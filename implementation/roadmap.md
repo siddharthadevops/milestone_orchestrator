@@ -45,15 +45,15 @@ the tests that pin them; documentation-phase reviews check altitude in both
 directions; and reducing over-specified mechanism to its unchanged contract
 does not widen review.
 
-S8 is open to canonize review fix-convergence practice for reviewed release
-`v0.9.0`: batched whole-artifact fixes, pre-relaunch self-review of pending
-diffs, exhaustive review prompts, and review-log evidence fields, without
-changing review gates or seal independence.
+S8 canonizes review fix-convergence practice as reviewed release `v0.9.0`:
+batched whole-artifact fixes, pre-relaunch self-review of pending diffs,
+exhaustive review prompts, and review-log evidence fields, without changing
+review gates or seal independence.
 
 ## Next Direction
 
-Close S8 under the reviewed process, then keep consuming product repositories
-pinned to reviewed tags.
+Open future canon changes as new milestones. Keep consuming product
+repositories pinned to reviewed tags.
 
 ## Non-Goals
 

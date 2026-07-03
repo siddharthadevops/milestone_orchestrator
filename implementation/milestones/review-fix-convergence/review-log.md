@@ -22,12 +22,12 @@ Durable review record for S8.
 - Normal Codex clean state: Slice 01 implementation review r2 returned
   `VERDICT: 0 findings`, `EXIT=0`
   (`implementation/review-work/review-fix-convergence/slice-01-impl-codex-r2.md`);
-  reviewed artifact: implementation commit `cfe74c3` plus bookkeeping and r1
+  reviewed artifact: implementation commit `85b420c` plus bookkeeping and r1
   fix.
 - Normal Claude clean state: Slice 01 implementation review r1 returned
   `VERDICT: 0 findings`, `EXIT=0`
   (`implementation/review-work/review-fix-convergence/slice-01-impl-claude-r1.md`);
-  reviewed artifact: implementation commit `cfe74c3` plus bookkeeping and r1
+  reviewed artifact: implementation commit `85b420c` plus bookkeeping and r1
   fix.
 - Post-review verification: `git diff --check` passed; exact-string search
   confirmed the reviewer-exhaustiveness sentence in Prompt Shape.

@@ -22,10 +22,9 @@ Delivery follows the local canon:
 | S5 | Review/seal convergence formula | Process canon | Closed (reviewed release `v0.6.0`) | Process layout | [README](review-seal-convergence-formula/README.md) |
 | S6 | Review phase gate logging | Process canon | Closed (reviewed release `v0.7.0`) | Process layout | [README](review-phase-gate-logging/README.md) |
 | S7 | Documentation altitude rule | Process canon | Closed (reviewed release `v0.8.0`) | Process layout | [README](documentation-altitude-rule/README.md) |
-| S8 | Review fix convergence | Process canon | Open | Process layout | [README](review-fix-convergence/README.md) |
+| S8 | Review fix convergence | Process canon | Closed (reviewed release `v0.9.0`) | Process layout | [README](review-fix-convergence/README.md) |
 
 ## Active Continuation
 
-S8 is active. Continue from
-[`review-fix-convergence/README.md`](review-fix-convergence/README.md), then
-the latest work-log entry.
+No active milestone. For any future canon change, read the roadmap before
+opening a new milestone.
