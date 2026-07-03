@@ -102,6 +102,22 @@ A clean-state entry must include the reviewer family, run id or output path,
 open until the durable log records normal Codex clean followed by normal Claude
 clean for the current artifact phase.
 
+Fixes are batched by review round without changing the triage outcomes in the
+common process. For findings triaged as fixed from one round, correct them in
+one whole-artifact pass before relaunching that reviewer; do not relaunch a
+reviewer per finding.
+
+Before relaunching any reviewer after a fix pass, self-review the pending
+uncommitted diff for finding coverage, phase-rule compliance, and stale
+surrounding surfaces such as work logs, review logs, statuses, and acceptance
+criteria. Corrections fold into the same pass.
+
+The self-review is orchestration, not review: it is not a round, produces no
+findings or `VERDICT:` evidence, and cannot substitute for reviewer
+convergence. Record only one line inside the round's existing fix entry:
+`self-review of pending diff: clean` or `self-review of pending diff: N
+corrections folded in`.
+
 After normal Claude review begins, do not return to normal Codex rounds for
 Claude-driven fixes in the same phase. Fix valid Claude findings and continue
 Claude rounds until `VERDICT: 0`; the final post-Claude artifact is next checked
@@ -258,6 +274,7 @@ Keep prompts thin. Include:
   content inspection when available, local search and file-reading tools are
   preferred for speed, and Git is used for scope, diff comparison, relevant
   history, and commit/ref verification.
+- this exact reviewer exhaustiveness sentence for all review phases: "Do not stop at the first finding: report every defect you can verify in a complete pass of the artifact and the code it cites. An exhaustive pass with zero findings is a valid outcome."
 - the rule that doubts and disagreements use one continuous CLI dialogue session
   with the opposite LLM family when available.
 - the rule that unresolved disagreement, or unavailable opposite-family CLI

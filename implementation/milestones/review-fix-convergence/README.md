@@ -60,12 +60,13 @@ cadence and evidence shape, not reviewer authority or pass/fail criteria.
 | Unit | Phase | Status | Review | Commit | Notes |
 |---|---|---|---|---|---|
 | Skeleton | doc | ready | Codex r1 clean; Claude r3 clean; seal a1 clean | 98c17f5 | Skeleton sealed `ready`. |
-| Slice 01 | doc | ready | Codex r5 clean; Claude r2 clean; seal a3 clean | | Slice note sealed `ready`. |
+| Slice 01 | doc | ready | Codex r5 clean; Claude r2 clean; seal a3 clean | 1ef8d18 | Slice note sealed `ready`. |
+| Slice 01 | impl | review_clean | Codex r2 clean; Claude r1 clean; seal a5 clean | cfe74c3 | Implementation sealed `review_clean`. |
 
 ## Current Slice
 
-Slice 01 implementation after the sealed-note commit.
+Slice 01 closure.
 
 ## Continuation
 
-Commit the sealed Slice 01 note, then implement only the approved scope.
+Write closure and release bookkeeping for reviewed release `v0.9.0`.

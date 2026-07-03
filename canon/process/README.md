@@ -216,6 +216,22 @@ For each finding, record the outcome in the durable review log:
 - `blocked/operator`: the orchestrator cannot resolve the issue under the
   process rules.
 
+Fixes are batched by review round without changing those triage outcomes.
+For findings triaged as `fixed` from one round, correct them in one
+whole-artifact pass before relaunching that reviewer. Do not relaunch a
+reviewer per finding.
+
+Before relaunching any reviewer after a fix pass, self-review the pending
+uncommitted diff for finding coverage, phase-rule compliance, and stale
+surrounding surfaces such as work logs, review logs, statuses, and acceptance
+criteria. Corrections fold into the same pass.
+
+The self-review is orchestration, not review: it is not a round, produces no
+findings or `VERDICT:` evidence, and cannot substitute for reviewer
+convergence. Record only one line inside the round's existing fix entry:
+`self-review of pending diff: clean` or `self-review of pending diff: N
+corrections folded in`.
+
 ### Consultation And Adjudication
 
 The orchestrator adjudicates; reviewers and consulted LLMs do not. When the
