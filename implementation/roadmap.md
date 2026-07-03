@@ -39,6 +39,12 @@ S6 adds phase-gate logging as reviewed release `v0.7.0`: normal review clean
 states must be recorded as explicit durable gates before seal opens, and
 Claude-phase fixes must not drift back into normal Codex rounds.
 
+S7 (open) hardens the documentation altitude discipline as planned reviewed
+release `v0.8.0`: documentation scope states observable contracts, invariants,
+and tests; documentation-phase reviews check altitude in both directions; and
+reducing over-specified mechanism to its unchanged contract does not widen
+review.
+
 ## Next Direction
 
 Open future canon changes as new milestones. Keep consuming product
