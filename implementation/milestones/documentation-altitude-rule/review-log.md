@@ -11,6 +11,47 @@ Durable review record for S7.
   passed; sealed-note acceptance criteria 1-5 diff-verified (36 insertions, 0
   deletions; the two shared-section additions are documentation-phase-scoped;
   implementation-phase rules textually unchanged). Review pending.
+- Codex implementation review r1 returned one finding (`VERDICT: 1 findings`,
+  `EXIT=0`). Fixed:
+  - `F01 [P2]` - Current Slice still described the documentation phase while
+    the Work Log recorded implementation in progress (verified). Current
+    Slice now records the implementation phase, the governing sealed-note
+    commit, and the reviewed implementation commit.
+- Normal Codex clean state: Slice 01 implementation review r2 returned
+  `VERDICT: 0 findings`, `EXIT=0`
+  (`implementation/review-work/documentation-altitude-rule/slice-01-impl-codex-r2.md`);
+  reviewed artifact: implementation commit `5c0b6e5` plus bookkeeping
+  (post r1 fix).
+- Claude implementation review r1 returned one finding (`VERDICT: 1
+  findings`, `EXIT=0`). Rejected after adjudication:
+  - `F01 [P3]` - Claimed the named `### Altitude Rule` subsection diverges
+    from the sealed "extends the no-pseudo-code paragraph in place" phrasing.
+    Rejected: the sealed Scope requires the implementation to *name* the
+    rule, AC 1 binds content not paragraph form, and the Reuse Posture line
+    is reuse-gate assurance (same section, no parallel machinery) — one
+    continuous Codex CLI dialogue session ran per the disagreement protocol
+    (`impl-r1-adjudication-prompt.txt` / `impl-r1-adjudication-d1.md`,
+    `EXIT=0`); result: "the rejection stands", the finding is over-literal.
+- Normal Claude clean state: Slice 01 implementation review r2 returned
+  `VERDICT: 0 findings`, `EXIT=0`
+  (`implementation/review-work/documentation-altitude-rule/slice-01-impl-claude-r2.md`);
+  reviewed artifact: implementation commit `5c0b6e5` plus bookkeeping
+  (r1 rejection adjudicated and recorded).
+- Post-review verification: `git diff --check` passed.
+- Slice 01 implementation seal attempt a1 (concurrent Codex + Claude CLI,
+  same prompt, no shared outputs) **passed**:
+  - Codex a1 returned `VERDICT: 0 findings`, `EXIT=0`, no worktree
+    invalidation
+    (`implementation/review-work/documentation-altitude-rule/slice-01-impl-seal-a1-codex.md`).
+  - Claude CLI a1 (Claude CLI reviewer; model `opus`, `--effort max`,
+    `--permission-mode bypassPermissions`; canon Claude CLI runner command
+    surface) returned `VERDICT: 0 findings`, `EXIT=0`, no worktree
+    invalidation
+    (`implementation/review-work/documentation-altitude-rule/slice-01-impl-seal-a1-claude.md`).
+  - Seal adjudication (orchestrator): the Slice 01 implementation double seal
+    is passed on the unchanged artifact. Implementation sealed
+    `review_clean`; the slice closes with no accepted debt (closure
+    `closures/01-altitude-rule-and-doc-review-check.md`).
 
 ## Slice 01 Documentation
 

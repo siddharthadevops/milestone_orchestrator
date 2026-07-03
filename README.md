@@ -31,7 +31,7 @@ Use a submodule when the product should pin an exact canon revision:
 
 ```bash
 git submodule add <canon-git-url> vendor/impl_roadmap_canon
-git -C vendor/impl_roadmap_canon checkout v0.7.0
+git -C vendor/impl_roadmap_canon checkout v0.8.0
 git add .gitmodules vendor/impl_roadmap_canon
 git commit -m "Pin implementation roadmap canon"
 ```

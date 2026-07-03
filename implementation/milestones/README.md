@@ -21,10 +21,9 @@ Delivery follows the local canon:
 | S4 | Thin skeleton and slice budget discipline | Process canon | Closed (reviewed release `v0.5.0`) | Process layout | [README](thin-skeleton-and-slice-budget/README.md) |
 | S5 | Review/seal convergence formula | Process canon | Closed (reviewed release `v0.6.0`) | Process layout | [README](review-seal-convergence-formula/README.md) |
 | S6 | Review phase gate logging | Process canon | Closed (reviewed release `v0.7.0`) | Process layout | [README](review-phase-gate-logging/README.md) |
-| S7 | Documentation altitude rule | Process canon | Open | Process layout | [README](documentation-altitude-rule/README.md) |
+| S7 | Documentation altitude rule | Process canon | Closed (reviewed release `v0.8.0`) | Process layout | [README](documentation-altitude-rule/README.md) |
 
 ## Active Continuation
 
-S7 (documentation altitude rule) is the active milestone. Read its
-[README](documentation-altitude-rule/README.md), then its latest work-log
-entry, and continue from the recorded state.
+No active milestone. For any future canon change, read the roadmap before
+opening a new milestone.

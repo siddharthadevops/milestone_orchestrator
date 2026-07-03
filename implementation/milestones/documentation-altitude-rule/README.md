@@ -1,6 +1,6 @@
 # Documentation Altitude Rule
 
-Status: open.
+Status: closed.
 
 Planned reviewed release: `v0.8.0`.
 
@@ -56,7 +56,7 @@ or design change. Implementation-phase review rules are untouched.
 
 | Slice | Title | Status | Notes |
 |---|---|---|---|
-| 01 | Altitude rule, doc-review altitude check, and template guardrail | in_progress | Publishes reviewed release `v0.8.0`. |
+| 01 | Altitude rule, doc-review altitude check, and template guardrail | closed | Reviewed release `v0.8.0`; no accepted debt. |
 
 ## Work Log
 
@@ -64,16 +64,14 @@ or design change. Implementation-phase review rules are untouched.
 |---|---|---|---|---|---|
 | Skeleton | doc | ready | Codex r1 clean; Claude r6 clean; seal a3 clean | 39992db | Skeleton sealed `ready`. |
 | Slice 01 | doc | ready | Codex r1 clean; Claude r4 clean; seal a3 clean | 238dd23 | Slice note sealed `ready`. |
-| Slice 01 | impl | in_progress | | | Canon edits applied per the sealed note; sealed-note ACs 1-5 diff-verified; review pending. |
+| Slice 01 | impl | review_clean | Codex r2 clean; Claude r2 clean; seal a1 clean | 5c0b6e5 | Implementation sealed `review_clean`; closure recorded. |
+| Slice 01 | closure | closed | | | Closure/bookkeeping recorded for reviewed release `v0.8.0`. |
 
 ## Current Slice
 
-Slice 01
-([`slices/01-altitude-rule-and-doc-review-check.md`](slices/01-altitude-rule-and-doc-review-check.md))
-is open in its documentation phase. Implementation starts only after the note
-seals `ready` and is committed.
+None. S7 is closed.
 
 ## Continuation
 
-Read the global milestone index, then this README and its latest work-log
-entry, and continue from the recorded state.
+S7 is closed. Continue by reading the global milestone index and roadmap
+before opening any future canon change.
