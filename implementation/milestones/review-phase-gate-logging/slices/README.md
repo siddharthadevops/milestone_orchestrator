@@ -1,4 +1,3 @@
 # Slices
 
-Slice notes are drafted only after the S6 skeleton seals `ready` and is
-committed.
+- [`01-phase-gate-clean-state-logging.md`](01-phase-gate-clean-state-logging.md)

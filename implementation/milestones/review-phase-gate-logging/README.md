@@ -1,6 +1,6 @@
 # Review Phase Gate Logging
 
-Status: open - skeleton sealed `ready`; Slice 01 documentation is next.
+Status: open - Slice 01 documentation sealed `ready`; implementation is next.
 
 Planned reviewed release: `v0.7.0`.
 
@@ -47,18 +47,20 @@ or design.
 
 | Slice | Title | Status | Notes |
 |---|---|---|---|
-| 01 | Phase-gate clean-state logging | planned | Tighten canon wording and template guidance; draft after skeleton seals and commits. |
+| 01 | Phase-gate clean-state logging | ready | Tighten canon wording and template guidance. |
 
 ## Work Log
 
 | Unit | Phase | Status | Review | Commit | Notes |
 |---|---|---|---|---|---|
 | Skeleton | doc | ready | Codex r1 clean; Claude r1 clean; seal a1 clean | | Skeleton sealed `ready`; Slice 01 not drafted. |
+| Slice 01 | doc | ready | Codex r1 clean; Claude r1 clean; seal a1 clean | | Slice note sealed `ready`; implementation not started. |
 
 ## Current Slice
 
-Slice 01 is not drafted. Draft it after this sealed skeleton is committed.
+Slice 01 (`slices/01-phase-gate-clean-state-logging.md`) documentation is sealed
+`ready`; implementation starts after the slice note commit.
 
 ## Continuation
 
-Commit this sealed skeleton, then draft Slice 01.
+Commit the sealed Slice 01 note, then implement its expected files.
