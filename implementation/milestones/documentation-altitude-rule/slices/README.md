@@ -1,4 +1,3 @@
 # Slices
 
-Slice notes are drafted only after the milestone skeleton is sealed `ready`
-and committed.
+- [`01-altitude-rule-and-doc-review-check.md`](01-altitude-rule-and-doc-review-check.md)

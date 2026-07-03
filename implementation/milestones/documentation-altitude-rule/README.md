@@ -56,18 +56,21 @@ or design change. Implementation-phase review rules are untouched.
 
 | Slice | Title | Status | Notes |
 |---|---|---|---|
-| 01 | Altitude rule, doc-review altitude check, and template guardrail | planned | Publishes reviewed release `v0.8.0`. |
+| 01 | Altitude rule, doc-review altitude check, and template guardrail | in_progress | Publishes reviewed release `v0.8.0`. |
 
 ## Work Log
 
 | Unit | Phase | Status | Review | Commit | Notes |
 |---|---|---|---|---|---|
-| Skeleton | doc | ready | Codex r1 clean; Claude r6 clean; seal a3 clean | | Skeleton sealed `ready`; Slice 01 not drafted. |
+| Skeleton | doc | ready | Codex r1 clean; Claude r6 clean; seal a3 clean | 39992db | Skeleton sealed `ready`. |
+| Slice 01 | doc | ready | Codex r1 clean; Claude r4 clean; seal a3 clean | | Slice note sealed `ready`; implementation not started. |
 
 ## Current Slice
 
-None open. Slice 01 is drafted only after this skeleton seals `ready` and is
-committed.
+Slice 01
+([`slices/01-altitude-rule-and-doc-review-check.md`](slices/01-altitude-rule-and-doc-review-check.md))
+is open in its documentation phase. Implementation starts only after the note
+seals `ready` and is committed.
 
 ## Continuation
 
