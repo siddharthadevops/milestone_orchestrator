@@ -53,18 +53,19 @@ cadence and evidence shape, not reviewer authority or pass/fail criteria.
 
 | Slice | Title | Status | Notes |
 |---|---|---|---|
-| 01 | Batched fixes, pre-relaunch self-review, exhaustive prompts, and evidence fields | planned | Rough intent only; draft the slice note after the skeleton is sealed and committed. |
+| 01 | Batched fixes, pre-relaunch self-review, exhaustive prompts, and evidence fields | ready | Slice note sealed `ready`. |
 
 ## Work Log
 
 | Unit | Phase | Status | Review | Commit | Notes |
 |---|---|---|---|---|---|
-| Skeleton | doc | ready | Codex r1 clean; Claude r3 clean; seal a1 clean | | Skeleton sealed `ready`. |
+| Skeleton | doc | ready | Codex r1 clean; Claude r3 clean; seal a1 clean | 98c17f5 | Skeleton sealed `ready`. |
+| Slice 01 | doc | ready | Codex r5 clean; Claude r2 clean; seal a3 clean | | Slice note sealed `ready`. |
 
 ## Current Slice
 
-None. Skeleton sealed `ready`; draft Slice 01 after the skeleton commit.
+Slice 01 implementation after the sealed-note commit.
 
 ## Continuation
 
-Commit the sealed skeleton, then draft Slice 01.
+Commit the sealed Slice 01 note, then implement only the approved scope.
