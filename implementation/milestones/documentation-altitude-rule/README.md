@@ -63,7 +63,8 @@ or design change. Implementation-phase review rules are untouched.
 | Unit | Phase | Status | Review | Commit | Notes |
 |---|---|---|---|---|---|
 | Skeleton | doc | ready | Codex r1 clean; Claude r6 clean; seal a3 clean | 39992db | Skeleton sealed `ready`. |
-| Slice 01 | doc | ready | Codex r1 clean; Claude r4 clean; seal a3 clean | | Slice note sealed `ready`; implementation not started. |
+| Slice 01 | doc | ready | Codex r1 clean; Claude r4 clean; seal a3 clean | 238dd23 | Slice note sealed `ready`. |
+| Slice 01 | impl | in_progress | | | Canon edits applied per the sealed note; sealed-note ACs 1-5 diff-verified; review pending. |
 
 ## Current Slice
 

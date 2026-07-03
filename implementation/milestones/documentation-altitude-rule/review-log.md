@@ -2,6 +2,16 @@
 
 Durable review record for S7.
 
+## Slice 01 Implementation
+
+- `2026-07-03` - Implemented the altitude rule in Documentation Discipline,
+  the documentation-phase reduction guard and Prompt Shape altitude bullet in
+  the review runner, and the slice-template Scope guardrail, after the
+  sealed-note commit `238dd23`. Pre-review verification: `git diff --check`
+  passed; sealed-note acceptance criteria 1-5 diff-verified (36 insertions, 0
+  deletions; the two shared-section additions are documentation-phase-scoped;
+  implementation-phase rules textually unchanged). Review pending.
+
 ## Slice 01 Documentation
 
 - `2026-07-03` - Drafted Slice 01 after the sealed-skeleton commit `39992db`;

@@ -7,6 +7,11 @@ committed.
 
 ## Scope
 
+State observable contracts, invariants, and the tests that pin them. If a
+statement can be falsified only by reading the implementation diff, reduce it
+to its contract. Name any pinned public or cross-slice contract that
+justifies mechanism-level detail.
+
 ## Non-Goals
 
 ## Reuse Posture

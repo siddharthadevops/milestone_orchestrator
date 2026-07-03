@@ -118,6 +118,9 @@ tests, or commands; fix it; run relevant local/focused checks; then repeat the
 full seal round only. Do not return to normal review rounds after a seal
 finding unless the fix substantially changes scope or design.
 
+In documentation phases, reducing over-specified mechanism to its unchanged
+contract is not a substantial scope or design change.
+
 If the full official verification suite after normal review fails, fix it and
 restart from the pre-review full verification step.
 
@@ -241,6 +244,11 @@ Keep prompts thin. Include:
   brainstorming and `_drafts`; do not review product or architecture content
   unless the operator names that content as the review artifact.
 - the severity rubric.
+- for skeleton, slice documentation, and process-doc phases only: the
+  altitude check in both directions — under-specified observable contracts
+  and over-specified mechanism (control flow in prose) are both findings;
+  over-specified mechanism is `P3` by default and `P2` when acceptance
+  criteria or tests anchor to mechanism instead of observable behavior.
 - the no-edit instruction.
 - the rule that reviewer findings are claims, not facts.
 - the rule that the orchestrator must verify findings against files, diffs,

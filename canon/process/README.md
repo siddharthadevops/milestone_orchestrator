@@ -287,3 +287,26 @@ detail to the just-in-time slice note.
 Avoid pseudo-code, defensive FAQs, repetition, and future milestone chains. If a
 document starts specifying control flow that belongs in code, reduce it to
 observable contracts, invariants, and tests.
+
+### Altitude Rule
+
+Documentation scope states observable contracts, invariants, and the tests
+that pin them. Mechanism — internal names, call ordering, state enumeration,
+control flow — belongs to implementation.
+
+The operational test: a statement that can be falsified only by reading the
+implementation diff, and not by observing behavior or running a named test,
+is mechanism. Reduce it to the contract it protects.
+
+Mechanism-level detail is allowed only where it pins a named public or
+cross-slice contract — a signature, an error vocabulary, a seam another slice
+or consumer depends on. The artifact must name that pinned contract.
+
+Fix documentation findings at altitude: a valid finding about unspecified
+behavior is fixed by recording the observable contract, invariant, or test,
+not the mechanism that produces it.
+
+In documentation phases, reducing over-specified mechanism to its unchanged
+contract is not a substantial scope or design change: the contract is
+unchanged, only its expression compresses. A reduction fix stays in its
+current review phase and, during seals, follows the seal-finding rule.
