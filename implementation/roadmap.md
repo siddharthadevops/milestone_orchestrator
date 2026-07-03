@@ -35,14 +35,14 @@ Codex CLI reviews run clean first, Claude CLI reviews run clean second, full
 official verification brackets review, and later seal findings return to the
 full seal round unless the fix materially changes scope or design.
 
-S6 is in implementation review for `v0.7.0`: normal review clean states must be
-recorded as explicit durable gates before seal opens, and Claude-phase fixes
-must not drift back into normal Codex rounds.
+S6 adds phase-gate logging as reviewed release `v0.7.0`: normal review clean
+states must be recorded as explicit durable gates before seal opens, and
+Claude-phase fixes must not drift back into normal Codex rounds.
 
 ## Next Direction
 
-Close S6 through the normal process, then publish a reviewed `v0.7.0` tag. Keep
-consuming product repositories pinned to reviewed tags.
+Open future canon changes as new milestones. Keep consuming product
+repositories pinned to reviewed tags.
 
 ## Non-Goals
 

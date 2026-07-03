@@ -20,10 +20,9 @@ Delivery follows the local canon:
 | S3 | Review efficiency and concurrent seals | Process canon | Closed (reviewed release `v0.4.0`) | Process layout | [README](review-efficiency-and-concurrent-seals/README.md) |
 | S4 | Thin skeleton and slice budget discipline | Process canon | Closed (reviewed release `v0.5.0`) | Process layout | [README](thin-skeleton-and-slice-budget/README.md) |
 | S5 | Review/seal convergence formula | Process canon | Closed (reviewed release `v0.6.0`) | Process layout | [README](review-seal-convergence-formula/README.md) |
-| S6 | Review phase gate logging | Process canon | Open (Slice 01 implementation review) | Process layout | [README](review-phase-gate-logging/README.md) |
+| S6 | Review phase gate logging | Process canon | Closed (reviewed release `v0.7.0`) | Process layout | [README](review-phase-gate-logging/README.md) |
 
 ## Active Continuation
 
-S6 (`review-phase-gate-logging`) is open in Slice 01 implementation review.
-Continue by reading its `README.md`, `review-log.md`, and
-`slices/01-phase-gate-clean-state-logging.md`.
+No active milestone. For any future canon change, read the roadmap before
+opening a new milestone.
