@@ -1,6 +1,6 @@
 # Review Phase Gate Logging
 
-Status: open - Slice 01 documentation sealed `ready`; implementation is next.
+Status: open - Slice 01 implementation review.
 
 Planned reviewed release: `v0.7.0`.
 
@@ -47,7 +47,7 @@ or design.
 
 | Slice | Title | Status | Notes |
 |---|---|---|---|
-| 01 | Phase-gate clean-state logging | ready | Tighten canon wording and template guidance. |
+| 01 | Phase-gate clean-state logging | review_requested | Tighten canon wording and template guidance. |
 
 ## Work Log
 
@@ -55,12 +55,12 @@ or design.
 |---|---|---|---|---|---|
 | Skeleton | doc | ready | Codex r1 clean; Claude r1 clean; seal a1 clean | | Skeleton sealed `ready`; Slice 01 not drafted. |
 | Slice 01 | doc | ready | Codex r1 clean; Claude r1 clean; seal a1 clean | | Slice note sealed `ready`; implementation not started. |
+| Slice 01 | impl | review_requested | | | Implemented process wording and template guidance; review pending. |
 
 ## Current Slice
 
-Slice 01 (`slices/01-phase-gate-clean-state-logging.md`) documentation is sealed
-`ready`; implementation starts after the slice note commit.
+Slice 01 implementation is in review.
 
 ## Continuation
 
-Commit the sealed Slice 01 note, then implement its expected files.
+Continue Slice 01 implementation review.

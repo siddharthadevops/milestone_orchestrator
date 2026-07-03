@@ -139,9 +139,18 @@ Each phase uses the review/seal convergence loop in
 - run the full official verification suite recorded in local state before
   normal review begins.
 - run normal Codex CLI review rounds until Codex is clean.
+- record the normal Codex clean state in the durable review log.
 - run normal Claude CLI review rounds until Claude is clean.
+- record the normal Claude clean state in the durable review log.
 - run the full official verification suite again.
 - run full double-seal rounds until clean on an unchanged artifact.
+
+The seal phase may not open until the review log records the normal Codex clean
+state followed by the normal Claude clean state for the current artifact phase.
+After normal Claude review begins, do not return to normal Codex review for
+Claude-driven fixes unless the operator explicitly resets the phase or the fix
+substantially changes scope or design. Codex reviews the final post-Claude
+artifact as the Codex half of the seal.
 
 Triage every finding as fixed, rejected with rationale, operator-accepted debt,
 or blocked for the operator.
@@ -265,8 +274,10 @@ short and executable:
 - tests and risks.
 - current continuation state.
 
-Durable review logs summarize review state, findings, triage, seal outcomes,
-and accepted debt. Full prompts and reviewer output stay in git-ignored
+Durable review logs summarize review state, phase-gate clean states, findings,
+triage, seal outcomes, and accepted debt. A phase-gate clean-state entry records
+the reviewer family, run id or output path, `EXIT=0`, `VERDICT: 0`, and the
+reviewed artifact or ref. Full prompts and reviewer output stay in git-ignored
 `implementation/review-work/`.
 
 Skeletons are planning contracts, not slice notes. They keep rough slice intent

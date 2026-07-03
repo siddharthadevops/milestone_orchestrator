@@ -35,9 +35,9 @@ Codex CLI reviews run clean first, Claude CLI reviews run clean second, full
 official verification brackets review, and later seal findings return to the
 full seal round unless the fix materially changes scope or design.
 
-S6 is open to tighten that formula for `v0.7.0`: normal review clean states
-must be recorded as explicit durable gates before seal opens, and Claude-phase
-fixes must not drift back into normal Codex rounds.
+S6 is in implementation review for `v0.7.0`: normal review clean states must be
+recorded as explicit durable gates before seal opens, and Claude-phase fixes
+must not drift back into normal Codex rounds.
 
 ## Next Direction
 

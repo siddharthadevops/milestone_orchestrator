@@ -31,3 +31,9 @@ Durable review record for S6.
   - Codex seal half: `VERDICT: 0 findings`, `EXIT=0`.
   - Claude CLI seal half: `VERDICT: 0 findings`, `EXIT=0`.
   - Outcome: Slice 01 documentation sealed `ready`; no accepted debt.
+
+## Slice 01 Implementation
+
+- `2026-07-03` - Implemented phase-gate clean-state logging wording in the
+  common process, review runner, and milestone review-log template; review
+  pending.

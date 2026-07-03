@@ -91,9 +91,23 @@ For each reviewed artifact, after the approved change is applied:
    directly relevant.
 2. Run the full official verification suite before normal review starts.
 3. Run normal Codex CLI review rounds until Codex returns `VERDICT: 0`.
-4. Run normal Claude CLI review rounds until Claude returns `VERDICT: 0`.
-5. Run the full official verification suite again.
-6. Run full seal rounds until clean.
+4. Record the normal Codex clean state in the durable review log.
+5. Run normal Claude CLI review rounds until Claude returns `VERDICT: 0`.
+6. Record the normal Claude clean state in the durable review log.
+7. Run the full official verification suite again.
+8. Run full seal rounds until clean.
+
+A clean-state entry must include the reviewer family, run id or output path,
+`EXIT=0`, `VERDICT: 0`, and the reviewed artifact or ref. The seal phase is not
+open until the durable log records normal Codex clean followed by normal Claude
+clean for the current artifact phase.
+
+After normal Claude review begins, do not return to normal Codex rounds for
+Claude-driven fixes in the same phase. Fix valid Claude findings and continue
+Claude rounds until `VERDICT: 0`; the final post-Claude artifact is next checked
+by the Codex seal half. Reopen normal Codex review only if the operator
+explicitly resets the phase or the fix substantially changes scope or design
+before seal.
 
 A full seal round means the Codex seal half and Claude CLI seal half review the
 same unchanged artifact with the same prompt, under the no-peek independence
