@@ -1,0 +1,19 @@
+{
+  "families_order": ["codex", "claude"],
+  "commands": {
+    "codex": [
+      "codex", "exec", "--dangerously-bypass-approvals-and-sandbox",
+      "--output-last-message", "{output_file}"
+    ],
+    "claude": [
+      "claude", "-p", "--model", "opus", "--effort", "max",
+      "--permission-mode", "bypassPermissions"
+    ]
+  },
+  "timeouts": {"codex": 900, "claude": 1800},
+  "verification": ["python3 run_checks.py"],
+  "max_rounds_per_family": 12,
+  "max_seal_attempts": 8,
+  "max_verify_fix_attempts": 4,
+  "seal_concurrent": false
+}

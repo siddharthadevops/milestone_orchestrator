@@ -1,0 +1,498 @@
+"""Orchestrator state: a JSON document with structurally enforced history.
+
+Properties this module guarantees in code (they used to be prose rules that
+LLM orchestrators kept getting wrong):
+
+1. Append-only history. Events, rounds, and seal attempts are lists that can
+   only grow; `save()` refuses to persist a state whose history diverges from
+   what is already on disk (no rewriting round N's record when round N+1
+   learns something).
+2. Atomic writes. State is written to a temp file and renamed, so a crash
+   mid-step never leaves a half-written state file. Note the flip side:
+   records are persisted only after a step completes, so a crash between a
+   worker CLI call and that save re-executes the call on resume. Worker
+   calls therefore have at-least-once semantics (see the README,
+   "Operational semantics").
+3. Explicit phase gates. Transition helpers raise IllegalTransition instead
+   of silently doing the wrong thing.
+
+The unit sequence mirrors the canon cycle: one skeleton unit, then per slice
+a documentation unit and an implementation unit. Every unit runs the same
+review machinery: draft -> verify -> codex rounds until clean -> claude
+rounds until clean -> verify -> double seal until both halves are clean on
+an unchanged workspace.
+"""
+
+import copy
+import json
+import os
+import tempfile
+import time
+
+SCHEMA_VERSION = 1
+
+# Unit kinds
+UNIT_SKELETON = "skeleton"
+UNIT_SLICE_DOC = "slice_doc"
+UNIT_SLICE_IMPL = "slice_impl"
+
+# Unit statuses (the per-unit state machine)
+U_PENDING = "pending"
+U_PRE_REVIEW_VERIFY = "pre_review_verify"
+U_VERIFY_FIX = "verify_fix"
+U_ROUNDS = "rounds"            # reviewing with families in order
+U_PRE_SEAL_VERIFY = "pre_seal_verify"
+U_SEALING = "sealing"
+U_SEAL_FIX = "seal_fix"
+U_SEALED = "sealed"
+U_FAILED = "failed"
+
+UNIT_STATUSES = (
+    U_PENDING,
+    U_PRE_REVIEW_VERIFY,
+    U_VERIFY_FIX,
+    U_ROUNDS,
+    U_PRE_SEAL_VERIFY,
+    U_SEALING,
+    U_SEAL_FIX,
+    U_SEALED,
+    U_FAILED,
+)
+
+# Milestone statuses
+M_OPEN = "open"
+M_CLOSED = "closed"
+M_FAILED = "failed"
+
+
+class IllegalTransition(RuntimeError):
+    """A driver bug or corrupted state asked for a transition the canon
+    flow does not allow."""
+
+
+class HistoryRewriteError(RuntimeError):
+    """An attempt was made to persist a state whose recorded history
+    differs from the history already on disk."""
+
+
+def now_iso():
+    return time.strftime("%Y-%m-%dT%H:%M:%S%z")
+
+
+def new_state(goal, workspace, config):
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "goal": goal,
+        "workspace": workspace,
+        "created_at": now_iso(),
+        "milestone": {
+            "status": M_OPEN,
+            "slices": [],          # filled by the skeleton draft; skeleton
+                                   # fix rounds may update it until the
+                                   # skeleton unit seals
+        },
+        "units": [
+            _new_unit(UNIT_SKELETON, None),
+        ],
+        "events": [],
+        "failure": None,
+        "config": config,
+    }
+
+
+def _new_unit(kind, slice_id):
+    return {
+        "kind": kind,
+        "slice_id": slice_id,
+        "status": U_PENDING,
+        "artifact": None,
+        "draft": None,              # write-once draft record
+        "family_index": 0,          # index into config families_order
+        "rounds": [],               # append-only
+        "seals": [],                # append-only
+        # Per-stage fix-attempt counters; each resets when its stage's
+        # verification passes (the cap bounds consecutive failures of the
+        # current stage, not lifetime fixes of the unit).
+        "verify_fix_attempts": {"pre_review": 0, "pre_seal": 0},
+        "return_to": None,          # where verify_fix returns: pre_review|pre_seal
+        "closed_record": None,      # slice_impl closure bookkeeping
+    }
+
+
+# ---------------------------------------------------------------------------
+# Persistence with append-only enforcement
+
+
+def load(path):
+    with open(path, "r", encoding="utf-8") as fh:
+        state = json.load(fh)
+    if state.get("schema_version") != SCHEMA_VERSION:
+        raise RuntimeError(
+            "state schema_version %r != %d" % (state.get("schema_version"), SCHEMA_VERSION)
+        )
+    # In-place migration of pre-per-stage counter shape (a plain int).
+    # Applied on every load so append-only comparisons see one shape.
+    for unit in state.get("units", []):
+        vfa = unit.get("verify_fix_attempts")
+        if isinstance(vfa, int):
+            unit["verify_fix_attempts"] = {"pre_review": vfa, "pre_seal": 0}
+    return state
+
+
+def _assert_list_prefix(old_list, new_list, ctx):
+    if len(new_list) < len(old_list):
+        raise HistoryRewriteError("%s: history shrank (%d -> %d)" % (ctx, len(old_list), len(new_list)))
+    for i, old_item in enumerate(old_list):
+        if new_list[i] != old_item:
+            raise HistoryRewriteError(
+                "%s[%d]: recorded history was modified; records are "
+                "append-only and immutable" % (ctx, i)
+            )
+
+
+def assert_append_only(old_state, new_state_):
+    """Raise HistoryRewriteError if new_state_ rewrites recorded history."""
+    _assert_list_prefix(old_state.get("events", []), new_state_.get("events", []), "events")
+    old_units = old_state.get("units", [])
+    new_units = new_state_.get("units", [])
+    if len(new_units) < len(old_units):
+        raise HistoryRewriteError("units: history shrank")
+    for i, old_unit in enumerate(old_units):
+        nu = new_units[i]
+        uctx = "units[%d]" % i
+        if (nu.get("kind"), nu.get("slice_id")) != (old_unit.get("kind"), old_unit.get("slice_id")):
+            raise HistoryRewriteError("%s: identity changed" % uctx)
+        _assert_list_prefix(old_unit.get("rounds", []), nu.get("rounds", []), uctx + ".rounds")
+        _assert_list_prefix(old_unit.get("seals", []), nu.get("seals", []), uctx + ".seals")
+        # A sealed or failed unit is frozen except for closure bookkeeping.
+        if old_unit.get("status") in (U_SEALED, U_FAILED):
+            frozen_old = {k: v for k, v in old_unit.items() if k != "closed_record"}
+            frozen_new = {k: v for k, v in nu.items() if k != "closed_record"}
+            if frozen_old != frozen_new:
+                raise HistoryRewriteError("%s: terminal unit was modified" % uctx)
+
+
+def save(path, state):
+    """Atomically persist state, enforcing append-only history against the
+    current on-disk version (if any)."""
+    if os.path.exists(path):
+        assert_append_only(load(path), state)
+    directory = os.path.dirname(os.path.abspath(path))
+    os.makedirs(directory, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(prefix=".state-", suffix=".json", dir=directory)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            json.dump(state, fh, indent=2, ensure_ascii=False)
+            fh.write("\n")
+        os.replace(tmp, path)
+    finally:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+
+
+# ---------------------------------------------------------------------------
+# Events
+
+
+def append_event(state, etype, **data):
+    evt = {"seq": len(state["events"]), "at": now_iso(), "type": etype}
+    evt.update(data)
+    state["events"].append(evt)
+    return evt
+
+
+# ---------------------------------------------------------------------------
+# Unit navigation and transitions
+
+
+def current_unit(state):
+    """The first unit that is not sealed. None when all units are sealed."""
+    for unit in state["units"]:
+        if unit["status"] != U_SEALED:
+            return unit
+    return None
+
+
+def unit_key(unit):
+    if unit["slice_id"] is None:
+        return unit["kind"]
+    return "%s-%02d" % (unit["kind"], unit["slice_id"])
+
+
+def planned_units(state):
+    """Full unit plan: skeleton plus doc+impl per known slice."""
+    plan = [(UNIT_SKELETON, None)]
+    for sl in state["milestone"]["slices"]:
+        plan.append((UNIT_SLICE_DOC, sl["id"]))
+        plan.append((UNIT_SLICE_IMPL, sl["id"]))
+    return plan
+
+
+def ensure_next_unit(state):
+    """After a unit seals, append the next planned unit record (if any).
+
+    Returns the appended unit or None when the plan is complete."""
+    existing = [(u["kind"], u["slice_id"]) for u in state["units"]]
+    for kind, slice_id in planned_units(state):
+        if (kind, slice_id) not in existing:
+            unit = _new_unit(kind, slice_id)
+            state["units"].append(unit)
+            append_event(state, "unit_opened", unit=unit_key(unit))
+            return unit
+    return None
+
+
+def transition_unit(state, unit, new_status, reason=None):
+    _ALLOWED = {
+        U_PENDING: (U_PRE_REVIEW_VERIFY, U_FAILED),
+        U_PRE_REVIEW_VERIFY: (U_ROUNDS, U_VERIFY_FIX, U_FAILED),
+        U_VERIFY_FIX: (U_PRE_REVIEW_VERIFY, U_PRE_SEAL_VERIFY, U_FAILED),
+        U_ROUNDS: (U_ROUNDS, U_PRE_SEAL_VERIFY, U_FAILED),
+        U_PRE_SEAL_VERIFY: (U_SEALING, U_VERIFY_FIX, U_FAILED),
+        # U_SEALING -> U_PRE_SEAL_VERIFY: an invalidated seal attempt (a
+        # half modified the workspace) must re-verify the modified content
+        # before the next attempt, exactly like the seal-findings path.
+        U_SEALING: (U_SEALED, U_SEAL_FIX, U_PRE_SEAL_VERIFY, U_FAILED),
+        U_SEAL_FIX: (U_PRE_SEAL_VERIFY, U_FAILED),
+        U_SEALED: (),
+        U_FAILED: (),
+    }
+    old = unit["status"]
+    if new_status not in _ALLOWED[old]:
+        raise IllegalTransition(
+            "unit %s: %s -> %s is not a legal transition"
+            % (unit_key(unit), old, new_status)
+        )
+    unit["status"] = new_status
+    append_event(
+        state,
+        "unit_transition",
+        unit=unit_key(unit),
+        from_status=old,
+        to_status=new_status,
+        reason=reason,
+    )
+
+
+def record_draft(state, unit, kind, result, raw_path=None):
+    """Write-once record of the unit's draft/implement call."""
+    if unit["status"] != U_PENDING:
+        raise IllegalTransition(
+            "unit %s: draft can only be recorded from pending (is %s)"
+            % (unit_key(unit), unit["status"])
+        )
+    if unit["draft"] is not None:
+        raise IllegalTransition("unit %s: draft already recorded" % unit_key(unit))
+    unit["draft"] = {
+        "kind": kind,
+        "at": now_iso(),
+        "raw_path": raw_path,
+        "result": copy.deepcopy(result),
+    }
+    unit["artifact"] = result.get("artifact")
+    append_event(state, "draft_recorded", unit=unit_key(unit), kind=kind)
+    return unit["draft"]
+
+
+def current_family(state, unit):
+    families = state["config"]["families_order"]
+    idx = unit["family_index"]
+    if idx >= len(families):
+        return None
+    return families[idx]
+
+
+def family_rounds(unit, family):
+    return [r for r in unit["rounds"] if r["family"] == family]
+
+
+def record_round(state, unit, family, kind, result, raw_path=None, duration=None):
+    """Append an immutable round record. Never edited afterwards."""
+    if unit["status"] not in (U_ROUNDS, U_VERIFY_FIX, U_SEAL_FIX):
+        raise IllegalTransition(
+            "unit %s: cannot record a %s round in status %s"
+            % (unit_key(unit), kind, unit["status"])
+        )
+    rec = {
+        "id": "%s-%s-r%d" % (unit_key(unit), family, len(family_rounds(unit, family)) + 1),
+        "family": family,
+        "kind": kind,
+        "at": now_iso(),
+        "duration_s": duration,
+        "raw_path": raw_path,
+        "result": copy.deepcopy(result),
+    }
+    unit["rounds"].append(rec)
+    append_event(
+        state,
+        "round_recorded",
+        unit=unit_key(unit),
+        round=rec["id"],
+        kind=kind,
+        findings=len(result.get("findings", [])),
+    )
+    return rec
+
+
+def advance_family_if_clean(state, unit, last_result):
+    """After a clean review round, move to the next family or to pre-seal.
+
+    Encodes the canon ordering rule: families run in configured order and a
+    later family's rounds never reopen an earlier family's normal rounds.
+    """
+    from . import contracts
+
+    if not contracts.findings_clean(last_result):
+        return  # stay in rounds with same family
+    families = state["config"]["families_order"]
+    unit["family_index"] += 1
+    if unit["family_index"] >= len(families):
+        transition_unit(state, unit, U_PRE_SEAL_VERIFY, reason="all families clean")
+    else:
+        append_event(
+            state,
+            "family_clean",
+            unit=unit_key(unit),
+            next_family=families[unit["family_index"]],
+        )
+
+
+def can_open_seal(state, unit):
+    """Seal opens only when every configured family has a recorded clean
+    round and the unit passed pre-seal verification (status sealing)."""
+    from . import contracts
+
+    families = state["config"]["families_order"]
+    for fam in families:
+        rounds = family_rounds(unit, fam)
+        review_rounds = [r for r in rounds if r["kind"] == "review_round"]
+        if not review_rounds or not contracts.findings_clean(review_rounds[-1]["result"]):
+            return False
+    return True
+
+
+def record_seal_attempt(state, unit, halves, passed, invalidated=None):
+    """Append an immutable seal attempt record.
+
+    halves: {family: {"result": <validated seal_half output or None>,
+                      "raw_path": ..., "duration_s": ...,
+                      "workspace_modified": bool}}
+    """
+    if unit["status"] != U_SEALING:
+        raise IllegalTransition(
+            "unit %s: cannot record a seal attempt in status %s"
+            % (unit_key(unit), unit["status"])
+        )
+    rec = {
+        "attempt": len(unit["seals"]) + 1,
+        "at": now_iso(),
+        "halves": copy.deepcopy(halves),
+        "passed": passed,
+        "invalidated": invalidated,
+    }
+    unit["seals"].append(rec)
+    append_event(
+        state,
+        "seal_attempt",
+        unit=unit_key(unit),
+        attempt=rec["attempt"],
+        passed=passed,
+        invalidated=invalidated,
+    )
+    return rec
+
+
+def fail_run(state, reason, unit=None):
+    """Terminal failure: record the explanation and stop. The next driver
+    invocation will refuse to continue until the operator intervenes."""
+    state["failure"] = {
+        "at": now_iso(),
+        "reason": reason,
+        "unit": unit_key(unit) if unit else None,
+    }
+    if unit is not None and unit["status"] not in (U_SEALED, U_FAILED):
+        unit["status"] = U_FAILED
+    state["milestone"]["status"] = M_FAILED
+    append_event(state, "run_failed", reason=reason, unit=state["failure"]["unit"])
+
+
+def close_slice(state, unit):
+    if unit["kind"] != UNIT_SLICE_IMPL or unit["status"] != U_SEALED:
+        raise IllegalTransition("close_slice requires a sealed slice_impl unit")
+    unit["closed_record"] = {
+        "at": now_iso(),
+        "slice_id": unit["slice_id"],
+        "rounds": len(unit["rounds"]),
+        "seal_attempts": len(unit["seals"]),
+    }
+    append_event(state, "slice_closed", slice_id=unit["slice_id"])
+
+
+def maybe_close_milestone(state):
+    if state["milestone"]["status"] == M_CLOSED:
+        return True  # idempotent: never records milestone_closed twice
+    plan = planned_units(state)
+    have = {(u["kind"], u["slice_id"]): u for u in state["units"]}
+    for key in plan:
+        unit = have.get(key)
+        if unit is None or unit["status"] != U_SEALED:
+            return False
+    state["milestone"]["status"] = M_CLOSED
+    append_event(state, "milestone_closed")
+    return True
+
+
+# ---------------------------------------------------------------------------
+# Derived summary (consumed by `status --json` and the web app)
+
+
+def summary(state):
+    unit = current_unit(state)
+    units_view = []
+    for u in state["units"]:
+        units_view.append(
+            {
+                "unit": unit_key(u),
+                "status": u["status"],
+                "artifact": u["artifact"],
+                "rounds": [
+                    {
+                        "id": r["id"],
+                        "family": r["family"],
+                        "kind": r["kind"],
+                        "findings": len(r["result"].get("findings", [])),
+                        "at": r["at"],
+                    }
+                    for r in u["rounds"]
+                ],
+                "seals": [
+                    {
+                        "attempt": s["attempt"],
+                        "passed": s["passed"],
+                        "invalidated": s["invalidated"],
+                        "findings": {
+                            fam: (
+                                len(h["result"].get("findings", []))
+                                if h.get("result")
+                                else None
+                            )
+                            for fam, h in s["halves"].items()
+                        },
+                        "at": s["at"],
+                    }
+                    for s in u["seals"]
+                ],
+            }
+        )
+    return {
+        "goal": state["goal"],
+        "workspace": state["workspace"],
+        "milestone_status": state["milestone"]["status"],
+        "slices": state["milestone"]["slices"],
+        "current_unit": unit_key(unit) if unit else None,
+        "current_unit_status": unit["status"] if unit else None,
+        "failure": state["failure"],
+        "units": units_view,
+        "events_total": len(state["events"]),
+        "last_events": state["events"][-30:],
+    }

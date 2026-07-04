@@ -2,3 +2,6 @@
 implementation/review-work/
 review-work/
 
+__pycache__/
+*.pyc
+orchestrator/examples/calculator/work/

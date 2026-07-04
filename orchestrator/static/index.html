@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Orchestrator</title>
+<style>
+  :root {
+    --bg: #0f1117; --panel: #171a23; --line: #262b38; --text: #d6dae3;
+    --dim: #8a90a0; --ok: #4ade80; --warn: #fbbf24; --bad: #f87171;
+    --accent: #7aa2f7;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: var(--bg); color: var(--text);
+         font: 14px/1.5 "SF Mono", ui-monospace, Menlo, monospace; padding: 24px; }
+  h1 { font-size: 16px; font-weight: 600; margin-bottom: 4px; }
+  .dim { color: var(--dim); }
+  .goal { margin-bottom: 16px; }
+  .badge { display: inline-block; padding: 1px 10px; border-radius: 10px;
+           font-size: 12px; border: 1px solid var(--line); }
+  .badge.open { color: var(--accent); border-color: var(--accent); }
+  .badge.closed { color: var(--ok); border-color: var(--ok); }
+  .badge.failed { color: var(--bad); border-color: var(--bad); }
+  .failure { background: #2a1518; border: 1px solid var(--bad); color: var(--bad);
+             padding: 10px 14px; border-radius: 8px; margin: 12px 0; white-space: pre-wrap; }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-top: 16px; }
+  @media (max-width: 900px) { .grid { grid-template-columns: 1fr; } }
+  .panel { background: var(--panel); border: 1px solid var(--line);
+           border-radius: 10px; padding: 14px 16px; }
+  .panel h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .08em;
+              color: var(--dim); margin-bottom: 10px; }
+  .unit { padding: 8px 0; border-bottom: 1px solid var(--line); }
+  .unit:last-child { border-bottom: none; }
+  .unit-head { display: flex; justify-content: space-between; align-items: center; }
+  .unit-name { font-weight: 600; }
+  .st { font-size: 12px; }
+  .st.sealed { color: var(--ok); } .st.failed { color: var(--bad); }
+  .st.rounds, .st.sealing, .st.seal_fix, .st.verify_fix { color: var(--warn); }
+  .st.pending { color: var(--dim); }
+  .chips { margin-top: 4px; display: flex; flex-wrap: wrap; gap: 4px; }
+  .chip { font-size: 11px; padding: 0 8px; border-radius: 8px;
+          border: 1px solid var(--line); color: var(--dim); }
+  .chip.clean { color: var(--ok); border-color: #234; }
+  .chip.dirty { color: var(--warn); }
+  .chip.pass { color: var(--ok); border-color: var(--ok); }
+  .chip.fail { color: var(--bad); }
+  .events { max-height: 420px; overflow-y: auto; }
+  .evt { padding: 3px 0; border-bottom: 1px dashed var(--line); font-size: 12px; }
+  .evt .t { color: var(--dim); margin-right: 8px; }
+  .evt .ty { color: var(--accent); margin-right: 8px; }
+  #err { color: var(--bad); margin-top: 8px; }
+  .meta { font-size: 12px; color: var(--dim); margin-top: 14px; }
+</style>
+</head>
+<body>
+  <h1>Orchestrator <span id="badge" class="badge">…</span></h1>
+  <div class="goal dim" id="goal">loading…</div>
+  <div id="failure"></div>
+  <div class="grid">
+    <div class="panel">
+      <h2>Pipeline</h2>
+      <div id="units"></div>
+    </div>
+    <div class="panel">
+      <h2>Events</h2>
+      <div class="events" id="events"></div>
+    </div>
+  </div>
+  <div class="meta" id="meta"></div>
+  <div id="err"></div>
+<script>
+function esc(s) {
+  return String(s == null ? "" : s).replace(/[&<>"]/g,
+    c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+}
+function roundChip(r) {
+  const cls = r.findings === 0 ? "clean" : "dirty";
+  return `<span class="chip ${cls}">${esc(r.family)} ${esc(r.kind === "review_round" ? "r" : r.kind)} · ${r.findings}f</span>`;
+}
+function sealChip(s) {
+  const cls = s.passed ? "pass" : "fail";
+  const label = s.passed ? "pass" : (s.invalidated ? "invalid" : "findings");
+  const counts = Object.entries(s.findings || {})
+    .map(([f, n]) => `${f}:${n === null ? "×" : n}`).join(" ");
+  return `<span class="chip ${cls}">seal a${s.attempt} ${label} ${esc(counts)}</span>`;
+}
+function render(sum) {
+  const badge = document.getElementById("badge");
+  badge.textContent = sum.milestone_status;
+  badge.className = "badge " + esc(sum.milestone_status);
+  document.getElementById("goal").textContent = sum.goal + "  —  " + sum.workspace;
+  document.getElementById("failure").innerHTML = sum.failure
+    ? `<div class="failure">RUN FAILED · ${esc(sum.failure.unit || "")}\n${esc(sum.failure.reason)}</div>`
+    : "";
+  document.getElementById("units").innerHTML = (sum.units || []).map(u => `
+    <div class="unit">
+      <div class="unit-head">
+        <span class="unit-name">${esc(u.unit)}</span>
+        <span class="st ${esc(u.status)}">${esc(u.status)}</span>
+      </div>
+      <div class="chips">
+        ${(u.rounds || []).map(roundChip).join("")}
+        ${(u.seals || []).map(sealChip).join("")}
+      </div>
+    </div>`).join("") || '<div class="dim">no units yet</div>';
+  document.getElementById("events").innerHTML =
+    (sum.last_events || []).slice().reverse().map(e => {
+      const extra = Object.entries(e)
+        .filter(([k]) => !["seq","at","type"].includes(k))
+        .map(([k, v]) => `${k}=${typeof v === "object" ? JSON.stringify(v) : v}`)
+        .join(" ");
+      return `<div class="evt"><span class="t">#${e.seq} ${esc(e.at)}</span><span class="ty">${esc(e.type)}</span>${esc(extra)}</div>`;
+    }).join("");
+  document.getElementById("meta").textContent =
+    `current: ${sum.current_unit || "—"} (${sum.current_unit_status || "—"}) · ` +
+    `slices: ${(sum.slices || []).length} · events: ${sum.events_total}`;
+}
+async function tick() {
+  try {
+    const res = await fetch("/api/state", {cache: "no-store"});
+    const data = await res.json();
+    if (data.ok) { render(data.summary); document.getElementById("err").textContent = ""; }
+    else { document.getElementById("err").textContent = "state error: " + data.error; }
+  } catch (e) {
+    document.getElementById("err").textContent = "poll failed: " + e;
+  }
+}
+tick();
+setInterval(tick, 2000);
+</script>
+</body>
+</html>
