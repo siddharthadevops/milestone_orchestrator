@@ -80,7 +80,7 @@
 
   /* new-run form */
   dialog { border: 1px solid var(--line); border-radius: 12px; padding: 22px;
-           width: 560px; max-width: 92vw; }
+           width: 560px; max-width: 92vw; margin: auto; }
   dialog::backdrop { background: rgba(20,24,33,.35); }
   dialog h2 { margin-bottom: 14px; }
   .field { margin-bottom: 12px; }
@@ -138,9 +138,10 @@
       <button class="btn" type="button" onclick="openPicker('dir','f_ws')">Browse…</button>
     </div>
     <datalist id="dl_ws"></datalist>
-    <div class="hint">Created if missing; previous workspaces appear in the
-      dropdown. State lives in
-      <span class="mono">&lt;workspace&gt;/.orchestrator/</span>.</div></div>
+    <div class="hint">Must be the ROOT of an existing git repository
+      (<span class="mono">git init</span> it deliberately first) — the run's
+      gate commits live there. Previous workspaces appear in the dropdown.
+      State lives in <span class="mono">&lt;workspace&gt;/.orchestrator/</span>.</div></div>
   <div class="field"><label>Work description (goal) *</label>
     <textarea id="f_goal" placeholder="What should be built…"></textarea></div>
   <div class="field"><label>…or description doc path (.md)</label>

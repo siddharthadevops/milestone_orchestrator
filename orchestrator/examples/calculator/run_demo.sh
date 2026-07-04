@@ -8,6 +8,7 @@ WORK="${1:-$HERE/work}"
 
 rm -rf "$WORK"
 mkdir -p "$WORK"
+git -C "$WORK" init -q   # the ledger repo is created deliberately (no auto-init)
 CFG="$WORK/.demo-config.json"
 cat > "$CFG" <<EOF
 {

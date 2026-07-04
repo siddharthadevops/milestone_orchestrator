@@ -98,6 +98,10 @@ class ServiceApiTest(unittest.TestCase):
     def workspace(self, name):
         path = os.path.join(self.tmp.name, name)
         os.makedirs(path, exist_ok=True)
+        # Launch-time rule: the workspace must be the root of an existing
+        # git repository (no auto-init); tests create the ledger repo the
+        # same deliberate way an operator would.
+        subprocess.run(["git", "init", "-q", path], check=True)
         return path
 
     def create_run(self, ws, **extra):

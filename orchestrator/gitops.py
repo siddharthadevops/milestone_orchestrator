@@ -120,6 +120,11 @@ def _is_own_repo(workspace):
     return _git_dir(workspace) == os.path.join(real_ws, ".git")
 
 
+def is_repo_root(workspace):
+    """Public check: is this directory the root of its own git repo?"""
+    return _is_own_repo(workspace)
+
+
 def _assert_workspace_root(workspace):
     """Refuse to mutate unless the workspace is the root of its OWN repo.
 
@@ -218,13 +223,12 @@ def ignore_lines(extra_dirs=None):
 def ensure_repo(workspace, extra_ignore_dirs=None):
     """Idempotently make the workspace a usable gate repo.
 
-    - `git init` when there is no repository yet. A workspace nested inside
-      some OTHER repository gets its own independent nested repo (`git
-      init` here wins over the enclosing repo for every git command run
-      inside the workspace) — gate commits must never leak into an
-      enclosing project. A `.git` entry that exists but does not resolve
-      to the workspace's own repository (a gitdir link into a foreign
-      repo, a corrupt repo) is a hard failure, never an init through it.
+    - REQUIRES the workspace to already be the ROOT of its own git
+      repository — no auto-init, no adopting an enclosing repo: the
+      operator creates the ledger repo deliberately (git init). A `.git`
+      entry that does not resolve to the workspace's own repository (a
+      gitdir link into a foreign repo, a corrupt repo) is likewise a hard
+      failure.
     - A local committer identity when none is configured (gate commits must
       never fail over a missing global git config).
     - `.orchestrator/` and the tool-cache set in .gitignore (created or
@@ -247,7 +251,15 @@ def ensure_repo(workspace, extra_ignore_dirs=None):
                 "own repository (git dir: %s); refusing to initialize or "
                 "operate through it" % (workspace, _git_dir(workspace) or "none")
             )
-        _run(workspace, "init", "-q")
+        # Deliberately NO auto `git init`: the gate ledger must land in a
+        # repository the operator created on purpose. Auto-initializing is
+        # how run history ends up in the wrong place when a path is
+        # mistyped or a parent directory gets picked by accident.
+        raise GitError(
+            "workspace %s is not the root of a git repository; create the "
+            "ledger repo deliberately first (git -C %s init) or pick the "
+            "right directory" % (workspace, workspace)
+        )
     _assert_workspace_root(workspace)
     _assert_no_embedded_repos(workspace)
     for key, value in (

@@ -3,6 +3,7 @@
 
 import json
 import os
+import subprocess
 import tempfile
 import threading
 import unittest
@@ -266,6 +267,8 @@ class FsHttpTest(unittest.TestCase):
         os.makedirs(self.home, exist_ok=True)
         os.mkdir(os.path.join(self.home, "recents.json"))
         ws = os.path.join(self.tmp.name, "ws2")
+        os.makedirs(ws, exist_ok=True)
+        subprocess.run(["git", "init", "-q", ws], check=True)
         status, data = _post(
             self.port,
             "/api/runs",
@@ -290,6 +293,8 @@ class FsHttpTest(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(data["workspaces"], [])
         ws = os.path.join(self.tmp.name, "ws1")
+        os.makedirs(ws, exist_ok=True)
+        subprocess.run(["git", "init", "-q", ws], check=True)
         doc = os.path.join(self.tree, "GOAL.md")
         status, data = _post(
             self.port,

@@ -193,8 +193,12 @@ class Driver(object):
                 )
             except gitops.GitError as exc:
                 # A driver that cannot keep its gate ledger must not run.
-                st.fail_run(self.state, "git unavailable: %s" % exc)
-                self._save()
+                # Idempotent across operator retries: an already-recorded
+                # failure is not overwritten and the ledger gains no
+                # duplicate run_failed events.
+                if self.state["failure"] is None:
+                    st.fail_run(self.state, "git unavailable: %s" % exc)
+                    self._save()
 
     # -- helpers ----------------------------------------------------------
 

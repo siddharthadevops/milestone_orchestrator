@@ -50,7 +50,7 @@ import urllib.parse
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from . import driver, registry, state as st
+from . import driver, gitops, registry, state as st
 
 STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -357,6 +357,26 @@ def create_run(home, payload):
             if not isinstance(user_cfg, dict):
                 raise ApiError(400, "config must be a JSON object")
             driver.merge_config(config, user_cfg)  # same semantics as the CLI
+        if gitops.enabled(config):
+            # The gate ledger must land in a repo the operator created on
+            # purpose: no auto-init, no adopting parents. This also catches
+            # the picked-the-parent-directory mistake at launch time
+            # instead of writing run history into the wrong repository.
+            if not os.path.isdir(workspace):
+                raise ApiError(
+                    400,
+                    "workspace does not exist: %s — create it and run "
+                    "`git init` in it first (or disable git in the advanced "
+                    "config for a pure-state run)" % workspace,
+                )
+            if not gitops.is_repo_root(workspace):
+                raise ApiError(
+                    400,
+                    "workspace must be the ROOT of an existing git "
+                    "repository (gate commits and the fix loop live there; "
+                    "this prevents run history landing in a parent or "
+                    "unrelated repo). Run: git -C %s init" % workspace,
+                )
         try:
             driver.init_run(goal.strip(), workspace, config=config)
         except FileExistsError as exc:

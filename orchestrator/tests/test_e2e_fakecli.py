@@ -58,7 +58,9 @@ GATE_MESSAGES = [
 
 
 def _git(repo, *args):
-    """Read-only git helper (status/log/ls-tree/show/rev-parse only)."""
+    """Git helper: the one deliberate `init` on the temp workspace in
+    setUpClass, read-only queries (status/log/ls-tree/show/rev-parse)
+    everywhere else."""
     return subprocess.run(
         ["git", "-C", repo] + list(args),
         capture_output=True,
@@ -74,6 +76,11 @@ class TestCalculatorE2E(unittest.TestCase):
         cls.addClassCleanup(cls.tmp.cleanup)
         cls.work = os.path.join(cls.tmp.name, "work")
         os.makedirs(cls.work)
+        # The operator's deliberate ledger repo: ensure_repo no longer
+        # auto-inits, so a git-enabled run requires the workspace to
+        # already be the root of its own repository (run_demo.sh does
+        # exactly this before `driver init`).
+        _git(cls.work, "init", "-q")
 
         # Incident regression baseline: the enclosing canon repo before the
         # run. The run must leave both the worktree status and HEAD alone.

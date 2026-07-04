@@ -1,7 +1,8 @@
 """Tests for gitops.py: the wip/amend/gate discipline and repo protections.
 
-The centerpiece is the nesting-incident regression: a workspace created
-INSIDE another repository must get its own independent nested repo, and
+The centerpiece is the nesting-incident regression: ensure_repo no longer
+auto-inits, so a workspace that is not already the root of its own repo is
+refused outright (the operator creates the ledger repo deliberately), and
 every mutating op must hard-fail (GitError) rather than stage or commit
 into the enclosing project. The first demo run polluted the enclosing
 canon repo exactly this way; these tests keep that impossible.
@@ -106,6 +107,14 @@ class GitopsTestCase(unittest.TestCase):
             _write(os.path.join(ws, rel), content)
         return ws
 
+    def make_repo(self, name="ws", files=None):
+        """A workspace the operator deliberately made a git repo. Since
+        ensure_repo no longer auto-inits, every test that wants a usable
+        gate repo owes the workspace this `git init` first."""
+        ws = self.make_workspace(name, files)
+        self.git(ws, "init", "-q")
+        return ws
+
     def make_outer_repo(self, name="outer"):
         """A committed repo standing in for the polluted canon repo."""
         outer = os.path.join(self.tmp, name)
@@ -129,8 +138,23 @@ class GitopsTestCase(unittest.TestCase):
 
 
 class EnsureRepoTests(GitopsTestCase):
-    def test_empty_dir_creates_repo_with_baseline_commit(self):
+    def test_non_repo_dir_is_refused_no_auto_init(self):
+        # ensure_repo no longer auto-inits: a plain directory is refused
+        # with the explanation that the operator must create the ledger
+        # repo deliberately — and the refusal leaves the directory intact.
         ws = self.make_workspace()
+        with self.assertRaises(gitops.GitError) as ctx:
+            gitops.ensure_repo(ws)
+        msg = str(ctx.exception)
+        self.assertIn("is not the root of a git repository", msg)
+        self.assertIn("create the ledger repo deliberately", msg)
+        self.assertFalse(os.path.lexists(os.path.join(ws, ".git")))
+        self.assertEqual(os.listdir(ws), [])  # no .gitignore either
+
+    def test_fresh_empty_deliberate_repo_gets_baseline_commit(self):
+        # On a freshly `git init`ed EMPTY repo, ensure_repo still seeds
+        # identity, .gitignore and the baseline commit.
+        ws = self.make_repo()
         gitops.ensure_repo(ws)
         self.assertTrue(os.path.isdir(os.path.join(ws, ".git")))
         top = os.path.realpath(self.git(ws, "rev-parse", "--show-toplevel").strip())
@@ -145,7 +169,7 @@ class EnsureRepoTests(GitopsTestCase):
     def test_sets_local_identity_when_none_configured(self):
         # Global/system config is masked in setUp, so the defaults MUST be
         # written locally or the baseline commit could not even succeed.
-        ws = self.make_workspace()
+        ws = self.make_repo()
         gitops.ensure_repo(ws)
         self.assertEqual(
             self.git(ws, "config", "--get", "user.name").strip(),
@@ -157,7 +181,7 @@ class EnsureRepoTests(GitopsTestCase):
         )
 
     def test_second_call_is_idempotent(self):
-        ws = self.make_workspace(files={"seed.txt": "seed\n"})
+        ws = self.make_repo(files={"seed.txt": "seed\n"})
         gitops.ensure_repo(ws)
         first_head = self.git(ws, "rev-parse", "HEAD").strip()
         first_ignore = _read(os.path.join(ws, ".gitignore"))
@@ -200,7 +224,7 @@ class EnsureRepoTests(GitopsTestCase):
         # neither commit nor otherwise disturb the pending worktree delta:
         # HEAD is the last accepted state and only commit_wip/amend may
         # advance it.
-        ws = self.make_workspace(files={"seed.txt": "seed\n"})
+        ws = self.make_repo(files={"seed.txt": "seed\n"})
         gitops.ensure_repo(ws)
         _write(os.path.join(ws, "draft.py"), "pending unreviewed delta\n")
         delta_before = gitops.worktree_diff(ws)
@@ -215,7 +239,7 @@ class EnsureRepoTests(GitopsTestCase):
         self.assertEqual(gitops.worktree_diff(ws), "")
 
     def test_extra_ignore_dirs_are_written_to_gitignore(self):
-        ws = self.make_workspace(files={"seed.txt": "seed\n"})
+        ws = self.make_repo(files={"seed.txt": "seed\n"})
         gitops.ensure_repo(ws, extra_ignore_dirs=["opcache", "buildcache/"])
         lines = _read(os.path.join(ws, ".gitignore")).splitlines()
         self.assertIn("opcache/", lines)
@@ -242,28 +266,50 @@ class EnsureRepoTests(GitopsTestCase):
 
 class NestingRegressionTests(GitopsTestCase):
     """The incident: a workspace nested inside another repo must never
-    stage into or commit to the enclosing repository."""
+    stage into or commit to the enclosing repository. ensure_repo no
+    longer auto-inits an independent nested repo — a nested non-repo
+    workspace is refused outright; only a nested repo the operator
+    created deliberately is accepted."""
 
-    def test_nested_workspace_gets_independent_repo(self):
+    def test_nested_non_repo_workspace_is_refused_no_auto_init(self):
+        # Flip of the old auto-init expectation: a workspace nested inside
+        # another repository (and NOT itself a repo) raises GitError AND
+        # leaves the outer repo completely untouched (status+log identical).
         outer = self.make_outer_repo()
         ws = os.path.join(outer, "workspace")
         os.makedirs(ws)
         _write(os.path.join(ws, "seed.txt"), "seed\n")
         before = self.outer_fingerprint(outer)
+        with self.assertRaises(gitops.GitError) as ctx:
+            gitops.ensure_repo(ws)
+        msg = str(ctx.exception)
+        self.assertIn("is not the root of a git repository", msg)
+        self.assertIn("create the ledger repo deliberately", msg)
+        # No nested repo materialized, no adoption of the enclosing repo.
+        self.assertFalse(os.path.lexists(os.path.join(ws, ".git")))
+        self.assertEqual(self.outer_fingerprint(outer), before)
+        self.assertEqual(self.git_rc(outer, "diff", "--cached", "--quiet"), 0)
+        self.assertEqual(self.git(outer, "ls-files").strip(), "project.txt")
+        # The refusal repeats deterministically (nothing half-initialized).
+        with self.assertRaises(gitops.GitError):
+            gitops.ensure_repo(ws)
+        self.assertEqual(self.outer_fingerprint(outer), before)
+
+    def test_deliberately_inited_nested_workspace_stays_isolated(self):
+        # Still supported and still crucial: a nested dir the operator
+        # deliberately `git init`ed IS accepted, and every mutation stays
+        # inside it — the enclosing repo sees nothing.
+        outer = self.make_outer_repo()
+        ws = os.path.join(outer, "workspace")
+        os.makedirs(ws)
+        _write(os.path.join(ws, "seed.txt"), "seed\n")
+        before = self.outer_fingerprint(outer)
+        self.git(ws, "init", "-q")  # the deliberate operator act
         gitops.ensure_repo(ws)
         self.assertTrue(os.path.isdir(os.path.join(ws, ".git")))
         top = os.path.realpath(self.git(ws, "rev-parse", "--show-toplevel").strip())
         self.assertEqual(top, os.path.realpath(ws))
         self.assertEqual(self.commit_count(ws), 1)  # own baseline only
-        self.assertEqual(self.outer_fingerprint(outer), before)
-
-    def test_nested_workspace_mutations_leave_outer_repo_untouched(self):
-        outer = self.make_outer_repo()
-        ws = os.path.join(outer, "workspace")
-        os.makedirs(ws)
-        _write(os.path.join(ws, "seed.txt"), "seed\n")
-        before = self.outer_fingerprint(outer)
-        gitops.ensure_repo(ws)
         # A full unit cycle: draft -> wip commit -> fix -> amend -> gate.
         _write(os.path.join(ws, "src.py"), "def add(a, b):\n    return a + b\n")
         delta = gitops.worktree_diff(ws)
@@ -289,6 +335,7 @@ class NestingRegressionTests(GitopsTestCase):
         ws = os.path.join(outer, "workspace")
         os.makedirs(ws)
         _write(os.path.join(ws, "seed.txt"), "seed\n")
+        self.git(ws, "init", "-q")  # the deliberate operator act
         gitops.ensure_repo(ws)
         before = self.outer_fingerprint(outer)
         shutil.rmtree(os.path.join(ws, ".git"))
@@ -325,7 +372,7 @@ class GitEnvLeakRegressionTests(GitopsTestCase):
 
     def test_leaked_git_dir_cannot_redirect_gate_commits(self):
         outer = self.make_outer_repo()
-        ws = self.make_workspace()
+        ws = self.make_repo()
         gitops.ensure_repo(ws)
         _write(os.path.join(ws, "payload.py"), "x = 1\n")
         before = self.outer_fingerprint(outer)
@@ -342,7 +389,7 @@ class GitEnvLeakRegressionTests(GitopsTestCase):
 
     def test_leaked_git_dir_does_not_hijack_ensure_repo(self):
         outer = self.make_outer_repo()
-        ws = self.make_workspace(files={"seed.txt": "seed\n"})
+        ws = self.make_repo(files={"seed.txt": "seed\n"})
         before = self.outer_fingerprint(outer)
         self.leak("GIT_DIR", os.path.join(outer, ".git"))
         gitops.ensure_repo(ws)
@@ -353,7 +400,7 @@ class GitEnvLeakRegressionTests(GitopsTestCase):
 
     def test_leaked_index_and_worktree_do_not_touch_outer_repo(self):
         outer = self.make_outer_repo()
-        ws = self.make_workspace()
+        ws = self.make_repo()
         gitops.ensure_repo(ws)
         _write(os.path.join(ws, "payload.py"), "x = 1\n")
         before = self.outer_fingerprint(outer)
@@ -444,7 +491,7 @@ class EmbeddedRepoTests(GitopsTestCase):
         return dep
 
     def test_committed_nested_repo_fails_diff_wip_and_gate(self):
-        ws = self.make_workspace(files={"seed.txt": "seed\n"})
+        ws = self.make_repo(files={"seed.txt": "seed\n"})
         gitops.ensure_repo(ws)
         self.make_nested(ws)
         for op in (
@@ -465,7 +512,7 @@ class EmbeddedRepoTests(GitopsTestCase):
         # Without a HEAD the nested repo cannot even be represented as a
         # gitlink: add -A simply skips it and the content vanishes with
         # no trace at all. Detection must not depend on the index.
-        ws = self.make_workspace(files={"seed.txt": "seed\n"})
+        ws = self.make_repo(files={"seed.txt": "seed\n"})
         gitops.ensure_repo(ws)
         self.make_nested(ws, rel="vendor2/dep", commit=False)
         with self.assertRaises(gitops.GitError):
@@ -474,7 +521,7 @@ class EmbeddedRepoTests(GitopsTestCase):
     def test_declared_submodule_is_allowed(self):
         # An intentional submodule (gitlink + .gitmodules entry) is a
         # correct representation, not content loss: adoption must work.
-        ws = self.make_workspace(files={"seed.txt": "seed\n"})
+        ws = self.make_repo(files={"seed.txt": "seed\n"})
         gitops.ensure_repo(ws)
         self.make_nested(ws, rel="libs/sub")
         _write(
@@ -490,7 +537,7 @@ class EmbeddedRepoTests(GitopsTestCase):
         # A nested repo inside an ignored cache dir (e.g. a tox env that
         # pulled sources from VCS) can never be staged — it must not
         # hard-fail the run.
-        ws = self.make_workspace(files={"seed.txt": "seed\n"})
+        ws = self.make_repo(files={"seed.txt": "seed\n"})
         gitops.ensure_repo(ws)
         self.make_nested(ws, rel=os.path.join(".tox", "dep"))
         self.assertEqual(gitops.worktree_diff(ws), "")
@@ -504,7 +551,7 @@ class CacheNoiseTests(GitopsTestCase):
     snapshots exclude (runners.SNAPSHOT_EXCLUDE_DIRS)."""
 
     def test_pycache_never_enters_diffs_or_gate_commits(self):
-        ws = self.make_workspace(files={"mod.py": "x = 1\n"})
+        ws = self.make_repo(files={"mod.py": "x = 1\n"})
         gitops.ensure_repo(ws)
         _write(
             os.path.join(ws, "__pycache__", "mod.cpython-311.pyc"),
@@ -535,12 +582,12 @@ class WorktreeDiffTests(GitopsTestCase):
     """worktree_diff is the pending fix delta: worktree vs HEAD."""
 
     def test_empty_at_baseline(self):
-        ws = self.make_workspace(files={"seed.txt": "seed\n"})
+        ws = self.make_repo(files={"seed.txt": "seed\n"})
         gitops.ensure_repo(ws)
         self.assertEqual(gitops.worktree_diff(ws), "")
 
     def test_shows_modified_content(self):
-        ws = self.make_workspace(files={"notes.txt": "old line\n"})
+        ws = self.make_repo(files={"notes.txt": "old line\n"})
         gitops.ensure_repo(ws)
         _write(os.path.join(ws, "notes.txt"), "old line\nadded line two\n")
         delta = gitops.worktree_diff(ws)
@@ -548,7 +595,7 @@ class WorktreeDiffTests(GitopsTestCase):
         self.assertIn("+added line two", delta)
 
     def test_shows_new_file_content_via_intent_to_add(self):
-        ws = self.make_workspace(files={"seed.txt": "seed\n"})
+        ws = self.make_repo(files={"seed.txt": "seed\n"})
         gitops.ensure_repo(ws)
         _write(os.path.join(ws, "brand_new.py"), "print('brand new content')\n")
         delta = gitops.worktree_diff(ws)
@@ -566,7 +613,7 @@ class WorktreeDiffTests(GitopsTestCase):
         # deletion-only worker delta look like "no changes". With
         # `--ignore-removal`, deletions stay worktree-only and show in the
         # diff vs HEAD like every other change.
-        ws = self.make_workspace(files={"doomed.txt": "soon to be gone\n"})
+        ws = self.make_repo(files={"doomed.txt": "soon to be gone\n"})
         gitops.ensure_repo(ws)
         os.remove(os.path.join(ws, "doomed.txt"))
         delta = gitops.worktree_diff(ws)
@@ -581,7 +628,7 @@ class WorktreeDiffTests(GitopsTestCase):
         self.assertIn("doomed.txt", self.git(ws, "ls-files"))
 
     def test_ignores_orchestrator_dir(self):
-        ws = self.make_workspace(files={"seed.txt": "seed\n"})
+        ws = self.make_repo(files={"seed.txt": "seed\n"})
         gitops.ensure_repo(ws)
         _write(
             os.path.join(ws, ".orchestrator", "state.json"),
@@ -591,7 +638,7 @@ class WorktreeDiffTests(GitopsTestCase):
         self.assertEqual(gitops.worktree_diff(ws), "")
 
     def test_truncates_beyond_max_chars(self):
-        ws = self.make_workspace(files={"big.txt": "line\n"})
+        ws = self.make_repo(files={"big.txt": "line\n"})
         gitops.ensure_repo(ws)
         _write(
             os.path.join(ws, "big.txt"),
@@ -606,7 +653,7 @@ class WorktreeDiffTests(GitopsTestCase):
 
 class HasPendingDeltaTests(GitopsTestCase):
     def test_tracks_every_change_shape_and_clears_on_commit(self):
-        ws = self.make_workspace(files={"seed.txt": "seed\n"})
+        ws = self.make_repo(files={"seed.txt": "seed\n"})
         gitops.ensure_repo(ws)
         self.assertFalse(gitops.has_pending_delta(ws))
         # New file.
@@ -626,7 +673,7 @@ class HasPendingDeltaTests(GitopsTestCase):
         self.assertFalse(gitops.has_pending_delta(ws))
 
     def test_orchestrator_writes_are_not_a_delta(self):
-        ws = self.make_workspace(files={"seed.txt": "seed\n"})
+        ws = self.make_repo(files={"seed.txt": "seed\n"})
         gitops.ensure_repo(ws)
         _write(os.path.join(ws, ".orchestrator", "raw", "r1.txt"), "raw\n")
         self.assertFalse(gitops.has_pending_delta(ws))
@@ -637,7 +684,7 @@ class WipAmendGateTests(GitopsTestCase):
     the gate retitles it; the milestone close is a plain commit."""
 
     def test_commit_wip_opens_the_unit_commit(self):
-        ws = self.make_workspace(files={"seed.txt": "seed\n"})
+        ws = self.make_repo(files={"seed.txt": "seed\n"})
         gitops.ensure_repo(ws)
         _write(os.path.join(ws, "draft.py"), "draft = True\n")
         sha = gitops.commit_wip(ws, "wip: skeleton")
@@ -652,7 +699,7 @@ class WipAmendGateTests(GitopsTestCase):
     def test_commit_wip_allows_an_empty_draft(self):
         # A unit whose draft changed nothing still opens its wip commit
         # (--allow-empty): the amend/gate machinery needs the commit.
-        ws = self.make_workspace(files={"seed.txt": "seed\n"})
+        ws = self.make_repo(files={"seed.txt": "seed\n"})
         gitops.ensure_repo(ws)
         sha = gitops.commit_wip(ws, "wip: slice_doc-01")
         self.assertIsNotNone(sha)
@@ -660,7 +707,7 @@ class WipAmendGateTests(GitopsTestCase):
         self.assertEqual(self.subject(ws), "wip: slice_doc-01")
 
     def test_amend_keeps_message_changes_sha_history_constant(self):
-        ws = self.make_workspace(files={"seed.txt": "seed\n"})
+        ws = self.make_repo(files={"seed.txt": "seed\n"})
         gitops.ensure_repo(ws)
         _write(os.path.join(ws, "draft.py"), "draft = True\n")
         wip_sha = gitops.commit_wip(ws, "wip: skeleton")
@@ -680,7 +727,7 @@ class WipAmendGateTests(GitopsTestCase):
         )
 
     def test_finalize_gate_replaces_the_message(self):
-        ws = self.make_workspace(files={"seed.txt": "seed\n"})
+        ws = self.make_repo(files={"seed.txt": "seed\n"})
         gitops.ensure_repo(ws)
         _write(os.path.join(ws, "draft.py"), "draft = True\n")
         wip_sha = gitops.commit_wip(ws, "wip: skeleton")
@@ -697,7 +744,7 @@ class WipAmendGateTests(GitopsTestCase):
         )
 
     def test_commit_plain_returns_sha_or_none(self):
-        ws = self.make_workspace(files={"seed.txt": "seed\n"})
+        ws = self.make_repo(files={"seed.txt": "seed\n"})
         gitops.ensure_repo(ws)
         self.assertIsNone(gitops.commit_plain(ws, "Close milestone"))
         self.assertEqual(self.commit_count(ws), 1)
@@ -733,7 +780,7 @@ class RestoreCleanTests(GitopsTestCase):
     destroying runtime bookkeeping."""
 
     def test_reverts_tracked_removes_untracked_preserves_orchestrator(self):
-        ws = self.make_workspace(
+        ws = self.make_repo(
             files={"kept.txt": "original\n", "doomed.txt": "restore me\n"}
         )
         gitops.ensure_repo(ws)
@@ -763,7 +810,7 @@ class RestoreCleanTests(GitopsTestCase):
     def test_restores_to_the_amended_commit_not_the_baseline(self):
         # HEAD is "the last accepted state": after wip+amend, restore must
         # return to the amended content, not the baseline.
-        ws = self.make_workspace(files={"seed.txt": "seed\n"})
+        ws = self.make_repo(files={"seed.txt": "seed\n"})
         gitops.ensure_repo(ws)
         _write(os.path.join(ws, "unit.py"), "accepted = 1\n")
         gitops.commit_wip(ws, "wip: skeleton")
@@ -776,7 +823,7 @@ class RestoreCleanTests(GitopsTestCase):
 
 class GitignoreTests(GitopsTestCase):
     def test_append_preserves_existing_content(self):
-        ws = self.make_workspace(files={"seed.txt": "seed\n"})
+        ws = self.make_repo(files={"seed.txt": "seed\n"})
         # No trailing newline: the append must add its own separator.
         _write(os.path.join(ws, ".gitignore"), "*.pyc\nbuild/")
         gitops.ensure_repo(ws)
@@ -787,7 +834,7 @@ class GitignoreTests(GitopsTestCase):
         )
 
     def test_no_duplicate_line_on_rerun(self):
-        ws = self.make_workspace(files={"seed.txt": "seed\n"})
+        ws = self.make_repo(files={"seed.txt": "seed\n"})
         _write(os.path.join(ws, ".gitignore"), "*.pyc\nbuild/")
         gitops.ensure_repo(ws)
         after_first = _read(os.path.join(ws, ".gitignore"))

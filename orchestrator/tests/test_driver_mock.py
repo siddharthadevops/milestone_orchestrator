@@ -77,8 +77,23 @@ def make_config(**overrides):
     return cfg
 
 
+def git_init_workspace(workspace):
+    """The operator's deliberate `git init`. ensure_repo no longer
+    auto-inits (the ledger repo must be created on purpose), so every
+    git-enabled harness workspace gets its repo up front — exactly what
+    run_demo.sh does before `driver init`."""
+    subprocess.run(
+        ["git", "init", "-q"],
+        cwd=workspace, capture_output=True, text=True, check=True, timeout=60,
+    )
+
+
 def init_state(workspace, config, goal=GOAL):
-    """Create the on-disk state file the way `driver init` does."""
+    """Create the on-disk state file the way `driver init` does. For
+    git-enabled configs the workspace is first made a repo deliberately
+    (ensure_repo refuses non-repo workspaces)."""
+    if (config.get("git") or {}).get("enabled"):
+        git_init_workspace(workspace)
     state = st.new_state(goal, workspace, config)
     st.append_event(state, "initialized", goal=goal)
     path = drv.default_state_path(workspace)
@@ -942,6 +957,33 @@ class TestGitDisabledLegacyPath(DriverTestCase):
             self.assertNotIn("amended", types)
             self.assertNotIn("gate_commit", types)
             self.assertIsNone(unit["gate_commit"])
+
+
+# ---------------------------------------------------------------------------
+# git enabled without a deliberately created ledger repo: run refused
+
+
+class TestGitEnabledNonRepoWorkspace(DriverTestCase):
+    def test_missing_ledger_repo_fails_run_with_the_git_error(self):
+        # Flip of the old auto-init behavior: ensure_repo no longer
+        # initializes a repo for a git-enabled run. Driver construction
+        # records the terminal failure (before any worker call) with the
+        # GitError explanation, and no repo materializes behind the refusal.
+        with tempfile.TemporaryDirectory(prefix="orch-mock-") as ws:
+            state = st.new_state(GOAL, ws, make_config())
+            st.append_event(state, "initialized", goal=GOAL)
+            path = drv.default_state_path(ws)
+            st.save(path, state)  # deliberately NO git init
+            mock = runners.MockRunner([])
+            driver = drv.Driver(path, runner=mock)
+            self.assert_failed(
+                path, driver,
+                ["git unavailable",
+                 "is not the root of a git repository",
+                 "create the ledger repo deliberately"],
+            )
+            self.assertEqual(mock.calls, [])  # no worker call was made
+            self.assertFalse(os.path.exists(os.path.join(ws, ".git")))
 
 
 # ---------------------------------------------------------------------------

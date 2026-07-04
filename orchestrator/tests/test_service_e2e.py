@@ -23,6 +23,7 @@ Never touches ~/.impl_roadmap; everything lives in TemporaryDirectory.
 
 import json
 import os
+import subprocess
 import signal
 import threading
 import time
@@ -51,6 +52,7 @@ class TestServicePanelE2E(unittest.TestCase):
         self.work = os.path.join(self.tmp.name, "work")
         os.makedirs(self.home)
         os.makedirs(self.work)
+        subprocess.run(["git", "init", "-q", self.work], check=True)
         self.spawned_pids = set()
         self.server = service.make_server(self.home, 0)  # ephemeral port
         self.port = self.server.server_address[1]
