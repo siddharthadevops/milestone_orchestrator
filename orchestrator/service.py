@@ -6,6 +6,11 @@ Serves a white two-pane panel (left: launched milestones; right: selected
 run's live state) and a JSON API:
 
     GET    /api/runs               all runs + derived status
+    GET    /api/fs                 read-only listing for the panel pickers:
+                                   ?path=&mode=dir|file&ext=&hidden=1&nearest=1
+                                   (nearest walks up to the closest existing
+                                   directory instead of 404-ing)
+    GET    /api/recents            MRU workspaces/goal docs (form memory)
     POST   /api/runs               launch: {name?, workspace, goal? | goal_doc?,
                                    config?, autostart?, attach?}; attach adopts
                                    an existing state exactly as it is on disk
@@ -39,6 +44,7 @@ import subprocess
 import sys
 import threading
 import time
+import urllib.parse
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -50,6 +56,11 @@ REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 MAX_BODY = 1 * 1024 * 1024  # 1 MiB request cap
 TAIL_CHUNK = 64 * 1024      # bytes per backwards read when tailing logs
 STOP_WAIT_S = 5.0           # how long stop_run waits for the driver to die
+
+# Filesystem browser (panel pickers): read-only listings for the workspace
+# directory selector and the work-description (.md) file selector.
+FS_FILE_EXTS = (".md", ".markdown", ".txt")
+FS_MAX_ENTRIES = 500        # per kind per listing; truncated flag beyond
 
 
 class ApiError(Exception):
@@ -151,6 +162,109 @@ def _evict_summary(state_path):
 
 
 # ---------------------------------------------------------------------------
+# Filesystem browsing + form memory (panel pickers)
+
+
+def browse_fs(path, mode="dir", exts=None, show_hidden=False, nearest=False):
+    """Read-only directory listing for the panel pickers.
+
+    mode "dir" lists directories only (workspace picker); mode "file" also
+    lists files filtered by `exts` (work-description picker). Hidden entries
+    are skipped unless show_hidden. With `nearest`, a path that is not an
+    existing directory (a file, or a workspace that will be "created if
+    missing") is walked up to its closest existing ancestor instead of
+    failing — the picker always opens somewhere useful, and the server does
+    the walking because only it knows the host's path rules (os.sep). Same
+    trust model as the rest of the service: localhost-only, the operator
+    browsing their own machine."""
+    raw = path or "~"
+    p = os.path.abspath(os.path.expanduser(raw))
+    if nearest:
+        while not os.path.isdir(p):
+            parent = os.path.dirname(p)
+            if parent == p:
+                break
+            p = parent
+    if not os.path.exists(p):
+        raise ApiError(404, "path not found: %s" % p)
+    if not os.path.isdir(p):
+        raise ApiError(400, "not a directory: %s" % p)
+    if mode not in ("dir", "file"):
+        raise ApiError(400, "mode must be 'dir' or 'file'")
+    if mode == "file" and exts is None:
+        exts = FS_FILE_EXTS
+    try:
+        with os.scandir(p) as it:
+            entries = sorted(it, key=lambda e: e.name.lower())
+    except PermissionError:
+        raise ApiError(403, "permission denied: %s" % p)
+    except OSError as exc:
+        raise ApiError(400, "cannot list %s: %s" % (p, exc))
+    dirs, files, truncated = [], [], False
+    for entry in entries:
+        name = entry.name
+        if not show_hidden and name.startswith("."):
+            continue
+        try:
+            name.encode("utf-8")
+        except UnicodeEncodeError:
+            # PEP-383 surrogate escapes: raw non-UTF-8 bytes on disk (Linux
+            # ext4/NFS/FUSE; APFS refuses such names). The name cannot
+            # survive _json's UTF-8 encode, so one bad entry would 500 the
+            # whole listing — skip it instead; it could never round-trip
+            # through the JSON API for selection anyway.
+            continue
+        try:
+            is_dir = entry.is_dir(follow_symlinks=True)
+        except OSError:
+            continue
+        if is_dir:
+            if len(dirs) < FS_MAX_ENTRIES:
+                dirs.append(name)
+            else:
+                truncated = True
+        elif mode == "file":
+            if exts and not any(name.lower().endswith(x) for x in exts):
+                continue
+            if len(files) < FS_MAX_ENTRIES:
+                files.append(name)
+            else:
+                truncated = True
+    parent = os.path.dirname(p)
+    if parent == p:
+        parent = None
+    return {
+        "path": p,
+        "parent": parent,
+        "sep": os.sep,
+        "dirs": dirs,
+        "files": files,
+        "truncated": truncated,
+    }
+
+
+def recent_paths(home):
+    """Form memory: MRU workspaces/goal docs from recents.json, extended
+    with workspaces of currently registered runs (covers pre-recents
+    entries and other-service creates)."""
+    rec = registry.load_recents(home)
+    workspaces = list(rec["workspaces"])
+    seen = set(workspaces)
+    try:
+        for entry in registry.load(home)["runs"]:
+            ws = entry.get("workspace")
+            if ws and ws not in seen:
+                workspaces.append(ws)
+                seen.add(ws)
+    except Exception:
+        pass  # recents are convenience; never fail the endpoint over them
+    return {
+        "workspaces": workspaces[: registry.RECENTS_MAX],
+        "goal_docs": rec["goal_docs"],
+    }
+
+
+# ---------------------------------------------------------------------------
 # Core operations (HTTP-independent; unit-testable directly)
 
 
@@ -245,6 +359,9 @@ def create_run(home, payload):
         registry.add(home, entry)
     except ValueError as exc:
         raise ApiError(409, str(exc))
+    registry.remember_recent(home, "workspaces", workspace)
+    if goal_doc:
+        registry.remember_recent(home, "goal_docs", goal_doc)
     if payload.get("autostart", True):
         entry = start_run(home, run_id)
     return entry
@@ -403,14 +520,42 @@ def read_log_tail(home, run_id, lines):
 
 def make_handler(home):
     class Handler(BaseHTTPRequestHandler):
+        def _route(self):
+            """Split the request target into (path, query dict)."""
+            parsed = urllib.parse.urlsplit(self.path)
+            query = urllib.parse.parse_qs(parsed.query)
+            return parsed.path, {k: v[-1] for k, v in query.items()}
+
         def do_GET(self):
             try:
-                if self.path in ("/", "/index.html"):
+                route, query = self._route()
+                if route in ("/", "/index.html"):
                     self._static("panel.html", "text/html; charset=utf-8")
-                elif self.path == "/api/runs":
+                elif route == "/api/runs":
                     self._json(200, {"ok": True, "runs": list_runs(home)})
-                elif self.path.startswith("/api/runs/"):
-                    parts = self.path.rstrip("/").split("/")
+                elif route == "/api/recents":
+                    self._json(200, {"ok": True, **recent_paths(home)})
+                elif route == "/api/fs":
+                    exts = None
+                    if "ext" in query:
+                        exts = tuple(
+                            e if e.startswith(".") else "." + e
+                            for e in (
+                                x.strip().lower()
+                                for x in query["ext"].split(",")
+                            )
+                            if e and e != "."
+                        ) or None
+                    listing = browse_fs(
+                        query.get("path"),
+                        mode=query.get("mode", "dir"),
+                        exts=exts,
+                        show_hidden=query.get("hidden") == "1",
+                        nearest=query.get("nearest") == "1",
+                    )
+                    self._json(200, {"ok": True, **listing})
+                elif route.startswith("/api/runs/"):
+                    parts = route.rstrip("/").split("/")
                     # /api/runs/<id>  or  /api/runs/<id>/log
                     if len(parts) == 4:
                         self._json(200, {"ok": True, **run_detail(home, parts[3])})
@@ -427,11 +572,12 @@ def make_handler(home):
 
         def do_POST(self):
             try:
-                if self.path == "/api/runs":
+                route, _query = self._route()
+                if route == "/api/runs":
                     entry = create_run(home, self._body())
                     self._json(201, {"ok": True, "run": run_status(entry)})
-                elif self.path.startswith("/api/runs/"):
-                    parts = self.path.rstrip("/").split("/")
+                elif route.startswith("/api/runs/"):
+                    parts = route.rstrip("/").split("/")
                     if len(parts) == 5 and parts[4] == "start":
                         entry = start_run(home, parts[3])
                         self._json(200, {"ok": True, "run": run_status(entry)})
@@ -448,8 +594,9 @@ def make_handler(home):
 
         def do_DELETE(self):
             try:
-                parts = self.path.rstrip("/").split("/")
-                if len(parts) == 4 and self.path.startswith("/api/runs/"):
+                route, _query = self._route()
+                parts = route.rstrip("/").split("/")
+                if len(parts) == 4 and route.startswith("/api/runs/"):
                     self._json(200, {"ok": True, **delete_run(home, parts[3])})
                 else:
                     self._json(404, {"ok": False, "error": "not found"})

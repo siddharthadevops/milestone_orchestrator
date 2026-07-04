@@ -76,7 +76,17 @@ the selected run — pipeline, rounds, seals, failure banner, event log,
 driver log — with Start / Stop / Forget. "New milestone" takes a workspace
 path plus a goal text **or a work-description doc path** (its content
 becomes the goal, snapshotted at launch), an optional verification command,
-and an optional advanced config JSON merged over defaults.
+and an optional advanced config JSON merged over defaults. Both path fields
+have a Browse… picker (`GET /api/fs`, read-only listings; a typed path that
+does not exist yet opens at its nearest existing ancestor) and a dropdown of
+previously used paths (`GET /api/recents`, best-effort form memory in
+`~/.impl_roadmap/recents.json` — a failed recents read or write never fails
+the endpoint or the launch). Known limitation: `/api/fs` performs plain
+synchronous filesystem calls with no timeout, so browsing into a dead
+network mount (hung NFS/SMB under `/Volumes`) blocks that request — and any
+retries — until the mount recovers; the service itself stays responsive
+(one daemon handler thread per request), but such a listing cannot be
+cancelled. Avoid pointing the picker at dead mounts.
 
 Service home is `~/.impl_roadmap/` (override with `--home`): `registry.json`
 (pointers to per-workspace states + PIDs; atomic writes under an advisory

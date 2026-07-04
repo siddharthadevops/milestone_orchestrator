@@ -163,6 +163,71 @@ def pid_alive(pid):
     return True
 
 
+# ---------------------------------------------------------------------------
+# Recents (panel form memory: previously used workspaces / goal docs)
+
+RECENTS_MAX = 20
+RECENT_KINDS = ("workspaces", "goal_docs")
+
+
+def recents_path(home):
+    return os.path.join(home, "recents.json")
+
+
+def load_recents(home):
+    """MRU lists for the panel form. Tolerant: a missing or corrupt file is
+    just empty memory, never an error."""
+    empty = {kind: [] for kind in RECENT_KINDS}
+    try:
+        with open(recents_path(home), "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+    except (OSError, ValueError):
+        return empty
+    if not isinstance(data, dict):
+        return empty
+    out = {}
+    for kind in RECENT_KINDS:
+        values = data.get(kind, [])
+        out[kind] = [v for v in values if isinstance(v, str)][:RECENTS_MAX] \
+            if isinstance(values, list) else []
+    return out
+
+
+def remember_recent(home, kind, value):
+    """Record value as most-recent of its kind (deduped, capped).
+
+    Best-effort like load_recents: recents are panel form memory only, so a
+    write failure (unwritable home, disk full, clobbered recents.json) must
+    never fail the operation that recorded the path — by the time create_run
+    calls this the run is already registered, and a 500 here would skip
+    autostart and turn the client's retry into a spurious 409."""
+    if kind not in RECENT_KINDS:
+        raise ValueError("unknown recents kind %r" % kind)
+    if not value or not isinstance(value, str):
+        return
+    try:
+        with locked(home):
+            rec = load_recents(home)
+            items = [v for v in rec[kind] if v != value]
+            items.insert(0, value)
+            rec[kind] = items[:RECENTS_MAX]
+            fd, tmp = tempfile.mkstemp(
+                prefix=".recents-", suffix=".json", dir=home
+            )
+            try:
+                with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                    json.dump(rec, fh, indent=2, ensure_ascii=False)
+                    fh.write("\n")
+                os.replace(tmp, recents_path(home))
+            finally:
+                if os.path.exists(tmp):
+                    os.unlink(tmp)
+    except (OSError, ValueError):
+        # ValueError covers UnicodeEncodeError from a value carrying lone
+        # surrogates (JSON \uXXXX escapes in a crafted request body).
+        pass  # never fail the caller over form memory
+
+
 def session_leader_alive(pid):
     """True only when pid exists AND leads its own process group (pgid ==
     pid). Drivers are always spawned with start_new_session=True, so a real

@@ -93,6 +93,22 @@
   .formrow { display: flex; gap: 10px; justify-content: flex-end;
              align-items: center; margin-top: 8px; }
   #formError { color: var(--bad); font-size: 12px; margin-right: auto; }
+  .pathrow { display: flex; gap: 6px; }
+  .pathrow input { flex: 1; }
+
+  /* file/dir picker */
+  #picker { width: 640px; }
+  .pk-bar { display: flex; gap: 6px; margin-bottom: 10px; }
+  .pk-bar input { flex: 1; border: 1px solid var(--line); border-radius: 8px;
+                  padding: 6px 10px; font: inherit; }
+  #pk_list { border: 1px solid var(--line); border-radius: 8px;
+             max-height: 340px; overflow-y: auto; margin-bottom: 10px; }
+  .pick { padding: 6px 12px; cursor: pointer; display: flex; gap: 8px;
+          border-bottom: 1px solid var(--line); font-size: 13px; }
+  .pick:last-child { border-bottom: none; }
+  .pick:hover { background: var(--accent-soft); }
+  .pick .ico { flex: none; }
+  .pk-note { font-size: 11px; color: var(--dim); margin-bottom: 8px; }
 </style>
 </head>
 <body>
@@ -117,13 +133,22 @@
   <div class="field"><label>Name</label>
     <input id="f_name" placeholder="my-feature"></div>
   <div class="field"><label>Workspace directory *</label>
-    <input id="f_ws" class="mono" placeholder="/path/to/project/work">
-    <div class="hint">Created if missing. State lives in
+    <div class="pathrow">
+      <input id="f_ws" class="mono" list="dl_ws" placeholder="/path/to/project/work">
+      <button class="btn" type="button" onclick="openPicker('dir','f_ws')">Browse…</button>
+    </div>
+    <datalist id="dl_ws"></datalist>
+    <div class="hint">Created if missing; previous workspaces appear in the
+      dropdown. State lives in
       <span class="mono">&lt;workspace&gt;/.orchestrator/</span>.</div></div>
   <div class="field"><label>Work description (goal) *</label>
     <textarea id="f_goal" placeholder="What should be built…"></textarea></div>
-  <div class="field"><label>…or description doc path</label>
-    <input id="f_doc" class="mono" placeholder="/path/to/DESCRIPTION.md">
+  <div class="field"><label>…or description doc path (.md)</label>
+    <div class="pathrow">
+      <input id="f_doc" class="mono" list="dl_doc" placeholder="/path/to/DESCRIPTION.md">
+      <button class="btn" type="button" onclick="openPicker('file','f_doc')">Browse…</button>
+    </div>
+    <datalist id="dl_doc"></datalist>
     <div class="hint">If set, the file's content becomes the goal.</div></div>
   <div class="field"><label>Verification command (optional)</label>
     <input id="f_verify" class="mono" placeholder="python3 -m unittest discover"></div>
@@ -135,6 +160,22 @@
       start now</label>
     <button class="btn" onclick="document.getElementById('form').close()">Cancel</button>
     <button class="btn primary" onclick="submitForm()">Launch</button>
+  </div>
+</dialog>
+
+<dialog id="picker">
+  <h2 id="pk_title">Select directory</h2>
+  <div class="pk-bar">
+    <button class="btn" type="button" onclick="pickerUp()" id="pk_up">&#8593; Up</button>
+    <input id="pk_path" class="mono" onkeydown="if(event.key==='Enter')loadPicker(this.value)">
+    <button class="btn" type="button" onclick="loadPicker(document.getElementById('pk_path').value)">Go</button>
+  </div>
+  <div id="pk_list"></div>
+  <div class="pk-note" id="pk_note"></div>
+  <div class="formrow">
+    <span id="pk_error" style="color:var(--bad);font-size:12px;margin-right:auto"></span>
+    <button class="btn" type="button" onclick="document.getElementById('picker').close()">Cancel</button>
+    <button class="btn primary" type="button" id="pk_use" onclick="pickerUseDir()">Use this directory</button>
   </div>
 </dialog>
 
@@ -241,8 +282,95 @@ async function del() {
 }
 function openForm() {
   document.getElementById("formError").textContent = "";
+  loadRecents();
   document.getElementById("form").showModal();
 }
+async function loadRecents() {
+  try {
+    const data = await api("/api/recents");
+    document.getElementById("dl_ws").innerHTML =
+      (data.workspaces || []).map(w => `<option value="${esc(w)}">`).join("");
+    document.getElementById("dl_doc").innerHTML =
+      (data.goal_docs || []).map(d => `<option value="${esc(d)}">`).join("");
+  } catch (e) { /* memory is convenience only */ }
+}
+
+/* ---- directory / file picker ---- */
+const picker = { mode: "dir", target: null, path: null, parent: null, sep: "/" };
+let pkSeq = 0;  // request sequence: stale /api/fs responses must not win
+function openPicker(mode, targetId) {
+  picker.mode = mode;
+  picker.target = targetId;
+  picker.path = null;    // no listing loaded yet: "Use this directory" and
+  picker.parent = null;  // row clicks stay inert until a load succeeds
+  document.getElementById("pk_title").textContent =
+    mode === "dir" ? "Select workspace directory" : "Select description doc (.md)";
+  document.getElementById("pk_use").style.display =
+    mode === "dir" ? "" : "none";
+  document.getElementById("pk_use").disabled = true;
+  document.getElementById("pk_error").textContent = "";
+  document.getElementById("pk_path").value = "";
+  document.getElementById("pk_up").disabled = true;
+  document.getElementById("pk_list").innerHTML = "";
+  document.getElementById("pk_note").textContent = "";
+  // The typed value may be a file path or a not-yet-created workspace
+  // ("created if missing"): nearest=1 makes the server walk up to the
+  // closest existing directory — the server, not us, knows the host's
+  // path separator and existence, so no client-side path parsing here.
+  const current = document.getElementById(picker.target).value.trim();
+  document.getElementById("picker").showModal();
+  loadPicker(current || "~", true);
+}
+async function loadPicker(path, nearest) {
+  const seq = ++pkSeq;
+  const err = document.getElementById("pk_error");
+  err.textContent = "";
+  const params = new URLSearchParams({ path: path || "~", mode: picker.mode });
+  if (picker.mode === "file") params.set("ext", ".md,.markdown,.txt");
+  if (nearest) params.set("nearest", "1");
+  try {
+    const data = await api("/api/fs?" + params.toString());
+    if (seq !== pkSeq) return;  // superseded by a newer navigation
+    picker.path = data.path;
+    picker.parent = data.parent;
+    picker.sep = data.sep || "/";
+    document.getElementById("pk_path").value = data.path;
+    document.getElementById("pk_up").disabled = !data.parent;
+    document.getElementById("pk_use").disabled = false;
+    document.getElementById("pk_note").textContent = data.truncated
+      ? "listing truncated (too many entries)" : "";
+    const rows = []
+      .concat((data.dirs || []).map(n =>
+        `<div class="pick" data-kind="dir" data-name="${esc(n)}">` +
+        `<span class="ico">&#128193;</span><span class="mono">${esc(n)}</span></div>`))
+      .concat((data.files || []).map(n =>
+        `<div class="pick" data-kind="file" data-name="${esc(n)}">` +
+        `<span class="ico">&#128196;</span><span class="mono">${esc(n)}</span></div>`));
+    document.getElementById("pk_list").innerHTML =
+      rows.join("") || '<div class="pick"><span class="dim">empty</span></div>';
+  } catch (e) {
+    if (seq === pkSeq) err.textContent = e.message;
+  }
+}
+function pickerUp() { if (picker.parent) loadPicker(picker.parent); }
+function pickerJoin(name) {
+  return picker.path.endsWith(picker.sep)
+    ? picker.path + name : picker.path + picker.sep + name;
+}
+function pickerUseDir() {
+  if (!picker.path) return;  // nothing successfully listed yet
+  document.getElementById(picker.target).value = picker.path;
+  document.getElementById("picker").close();
+}
+document.getElementById("pk_list").addEventListener("click", (ev) => {
+  const row = ev.target.closest(".pick");
+  if (!row || !row.dataset.name) return;
+  if (row.dataset.kind === "dir") loadPicker(pickerJoin(row.dataset.name));
+  else if (row.dataset.kind === "file" && picker.mode === "file") {
+    document.getElementById(picker.target).value = pickerJoin(row.dataset.name);
+    document.getElementById("picker").close();
+  }
+});
 async function submitForm() {
   const err = document.getElementById("formError");
   err.textContent = "";
