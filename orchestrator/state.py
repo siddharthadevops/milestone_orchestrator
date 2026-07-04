@@ -172,6 +172,31 @@ def assert_append_only(old_state, new_state_):
                 raise HistoryRewriteError("%s: terminal unit was modified" % uctx)
 
 
+def save_new(path, state):
+    """Atomically create a NEW state file; raises FileExistsError when path
+    already exists. The claim is an exclusive hard link of a fully written
+    temp file: atomic against crashes (like save) AND race-free against a
+    concurrent init of the same path (unlike an exists() pre-check, where
+    two same-second inits with equal goals could pass save()'s append-only
+    comparison and one config would silently replace the other)."""
+    directory = os.path.dirname(os.path.abspath(path))
+    os.makedirs(directory, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(prefix=".state-", suffix=".json", dir=directory)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            json.dump(state, fh, indent=2, ensure_ascii=False)
+            fh.write("\n")
+        try:
+            os.link(tmp, path)  # atomic exclusive claim of `path`
+        except FileExistsError:
+            raise FileExistsError(
+                "refusing to overwrite existing state at %s" % path
+            )
+    finally:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+
+
 def save(path, state):
     """Atomically persist state, enforcing append-only history against the
     current on-disk version (if any)."""

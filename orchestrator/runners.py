@@ -21,9 +21,40 @@ import os
 import signal
 import subprocess
 import tempfile
+import threading
 import time
 
 from . import contracts
+
+# In-flight worker CLI processes. Workers run in their OWN sessions
+# (start_new_session=True below) so a timeout can SIGKILL the whole worker
+# tree without touching the driver — which also means a SIGTERM to the
+# driver's group does NOT reach them. The driver's stop handler uses this
+# set to forward a stop to every active worker's process group instead of
+# orphaning full-permission CLIs mid-edit.
+_ACTIVE_WORKERS = set()
+_ACTIVE_WORKERS_LOCK = threading.Lock()
+
+
+def _track_worker(proc):
+    with _ACTIVE_WORKERS_LOCK:
+        _ACTIVE_WORKERS.add(proc)
+
+
+def _untrack_worker(proc):
+    with _ACTIVE_WORKERS_LOCK:
+        _ACTIVE_WORKERS.discard(proc)
+
+
+def kill_active_worker_groups():
+    """SIGKILL the process groups of all in-flight worker CLIs (same signal
+    the timeout path uses). Called from the driver's SIGTERM handler so a
+    service-initiated stop cannot leave an orphaned worker editing the
+    workspace and burning quota."""
+    with _ACTIVE_WORKERS_LOCK:
+        procs = list(_ACTIVE_WORKERS)
+    for proc in procs:
+        _kill_group(proc)
 
 
 class RunnerError(RuntimeError):
@@ -167,16 +198,20 @@ class SubprocessRunner(object):
             if output_file:
                 _unlink_quiet(output_file)
             raise RunnerError("failed to spawn %r: %s" % (argv[0], exc))
+        _track_worker(proc)
         try:
-            stdout, stderr = proc.communicate(input=prompt, timeout=timeout)
-        except subprocess.TimeoutExpired:
-            _kill_group(proc)
-            stdout, stderr = proc.communicate()
-            if output_file:
-                _unlink_quiet(output_file)
-            raise RunnerError(
-                "family %s timed out after %ss" % (family, timeout)
-            )
+            try:
+                stdout, stderr = proc.communicate(input=prompt, timeout=timeout)
+            except subprocess.TimeoutExpired:
+                _kill_group(proc)
+                stdout, stderr = proc.communicate()
+                if output_file:
+                    _unlink_quiet(output_file)
+                raise RunnerError(
+                    "family %s timed out after %ss" % (family, timeout)
+                )
+        finally:
+            _untrack_worker(proc)
         duration = time.time() - started
         text = stdout
         if output_file:

@@ -62,6 +62,46 @@ State lives at `<workspace>/.orchestrator/state.json`; raw worker outputs at
 `state.failure` and the event log; `status` prints it. Config is frozen into
 the state at `init`.
 
+## Local service panel (multi-run)
+
+The repo doubles as a local programming service: projects pin nothing — you
+point the panel at any workspace directory and launch milestones from the
+browser.
+
+    ./panel.sh                # from the repo root -> http://127.0.0.1:8700
+    ./panel.sh --port 9000 --open
+
+Left pane: launched milestones (process dot, milestone status). Right pane:
+the selected run — pipeline, rounds, seals, failure banner, event log,
+driver log — with Start / Stop / Forget. "New milestone" takes a workspace
+path plus a goal text **or a work-description doc path** (its content
+becomes the goal, snapshotted at launch), an optional verification command,
+and an optional advanced config JSON merged over defaults.
+
+Service home is `~/.impl_roadmap/` (override with `--home`): `registry.json`
+(pointers to per-workspace states + PIDs; atomic writes under an advisory
+lock) and `logs/<run-id>.log` (driver output). Runs execute as detached
+background processes (`python3 -m orchestrator.driver run`); the panel is a
+read-only poller plus launch/stop controls. Deleting a run only forgets the
+registry entry — workspace files are never touched. Attaching
+(`"attach": true`) adopts an existing workspace state exactly as it is on
+disk; supplying a goal/goal_doc/config alongside it is rejected rather than
+silently ignored.
+
+Process semantics: the service keeps the handles of drivers it spawned and
+reaps exited ones on every API call (an exited run can never linger as a
+zombie shown "running"), clearing the recorded pid. Stop SIGTERMs the
+driver's own process group and the driver forwards the stop to any
+in-flight worker CLI's process group (workers run in their own sessions),
+so no full-permission worker is orphaned mid-edit. A pid recorded by a
+previous service process (after a restart) is trusted only while it is a
+live session leader — which a real driver always is and an OS-recycled pid
+almost never is — so stale pids neither wedge start/delete nor let stop
+signal an innocent process group.
+
+Trust model: binds 127.0.0.1, no auth. It spawns full-permission LLM CLIs,
+exactly like running the driver yourself; never expose the port.
+
 ## The flow
 
 For the milestone: one `skeleton` unit, then per slice a `slice_doc` and a

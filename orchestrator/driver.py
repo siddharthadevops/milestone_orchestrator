@@ -19,6 +19,7 @@ import argparse
 import contextlib
 import json
 import os
+import signal
 import subprocess
 import sys
 import threading
@@ -67,16 +68,26 @@ DEFAULT_CONFIG = {
 }
 
 
+def merge_config(config, override):
+    """Merge a user override into a config dict, in place: one level deep —
+    dict values update key-wise, everything else replaces. The single
+    source of truth for config merge semantics; both the CLI (load_config)
+    and the service panel (service.create_run) go through here, so the two
+    entry points can never drift."""
+    for key, value in override.items():
+        if isinstance(value, dict) and isinstance(config.get(key), dict):
+            config[key].update(value)
+        else:
+            config[key] = value
+    return config
+
+
 def load_config(path=None):
     cfg = json.loads(json.dumps(DEFAULT_CONFIG))  # deep copy
     if path:
         with open(path, "r", encoding="utf-8") as fh:
             user = json.load(fh)
-        for key, value in user.items():
-            if isinstance(value, dict) and isinstance(cfg.get(key), dict):
-                cfg[key].update(value)
-            else:
-                cfg[key] = value
+        merge_config(cfg, user)
     return cfg
 
 
@@ -794,17 +805,34 @@ def default_state_path(workspace):
     return os.path.join(workspace, ".orchestrator", "state.json")
 
 
-def cmd_init(args):
-    workspace = os.path.abspath(args.workspace)
+def init_run(goal, workspace, config=None, state_path=None):
+    """Create a new run state. `config` is a merged config dict (see
+    load_config) or None for defaults. Returns the state path.
+    Raises FileExistsError instead of overwriting an existing state; the
+    claim is atomic (st.save_new, exclusive hard link), so two concurrent
+    inits of the same workspace cannot both win — no exists() TOCTOU."""
+    workspace = os.path.abspath(workspace)
     os.makedirs(workspace, exist_ok=True)
-    config = load_config(args.config)
-    state = st.new_state(args.goal, workspace, config)
-    st.append_event(state, "initialized", goal=args.goal)
-    path = args.state or default_state_path(workspace)
-    if os.path.exists(path):
-        print("refusing to overwrite existing state at %s" % path, file=sys.stderr)
+    if config is None:
+        config = load_config(None)
+    state = st.new_state(goal, workspace, config)
+    st.append_event(state, "initialized", goal=goal)
+    path = state_path or default_state_path(workspace)
+    st.save_new(path, state)
+    return path
+
+
+def cmd_init(args):
+    try:
+        path = init_run(
+            args.goal,
+            args.workspace,
+            config=load_config(args.config),
+            state_path=args.state,
+        )
+    except FileExistsError as exc:
+        print(str(exc), file=sys.stderr)
         return 2
-    st.save(path, state)
     print("initialized: %s" % path)
     return 0
 
@@ -852,7 +880,30 @@ def cmd_next(args):
     return 0
 
 
+def _install_stop_forwarding():
+    """Make SIGTERM (service Stop button, plain `kill`) reach in-flight
+    worker CLIs before the driver dies. Workers run in their OWN sessions
+    (so timeout kills cannot take the driver down with them), which also
+    means a SIGTERM to the driver's group would otherwise orphan a
+    full-permission codex/claude process that keeps editing the workspace
+    for up to its whole timeout. CLI entry points only; signal handlers can
+    only be installed from the main thread."""
+    if threading.current_thread() is not threading.main_thread():
+        return  # pragma: no cover - embedded use; CLI always hits main thread
+
+    def handler(signum, frame):
+        runners.kill_active_worker_groups()
+        signal.signal(signal.SIGTERM, signal.SIG_DFL)
+        os.kill(os.getpid(), signal.SIGTERM)  # die with the real signal status
+
+    try:
+        signal.signal(signal.SIGTERM, handler)
+    except ValueError:  # pragma: no cover - non-main thread race
+        pass
+
+
 def cmd_step(args):
+    _install_stop_forwarding()
     driver = Driver(_state_path(args))
     try:
         action, note = driver.step()
@@ -866,6 +917,7 @@ def cmd_step(args):
 
 
 def cmd_run(args):
+    _install_stop_forwarding()
     driver = Driver(_state_path(args))
     try:
         code = driver.run(max_steps=args.max_steps)
