@@ -507,5 +507,43 @@ class TestSummaryCache(ServiceFixesTestCase):
         self.assertEqual(s3["events_total"], s1["events_total"] + 1)
 
 
+# ---------------------------------------------------------------------------
+# Discard purges the workspace state claim (opt-in), so a fresh launch over
+# the same workspace does not hit state.init's refuse-to-overwrite.
+
+
+class TestDeletePurgesStateClaim(ServiceFixesTestCase):
+    def test_delete_run_purge_removes_state_file_and_lock(self):
+        ws = self.workspace("ws-purge")
+        entry = service.create_run(
+            self.home, {"workspace": ws, "goal": "purge me", "autostart": False}
+        )
+        run_id = entry["id"]
+        state_path = self._entry(run_id)["state_path"]
+        self.assertTrue(os.path.exists(state_path))
+        open(state_path + ".lock", "a").close()  # a past driver's lock
+        result = service.delete_run(self.home, run_id, purge=True)
+        self.assertEqual(result["deleted"], run_id)
+        self.assertIn(state_path, result["purged"])
+        self.assertFalse(os.path.exists(state_path))
+        self.assertFalse(os.path.exists(state_path + ".lock"))
+        # The user-facing point: the same workspace launches fresh again.
+        entry2 = service.create_run(
+            self.home, {"workspace": ws, "goal": "fresh", "autostart": False}
+        )
+        self.assertTrue(os.path.exists(entry2["state_path"]))
+
+    def test_delete_run_without_purge_keeps_workspace_files(self):
+        ws = self.workspace("ws-nopurge")
+        entry = service.create_run(
+            self.home, {"workspace": ws, "goal": "keep", "autostart": False}
+        )
+        run_id = entry["id"]
+        state_path = self._entry(run_id)["state_path"]
+        result = service.delete_run(self.home, run_id)
+        self.assertEqual(result["note"], "workspace files untouched")
+        self.assertTrue(os.path.exists(state_path))
+
+
 if __name__ == "__main__":
     unittest.main()

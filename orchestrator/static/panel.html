@@ -273,8 +273,8 @@ async function act(verb) {
   refreshRuns();
 }
 async function del() {
-  if (!confirm("Forget this run? Workspace files are untouched.")) return;
-  try { await api(`/api/runs/${selected}`, {method: "DELETE"}); selected = null; }
+  if (!confirm("Discard this run? Its state file is removed so the workspace can launch fresh (repo files are untouched).")) return;
+  try { await api(`/api/runs/${selected}?purge=1`, {method: "DELETE"}); selected = null; }
   catch (e) { alert(e.message); }
   refreshRuns();
   document.getElementById("detail").innerHTML =

@@ -21,7 +21,9 @@ run's live state) and a JSON API:
                                    driver forwards the stop to in-flight
                                    worker CLI process groups)
     GET    /api/runs/<id>/log      {"lines": [...]} tail of driver output
-    DELETE /api/runs/<id>          forget the run (workspace files untouched)
+    DELETE /api/runs/<id>          forget the run (workspace files untouched;
+                                   ?purge=1 also removes the run's state file
+                                   + lock so the workspace can launch fresh)
 
 Process bookkeeping: drivers spawned by this service are kept as Popen
 handles and polled (reaped) on every API operation — an exited driver never
@@ -458,7 +460,7 @@ def _wait_driver_exit(entry, timeout_s):
     return not driver_alive(entry)
 
 
-def delete_run(home, run_id):
+def delete_run(home, run_id, purge=False):
     reap_exited_drivers(home)
     reg = registry.load(home)
     entry = registry.get(reg, run_id)
@@ -471,7 +473,30 @@ def delete_run(home, run_id):
     except KeyError:  # concurrent delete won the race
         raise ApiError(404, "unknown run %r" % run_id)
     _evict_summary(entry["state_path"])
-    return {"deleted": run_id, "note": "workspace files untouched"}
+    if not purge:
+        return {"deleted": run_id, "note": "workspace files untouched"}
+    purged, purge_errors = _purge_state_files(entry["state_path"])
+    out = {"deleted": run_id, "purged": purged}
+    if purge_errors:
+        out["purge_errors"] = purge_errors
+    return out
+
+
+def _purge_state_files(state_path):
+    """Best-effort removal of a discarded run's on-disk state claim — the
+    state file and its driver lock — so a fresh launch can re-claim the same
+    workspace path (state.init refuses to overwrite an existing file). Only
+    these two exact files; nothing else in the workspace is touched."""
+    purged, errors = [], []
+    for path in (state_path, state_path + ".lock"):
+        try:
+            os.unlink(path)
+            purged.append(path)
+        except FileNotFoundError:
+            pass
+        except OSError as exc:
+            errors.append("%s: %s" % (path, exc))
+    return purged, errors
 
 
 def run_detail(home, run_id, log_tail=80):
@@ -602,10 +627,11 @@ def make_handler(home):
 
         def do_DELETE(self):
             try:
-                route, _query = self._route()
+                route, query = self._route()
                 parts = route.rstrip("/").split("/")
                 if len(parts) == 4 and route.startswith("/api/runs/"):
-                    self._json(200, {"ok": True, **delete_run(home, parts[3])})
+                    self._json(200, {"ok": True, **delete_run(
+                        home, parts[3], purge=query.get("purge") == "1")})
                 else:
                     self._json(404, {"ok": False, "error": "not found"})
             except ApiError as exc:
