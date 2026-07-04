@@ -1,8 +1,7 @@
-"""Regression tests for the adversarial-review fixes.
+"""Regression tests for adversarial-review fixes that survived the
+review/fix-separation redesign.
 
 Covers, per finding:
-- invalidated seal attempts re-verify before the next attempt (the
-  tampering delta can never be double-sealed unverified);
 - concurrent seal never passes with a crashed/missing half, and failure
   recording happens exactly once, from the main thread;
 - milestone_closed is recorded exactly once, and re-running a finished
@@ -10,10 +9,17 @@ Covers, per finding:
 - worker protocol failures persist the raw outputs of both attempts;
 - tool-cache writes by read-only seal halves do not invalidate the half
   (defaults + snapshot_exclude_dirs config);
-- verify-fix attempt caps are per verification stage;
+- verify-fix attempt caps are per verification stage (verification
+  failures queue a synthetic V1 finding for a fix_findings episode);
 - skeleton fix rounds can update the structural slice plan;
 - a second driver invocation is refused before any worker call runs
-  (staleness check + advisory lock).
+  (staleness check + advisory lock);
+- a contract-valid skeleton with duplicate slice ids fails the run
+  instead of silently collapsing the unit plan.
+
+Deliberately self-contained (no imports from other test modules): local
+helpers script the NEW protocol — reviewers report findings without
+dispositions; fixers triage exactly the queued ids.
 
 All workspaces are tempfile.TemporaryDirectory(); nothing touches the repo.
 """
@@ -23,22 +29,166 @@ import os
 import tempfile
 import unittest
 
-from orchestrator import contracts
 from orchestrator import driver as drv
 from orchestrator import runners
 from orchestrator import state as st
-from orchestrator.tests.test_driver_mock import (
-    DriverTestCase,
-    clean,
-    fixed,
-    init_state,
-    make_config,
-    ok,
-    skeleton_script,
-    doc_script,
-    impl_script,
-    step,
-)
+
+GOAL = "Build a small CLI calculator (add/sub/mul/div) with unit tests"
+
+
+def make_config(**overrides):
+    """Minimal frozen config; commands are never spawned (mock runners).
+    Git stays disabled: fix episodes return directly without delta reviews,
+    which keeps these regressions independent of gitops."""
+    cfg = {
+        "families_order": ["codex", "claude"],
+        "fix_family": None,
+        "commands": {"codex": ["fake-codex"], "claude": ["fake-claude"]},
+        "timeouts": {},
+        "verification": [],
+        "verification_timeout": 60,
+        "max_rounds_per_family": 6,
+        "max_seal_attempts": 4,
+        "max_verify_fix_attempts": 2,
+        "seal_concurrent": False,
+        "acts": {"fixer": "codex", "delta_review": "codex",
+                 "consultation": "opposite"},
+        "max_fix_loops": 4,
+    }
+    cfg.update(overrides)
+    return cfg
+
+
+def init_state(workspace, config, goal=GOAL):
+    """Create the on-disk state file the way `driver init` does."""
+    state = st.new_state(goal, workspace, config)
+    st.append_event(state, "initialized", goal=goal)
+    path = drv.default_state_path(workspace)
+    st.save(path, state)
+    return path
+
+
+def ok(kind, **extra):
+    payload = {"status": "ok", "kind": kind}
+    payload.update(extra)
+    return payload
+
+
+def clean(kind="review_round"):
+    """A clean report-only round (reviewers return findings, nothing else)."""
+    return ok(kind, findings=[])
+
+
+def reported(kind, summary, fid="F1", severity="P2"):
+    """A reviewer finding: NO disposition (whoever detects never fixes)."""
+    return ok(
+        kind,
+        findings=[{"id": fid, "severity": severity, "summary": summary}],
+    )
+
+
+def fix_fixed(*ids, **extra):
+    """A fixer triage conceding every queued finding as fixed."""
+    return ok(
+        "fix_findings",
+        findings=[
+            {
+                "id": fid,
+                "severity": "P1",
+                "summary": "queued finding %s addressed" % fid,
+                "disposition": "fixed",
+                "consultation": None,
+            }
+            for fid in ids
+        ],
+        files_changed=[],
+        **extra
+    )
+
+
+def step(kind, response, family=None, side_effect=None):
+    s = {"expect_kind": kind, "response": response}
+    if family is not None:
+        s["expect_family"] = family
+    if side_effect is not None:
+        s["side_effect"] = side_effect
+    return s
+
+
+def draft_skeleton_step(slices=None):
+    return step(
+        "draft_skeleton",
+        ok(
+            "draft_skeleton",
+            artifact="docs/skeleton.md",
+            slices=slices or [{"id": 1, "title": "core"}],
+        ),
+        family="codex",
+    )
+
+
+def clean_reviews_and_seal():
+    return [
+        step("review_round", clean(), family="codex"),
+        step("review_round", clean(), family="claude"),
+        step("seal_half", ok("seal_half", findings=[]), family="codex"),
+        step("seal_half", ok("seal_half", findings=[]), family="claude"),
+    ]
+
+
+def skeleton_script():
+    return [draft_skeleton_step()] + clean_reviews_and_seal()
+
+
+def doc_script():
+    return [
+        step(
+            "draft_slice_note",
+            ok("draft_slice_note", artifact="docs/slice-01.md"),
+            family="codex",
+        ),
+    ] + clean_reviews_and_seal()
+
+
+def impl_script():
+    return [
+        step(
+            "implement",
+            ok("implement", files_changed=["calculator.py"]),
+            family="codex",
+        ),
+    ] + clean_reviews_and_seal()
+
+
+class DriverTestCase(unittest.TestCase):
+    """Shared drive helpers that also verify decide() totality."""
+
+    def drive(self, driver, max_steps=200):
+        """Step until DONE/FAILED; decide() must be total after every step."""
+        actions = []
+        for _ in range(max_steps):
+            action = drv.decide(driver.state)
+            if action.type in (drv.A_DONE, drv.A_FAILED):
+                return actions, action
+            act, note = driver.step()
+            actions.append((act.type, note))
+            after = drv.decide(driver.state)  # totality: never raises
+            self.assertIsInstance(after, drv.Action)
+        self.fail("driver did not reach a terminal action in %d steps" % max_steps)
+
+    def step_until(self, driver, pred, max_steps=100):
+        for _ in range(max_steps):
+            if pred(driver.state):
+                return
+            action = drv.decide(driver.state)
+            self.assertNotIn(
+                action.type,
+                (drv.A_DONE, drv.A_FAILED),
+                "terminal action before predicate was satisfied: %r" % action,
+            )
+            driver.step()
+            self.assertIsInstance(drv.decide(driver.state), drv.Action)
+        self.fail("predicate never satisfied within %d steps" % max_steps)
 
 
 class FamilyRunner(object):
@@ -80,69 +230,6 @@ def concurrent_responses(codex_half, claude_half):
     }
 
 
-class TestInvalidatedSealReverifies(DriverTestCase):
-    def test_tampered_workspace_must_repass_verification(self):
-        """P1: an invalidated attempt used to stay in U_SEALING and the
-        next attempt double-sealed the tampered content with zero
-        verification of the delta. Now the unit returns to pre-seal
-        verification, so a tampering delta that breaks verification can
-        never be sealed."""
-
-        def tamper(workspace):
-            with open(os.path.join(workspace, "tampered.txt"), "w",
-                      encoding="utf-8") as fh:
-                fh.write("never reviewed\n")
-
-        def untamper(workspace):
-            os.remove(os.path.join(workspace, "tampered.txt"))
-
-        with tempfile.TemporaryDirectory(prefix="orch-fix-") as ws:
-            path = init_state(
-                ws, make_config(verification=["test ! -f tampered.txt"])
-            )
-            mock = runners.MockRunner([
-                skeleton_script()[0],  # draft ok
-                step("review_round", clean(), family="codex"),
-                step("review_round", clean(), family="claude"),
-                # attempt 1: codex half reports clean but tampers
-                step("seal_half", ok("seal_half", findings=[]),
-                     family="codex", side_effect=tamper),
-                step("seal_half", ok("seal_half", findings=[]),
-                     family="claude"),
-                # re-verification FAILS on the tampered file -> fix call
-                step("fix_verification",
-                     fixed("fix_verification", "removed tampering artifact"),
-                     family="codex", side_effect=untamper),
-                # attempt 2: genuinely clean
-                step("seal_half", ok("seal_half", findings=[]),
-                     family="codex"),
-                step("seal_half", ok("seal_half", findings=[]),
-                     family="claude"),
-            ])
-            driver = drv.Driver(path, runner=mock)
-            self.step_until(
-                driver, lambda s: s["units"][0]["status"] == st.U_SEALED
-            )
-            self.assertEqual(mock.script, [])
-
-            state = st.load(path)
-            unit = state["units"][0]
-            a1, a2 = unit["seals"]
-            self.assertIsNotNone(a1["invalidated"])
-            self.assertTrue(a2["passed"])
-            # The tampering delta was caught by verification and fixed.
-            self.assertIn(
-                "fix_verification", [r["kind"] for r in unit["rounds"]]
-            )
-            self.assertFalse(os.path.exists(os.path.join(ws, "tampered.txt")))
-            failed_verifs = [
-                e for e in state["events"]
-                if e["type"] == "verification" and not e["ok"]
-            ]
-            self.assertEqual(len(failed_verifs), 1)
-            self.assertEqual(failed_verifs[0]["stage"], st.U_PRE_SEAL_VERIFY)
-
-
 class TestConcurrentSeal(DriverTestCase):
     def test_happy_path_records_both_halves(self):
         with tempfile.TemporaryDirectory(prefix="orch-fix-") as ws:
@@ -160,7 +247,7 @@ class TestConcurrentSeal(DriverTestCase):
             self.assertEqual(set(seal["halves"].keys()), {"codex", "claude"})
 
     def test_crashed_half_fails_run_instead_of_sealing(self):
-        """P1: a worker thread dying on a non-StopStep exception used to
+        """P1: a worker thread dying on an unexpected exception used to
         leave halves incomplete and all() over the survivors sealed the
         unit on one half (or zero). Now any crashed half fails the run."""
         with tempfile.TemporaryDirectory(prefix="orch-fix-") as ws:
@@ -236,6 +323,7 @@ class TestMilestoneCloseIdempotent(DriverTestCase):
             )
             driver = drv.Driver(path, runner=mock)
             self.assertEqual(driver.run(), 0)
+            self.assertEqual(mock.script, [])
 
             def closed_count():
                 state = st.load(path)
@@ -282,7 +370,7 @@ class TestSnapshotCacheExclusions(DriverTestCase):
     def _drive_seal_with_side_effect(self, ws, config, side_effect):
         path = init_state(ws, config)
         mock = runners.MockRunner([
-            skeleton_script()[0],  # draft ok
+            draft_skeleton_step(),
             step("review_round", clean(), family="codex"),
             step("review_round", clean(), family="claude"),
             step("seal_half", ok("seal_half", findings=[]),
@@ -334,43 +422,38 @@ class TestSnapshotCacheExclusions(DriverTestCase):
 
 
 class TestVerifyFixCapPerStage(DriverTestCase):
+    # Fails on invocations 1, 2 (pre-review) and 4 (pre-seal); passes on
+    # 3 and 5. Counter lives in the workspace; deterministic because
+    # verification runs are strictly sequential.
+    VER_CMD = (
+        "python3 -c \"import os,sys; p='vcount'; "
+        "n=int(open(p).read()) if os.path.exists(p) else 0; n+=1; "
+        "open(p,'w').write(str(n)); sys.exit(0 if n in (3,5) else 1)\""
+    )
+
     def test_pre_review_attempts_do_not_burn_the_pre_seal_cap(self):
         """P3: one shared counter meant a unit that consumed the cap
         pre-review failed on its FIRST pre-seal verification failure with
-        a misleading explanation. Counters are per stage now."""
-        marker = "ok_marker"
-
-        def create_marker(workspace):
-            with open(os.path.join(workspace, marker), "w",
-                      encoding="utf-8") as fh:
-                fh.write("ok")
-
-        def remove_marker(workspace):
-            os.remove(os.path.join(workspace, marker))
-
+        a misleading explanation. Counters are per stage now. Under the
+        redesign, each verification failure queues the synthetic V1
+        finding for a fix_findings episode."""
         with tempfile.TemporaryDirectory(prefix="orch-fix-") as ws:
             path = init_state(
                 ws,
                 make_config(
-                    verification=["test -f %s" % marker],
+                    verification=[self.VER_CMD],
                     max_verify_fix_attempts=2,
                 ),
             )
             mock = runners.MockRunner([
-                skeleton_script()[0],  # draft; no marker yet
+                draft_skeleton_step(),
                 # pre-review: two failing episodes = the full stage cap
-                step("fix_verification",
-                     fixed("fix_verification", "no fix yet"), family="codex"),
-                step("fix_verification",
-                     fixed("fix_verification", "created marker"),
-                     family="codex", side_effect=create_marker),
+                step("fix_findings", fix_fixed("V1"), family="codex"),
+                step("fix_findings", fix_fixed("V1"), family="codex"),
                 step("review_round", clean(), family="codex"),
-                # claude round removes the marker: pre-seal verify fails
-                step("review_round", clean(), family="claude",
-                     side_effect=remove_marker),
-                step("fix_verification",
-                     fixed("fix_verification", "recreated marker"),
-                     family="codex", side_effect=create_marker),
+                step("review_round", clean(), family="claude"),
+                # pre-seal: one failing episode of its own
+                step("fix_findings", fix_fixed("V1"), family="codex"),
                 step("seal_half", ok("seal_half", findings=[]),
                      family="codex"),
                 step("seal_half", ok("seal_half", findings=[]),
@@ -393,18 +476,38 @@ class TestVerifyFixCapPerStage(DriverTestCase):
                 unit["verify_fix_attempts"],
                 {"pre_review": 0, "pre_seal": 0},
             )
+            # Every fix episode cites its own synthetic verification source.
+            fixes = [r for r in unit["rounds"] if r["kind"] == "fix_findings"]
+            self.assertEqual(
+                [r["source_round_id"] for r in fixes],
+                [
+                    "skeleton-verify-pre_review-1",
+                    "skeleton-verify-pre_review-2",
+                    "skeleton-verify-pre_seal-1",
+                ],
+            )
+            failed = [
+                e for e in state["events"]
+                if e["type"] == "verification" and not e["ok"]
+            ]
+            self.assertEqual(
+                [e["stage"] for e in failed],
+                [st.U_PRE_REVIEW_VERIFY, st.U_PRE_REVIEW_VERIFY,
+                 st.U_PRE_SEAL_VERIFY],
+            )
             # Raw fix outputs kept distinct monotonic names.
             raw_dir = os.path.join(ws, ".orchestrator", "raw")
-            for name in ("skeleton-vfix1.txt", "skeleton-vfix2.txt",
-                         "skeleton-vfix3.txt"):
+            for name in ("skeleton-fix1.txt", "skeleton-fix2.txt",
+                         "skeleton-fix3.txt"):
                 self.assertIn(name, os.listdir(raw_dir))
 
 
 class TestSkeletonSlicePlanUpdate(DriverTestCase):
     def test_skeleton_fix_round_updates_structural_plan(self):
-        """P3: the slice plan was frozen from the pre-review draft JSON;
-        a review round that rewrites the skeleton's slice table can now
-        report the updated plan and the unit plan follows it."""
+        """P3: the slice plan was frozen from the pre-review draft JSON.
+        Under the redesign the reviewer only REPORTS the gap; the fixer
+        (which has edit permissions on the skeleton document) reports the
+        updated plan and the structural unit plan follows it."""
         with tempfile.TemporaryDirectory(prefix="orch-fix-") as ws:
             path = init_state(ws, make_config())
             new_plan = [
@@ -412,29 +515,16 @@ class TestSkeletonSlicePlanUpdate(DriverTestCase):
                 {"id": 2, "title": "follow-up"},
             ]
             mock = runners.MockRunner([
+                draft_skeleton_step(slices=[{"id": 1, "title": "core"}]),
                 step(
-                    "draft_skeleton",
-                    ok(
-                        "draft_skeleton",
-                        artifact="docs/skeleton.md",
-                        slices=[{"id": 1, "title": "core"}],
-                    ),
+                    "review_round",
+                    reported("review_round",
+                             "slice plan missed the follow-up work"),
                     family="codex",
                 ),
                 step(
-                    "review_round",
-                    ok(
-                        "review_round",
-                        findings=[{
-                            "id": "F1",
-                            "severity": "P2",
-                            "summary": "slice plan missed the follow-up work",
-                            "disposition": "fixed",
-                            "consultation": None,
-                        }],
-                        files_changed=["docs/skeleton.md"],
-                        slices=new_plan,
-                    ),
+                    "fix_findings",
+                    fix_fixed("F1", slices=new_plan),
                     family="codex",
                 ),
                 step("review_round", clean(), family="codex"),
@@ -448,6 +538,7 @@ class TestSkeletonSlicePlanUpdate(DriverTestCase):
             self.step_until(
                 driver, lambda s: s["units"][0]["status"] == st.U_SEALED
             )
+            self.assertEqual(mock.script, [])
             state = st.load(path)
             self.assertEqual(state["milestone"]["slices"], new_plan)
             updates = [
@@ -476,10 +567,10 @@ class TestConcurrentInvocationRefused(DriverTestCase):
         with tempfile.TemporaryDirectory(prefix="orch-fix-") as ws:
             path = init_state(ws, make_config())
             driver_a = drv.Driver(
-                path, runner=runners.MockRunner([skeleton_script()[0]])
+                path, runner=runners.MockRunner([draft_skeleton_step()])
             )
             driver_b = drv.Driver(
-                path, runner=runners.MockRunner([skeleton_script()[0]])
+                path, runner=runners.MockRunner([draft_skeleton_step()])
             )
             driver_a.step()  # advances the on-disk state
             with self.assertRaises(drv.ConcurrentRunError):
@@ -500,7 +591,7 @@ class TestConcurrentInvocationRefused(DriverTestCase):
         with tempfile.TemporaryDirectory(prefix="orch-fix-") as ws:
             path = init_state(ws, make_config())
             driver = drv.Driver(
-                path, runner=runners.MockRunner([skeleton_script()[0]])
+                path, runner=runners.MockRunner([draft_skeleton_step()])
             )
             fh = open(path + ".lock", "a+")
             try:

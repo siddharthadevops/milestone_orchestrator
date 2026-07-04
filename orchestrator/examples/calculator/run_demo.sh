@@ -18,7 +18,10 @@ cat > "$CFG" <<EOF
   "timeouts": {"codex": 60, "claude": 60},
   "verification": ["python3 run_checks.py"],
   "max_rounds_per_family": 6,
-  "max_seal_attempts": 4
+  "max_seal_attempts": 4,
+  "git": {"enabled": true},
+  "acts": {"fixer": "codex", "delta_review": "codex", "consultation": "opposite"},
+  "max_fix_loops": 4
 }
 EOF
 
@@ -28,5 +31,8 @@ python3 -m orchestrator.driver init \
   --workspace "$WORK" --config "$CFG"
 python3 -m orchestrator.driver run --workspace "$WORK"
 python3 -m orchestrator.driver status --workspace "$WORK"
+echo
+echo "--- gate commits ---"
+git -C "$WORK" log --oneline
 echo
 echo "dashboard: python3 -m orchestrator.driver serve --workspace $WORK"

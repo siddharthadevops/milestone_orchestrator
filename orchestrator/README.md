@@ -21,8 +21,10 @@ forgotten). Every one of those rules is enforced here structurally.
 | Phase gates (draft -> verify -> rounds -> verify -> seal) | `state.transition_unit()` raises `IllegalTransition` |
 | Family order; later families never reopen earlier normal rounds | `state.advance_family_if_clean()` |
 | Seal opens only after every family has a recorded clean round | `state.can_open_seal()` checked before `U_SEALING` |
-| Seal halves review the same unchanged artifact and edit nothing | workspace snapshots (file contents, directories, symlink targets, unreadable-file markers) before/after each half; violations invalidate the half and send the unit back through pre-seal verification |
-| A rejected finding requires an opposite-family consultation | `contracts.validate_finding()` (P0-P3; therefore also P0/P1) |
+| Whoever detects never fixes: ALL reviews are report-only | `contracts.REPORT_KINDS` forbid dispositions and file changes; workspace snapshots detect tampering; tampered reviews are discarded and the worktree restored to HEAD |
+| A rejected finding requires an opposite-family consultation | `contracts.validate_fix_finding()` (P0-P3; therefore also P0/P1) |
+| Settled findings stay settled | milestone-global adjudication registry injected into every prompt; `contests` and `rejected_adjudicated` references validated against it; misreadable-target rejections carry a `prevention` edit |
+| The fixer triages exactly what was queued | `contracts.validate_fix_coverage()` (same ids, nothing invented) |
 | Round/seal/verify-fix caps | driver executors fail the run with the explanation in the event log |
 | Blocked -> stop with explanation, no silent retries | `status: "blocked"` or a `blocked` disposition ends the run; the reason is in `state.failure` and the events |
 | No prose parsing of reviewer output | workers must return contract JSON (`contracts.py`); one repair retry, then the run fails |
@@ -76,7 +78,10 @@ the selected run — pipeline, rounds, seals, failure banner, event log,
 driver log — with Start / Stop / Forget. "New milestone" takes a workspace
 path plus a goal text **or a work-description doc path** (its content
 becomes the goal, snapshotted at launch), an optional verification command,
-and an optional advanced config JSON merged over defaults. Both path fields
+and an optional advanced config JSON merged over defaults. Panel launches
+enable `git.enabled` by default — the full gate/amend/delta-review
+discipline described above; pass `{"git": {"enabled": false}}` in the
+advanced config for a deliberate pure-state run. Both path fields
 have a Browse… picker (`GET /api/fs`, read-only listings; a typed path that
 does not exist yet opens at its nearest existing ancestor) and a dropdown of
 previously used paths (`GET /api/recents`, best-effort form memory in
@@ -117,25 +122,80 @@ exactly like running the driver yourself; never expose the port.
 For the milestone: one `skeleton` unit, then per slice a `slice_doc` and a
 `slice_impl` unit. Every unit runs:
 
-    draft/implement (full-permission worker call)
+    draft/implement (edit-permission worker call) -> wip commit
+      -> verification suite (fail -> the findings go to the FIX LOOP)
+      -> codex review rounds (REPORT-ONLY) until a clean round
+      -> claude review rounds (REPORT-ONLY) until a clean round
       -> verification suite
-      -> codex review-and-fix rounds until a clean round
-      -> claude review-and-fix rounds until a clean round
-      -> verification suite
-      -> double seal: both families report-only on a hash-verified
-         unchanged workspace; findings -> one seal-fix call -> verify
-         -> full new attempt; both clean -> sealed. An INVALIDATED
-         attempt (a half modified the workspace) also goes back through
-         pre-seal verification before the next attempt: the tampering
-         delta is never double-sealed unverified.
+      -> double seal: both families report-only on the unit's amended
+         commit; findings -> FIX LOOP -> verify -> full new attempt;
+         both clean -> the wip commit is finalized as the GATE COMMIT.
 
-Review rounds have full edit permissions and fix in-pass (exhaustive-pass
-instruction is in the prompt). Consultations with the opposite family are
-run by the worker itself; the driver records outcomes from the JSON.
-A fix call on the skeleton unit that changes the slice plan reports the
-updated plan in its JSON (`slices`); the driver keeps the structural unit
-plan in sync until the skeleton seals. Slice ids are validated as unique
-integers — a duplicate id would silently collapse the unit plan.
+### Review/fix separation (whoever detects never fixes)
+
+Every review — codex round, claude round, seal half, delta review — is
+REPORT-ONLY: it returns findings and edits nothing (enforced by workspace
+snapshots; a tampering reviewer's output is discarded and, because reviews
+run on a clean worktree, the workspace is mechanically restored to HEAD —
+with git disabled there is no restorable HEAD, so a tampering reviewer
+fails the run with the explanation instead of touching the worktree).
+The driver uses clean reviews to advance state; dirty reviews queue their
+findings for the FIX LOOP:
+
+    findings -> FIXER (edit permissions: verifies each finding against the
+      real code/doc; concedes-and-fixes, or dissents-and-justifies)
+      -> DELTA REVIEW (report-only, target = the pending `git diff HEAD`
+         of the fix — review the 5 changed lines, not the 1000-line unit)
+      -> findings? -> back to the FIXER (same episode, capped by
+         max_fix_loops)
+      -> green -> AMEND into the unit's wip commit -> continue exactly
+         where the dirty review left off (next round of the same family,
+         re-verify, or a fresh seal attempt)
+
+Per-act family policy (config "acts"): each act — fixer, delta_review,
+consultation — is a fixed family name, "self", or "opposite" (relative to
+the act's origin). This release pins fixer and delta_review to codex for
+speed; review rounds and seal halves keep their family identity by
+definition.
+
+### Adjudicated rejections (no infinite finding loops)
+
+A fixer rejection requires the opposite-family consultation, and when the
+target was correct-but-misreadable, a `prevention` edit documented in the
+target itself. Every rejection lands in the milestone-global registry
+(derived from the append-only rounds; ids like `skeleton-claude-r1/F1`)
+and is injected into EVERY subsequent review and fix prompt. Re-raising a
+settled finding requires `contests` with the registry id and genuinely new
+evidence — both validated structurally (unknown ids fail the run). A
+duplicate without new evidence dies by pointer: `rejected_adjudicated`
+citing the registry entry, zero new consultations. A contested finding is
+never killable by pointer — the contest re-opened that adjudication, so the
+fixer must fix or reject it with a fresh consultation (enforced
+structurally). When the fixer CONCEDES a contested finding (`fixed`), the
+contested adjudication is overturned: it leaves the registry, no longer
+satisfies `adjudication_ref`, and the finding may be re-raised freely. The
+jurisprudence is committed at every gate as `docs/adjudications.md`.
+
+### Git gates and the amend discipline
+
+With `git.enabled`, the workspace is (or becomes) its own git repository —
+strictly its OWN: a workspace nested inside another repo gets an
+independent nested repo, and every staging/commit operation hard-fails
+rather than touch an enclosing project. Each unit opens with a wip commit
+of its draft; green fix episodes AMEND it (one clean commit per unit, no
+patch stacking); the double seal reviews that amended commit and a passing
+seal finalizes it under the canonical gate message (`Seal milestone
+skeleton`, `Seal slice NN note`, `Seal slice NN implementation and close`,
+`Close milestone`). At each gate the driver regenerates the markdown
+ledgers from state.json — `docs/MILESTONE.md`, `docs/review-log.md`,
+`docs/adjudications.md`, `docs/closures/` — and folds them into the gate.
+The JSON is the source of truth; ledgers are compiled views, so
+ledger-vs-state drift is structurally impossible.
+
+Access model: workers get full READ access (sibling repositories,
+dependency checkouts — whatever tracing requires; the CLI bypass flags
+stay). Edits are only legitimate inside the workspace and only for
+edit-kind calls; the boundary is enforced by detection, not sandboxing.
 
 ## Demo (no LLMs, ~seconds)
 
@@ -200,6 +260,8 @@ Tiers:
 - Consultation transcripts are saved by workers under
   `.orchestrator/scratch/` on the honor system; only the JSON resolution is
   recorded structurally.
-- No git commits at gates yet; the state file is the ledger.
+- Gate commits, the amend discipline, and delta reviews require `git.enabled`
+  (off by default for pure-state CLI runs; the demo config and service-panel
+  launches enable it); pushing is not automated — the operator pushes.
 
 These are inputs for canon v10, which will be written against this driver.

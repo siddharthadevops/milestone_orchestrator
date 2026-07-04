@@ -121,7 +121,17 @@ def ok_output(kind, **extra):
     return base
 
 
-def full_finding(disposition="fixed", severity="P2", consultation=None):
+def report_finding(severity="P2", contests=None):
+    """A reviewer finding: no disposition (reviewers never triage)."""
+    f = {"id": "F1", "severity": severity, "summary": "a finding"}
+    if contests is not None:
+        f["contests"] = contests
+    return f
+
+
+def full_finding(disposition="fixed", severity="P2", consultation=None,
+                 **extra):
+    """A fixer triage entry (kind fix_findings): carries the disposition."""
     f = {
         "id": "F1",
         "severity": severity,
@@ -130,6 +140,7 @@ def full_finding(disposition="fixed", severity="P2", consultation=None):
     }
     if consultation is not None:
         f["consultation"] = consultation
+    f.update(extra)
     return f
 
 
@@ -163,38 +174,82 @@ class TestValidateWorkerOutputHappy(unittest.TestCase):
         contracts.validate_worker_output(obj, contracts.KIND_REVIEW_ROUND)
         self.assertTrue(contracts.findings_clean(obj))
 
-    def test_review_round_with_fixed_finding(self):
+    def test_review_round_with_report_finding(self):
+        # Reviewer findings carry NO disposition and the output claims no
+        # file changes (whoever detects never fixes).
         obj = ok_output(
-            contracts.KIND_REVIEW_ROUND,
-            findings=[full_finding("fixed")],
-            files_changed=["calc.py"],
+            contracts.KIND_REVIEW_ROUND, findings=[report_finding()]
         )
         contracts.validate_worker_output(obj, contracts.KIND_REVIEW_ROUND)
         self.assertFalse(contracts.findings_clean(obj))
 
-    def test_rejected_with_consultation_is_valid_for_each_fixer_kind(self):
-        for kind in (
-            contracts.KIND_REVIEW_ROUND,
-            contracts.KIND_SEAL_FIX,
-            contracts.KIND_FIX_VERIFICATION,
-        ):
+    def test_report_finding_with_valid_contests(self):
+        # Re-raising a settled finding is legal only with the registry id
+        # and genuinely new evidence.
+        for kind in contracts.REPORT_KINDS:
             with self.subTest(kind=kind):
                 obj = ok_output(
                     kind,
                     findings=[
-                        full_finding(
-                            "rejected",
-                            consultation={"resolution": "both families agree"},
+                        report_finding(
+                            contests={
+                                "rejection_id": "skeleton-claude-r1/F1",
+                                "new_evidence": "the CLI now parses ints",
+                            }
                         )
                     ],
                 )
-                contracts.validate_worker_output(obj, kind)
+                self.assertIs(contracts.validate_worker_output(obj, kind), obj)
+
+    def test_rejected_with_consultation_is_valid_for_the_fixer(self):
+        # fix_findings is the only kind that triages (dispositions).
+        obj = ok_output(
+            contracts.KIND_FIX_FINDINGS,
+            findings=[
+                full_finding(
+                    "rejected",
+                    consultation={"resolution": "both families agree"},
+                )
+            ],
+        )
+        contracts.validate_worker_output(obj, contracts.KIND_FIX_FINDINGS)
+
+    def test_rejected_with_prevention_edit(self):
+        obj = ok_output(
+            contracts.KIND_FIX_FINDINGS,
+            findings=[
+                full_finding(
+                    "rejected",
+                    consultation={"resolution": "target was correct"},
+                    prevention={
+                        "documented_in": "docs/skeleton.md",
+                        "note": "clarifying sentence added",
+                    },
+                )
+            ],
+            files_changed=["docs/skeleton.md"],
+        )
+        contracts.validate_worker_output(obj, contracts.KIND_FIX_FINDINGS)
+
+    def test_rejected_adjudicated_with_ref_needs_no_consultation(self):
+        # A duplicate of a settled rejection dies by pointer: registry ref,
+        # zero new consultations.
+        obj = ok_output(
+            contracts.KIND_FIX_FINDINGS,
+            findings=[
+                full_finding(
+                    "rejected_adjudicated",
+                    adjudication_ref="skeleton-claude-r1/F1",
+                )
+            ],
+        )
+        contracts.validate_worker_output(obj, contracts.KIND_FIX_FINDINGS)
 
     def test_blocked_disposition_needs_no_consultation(self):
         obj = ok_output(
-            contracts.KIND_REVIEW_ROUND, findings=[full_finding("blocked")]
+            contracts.KIND_FIX_FINDINGS, findings=[full_finding("blocked")]
         )
-        contracts.validate_worker_output(obj, contracts.KIND_REVIEW_ROUND)
+        contracts.validate_worker_output(obj, contracts.KIND_FIX_FINDINGS)
         self.assertEqual(len(contracts.blocking_findings(obj)), 1)
 
     def test_seal_half_report_only_finding(self):
@@ -210,12 +265,17 @@ class TestValidateWorkerOutputHappy(unittest.TestCase):
         obj = ok_output(contracts.KIND_SEAL_HALF, findings=[])
         contracts.validate_worker_output(obj, contracts.KIND_SEAL_HALF)
 
-    def test_seal_fix_and_fix_verification_clean(self):
-        for kind in (contracts.KIND_SEAL_FIX, contracts.KIND_FIX_VERIFICATION):
-            with self.subTest(kind=kind):
-                contracts.validate_worker_output(
-                    ok_output(kind, findings=[]), kind
-                )
+    def test_delta_review_clean_and_with_finding(self):
+        contracts.validate_worker_output(
+            ok_output(contracts.KIND_DELTA_REVIEW, findings=[]),
+            contracts.KIND_DELTA_REVIEW,
+        )
+        contracts.validate_worker_output(
+            ok_output(
+                contracts.KIND_DELTA_REVIEW, findings=[report_finding("P1")]
+            ),
+            contracts.KIND_DELTA_REVIEW,
+        )
 
     def test_blocked_status_valid_for_every_kind(self):
         for kind in contracts.KINDS:
@@ -335,37 +395,30 @@ class TestValidateWorkerOutputViolations(unittest.TestCase):
                 )
                 self.assertContract(obj, contracts.KIND_DRAFT_SKELETON, "boolean")
 
-    def test_fixer_kinds_accept_optional_valid_slices(self):
-        for kind in (
-            contracts.KIND_REVIEW_ROUND,
-            contracts.KIND_SEAL_FIX,
-            contracts.KIND_FIX_VERIFICATION,
-        ):
-            with self.subTest(kind=kind):
-                obj = ok_output(
-                    kind,
-                    findings=[],
-                    slices=[{"id": 1, "title": "one"},
-                            {"id": 2, "title": "two"}],
-                )
-                contracts.validate_worker_output(obj, kind)
+    def test_fixer_accepts_optional_valid_slices(self):
+        # Only the fixer (edit permissions) may return an updated slice
+        # plan — meaningful when a fix touched the skeleton's slice table.
+        obj = ok_output(
+            contracts.KIND_FIX_FINDINGS,
+            findings=[],
+            slices=[{"id": 1, "title": "one"},
+                    {"id": 2, "title": "two"}],
+        )
+        contracts.validate_worker_output(obj, contracts.KIND_FIX_FINDINGS)
 
-    def test_fixer_kinds_reject_bad_optional_slices(self):
+    def test_fixer_rejects_bad_optional_slices(self):
         cases = [
             ([], "non-empty"),
             ([{"id": 1, "title": "a"}, {"id": 1, "title": "b"}], "duplicate"),
             ([{"id": True, "title": "a"}], "boolean"),
             (["not-an-object"], None),
         ]
-        for kind in (
-            contracts.KIND_REVIEW_ROUND,
-            contracts.KIND_SEAL_FIX,
-            contracts.KIND_FIX_VERIFICATION,
-        ):
-            for slices, fragment in cases:
-                with self.subTest(kind=kind, slices=slices):
-                    obj = ok_output(kind, findings=[], slices=slices)
-                    self.assertContract(obj, kind, fragment)
+        for slices, fragment in cases:
+            with self.subTest(slices=slices):
+                obj = ok_output(
+                    contracts.KIND_FIX_FINDINGS, findings=[], slices=slices
+                )
+                self.assertContract(obj, contracts.KIND_FIX_FINDINGS, fragment)
 
     def test_slice_note_missing_artifact(self):
         self.assertContract(
@@ -381,52 +434,114 @@ class TestValidateWorkerOutputViolations(unittest.TestCase):
             "files_changed",
         )
 
-    def test_review_missing_findings(self):
-        for kind in (
-            contracts.KIND_REVIEW_ROUND,
-            contracts.KIND_SEAL_FIX,
-            contracts.KIND_FIX_VERIFICATION,
-            contracts.KIND_SEAL_HALF,
-        ):
+    def test_missing_findings_on_report_and_fix_kinds(self):
+        for kind in contracts.REPORT_KINDS + (contracts.KIND_FIX_FINDINGS,):
             with self.subTest(kind=kind):
                 self.assertContract(ok_output(kind), kind, "findings")
 
-    def test_rejected_without_consultation_all_severities_all_kinds(self):
+    def test_report_kinds_must_not_claim_file_changes(self):
+        # Whoever detects never fixes: a review output claiming edits is a
+        # protocol violation by itself.
+        for kind in contracts.REPORT_KINDS:
+            with self.subTest(kind=kind):
+                obj = ok_output(
+                    kind, findings=[], files_changed=["calc.py"]
+                )
+                self.assertContract(obj, kind, "file changes")
+
+    def test_rejected_without_consultation_all_severities(self):
         # Encodes the never-solo-rejected rule: the contract requires a
         # consultation for EVERY severity, hence in particular P0/P1.
-        for kind in (
-            contracts.KIND_REVIEW_ROUND,
-            contracts.KIND_SEAL_FIX,
-            contracts.KIND_FIX_VERIFICATION,
-        ):
-            for sev in contracts.SEVERITIES:
-                with self.subTest(kind=kind, severity=sev):
-                    obj = ok_output(
-                        kind,
-                        findings=[full_finding("rejected", severity=sev)],
-                    )
-                    self.assertContract(obj, kind, "consultation")
+        for sev in contracts.SEVERITIES:
+            with self.subTest(severity=sev):
+                obj = ok_output(
+                    contracts.KIND_FIX_FINDINGS,
+                    findings=[full_finding("rejected", severity=sev)],
+                )
+                self.assertContract(
+                    obj, contracts.KIND_FIX_FINDINGS, "consultation"
+                )
 
     def test_rejected_with_consultation_missing_resolution(self):
         obj = ok_output(
-            contracts.KIND_REVIEW_ROUND,
+            contracts.KIND_FIX_FINDINGS,
             findings=[full_finding("rejected", consultation={})],
         )
-        self.assertContract(obj, contracts.KIND_REVIEW_ROUND, "resolution")
+        self.assertContract(obj, contracts.KIND_FIX_FINDINGS, "resolution")
 
     def test_rejected_with_non_string_resolution(self):
         obj = ok_output(
-            contracts.KIND_REVIEW_ROUND,
+            contracts.KIND_FIX_FINDINGS,
             findings=[
                 full_finding("rejected", consultation={"resolution": 42})
             ],
         )
-        self.assertContract(obj, contracts.KIND_REVIEW_ROUND)
+        self.assertContract(obj, contracts.KIND_FIX_FINDINGS)
 
     def test_rejected_with_consultation_wrong_type(self):
         obj = ok_output(
-            contracts.KIND_REVIEW_ROUND,
+            contracts.KIND_FIX_FINDINGS,
             findings=[full_finding("rejected", consultation="we talked")],
+        )
+        self.assertContract(obj, contracts.KIND_FIX_FINDINGS)
+
+    def test_rejected_adjudicated_without_ref(self):
+        obj = ok_output(
+            contracts.KIND_FIX_FINDINGS,
+            findings=[full_finding("rejected_adjudicated")],
+        )
+        self.assertContract(
+            obj, contracts.KIND_FIX_FINDINGS, "adjudication_ref"
+        )
+
+    def test_prevention_missing_fields(self):
+        for prevention in (
+            {"documented_in": "docs/skeleton.md"},  # no note
+            {"note": "clarified"},  # no documented_in
+            {"documented_in": 3, "note": "clarified"},  # wrong type
+        ):
+            with self.subTest(prevention=prevention):
+                obj = ok_output(
+                    contracts.KIND_FIX_FINDINGS,
+                    findings=[
+                        full_finding(
+                            "rejected",
+                            consultation={"resolution": "agreed"},
+                            prevention=prevention,
+                        )
+                    ],
+                )
+                self.assertContract(
+                    obj, contracts.KIND_FIX_FINDINGS, "prevention"
+                )
+
+    def test_contests_missing_rejection_id(self):
+        obj = ok_output(
+            contracts.KIND_REVIEW_ROUND,
+            findings=[
+                report_finding(contests={"new_evidence": "new fact"})
+            ],
+        )
+        self.assertContract(obj, contracts.KIND_REVIEW_ROUND, "rejection_id")
+
+    def test_contests_missing_new_evidence(self):
+        for contests in (
+            {"rejection_id": "skeleton-claude-r1/F1"},
+            {"rejection_id": "skeleton-claude-r1/F1", "new_evidence": ""},
+        ):
+            with self.subTest(contests=contests):
+                obj = ok_output(
+                    contracts.KIND_REVIEW_ROUND,
+                    findings=[report_finding(contests=contests)],
+                )
+                self.assertContract(
+                    obj, contracts.KIND_REVIEW_ROUND, "new_evidence"
+                )
+
+    def test_contests_wrong_type(self):
+        obj = ok_output(
+            contracts.KIND_REVIEW_ROUND,
+            findings=[report_finding(contests="I disagree")],
         )
         self.assertContract(obj, contracts.KIND_REVIEW_ROUND)
 
@@ -444,12 +559,19 @@ class TestValidateWorkerOutputViolations(unittest.TestCase):
         )
         self.assertContract(obj, contracts.KIND_SEAL_HALF, "disposition")
 
-    def test_bad_severity(self):
+    def test_bad_severity_on_report_finding(self):
         obj = ok_output(
             contracts.KIND_REVIEW_ROUND,
-            findings=[full_finding("fixed", severity="P4")],
+            findings=[report_finding(severity="P4")],
         )
         self.assertContract(obj, contracts.KIND_REVIEW_ROUND, "severity")
+
+    def test_bad_severity_on_fix_finding(self):
+        obj = ok_output(
+            contracts.KIND_FIX_FINDINGS,
+            findings=[full_finding("fixed", severity="P4")],
+        )
+        self.assertContract(obj, contracts.KIND_FIX_FINDINGS, "severity")
 
     def test_missing_severity(self):
         obj = ok_output(
@@ -459,17 +581,26 @@ class TestValidateWorkerOutputViolations(unittest.TestCase):
 
     def test_bad_disposition(self):
         obj = ok_output(
-            contracts.KIND_REVIEW_ROUND,
+            contracts.KIND_FIX_FINDINGS,
             findings=[full_finding("wontfix")],
         )
-        self.assertContract(obj, contracts.KIND_REVIEW_ROUND, "disposition")
+        self.assertContract(obj, contracts.KIND_FIX_FINDINGS, "disposition")
 
-    def test_missing_disposition_on_review_finding(self):
+    def test_disposition_on_review_finding_rejected(self):
+        # Old model allowed (required) dispositions on review findings; the
+        # redesign forbids them on EVERY report kind: reviewers never triage.
+        for kind in contracts.REPORT_KINDS:
+            for disp in contracts.DISPOSITIONS:
+                with self.subTest(kind=kind, disposition=disp):
+                    obj = ok_output(kind, findings=[full_finding(disp)])
+                    self.assertContract(obj, kind, "no disposition")
+
+    def test_missing_disposition_on_fix_finding(self):
         obj = ok_output(
-            contracts.KIND_REVIEW_ROUND,
+            contracts.KIND_FIX_FINDINGS,
             findings=[{"id": "F1", "severity": "P2", "summary": "s"}],
         )
-        self.assertContract(obj, contracts.KIND_REVIEW_ROUND, "disposition")
+        self.assertContract(obj, contracts.KIND_FIX_FINDINGS, "disposition")
 
     def test_finding_not_an_object(self):
         obj = ok_output(contracts.KIND_REVIEW_ROUND, findings=["oops"])
@@ -480,6 +611,51 @@ class TestValidateWorkerOutputViolations(unittest.TestCase):
             contracts.KIND_SEAL_HALF, findings=[{"id": "F1", "severity": "P1"}]
         )
         self.assertContract(obj, contracts.KIND_SEAL_HALF, "summary")
+
+
+# ---------------------------------------------------------------------------
+# contracts.validate_fix_coverage
+
+
+class TestValidateFixCoverage(unittest.TestCase):
+    QUEUED = [
+        {"id": "F1", "severity": "P2", "summary": "one"},
+        {"id": "F2", "severity": "P3", "summary": "two"},
+    ]
+
+    def fix_output(self, ids):
+        return ok_output(
+            contracts.KIND_FIX_FINDINGS,
+            findings=[dict(full_finding("fixed"), id=i) for i in ids],
+            files_changed=[],
+        )
+
+    def test_exact_coverage_passes_any_order(self):
+        for ids in (["F1", "F2"], ["F2", "F1"]):
+            with self.subTest(ids=ids):
+                out = self.fix_output(ids)
+                self.assertIs(
+                    contracts.validate_fix_coverage(out, self.QUEUED), out
+                )
+
+    def test_missing_queued_id_raises(self):
+        with self.assertRaises(contracts.ContractError) as cm:
+            contracts.validate_fix_coverage(
+                self.fix_output(["F1"]), self.QUEUED
+            )
+        self.assertIn("exactly the queued findings", str(cm.exception))
+
+    def test_invented_id_raises(self):
+        with self.assertRaises(contracts.ContractError):
+            contracts.validate_fix_coverage(
+                self.fix_output(["F1", "F2", "F3"]), self.QUEUED
+            )
+
+    def test_duplicated_id_raises(self):
+        with self.assertRaises(contracts.ContractError):
+            contracts.validate_fix_coverage(
+                self.fix_output(["F1", "F1"]), self.QUEUED
+            )
 
 
 # ---------------------------------------------------------------------------

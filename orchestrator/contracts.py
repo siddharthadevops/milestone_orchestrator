@@ -1,49 +1,70 @@
 """JSON contracts between the deterministic driver and LLM CLI workers.
 
-This module is the single source of truth for the worker output protocol:
-prompts advertise these schemas, runners validate against them, the driver
-trusts only validated objects, and fake CLIs / tests import them.
+Single source of truth for the worker protocol: prompts advertise these
+schemas, runners validate against them, the driver trusts only validated
+objects, fake CLIs and tests import them.
 
-Design rule: the driver never parses prose. A worker that cannot produce a
-valid JSON object (after one repair retry) fails the run with an explanation
-recorded in the event log.
+Role separation (the core rule): WHOEVER DETECTS NEVER FIXES.
+
+- Report kinds (review_round, delta_review, seal_half): review a target,
+  return findings, edit NOTHING (enforced mechanically by the driver via
+  workspace snapshots, never by trust). Findings carry no disposition —
+  reviewers do not triage. A finding that contests a previously adjudicated
+  rejection MUST reference it (`contests`) and bring new evidence.
+- Fix kind (fix_findings): receives a findings list, verifies each against
+  the real code/doc, and either concedes-and-fixes or dissents-and-
+  justifies. Dispositions:
+    fixed                 the finding was right; corrected in this pass.
+    rejected              the finding is wrong; REQUIRES the opposite-family
+                          consultation resolution, and, when the artifact
+                          was correct-but-misreadable, a `prevention` edit
+                          documented in the target so the finding cannot
+                          keep being reborn.
+    rejected_adjudicated  the finding duplicates an already-adjudicated
+                          rejection; REQUIRES `adjudication_ref` (validated
+                          by the driver against the milestone registry);
+                          costs no new consultation.
+    blocked               neither fixing nor a justified rejection is
+                          possible; the run stops with the explanation.
+- Draft kinds (draft_skeleton, draft_slice_note, implement): produce the
+  unit's artifact with full edit permissions.
+
+A worker that cannot produce contract JSON (after one repair retry) fails
+the run with the explanation recorded.
 """
 
 SEVERITIES = ("P0", "P1", "P2", "P3")
-DISPOSITIONS = ("fixed", "rejected", "blocked")
+DISPOSITIONS = ("fixed", "rejected", "rejected_adjudicated", "blocked")
 
 # Worker call kinds. Every prompt carries a `KIND:` header with one of these.
 KIND_DRAFT_SKELETON = "draft_skeleton"
 KIND_DRAFT_SLICE_NOTE = "draft_slice_note"
 KIND_IMPLEMENT = "implement"
 KIND_REVIEW_ROUND = "review_round"
+KIND_DELTA_REVIEW = "delta_review"
 KIND_SEAL_HALF = "seal_half"
-KIND_SEAL_FIX = "seal_fix"
-KIND_FIX_VERIFICATION = "fix_verification"
+KIND_FIX_FINDINGS = "fix_findings"
 
 KINDS = (
     KIND_DRAFT_SKELETON,
     KIND_DRAFT_SLICE_NOTE,
     KIND_IMPLEMENT,
     KIND_REVIEW_ROUND,
+    KIND_DELTA_REVIEW,
     KIND_SEAL_HALF,
-    KIND_SEAL_FIX,
-    KIND_FIX_VERIFICATION,
+    KIND_FIX_FINDINGS,
 )
 
-# Kinds whose worker gets full edit permissions on the workspace.
+# Reviewers report; they never edit (enforced via snapshots/git restore).
+REPORT_KINDS = (KIND_REVIEW_ROUND, KIND_DELTA_REVIEW, KIND_SEAL_HALF)
+
+# Kinds whose worker gets full edit permissions inside the workspace.
 EDIT_KINDS = (
     KIND_DRAFT_SKELETON,
     KIND_DRAFT_SLICE_NOTE,
     KIND_IMPLEMENT,
-    KIND_REVIEW_ROUND,
-    KIND_SEAL_FIX,
-    KIND_FIX_VERIFICATION,
+    KIND_FIX_FINDINGS,
 )
-
-# Kinds that must NOT modify the workspace (enforced structurally by the
-# driver via workspace snapshots, not by trusting the worker).
-READONLY_KINDS = (KIND_SEAL_HALF,)
 
 
 class ContractError(ValueError):
@@ -99,35 +120,64 @@ def validate_slices(slices, ctx):
     return slices
 
 
-def validate_finding(finding, kind, ctx):
-    """Validate one finding object. Returns the finding.
-
-    review_round / seal_fix / fix_verification findings carry a disposition;
-    a `rejected` disposition additionally requires a recorded consultation
-    with the opposite family (this encodes the canon rule that a finding is
-    never rejected on single-family judgment alone).
-    seal_half findings carry no disposition: seal halves report, they do not
-    triage.
-    """
+def validate_report_finding(finding, ctx):
+    """A reviewer finding: id/severity/summary, NO disposition (reviewers
+    do not triage), optional `contests` referencing an adjudicated
+    rejection — then new_evidence is mandatory. The referenced id's
+    existence is validated by the driver against the milestone registry."""
     if not isinstance(finding, dict):
         raise ContractError("%s: finding must be an object" % ctx)
+    _require(finding, "id", str, ctx)
     _require(finding, "summary", str, ctx)
     sev = _require(finding, "severity", str, ctx)
     if sev not in SEVERITIES:
         raise ContractError("%s: severity %r not in %s" % (ctx, sev, SEVERITIES))
-    if kind == KIND_SEAL_HALF:
-        if "disposition" in finding and finding["disposition"] is not None:
+    if finding.get("disposition") is not None:
+        raise ContractError(
+            "%s: reviewer findings carry no disposition (whoever detects "
+            "never fixes; triage belongs to the fixer)" % ctx
+        )
+    contests = _optional(finding, "contests", dict, ctx)
+    if contests is not None:
+        rid = contests.get("rejection_id")
+        evidence = contests.get("new_evidence")
+        if not rid or not isinstance(rid, str):
             raise ContractError(
-                "%s: seal_half findings must not carry a disposition "
-                "(seal halves report; they do not triage)" % ctx
+                "%s: contests requires the adjudicated rejection_id" % ctx
             )
-        return finding
+        if not evidence or not isinstance(evidence, str):
+            raise ContractError(
+                "%s: contesting an adjudicated rejection requires "
+                "non-empty new_evidence" % ctx
+            )
+    return finding
+
+
+def validate_fix_finding(finding, ctx):
+    """A fixer triage entry: echoes the reviewed finding's id, carries the
+    disposition and its per-disposition obligations."""
+    if not isinstance(finding, dict):
+        raise ContractError("%s: finding must be an object" % ctx)
+    _require(finding, "id", str, ctx)
+    _require(finding, "summary", str, ctx)
+    sev = _require(finding, "severity", str, ctx)
+    if sev not in SEVERITIES:
+        raise ContractError("%s: severity %r not in %s" % (ctx, sev, SEVERITIES))
     disp = _require(finding, "disposition", str, ctx)
     if disp not in DISPOSITIONS:
         raise ContractError(
             "%s: disposition %r not in %s" % (ctx, disp, DISPOSITIONS)
         )
     consultation = _optional(finding, "consultation", dict, ctx)
+    prevention = _optional(finding, "prevention", dict, ctx)
+    if prevention is not None:
+        if not isinstance(prevention.get("documented_in"), str) or not isinstance(
+            prevention.get("note"), str
+        ):
+            raise ContractError(
+                "%s: prevention requires string 'documented_in' (workspace-"
+                "relative path edited) and 'note'" % ctx
+            )
     if disp == "rejected":
         if not consultation or not isinstance(
             consultation.get("resolution"), str
@@ -136,7 +186,32 @@ def validate_finding(finding, kind, ctx):
                 "%s: a rejected finding requires a consultation object with "
                 "a string 'resolution' (opposite-family dialogue result)" % ctx
             )
+    if disp == "rejected_adjudicated":
+        ref = finding.get("adjudication_ref")
+        if not ref or not isinstance(ref, str):
+            raise ContractError(
+                "%s: rejected_adjudicated requires adjudication_ref (the "
+                "registry id of the prior rejection)" % ctx
+            )
     return finding
+
+
+def _assert_unique_finding_ids(findings, ctx):
+    """Finding ids must be unique within one output. A reviewer emitting
+    the same id twice would poison everything keyed on ids downstream: an
+    honest fixer deduplicating the queue fails validate_fix_coverage (the
+    run dies), while a fixer echoing the id twice and rejecting both would
+    mint two adjudication registry entries with the SAME id, making
+    contests / adjudication_ref targets ambiguous."""
+    seen = set()
+    for i, f in enumerate(findings):
+        fid = f.get("id")
+        if fid in seen:
+            raise ContractError(
+                "%s.findings[%d]: duplicate finding id %r (finding ids "
+                "must be unique within one output)" % (ctx, i, fid)
+            )
+        seen.add(fid)
 
 
 def validate_worker_output(obj, kind):
@@ -177,13 +252,23 @@ def validate_worker_output(obj, kind):
         _require(obj, "artifact", str, ctx)
     elif kind == KIND_IMPLEMENT:
         _require(obj, "files_changed", list, ctx)
-    elif kind in (KIND_REVIEW_ROUND, KIND_SEAL_FIX, KIND_FIX_VERIFICATION):
+    elif kind in REPORT_KINDS:
         findings = _require(obj, "findings", list, ctx)
         for i, f in enumerate(findings):
-            validate_finding(f, kind, "%s.findings[%d]" % (ctx, i))
+            validate_report_finding(f, "%s.findings[%d]" % (ctx, i))
+        _assert_unique_finding_ids(findings, ctx)
+        if obj.get("files_changed"):
+            raise ContractError(
+                "%s: report kinds must not claim file changes" % ctx
+            )
+    elif kind == KIND_FIX_FINDINGS:
+        findings = _require(obj, "findings", list, ctx)
+        for i, f in enumerate(findings):
+            validate_fix_finding(f, "%s.findings[%d]" % (ctx, i))
+        _assert_unique_finding_ids(findings, ctx)
         _optional(obj, "files_changed", list, ctx, default=[])
-        # Optional updated slice plan: only meaningful when the call fixed
-        # the milestone skeleton and changed its slice table.
+        # Optional updated slice plan: only meaningful when the fix touched
+        # the milestone skeleton's slice table (before the skeleton seals).
         slices = _optional(obj, "slices", list, ctx)
         if slices is not None:
             if not slices:
@@ -191,20 +276,30 @@ def validate_worker_output(obj, kind):
                     "%s: slices, when present, must be non-empty" % ctx
                 )
             validate_slices(slices, "%s.slices" % ctx)
-    elif kind == KIND_SEAL_HALF:
-        findings = _require(obj, "findings", list, ctx)
-        for i, f in enumerate(findings):
-            validate_finding(f, kind, "%s.findings[%d]" % (ctx, i))
     return obj
 
 
+def validate_fix_coverage(output, queued_findings):
+    """Driver-side check with context: the fixer must triage EXACTLY the
+    queued findings — every queued id appears once, no invented ids."""
+    ctx = "worker[%s]" % KIND_FIX_FINDINGS
+    queued_ids = [f["id"] for f in queued_findings]
+    got_ids = [f["id"] for f in output.get("findings", [])]
+    if sorted(queued_ids) != sorted(got_ids):
+        raise ContractError(
+            "%s: triage must cover exactly the queued findings; queued=%s "
+            "got=%s" % (ctx, sorted(queued_ids), sorted(got_ids))
+        )
+    return output
+
+
 def findings_clean(obj):
-    """A validated review/seal output is clean when it reports no findings."""
+    """A validated review output is clean when it reports no findings."""
     return len(obj.get("findings", [])) == 0
 
 
 def blocking_findings(obj):
-    """Findings that force the run to stop: any 'blocked' disposition."""
+    """Fixer findings that force the run to stop."""
     return [
         f
         for f in obj.get("findings", [])
@@ -226,8 +321,7 @@ Common fields (all kinds):
 
 Kind draft_skeleton adds:
   "artifact": "<workspace-relative path of the skeleton document you wrote>"
-  "slices": [ {"id": 1, "title": "..."}, ... ]   (at least one; ids are
-      unique integers)
+  "slices": [ {"id": 1, "title": "..."}, ... ]   (unique integer ids)
 
 Kind draft_slice_note adds:
   "artifact": "<workspace-relative path of the slice note you wrote>"
@@ -235,28 +329,40 @@ Kind draft_slice_note adds:
 Kind implement adds:
   "files_changed": ["<workspace-relative paths you created or edited>", ...]
 
-Kinds review_round / seal_fix / fix_verification add:
+REVIEW kinds (review_round / delta_review / seal_half) add:
   "findings": [
     {"id": "F1", "severity": "P0"|"P1"|"P2"|"P3", "summary": "...",
-     "disposition": "fixed"|"rejected"|"blocked",
-     "consultation": null | {"resolution": "<one-paragraph outcome of the
-                              opposite-family dialogue you ran>"}}
+     "contests": null | {"rejection_id": "<id from the ADJUDICATED
+      REJECTIONS list>", "new_evidence": "<the new fact that contradicts
+      the recorded rationale>"}}
   ]
-  "files_changed": ["...paths you edited while fixing...", ...]
-  "slices": [ {"id": 1, "title": "..."}, ... ]   (optional; ONLY when the
-      artifact is the milestone skeleton and your fixes changed its slice
-      plan — report the full updated plan, unique integer ids, so the
-      structural unit plan stays in sync with the document)
-  Rules: an empty findings list means the artifact is clean. A "rejected"
-  disposition REQUIRES a consultation with the opposite family (run it
-  yourself with the command given above and summarize its resolution).
-  Use "blocked" disposition only when neither fixing nor a consulted
-  rejection is possible; the run will stop and ask the operator.
+  Rules: you REVIEW ONLY — no disposition field, and you must not create,
+  edit, delete, or move ANY file (modifications are detected mechanically
+  and invalidate your output). Finding ids must be unique within this
+  response. An empty findings list means the target is clean. Before filing any finding, check the ADJUDICATED REJECTIONS list
+  in this prompt: if your finding challenges one of them you MUST fill
+  `contests` with its id and genuinely new evidence; re-raising an
+  adjudicated finding without new evidence is a protocol violation.
 
-Kind seal_half adds:
-  "findings": [ {"id": "F1", "severity": "P0"|"P1"|"P2"|"P3",
-                 "summary": "..."} ]
-  Seal halves REPORT ONLY: no disposition field, and you must not modify
-  any file in the workspace (modifications are detected mechanically and
-  invalidate your output).
+Kind fix_findings adds:
+  "findings": [
+    {"id": "<echo the queued finding's id>", "severity": "<echo>",
+     "summary": "...",
+     "disposition": "fixed" | "rejected" | "rejected_adjudicated" | "blocked",
+     "consultation": null | {"resolution": "<one-paragraph outcome of the
+                              opposite-family dialogue you ran>"},
+     "prevention": null | {"documented_in": "<path you edited>",
+                           "note": "<what now documents the decision>"},
+     "adjudication_ref": null | "<registry id of the prior rejection>"}
+  ]
+  "files_changed": ["...paths you edited...", ...]
+  Rules: triage EXACTLY the queued findings (same ids, nothing else).
+  Verify each against the real code/doc before deciding. "rejected"
+  REQUIRES the consultation; when the target was correct but misreadable,
+  ALSO make the minimal clarifying edit and record it in `prevention` so
+  the finding cannot keep being reborn. "rejected_adjudicated" is for
+  findings duplicating an entry of the ADJUDICATED REJECTIONS list without
+  new evidence: cite it in adjudication_ref, no consultation needed, do
+  not re-litigate. Use "blocked" only when neither fixing nor a justified
+  rejection is possible; the run will stop and show your reason.
 """

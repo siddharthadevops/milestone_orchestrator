@@ -3,9 +3,12 @@
 Starts the local-service HTTP server in a thread over a temporary --home,
 then exercises the JSON API exactly like the panel does: POST /api/runs with
 the fake-LLM calculator config (the same scenario as run_demo.sh: deliberate
-div bug -> fix_verification path, a mid-flow review finding, and an impl
-seal attempt 1 failure -> seal_fix + attempt 2), poll until the milestone
-closes, then stop/forget.
+div bug -> verification failure -> fix episode, a mid-flow review finding,
+and an impl seal attempt 1 failure -> fix episode + attempt 2), poll until
+the milestone closes, then stop/forget. Service launches enable git by
+default (the panel promises the FULL enforced flow), so like the demo this
+run exercises delta reviews, amends, and gate commits — inside the
+tempdir workspace only.
 
 The spawned driver is a real detached subprocess (`python3 -m
 orchestrator.driver run`) launched by service.start_run. Because the server
@@ -225,10 +228,27 @@ class TestServicePanelE2E(unittest.TestCase):
             [(1, False), (2, True)],
             "impl seals: %r" % (impl["seals"],),
         )
-        vfix = [r for r in impl["rounds"] if r["kind"] == "fix_verification"]
-        self.assertGreaterEqual(
-            len(vfix), 1,
-            "no fix_verification round on impl: %r" % (impl["rounds"],),
+        impl_kinds = [r["kind"] for r in impl["rounds"]]
+        # The deliberate div bug fails the pre-review verification, so the
+        # very first impl round is a fixer episode (fix_findings) recorded
+        # BEFORE any review round.
+        self.assertTrue(
+            impl_kinds and impl_kinds[0] == "fix_findings",
+            "expected a verification fix episode before the first review "
+            "round on impl: %r" % (impl["rounds"],),
+        )
+        self.assertIn(
+            "review_round", impl_kinds,
+            "no review rounds on impl: %r" % (impl["rounds"],),
+        )
+        # Seal attempt 1 fails (missing README), forcing another fix
+        # episode after the clean reviews; attempt 2 then passes. With git
+        # enabled (the service default) every fix is followed by its delta
+        # review before the amend.
+        self.assertEqual(
+            impl_kinds[-2:], ["fix_findings", "delta_review"],
+            "expected a seal fix episode (fixer + delta review) as the "
+            "last impl rounds: %r" % (impl["rounds"],),
         )
         # The run list shows the same closed run.
         status, body = self._request("GET", "/api/runs")

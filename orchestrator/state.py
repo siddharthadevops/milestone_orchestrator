@@ -29,7 +29,7 @@ import os
 import tempfile
 import time
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 # Unit kinds
 UNIT_SKELETON = "skeleton"
@@ -39,22 +39,22 @@ UNIT_SLICE_IMPL = "slice_impl"
 # Unit statuses (the per-unit state machine)
 U_PENDING = "pending"
 U_PRE_REVIEW_VERIFY = "pre_review_verify"
-U_VERIFY_FIX = "verify_fix"
-U_ROUNDS = "rounds"            # reviewing with families in order
+U_ROUNDS = "rounds"            # report-only review rounds, families in order
+U_FIXING = "fixing"            # a fixer call triages the queued findings
+U_DELTA_REVIEW = "delta_review"  # report-only review of the pending fix diff
 U_PRE_SEAL_VERIFY = "pre_seal_verify"
 U_SEALING = "sealing"
-U_SEAL_FIX = "seal_fix"
 U_SEALED = "sealed"
 U_FAILED = "failed"
 
 UNIT_STATUSES = (
     U_PENDING,
     U_PRE_REVIEW_VERIFY,
-    U_VERIFY_FIX,
     U_ROUNDS,
+    U_FIXING,
+    U_DELTA_REVIEW,
     U_PRE_SEAL_VERIFY,
     U_SEALING,
-    U_SEAL_FIX,
     U_SEALED,
     U_FAILED,
 )
@@ -114,8 +114,20 @@ def _new_unit(kind, slice_id):
         # verification passes (the cap bounds consecutive failures of the
         # current stage, not lifetime fixes of the unit).
         "verify_fix_attempts": {"pre_review": 0, "pre_seal": 0},
-        "return_to": None,          # where verify_fix returns: pre_review|pre_seal
+        # Never-reset per-stage sequence for synthetic verification fix
+        # episodes: verify_fix_attempts resets on a pass, so it cannot
+        # number the episode ids (ids must stay unique when a stage is
+        # re-entered after a dirty seal attempt).
+        "verify_episode_seq": {"pre_review": 0, "pre_seal": 0},
         "closed_record": None,      # slice_impl closure bookkeeping
+        "gate_commit": None,        # short sha of this unit's seal gate commit
+        # The active fix episode (working fields; history lives in rounds):
+        "fix_queue": [],            # findings currently queued for the fixer
+        "fix_source": None,         # {"type": verification|round|seal|delta,
+                                    #  "family": origin family or None,
+                                    #  "source_round_id": ...,
+                                    #  "return_to": status after green+amend}
+        "fix_loop_rounds": 0,       # fixer+delta iterations on this episode
     }
 
 
@@ -130,12 +142,6 @@ def load(path):
         raise RuntimeError(
             "state schema_version %r != %d" % (state.get("schema_version"), SCHEMA_VERSION)
         )
-    # In-place migration of pre-per-stage counter shape (a plain int).
-    # Applied on every load so append-only comparisons see one shape.
-    for unit in state.get("units", []):
-        vfa = unit.get("verify_fix_attempts")
-        if isinstance(vfa, int):
-            unit["verify_fix_attempts"] = {"pre_review": vfa, "pre_seal": 0}
     return state
 
 
@@ -166,8 +172,12 @@ def assert_append_only(old_state, new_state_):
         _assert_list_prefix(old_unit.get("seals", []), nu.get("seals", []), uctx + ".seals")
         # A sealed or failed unit is frozen except for closure bookkeeping.
         if old_unit.get("status") in (U_SEALED, U_FAILED):
-            frozen_old = {k: v for k, v in old_unit.items() if k != "closed_record"}
-            frozen_new = {k: v for k, v in nu.items() if k != "closed_record"}
+            # closed_record and gate_commit are post-seal bookkeeping
+            # written by the driver itself right after the terminal
+            # transition; everything else in a terminal unit is frozen.
+            _post_seal = ("closed_record", "gate_commit")
+            frozen_old = {k: v for k, v in old_unit.items() if k not in _post_seal}
+            frozen_new = {k: v for k, v in nu.items() if k not in _post_seal}
             if frozen_old != frozen_new:
                 raise HistoryRewriteError("%s: terminal unit was modified" % uctx)
 
@@ -269,16 +279,22 @@ def ensure_next_unit(state):
 
 def transition_unit(state, unit, new_status, reason=None):
     _ALLOWED = {
+        # Review/fix separation: dirty reviews (any source: verification,
+        # a review round, a seal) enter U_FIXING; the fixer's pending diff
+        # is checked in U_DELTA_REVIEW (report-only); a dirty delta loops
+        # back to U_FIXING; a green delta is amended and the unit returns
+        # exactly where the dirty review would have gone.
         U_PENDING: (U_PRE_REVIEW_VERIFY, U_FAILED),
-        U_PRE_REVIEW_VERIFY: (U_ROUNDS, U_VERIFY_FIX, U_FAILED),
-        U_VERIFY_FIX: (U_PRE_REVIEW_VERIFY, U_PRE_SEAL_VERIFY, U_FAILED),
-        U_ROUNDS: (U_ROUNDS, U_PRE_SEAL_VERIFY, U_FAILED),
-        U_PRE_SEAL_VERIFY: (U_SEALING, U_VERIFY_FIX, U_FAILED),
-        # U_SEALING -> U_PRE_SEAL_VERIFY: an invalidated seal attempt (a
-        # half modified the workspace) must re-verify the modified content
-        # before the next attempt, exactly like the seal-findings path.
-        U_SEALING: (U_SEALED, U_SEAL_FIX, U_PRE_SEAL_VERIFY, U_FAILED),
-        U_SEAL_FIX: (U_PRE_SEAL_VERIFY, U_FAILED),
+        U_PRE_REVIEW_VERIFY: (U_ROUNDS, U_FIXING, U_FAILED),
+        U_ROUNDS: (U_ROUNDS, U_FIXING, U_PRE_SEAL_VERIFY, U_FAILED),
+        U_FIXING: (U_DELTA_REVIEW, U_PRE_REVIEW_VERIFY, U_ROUNDS,
+                   U_PRE_SEAL_VERIFY, U_FAILED),
+        U_DELTA_REVIEW: (U_FIXING, U_PRE_REVIEW_VERIFY, U_ROUNDS,
+                         U_PRE_SEAL_VERIFY, U_FAILED),
+        U_PRE_SEAL_VERIFY: (U_SEALING, U_FIXING, U_FAILED),
+        # U_SEALING stays on an invalidated attempt (the workspace is
+        # restored to the sealed candidate commit and the attempt retries).
+        U_SEALING: (U_SEALED, U_FIXING, U_FAILED),
         U_SEALED: (),
         U_FAILED: (),
     }
@@ -331,9 +347,13 @@ def family_rounds(unit, family):
     return [r for r in unit["rounds"] if r["family"] == family]
 
 
-def record_round(state, unit, family, kind, result, raw_path=None, duration=None):
-    """Append an immutable round record. Never edited afterwards."""
-    if unit["status"] not in (U_ROUNDS, U_VERIFY_FIX, U_SEAL_FIX):
+def record_round(state, unit, family, kind, result, raw_path=None, duration=None,
+                 meta=None):
+    """Append an immutable round record. Never edited afterwards.
+
+    meta: optional extra record fields (e.g. the fixer's source round id,
+    an invalidation marker for a tampering reviewer)."""
+    if unit["status"] not in (U_ROUNDS, U_FIXING, U_DELTA_REVIEW):
         raise IllegalTransition(
             "unit %s: cannot record a %s round in status %s"
             % (unit_key(unit), kind, unit["status"])
@@ -347,6 +367,8 @@ def record_round(state, unit, family, kind, result, raw_path=None, duration=None
         "raw_path": raw_path,
         "result": copy.deepcopy(result),
     }
+    if meta:
+        rec.update(copy.deepcopy(meta))
     unit["rounds"].append(rec)
     append_event(
         state,
@@ -390,7 +412,11 @@ def can_open_seal(state, unit):
     families = state["config"]["families_order"]
     for fam in families:
         rounds = family_rounds(unit, fam)
-        review_rounds = [r for r in rounds if r["kind"] == "review_round"]
+        review_rounds = [
+            r
+            for r in rounds
+            if r["kind"] == "review_round" and not r.get("invalidated")
+        ]
         if not review_rounds or not contracts.findings_clean(review_rounds[-1]["result"]):
             return False
     return True
@@ -465,6 +491,91 @@ def maybe_close_milestone(state):
     state["milestone"]["status"] = M_CLOSED
     append_event(state, "milestone_closed")
     return True
+
+
+# ---------------------------------------------------------------------------
+# Adjudication registry (milestone-global, derived from immutable rounds)
+
+
+def _overturned_rejections(state):
+    """Registry ids whose adjudication was CONTESTED with new evidence and
+    CONCEDED: the fixer disposed the contested re-raise 'fixed'. Derived
+    from each fix round's recorded `queued` findings (which carry the
+    contests link). An overturned adjudication is no longer settled law —
+    it must not appear in prompts, must not satisfy adjudication_ref, and
+    a genuine recurrence may be re-raised without contests."""
+    overturned = set()
+    for unit in state["units"]:
+        for rec in unit["rounds"]:
+            if rec["kind"] != "fix_findings":
+                continue
+            contested = {
+                q.get("id"): (q.get("contests") or {}).get("rejection_id")
+                for q in rec.get("queued") or []
+                if q.get("contests")
+            }
+            if not contested:
+                continue
+            for f in rec["result"].get("findings", []):
+                if f.get("disposition") == "fixed":
+                    ref = contested.get(f.get("id"))
+                    if ref:
+                        overturned.add(ref)
+    return overturned
+
+
+def adjudicated_rejections(state):
+    """Every rejected finding across ALL units, with stable ids.
+
+    Entry id = "<source_round_id>/<finding_id>" where source_round_id is the
+    review round (or synthetic verification id) whose finding was rejected.
+    Derived on demand from the append-only round records, so the registry
+    survives the whole milestone by construction and can never disagree
+    with history. Adjudications later overturned by a conceded contest
+    (_overturned_rejections) are excluded: they are no longer settled."""
+    overturned = _overturned_rejections(state)
+    entries = []
+    for unit in state["units"]:
+        for rec in unit["rounds"]:
+            if rec["kind"] != "fix_findings":
+                continue
+            source = rec.get("source_round_id") or rec["id"]
+            for f in rec["result"].get("findings", []):
+                if f.get("disposition") == "rejected":
+                    if "%s/%s" % (source, f["id"]) in overturned:
+                        continue
+                    entries.append(
+                        {
+                            "id": "%s/%s" % (source, f["id"]),
+                            "unit": unit_key(unit),
+                            "severity": f.get("severity"),
+                            "summary": f.get("summary"),
+                            "rationale": (f.get("consultation") or {}).get(
+                                "resolution"
+                            ),
+                            "prevention": f.get("prevention"),
+                        }
+                    )
+    return entries
+
+
+def registry_ids(state):
+    return {e["id"] for e in adjudicated_rejections(state)}
+
+
+def enter_fix_episode(state, unit, findings, source_type, source_family,
+                      source_round_id, return_to):
+    """Queue a findings list for the fixer and transition to U_FIXING."""
+    unit["fix_queue"] = copy.deepcopy(findings)
+    unit["fix_source"] = {
+        "type": source_type,
+        "family": source_family,
+        "source_round_id": source_round_id,
+        "return_to": return_to,
+    }
+    unit["fix_loop_rounds"] = 0
+    transition_unit(state, unit, U_FIXING,
+                    reason="%s findings queued for fixing" % source_type)
 
 
 # ---------------------------------------------------------------------------

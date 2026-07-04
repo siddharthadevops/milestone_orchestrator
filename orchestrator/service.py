@@ -342,6 +342,14 @@ def create_run(home, payload):
         if not goal or not isinstance(goal, str) or not goal.strip():
             raise ApiError(400, "goal text or goal_doc is required")
         config = driver.load_config(None)
+        # Panel runs get the FULL enforced flow: gate commits, the amend
+        # discipline, delta reviews of every fix, and revertible tamper
+        # recovery all require git (README, "Git gates and the amend
+        # discipline"), so service launches enable it by default — same as
+        # the demo config, and matching driver.DEFAULT_CONFIG's own note.
+        # An explicit {"git": {"enabled": false}} in the advanced config
+        # still wins (merged below), for deliberate pure-state runs.
+        driver.merge_config(config, {"git": {"enabled": True}})
         user_cfg = payload.get("config")
         if user_cfg is not None:
             if not isinstance(user_cfg, dict):

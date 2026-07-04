@@ -17,6 +17,7 @@ Usage:
 
 import argparse
 import contextlib
+import copy
 import json
 import os
 import signal
@@ -29,7 +30,7 @@ try:
 except ImportError:  # pragma: no cover - non-POSIX: flock degrades to the
     fcntl = None     # staleness check in step(); documented in the README
 
-from . import contracts, prompts, runners, state as st
+from . import contracts, gitops, ledgers, prompts, runners, state as st
 
 DEFAULT_CONFIG = {
     "families_order": ["codex", "claude"],
@@ -60,10 +61,26 @@ DEFAULT_CONFIG = {
     "max_seal_attempts": 8,
     "max_verify_fix_attempts": 4,
     "seal_concurrent": False,
+    # Gate commits + the reviewed-point index discipline (see gitops.py).
+    # Off by default for pure-state CLI runs; the demo config and the
+    # service panel (service.create_run forces it on unless the operator
+    # explicitly disables it) enable it.
+    "git": {"enabled": False},
+    # Per-act family policy: a family name ("codex"/"claude"), "self"
+    # (same family as the act's origin: the reviewer whose findings are
+    # being fixed, or the fixer whose delta is being reviewed), or
+    # "opposite". This release pins the cheap acts to codex for speed.
+    "acts": {"fixer": "codex", "delta_review": "codex",
+             "consultation": "opposite"},
+    # Fixer+delta iterations allowed per fix episode before failing.
+    "max_fix_loops": 6,
     # Extra directory names excluded from workspace snapshots, on top of
     # runners.SNAPSHOT_EXCLUDE_DIRS (runtime dirs + common Python tool
     # caches). Add tool caches your verification suite writes so read-only
-    # seal halves that run it are not falsely invalidated.
+    # seal halves that run it are not falsely invalidated. With git
+    # enabled the same names are also git-ignored in the workspace repo
+    # (gitops.ignore_lines), so cache writes never enter micro-review
+    # diffs or gate commits.
     "snapshot_exclude_dirs": [],
 }
 
@@ -110,9 +127,9 @@ class Action(object):
 A_DRAFT = "draft"
 A_VERIFY = "verify"
 A_REVIEW_ROUND = "review_round"
-A_FIX_VERIFICATION = "fix_verification"
+A_FIX = "fix_findings"
+A_DELTA_REVIEW = "delta_review"
 A_SEAL_ATTEMPT = "seal_attempt"
-A_SEAL_FIX = "seal_fix"
 A_DONE = "done"
 A_FAILED = "failed"
 
@@ -131,15 +148,15 @@ def decide(state):
         return Action(A_DRAFT, unit=st.unit_key(unit))
     if status in (st.U_PRE_REVIEW_VERIFY, st.U_PRE_SEAL_VERIFY):
         return Action(A_VERIFY, unit=st.unit_key(unit), stage=status)
-    if status == st.U_VERIFY_FIX:
-        return Action(A_FIX_VERIFICATION, unit=st.unit_key(unit))
     if status == st.U_ROUNDS:
         family = st.current_family(state, unit)
         return Action(A_REVIEW_ROUND, unit=st.unit_key(unit), family=family)
+    if status == st.U_FIXING:
+        return Action(A_FIX, unit=st.unit_key(unit))
+    if status == st.U_DELTA_REVIEW:
+        return Action(A_DELTA_REVIEW, unit=st.unit_key(unit))
     if status == st.U_SEALING:
         return Action(A_SEAL_ATTEMPT, unit=st.unit_key(unit))
-    if status == st.U_SEAL_FIX:
-        return Action(A_SEAL_FIX, unit=st.unit_key(unit))
     raise st.IllegalTransition("no action for unit status %r" % status)
 
 
@@ -168,6 +185,16 @@ class Driver(object):
         self.runner = runner or runners.SubprocessRunner(
             self.config["commands"], self.config.get("timeouts", {})
         )
+        if gitops.enabled(self.config):
+            try:
+                gitops.ensure_repo(
+                    self.workspace,
+                    extra_ignore_dirs=self.config.get("snapshot_exclude_dirs"),
+                )
+            except gitops.GitError as exc:
+                # A driver that cannot keep its gate ledger must not run.
+                st.fail_run(self.state, "git unavailable: %s" % exc)
+                self._save()
 
     # -- helpers ----------------------------------------------------------
 
@@ -330,9 +357,9 @@ class Driver(object):
             A_DRAFT: self._do_draft,
             A_VERIFY: self._do_verify,
             A_REVIEW_ROUND: self._do_review_round,
-            A_FIX_VERIFICATION: self._do_fix_verification,
+            A_FIX: self._do_fix,
+            A_DELTA_REVIEW: self._do_delta_review,
             A_SEAL_ATTEMPT: self._do_seal_attempt,
-            A_SEAL_FIX: self._do_seal_fix,
         }[action.type]
         with self._exclusive():
             self._assert_not_stale()
@@ -391,7 +418,21 @@ class Driver(object):
         st.record_draft(self.state, unit, kind, output, raw_path)
         if unit["kind"] == st.UNIT_SKELETON:
             self.state["milestone"]["slices"] = output["slices"]
-        st.transition_unit(self.state, unit, st.U_PRE_REVIEW_VERIFY, reason="drafted")
+        if gitops.enabled(self.config):
+            try:
+                sha = gitops.commit_wip(
+                    self.workspace, "wip: %s" % st.unit_key(unit)
+                )
+            except gitops.GitError as exc:
+                st.fail_run(self.state, "wip commit failed: %s" % exc, unit=unit)
+                self._save()
+                raise StopStep(str(exc))
+            st.append_event(
+                self.state, "wip_commit", unit=st.unit_key(unit), sha=sha
+            )
+        st.transition_unit(
+            self.state, unit, st.U_PRE_REVIEW_VERIFY, reason="drafted"
+        )
         return "drafted %s" % (unit["artifact"] or "(implementation)")
 
     def _slice_info(self, slice_id):
@@ -411,6 +452,358 @@ class Driver(object):
             if u["kind"] == st.UNIT_SLICE_DOC and u["slice_id"] == slice_id:
                 return u["artifact"] or ("docs/slice-%02d.md" % slice_id)
         return "docs/slice-%02d.md" % slice_id
+
+
+    # -- review/fix separation machinery ------------------------------------
+
+    def _registry(self):
+        return st.adjudicated_rejections(self.state)
+
+    def _resolve_act(self, act, origin_family):
+        """Resolve an act's family per config: literal name, "self", or
+        "opposite" (relative to the act's origin)."""
+        policy = (self.config.get("acts") or {}).get(act, "codex")
+        families = self.config["families_order"]
+        if policy == "self":
+            return origin_family or families[0]
+        if policy == "opposite":
+            return self._opposite(origin_family or families[0])
+        return policy
+
+    def _validate_contests(self, unit, output, kind):
+        """Structural check: a finding's contests.rejection_id must exist in
+        the milestone registry. A bad reference is a protocol violation and
+        fails the run with the explanation."""
+        known = st.registry_ids(self.state)
+        for f in output.get("findings", []):
+            contests = f.get("contests")
+            if contests and contests.get("rejection_id") not in known:
+                st.fail_run(
+                    self.state,
+                    "%s finding %s contests unknown adjudication %r "
+                    "(known: %s)"
+                    % (kind, f.get("id"), contests.get("rejection_id"),
+                       sorted(known) or "none"),
+                    unit=unit,
+                )
+                self._save()
+                raise StopStep("bad contests reference")
+
+    def _validate_adjudication_refs(self, unit, output):
+        known = st.registry_ids(self.state)
+        for f in output.get("findings", []):
+            if f.get("disposition") == "rejected_adjudicated":
+                ref = f.get("adjudication_ref")
+                if ref not in known:
+                    st.fail_run(
+                        self.state,
+                        "fixer marked %s rejected_adjudicated with unknown "
+                        "registry ref %r (known: %s)"
+                        % (f.get("id"), ref, sorted(known) or "none"),
+                        unit=unit,
+                    )
+                    self._save()
+                    raise StopStep("bad adjudication reference")
+
+    def _validate_contested_dispositions(self, unit, output):
+        """A queued finding carrying `contests` re-opened that adjudication
+        with structurally validated new evidence; the fixer must weigh it
+        on the merits — fix, or reject with a FRESH consultation (the
+        prompt contract: a CONTESTS finding "re-opens that adjudication").
+        Disposing it rejected_adjudicated — killing the new evidence by
+        pointer, typically citing the very adjudication under contest — is
+        a protocol violation, enforced structurally, not by prompt text."""
+        contested = {
+            f["id"]: (f.get("contests") or {}).get("rejection_id")
+            for f in (unit.get("fix_queue") or [])
+            if f.get("contests")
+        }
+        for f in output.get("findings", []):
+            if (f.get("disposition") == "rejected_adjudicated"
+                    and f.get("id") in contested):
+                st.fail_run(
+                    self.state,
+                    "fixer disposed finding %s as rejected_adjudicated "
+                    "(ref %r), but that finding CONTESTS adjudication %r "
+                    "with new evidence: a contested adjudication is "
+                    "re-opened and must be fixed or rejected with a fresh "
+                    "consultation, never killed by pointer"
+                    % (f.get("id"), f.get("adjudication_ref"),
+                       contested[f.get("id")]),
+                    unit=unit,
+                )
+                self._save()
+                raise StopStep("contested finding killed by pointer")
+
+    def _report_call(self, unit, family, prompt, kind, raw_name):
+        """Run a report-only call with mechanical no-edit enforcement.
+
+        Returns (output, result, raw_path, tampered): when the reviewer
+        modified the workspace, tampered is True and the output must be
+        discarded by the caller."""
+        before = self._snapshot()
+        output, result, raw_path = self._call(family, prompt, kind, raw_name)
+        tampered = self._snapshot() != before
+        return output, result, raw_path, tampered
+
+    def _restore_or_fail(self, unit, why):
+        if not gitops.enabled(self.config):
+            # With git disabled there was never a wip commit: HEAD — if the
+            # workspace even is a repository, e.g. a user's own project —
+            # predates everything this run produced, so reset/clean would
+            # destroy the un-committed draft, every prior fix, and the
+            # user's own uncommitted work, then keep judging the gutted
+            # tree. Restoration is impossible; stop with the facts.
+            st.fail_run(
+                self.state,
+                "%s, and git is disabled for this run so the workspace "
+                "cannot be mechanically restored; operator inspection "
+                "required" % why,
+                unit=unit,
+            )
+            self._save()
+            raise StopStep(why)
+        try:
+            gitops.restore_clean(self.workspace)
+        except gitops.GitError as exc:
+            st.fail_run(
+                self.state,
+                "%s and the workspace could not be restored: %s" % (why, exc),
+                unit=unit,
+            )
+            self._save()
+            raise StopStep(str(exc))
+
+    def _do_fix(self):
+        unit = st.current_unit(self.state)
+        source = unit.get("fix_source") or {}
+        max_loops = self.config.get("max_fix_loops", 6)
+        if unit.get("fix_loop_rounds", 0) >= max_loops:
+            st.fail_run(
+                self.state,
+                "fix episode on %s did not converge after %d fixer+delta "
+                "loops (source: %s)"
+                % (st.unit_key(unit), max_loops, source.get("type")),
+                unit=unit,
+            )
+            self._save()
+            raise StopStep("fix loop cap")
+        family = self._resolve_act("fixer", source.get("family"))
+        consultation_family = self._resolve_act("consultation", family)
+        prompt = prompts.build_fix_findings(
+            family,
+            self.workspace,
+            self.state["goal"],
+            self._unit_desc(unit),
+            unit.get("fix_queue") or [],
+            self._registry(),
+            consultation_family,
+            self.config["commands"].get(consultation_family, []),
+            verification_output=(
+                unit.get("last_verification_output")
+                if source.get("type") == "verification"
+                else None
+            ),
+        )
+        n_fix = 1 + len(
+            [r for r in unit["rounds"] if r["kind"] == contracts.KIND_FIX_FINDINGS]
+        )
+        output, result, raw_path = self._call(
+            family,
+            prompt,
+            contracts.KIND_FIX_FINDINGS,
+            "%s-fix%d" % (st.unit_key(unit), n_fix),
+        )
+        self._check_worker_blocked(unit, output, contracts.KIND_FIX_FINDINGS)
+        try:
+            contracts.validate_fix_coverage(output, unit.get("fix_queue") or [])
+        except contracts.ContractError as exc:
+            st.fail_run(self.state, str(exc), unit=unit)
+            self._save()
+            raise StopStep(str(exc))
+        self._validate_adjudication_refs(unit, output)
+        self._validate_contested_dispositions(unit, output)
+        st.record_round(
+            self.state,
+            unit,
+            family,
+            contracts.KIND_FIX_FINDINGS,
+            output,
+            raw_path=raw_path,
+            duration=result.duration_s,
+            # `queued` preserves what the fixer was actually asked to triage
+            # — including any contests links — in the immutable history;
+            # state.adjudicated_rejections() derives overturned
+            # adjudications (a contested finding conceded as 'fixed') from
+            # it.
+            meta={"source_round_id": source.get("source_round_id"),
+                  "queued": copy.deepcopy(unit.get("fix_queue") or [])},
+        )
+        self._maybe_update_slices(unit, output)
+        unit["fix_loop_rounds"] = unit.get("fix_loop_rounds", 0) + 1
+        if gitops.enabled(self.config):
+            st.transition_unit(
+                self.state, unit, st.U_DELTA_REVIEW, reason="fix applied"
+            )
+            return "fix call done (%d finding(s) triaged); delta review next" % len(
+                output.get("findings", [])
+            )
+        # Without git there is no delta to review or amend: return directly.
+        target = source.get("return_to") or st.U_PRE_REVIEW_VERIFY
+        st.transition_unit(self.state, unit, target, reason="fix applied (no git)")
+        return "fix call done; continuing (git disabled)"
+
+    def _phantom_edit_claims(self, unit):
+        """Edit claims made by the unit's LAST fix call: any 'fixed'
+        disposition, any prevention edit, or a non-empty files_changed
+        (entries under .orchestrator/ are ignored — consultation
+        transcripts are bookkeeping, excluded from diffs by design).
+        Cross-checked against an empty worktree delta in _do_delta_review."""
+        last_fix = None
+        for r in reversed(unit["rounds"]):
+            if r["kind"] == contracts.KIND_FIX_FINDINGS:
+                last_fix = r["result"]
+                break
+        if last_fix is None:
+            return []
+        claims = []
+        changed = []
+        for p in last_fix.get("files_changed") or []:
+            norm = os.path.normpath(str(p))
+            if norm == ".orchestrator" or norm.startswith(
+                ".orchestrator" + os.sep
+            ):
+                continue
+            changed.append(p)
+        if changed:
+            claims.append("files_changed=%s" % (changed,))
+        for f in last_fix.get("findings", []):
+            if f.get("disposition") == "fixed":
+                claims.append("finding %s disposed 'fixed'" % f.get("id"))
+            if f.get("prevention"):
+                claims.append(
+                    "finding %s claims a prevention edit in %s"
+                    % (f.get("id"),
+                       (f.get("prevention") or {}).get("documented_in"))
+                )
+        return claims
+
+    def _do_delta_review(self):
+        unit = st.current_unit(self.state)
+        source = unit.get("fix_source") or {}
+        return_to = source.get("return_to") or st.U_PRE_REVIEW_VERIFY
+        try:
+            delta = gitops.worktree_diff(self.workspace)
+        except gitops.GitError as exc:
+            st.fail_run(self.state, "git diff failed: %s" % exc, unit=unit)
+            self._save()
+            raise StopStep(str(exc))
+        if not delta.strip():
+            # An all-rejections episode leaves no delta: nothing to amend.
+            # But the fixer's claims must agree with that: a 'fixed'
+            # disposition, a non-empty files_changed, or a prevention edit
+            # with an EMPTY worktree delta means the fixer reported work it
+            # never did — a phantom fix would close the finding unfixed,
+            # and a phantom prevention pointer would enter the adjudication
+            # registry and suppress re-detection in every later review
+            # prompt ("Settled findings stay settled" is a structural rule,
+            # so the prevention edit must structurally exist).
+            claims = self._phantom_edit_claims(unit)
+            if claims:
+                st.fail_run(
+                    self.state,
+                    "fixer on %s claimed edits but the worktree delta is "
+                    "empty (nothing was actually changed): %s"
+                    % (st.unit_key(unit), "; ".join(claims)),
+                    unit=unit,
+                )
+                self._save()
+                raise StopStep("fixer claimed edits with an empty delta")
+            st.transition_unit(
+                self.state, unit, return_to, reason="no delta (fix episode green)"
+            )
+            return "no pending delta; episode closed"
+        fixer_family = None
+        for r in reversed(unit["rounds"]):
+            if r["kind"] == contracts.KIND_FIX_FINDINGS:
+                fixer_family = r["family"]
+                break
+        family = self._resolve_act("delta_review", fixer_family)
+        prompt = prompts.build_delta_review(
+            family,
+            self.workspace,
+            self.state["goal"],
+            self._unit_desc(unit),
+            delta,
+            self._registry(),
+        )
+        n_delta = 1 + len(
+            [r for r in unit["rounds"] if r["kind"] == contracts.KIND_DELTA_REVIEW]
+        )
+        output, result, raw_path, tampered = self._report_call(
+            unit,
+            family,
+            prompt,
+            contracts.KIND_DELTA_REVIEW,
+            "%s-delta%d" % (st.unit_key(unit), n_delta),
+        )
+        if tampered:
+            # The pending fix delta and the tampering are now entangled;
+            # restoring would destroy the fixer's work. Stop with the facts.
+            st.fail_run(
+                self.state,
+                "delta reviewer (%s) modified the workspace during a "
+                "report-only call; its edits are entangled with the pending "
+                "fix delta — operator inspection required" % family,
+                unit=unit,
+            )
+            self._save()
+            raise StopStep("delta reviewer tampered")
+        self._check_worker_blocked(unit, output, contracts.KIND_DELTA_REVIEW)
+        self._validate_contests(unit, output, contracts.KIND_DELTA_REVIEW)
+        st.record_round(
+            self.state,
+            unit,
+            family,
+            contracts.KIND_DELTA_REVIEW,
+            output,
+            raw_path=raw_path,
+            duration=result.duration_s,
+        )
+        if contracts.findings_clean(output):
+            try:
+                sha = gitops.amend(self.workspace)
+            except gitops.GitError as exc:
+                st.fail_run(self.state, "amend failed: %s" % exc, unit=unit)
+                self._save()
+                raise StopStep(str(exc))
+            st.append_event(
+                self.state, "amended", unit=st.unit_key(unit), sha=sha
+            )
+            st.transition_unit(
+                self.state, unit, return_to, reason="delta green; amended"
+            )
+            return "delta review clean; amended (%s)" % sha
+        # Dirty delta: its findings become the new fix queue (same episode).
+        unit["fix_queue"] = [
+            {
+                "id": f["id"],
+                "severity": f["severity"],
+                "summary": f["summary"],
+                "contests": f.get("contests"),
+            }
+            for f in output["findings"]
+        ]
+        source["type"] = "delta"
+        source["family"] = family
+        source["source_round_id"] = st.family_rounds(unit, family)[-1]["id"]
+        unit["fix_source"] = source
+        st.transition_unit(
+            self.state, unit, st.U_FIXING, reason="delta findings queued"
+        )
+        return "delta review: %d finding(s); back to the fixer" % len(
+            output["findings"]
+        )
 
     def _do_verify(self):
         unit = st.current_unit(self.state)
@@ -463,56 +856,37 @@ class Driver(object):
             )
             self._save()
             raise StopStep("verification fix attempts exhausted")
-        unit["return_to"] = stage_key
         unit["last_verification_output"] = (output or "")[-4000:]
-        st.transition_unit(self.state, unit, st.U_VERIFY_FIX, reason="verification failed")
-        return "verification failed; scheduling fix call"
-
-    def _do_fix_verification(self):
-        unit = st.current_unit(self.state)
-        family = self._fix_family()
-        prompt = prompts.build_fix_verification(
-            family,
-            self.workspace,
-            self.state["goal"],
-            self._unit_desc(unit),
-            unit.get("last_verification_output", ""),
-            self._opposite(family),
-            self._opposite_cmd(family),
+        # The synthetic episode id must stay unique for the unit's whole
+        # life: verify_fix_attempts resets whenever the stage passes, but a
+        # stage can be RE-ENTERED later (every dirty seal attempt returns
+        # to pre-seal verification), and a colliding id would mint two
+        # adjudication registry entries with the same id if V1 is rejected
+        # in both episodes. A dedicated never-reset sequence numbers the
+        # episodes instead (setdefault: field absent in pre-existing
+        # states).
+        seq = unit.setdefault(
+            "verify_episode_seq", {"pre_review": 0, "pre_seal": 0}
         )
-        # Monotonic per-unit numbering (stage counters reset on pass, so
-        # they would collide across stages).
-        n_fix = 1 + len(
-            [
-                r
-                for r in unit["rounds"]
-                if r["kind"] == contracts.KIND_FIX_VERIFICATION
-            ]
-        )
-        output, result, raw_path = self._call(
-            family,
-            prompt,
-            contracts.KIND_FIX_VERIFICATION,
-            "%s-vfix%d" % (st.unit_key(unit), n_fix),
-        )
-        self._check_worker_blocked(unit, output, contracts.KIND_FIX_VERIFICATION)
-        st.record_round(
+        seq[stage_key] += 1
+        n_episode = seq[stage_key]
+        st.enter_fix_episode(
             self.state,
             unit,
-            family,
-            contracts.KIND_FIX_VERIFICATION,
-            output,
-            raw_path=raw_path,
-            duration=result.duration_s,
+            [
+                {
+                    "id": "V1",
+                    "severity": "P1",
+                    "summary": "the verification suite failed (see the "
+                    "verification output in this prompt)",
+                }
+            ],
+            "verification",
+            None,
+            "%s-verify-%s-%d" % (st.unit_key(unit), stage_key, n_episode),
+            stage,
         )
-        self._maybe_update_slices(unit, output)
-        target = (
-            st.U_PRE_REVIEW_VERIFY
-            if unit.get("return_to") == "pre_review"
-            else st.U_PRE_SEAL_VERIFY
-        )
-        st.transition_unit(self.state, unit, target, reason="verification fix applied")
-        return "verification fix call done; re-verifying"
+        return "verification failed; findings queued for the fixer"
 
     def _do_review_round(self):
         unit = st.current_unit(self.state)
@@ -542,17 +916,39 @@ class Driver(object):
             self.state["goal"],
             self._unit_desc(unit),
             self._artifact(unit),
-            self._opposite(family),
-            self._opposite_cmd(family),
+            self._registry(),
         )
-        output, result, raw_path = self._call(
+        output, result, raw_path, tampered = self._report_call(
+            unit,
             family,
             prompt,
             contracts.KIND_REVIEW_ROUND,
             "%s-%s-r%d" % (st.unit_key(unit), family, done + 1),
         )
+        if tampered:
+            # Rounds run on a clean worktree (everything is amended), so a
+            # tampering reviewer is fully revertible: restore, discard the
+            # output, record the incident as an invalidated round (it
+            # counts toward the family's cap), retry next step.
+            self._restore_or_fail(
+                unit, "review round reviewer (%s) tampered" % family
+            )
+            st.record_round(
+                self.state,
+                unit,
+                family,
+                contracts.KIND_REVIEW_ROUND,
+                {"status": "ok", "kind": contracts.KIND_REVIEW_ROUND,
+                 "findings": []},
+                raw_path=raw_path,
+                duration=result.duration_s,
+                meta={"invalidated": "reviewer modified the workspace; "
+                      "output discarded, workspace restored"},
+            )
+            return "%s round INVALID (reviewer edited); restored and retrying" % family
         self._check_worker_blocked(unit, output, contracts.KIND_REVIEW_ROUND)
-        st.record_round(
+        self._validate_contests(unit, output, contracts.KIND_REVIEW_ROUND)
+        rec = st.record_round(
             self.state,
             unit,
             family,
@@ -561,14 +957,28 @@ class Driver(object):
             raw_path=raw_path,
             duration=result.duration_s,
         )
-        self._maybe_update_slices(unit, output)
-        st.advance_family_if_clean(self.state, unit, output)
         n = len(output.get("findings", []))
-        return "%s round: %d finding(s)%s" % (
+        if n == 0:
+            st.advance_family_if_clean(self.state, unit, output)
+            return "%s round: clean" % family
+        st.enter_fix_episode(
+            self.state,
+            unit,
+            [
+                {
+                    "id": f["id"],
+                    "severity": f["severity"],
+                    "summary": f["summary"],
+                    "contests": f.get("contests"),
+                }
+                for f in output["findings"]
+            ],
+            "round",
             family,
-            n,
-            "" if n else " -> clean",
+            rec["id"],
+            st.U_ROUNDS,
         )
+        return "%s round: %d finding(s); queued for the fixer" % (family, n)
 
     def _do_seal_attempt(self):
         unit = st.current_unit(self.state)
@@ -586,15 +996,17 @@ class Driver(object):
         goal = self.state["goal"]
         desc = self._unit_desc(unit)
         artifact = self._artifact(unit)
+        registry = self._registry()
         halves = {}
         invalidated = None
+        tamper_family = None  # sequential mode can attribute the tampering
 
         def run_half_pure(family):
             """One seal half, mutating NO shared state (thread-safe): any
             failure raises _SealHalfFailure; raw outputs go to per-family
             files only."""
             prompt = prompts.build_seal_half(
-                family, self.workspace, goal, desc, artifact
+                family, self.workspace, goal, desc, artifact, registry
             )
             raw_name = "%s-seal-a%d-%s" % (st.unit_key(unit), attempt_no, family)
             try:
@@ -683,6 +1095,7 @@ class Driver(object):
                         "invalid and the attempt does not count as evidence"
                         % fam
                     )
+                    tamper_family = fam
                     snap = new_snap
 
         if set(halves) != set(families):
@@ -702,69 +1115,93 @@ class Driver(object):
             self._after_seal(unit)
             return "seal attempt %d PASSED; %s sealed" % (attempt_no, st.unit_key(unit))
         if invalidated is not None:
-            # The tampering half's modifications are still on disk: the
-            # delta must pass verification again before the next attempt
-            # may double-seal it (same gate as the seal-findings path).
-            st.transition_unit(
-                self.state,
-                unit,
-                st.U_PRE_SEAL_VERIFY,
-                reason="seal attempt invalidated; re-verify before retry",
+            # Seals run on a clean worktree (everything amended), so a
+            # tampering half is fully revertible: restore the sealed
+            # candidate commit and retry a full attempt (one attempt spent).
+            self._restore_or_fail(unit, "seal half tampered")
+            return "seal attempt %d INVALID: %s (workspace restored)" % (
+                attempt_no,
+                invalidated,
             )
-            return "seal attempt %d INVALID: %s" % (attempt_no, invalidated)
-        st.transition_unit(self.state, unit, st.U_SEAL_FIX, reason="seal findings")
-        total = sum(len(h["result"].get("findings", [])) for h in halves.values())
-        return "seal attempt %d: %d finding(s); scheduling seal fix" % (
+        for fam in families:
+            self._validate_contests(
+                unit, halves[fam]["result"], contracts.KIND_SEAL_HALF
+            )
+        merged = []
+        for fam in families:
+            for f in halves[fam]["result"].get("findings", []):
+                merged.append(
+                    {
+                        "id": "%s-%s" % (fam, f["id"]),
+                        "severity": f["severity"],
+                        "summary": "[%s seal half] %s" % (fam, f["summary"]),
+                        "contests": f.get("contests"),
+                    }
+                )
+        st.enter_fix_episode(
+            self.state,
+            unit,
+            merged,
+            "seal",
+            None,
+            "%s-seal-a%d" % (st.unit_key(unit), attempt_no),
+            st.U_PRE_SEAL_VERIFY,
+        )
+        return "seal attempt %d: %d finding(s); queued for the fixer" % (
             attempt_no,
-            total,
+            len(merged),
         )
 
     def _after_seal(self, unit):
         if unit["kind"] == st.UNIT_SLICE_IMPL:
             st.close_slice(self.state, unit)
+        self._gate_commit(unit)
         nxt = st.ensure_next_unit(self.state)
-        if nxt is None:
-            st.maybe_close_milestone(self.state)
+        if nxt is None and st.maybe_close_milestone(self.state):
+            self._final_commit()
 
-    def _do_seal_fix(self):
-        unit = st.current_unit(self.state)
-        family = self._fix_family()
-        last_seal = unit["seals"][-1]
-        seal_findings = {
-            fam: (h["result"].get("findings", []) if h.get("result") else [])
-            for fam, h in last_seal["halves"].items()
-        }
-        prompt = prompts.build_seal_fix(
-            family,
-            self.workspace,
-            self.state["goal"],
-            self._unit_desc(unit),
-            self._artifact(unit),
-            seal_findings,
-            self._opposite(family),
-            self._opposite_cmd(family),
-        )
-        output, result, raw_path = self._call(
-            family,
-            prompt,
-            contracts.KIND_SEAL_FIX,
-            "%s-sealfix-a%d" % (st.unit_key(unit), len(unit["seals"])),
-        )
-        self._check_worker_blocked(unit, output, contracts.KIND_SEAL_FIX)
-        st.record_round(
+    def _gate_message(self, unit):
+        if unit["kind"] == st.UNIT_SKELETON:
+            return "Seal milestone skeleton"
+        if unit["kind"] == st.UNIT_SLICE_DOC:
+            return "Seal slice %02d note" % unit["slice_id"]
+        return "Seal slice %02d implementation and close" % unit["slice_id"]
+
+    def _gate_commit(self, unit):
+        """The canon's commit-the-sealed-unit rule, executed by code: the
+        generated ledgers are folded in and the unit's amended wip commit
+        is finalized under the canonical gate message."""
+        if not gitops.enabled(self.config):
+            return
+        try:
+            ledgers.generate(self.state, self.workspace)
+            sha = gitops.finalize_gate(self.workspace, self._gate_message(unit))
+        except gitops.GitError as exc:
+            st.fail_run(self.state, "gate commit failed: %s" % exc, unit=unit)
+            self._save()
+            raise StopStep(str(exc))
+        unit["gate_commit"] = sha
+        st.append_event(
             self.state,
-            unit,
-            family,
-            contracts.KIND_SEAL_FIX,
-            output,
-            raw_path=raw_path,
-            duration=result.duration_s,
+            "gate_commit",
+            unit=st.unit_key(unit),
+            sha=sha,
+            message=self._gate_message(unit),
         )
-        self._maybe_update_slices(unit, output)
-        st.transition_unit(
-            self.state, unit, st.U_PRE_SEAL_VERIFY, reason="seal findings triaged"
-        )
-        return "seal fix call done; re-verifying before next attempt"
+
+    def _final_commit(self):
+        if not gitops.enabled(self.config):
+            return
+        try:
+            ledgers.generate(self.state, self.workspace)
+            sha = gitops.commit_plain(self.workspace, "Close milestone")
+        except gitops.GitError as exc:
+            st.fail_run(self.state, "close commit failed: %s" % exc)
+            self._save()
+            raise StopStep(str(exc))
+        if sha:
+            st.append_event(self.state, "gate_commit", unit=None, sha=sha,
+                            message="Close milestone")
 
 
 class StopStep(RuntimeError):

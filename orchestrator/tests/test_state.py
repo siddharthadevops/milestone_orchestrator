@@ -1,10 +1,15 @@
 """Exhaustive tests for orchestrator/state.py: the append-only state machine.
 
-Covers: new_state shape, the full unit lifecycle for every unit kind, the
-complete legal/illegal transition table, write-once drafts, round-recording
-guards, family ordering, the seal gate, seal attempts, slice and milestone
-closure, run failure, append-only persistence, atomic rename-based saves,
-and the summary() shape.
+Covers: new_state shape (schema v2, the fix-episode unit fields), the full
+unit lifecycle for every unit kind under the review/fix separation model
+(dirty review -> U_FIXING -> U_DELTA_REVIEW -> loop or return), the complete
+legal/illegal transition table, write-once drafts, round-recording guards
+(rounds/fixing/delta_review only, meta merge), family ordering,
+enter_fix_episode, the milestone-global adjudication registry, the seal gate
+(invalidated rounds and non-review kinds never count), seal attempts, slice
+and milestone closure, run failure, append-only persistence with the
+terminal-unit freeze (post-seal exceptions: closed_record and gate_commit),
+atomic rename-based saves, schema v1 rejection, and the summary() shape.
 
 Standard library only; every on-disk workspace is a tempfile.TemporaryDirectory.
 """
@@ -39,30 +44,94 @@ def make_state(workspace="unused-ws", slices=None):
 
 
 def clean_review(kind=contracts.KIND_REVIEW_ROUND):
-    obj = {"status": "ok", "kind": kind, "findings": [], "files_changed": []}
+    obj = {"status": "ok", "kind": kind, "findings": []}
     contracts.validate_worker_output(obj, kind)
     return obj
 
 
 def dirty_review(kind=contracts.KIND_REVIEW_ROUND, n=1):
+    # Reviewer findings carry NO disposition (whoever detects never fixes)
+    # and report kinds must not claim file changes.
     findings = [
-        {
-            "id": "F%d" % (i + 1),
-            "severity": "P1",
-            "summary": "issue %d" % (i + 1),
-            "disposition": "fixed",
-            "consultation": None,
-        }
+        {"id": "F%d" % (i + 1), "severity": "P1", "summary": "issue %d" % (i + 1)}
         for i in range(n)
     ]
-    obj = {
-        "status": "ok",
-        "kind": kind,
-        "findings": findings,
-        "files_changed": ["src/f.py"],
-    }
+    obj = {"status": "ok", "kind": kind, "findings": findings}
     contracts.validate_worker_output(obj, kind)
     return obj
+
+
+def fixed_finding(fid="F1", severity="P1"):
+    return {
+        "id": fid,
+        "severity": severity,
+        "summary": "issue %s" % fid,
+        "disposition": "fixed",
+    }
+
+
+def rejected_finding(fid="F1", resolution="the artifact is correct",
+                     prevention=None, severity="P1", summary=None):
+    f = {
+        "id": fid,
+        "severity": severity,
+        "summary": summary or "issue %s" % fid,
+        "disposition": "rejected",
+        "consultation": {"resolution": resolution},
+    }
+    if prevention is not None:
+        f["prevention"] = prevention
+    return f
+
+
+def adjudicated_finding(fid, ref, severity="P2"):
+    return {
+        "id": fid,
+        "severity": severity,
+        "summary": "duplicate of settled finding",
+        "disposition": "rejected_adjudicated",
+        "adjudication_ref": ref,
+    }
+
+
+def blocked_finding(fid="F1"):
+    return {
+        "id": fid,
+        "severity": "P0",
+        "summary": "cannot proceed",
+        "disposition": "blocked",
+    }
+
+
+def fix_result(findings=None, files_changed=None):
+    obj = {
+        "status": "ok",
+        "kind": contracts.KIND_FIX_FINDINGS,
+        "findings": findings if findings is not None else [fixed_finding("F1")],
+        "files_changed": files_changed if files_changed is not None else [],
+    }
+    contracts.validate_worker_output(obj, contracts.KIND_FIX_FINDINGS)
+    return obj
+
+
+def verification_finding():
+    """The synthetic V1 finding the driver queues on a verification failure."""
+    return {
+        "id": "V1",
+        "severity": "P1",
+        "summary": "the verification suite failed (see the verification "
+        "output in this prompt)",
+    }
+
+
+def queued(finding):
+    """The queue entry shape the driver derives from a reviewer finding."""
+    return {
+        "id": finding["id"],
+        "severity": finding["severity"],
+        "summary": finding["summary"],
+        "contests": finding.get("contests"),
+    }
 
 
 def seal_half_result(n_findings=0):
@@ -133,6 +202,28 @@ def run_reviews_clean(state, unit):
         st.advance_family_if_clean(state, unit, res)
 
 
+def run_fix_episode_green(state, unit, fix_findings, source_round_id=None):
+    """Drive the current fix episode to green exactly like the driver does:
+    one fixer call, one clean delta review, return to fix_source.return_to.
+    The unit must already be in U_FIXING (enter_fix_episode was called)."""
+    if unit["status"] != st.U_FIXING:
+        raise AssertionError("helper expects U_FIXING, got %s" % unit["status"])
+    st.record_round(
+        state, unit, "codex", contracts.KIND_FIX_FINDINGS,
+        fix_result(fix_findings),
+        meta={"source_round_id": source_round_id
+              or unit["fix_source"]["source_round_id"]},
+    )
+    unit["fix_loop_rounds"] += 1
+    st.transition_unit(state, unit, st.U_DELTA_REVIEW, reason="fix applied")
+    st.record_round(
+        state, unit, "codex", contracts.KIND_DELTA_REVIEW,
+        clean_review(contracts.KIND_DELTA_REVIEW),
+    )
+    st.transition_unit(state, unit, unit["fix_source"]["return_to"],
+                       reason="delta green; amended")
+
+
 def seal_current_unit(state, draft_result=None):
     """Drive the current unit through its full happy path to sealed."""
     unit = st.current_unit(state)
@@ -172,6 +263,9 @@ class TempWorkspaceCase(unittest.TestCase):
 
 
 class TestNewState(TempWorkspaceCase):
+    def test_schema_version_is_2(self):
+        self.assertEqual(st.SCHEMA_VERSION, 2)
+
     def test_top_level_shape(self):
         state = st.new_state("Build X", self.workspace, make_config())
         self.assertEqual(
@@ -196,7 +290,7 @@ class TestNewState(TempWorkspaceCase):
         self.assertIsNone(state["failure"])
         self.assertEqual(state["config"], make_config())
 
-    def test_initial_unit_is_pending_skeleton(self):
+    def test_initial_unit_is_pending_skeleton_with_fix_episode_fields(self):
         state = st.new_state("Build X", self.workspace, make_config())
         self.assertEqual(len(state["units"]), 1)
         unit = state["units"][0]
@@ -212,11 +306,31 @@ class TestNewState(TempWorkspaceCase):
                 "rounds": [],
                 "seals": [],
                 "verify_fix_attempts": {"pre_review": 0, "pre_seal": 0},
-                "return_to": None,
+                "verify_episode_seq": {"pre_review": 0, "pre_seal": 0},
                 "closed_record": None,
+                "gate_commit": None,
+                "fix_queue": [],
+                "fix_source": None,
+                "fix_loop_rounds": 0,
             },
         )
         self.assertEqual(st.unit_key(unit), "skeleton")
+
+    def test_status_set(self):
+        self.assertEqual(
+            st.UNIT_STATUSES,
+            (
+                st.U_PENDING,
+                st.U_PRE_REVIEW_VERIFY,
+                st.U_ROUNDS,
+                st.U_FIXING,
+                st.U_DELTA_REVIEW,
+                st.U_PRE_SEAL_VERIFY,
+                st.U_SEALING,
+                st.U_SEALED,
+                st.U_FAILED,
+            ),
+        )
 
     def test_current_unit_and_unit_key(self):
         state = make_state(self.workspace, slices=[{"id": 1, "title": "t"}])
@@ -252,37 +366,88 @@ class TestUnitLifecycle(TempWorkspaceCase):
         self.assertEqual(unit["status"], st.U_SEALED)
         self.assertIsNone(st.current_unit(state))
 
-    def test_slice_doc_lifecycle_with_verify_fix_detour(self):
+    def test_slice_doc_lifecycle_with_verification_fix_episodes(self):
         state = make_state(self.workspace)
         seal_current_unit(state, skeleton_draft(1))
         doc = st.ensure_next_unit(state)
         self.assertEqual(doc["kind"], st.UNIT_SLICE_DOC)
         st.record_draft(state, doc, contracts.KIND_DRAFT_SLICE_NOTE, default_draft_for(doc))
         st.transition_unit(state, doc, st.U_PRE_REVIEW_VERIFY)
-        # verification fails -> verify_fix -> fix round -> back to pre-review
-        st.transition_unit(state, doc, st.U_VERIFY_FIX)
-        st.record_round(
-            state, doc, "codex", contracts.KIND_FIX_VERIFICATION,
-            dirty_review(contracts.KIND_FIX_VERIFICATION),
+        # pre-review verification fails -> synthetic V1 finding -> fix
+        # episode -> clean delta -> back to pre-review verification
+        st.enter_fix_episode(
+            state, doc, [verification_finding()], "verification", None,
+            "slice_doc-01-verify-pre_review-1", st.U_PRE_REVIEW_VERIFY,
         )
-        st.transition_unit(state, doc, st.U_PRE_REVIEW_VERIFY)
+        self.assertEqual(doc["status"], st.U_FIXING)
+        run_fix_episode_green(state, doc, [fixed_finding("V1")])
+        self.assertEqual(doc["status"], st.U_PRE_REVIEW_VERIFY)
         st.transition_unit(state, doc, st.U_ROUNDS)
         run_reviews_clean(state, doc)
-        # pre-seal verification can also fail into verify_fix and return
-        st.transition_unit(state, doc, st.U_VERIFY_FIX)
-        st.record_round(
-            state, doc, "codex", contracts.KIND_FIX_VERIFICATION,
-            clean_review(contracts.KIND_FIX_VERIFICATION),
+        # pre-seal verification can also fail into a fix episode and return
+        self.assertEqual(doc["status"], st.U_PRE_SEAL_VERIFY)
+        st.enter_fix_episode(
+            state, doc, [verification_finding()], "verification", None,
+            "slice_doc-01-verify-pre_seal-1", st.U_PRE_SEAL_VERIFY,
         )
-        st.transition_unit(state, doc, st.U_PRE_SEAL_VERIFY)
+        run_fix_episode_green(state, doc, [fixed_finding("V1")])
+        self.assertEqual(doc["status"], st.U_PRE_SEAL_VERIFY)
         st.transition_unit(state, doc, st.U_SEALING)
         st.record_seal_attempt(state, doc, make_halves(), True)
         st.transition_unit(state, doc, st.U_SEALED)
         self.assertEqual(doc["status"], st.U_SEALED)
 
-    def test_slice_impl_lifecycle_with_seal_fix_loop(self):
-        # Mirrors the demo baseline: seal attempt 1 fails -> seal_fix ->
-        # attempt 2 passes on the impl unit.
+    def test_rounds_fix_episode_with_dirty_delta_loop(self):
+        # A dirty review round enters the fix episode; a dirty delta loops
+        # back to the fixer within the SAME episode; the green delta returns
+        # the unit exactly where the dirty review left off (U_ROUNDS).
+        state = make_state(self.workspace)
+        unit = st.current_unit(state)
+        st.transition_unit(state, unit, st.U_PRE_REVIEW_VERIFY)
+        st.transition_unit(state, unit, st.U_ROUNDS)
+        dirty = dirty_review()
+        rec = st.record_round(state, unit, "codex", contracts.KIND_REVIEW_ROUND, dirty)
+        st.enter_fix_episode(
+            state, unit, [queued(f) for f in dirty["findings"]],
+            "round", "codex", rec["id"], st.U_ROUNDS,
+        )
+        self.assertEqual(unit["status"], st.U_FIXING)
+        st.record_round(
+            state, unit, "codex", contracts.KIND_FIX_FINDINGS,
+            fix_result([fixed_finding("F1")]),
+            meta={"source_round_id": rec["id"]},
+        )
+        unit["fix_loop_rounds"] += 1
+        st.transition_unit(state, unit, st.U_DELTA_REVIEW)
+        delta_dirty = dirty_review(contracts.KIND_DELTA_REVIEW)
+        drec = st.record_round(
+            state, unit, "codex", contracts.KIND_DELTA_REVIEW, delta_dirty
+        )
+        # dirty delta: same episode, new queue, back to the fixer
+        unit["fix_queue"] = [queued(f) for f in delta_dirty["findings"]]
+        unit["fix_source"]["type"] = "delta"
+        unit["fix_source"]["family"] = "codex"
+        unit["fix_source"]["source_round_id"] = drec["id"]
+        st.transition_unit(state, unit, st.U_FIXING)
+        st.record_round(
+            state, unit, "codex", contracts.KIND_FIX_FINDINGS,
+            fix_result([fixed_finding("F1")]),
+            meta={"source_round_id": drec["id"]},
+        )
+        unit["fix_loop_rounds"] += 1
+        st.transition_unit(state, unit, st.U_DELTA_REVIEW)
+        st.record_round(
+            state, unit, "codex", contracts.KIND_DELTA_REVIEW,
+            clean_review(contracts.KIND_DELTA_REVIEW),
+        )
+        st.transition_unit(state, unit, unit["fix_source"]["return_to"])
+        self.assertEqual(unit["status"], st.U_ROUNDS)
+        # The episode never produced a clean codex REVIEW round: gate closed.
+        self.assertFalse(st.can_open_seal(state, unit))
+
+    def test_slice_impl_lifecycle_with_seal_fix_episode(self):
+        # Mirrors the demo baseline: seal attempt 1 fails -> fix episode ->
+        # re-verify -> attempt 2 passes on the impl unit.
         state = make_state(self.workspace)
         seal_current_unit(state, skeleton_draft(1))
         st.ensure_next_unit(state)
@@ -294,15 +459,17 @@ class TestUnitLifecycle(TempWorkspaceCase):
         st.transition_unit(state, impl, st.U_ROUNDS)
         run_reviews_clean(state, impl)
         st.transition_unit(state, impl, st.U_SEALING)
-        # attempt 1: claude half finds a problem
+        # attempt 1: claude half finds a problem -> fix episode -> re-verify
         rec1 = st.record_seal_attempt(state, impl, make_halves(claude=1), False)
         self.assertEqual(rec1["attempt"], 1)
-        st.transition_unit(state, impl, st.U_SEAL_FIX)
-        st.record_round(
-            state, impl, "codex", contracts.KIND_SEAL_FIX,
-            dirty_review(contracts.KIND_SEAL_FIX),
+        st.enter_fix_episode(
+            state, impl,
+            [{"id": "claude-F1", "severity": "P2",
+              "summary": "[claude seal half] seal issue", "contests": None}],
+            "seal", None, "slice_impl-01-seal-a1", st.U_PRE_SEAL_VERIFY,
         )
-        st.transition_unit(state, impl, st.U_PRE_SEAL_VERIFY)
+        run_fix_episode_green(state, impl, [fixed_finding("claude-F1", "P2")])
+        self.assertEqual(impl["status"], st.U_PRE_SEAL_VERIFY)
         st.transition_unit(state, impl, st.U_SEALING)
         rec2 = st.record_seal_attempt(state, impl, make_halves(), True)
         self.assertEqual(rec2["attempt"], 2)
@@ -325,21 +492,34 @@ class TestUnitLifecycle(TempWorkspaceCase):
 
 
 EXPECTED_ALLOWED = {
+    # Review/fix separation: dirty reviews from ANY source (verification, a
+    # review round, a seal) enter U_FIXING; the fixer's pending diff is
+    # checked in U_DELTA_REVIEW; a dirty delta loops back to U_FIXING; a
+    # green delta returns exactly where the dirty review would have gone.
     st.U_PENDING: {st.U_PRE_REVIEW_VERIFY, st.U_FAILED},
-    st.U_PRE_REVIEW_VERIFY: {st.U_ROUNDS, st.U_VERIFY_FIX, st.U_FAILED},
-    st.U_VERIFY_FIX: {st.U_PRE_REVIEW_VERIFY, st.U_PRE_SEAL_VERIFY, st.U_FAILED},
-    st.U_ROUNDS: {st.U_ROUNDS, st.U_PRE_SEAL_VERIFY, st.U_FAILED},
-    st.U_PRE_SEAL_VERIFY: {st.U_SEALING, st.U_VERIFY_FIX, st.U_FAILED},
-    # U_SEALING -> U_PRE_SEAL_VERIFY: invalidated seal attempts re-verify
-    # the modified workspace before the next attempt.
-    st.U_SEALING: {st.U_SEALED, st.U_SEAL_FIX, st.U_PRE_SEAL_VERIFY, st.U_FAILED},
-    st.U_SEAL_FIX: {st.U_PRE_SEAL_VERIFY, st.U_FAILED},
+    st.U_PRE_REVIEW_VERIFY: {st.U_ROUNDS, st.U_FIXING, st.U_FAILED},
+    st.U_ROUNDS: {st.U_ROUNDS, st.U_FIXING, st.U_PRE_SEAL_VERIFY, st.U_FAILED},
+    st.U_FIXING: {
+        st.U_DELTA_REVIEW, st.U_PRE_REVIEW_VERIFY, st.U_ROUNDS,
+        st.U_PRE_SEAL_VERIFY, st.U_FAILED,
+    },
+    st.U_DELTA_REVIEW: {
+        st.U_FIXING, st.U_PRE_REVIEW_VERIFY, st.U_ROUNDS,
+        st.U_PRE_SEAL_VERIFY, st.U_FAILED,
+    },
+    st.U_PRE_SEAL_VERIFY: {st.U_SEALING, st.U_FIXING, st.U_FAILED},
+    # U_SEALING stays U_SEALING on an invalidated attempt (workspace
+    # restored, attempt retried): no self-loop transition is needed.
+    st.U_SEALING: {st.U_SEALED, st.U_FIXING, st.U_FAILED},
     st.U_SEALED: set(),
     st.U_FAILED: set(),
 }
 
 
 class TestTransitionTable(TempWorkspaceCase):
+    def test_table_covers_every_status(self):
+        self.assertEqual(set(EXPECTED_ALLOWED), set(st.UNIT_STATUSES))
+
     def test_every_pair_exhaustively(self):
         for old in st.UNIT_STATUSES:
             for new in st.UNIT_STATUSES:
@@ -364,17 +544,25 @@ class TestTransitionTable(TempWorkspaceCase):
 
     def test_representative_illegal_transitions(self):
         cases = [
-            (st.U_PENDING, st.U_SEALING),
             (st.U_PENDING, st.U_ROUNDS),
+            (st.U_PENDING, st.U_FIXING),
+            (st.U_PENDING, st.U_SEALING),
+            (st.U_ROUNDS, st.U_SEALING),          # must pass pre-seal verify
+            (st.U_ROUNDS, st.U_DELTA_REVIEW),     # only a fixer opens a delta
+            (st.U_FIXING, st.U_FIXING),
+            (st.U_FIXING, st.U_SEALING),
+            (st.U_FIXING, st.U_SEALED),
+            (st.U_DELTA_REVIEW, st.U_SEALING),
+            (st.U_DELTA_REVIEW, st.U_SEALED),
+            (st.U_PRE_SEAL_VERIFY, st.U_ROUNDS),
+            (st.U_PRE_SEAL_VERIFY, st.U_DELTA_REVIEW),
+            (st.U_SEALING, st.U_ROUNDS),
+            (st.U_SEALING, st.U_PRE_SEAL_VERIFY),  # invalidated attempts stay
+            (st.U_SEALING, st.U_DELTA_REVIEW),
             (st.U_SEALED, st.U_ROUNDS),
             (st.U_SEALED, st.U_PENDING),
             (st.U_SEALED, st.U_FAILED),
             (st.U_FAILED, st.U_PENDING),
-            (st.U_ROUNDS, st.U_VERIFY_FIX),
-            (st.U_ROUNDS, st.U_SEALING),
-            (st.U_VERIFY_FIX, st.U_ROUNDS),
-            (st.U_SEAL_FIX, st.U_SEALING),
-            (st.U_SEALING, st.U_ROUNDS),
         ]
         for old, new in cases:
             state = make_state(self.workspace)
@@ -434,7 +622,7 @@ class TestRecordDraft(TempWorkspaceCase):
 
 
 class TestRecordRound(TempWorkspaceCase):
-    ALLOWED = {st.U_ROUNDS, st.U_VERIFY_FIX, st.U_SEAL_FIX}
+    ALLOWED = {st.U_ROUNDS, st.U_FIXING, st.U_DELTA_REVIEW}
 
     def test_status_guards_all_statuses(self):
         for status in st.UNIT_STATUSES:
@@ -455,16 +643,31 @@ class TestRecordRound(TempWorkspaceCase):
                 self.assertEqual(unit["rounds"], [])
                 self.assertEqual(state["events"], [])
 
-    def test_round_ids_number_per_family(self):
+    def test_round_ids_number_per_family_across_kinds(self):
+        # Fixer and delta rounds share the family's numbering: ids count
+        # ALL of that family's rounds, whatever their kind.
         state = make_state(self.workspace)
         unit = unit_in_status(state, st.U_ROUNDS)
         r1 = st.record_round(state, unit, "codex", contracts.KIND_REVIEW_ROUND, dirty_review())
-        r2 = st.record_round(state, unit, "codex", contracts.KIND_REVIEW_ROUND, clean_review())
-        r3 = st.record_round(state, unit, "claude", contracts.KIND_REVIEW_ROUND, clean_review())
-        self.assertEqual([r1["id"], r2["id"], r3["id"]],
-                         ["skeleton-codex-r1", "skeleton-codex-r2", "skeleton-claude-r1"])
-        self.assertEqual(st.family_rounds(unit, "codex"), [r1, r2])
-        self.assertEqual(st.family_rounds(unit, "claude"), [r3])
+        unit["status"] = st.U_FIXING
+        r2 = st.record_round(
+            state, unit, "codex", contracts.KIND_FIX_FINDINGS,
+            fix_result([fixed_finding("F1")]),
+        )
+        unit["status"] = st.U_DELTA_REVIEW
+        r3 = st.record_round(
+            state, unit, "codex", contracts.KIND_DELTA_REVIEW,
+            clean_review(contracts.KIND_DELTA_REVIEW),
+        )
+        unit["status"] = st.U_ROUNDS
+        r4 = st.record_round(state, unit, "claude", contracts.KIND_REVIEW_ROUND, clean_review())
+        self.assertEqual(
+            [r1["id"], r2["id"], r3["id"], r4["id"]],
+            ["skeleton-codex-r1", "skeleton-codex-r2", "skeleton-codex-r3",
+             "skeleton-claude-r1"],
+        )
+        self.assertEqual(st.family_rounds(unit, "codex"), [r1, r2, r3])
+        self.assertEqual(st.family_rounds(unit, "claude"), [r4])
 
     def test_result_is_deep_copied(self):
         state = make_state(self.workspace)
@@ -473,6 +676,42 @@ class TestRecordRound(TempWorkspaceCase):
         rec = st.record_round(state, unit, "codex", contracts.KIND_REVIEW_ROUND, res)
         res["findings"].append({"id": "F2", "severity": "P0", "summary": "later edit"})
         self.assertEqual(len(rec["result"]["findings"]), 1)
+
+    def test_meta_merges_into_record(self):
+        state = make_state(self.workspace)
+        unit = unit_in_status(state, st.U_FIXING)
+        rec = st.record_round(
+            state, unit, "codex", contracts.KIND_FIX_FINDINGS,
+            fix_result([fixed_finding("F1")]),
+            meta={"source_round_id": "skeleton-claude-r1"},
+        )
+        self.assertEqual(rec["source_round_id"], "skeleton-claude-r1")
+        # base record fields survive the merge
+        self.assertEqual(rec["id"], "skeleton-codex-r1")
+        self.assertEqual(rec["kind"], contracts.KIND_FIX_FINDINGS)
+
+    def test_meta_invalidation_marker(self):
+        # The driver records a tampering reviewer as an invalidated round
+        # (output discarded, empty findings) via meta.
+        state = make_state(self.workspace)
+        unit = unit_in_status(state, st.U_ROUNDS)
+        rec = st.record_round(
+            state, unit, "codex", contracts.KIND_REVIEW_ROUND, clean_review(),
+            meta={"invalidated": "reviewer modified the workspace; "
+                  "output discarded, workspace restored"},
+        )
+        self.assertIn("reviewer modified", rec["invalidated"])
+
+    def test_meta_is_deep_copied(self):
+        state = make_state(self.workspace)
+        unit = unit_in_status(state, st.U_FIXING)
+        meta = {"source_round_id": "skeleton-claude-r1", "extra": {"n": 1}}
+        rec = st.record_round(
+            state, unit, "codex", contracts.KIND_FIX_FINDINGS,
+            fix_result([fixed_finding("F1")]), meta=meta,
+        )
+        meta["extra"]["n"] = 99
+        self.assertEqual(rec["extra"], {"n": 1})
 
 
 # ---------------------------------------------------------------------------
@@ -540,6 +779,223 @@ class TestAdvanceFamily(TempWorkspaceCase):
 
 
 # ---------------------------------------------------------------------------
+# enter_fix_episode
+
+
+class TestEnterFixEpisode(TempWorkspaceCase):
+    LEGAL_FROM = {
+        st.U_PRE_REVIEW_VERIFY,
+        st.U_ROUNDS,
+        st.U_DELTA_REVIEW,
+        st.U_PRE_SEAL_VERIFY,
+        st.U_SEALING,
+    }
+
+    def test_queue_source_counter_and_transition(self):
+        state = make_state(self.workspace)
+        unit = unit_in_status(state, st.U_ROUNDS)
+        unit["fix_loop_rounds"] = 3  # stale value from a previous episode
+        findings = [queued(f) for f in dirty_review(n=2)["findings"]]
+        st.enter_fix_episode(
+            state, unit, findings, "round", "claude",
+            "skeleton-claude-r1", st.U_ROUNDS,
+        )
+        self.assertEqual(unit["status"], st.U_FIXING)
+        self.assertEqual(unit["fix_queue"], findings)
+        self.assertEqual(
+            unit["fix_source"],
+            {
+                "type": "round",
+                "family": "claude",
+                "source_round_id": "skeleton-claude-r1",
+                "return_to": st.U_ROUNDS,
+            },
+        )
+        self.assertEqual(unit["fix_loop_rounds"], 0)  # reset per episode
+        evt = state["events"][-1]
+        self.assertEqual(evt["type"], "unit_transition")
+        self.assertEqual(evt["from_status"], st.U_ROUNDS)
+        self.assertEqual(evt["to_status"], st.U_FIXING)
+        self.assertIn("round", evt["reason"])
+
+    def test_queue_is_deep_copied(self):
+        state = make_state(self.workspace)
+        unit = unit_in_status(state, st.U_ROUNDS)
+        findings = [queued(f) for f in dirty_review()["findings"]]
+        st.enter_fix_episode(
+            state, unit, findings, "round", "codex",
+            "skeleton-codex-r1", st.U_ROUNDS,
+        )
+        self.assertIsNot(unit["fix_queue"], findings)
+        self.assertIsNot(unit["fix_queue"][0], findings[0])
+        findings[0]["summary"] = "mutated by the caller"
+        self.assertEqual(unit["fix_queue"][0]["summary"], "issue 1")
+
+    def test_verification_source_has_no_family(self):
+        state = make_state(self.workspace)
+        unit = unit_in_status(state, st.U_PRE_SEAL_VERIFY)
+        st.enter_fix_episode(
+            state, unit, [verification_finding()], "verification", None,
+            "skeleton-verify-pre_seal-1", st.U_PRE_SEAL_VERIFY,
+        )
+        self.assertEqual(unit["status"], st.U_FIXING)
+        self.assertIsNone(unit["fix_source"]["family"])
+        self.assertEqual(unit["fix_source"]["return_to"], st.U_PRE_SEAL_VERIFY)
+
+    def test_legal_from_every_dirty_review_source_status(self):
+        for status in sorted(self.LEGAL_FROM):
+            state = make_state(self.workspace)
+            unit = unit_in_status(state, status)
+            st.enter_fix_episode(
+                state, unit, [verification_finding()], "verification", None,
+                "skeleton-x", status,
+            )
+            self.assertEqual(unit["status"], st.U_FIXING, msg=status)
+
+    def test_illegal_from_other_statuses(self):
+        for status in st.UNIT_STATUSES:
+            if status in self.LEGAL_FROM:
+                continue
+            state = make_state(self.workspace)
+            unit = unit_in_status(state, status)
+            with self.assertRaises(st.IllegalTransition, msg=status):
+                st.enter_fix_episode(
+                    state, unit, [verification_finding()], "verification",
+                    None, "skeleton-x", status,
+                )
+            self.assertEqual(unit["status"], status)
+
+
+# ---------------------------------------------------------------------------
+# Adjudication registry (milestone-global, derived from immutable rounds)
+
+
+class TestAdjudicationRegistry(TempWorkspaceCase):
+    def test_empty_without_fix_rounds(self):
+        state = make_state(self.workspace)
+        self.assertEqual(st.adjudicated_rejections(state), [])
+        self.assertEqual(st.registry_ids(state), set())
+
+    def test_entries_across_multiple_units(self):
+        state = make_state(self.workspace, slices=[{"id": 1, "title": "t"}])
+        skel = unit_in_status(state, st.U_FIXING)
+        prevention = {"documented_in": "docs/skeleton.md",
+                      "note": "added the rationale paragraph"}
+        st.record_round(
+            state, skel, "codex", contracts.KIND_FIX_FINDINGS,
+            fix_result([
+                rejected_finding(
+                    "F1", resolution="the skeleton is correct",
+                    prevention=prevention, severity="P2",
+                    summary="claimed missing slice",
+                ),
+                fixed_finding("F2"),
+            ]),
+            meta={"source_round_id": "skeleton-claude-r1"},
+        )
+        skel["status"] = st.U_SEALED
+        doc = st.ensure_next_unit(state)
+        doc["status"] = st.U_FIXING
+        st.record_round(
+            state, doc, "codex", contracts.KIND_FIX_FINDINGS,
+            fix_result([rejected_finding("F3", resolution="note is right")]),
+            meta={"source_round_id": "slice_doc-01-claude-r1"},
+        )
+        entries = st.adjudicated_rejections(state)
+        self.assertEqual(
+            [e["id"] for e in entries],
+            ["skeleton-claude-r1/F1", "slice_doc-01-claude-r1/F3"],
+        )
+        self.assertEqual(
+            entries[0],
+            {
+                "id": "skeleton-claude-r1/F1",
+                "unit": "skeleton",
+                "severity": "P2",
+                "summary": "claimed missing slice",
+                "rationale": "the skeleton is correct",
+                "prevention": prevention,
+            },
+        )
+        self.assertEqual(entries[1]["unit"], "slice_doc-01")
+        self.assertEqual(entries[1]["rationale"], "note is right")
+        self.assertIsNone(entries[1]["prevention"])
+        self.assertEqual(
+            st.registry_ids(state),
+            {"skeleton-claude-r1/F1", "slice_doc-01-claude-r1/F3"},
+        )
+
+    def test_source_round_id_falls_back_to_fix_round_id(self):
+        state = make_state(self.workspace)
+        unit = unit_in_status(state, st.U_FIXING)
+        # no meta at all: source_round_id key absent
+        rec1 = st.record_round(
+            state, unit, "codex", contracts.KIND_FIX_FINDINGS,
+            fix_result([rejected_finding("V1")]),
+        )
+        # meta present but source_round_id is None (verification episodes
+        # built by hand): the falsy value falls back too
+        rec2 = st.record_round(
+            state, unit, "codex", contracts.KIND_FIX_FINDINGS,
+            fix_result([rejected_finding("V2")]),
+            meta={"source_round_id": None},
+        )
+        ids = [e["id"] for e in st.adjudicated_rejections(state)]
+        self.assertEqual(ids, ["%s/V1" % rec1["id"], "%s/V2" % rec2["id"]])
+        self.assertEqual(rec1["id"], "skeleton-codex-r1")
+        self.assertEqual(rec2["id"], "skeleton-codex-r2")
+
+    def test_only_rejected_disposition_registers(self):
+        state = make_state(self.workspace)
+        unit = unit_in_status(state, st.U_FIXING)
+        st.record_round(
+            state, unit, "codex", contracts.KIND_FIX_FINDINGS,
+            fix_result([
+                fixed_finding("F1"),
+                rejected_finding("F2"),
+                blocked_finding("F4"),
+            ]),
+            meta={"source_round_id": "skeleton-claude-r1"},
+        )
+        self.assertEqual(
+            st.registry_ids(state), {"skeleton-claude-r1/F2"}
+        )
+        # a duplicate killed by pointer registers nothing new
+        st.record_round(
+            state, unit, "codex", contracts.KIND_FIX_FINDINGS,
+            fix_result([adjudicated_finding("F5", "skeleton-claude-r1/F2")]),
+            meta={"source_round_id": "skeleton-claude-r2"},
+        )
+        self.assertEqual(
+            st.registry_ids(state), {"skeleton-claude-r1/F2"}
+        )
+
+    def test_non_fix_rounds_never_register(self):
+        state = make_state(self.workspace)
+        unit = unit_in_status(state, st.U_ROUNDS)
+        st.record_round(state, unit, "codex", contracts.KIND_REVIEW_ROUND, dirty_review())
+        unit["status"] = st.U_DELTA_REVIEW
+        st.record_round(
+            state, unit, "codex", contracts.KIND_DELTA_REVIEW,
+            dirty_review(contracts.KIND_DELTA_REVIEW),
+        )
+        self.assertEqual(st.adjudicated_rejections(state), [])
+
+    def test_registry_survives_across_sealed_units(self):
+        # The registry is derived from append-only rounds, so it still
+        # reports entries of long-sealed units (milestone-global memory).
+        state = make_state(self.workspace)
+        unit = unit_in_status(state, st.U_FIXING)
+        st.record_round(
+            state, unit, "codex", contracts.KIND_FIX_FINDINGS,
+            fix_result([rejected_finding("F1")]),
+            meta={"source_round_id": "skeleton-claude-r1"},
+        )
+        unit["status"] = st.U_SEALED
+        self.assertEqual(st.registry_ids(state), {"skeleton-claude-r1/F1"})
+
+
+# ---------------------------------------------------------------------------
 # can_open_seal
 
 
@@ -570,35 +1026,60 @@ class TestCanOpenSeal(TempWorkspaceCase):
         st.record_round(state, unit, "codex", contracts.KIND_REVIEW_ROUND, clean_review())
         self.assertTrue(st.can_open_seal(state, unit))
 
-    def test_fix_verification_rounds_do_not_count(self):
+    def test_invalidated_rounds_are_ignored(self):
+        state, unit = self._unit_in_rounds()
+        tamper = {"invalidated": "reviewer modified the workspace"}
+        # codex has ONLY an invalidated (discarded, empty-findings) round:
+        # it must not count as the clean round the gate requires.
+        st.record_round(
+            state, unit, "codex", contracts.KIND_REVIEW_ROUND, clean_review(),
+            meta=tamper,
+        )
+        st.record_round(state, unit, "claude", contracts.KIND_REVIEW_ROUND, clean_review())
+        self.assertFalse(st.can_open_seal(state, unit))
+        # a dirty valid round followed by an invalidated one: the last
+        # VALID round (dirty) decides, the invalidated round is skipped
+        st.record_round(state, unit, "codex", contracts.KIND_REVIEW_ROUND, dirty_review())
+        st.record_round(
+            state, unit, "codex", contracts.KIND_REVIEW_ROUND, clean_review(),
+            meta=tamper,
+        )
+        self.assertFalse(st.can_open_seal(state, unit))
+        # only a genuine clean round opens the gate
+        st.record_round(state, unit, "codex", contracts.KIND_REVIEW_ROUND, clean_review())
+        self.assertTrue(st.can_open_seal(state, unit))
+
+    def test_clean_non_review_kinds_cannot_substitute(self):
+        state, unit = self._unit_in_rounds()
+        # codex only has a clean fix round and a clean delta review; that
+        # is not a clean REVIEW round, so the gate stays closed.
+        st.record_round(
+            state, unit, "codex", contracts.KIND_FIX_FINDINGS,
+            fix_result([fixed_finding("F1")]),
+            meta={"source_round_id": "skeleton-claude-r1"},
+        )
+        st.record_round(
+            state, unit, "codex", contracts.KIND_DELTA_REVIEW,
+            clean_review(contracts.KIND_DELTA_REVIEW),
+        )
+        st.record_round(state, unit, "claude", contracts.KIND_REVIEW_ROUND, clean_review())
+        self.assertFalse(st.can_open_seal(state, unit))
+
+    def test_dirty_non_review_kinds_cannot_reopen(self):
         state, unit = self._unit_in_rounds()
         st.record_round(state, unit, "codex", contracts.KIND_REVIEW_ROUND, clean_review())
         st.record_round(state, unit, "claude", contracts.KIND_REVIEW_ROUND, clean_review())
-        # a dirty fix_verification after the clean reviews must not close the gate
+        # later fix/delta activity (e.g. a pre-seal verification episode)
+        # does not disturb the recorded clean review rounds
         st.record_round(
-            state, unit, "codex", contracts.KIND_FIX_VERIFICATION,
-            dirty_review(contracts.KIND_FIX_VERIFICATION),
+            state, unit, "codex", contracts.KIND_DELTA_REVIEW,
+            dirty_review(contracts.KIND_DELTA_REVIEW),
+        )
+        st.record_round(
+            state, unit, "codex", contracts.KIND_FIX_FINDINGS,
+            fix_result([fixed_finding("F1")]),
         )
         self.assertTrue(st.can_open_seal(state, unit))
-
-    def test_clean_fix_verification_cannot_substitute_for_review(self):
-        state, unit = self._unit_in_rounds()
-        st.record_round(
-            state, unit, "codex", contracts.KIND_FIX_VERIFICATION,
-            clean_review(contracts.KIND_FIX_VERIFICATION),
-        )
-        st.record_round(state, unit, "claude", contracts.KIND_REVIEW_ROUND, clean_review())
-        self.assertFalse(st.can_open_seal(state, unit))
-
-    def test_clean_seal_fix_cannot_mask_dirty_review(self):
-        state, unit = self._unit_in_rounds()
-        st.record_round(state, unit, "codex", contracts.KIND_REVIEW_ROUND, dirty_review())
-        st.record_round(
-            state, unit, "codex", contracts.KIND_SEAL_FIX,
-            clean_review(contracts.KIND_SEAL_FIX),
-        )
-        st.record_round(state, unit, "claude", contracts.KIND_REVIEW_ROUND, clean_review())
-        self.assertFalse(st.can_open_seal(state, unit))
 
 
 # ---------------------------------------------------------------------------
@@ -622,6 +1103,8 @@ class TestSealAndClosure(TempWorkspaceCase):
                 self.assertEqual(unit["seals"], [])
 
     def test_seal_attempts_number_and_record_invalidation(self):
+        # An invalidated attempt (tampering half) stays in U_SEALING: the
+        # workspace is restored and the next attempt just runs.
         state = make_state(self.workspace)
         unit = unit_in_status(state, st.U_SEALING)
         r1 = st.record_seal_attempt(
@@ -630,6 +1113,7 @@ class TestSealAndClosure(TempWorkspaceCase):
         r2 = st.record_seal_attempt(
             state, unit, make_halves(), False, invalidated="half modified workspace"
         )
+        self.assertEqual(unit["status"], st.U_SEALING)
         r3 = st.record_seal_attempt(state, unit, make_halves(), True)
         self.assertEqual([r["attempt"] for r in unit["seals"]], [1, 2, 3])
         self.assertFalse(r1["passed"])
@@ -771,9 +1255,16 @@ class TestFailRun(TempWorkspaceCase):
         self.assertEqual(unit["status"], st.U_SEALED)
         self.assertEqual(state["milestone"]["status"], st.M_FAILED)
 
+    def test_fail_run_from_fix_statuses(self):
+        for status in (st.U_FIXING, st.U_DELTA_REVIEW):
+            state = make_state(self.workspace)
+            unit = unit_in_status(state, status)
+            st.fail_run(state, "fix loop cap", unit=unit)
+            self.assertEqual(unit["status"], st.U_FAILED, msg=status)
+
 
 # ---------------------------------------------------------------------------
-# Append-only persistence
+# Append-only persistence + terminal-unit freeze
 
 
 class TestAppendOnly(TempWorkspaceCase):
@@ -838,7 +1329,15 @@ class TestAppendOnly(TempWorkspaceCase):
         self._assert_rejected_and_disk_unchanged(bad)
 
     def test_altering_sealed_unit_fields_rejected(self):
-        for field, value in (("artifact", "docs/other.md"), ("family_index", 0)):
+        for field, value in (
+            ("artifact", "docs/other.md"),
+            ("family_index", 0),
+            ("fix_queue", [{"id": "F9", "severity": "P1", "summary": "x"}]),
+            ("fix_source", {"type": "round", "family": "codex",
+                            "source_round_id": "skeleton-codex-r1",
+                            "return_to": st.U_ROUNDS}),
+            ("fix_loop_rounds", 5),
+        ):
             bad = copy.deepcopy(self.state)
             bad["units"][0][field] = value
             self._assert_rejected_and_disk_unchanged(bad)
@@ -851,6 +1350,17 @@ class TestAppendOnly(TempWorkspaceCase):
              "raw_path": None, "result": clean_review()}
         )
         self._assert_rejected_and_disk_unchanged(bad)
+
+    def test_failed_unit_is_frozen_too(self):
+        state = make_state(self.workspace)
+        unit = unit_in_status(state, st.U_ROUNDS)
+        st.fail_run(state, "round cap", unit=unit)
+        path = os.path.join(self.workspace, "failed-state.json")
+        st.save(path, state)
+        bad = copy.deepcopy(state)
+        bad["units"][0]["artifact"] = "docs/rewritten.md"
+        with self.assertRaises(st.HistoryRewriteError):
+            st.save(path, bad)
 
     def test_appending_history_is_fine(self):
         st.append_event(self.state, "verification", unit="slice_doc-01", ok=True)
@@ -871,6 +1381,23 @@ class TestAppendOnly(TempWorkspaceCase):
         st.save(self.path, self.state)  # non-terminal unit fields may change
         self.assertEqual(st.load(self.path)["units"][1]["family_index"], 1)
 
+    def test_fix_episode_bookkeeping_on_live_unit_is_fine(self):
+        # fix_queue/fix_source/fix_loop_rounds are working fields on a
+        # non-terminal unit: entering an episode after a save must persist.
+        doc = self.state["units"][1]
+        rec_id = doc["rounds"][0]["id"]
+        st.enter_fix_episode(
+            self.state, doc,
+            [queued(f) for f in doc["rounds"][0]["result"]["findings"]],
+            "round", "codex", rec_id, st.U_ROUNDS,
+        )
+        st.save(self.path, self.state)  # must not raise
+        reloaded = st.load(self.path)
+        self.assertEqual(reloaded["units"][1]["status"], st.U_FIXING)
+        self.assertEqual(
+            reloaded["units"][1]["fix_source"]["source_round_id"], rec_id
+        )
+
     def test_closed_record_on_sealed_slice_impl_is_the_allowed_exception(self):
         # Build a fully sealed impl unit, save, then close_slice afterwards.
         state = make_state(self.workspace)
@@ -886,9 +1413,44 @@ class TestAppendOnly(TempWorkspaceCase):
         reloaded = st.load(path)
         self.assertEqual(reloaded["units"][2]["closed_record"]["slice_id"], 1)
 
+    def test_gate_commit_on_sealed_unit_is_the_allowed_exception(self):
+        # The driver writes gate_commit right after the terminal transition
+        # (state was already saved as sealed by the seal step).
+        self.state["units"][0]["gate_commit"] = "abc1234"
+        st.append_event(
+            self.state, "gate_commit", unit="skeleton", sha="abc1234",
+            message="Seal milestone skeleton",
+        )
+        st.save(self.path, self.state)  # must not raise
+        reloaded = st.load(self.path)
+        self.assertEqual(reloaded["units"][0]["gate_commit"], "abc1234")
+
 
 # ---------------------------------------------------------------------------
-# save() atomicity
+# save_new() exclusive creation
+
+
+class TestSaveNew(TempWorkspaceCase):
+    def test_creates_then_refuses_overwrite(self):
+        path = os.path.join(self.workspace, ".orchestrator", "state.json")
+        state = make_state(self.workspace)
+        st.save_new(path, state)
+        self.assertEqual(st.load(path), state)
+        other = make_state(self.workspace)
+        other["goal"] = "Different goal"
+        with self.assertRaises(FileExistsError):
+            st.save_new(path, other)
+        # original untouched, no temp leftovers
+        self.assertEqual(st.load(path)["goal"], "Build X")
+        leftovers = [
+            n for n in os.listdir(os.path.dirname(path))
+            if n.startswith(".state-")
+        ]
+        self.assertEqual(leftovers, [])
+
+
+# ---------------------------------------------------------------------------
+# save() atomicity + schema version gate
 
 
 class TestSaveAtomicity(TempWorkspaceCase):
@@ -960,29 +1522,40 @@ class TestSaveAtomicity(TempWorkspaceCase):
             self.assertEqual(fh.read(), before)
         self.assertEqual(self._tmp_leftovers(), [])
 
-    def test_load_rejects_wrong_schema_version(self):
+    def test_load_rejects_wrong_schema_versions(self):
+        # v1 (pre-redesign) states and anything else non-v2 are refused:
+        # there is no migration path; the operator starts a fresh run.
+        for version in (0, 1, 3, "2", None):
+            with open(self.path, "w", encoding="utf-8") as fh:
+                json.dump({"schema_version": version}, fh)
+            with self.assertRaises(RuntimeError, msg=repr(version)):
+                st.load(self.path)
+
+    def test_load_rejects_v1_shaped_state(self):
+        # A realistic schema-v1 file (old statuses, old unit fields) must
+        # be rejected outright by the version gate.
+        v1_state = {
+            "schema_version": 1,
+            "goal": "Build X",
+            "workspace": self.workspace,
+            "milestone": {"status": "open", "slices": []},
+            "units": [
+                {
+                    "kind": "skeleton",
+                    "slice_id": None,
+                    "status": "micro_review",
+                    "return_to": "rounds",
+                    "micro_rounds_in_loop": 1,
+                }
+            ],
+            "events": [],
+            "failure": None,
+            "config": make_config(),
+        }
         with open(self.path, "w", encoding="utf-8") as fh:
-            json.dump({"schema_version": 0}, fh)
+            json.dump(v1_state, fh)
         with self.assertRaises(RuntimeError):
             st.load(self.path)
-
-    def test_load_migrates_legacy_int_verify_fix_counter(self):
-        state = make_state(self.workspace)
-        st.save(self.path, state)
-        # Simulate a pre-per-stage state file (plain int counter).
-        with open(self.path, "r", encoding="utf-8") as fh:
-            raw = json.load(fh)
-        raw["units"][0]["verify_fix_attempts"] = 3
-        with open(self.path, "w", encoding="utf-8") as fh:
-            json.dump(raw, fh)
-        loaded = st.load(self.path)
-        self.assertEqual(
-            loaded["units"][0]["verify_fix_attempts"],
-            {"pre_review": 3, "pre_seal": 0},
-        )
-        # Saving the migrated state back must pass the append-only check
-        # (load() normalizes the on-disk side too).
-        st.save(self.path, loaded)
 
 
 # ---------------------------------------------------------------------------
@@ -1053,6 +1626,34 @@ class TestSummary(TempWorkspaceCase):
         # doc view carries the dirty round's finding count
         self.assertEqual(doc_view["rounds"][0]["findings"], 2)
         self.assertEqual(doc_view["seals"], [])
+
+    def test_summary_includes_fix_and_delta_rounds(self):
+        state = make_state(self.workspace)
+        unit = unit_in_status(state, st.U_ROUNDS)
+        rec = st.record_round(state, unit, "codex", contracts.KIND_REVIEW_ROUND, dirty_review())
+        st.enter_fix_episode(
+            state, unit, [queued(f) for f in rec["result"]["findings"]],
+            "round", "codex", rec["id"], st.U_ROUNDS,
+        )
+        st.record_round(
+            state, unit, "codex", contracts.KIND_FIX_FINDINGS,
+            fix_result([fixed_finding("F1")]),
+            meta={"source_round_id": rec["id"]},
+        )
+        st.transition_unit(state, unit, st.U_DELTA_REVIEW)
+        st.record_round(
+            state, unit, "codex", contracts.KIND_DELTA_REVIEW,
+            clean_review(contracts.KIND_DELTA_REVIEW),
+        )
+        summ = st.summary(state)
+        self.assertEqual(
+            [r["kind"] for r in summ["units"][0]["rounds"]],
+            [contracts.KIND_REVIEW_ROUND, contracts.KIND_FIX_FINDINGS,
+             contracts.KIND_DELTA_REVIEW],
+        )
+        self.assertEqual(
+            [r["findings"] for r in summ["units"][0]["rounds"]], [1, 1, 0]
+        )
 
     def test_summary_of_closed_milestone(self):
         state = make_state(self.workspace)

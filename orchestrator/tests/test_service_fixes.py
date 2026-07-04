@@ -459,7 +459,33 @@ class TestMergeConfigSingleSource(ServiceFixesTestCase):
              "config": override},
         )
         panel_cfg = st.load(driver.default_state_path(ws))["config"]
-        self.assertEqual(panel_cfg, cli_cfg)
+        # Same merge semantics as the CLI, with ONE deliberate service
+        # default on top: panel runs launch the full enforced flow, so git
+        # is enabled unless the operator explicitly disables it.
+        expected = json.loads(json.dumps(cli_cfg))
+        expected["git"] = {"enabled": True}
+        self.assertEqual(panel_cfg, expected)
+
+    def test_service_default_enables_git_and_explicit_override_wins(self):
+        # Default: the panel's runs get the full gate/amend/delta
+        # discipline (driver.DEFAULT_CONFIG's own comment promises the
+        # service enables git; a silently pure-state panel run would lose
+        # delta reviews, amends, and revertible tamper recovery).
+        ws = self.workspace("ws-gitdefault")
+        service.create_run(
+            self.home, {"workspace": ws, "goal": "g", "autostart": False}
+        )
+        cfg = st.load(driver.default_state_path(ws))["config"]
+        self.assertEqual(cfg["git"], {"enabled": True})
+        # An explicit pure-state request is honored.
+        ws2 = self.workspace("ws-gitoff")
+        service.create_run(
+            self.home,
+            {"workspace": ws2, "goal": "g", "autostart": False,
+             "config": {"git": {"enabled": False}}},
+        )
+        cfg2 = st.load(driver.default_state_path(ws2))["config"]
+        self.assertEqual(cfg2["git"], {"enabled": False})
 
 
 # ---------------------------------------------------------------------------
