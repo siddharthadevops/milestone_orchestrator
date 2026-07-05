@@ -218,6 +218,8 @@ class TestCalculatorE2E(unittest.TestCase):
                 "current_unit",
                 "current_unit_status",
                 "current_family",
+                "created_epoch",
+                "last_event_epoch",
                 "failure",
                 "units",
                 "events_total",

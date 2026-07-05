@@ -222,12 +222,22 @@ function elapsed(t0) {
   const m = Math.floor(secs / 60), sx = secs % 60;
   return m ? `${m}m${String(sx).padStart(2, "0")}s` : `${sx}s`;
 }
+function runTime(sum, s) {
+  if (!sum || !sum.created_epoch) return "";
+  if (s.process === "running")
+    return ` · elapsed ${elapsed(sum.created_epoch)}`;
+  if (sum.last_event_epoch && sum.last_event_epoch > sum.created_epoch) {
+    const label = sum.milestone_status === "closed" ? "took" : "active for";
+    return ` · ${label}${fmtDur(sum.last_event_epoch - sum.created_epoch)}`;
+  }
+  return "";
+}
 function inFlightChip(r) {
   const f = r.in_flight;
   if (!f || !f.kind) return "";
   const who = f.family ? `${f.family} ` : "";
   return `<span class="chip working" title="${esc(f.label || "")}">` +
-         `<span class="spin"></span>${esc(who)}${esc(f.kind)} · ${elapsed(f.started_at)}</span>`;
+         `<span class="spin"></span>${esc(who)}${esc(shortKind(f.kind))} · ${elapsed(f.started_at)}</span>`;
 }
 function workingChip(r) {
   if (r.process !== "running" || !r.current_unit_status) return "";
@@ -256,17 +266,27 @@ async function refreshRuns() {
   } catch (e) { /* keep last render */ }
 }
 function select(id) { selected = id; goalOpen = false; refreshRuns(); refreshDetail(); }
+const KIND_SHORT = {
+  review_round: "r", delta_review: "delta_r", fix_findings: "fix",
+  seal_half: "seal", verification: "verify",
+};
+function shortKind(k) { return KIND_SHORT[k] || k; }
+function fmtDur(secs) {
+  if (secs === null || secs === undefined) return "";
+  const t = Math.round(secs), m = Math.floor(t / 60), sx = t % 60;
+  return m ? ` · ${m}m${String(sx).padStart(2, "0")}s` : ` · ${sx}s`;
+}
 function roundChip(r) {
-  const kind = r.kind === "review_round" ? "r" : r.kind;
+  const kind = shortKind(r.kind);
   if (r.invalidated)
     return `<span class="chip fail" title="${esc(r.invalidated)}">${esc(r.family)} ${esc(kind)} · INVALID</span>`;
   const cls = r.findings === 0 ? "clean" : "dirty";
-  return `<span class="chip ${cls}">${esc(r.family)} ${esc(kind)} · ${r.findings}f</span>`;
+  return `<span class="chip ${cls}">${esc(r.family)} ${esc(kind)} · ${r.findings}f${fmtDur(r.duration_s)}</span>`;
 }
 function sealChip(s) {
   const cls = s.passed ? "pass" : "fail";
   const label = s.passed ? "pass" : (s.invalidated ? "invalid" : "findings");
-  return `<span class="chip ${cls}">seal a${s.attempt} ${label}</span>`;
+  return `<span class="chip ${cls}">seal a${s.attempt} ${label}${fmtDur(s.duration_s)}</span>`;
 }
 async function refreshDetail() {
   if (!selected) return;
@@ -276,7 +296,7 @@ async function refreshDetail() {
     const running = s.process === "running";
     let html = `<h2>${esc(s.name)} ${msChip(s.milestone_status)}
         ${workingChip(s)}
-        <span class="st">${running ? "· driver running (pid " + s.pid + ")" : "· driver stopped"}</span></h2>
+        <span class="st">${running ? "· driver running (pid " + s.pid + ")" : "· driver stopped"}${runTime(sum, s)}</span></h2>
       <div class="goalline mono">${esc(s.workspace)}</div>`;
     if (sum) {
       const long = (sum.goal || "").split("\n").length > 3 || (sum.goal || "").length > 320;

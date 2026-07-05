@@ -1595,6 +1595,8 @@ class TestSummary(TempWorkspaceCase):
                 "current_unit",
                 "current_unit_status",
                 "current_family",
+                "created_epoch",
+                "last_event_epoch",
                 "failure",
                 "units",
                 "events_total",
@@ -1625,14 +1627,16 @@ class TestSummary(TempWorkspaceCase):
         for r in skel_view["rounds"]:
             self.assertEqual(
             set(r.keys()),
-            {"id", "family", "kind", "findings", "invalidated", "at"},
+            {"id", "family", "kind", "findings", "invalidated",
+             "duration_s", "at"},
         )
             self.assertEqual(r["findings"], 0)
         # seals view: one passed attempt with per-family finding counts
         self.assertEqual(len(skel_view["seals"]), 1)
         seal = skel_view["seals"][0]
         self.assertEqual(
-            set(seal.keys()), {"attempt", "passed", "invalidated", "findings", "at"}
+            set(seal.keys()),
+            {"attempt", "passed", "invalidated", "findings", "duration_s", "at"},
         )
         self.assertEqual(seal["attempt"], 1)
         self.assertTrue(seal["passed"])

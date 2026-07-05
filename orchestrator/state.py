@@ -24,6 +24,7 @@ an unchanged workspace.
 """
 
 import copy
+from datetime import datetime
 import json
 import os
 import tempfile
@@ -632,6 +633,16 @@ def enter_fix_episode(state, unit, findings, source_type, source_family,
 # Derived summary (consumed by `status --json` and the web app)
 
 
+def _epoch(iso):
+    """ISO-with-offset timestamp -> epoch seconds (None if unparsable)."""
+    if not iso:
+        return None
+    try:
+        return datetime.strptime(iso, "%Y-%m-%dT%H:%M:%S%z").timestamp()
+    except (ValueError, TypeError):
+        return None
+
+
 def summary(state):
     unit = current_unit(state)
     units_view = []
@@ -648,6 +659,7 @@ def summary(state):
                         "kind": r["kind"],
                         "findings": len(r["result"].get("findings", [])),
                         "invalidated": r.get("invalidated"),
+                        "duration_s": r.get("duration_s"),
                         "at": r["at"],
                     }
                     for r in u["rounds"]
@@ -665,6 +677,9 @@ def summary(state):
                             )
                             for fam, h in s["halves"].items()
                         },
+                        "duration_s": sum(
+                            h.get("duration_s") or 0 for h in s["halves"].values()
+                        ) or None,
                         "at": s["at"],
                     }
                     for s in u["seals"]
@@ -683,6 +698,10 @@ def summary(state):
         "current_unit": unit_key(unit) if unit else None,
         "current_unit_status": unit["status"] if unit else None,
         "current_family": current_fam,
+        "created_epoch": _epoch(state.get("created_at")),
+        "last_event_epoch": _epoch(
+            state["events"][-1]["at"] if state["events"] else None
+        ),
         "failure": state["failure"],
         "units": units_view,
         "events_total": len(state["events"]),
