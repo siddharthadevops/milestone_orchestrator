@@ -723,6 +723,8 @@ class Driver(object):
                 )
                 self._save()
                 raise StopStep("fixer claimed edits with an empty delta")
+            unit["fix_queue"] = []
+            unit["fix_source"] = None
             st.transition_unit(
                 self.state, unit, return_to, reason="no delta (fix episode green)"
             )
@@ -784,6 +786,8 @@ class Driver(object):
             st.append_event(
                 self.state, "amended", unit=st.unit_key(unit), sha=sha
             )
+            unit["fix_queue"] = []
+            unit["fix_source"] = None
             st.transition_unit(
                 self.state, unit, return_to, reason="delta green; amended"
             )
