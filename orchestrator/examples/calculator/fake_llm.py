@@ -75,7 +75,7 @@ def parse_first_registry_id(prompt):
             m = re.match(r"^- \[([^\]]+)\]", line)
             if m:
                 return m.group(1)
-            if line.startswith(("ACCESS", "OUTPUT CONTRACT")):
+            if line.startswith(("ACCESS", "PROCESS AUTHORITY", "OUTPUT CONTRACT")):
                 break
     return None
 

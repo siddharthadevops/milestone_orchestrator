@@ -193,6 +193,8 @@ class SubprocessRunner(object):
                 env=self.env,
                 start_new_session=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
             )
         except OSError as exc:
             if output_file:
