@@ -50,7 +50,7 @@ import urllib.parse
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from . import driver, gitops, registry, state as st
+from . import driver, errclass, gitops, registry, state as st
 
 STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -539,16 +539,20 @@ def resume_run(home, run_id):
 
 def delete_run(home, run_id, purge=False):
     reap_exited_drivers(home)
-    reg = registry.load(home)
-    entry = registry.get(reg, run_id)
-    if entry is None:
-        raise ApiError(404, "unknown run %r" % run_id)
-    if driver_alive(entry):
-        raise ApiError(409, "stop the run before deleting it")
-    try:
-        registry.remove(home, run_id)
-    except KeyError:  # concurrent delete won the race
-        raise ApiError(404, "unknown run %r" % run_id)
+    # Check-and-remove under ONE registry lock: the auto-resume guard (or
+    # an operator Resume) could otherwise spawn a driver between our
+    # aliveness check and the removal, purging state under a live driver.
+    with registry.locked(home):
+        reg = registry.load(home)
+        entry = registry.get(reg, run_id)
+        if entry is None:
+            raise ApiError(404, "unknown run %r" % run_id)
+        if driver_alive(entry):
+            raise ApiError(409, "stop the run before deleting it")
+        # Inline removal under the SAME lock (registry.remove takes its
+        # own lock; flock on a second fd would deadlock this process).
+        reg["runs"] = [e for e in reg["runs"] if e["id"] != run_id]
+        registry.save(home, reg)
     _evict_summary(entry["state_path"])
     if not purge:
         return {"deleted": run_id, "note": "workspace files untouched"}
@@ -927,12 +931,138 @@ def make_handler(home):
     return Handler
 
 
+# ---------------------------------------------------------------------------
+# Auto-resume guard: the service is the long-lived process, so IT watches
+# for typed recoverable failures and revives runs — a quota window that
+# resets at 04:00 must not cost five sleeping-operator hours.
+
+GUARD_INTERVAL_S = 60
+# Consecutive auto-resumes per failure type before the guard stands down
+# and waits for the operator (quota windows genuinely move, so they get
+# a generous budget; transient types get a short one).
+AUTO_RESUME_CAPS = {"quota": 12, "network": 4, "busy": 4, "timeout": 4}
+
+
+def append_log(home, run_id, text):
+    try:
+        with open(registry.log_path(home, run_id), "a",
+                  encoding="utf-8") as fh:
+            fh.write(text)
+    except OSError:
+        pass
+
+
+def guard_scan(home):
+    """One pass: auto-resume every failed run whose typed failure is due.
+    Never raises. Returns a list of (run_id, action) for logging/tests.
+
+    Budget discipline (adversarial-review hardened): the consecutive
+    counter resets only on demonstrated PROGRESS (events beyond the
+    post-resume baseline), never on mere liveness — a doomed attempt
+    that hangs for minutes must not refill its own budget. Consecutive
+    resumes of one type also space out linearly (10min * count) so a
+    mis-scheduled quota window probes, not machine-guns."""
+    actions = []
+    try:
+        reap_exited_drivers(home)
+        reg = registry.load(home)
+        runs = list(reg.get("runs") or [])
+    except Exception as exc:
+        print("[guard] registry scan failed: %s" % exc, file=sys.stderr)
+        return actions
+    now = time.time()
+    for entry in runs:
+        try:
+            run_id = entry["id"]
+            summ = load_summary(entry["state_path"])
+            if summ is None:
+                continue
+            if driver_alive(entry):
+                baseline = entry.get("resume_baseline")
+                if (
+                    entry.get("auto_resumes")
+                    and baseline is not None
+                    and (summ.get("events_total") or 0) > baseline + 2
+                ):
+                    # resumed + a couple of bookkeeping events is not
+                    # progress; anything beyond is real work.
+                    registry.update(
+                        home, run_id, auto_resumes={}, resume_baseline=None
+                    )
+                continue
+            failure = summ.get("failure")
+            if not failure:
+                continue
+            ftype = failure.get("type") or "unknown"
+            if ftype not in errclass.AUTO_RESUMABLE:
+                continue
+            resume_at = failure.get("resume_at")
+            if resume_at:
+                due_at = st._epoch(resume_at)
+                if due_at is not None and due_at > now:
+                    continue
+            counts = dict(entry.get("auto_resumes") or {})
+            used = int(counts.get(ftype, 0))
+            cap = AUTO_RESUME_CAPS.get(ftype, 3)
+            if used >= cap:
+                if not entry.get("capped_logged"):
+                    append_log(
+                        home, run_id,
+                        "[guard] %s auto-resume budget exhausted (%d); "
+                        "waiting for the operator\n" % (ftype, cap),
+                    )
+                    registry.update(home, run_id, capped_logged=True)
+                actions.append((run_id, "capped:%s" % ftype))
+                continue
+            last = entry.get("last_auto_resume_at") or 0
+            gap = 600 * max(1, used)  # 10min, 20min, 30min...
+            if used and now - last < gap:
+                actions.append((run_id, "spaced:%s" % ftype))
+                continue
+            resume_run(home, run_id)
+            counts[ftype] = used + 1
+            registry.update(
+                home, run_id,
+                auto_resumes=counts,
+                resume_baseline=(summ.get("events_total") or 0),
+                last_auto_resume_at=now,
+                capped_logged=False,
+            )
+            append_log(
+                home, run_id,
+                "[guard] auto-resume %d/%d after %s failure\n"
+                % (used + 1, cap, ftype),
+            )
+            actions.append((run_id, "resumed:%s" % ftype))
+        except Exception as exc:
+            append_log(
+                home, entry.get("id") or "unknown",
+                "[guard] error: %s\n" % exc,
+            )
+            actions.append((entry.get("id"), "error:%s" % exc))
+    return actions
+
+
+def start_guard(home, interval=GUARD_INTERVAL_S):
+    """Daemon thread: periodic guard_scan for as long as the service
+    lives."""
+    def loop():
+        while True:
+            time.sleep(interval)
+            guard_scan(home)
+
+    t = threading.Thread(target=loop, name="auto-resume-guard", daemon=True)
+    t.start()
+    return t
+
+
 def make_server(home, port):
     return ThreadingHTTPServer(("127.0.0.1", port), make_handler(home))
 
 
 def serve(home, port, open_browser=False):
     server = make_server(home, port)
+    start_guard(home)
     actual_port = server.server_address[1]
     url = "http://127.0.0.1:%d" % actual_port
     print("impl_roadmap local service: %s  (home: %s)" % (url, home))

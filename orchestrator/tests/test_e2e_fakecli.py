@@ -107,6 +107,7 @@ class TestCalculatorE2E(unittest.TestCase):
             # The fake CLI scenario hardcodes docs/ artifact paths; the
             # canonical layout has its own dedicated tests.
             "docs_dir": "docs",
+            "error_classifier": False,
         }
         cfg_path = os.path.join(cls.tmp.name, "demo-config.json")
         with open(cfg_path, "w", encoding="utf-8") as fh:

@@ -665,6 +665,7 @@ def build_fix_findings(
     verification_output=None,
     unit_kind=None,
     amendments=None,
+    phantom_retry=False,
 ):
     lines = []
     for f in findings:
@@ -690,10 +691,23 @@ def build_fix_findings(
             "VERIFICATION OUTPUT (the failing suite that produced these "
             "findings; tail):\n" + verification_output[-4000:] + "\n\n"
         )
+    phantom_block = ""
+    if phantom_retry:
+        phantom_block = (
+            "RETRY NOTICE\n"
+            "Your previous response claimed edits (a 'fixed' disposition,\n"
+            "files_changed, or a prevention pointer) but the worktree\n"
+            "delta was EMPTY — nothing was actually written, and those\n"
+            "claims were discarded. This is your one retry: either apply\n"
+            "the edits to disk for real, or dispose honestly ('rejected'\n"
+            "with its consultation, or 'blocked'). A second empty-delta\n"
+            "claim fails the run.\n\n"
+        )
     return (
         _header(contracts.KIND_FIX_FINDINGS, family, workspace)
         + "\nTASK: triage and fix the queued findings on %s.\n" % unit_desc
         + "GOAL: %s\n\n" % goal
+        + phantom_block
         + _amendments_block(amendments)
         + "QUEUED FINDINGS (claims, not facts — verify each against the\n"
         "real code/doc before deciding):\n"

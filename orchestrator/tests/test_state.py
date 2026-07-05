@@ -1725,5 +1725,26 @@ class TestSummary(TempWorkspaceCase):
         self.assertEqual(seal["invalidated"], "claude half modified workspace")
 
 
+class TestTypedResume(TempWorkspaceCase):
+    def test_phantom_fix_resume_restores_to_fixing(self):
+        state = make_state(self.workspace)
+        unit = unit_in_status(state, st.U_DELTA_REVIEW)
+        st.fail_run(state, "phantom twice", unit=unit, type_="phantom_fix")
+        self.assertEqual(unit["status"], st.U_FAILED)
+        restored = st.resume_run(state)
+        self.assertEqual(unit["status"], st.U_FIXING)
+        self.assertEqual(list(restored.values()), [st.U_FIXING])
+
+    def test_quota_failure_records_type_and_resume_at(self):
+        state = make_state(self.workspace)
+        st.fail_run(state, "usage limit", type_="quota",
+                    resume_at="2026-07-06T00:37:00+0200")
+        self.assertEqual(state["failure"]["type"], "quota")
+        self.assertEqual(state["failure"]["resume_at"],
+                         "2026-07-06T00:37:00+0200")
+        ev = [e for e in state["events"] if e["type"] == "run_failed"][-1]
+        self.assertEqual(ev["failure_type"], "quota")
+
+
 if __name__ == "__main__":
     unittest.main()

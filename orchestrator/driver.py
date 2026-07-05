@@ -31,7 +31,8 @@ try:
 except ImportError:  # pragma: no cover - non-POSIX: flock degrades to the
     fcntl = None     # staleness check in step(); documented in the README
 
-from . import contracts, gitops, ledgers, prompts, runners, state as st
+from . import contracts, errclass, gitops, ledgers, prompts, runners
+from . import state as st
 
 DEFAULT_CONFIG = {
     "families_order": ["codex", "claude"],
@@ -96,6 +97,13 @@ DEFAULT_CONFIG = {
              "consultation": "opposite"},
     # Fixer+delta iterations allowed per fix episode before failing.
     "max_fix_loops": 6,
+    # Infra-failure handling (errclass): short in-place retries for
+    # network/busy before a typed failure, and the opposite-family LLM
+    # classifier fallback for noisy failure output. The service guard
+    # auto-resumes typed failures at their resume_at; login/unknown
+    # always wait for the operator.
+    "infra_retry_backoff_s": [10, 30],
+    "error_classifier": True,
     # Where the milestone's documents live inside the workspace: worker
     # artifacts (skeleton.md, slices/) and driver-generated ledgers
     # (README.md record, review-log.md, adjudications.md, closures/).
@@ -202,7 +210,14 @@ class ConcurrentRunError(RuntimeError):
 class _SealHalfFailure(RuntimeError):
     """Internal: a seal half failed (runner/protocol error or a blocked
     worker). Deliberately mutates no state so it is safe to raise from
-    concurrent seal worker threads; the caller decides how to record it."""
+    concurrent seal worker threads; the caller decides how to record it.
+    Carries the raw output texts so the MAIN thread can classify the
+    failure type (the classifier must never run inside half threads)."""
+
+    def __init__(self, message, raw_texts=None, family=None):
+        RuntimeError.__init__(self, message)
+        self.raw_texts = list(raw_texts or [])
+        self.family = family
 
 
 class Driver(object):
@@ -458,22 +473,73 @@ class Driver(object):
         dm, de = self._family_defaults(family)
         model = model or dm
         effort = effort or de
-        self._mark_busy(raw_name, kind, family)
-        try:
-            output, result = runners.call_worker(
-                self.runner, family, prompt, kind, self.workspace,
-                model=model, effort=effort,
-            )
-        except (runners.RunnerError, runners.WorkerProtocolError) as exc:
-            self._clear_busy()
-            self._save_protocol_raws(raw_name, exc)
-            st.fail_run(self.state, "%s call failed: %s" % (kind, exc),
-                        unit=st.current_unit(self.state))
-            self._save()
-            raise StopStep(str(exc))
+        retries = self.config.get("infra_retry_backoff_s")
+        if retries is None:
+            retries = [10, 30]
+        attempt = 0
+        while True:
+            self._mark_busy(raw_name, kind, family)
+            try:
+                output, result = runners.call_worker(
+                    self.runner, family, prompt, kind, self.workspace,
+                    model=model, effort=effort,
+                )
+            except (runners.RunnerError, runners.WorkerProtocolError) as exc:
+                self._clear_busy()
+                self._save_protocol_raws(raw_name, exc)
+                etype, resume_at, evidence = self._classify_failure(
+                    family, exc
+                )
+                if etype in ("network", "busy") and attempt < len(retries):
+                    # Short in-place retries BEFORE failing: transient
+                    # blips should not cost a run failure + resume cycle.
+                    st.append_event(
+                        self.state, "infra_retry", kind=kind, family=family,
+                        failure_type=etype, attempt=attempt + 1,
+                        wait_s=retries[attempt],
+                    )
+                    self._save()
+                    time.sleep(retries[attempt])
+                    attempt += 1
+                    continue
+                resume_at = errclass.normalize_resume_at(resume_at)
+                if etype in errclass.AUTO_RESUMABLE and not resume_at:
+                    fallback_min = (
+                        30 if etype == "quota"
+                        else errclass.TRANSIENT_BACKOFF_MIN
+                    )
+                    resume_at = errclass.parse_resume_at(
+                        "in %d minutes" % fallback_min
+                    )
+                st.fail_run(
+                    self.state,
+                    "%s call failed: %s" % (kind, exc),
+                    unit=st.current_unit(self.state),
+                    type_=etype,
+                    resume_at=resume_at,
+                )
+                self._save()
+                raise StopStep(str(exc))
+            break
         self._clear_busy()
         raw_path = self._save_raw(raw_name, result.text)
         return output, result, raw_path
+
+    def _classify_failure(self, family, exc):
+        """Type a failed worker call: deterministic patterns over the raw
+        outputs (and the exception text), opposite-family LLM classifier
+        as a non-blocking fallback (config error_classifier)."""
+        texts = list(getattr(exc, "raw_texts", []) or [])
+        texts.append(str(exc))
+        if isinstance(exc, runners.RunnerError) and "timed out" in str(exc):
+            return "timeout", None, "runner timeout"
+        return errclass.classify_failure(
+            texts,
+            runner=self.runner,
+            opposite_family=self._opposite(family),
+            workspace=self.workspace,
+            use_llm=bool(self.config.get("error_classifier", True)),
+        )
 
     def _maybe_update_slices(self, unit, output):
         """A fix call on the skeleton unit may report an updated slice plan
@@ -839,6 +905,7 @@ class Driver(object):
             ),
             unit_kind=unit["kind"],
             amendments=self._amendments(),
+            phantom_retry=bool(unit.get("phantom_retried")),
         )
         n_fix = 1 + len(
             [r for r in unit["rounds"] if r["kind"] == contracts.KIND_FIX_FINDINGS]
@@ -967,15 +1034,37 @@ class Driver(object):
             # so the prevention edit must structurally exist).
             claims = self._phantom_edit_claims(unit)
             if claims:
+                if not unit.get("phantom_retried"):
+                    # First offense: the phantom round stays on the record
+                    # (invalid evidence) but does not kill the run —
+                    # re-run the fixer once with the same queue, exactly
+                    # like the JSON repair retry. A second phantom is a
+                    # typed failure whose resume restores to FIXING.
+                    unit["phantom_retried"] = True
+                    st.append_event(
+                        self.state,
+                        "phantom_fix_retry",
+                        unit=st.unit_key(unit),
+                        claims="; ".join(claims)[:300],
+                    )
+                    st.transition_unit(
+                        self.state, unit, st.U_FIXING,
+                        reason="phantom fix (claims with empty delta); "
+                               "retrying fixer",
+                    )
+                    self._save()
+                    return "phantom fix discarded; retrying fixer once"
                 st.fail_run(
                     self.state,
                     "fixer on %s claimed edits but the worktree delta is "
-                    "empty (nothing was actually changed): %s"
-                    % (st.unit_key(unit), "; ".join(claims)),
+                    "empty (nothing was actually changed), twice in a row: "
+                    "%s" % (st.unit_key(unit), "; ".join(claims)),
                     unit=unit,
+                    type_="phantom_fix",
                 )
                 self._save()
                 raise StopStep("fixer claimed edits with an empty delta")
+            unit.pop("phantom_retried", None)
             unit["fix_queue"] = []
             unit["fix_source"] = None
             if return_to in (st.U_PRE_REVIEW_VERIFY, st.U_PRE_SEAL_VERIFY):
@@ -1053,6 +1142,7 @@ class Driver(object):
             st.transition_unit(
                 self.state, unit, return_to, reason="delta green; amended"
             )
+            unit.pop("phantom_retried", None)
             return "delta review clean; amended (%s)" % sha
         # Dirty delta: its findings become the new fix queue (same episode).
         unit["fix_queue"] = [
@@ -1331,7 +1421,10 @@ class Driver(object):
             except (runners.RunnerError, runners.WorkerProtocolError) as exc:
                 self._save_protocol_raws(raw_name, exc)
                 raise _SealHalfFailure(
-                    "%s call failed: %s" % (contracts.KIND_SEAL_HALF, exc)
+                    "%s call failed: %s" % (contracts.KIND_SEAL_HALF, exc),
+                    raw_texts=list(getattr(exc, "raw_texts", []) or [])
+                    + [str(exc)],
+                    family=family,
                 )
             raw_path = self._save_raw(raw_name, result.text)
             if output["status"] == "blocked":
@@ -1346,14 +1439,36 @@ class Driver(object):
                 "workspace_modified": False,
             }
 
-        def fail_attempt(reason):
-            st.fail_run(self.state, reason, unit=unit)
+        def fail_attempt(reason, raw_texts=None, failed_family=None):
+            etype, resume_at = "unknown", None
+            if raw_texts:
+                etype, resume_at, _ev = errclass.classify_failure(
+                    raw_texts,
+                    runner=self.runner,
+                    opposite_family=self._opposite(
+                        failed_family or families[0]
+                    ),
+                    workspace=self.workspace,
+                    use_llm=bool(self.config.get("error_classifier", True)),
+                )
+                resume_at = errclass.normalize_resume_at(resume_at)
+                if etype in errclass.AUTO_RESUMABLE and not resume_at:
+                    fallback_min = (
+                        30 if etype == "quota"
+                        else errclass.TRANSIENT_BACKOFF_MIN
+                    )
+                    resume_at = errclass.parse_resume_at(
+                        "in %d minutes" % fallback_min
+                    )
+            st.fail_run(self.state, reason, unit=unit, type_=etype,
+                        resume_at=resume_at)
             self._save()
             raise StopStep(reason)
 
         if self.config.get("seal_concurrent"):
             before = self._snapshot()
             errors = {}
+            error_raws = []
 
             def worker(fam):
                 # Worker threads never touch driver state: mutating and
@@ -1366,6 +1481,7 @@ class Driver(object):
                     halves[fam] = run_half_pure(fam)
                 except _SealHalfFailure as exc:
                     errors[fam] = str(exc)
+                    error_raws.extend(exc.raw_texts)
                 except Exception as exc:  # a dead thread must fail the run
                     errors[fam] = "seal half crashed: %r" % (exc,)
 
@@ -1390,7 +1506,9 @@ class Driver(object):
                     "concurrent seal attempt failed: "
                     + "; ".join(
                         "%s: %s" % (fam, errors[fam]) for fam in sorted(errors)
-                    )
+                    ),
+                    raw_texts=error_raws,
+                    failed_family=sorted(errors)[0],
                 )
             changed = self._snapshot_diff(before, self._snapshot())
             if changed:
@@ -1412,7 +1530,8 @@ class Driver(object):
                 try:
                     halves[fam] = run_half_pure(fam)
                 except _SealHalfFailure as exc:
-                    fail_attempt(str(exc))
+                    fail_attempt(str(exc), raw_texts=exc.raw_texts,
+                                 failed_family=exc.family)
                 finally:
                     self._clear_busy()
                 new_snap = self._snapshot()

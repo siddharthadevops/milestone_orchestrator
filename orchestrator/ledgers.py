@@ -155,6 +155,8 @@ def render_milestone(state):
             "",
             "- at: %s" % failure.get("at"),
             "- unit: %s" % failure.get("unit"),
+            "- type: %s" % (failure.get("type") or "unknown"),
+            "- resume_at: %s" % (failure.get("resume_at") or "-"),
             "- reason: %s" % failure.get("reason"),
         ]
     return "\n".join(lines) + "\n"

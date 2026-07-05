@@ -529,21 +529,27 @@ def record_seal_attempt(state, unit, halves, passed, invalidated=None):
     return rec
 
 
-def fail_run(state, reason, unit=None):
+def fail_run(state, reason, unit=None, type_="unknown", resume_at=None):
     """Terminal failure: record the explanation and stop. Resumable by a
-    deliberate operator action (resume_run) — e.g. after a transient CLI
-    failure like a logged-out reviewer — which restores the failed unit to
-    the status it was in when it failed."""
+    deliberate operator action (resume_run) or, for auto-resumable typed
+    failures (quota/network/busy/timeout), by the service guard at
+    resume_at. type_ and resume_at come from errclass; "unknown" and
+    "login" are never auto-resumed."""
     state["failure"] = {
         "at": now_iso(),
         "reason": reason,
         "unit": unit_key(unit) if unit else None,
+        "type": type_,
+        "resume_at": resume_at,
     }
     if unit is not None and unit["status"] not in (U_SEALED, U_FAILED):
         unit["failed_from"] = unit["status"]
         unit["status"] = U_FAILED
     state["milestone"]["status"] = M_FAILED
-    append_event(state, "run_failed", reason=reason, unit=state["failure"]["unit"])
+    append_event(
+        state, "run_failed", reason=reason, unit=state["failure"]["unit"],
+        failure_type=type_, resume_at=resume_at,
+    )
 
 
 def resume_run(state):
@@ -557,6 +563,7 @@ def resume_run(state):
     appended. Raises ValueError when there is nothing to resume."""
     if state.get("failure") is None:
         raise ValueError("nothing to resume: the run has no recorded failure")
+    failure_type = (state["failure"] or {}).get("type")
     restored = {}
     for unit in state["units"]:
         if unit["status"] != U_FAILED:
@@ -572,6 +579,10 @@ def resume_run(state):
                 target = U_PRE_REVIEW_VERIFY
             else:
                 target = U_PENDING
+        if failure_type == "phantom_fix" and target == U_DELTA_REVIEW:
+            # The phantom check would re-fire instantly on the recorded
+            # claim + empty delta; the cure is re-running the fixer.
+            target = U_FIXING
         if target == U_SEALING:
             # A run that died while sealing re-enters through the pre-seal
             # gate: a crashed/killed seal half may have left unverified
@@ -702,6 +713,7 @@ def enter_fix_episode(state, unit, findings, source_type, source_family,
         "return_to": return_to,
     }
     unit["fix_loop_rounds"] = 0
+    unit.pop("phantom_retried", None)
     transition_unit(state, unit, U_FIXING,
                     reason="%s findings queued for fixing" % source_type)
 

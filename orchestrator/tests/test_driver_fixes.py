@@ -230,6 +230,102 @@ def concurrent_responses(codex_half, claude_half):
     }
 
 
+class _FailingRunner(object):
+    """Raises scripted exceptions, then succeeds with scripted responses."""
+
+    def __init__(self, failures, then=None):
+        self.failures = list(failures)
+        self.then = list(then or [])
+        self.calls = 0
+
+    def call(self, family, prompt, workspace, model=None, effort=None):
+        self.calls += 1
+        if self.failures:
+            raise self.failures.pop(0)
+        import json as _json
+        return runners.RunnerResult(_json.dumps(self.then.pop(0)), 0, 1.0)
+
+
+class TestTypedInfraFailures(DriverTestCase):
+    def test_quota_failure_is_typed_with_resume_at(self):
+        with tempfile.TemporaryDirectory(prefix="orch-fix-") as ws:
+            path = init_state(ws, make_config())
+            runner = _FailingRunner([
+                runners.WorkerProtocolError(
+                    "no valid JSON object found in worker output",
+                    raw_texts=["You've hit your usage limit. "
+                               "Your limit resets at 00:10."],
+                ),
+            ])
+            driver = drv.Driver(path, runner=runner)
+            driver.step()  # step swallows StopStep; the failure is recorded
+            state = st.load(path)
+            self.assertEqual(state["failure"]["type"], "quota")
+            self.assertIsNotNone(state["failure"]["resume_at"])
+
+    def test_login_failure_typed_without_resume(self):
+        with tempfile.TemporaryDirectory(prefix="orch-fix-") as ws:
+            path = init_state(ws, make_config())
+            runner = _FailingRunner([
+                runners.WorkerProtocolError(
+                    "no valid JSON object found in worker output",
+                    raw_texts=["Not logged in · Please run /login"],
+                ),
+            ])
+            driver = drv.Driver(path, runner=runner)
+            driver.step()
+            state = st.load(path)
+            self.assertEqual(state["failure"]["type"], "login")
+            self.assertIsNone(state["failure"]["resume_at"])
+
+    def test_network_blip_retried_in_place_then_succeeds(self):
+        with tempfile.TemporaryDirectory(prefix="orch-fix-") as ws:
+            cfg = make_config(infra_retry_backoff_s=[0, 0])
+            path = init_state(ws, cfg)
+            skeleton = {
+                "status": "ok", "kind": "draft_skeleton",
+                "artifact": "docs/skeleton.md",
+                "slices": [{"id": 1, "title": "core"}],
+            }
+            runner = _FailingRunner(
+                [
+                    runners.RunnerError("fetch failed: ECONNRESET"),
+                    runners.RunnerError("fetch failed: ECONNRESET"),
+                ],
+                then=[skeleton],
+            )
+            # The draft must write its artifact for the wip commit.
+            import os as _os
+            _os.makedirs(_os.path.join(ws, "docs"), exist_ok=True)
+            with open(_os.path.join(ws, "docs", "skeleton.md"), "w",
+                      encoding="utf-8") as fh:
+                fh.write("# skeleton\n")
+            driver = drv.Driver(path, runner=runner)
+            driver.step()
+            state = st.load(path)
+            self.assertIsNone(state["failure"])
+            retries = [e for e in state["events"]
+                       if e["type"] == "infra_retry"]
+            self.assertEqual(
+                [e["failure_type"] for e in retries],
+                ["network", "network"],
+            )
+            self.assertEqual(runner.calls, 3)
+
+    def test_network_failure_beyond_retries_is_typed(self):
+        with tempfile.TemporaryDirectory(prefix="orch-fix-") as ws:
+            cfg = make_config(infra_retry_backoff_s=[])
+            path = init_state(ws, cfg)
+            runner = _FailingRunner([
+                runners.RunnerError("could not connect: ENOTFOUND api"),
+            ])
+            driver = drv.Driver(path, runner=runner)
+            driver.step()
+            state = st.load(path)
+            self.assertEqual(state["failure"]["type"], "network")
+            self.assertIsNotNone(state["failure"]["resume_at"])
+
+
 class TestConcurrentSeal(DriverTestCase):
     def test_happy_path_records_both_halves(self):
         with tempfile.TemporaryDirectory(prefix="orch-fix-") as ws:

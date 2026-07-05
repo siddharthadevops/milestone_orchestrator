@@ -241,12 +241,58 @@ class TestPhantomFixEmptyDelta(DriverTestCase):
             step("review_round",
                  report("review_round", [finding("F1", "missing non-goals")]),
                  family="codex"),
+            # First phantom is discarded and the fixer retried once
+            # (mirror of the JSON repair retry); the second is the typed
+            # terminal failure.
             step("fix_findings", fix_response),  # NO side effect: no edits
+            step("fix_findings", fix_response),  # phantom again -> fail
         ]))
         self.step_until(
-            driver, lambda s: s["failure"] is not None, max_steps=20
+            driver, lambda s: s["failure"] is not None, max_steps=30
+        )
+        state = st.load(path)
+        self.assertEqual(state["failure"]["type"], "phantom_fix")
+        self.assertTrue(
+            [e for e in state["events"] if e["type"] == "phantom_fix_retry"]
         )
         return path, driver
+
+    def test_phantom_then_honest_fix_recovers(self):
+        """The retry is not a formality: a fixer that edits for real on
+        the second attempt keeps the run alive."""
+        with tempfile.TemporaryDirectory(prefix="orch-adv-") as ws:
+            path = init_state(ws, make_config())
+            driver = drv.Driver(path, runner=runners.MockRunner([
+                draft_step(),
+                step("review_round",
+                     report("review_round",
+                            [finding("F1", "missing non-goals")]),
+                     family="codex"),
+                step("fix_findings",
+                     fix_ok([triaged("F1", "fixed", "missing non-goals")])),
+                step("fix_findings",
+                     fix_ok([triaged("F1", "fixed", "missing non-goals")],
+                            files_changed=["docs/skeleton.md"]),
+                     side_effect=write_file("docs/skeleton.md",
+                                            "# fixed for real\n")),
+                step("delta_review", report("delta_review")),
+                step("review_round", report("review_round"),
+                     family="codex"),
+                step("review_round", report("review_round"),
+                     family="claude"),
+                step("seal_half", report("seal_half"), family="codex"),
+                step("seal_half", report("seal_half"), family="claude"),
+            ]))
+            self.step_until(
+                driver, lambda s: s["units"][0]["status"] == st.U_SEALED,
+                max_steps=40,
+            )
+            state = st.load(path)
+            self.assertIsNone(state["failure"])
+            self.assertTrue(
+                [e for e in state["events"]
+                 if e["type"] == "phantom_fix_retry"]
+            )
 
     def test_fixed_disposition_with_no_edit_fails_run(self):
         with tempfile.TemporaryDirectory(prefix="orch-adv-") as ws:
@@ -255,7 +301,8 @@ class TestPhantomFixEmptyDelta(DriverTestCase):
             )
             self.assert_failed(
                 path, driver,
-                ["claimed edits", "delta is empty", "disposed 'fixed'"],
+                ["claimed edits", "delta is empty", "twice in a row",
+                 "disposed 'fixed'"],
                 unit_key="skeleton",
             )
 

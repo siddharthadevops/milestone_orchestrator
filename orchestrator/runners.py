@@ -191,7 +191,8 @@ class SubprocessRunner(object):
         self.cwd = cwd
         self.env = env
 
-    def call(self, family, prompt, workspace, model=None, effort=None):
+    def call(self, family, prompt, workspace, model=None, effort=None,
+             timeout_override=None):
         if family not in self.commands:
             raise RunnerError("no command configured for family %r" % family)
         template = apply_model_effort(self.commands[family], model, effort)
@@ -208,7 +209,7 @@ class SubprocessRunner(object):
             arg = arg.replace("{workspace}", workspace)
             argv.append(arg)
 
-        timeout = self.timeouts.get(family)
+        timeout = timeout_override or self.timeouts.get(family)
         started = time.time()
         try:
             proc = subprocess.Popen(
@@ -295,7 +296,8 @@ class MockRunner(object):
         self.calls = []  # (family, kind, prompt)
         self.call_meta = []  # {"family","kind","model","effort"} per call
 
-    def call(self, family, prompt, workspace, model=None, effort=None):
+    def call(self, family, prompt, workspace, model=None, effort=None,
+             timeout_override=None):
         kind = prompt_kind(prompt)
         self.calls.append((family, kind, prompt))
         self.call_meta.append(

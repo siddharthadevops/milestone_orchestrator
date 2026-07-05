@@ -121,6 +121,81 @@ class ServiceFixesTestCase(unittest.TestCase):
 # P1: exited drivers must be reaped, not shown as "running" zombies
 
 
+class TestAutoResumeGuard(ServiceFixesTestCase):
+    """The service-side guard: typed recoverable failures are auto-resumed
+    when due, capped per type, and never touched for login/unknown."""
+
+    def _failed_run(self, name, ftype, resume_at=None):
+        ws = self.workspace(name)
+        entry = service.create_run(
+            self.home,
+            {"workspace": ws, "goal": "guard test", "autostart": False},
+        )
+        state = st.load(entry["state_path"])
+        st.fail_run(state, "boom (%s)" % ftype, type_=ftype,
+                    resume_at=resume_at)
+        st.save(entry["state_path"], state)
+        return entry
+
+    def _patched_resume(self):
+        calls = []
+        real = service.resume_run
+
+        def stub(home, run_id):
+            calls.append(run_id)
+            # clear the failure like the real one, but spawn nothing
+            reg = registry.load(home)
+            entry = registry.get(reg, run_id)
+            state = st.load(entry["state_path"])
+            st.resume_run(state)
+            st.save(entry["state_path"], state)
+            return entry
+
+        service.resume_run = stub
+        self.addCleanup(setattr, service, "resume_run", real)
+        return calls
+
+    def test_due_quota_failure_is_resumed(self):
+        entry = self._failed_run(
+            "ws-guard-due", "quota",
+            resume_at="2026-07-05T00:00:00+0000",
+        )
+        calls = self._patched_resume()
+        actions = service.guard_scan(self.home)
+        self.assertIn((entry["id"], "resumed:quota"), actions)
+        self.assertEqual(calls, [entry["id"]])
+        reg = registry.load(self.home)
+        self.assertEqual(
+            registry.get(reg, entry["id"])["auto_resumes"], {"quota": 1}
+        )
+
+    def test_future_resume_at_waits(self):
+        entry = self._failed_run(
+            "ws-guard-future", "quota",
+            resume_at="2099-01-01T00:00:00+0000",
+        )
+        calls = self._patched_resume()
+        actions = service.guard_scan(self.home)
+        self.assertNotIn((entry["id"], "resumed:quota"), actions)
+        self.assertEqual(calls, [])
+
+    def test_login_and_unknown_never_auto_resume(self):
+        for ftype in ("login", "unknown"):
+            entry = self._failed_run("ws-guard-%s" % ftype, ftype)
+            calls = self._patched_resume()
+            service.guard_scan(self.home)
+            self.assertEqual(calls, [], ftype)
+
+    def test_cap_stands_down(self):
+        entry = self._failed_run("ws-guard-cap", "network")
+        registry.update(self.home, entry["id"],
+                        auto_resumes={"network": 99})
+        calls = self._patched_resume()
+        actions = service.guard_scan(self.home)
+        self.assertIn((entry["id"], "capped:network"), actions)
+        self.assertEqual(calls, [])
+
+
 class TestZombieReaping(ServiceFixesTestCase):
     def test_exited_driver_is_reaped_and_run_flips_to_stopped(self):
         ws = self.workspace("ws-zombie")

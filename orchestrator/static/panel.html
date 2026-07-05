@@ -395,8 +395,18 @@ async function refreshDetail() {
       html += `<div class="goalline ${goalOpen ? "full" : "clamp"}" id="goalText">${esc(sum.goal)}</div>` +
         (long ? `<div class="morelink" onclick="toggleGoal()">${goalOpen ? "less \u25b4" : "more \u25be"}</div>` : "");
     }
-    if (s.failure_reason)
-      html += `<div class="failure">RUN FAILED\n${esc(s.failure_reason)}</div>`;
+    if (s.failure_reason) {
+      const f = (sum && sum.failure) || {};
+      const ftype = f.type || "unknown";
+      const auto = ["quota", "network", "busy", "timeout"].includes(ftype);
+      let when = "";
+      if (auto && f.resume_at)
+        when = ` — auto-resume at ${esc(f.resume_at.slice(11, 16))}`;
+      else if (auto) when = " — auto-resume pending";
+      else if (ftype === "login")
+        when = " — needs operator login (`claude /login`), never auto-resumed";
+      html += `<div class="failure"><span class="chip ${auto ? "sev23" : "fail"}">${esc(ftype)}</span>${esc(when)}\nRUN FAILED\n${esc(s.failure_reason)}</div>`;
+    }
     html += `<div class="toolbar">
       ${s.failure_reason && !running
         ? `<button class="btn primary" onclick="act('resume')">Resume</button>` : ""}

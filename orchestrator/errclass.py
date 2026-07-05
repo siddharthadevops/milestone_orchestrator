@@ -1,0 +1,262 @@
+"""Failure classification: recoverable infra errors become typed,
+schedulable failures instead of dead stops.
+
+Two-stage chain, never blocking and never authoritative over content:
+
+1. Deterministic pattern table over the failed worker's raw output —
+   offline, instant, free. Covers the known families (login, quota with
+   a concrete reset time, network, service busy, timeout).
+2. Opposite-family LLM classifier as fallback for noisy cases: a tiny
+   closed-enum JSON contract; one attempt, its own short timeout, and
+   any problem (dead CLI, garbage output, disabled in config) degrades
+   to "unknown" — today's plain-failure behavior, untouched.
+
+The classifier picks from an enum and extracts a timestamp; it has no
+authority over anything else. Correlated outages (both CLIs down) land
+on "unknown" by design.
+
+Types and their operational meaning (consumed by the driver and by the
+service auto-resume guard):
+
+  login    unrecoverable without the operator (`claude /login`); never
+           auto-resumed, no repair retry (the model never saw the prompt)
+  quota    recoverable at a known/parsed reset time (5h windows);
+           auto-resume at resume_at
+  network  transient connectivity; short in-driver retries first, then
+           auto-resume after a near-term backoff
+  busy     service overloaded/5xx; same shape as network
+  timeout  a configured cap killed the call; auto-resume near-term
+  unknown  everything else; requires the operator
+"""
+
+import json
+import re
+from datetime import datetime, timedelta
+
+from . import runners
+
+TYPES = ("login", "quota", "network", "busy", "timeout", "unknown")
+
+# Types the service guard may auto-resume (login/unknown never).
+AUTO_RESUMABLE = ("quota", "network", "busy", "timeout")
+
+# Near-term backoff for transient types without an explicit reset time.
+TRANSIENT_BACKOFF_MIN = 10
+
+# Patterns are matched only against SHORT texts (real CLI error banners;
+# see MAX_CLASSIFIABLE_CHARS): a 4KB review that merely DISCUSSES quota
+# or auth handling is content, not an infra error. Bare status codes
+# additionally require an error-ish neighbor so "driver.py:429" in a
+# stack line cannot read as rate limiting.
+_PATTERNS = (
+    ("login", (
+        r"not logged in",
+        r"please run /login",
+        r"please log ?in\b",
+        r"\b401 unauthorized",
+        r"invalid api key",
+    )),
+    ("quota", (
+        r"usage limit",
+        r"rate limit",
+        r"\bquota\b",
+        r"limit reached",
+        r"out of (free )?credits",
+    )),
+    ("busy", (
+        r"overloaded",
+        r"service unavailable",
+        r"server busy",
+        r"too many requests",
+        r"(?:error|status|http)[^\n]{0,24}\b(?:429|503|529)\b",
+        r"\b(?:429|503|529)\b[^\n]{0,24}(?:error|unavailable|overload)",
+    )),
+    ("network", (
+        r"\benotfound\b",
+        r"\beconnrefused\b",
+        r"\beconnreset\b",
+        r"\betimedout\b",
+        r"getaddrinfo",
+        r"fetch failed",
+        r"could not connect",
+        r"network error",
+        r"\bdns\b",
+        r"socket hang ?up",
+    )),
+    # The timeout message is authored by runners.py itself — a safe
+    # self-match, unlike worker prose (covers the seal-half path where
+    # the driver's isinstance special-case does not run).
+    ("timeout", (
+        r"timed out after \d+s",
+    )),
+)
+
+# Real CLI error banners are short; anything longer is (or contains)
+# content and must not be pattern-typed.
+MAX_CLASSIFIABLE_CHARS = 600
+
+# Reset-time extraction for quota messages: "resets at 00:37",
+# "try again at 3:15 PM", "resets 4pm", "available again at 16:00".
+_TIME_RE = re.compile(
+    r"(?:reset?s?|try again|available again|resumes?)\s*(?:at\s*)?"
+    r"(\d{1,2})(?::(\d{2}))?\s*([ap]m)?",
+    re.IGNORECASE,
+)
+_RELATIVE_RE = re.compile(
+    r"\b(?:in|after)\s+(\d{1,3})\s*"
+    r"(hours?\b|hrs?\b|h\b|minutes?\b|mins?\b|m\b)",
+    re.IGNORECASE,
+)
+# A stated non-local timezone we cannot honor: better a cheap 10-minute
+# probe than a confidently wrong 24h park.
+_FOREIGN_TZ_RE = re.compile(
+    r"\b(?:GMT|UTC)[+-]?\d*\b|\([A-Za-z_]+/[A-Za-z_]+\)|\b[PECM][SD]T\b"
+)
+
+
+def classify_text(text):
+    """Deterministic pattern classification of ONE text. Returns a type
+    or None. Texts longer than MAX_CLASSIFIABLE_CHARS are never typed:
+    infra errors are short banners, content is long — length is the
+    provenance check that keeps worker prose from cosplaying as infra."""
+    lowered = (text or "").strip().lower()
+    if not lowered or len(lowered) > MAX_CLASSIFIABLE_CHARS:
+        return None
+    for type_, patterns in _PATTERNS:
+        for pat in patterns:
+            if re.search(pat, lowered):
+                return type_
+    return None
+
+
+def parse_resume_at(text, now=None):
+    """Extract a concrete resume time from a quota-style message.
+
+    Clock times roll over to tomorrow when already past (a 5h window
+    that 'resets at 00:37' announced at 23:50 means tonight; announced
+    at 01:00 it means tonight too — the NEXT occurrence). Relative
+    forms ('in 5 hours') add to now. Returns an ISO string with the
+    local offset, or None."""
+    if not text:
+        return None
+    now = now or datetime.now().astimezone()
+    if _FOREIGN_TZ_RE.search(text):
+        return None
+    m = _RELATIVE_RE.search(text)
+    if m:
+        qty = int(m.group(1))
+        unit = m.group(2).lower()
+        delta = timedelta(hours=qty) if unit.startswith("h") else \
+            timedelta(minutes=qty)
+        return (now + delta).strftime("%Y-%m-%dT%H:%M:%S%z")
+    for m in _TIME_RE.finditer(text):
+        hour = int(m.group(1))
+        minute = int(m.group(2) or 0)
+        ampm = (m.group(3) or "").lower()
+        if ampm == "pm" and hour < 12:
+            hour += 12
+        if ampm == "am" and hour == 12:
+            hour = 0
+        if hour > 23 or minute > 59:
+            continue  # keep scanning: a later match may be the real time
+        candidate = now.replace(
+            hour=hour, minute=minute, second=0, microsecond=0
+        )
+        if candidate <= now:
+            candidate += timedelta(days=1)
+        return candidate.strftime("%Y-%m-%dT%H:%M:%S%z")
+    return None
+
+
+RESUME_MIN_S = 60
+RESUME_MAX_S = 24 * 3600
+
+
+def normalize_resume_at(value, now=None):
+    """Canonicalize an operator/classifier-supplied resume_at into the
+    ledger format, clamped to [now+1min, now+24h]. Anything unparsable
+    (naive strings get the local offset attached) returns None so the
+    caller substitutes a sane backoff — a hallucinated or injected
+    timestamp must never park a run for days or fire it immediately."""
+    if not value or not isinstance(value, str):
+        return None
+    now = now or datetime.now().astimezone()
+    try:
+        parsed = datetime.fromisoformat(value.strip())
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=now.tzinfo)
+    lo = now + timedelta(seconds=RESUME_MIN_S)
+    hi = now + timedelta(seconds=RESUME_MAX_S)
+    parsed = min(max(parsed, lo), hi)
+    return parsed.strftime("%Y-%m-%dT%H:%M:%S%z")
+
+
+CLASSIFIER_PROMPT = """You are classifying a FAILED AI-CLI worker call \
+for an orchestrator. Below are the raw output(s) of the failed call. \
+Decide which infrastructure error class fits best.
+
+Classes:
+- "login": the CLI is not authenticated (needs an operator login)
+- "quota": a usage/rate limit window; extract the reset time if stated
+- "network": connectivity/DNS/socket failure
+- "busy": the service is overloaded/unavailable (5xx, capacity)
+- "timeout": the call was killed by a time cap
+- "unknown": anything else, including content-level garbage
+
+Respond with EXACTLY ONE JSON object, nothing else:
+{"error_type": "<one of the classes>",
+ "resume_at": null or "an ISO-8601 local timestamp when retrying makes sense",
+ "evidence": "<the exact phrase from the output that decided it>"}
+
+RAW OUTPUT(S) OF THE FAILED CALL
+--------------------------------
+%s
+--------------------------------
+"""
+
+CLASSIFIER_TIMEOUT_S = 120
+_RAW_CLIP = 4000
+
+
+def llm_classify(runner, family, raw_texts, workspace):
+    """One opposite-family attempt at classifying noisy failure output.
+    NEVER raises and never blocks beyond its own timeout: any problem
+    returns ("unknown", None, <why>)."""
+    joined = "\n---\n".join(
+        (t or "")[-_RAW_CLIP:] for t in raw_texts if (t or "").strip()
+    )
+    if not joined.strip():
+        return "unknown", None, "no raw output to classify"
+    prompt = CLASSIFIER_PROMPT % joined
+    try:
+        result = runner.call(
+            family, prompt, workspace,
+            timeout_override=CLASSIFIER_TIMEOUT_S,
+        )
+        obj = runners.extract_json(result.text)
+        etype = obj.get("error_type")
+        if etype not in TYPES:
+            return "unknown", None, "classifier returned %r" % (etype,)
+        resume_at = normalize_resume_at(obj.get("resume_at"))
+        return etype, resume_at, str(obj.get("evidence") or "")[:300]
+    except Exception as exc:  # the classifier must never worsen a failure
+        return "unknown", None, "classifier unavailable: %s" % exc
+
+
+def classify_failure(raw_texts, runner=None, opposite_family=None,
+                     workspace=None, use_llm=True):
+    """Full chain: patterns first, LLM fallback, unknown last.
+
+    Returns (type, resume_at_iso_or_None, evidence)."""
+    for text in raw_texts:
+        etype = classify_text(text)
+        if etype:
+            resume_at = (
+                parse_resume_at(text) if etype == "quota" else None
+            )
+            return etype, resume_at, "pattern match"
+    if use_llm and runner is not None and opposite_family:
+        return llm_classify(runner, opposite_family, raw_texts, workspace)
+    return "unknown", None, "no pattern matched"

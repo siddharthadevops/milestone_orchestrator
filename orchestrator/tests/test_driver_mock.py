@@ -72,6 +72,9 @@ def make_config(**overrides):
                  "consultation": "opposite"},
         "max_fix_loops": 6,
         "snapshot_exclude_dirs": [],
+        # Deterministic tests: no LLM classifier fallback, no sleeps.
+        "error_classifier": False,
+        "infra_retry_backoff_s": [],
     }
     cfg.update(overrides)
     return cfg
