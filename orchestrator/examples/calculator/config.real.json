@@ -10,7 +10,7 @@
       "--permission-mode", "bypassPermissions"
     ]
   },
-  "timeouts": {"codex": 900, "claude": 1800},
+  "timeouts": {},
   "verification": ["python3 run_checks.py"],
   "max_rounds_per_family": 12,
   "max_seal_attempts": 8,

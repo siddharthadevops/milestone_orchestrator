@@ -55,7 +55,13 @@ DEFAULT_CONFIG = {
             "bypassPermissions",
         ],
     },
-    "timeouts": {"codex": 900, "claude": 1800},
+    # No timeouts by default: worker calls run as long as the work needs
+    # (an implement call may legitimately run hours of test suites). A
+    # fixed cap killed a real 15-minute-plus implement mid-flight; a hung
+    # CLI is the operator's Stop button (a liveness mechanism — e.g.
+    # periodic workspace-diff progress checks — is future work). Operators
+    # can still set per-family caps here when a run warrants them.
+    "timeouts": {},
     "verification": [],
     "verification_timeout": 600,
     "max_rounds_per_family": 12,
