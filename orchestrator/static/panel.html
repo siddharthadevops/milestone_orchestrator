@@ -212,33 +212,40 @@
       <span></span><span class="acthead">agent</span>
       <span class="acthead">model</span><span class="acthead">effort</span>
       <label>Draft docs</label>
-      <select id="a_drafter_agent"><option value="">default</option>
+      <select id="a_drafter_agent" onchange="onAgentChange('a_','drafter')">
+        <option value="">default</option>
         <option>codex</option><option>claude</option></select>
-      <input id="a_drafter_model" list="dl_models" placeholder="default">
+      <input id="a_drafter_model" list="dl_a_drafter" placeholder="default">
       <select id="a_drafter_effort"><option value="">default</option>
         <option>low</option><option>medium</option><option>high</option>
-        <option>max</option></select>
+        <option>xhigh</option><option>max</option></select>
       <label>Implement</label>
-      <select id="a_implementer_agent"><option value="">default</option>
+      <select id="a_implementer_agent"
+        onchange="onAgentChange('a_','implementer')">
+        <option value="">default</option>
         <option>codex</option><option>claude</option></select>
-      <input id="a_implementer_model" list="dl_models" placeholder="default">
+      <input id="a_implementer_model" list="dl_a_implementer"
+        placeholder="default">
       <select id="a_implementer_effort"><option value="">default</option>
         <option>low</option><option>medium</option><option>high</option>
-        <option>max</option></select>
+        <option>xhigh</option><option>max</option></select>
       <label>Fix findings</label>
-      <select id="a_fixer_agent"><option value="">default</option>
+      <select id="a_fixer_agent" onchange="onAgentChange('a_','fixer')">
+        <option value="">default</option>
         <option>codex</option><option>claude</option></select>
-      <input id="a_fixer_model" list="dl_models" placeholder="default">
+      <input id="a_fixer_model" list="dl_a_fixer" placeholder="default">
       <select id="a_fixer_effort"><option value="">default</option>
         <option>low</option><option>medium</option><option>high</option>
-        <option>max</option></select>
+        <option>xhigh</option><option>max</option></select>
     </div>
-    <datalist id="dl_models">
-      <option>fable</option><option>opus</option><option>sonnet</option>
-      <option>haiku</option>
-    </datalist>
-    <div class="hint">model/effort apply to claude (codex keeps its own CLI
-      config). Editable mid-run from the run view.</div></div>
+    <datalist id="dl_a_drafter"></datalist>
+    <datalist id="dl_a_implementer"></datalist>
+    <datalist id="dl_a_fixer"></datalist>
+    <div class="hint">Options adapt to the agent: claude ids
+      (fable-5 / opus-4.8 / sonnet-5, efforts low→max) or the codex
+      catalog (gpt-5.5 …, efforts low→xhigh). Empty = family default
+      (claude: opus-4.8/max, codex: gpt-5.5/xhigh). Editable mid-run
+      from the run view.</div></div>
   <div class="field">
     <button class="btn" type="button" id="f_more_btn"
       onclick="toggleMore()">More options ▾</button></div>
@@ -452,17 +459,21 @@ async function refreshDetail() {
       const actRow = (act, label) => {
         const v = curActs[act];
         const entry = typeof v === "string" ? {agent: v} : (v || {});
-        const opts = (sel, val) =>
+        const opts = val =>
           ["", "codex", "claude"].map(o =>
             `<option value="${o}" ${o === (val || "") ? "selected" : ""}>${o || "default"}</option>`).join("");
-        const effOpts = val =>
-          ["", "low", "medium", "high", "max"].map(o =>
+        const effOpts = (agent, val) =>
+          ["", ...agentEfforts(agent)].map(o =>
             `<option value="${o}" ${o === (val || "") ? "selected" : ""}>${o || "default"}</option>`).join("");
+        const models = agentModels(entry.agent)
+          .map(m => `<option>${m}</option>`).join("");
         return `<label>${label}</label>
-          <select id="ra_${act}_agent">${opts(act, entry.agent)}</select>
-          <input id="ra_${act}_model" list="dl_models" placeholder="default"
+          <select id="ra_${act}_agent"
+            onchange="onAgentChange('ra_','${act}')">${opts(entry.agent)}</select>
+          <input id="ra_${act}_model" list="dl_ra_${act}" placeholder="default"
             value="${esc(entry.model || "")}">
-          <select id="ra_${act}_effort">${effOpts(entry.effort)}</select>`;
+          <datalist id="dl_ra_${act}">${models}</datalist>
+          <select id="ra_${act}_effort">${effOpts(entry.agent, entry.effort)}</select>`;
       };
       html += `<div class="card"><h3>Acts (who leads what)</h3>
         <div class="actgrid">
@@ -816,6 +827,35 @@ document.getElementById("pk_list").addEventListener("click", (ev) => {
     document.getElementById("picker").close();
   }
 });
+const MODEL_OPTS = {
+  claude: ["claude-fable-5", "claude-opus-4-8", "claude-sonnet-5"],
+  codex: ["gpt-5.5", "gpt-5.4", "gpt-5.3-codex-spark", "gpt-5.4-mini"],
+};
+const EFFORT_OPTS = {
+  claude: ["low", "medium", "high", "xhigh", "max"],
+  codex: ["low", "medium", "high", "xhigh"],
+};
+function agentModels(agent) {
+  return MODEL_OPTS[agent] || [...MODEL_OPTS.claude, ...MODEL_OPTS.codex];
+}
+function agentEfforts(agent) {
+  return EFFORT_OPTS[agent] || ["low", "medium", "high", "xhigh", "max"];
+}
+function onAgentChange(prefix, act) {
+  const agent = document.getElementById(`${prefix}${act}_agent`).value;
+  const dl = document.getElementById(`dl_${prefix}${act}`);
+  if (dl)
+    dl.innerHTML = agentModels(agent)
+      .map(m => `<option>${m}</option>`).join("");
+  const eff = document.getElementById(`${prefix}${act}_effort`);
+  if (eff) {
+    const cur = eff.value;
+    const opts = agentEfforts(agent);
+    eff.innerHTML = `<option value="">default</option>` +
+      opts.map(o => `<option ${o === cur ? "selected" : ""}>${o}</option>`).join("");
+    if (cur && !opts.includes(cur)) eff.value = "";
+  }
+}
 function toggleMore() {
   const el = document.getElementById("f_more");
   const open = el.style.display !== "none";

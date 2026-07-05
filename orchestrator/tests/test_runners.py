@@ -1032,6 +1032,20 @@ class TestApplyModelEffort(unittest.TestCase):
             ["claude", "-p", "--model", "sonnet", "--effort", "max"],
         )
 
+    def test_codex_default_template_takes_model_and_effort(self):
+        # The shipped codex template (verified against codex-cli 0.142.5)
+        # slots -m and -c model_reasoning_effort= per call.
+        from orchestrator.runners import apply_model_effort
+        from orchestrator.driver import DEFAULT_CONFIG
+        tpl = DEFAULT_CONFIG["commands"]["codex"]
+        out = apply_model_effort(tpl, "gpt-5.4-mini", "high")
+        self.assertIn("gpt-5.4-mini", out)
+        self.assertIn("model_reasoning_effort=high", out)
+        d = DEFAULT_CONFIG["model_defaults"]
+        self.assertEqual(d["codex"], {"model": "gpt-5.5", "effort": "xhigh"})
+        self.assertEqual(d["claude"],
+                         {"model": "claude-opus-4-8", "effort": "max"})
+
     def test_no_placeholder_no_flag_ignores_overrides(self):
         from orchestrator.runners import apply_model_effort
         self.assertEqual(

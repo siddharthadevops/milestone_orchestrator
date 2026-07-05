@@ -42,6 +42,10 @@ DEFAULT_CONFIG = {
             "codex",
             "exec",
             "--dangerously-bypass-approvals-and-sandbox",
+            "-m",
+            "{model}",
+            "-c",
+            "model_reasoning_effort={effort}",
             "--output-last-message",
             "{output_file}",
         ],
@@ -60,7 +64,17 @@ DEFAULT_CONFIG = {
     # {model}/{effort} placeholders in the command template are filled per
     # call; templates without placeholders (codex: its model lives in its
     # own CLI config) ignore overrides.
-    "model_defaults": {"claude": {"model": "opus", "effort": "max"}},
+    # Verified against the installed CLIs (2026-07-05): claude accepts
+    # explicit ids (claude-fable-5 / claude-opus-4-8 / claude-sonnet-5)
+    # and efforts low|medium|high|xhigh|max; codex models come from its
+    # live catalog (gpt-5.5 / gpt-5.4 / gpt-5.3-codex-spark /
+    # gpt-5.4-mini) with reasoning efforts low|medium|high|xhigh set via
+    # `-c model_reasoning_effort=...` (bare value: failed TOML parse
+    # falls back to the literal string, per codex --help).
+    "model_defaults": {
+        "claude": {"model": "claude-opus-4-8", "effort": "max"},
+        "codex": {"model": "gpt-5.5", "effort": "xhigh"},
+    },
     # No timeouts by default: worker calls run as long as the work needs
     # (an implement call may legitimately run hours of test suites). A
     # fixed cap killed a real 15-minute-plus implement mid-flight; a hung
