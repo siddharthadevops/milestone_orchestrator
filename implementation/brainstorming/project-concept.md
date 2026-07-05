@@ -54,11 +54,19 @@ than converging later:
 - **policy**: the safeguards, as versioned policy objects (id, version,
   enabled, scope, and the contract field each one adds — see gate machinery
   below). These are the future workspace capability policies, in miniature.
-- **work_areas**: named sets of filesystem roots in agent_99's ACTUAL
-  stored shape — `{name, display_name, primary: {path, device},
-  additional: [{path, device}, ...], status}` (executor_id provenance joins
-  at fusion; codex review F1: an invented flat `primary_root` field would
-  be believed-compatible but need translation later). A run launches
+- **work_areas**: named sets of filesystem roots in agent_99's FULL stored
+  record domain — `{name, display_name, primary: {path, device},
+  additional: [{path, device}, ...], executor_id, version, status}`. Every
+  field is mandatory there: the store's reader rejects records missing
+  `executor_id`/`version` as malformed (codex r2 F1 — the r1 wording
+  "provenance joins at fusion" would have produced unreadable records).
+  The local store therefore writes the full domain from day one:
+  `executor_id` is the local orchestrator's identity (provenance is
+  non-authoritative in agent_99 by design), `version` the monotonic
+  descriptor version. Records are then verbatim-readable by
+  `Agent99.Body.WorkAreaStore` — zero translation, this time actually
+  true. (r1 F1 already killed the invented flat `primary_root`.) A run
+  launches
   against `(project, work_area)`: **primary.path** is the git repo the
   driver owns and executes in; **additional** roots are read-only grants.
   Reuse-source role metadata rides BESIDE the agent_99 fields, never inside
