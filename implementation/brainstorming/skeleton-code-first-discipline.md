@@ -77,7 +77,18 @@ documentation. Every doc-vs-code discrepancy is declared in a dedicated
 skeleton section: code is the truth; discrepancies become doc-fix candidates,
 never design inputs.
 
-### 5. Reviewer duties at skeleton altitude
+### 5. Reviewer duties at skeleton altitude — contrast by contract
+
+Reviewers do not merely READ the drafter's answers; they answer the same
+questions independently, and the contrast is itself a contract field. The
+doc-review contract gains one contrast entry per draft invariant id: the
+reviewer's OWN answer to each load-bearing question (consumer, payload
+facts, frequency/window, victim) with the reviewer's OWN file:line
+citations, plus a per-field verdict: concur or diverge. Every divergence
+must back a finding (or an explicit, cited concurrence-with-nuance). A
+diverging field with no finding, or a draft invariant with no contrast
+entry, is rejected mechanically by the driver — coverage and citation
+existence are checked without an LLM.
 
 - Sample-verify the assumption citations against code.
 - A missing price tag or missing assumptions/discrepancy section is a P1
@@ -86,6 +97,18 @@ never design inputs.
   magnitude larger than the harm it prevents draws a P2, and the finding must
   name the harm (findings that demand mechanisms without a victim are
   themselves invalid).
+
+Scope (token economics): the full contrast is a FULL review-round
+obligation only. Delta reviews contrast ONLY the entries the diff touches
+(new or modified invariants/assumptions); untouched entries carry the last
+full round's contrast forward. A delta must never re-pay the whole table —
+the standing delta-cost rule applies here unchanged.
+
+Known limit: anchoring cannot be mechanically prevented (the drafter's
+table sits inside the artifact under review; "derive from code before
+opening the table" is instruction, not enforcement). Mitigations: family
+rotation makes the contraster a different model, and the slot demands the
+reviewer's own citations — anchored or not, they are falsifiable.
 
 ### 6. Operator gate surface
 

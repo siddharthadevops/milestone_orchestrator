@@ -149,6 +149,10 @@ adopts this contract LOCALLY:
 3. **Review duties**: reviewers may read reuse sources (read-only) to verify
    audit claims; implementing locally what a reuse source already provides,
    without a recorded reject decision, is a P1 duplication finding.
+   Verification is slot-driven here too: the review contract carries a
+   per-package concur/dissent entry (with the reviewer's own citation) for
+   every adopt/gap/reject decision in the audit — a dissent must back a
+   finding (see skeleton-code-first-discipline.md §5 for the pattern).
 4. **Safeguards compile to CONTRACT FIELDS, not prose.** Proven twice: prose
    prohibitions failed (M26/M27 duplicated despite a verbatim ban), while
    JSON contract obligations worked (suite_command reporting; the phantom-fix
