@@ -62,6 +62,12 @@
   .pipe-cat .unit-title { text-transform: none; letter-spacing: 0;
     font-weight: 500; }
   .unit + .unit { margin-top: 10px; }
+  .amend { font-size: 12px; padding: 4px 0; border-bottom: 1px dashed var(--line); }
+  .amend .t { color: #71717a; margin-right: 6px; font-size: 11px; }
+  .amendform { display: flex; gap: 6px; margin-top: 8px; align-items: flex-start; }
+  .amendform textarea { flex: 1; font: inherit; font-size: 12px; padding: 6px;
+    border: 1px solid var(--line); border-radius: 6px; resize: vertical; }
+  .amend-hint { font-size: 11px; color: #71717a; margin-top: 4px; }
   .unit-title { color: #71717a; font-size: 11px; margin-left: 6px; }
   .chip.working { color: var(--accent); border-color: #c3d4fb;
                   background: var(--accent-soft); display: inline-flex;
@@ -350,6 +356,15 @@ async function refreshDetail() {
       <button class="btn danger" ${running ? "disabled" : ""} onclick="del()">Forget</button>
     </div>`;
     if (sum) {
+      html += `<div class="card"><h3>Operator amendments</h3>` +
+        ((d.amendments || []).map(a =>
+          `<div class="amend"><span class="t">${esc(a.id)} · ${esc((a.at || "").slice(0, 16).replace("T", " "))}</span>${esc(a.text)}</div>`
+        ).join("") || `<div class="amend-hint">none — notes added here bind every subsequent worker call</div>`) +
+        `<div class="amendform">
+           <textarea id="amendText" rows="2" placeholder="Binding constraint, e.g. 'Do not touch hot paths: no new indexes, no extra SQL, no machinery in message send.'"></textarea>
+           <button class="btn" onclick="addAmend()">Add</button>
+         </div>
+         <div class="amend-hint">Applies from the next worker call. Drivers started before this feature exists need one Stop → Start to begin reading amendments.</div></div>`;
       const sliceTitle = id => {
         const sl = (sum.slices || []).find(x => x.id === id);
         return sl ? `<span class="unit-title">${esc(sl.title)}</span>` : "";
@@ -426,6 +441,20 @@ async function refreshDetail() {
     document.getElementById("detail").innerHTML =
       `<div class="failure">${esc(e.message)}</div>`;
   }
+}
+async function addAmend() {
+  const el = document.getElementById("amendText");
+  const text = (el.value || "").trim();
+  if (!text) return;
+  try {
+    await api(`/api/runs/${selected}/amendments`, {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({text}),
+    });
+    el.value = "";
+  } catch (e) { alert(e.message); }
+  refreshDetail();
 }
 async function act(verb) {
   try { await api(`/api/runs/${selected}/${verb}`, {method: "POST"}); }

@@ -881,6 +881,59 @@ class TestSealInFlightMarker(DriverTestCase):
                 os.path.join(ws, ".orchestrator", "current.json")))
 
 
+class TestOperatorAmendmentsFlow(DriverTestCase):
+    """Amendments dropped into .orchestrator/amendments.json mid-run reach
+    every subsequent worker prompt and leave an amendment_seen ledger
+    event exactly once per id."""
+
+    def test_amendments_reach_prompts_and_ledger(self):
+        import json as _json
+        with tempfile.TemporaryDirectory(prefix="orch-mock-") as ws:
+            path = init_state(ws, make_config())
+            os.makedirs(os.path.join(ws, ".orchestrator"), exist_ok=True)
+            with open(os.path.join(ws, ".orchestrator", "amendments.json"),
+                      "w", encoding="utf-8") as fh:
+                _json.dump({"amendments": [
+                    {"id": "A1", "text": "No hot-path changes.",
+                     "at": "2026-07-05T13:00:00+0200"},
+                ]}, fh)
+            mock = runners.MockRunner([
+                skeleton_script()[0],
+                step("review_round", report("review_round"), family="codex"),
+                step("review_round", report("review_round"), family="claude"),
+                step("seal_half", report("seal_half"), family="codex"),
+                step("seal_half", report("seal_half"), family="claude"),
+            ])
+            driver = drv.Driver(path, runner=mock)
+            self.step_until(
+                driver, lambda s: s["units"][0]["status"] == st.U_SEALED)
+            self.assertEqual(mock.script, [])
+            # Every worker prompt carried the amendment.
+            self.assertEqual(len(mock.calls), 5)
+            for _fam, _kind, prompt in mock.calls:
+                self.assertIn("OPERATOR AMENDMENTS", prompt)
+                self.assertIn("No hot-path changes.", prompt)
+            # Ledger trail: exactly one amendment_seen for A1.
+            state = st.load(path)
+            seen = [e for e in state["events"]
+                    if e["type"] == "amendment_seen"]
+            self.assertEqual(
+                [e["amendment_id"] for e in seen], ["A1"])
+
+    def test_missing_or_corrupt_file_means_no_amendments(self):
+        with tempfile.TemporaryDirectory(prefix="orch-mock-") as ws:
+            path = init_state(ws, make_config())
+            os.makedirs(os.path.join(ws, ".orchestrator"), exist_ok=True)
+            with open(os.path.join(ws, ".orchestrator", "amendments.json"),
+                      "w", encoding="utf-8") as fh:
+                fh.write("{not json")
+            mock = runners.MockRunner([skeleton_script()[0]])
+            driver = drv.Driver(path, runner=mock)
+            driver.step()
+            _fam, _kind, prompt = mock.calls[0]
+            self.assertNotIn("OPERATOR AMENDMENTS", prompt)
+
+
 class TestFixerProtocolFailures(DriverTestCase):
     def _dirty_round_prefix(self):
         return [

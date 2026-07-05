@@ -461,5 +461,48 @@ class ServiceApiTest(unittest.TestCase):
         self.assertIn("unreadable", body["error"])
 
 
+class AmendmentsApiTest(ServiceApiTest):
+    def test_add_and_list_amendments(self):
+        ws = self.workspace("ws-amend")
+        status, body = self.create_run(ws)
+        self.assertEqual(status, 201)
+        rid = body["run"]["id"]
+        status, body = self.request_json(
+            "POST", "/api/runs/%s/amendments" % rid,
+            {"text": "No hot-path changes: no new indexes."})
+        self.assertEqual(status, 200)
+        self.assertEqual(body["amendments"][0]["id"], "A1")
+        status, body = self.request_json(
+            "POST", "/api/runs/%s/amendments" % rid,
+            {"text": "Second note."})
+        self.assertEqual(status, 200)
+        self.assertEqual([a["id"] for a in body["amendments"]],
+                         ["A1", "A2"])
+        # Persisted where the driver reads them.
+        with open(os.path.join(ws, ".orchestrator", "amendments.json"),
+                  encoding="utf-8") as fh:
+            on_disk = json.load(fh)
+        self.assertEqual(len(on_disk["amendments"]), 2)
+        # And surfaced in the run detail.
+        status, body = self.request_json("GET", "/api/runs/%s" % rid)
+        self.assertEqual(status, 200)
+        self.assertEqual([a["id"] for a in body["amendments"]],
+                         ["A1", "A2"])
+
+    def test_amendment_validation(self):
+        ws = self.workspace("ws-amend-bad")
+        status, body = self.create_run(ws)
+        rid = body["run"]["id"]
+        status, body = self.request_json(
+            "POST", "/api/runs/%s/amendments" % rid, {"text": "   "})
+        self.assertEqual(status, 400)
+        status, body = self.request_json(
+            "POST", "/api/runs/%s/amendments" % rid, {"text": "x" * 4001})
+        self.assertEqual(status, 400)
+        status, body = self.request_json(
+            "POST", "/api/runs/unknown-run/amendments", {"text": "hi"})
+        self.assertEqual(status, 404)
+
+
 if __name__ == "__main__":
     unittest.main()

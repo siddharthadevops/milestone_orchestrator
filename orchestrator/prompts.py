@@ -358,6 +358,31 @@ EXHAUSTIVE_SENTENCE = (
 )
 
 
+AMENDMENT_TEXT_CLIP = 2000
+
+
+def _amendments_block(amendments):
+    """Operator-authored, run-scoped constraints added while the milestone
+    runs (.orchestrator/amendments.json). They refine the GOAL without
+    rewriting sealed artifacts and bind every subsequent worker call.
+    Operator text is trusted and rendered verbatim (length-clipped only
+    to protect the context window)."""
+    if not amendments:
+        return ""
+    lines = [
+        "OPERATOR AMENDMENTS (binding; they refine the GOAL)",
+        "For authors and fixers these bind like the TASK itself. For",
+        "report-only reviewers, a violation of any amendment in the",
+        "reviewed artifact is a finding.",
+    ]
+    for a in amendments:
+        text = str(a.get("text") or "").strip()
+        if len(text) > AMENDMENT_TEXT_CLIP:
+            text = text[: AMENDMENT_TEXT_CLIP - 3] + "..."
+        lines.append("[%s] %s" % (_oneline(a.get("id"), ID_CLIP) or "?", text))
+    return "\n".join(lines) + "\n\n"
+
+
 def _governing_line(governing):
     """Name the sealed document the reviewed artifact answers to — the
     explicit standard the reviewer judges against."""
@@ -405,11 +430,12 @@ def _fix_quality_block(unit_kind):
 # Draft kinds
 
 
-def build_draft_skeleton(family, workspace, goal):
+def build_draft_skeleton(family, workspace, goal, amendments=None):
     return (
         _header(contracts.KIND_DRAFT_SKELETON, family, workspace)
         + "\nTASK: draft the milestone skeleton for this goal.\n"
         + "GOAL: %s\n\n" % goal
+        + _amendments_block(amendments)
         + "Write a concise skeleton document at docs/skeleton.md inside the\n"
         "workspace: goal restatement, boundary/non-goals, and a short table\n"
         "of planned slices. Keep it thin: intent and contracts, no\n"
@@ -426,13 +452,15 @@ def build_draft_skeleton(family, workspace, goal):
     )
 
 
-def build_draft_slice_note(family, workspace, goal, slice_info, skeleton_path):
+def build_draft_slice_note(family, workspace, goal, slice_info, skeleton_path,
+                           amendments=None):
     return (
         _header(contracts.KIND_DRAFT_SLICE_NOTE, family, workspace)
         + "\nTASK: draft the slice note for slice %d (%s).\n"
         % (slice_info["id"], slice_info["title"])
         + "GOAL: %s\n" % goal
         + "SKELETON: %s (sealed; stay inside its boundary)\n\n" % skeleton_path
+        + _amendments_block(amendments)
         + "Write docs/slice-%02d.md: scope as observable contracts and the\n"
         % slice_info["id"]
         + "tests that pin them, non-goals, expected files, dependencies,\n"
@@ -450,7 +478,8 @@ def build_draft_slice_note(family, workspace, goal, slice_info, skeleton_path):
     )
 
 
-def build_implement(family, workspace, goal, slice_info, note_path, verification):
+def build_implement(family, workspace, goal, slice_info, note_path, verification,
+                    amendments=None):
     ver = "\n".join("  %s" % c for c in verification) or "  (none configured)"
     return (
         _header(contracts.KIND_IMPLEMENT, family, workspace)
@@ -458,6 +487,7 @@ def build_implement(family, workspace, goal, slice_info, note_path, verification
         % (slice_info["id"], slice_info["title"])
         + "GOAL: %s\n" % goal
         + "SLICE NOTE: %s\n\n" % note_path
+        + _amendments_block(amendments)
         + "Implement the scope, including its tests. The verification\n"
         "commands that must pass (run from the workspace root):\n"
         + ver
@@ -478,12 +508,13 @@ def build_implement(family, workspace, goal, slice_info, note_path, verification
 
 
 def build_review_round(family, workspace, goal, unit_desc, artifact, registry,
-                       unit_kind=None, governing=None):
+                       unit_kind=None, governing=None, amendments=None):
     return (
         _header(contracts.KIND_REVIEW_ROUND, family, workspace)
         + "\nTASK: full review round of %s. REPORT ONLY.\n" % unit_desc
         + "GOAL: %s\n" % goal
         + "TARGET: %s (plus any code/tests it governs)\n\n" % artifact
+        + _amendments_block(amendments)
         + _governing_line(governing)
         + EXHAUSTIVE_SENTENCE
         + "You fix nothing and triage nothing — a separate fixer call\n"
@@ -499,13 +530,14 @@ def build_review_round(family, workspace, goal, unit_desc, artifact, registry,
 
 
 def build_delta_review(family, workspace, goal, unit_desc, diff_text, registry,
-                       unit_kind=None, governing=None):
+                       unit_kind=None, governing=None, amendments=None):
     return (
         _header(contracts.KIND_DELTA_REVIEW, family, workspace)
         + "\nTASK: incremental review of the pending fix delta on %s.\n"
         % unit_desc
         + "REPORT ONLY.\n"
         + "GOAL: %s\n\n" % goal
+        + _amendments_block(amendments)
         + _governing_line(governing)
         + "Below is the exact uncommitted diff a fixer just produced. Review\n"
         "ONLY this delta in the context of the files it touches:\n"
@@ -528,13 +560,14 @@ def build_delta_review(family, workspace, goal, unit_desc, diff_text, registry,
 
 
 def build_seal_half(family, workspace, goal, unit_desc, artifact, registry,
-                    unit_kind=None, governing=None):
+                    unit_kind=None, governing=None, amendments=None):
     return (
         _header(contracts.KIND_SEAL_HALF, family, workspace)
         + "\nTASK: independent final seal review of %s. REPORT ONLY.\n"
         % unit_desc
         + "GOAL: %s\n" % goal
         + "TARGET: %s (plus any code/tests it governs)\n\n" % artifact
+        + _amendments_block(amendments)
         + _governing_line(governing)
         + "You are one half of a double seal: a fresh, independent, final\n"
         "check on a target other agents already reviewed and fixed.\n"
@@ -564,6 +597,7 @@ def build_fix_findings(
     consultation_cmd,
     verification_output=None,
     unit_kind=None,
+    amendments=None,
 ):
     lines = []
     for f in findings:
@@ -593,6 +627,7 @@ def build_fix_findings(
         _header(contracts.KIND_FIX_FINDINGS, family, workspace)
         + "\nTASK: triage and fix the queued findings on %s.\n" % unit_desc
         + "GOAL: %s\n\n" % goal
+        + _amendments_block(amendments)
         + "QUEUED FINDINGS (claims, not facts — verify each against the\n"
         "real code/doc before deciding):\n"
         + findings_text

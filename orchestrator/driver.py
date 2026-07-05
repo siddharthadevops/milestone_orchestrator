@@ -338,6 +338,44 @@ class Driver(object):
         for i, text in enumerate(getattr(exc, "raw_texts", []) or [], 1):
             self._save_raw("%s-protoerr%d" % (raw_name, i), text)
 
+    def _amendments_path(self):
+        return os.path.join(self.workspace, ".orchestrator", "amendments.json")
+
+    def _amendments(self):
+        """Operator amendments, re-read before every worker call so a note
+        added mid-run binds the very next call. The file is operator-owned
+        (the panel appends to it; the driver only reads) — deliberately
+        OUTSIDE the append-only ledger so hot edits cannot collide with
+        the driver's lock. The ledger still gets an `amendment_seen`
+        event the first time each id shows up, so every round can be
+        judged against what its workers actually knew."""
+        try:
+            with open(self._amendments_path(), "r", encoding="utf-8") as fh:
+                data = json.load(fh)
+            amendments = [
+                a
+                for a in (data.get("amendments") or [])
+                if isinstance(a, dict) and str(a.get("text") or "").strip()
+            ]
+        except (OSError, ValueError):
+            return []
+        if amendments:
+            seen = {
+                e.get("amendment_id")
+                for e in self.state["events"]
+                if e.get("type") == "amendment_seen"
+            }
+            for a in amendments:
+                aid = str(a.get("id") or "")
+                if aid and aid not in seen:
+                    st.append_event(
+                        self.state,
+                        "amendment_seen",
+                        amendment_id=aid,
+                        text=str(a.get("text"))[:300],
+                    )
+        return amendments
+
     def _busy_path(self):
         return os.path.join(self.workspace, ".orchestrator", "current.json")
 
@@ -469,14 +507,18 @@ class Driver(object):
         unit = st.current_unit(self.state)
         family = self._fix_family()
         goal = self.state["goal"]
+        amendments = self._amendments()
         if unit["kind"] == st.UNIT_SKELETON:
             kind = contracts.KIND_DRAFT_SKELETON
-            prompt = prompts.build_draft_skeleton(family, self.workspace, goal)
+            prompt = prompts.build_draft_skeleton(
+                family, self.workspace, goal, amendments=amendments
+            )
         elif unit["kind"] == st.UNIT_SLICE_DOC:
             kind = contracts.KIND_DRAFT_SLICE_NOTE
             sl = self._slice_info(unit["slice_id"])
             prompt = prompts.build_draft_slice_note(
-                family, self.workspace, goal, sl, self._skeleton_artifact()
+                family, self.workspace, goal, sl, self._skeleton_artifact(),
+                amendments=amendments,
             )
         else:
             kind = contracts.KIND_IMPLEMENT
@@ -488,6 +530,7 @@ class Driver(object):
                 sl,
                 self._slice_note_artifact(unit["slice_id"]),
                 self.config["verification"],
+                amendments=amendments,
             )
         output, result, raw_path = self._call(
             family, prompt, kind, "%s-draft" % st.unit_key(unit)
@@ -684,6 +727,7 @@ class Driver(object):
                 else None
             ),
             unit_kind=unit["kind"],
+            amendments=self._amendments(),
         )
         n_fix = 1 + len(
             [r for r in unit["rounds"] if r["kind"] == contracts.KIND_FIX_FINDINGS]
@@ -820,6 +864,7 @@ class Driver(object):
             self._registry(),
             unit_kind=unit["kind"],
             governing=self._governing(unit),
+            amendments=self._amendments(),
         )
         n_delta = 1 + len(
             [r for r in unit["rounds"] if r["kind"] == contracts.KIND_DELTA_REVIEW]
@@ -1010,6 +1055,7 @@ class Driver(object):
             self._registry(),
             unit_kind=unit["kind"],
             governing=self._governing(unit),
+            amendments=self._amendments(),
         )
         output, result, raw_path, changed = self._report_call(
             unit,
@@ -1094,6 +1140,7 @@ class Driver(object):
         halves = {}
         invalidated = None
         tamper_family = None  # sequential mode can attribute the tampering
+        amendments = self._amendments()  # once, before any half thread
 
         def run_half_pure(family):
             """One seal half, mutating NO shared state (thread-safe): any
@@ -1102,6 +1149,7 @@ class Driver(object):
             prompt = prompts.build_seal_half(
                 family, self.workspace, goal, desc, artifact, registry,
                 unit_kind=unit["kind"], governing=self._governing(unit),
+                amendments=amendments,
             )
             raw_name = "%s-seal-a%d-%s" % (st.unit_key(unit), attempt_no, family)
             try:

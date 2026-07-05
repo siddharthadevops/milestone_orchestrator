@@ -569,6 +569,56 @@ def _purge_state_files(state_path):
     return purged, errors
 
 
+def _amendments_path(entry):
+    return os.path.join(
+        entry["workspace"], ".orchestrator", "amendments.json"
+    )
+
+
+def read_amendments(entry):
+    try:
+        with open(_amendments_path(entry), "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+        return [
+            a
+            for a in (data.get("amendments") or [])
+            if isinstance(a, dict) and str(a.get("text") or "").strip()
+        ]
+    except (OSError, ValueError):
+        return []
+
+
+def add_amendment(home, run_id, body):
+    """Append an operator amendment to the run's amendments file. The
+    driver re-reads the file before every worker call, so a note added
+    here binds the next call (drivers older than the feature pick it up
+    on their next restart). Atomic write; the driver only ever reads."""
+    reg = registry.load(home)
+    entry = registry.get(reg, run_id)
+    if entry is None:
+        raise ApiError(404, "unknown run %r" % run_id)
+    text = str((body or {}).get("text") or "").strip()
+    if not text:
+        raise ApiError(400, "amendment text is required")
+    if len(text) > 4000:
+        raise ApiError(400, "amendment text too long (max 4000 chars)")
+    amendments = read_amendments(entry)
+    amendments.append(
+        {
+            "id": "A%d" % (len(amendments) + 1),
+            "text": text,
+            "at": st.now_iso(),
+        }
+    )
+    path = _amendments_path(entry)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as fh:
+        json.dump({"amendments": amendments}, fh, indent=1)
+    os.replace(tmp, path)
+    return amendments
+
+
 def run_detail(home, run_id, log_tail=80):
     reap_exited_drivers(home)
     reg = registry.load(home)
@@ -581,6 +631,7 @@ def run_detail(home, run_id, log_tail=80):
     except Exception as exc:
         detail["summary_error"] = str(exc)
     detail["log"] = read_log_tail(home, run_id, log_tail)
+    detail["amendments"] = read_amendments(entry)
     return detail
 
 
@@ -689,6 +740,13 @@ def make_handler(home):
                     elif len(parts) == 5 and parts[4] == "resume":
                         entry = resume_run(home, parts[3])
                         self._json(200, {"ok": True, "run": run_status(entry)})
+                    elif len(parts) == 5 and parts[4] == "amendments":
+                        amendments = add_amendment(
+                            home, parts[3], self._body()
+                        )
+                        self._json(
+                            200, {"ok": True, "amendments": amendments}
+                        )
                     else:
                         self._json(404, {"ok": False, "error": "not found"})
                 else:

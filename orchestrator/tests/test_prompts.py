@@ -556,5 +556,63 @@ class TestPortedCanonContentRules(unittest.TestCase):
         self.assertIn("ADJ-9", prompt)
 
 
+class TestOperatorAmendments(unittest.TestCase):
+    """Operator amendments (.orchestrator/amendments.json) bind every
+    subsequent worker call: verbatim in every builder, violation-is-a-
+    finding framing for reviewers, absent when there are none."""
+
+    AMENDMENTS = [
+        {"id": "A1", "text": "Do not touch hot paths: no new indexes, "
+                             "no extra SQL, no machinery in message send."},
+    ]
+
+    def build_all_with_amendments(self):
+        a = self.AMENDMENTS
+        return {
+            "draft_skeleton": prompts.build_draft_skeleton(
+                FAMILY, WORKSPACE, GOAL, amendments=a),
+            "draft_slice_note": prompts.build_draft_slice_note(
+                FAMILY, WORKSPACE, GOAL, SLICE, "docs/skeleton.md",
+                amendments=a),
+            "implement": prompts.build_implement(
+                FAMILY, WORKSPACE, GOAL, SLICE, "docs/slice-01.md",
+                ["make test"], amendments=a),
+            "review_round": prompts.build_review_round(
+                FAMILY, WORKSPACE, GOAL, UNIT, "docs/slice-01.md", [],
+                amendments=a),
+            "delta_review": prompts.build_delta_review(
+                FAMILY, WORKSPACE, GOAL, UNIT, "diff --git a/x b/x\n", [],
+                amendments=a),
+            "seal_half": prompts.build_seal_half(
+                FAMILY, WORKSPACE, GOAL, UNIT, "docs/slice-01.md", [],
+                amendments=a),
+            "fix_findings": prompts.build_fix_findings(
+                FAMILY, WORKSPACE, GOAL, UNIT, FINDINGS, [], "claude",
+                ["claude", "-p"], amendments=a),
+        }
+
+    def test_every_builder_carries_amendments_verbatim(self):
+        for name, prompt in self.build_all_with_amendments().items():
+            flat = normalized(prompt)
+            with self.subTest(builder=name):
+                self.assertIn("OPERATOR AMENDMENTS (binding", flat)
+                self.assertIn("[A1] Do not touch hot paths: no new indexes",
+                              flat)
+                self.assertIn("a violation of any amendment in the reviewed "
+                              "artifact is a finding", flat)
+
+    def test_absent_without_amendments(self):
+        for name, prompt in build_all().items():
+            with self.subTest(builder=name):
+                self.assertNotIn("OPERATOR AMENDMENTS", prompt)
+
+    def test_long_amendment_text_is_clipped(self):
+        a = [{"id": "A1", "text": "x" * 5000}]
+        prompt = prompts.build_review_round(
+            FAMILY, WORKSPACE, GOAL, UNIT, "docs/x.md", [], amendments=a)
+        self.assertNotIn("x" * (prompts.AMENDMENT_TEXT_CLIP + 1), prompt)
+        self.assertIn("...", prompt)
+
+
 if __name__ == "__main__":
     unittest.main()
