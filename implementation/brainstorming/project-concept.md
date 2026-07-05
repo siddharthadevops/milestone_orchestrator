@@ -62,10 +62,10 @@ than converging later:
   `(project, work_area)`: **primary.path** is the git repo the driver owns
   and executes in; **additional** roots are read-only grants. Reuse-source
   role metadata rides BESIDE the agent_99 fields, never inside them —
-  stored in its own `work_area_meta:<name>` family (see key grammar):
-  `{inventory, registry, consumption}` — the directory planners must
-  enumerate, the milestone registry to read, and the sanctioned consumption
-  model (submodule + path dep, hex, HTTP client...). The ledger records the
+  stored in its own `work_area_meta:<name>` family, whose exact value
+  shape is defined ONCE in the key grammar below (per source: the
+  inventory to enumerate, the registry to read, the sanctioned consumption
+  model — submodule + path dep, hex, HTTP client...). The ledger records the
   work-area name on every run.
 - **defaults** (optional): acts/model preferences, docs_dir convention.
 
@@ -113,15 +113,20 @@ adopts this contract LOCALLY:
 - **Same primitives, local backing.** The service stores project data in a
   local KV (file-backed) implementing the same get/put/cas/list semantics,
   the same revision envelope, and JSON-plain, serialization-stable values.
-  Fusion later = pumping entries into a reserved namespace of the workspace
-  datastore (`milestone_orchestrator/…` — final name TBD, a single
-  configurable constant) through the same Client behaviour, revisions intact.
-- **Key families**: `refs/work_area:<name>` (identical shape to agent_99's,
-  including the pending/ready/unavailable machine — locally, the panel plays
-  the Body's declare role and the launcher's validation plays the executor's
-  reconcile role, e.g. "primary.path is a git repo root" → ready);
-  `policy:<id>` (versioned safeguards); `run:<id>/status` and
-  `run:<id>/digest` (projections).
+  Fusion later = pumping OUR families into a reserved namespace of the
+  workspace datastore (`milestone_orchestrator/…` — final name TBD, a
+  single configurable constant) through the same Client behaviour,
+  revisions intact. The raw `refs/work_area:<name>` family is NEVER
+  namespaced: agent_99's reader uses the fixed key
+  `Datastore.ref_key("work_area:" <> name)` with no namespace knob, so at
+  fusion work areas pump to that exact native key family or the cited
+  reader cannot see them.
+- **Key families**: defined ONCE, in the Normative-contracts key grammar
+  below — the single source; do not restate the list elsewhere (earlier
+  drafts restated it here and drifted). Locally, the work-area state
+  machine runs with the panel playing the Body's declare role and the
+  launcher's validation playing the executor's reconcile role (e.g.
+  "primary.path is a git repo root" → ready).
 - **Authority is per-family, and OURS is bottom-up.** agent_99's work-area
   family reconciles top-down (server declares, executor confirms) — fine for
   descriptors, which are cheap declarations. The orchestrator's families are
@@ -180,12 +185,16 @@ concurrent writers serialize; where it lives and how it locks is the
 implementation's choice.
 
 **Per-family storage shape (fusion-critical)**: the envelope above applies
-to OUR families only (`policy:`, `run:*`) — agent_99 never reads those.
+to OUR families only (`work_area_meta:`, `policy:`, `run:*`) — agent_99
+never reads those.
 The `refs/work_area:<name>` family is stored RAW: the top-level work-area
 map exactly as `Agent99.Body.WorkAreaStore` reads it (that store uses LPC
 `Datastore.update/5` plus a hand-rolled CAS over the Client primitives,
-NOT the `Cas` envelope adapter; its optimistic concurrency is the record's
-own domain `version`). Its delete is agent_99's own tombstone record
+NOT the `Cas` envelope adapter; concurrency there is CAS on the ENTIRE
+current value — `client.cas(key, current_value, new_value)` — and the
+record's `version` is a validated domain field, NOT the CAS token: their
+own display-name rename preserves `version`, so a version-only CAS copied
+from this note would lose updates). Its delete is agent_99's own tombstone record
 `{name, deleted: true, version}` with `version` a POSITIVE integer,
 written as the prior record's version + 1 — their reader only recognizes
 tombstones with `version > 0` — never the envelope tombstone. Work-area
@@ -195,7 +204,7 @@ rule above governs our families, not this one.
 
 **Key grammar**: one reserved namespace constant (default
 `milestone_orchestrator`, single config point, final name TBD). Families:
-`refs/work_area:<name>` (raw, agent_99-native) ·
+`refs/work_area:<name>` (raw, agent_99-native, never namespaced) ·
 `work_area_meta:<name>` (OURS, enveloped: the reuse-source role metadata
 for that work area's roots — `{reuse_sources: [{root, inventory,
 registry, consumption}]}`; agent_99 never reads it) · `policy:<id>` ·
