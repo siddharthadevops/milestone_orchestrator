@@ -180,7 +180,7 @@ fixer must fix or reject it with a fresh consultation (enforced
 structurally). When the fixer CONCEDES a contested finding (`fixed`), the
 contested adjudication is overturned: it leaves the registry, no longer
 satisfies `adjudication_ref`, and the finding may be re-raised freely. The
-jurisprudence is committed at every gate as `docs/adjudications.md`.
+jurisprudence is committed at every gate in the milestone's `adjudications.md` ledger.
 
 ### Git gates and the amend discipline
 
@@ -193,8 +193,11 @@ patch stacking); the double seal reviews that amended commit and a passing
 seal finalizes it under the canonical gate message (`Seal milestone
 skeleton`, `Seal slice NN note`, `Seal slice NN implementation and close`,
 `Close milestone`). At each gate the driver regenerates the markdown
-ledgers from state.json — `docs/MILESTONE.md`, `docs/review-log.md`,
-`docs/adjudications.md`, `docs/closures/` — and folds them into the gate.
+ledgers from state.json — the milestone record (`README.md`; `MILESTONE.md`
+in the legacy `docs_dir: "docs"` layout), `review-log.md`,
+`adjudications.md`, `closures/`, all under the run's `docs_dir`
+(default `implementation/milestones/<slug>/`), plus the machine-maintained
+milestone index in the parent directory — and folds them into the gate.
 The JSON is the source of truth; ledgers are compiled views, so
 ledger-vs-state drift is structurally impossible.
 

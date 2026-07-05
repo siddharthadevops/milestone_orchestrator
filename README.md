@@ -1,61 +1,27 @@
-# Implementation Roadmap Canon
+# impl_roadmap
 
-Shared canon for AI-led implementation roadmaps.
+Deterministic orchestrator for AI-led implementation milestones: a
+hardcoded driver runs the whole canon flow — skeleton → slice notes →
+implementation, adversarial review rounds between CLI agent families,
+review/fix separation, double seals, mechanical verification gates —
+with JSON worker contracts and an append-only run ledger. Sequencing and
+bookkeeping live in tested code; only content judgment is delegated to
+the LLM workers.
 
-This repository is meant to be pinned by product repositories and reused outside
-one local workspace. Product repositories keep their live state locally; this
-repository owns the common process.
+- **[orchestrator/README.md](orchestrator/README.md)** — how the system
+  works and how to run it (panel: `orchestrator/panel.sh` →
+  http://127.0.0.1:8700).
+- **[WORKSPACE.md](WORKSPACE.md)** — the workspace contract: how any
+  repository becomes a milestone workspace, the per-milestone layout,
+  and the no-vendoring doctrine.
+- **implementation/** — this repository's own milestone bookkeeping.
 
-## Layers
+## History
 
-| Layer | Lives here? | Examples |
-|---|---:|---|
-| Common canon | Yes | milestone/slice lifecycle, review contract, closure rules, continuation rules, templates |
-| Local state | No | roadmap, milestone index, active continuation, work logs, review logs, closures, accepted debt, mandates |
-
-Do not put product status in this repository. Do not fork the process text into
-each product unless the fork is intentionally temporary and recorded locally.
-
-## Repository Layout
-
-```text
-canon/
-  process/        # versioned common process
-templates/
-  local-state/    # files a product repo copies and owns
-```
-
-## Pinning From A Product Repository
-
-Use a submodule when the product should pin an exact canon revision:
-
-```bash
-git submodule add <canon-git-url> vendor/impl_roadmap_canon
-git -C vendor/impl_roadmap_canon checkout v0.9.0
-git add .gitmodules vendor/impl_roadmap_canon
-git commit -m "Pin implementation roadmap canon"
-```
-
-Then copy the local-state templates into the product repository:
-
-```bash
-cp -R vendor/impl_roadmap_canon/templates/local-state/implementation ./implementation
-```
-
-The copied `implementation/` tree becomes local state. It should link back to
-the pinned canon, not duplicate it.
-
-## Upgrading
-
-Upgrade deliberately:
-
-```bash
-git -C vendor/impl_roadmap_canon fetch --tags
-git -C vendor/impl_roadmap_canon checkout <new-tag-or-commit>
-git add vendor/impl_roadmap_canon
-git commit -m "Update implementation roadmap canon"
-```
-
-If a product must temporarily diverge, record the reason in its local
-`implementation/process/README.md` and remove the divergence during the next
-canon upgrade.
+The manual textual canon (v0.x, `canon/` + `templates/`) that this
+system replaces lived here until it was retired on 2026-07-05; git
+history keeps it. Its refined content rules — altitude, reuse gate,
+evidence discipline, consultation caps — were ported verbatim into the
+worker prompts (`orchestrator/prompts.py`). Consumer repositories no
+longer pin or vendor anything: the process travels in the orchestrator,
+and every run records the orchestrator commit that executed it.

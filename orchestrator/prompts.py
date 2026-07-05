@@ -78,8 +78,8 @@ def _access_block(edit_allowed):
         "PROCESS AUTHORITY",
         "- A deterministic orchestrator drives this run. Its ledger —",
         "  .orchestrator/state.json plus the ledger documents the driver",
-        "  itself generates (docs/MILESTONE.md, docs/review-log.md,",
-        "  docs/adjudications.md, docs/closures/, each carrying a",
+        "  itself generates in the milestone docs directory (the record,",
+        "  review-log.md, adjudications.md, closures/, each carrying a",
         "  GENERATED marker) — is the SOLE source of truth for run",
         "  process state: which rounds ran, their verdicts, and which",
         "  phase (drafting, review, fixing, sealing) is open. You were",
@@ -138,7 +138,7 @@ def _registry_block(registry):
         shown = registry[-REGISTRY_MAX_ENTRIES:]
         lines.append(
             "(%d older entries omitted from this prompt; the full list is "
-            "committed as docs/adjudications.md)" % omitted
+            "committed in the milestone's adjudications.md ledger)" % omitted
         )
     for e in shown:
         prevention = ""
@@ -482,16 +482,17 @@ def _fix_quality_block(unit_kind):
 # Draft kinds
 
 
-def build_draft_skeleton(family, workspace, goal, amendments=None):
+def build_draft_skeleton(family, workspace, goal, amendments=None,
+                         artifact_path="docs/skeleton.md"):
     return (
         _header(contracts.KIND_DRAFT_SKELETON, family, workspace)
         + "\nTASK: draft the milestone skeleton for this goal.\n"
         + "GOAL: %s\n\n" % goal
         + _amendments_block(amendments)
-        + "Write a concise skeleton document at docs/skeleton.md inside the\n"
-        "workspace: goal restatement, boundary/non-goals, and a short table\n"
-        "of planned slices. Keep it thin: intent and contracts, no\n"
-        "implementation detail.\n\n"
+        + "Write a concise skeleton document at %s\n" % artifact_path
+        + "inside the workspace: goal restatement, boundary/non-goals, and\n"
+        "a short table of planned slices. Keep it thin: intent and\n"
+        "contracts, no implementation detail.\n\n"
         + SKELETON_SCOPE_BLOCK
         + ALTITUDE_BLOCK
         + REUSE_GATE_BLOCK
@@ -505,7 +506,7 @@ def build_draft_skeleton(family, workspace, goal, amendments=None):
 
 
 def build_draft_slice_note(family, workspace, goal, slice_info, skeleton_path,
-                           amendments=None):
+                           amendments=None, note_path=None):
     return (
         _header(contracts.KIND_DRAFT_SLICE_NOTE, family, workspace)
         + "\nTASK: draft the slice note for slice %d (%s).\n"
@@ -513,8 +514,8 @@ def build_draft_slice_note(family, workspace, goal, slice_info, skeleton_path,
         + "GOAL: %s\n" % goal
         + "SKELETON: %s (sealed; stay inside its boundary)\n\n" % skeleton_path
         + _amendments_block(amendments)
-        + "Write docs/slice-%02d.md: scope as observable contracts and the\n"
-        % slice_info["id"]
+        + "Write %s: scope as observable contracts and the\n"
+        % (note_path or ("docs/slice-%02d.md" % slice_info["id"]))
         + "tests that pin them, non-goals, expected files, dependencies,\n"
         "acceptance criteria, risks, and reuse posture. State WHAT must be\n"
         "observably true, not HOW code will do it.\n\n"

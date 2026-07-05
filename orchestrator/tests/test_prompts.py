@@ -222,23 +222,15 @@ class TestSealHalfOverridesVendoredCanonBookkeeping(unittest.TestCase):
             self.assertNotIn(forbidden.lower(), flat.lower())
 
     def test_review_log_named_only_as_generated_ledger(self):
-        # The block deliberately names docs/review-log.md when enumerating
-        # the driver-generated ledgers (so workers can tell it apart from
-        # manual-era logs); every mention must be that enumeration, never
-        # a bare review-log.md a worker could read as the manual one.
+        # review-log.md may appear ONLY inside the generated-ledger
+        # enumeration ("documents the driver itself generates ..."), so a
+        # worker can never read the mention as an instruction to keep a
+        # manual-era review log.
         flat = normalized(self.build())
-        start = 0
-        while True:
-            idx = flat.find("review-log.md", start)
-            if idx == -1:
-                break
-            self.assertEqual(
-                flat[max(0, idx - 5): idx],
-                "docs/",
-                "bare review-log.md mention at offset %d: ...%s..."
-                % (idx, flat[max(0, idx - 60): idx + 20]),
-            )
-            start = idx + 1
+        self.assertEqual(flat.count("review-log.md"), 1)
+        idx = flat.find("review-log.md")
+        window = flat[max(0, idx - 160): idx]
+        self.assertIn("documents the driver itself generates", window)
 
     def test_every_verdict_mention_is_inside_the_bookkeeping_ban(self):
         # Case-sensitive on purpose: uppercase VERDICT is the manual

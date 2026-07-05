@@ -80,11 +80,56 @@ def now_iso():
     return time.strftime("%Y-%m-%dT%H:%M:%S%z")
 
 
-def new_state(goal, workspace, config):
+def slugify(name):
+    """Directory-safe milestone slug from a run name."""
+    out = []
+    for ch in str(name or "").lower():
+        if ch.isalnum():
+            out.append(ch)
+        elif out and out[-1] != "-":
+            out.append("-")
+    slug = "".join(out).strip("-")[:60].strip("-")
+    return slug or "milestone"
+
+
+def _orchestrator_rev():
+    """Best-effort provenance: the orchestrator repo commit that created
+    this run. The honest replacement for canon version pinning — the
+    process travels in the orchestrator, so each run records which
+    orchestrator ran it. None when git is unavailable."""
+    import subprocess
+    here = os.path.dirname(os.path.abspath(__file__))
+    try:
+        proc = subprocess.run(
+            ["git", "-C", here, "rev-parse", "--short", "HEAD"],
+            capture_output=True, text=True, timeout=10,
+        )
+    except Exception:
+        return None
+    rev = (proc.stdout or "").strip()
+    return rev if proc.returncode == 0 and rev else None
+
+
+def new_state(goal, workspace, config, name=None, slug=None):
+    docs_template = (config or {}).get("docs_dir") or "docs"
+    docs_dir = os.path.normpath(
+        docs_template.replace("{slug}", slug or slugify(name))
+    ).strip("/")
+    if os.path.isabs(docs_dir) or docs_dir.split("/")[0] == "..":
+        raise ValueError(
+            "docs_dir must stay inside the workspace: %r" % docs_dir
+        )
     return {
         "schema_version": SCHEMA_VERSION,
         "goal": goal,
         "workspace": workspace,
+        "name": name,
+        # Resolved once at init and stable for the run's life: the
+        # milestone docs directory (artifacts + generated ledgers).
+        # "docs" is the legacy flat layout (pre-docs_dir runs); anything
+        # else uses the canonical milestone layout (README.md, slices/).
+        "docs_dir": docs_dir,
+        "orchestrator_rev": _orchestrator_rev(),
         "created_at": now_iso(),
         "milestone": {
             "status": M_OPEN,
@@ -782,6 +827,8 @@ def summary(state):
         "current_unit_status": unit["status"] if unit else None,
         "current_family": current_fam,
         "suite_command": state.get("suite_command"),
+        "name": state.get("name"),
+        "docs_dir": state.get("docs_dir") or "docs",
         "created_epoch": _epoch(state.get("created_at")),
         "last_event_epoch": _epoch(
             state["events"][-1]["at"] if state["events"] else None

@@ -96,6 +96,13 @@ DEFAULT_CONFIG = {
              "consultation": "opposite"},
     # Fixer+delta iterations allowed per fix episode before failing.
     "max_fix_loops": 6,
+    # Where the milestone's documents live inside the workspace: worker
+    # artifacts (skeleton.md, slices/) and driver-generated ledgers
+    # (README.md record, review-log.md, adjudications.md, closures/).
+    # {slug} resolves from the run name at init. The parent directory
+    # gains a machine-maintained milestone index (README.md marker
+    # block). Set to "docs" for the legacy flat layout.
+    "docs_dir": "implementation/milestones/{slug}",
     # Extra directory names excluded from workspace snapshots, on top of
     # runners.SNAPSHOT_EXCLUDE_DIRS (runtime dirs + common Python tool
     # caches). Add tool caches your verification suite writes so read-only
@@ -368,9 +375,9 @@ class Driver(object):
         reviewer's explicit standard): the skeleton for a slice note, the
         slice note for an implementation, nothing for the skeleton."""
         if unit["kind"] == st.UNIT_SLICE_DOC:
-            return "docs/skeleton.md"
+            return self._skeleton_artifact()
         if unit["kind"] == st.UNIT_SLICE_IMPL:
-            return "docs/slice-%02d.md" % unit["slice_id"]
+            return self._slice_note_artifact(unit["slice_id"])
         return None
 
     def _save_protocol_raws(self, raw_name, exc):
@@ -560,7 +567,8 @@ class Driver(object):
         if unit["kind"] == st.UNIT_SKELETON:
             kind = contracts.KIND_DRAFT_SKELETON
             prompt = prompts.build_draft_skeleton(
-                family, self.workspace, goal, amendments=amendments
+                family, self.workspace, goal, amendments=amendments,
+                artifact_path=ledgers.skeleton_path(self.state),
             )
         elif unit["kind"] == st.UNIT_SLICE_DOC:
             kind = contracts.KIND_DRAFT_SLICE_NOTE
@@ -568,6 +576,9 @@ class Driver(object):
             prompt = prompts.build_draft_slice_note(
                 family, self.workspace, goal, sl, self._skeleton_artifact(),
                 amendments=amendments,
+                note_path=ledgers.slice_note_path(
+                    self.state, unit["slice_id"]
+                ),
             )
         else:
             kind = contracts.KIND_IMPLEMENT
@@ -619,14 +630,16 @@ class Driver(object):
     def _skeleton_artifact(self):
         for u in self.state["units"]:
             if u["kind"] == st.UNIT_SKELETON:
-                return u["artifact"] or "docs/skeleton.md"
-        return "docs/skeleton.md"
+                return u["artifact"] or ledgers.skeleton_path(self.state)
+        return ledgers.skeleton_path(self.state)
 
     def _slice_note_artifact(self, slice_id):
         for u in self.state["units"]:
             if u["kind"] == st.UNIT_SLICE_DOC and u["slice_id"] == slice_id:
-                return u["artifact"] or ("docs/slice-%02d.md" % slice_id)
-        return "docs/slice-%02d.md" % slice_id
+                return u["artifact"] or ledgers.slice_note_path(
+                    self.state, slice_id
+                )
+        return ledgers.slice_note_path(self.state, slice_id)
 
 
     # -- review/fix separation machinery ------------------------------------
@@ -1489,7 +1502,10 @@ class Driver(object):
         try:
             ledgers.generate(self.state, self.workspace)
             sha = gitops.finalize_gate(self.workspace, self._gate_message(unit))
-        except gitops.GitError as exc:
+        except (gitops.GitError, ledgers.LedgerError, OSError) as exc:
+            # A hostile/malformed index file must become a RECORDED run
+            # failure — an unhandled crash here would discard the sealed
+            # transition still in memory and livelock re-burning seals.
             st.fail_run(self.state, "gate commit failed: %s" % exc, unit=unit)
             self._save()
             raise StopStep(str(exc))
@@ -1508,7 +1524,7 @@ class Driver(object):
         try:
             ledgers.generate(self.state, self.workspace)
             sha = gitops.commit_plain(self.workspace, "Close milestone")
-        except gitops.GitError as exc:
+        except (gitops.GitError, ledgers.LedgerError, OSError) as exc:
             st.fail_run(self.state, "close commit failed: %s" % exc)
             self._save()
             raise StopStep(str(exc))
@@ -1578,7 +1594,7 @@ def default_state_path(workspace):
     return os.path.join(workspace, ".orchestrator", "state.json")
 
 
-def init_run(goal, workspace, config=None, state_path=None):
+def init_run(goal, workspace, config=None, state_path=None, name=None):
     """Create a new run state. `config` is a merged config dict (see
     load_config) or None for defaults. Returns the state path.
     Raises FileExistsError instead of overwriting an existing state; the
@@ -1588,7 +1604,35 @@ def init_run(goal, workspace, config=None, state_path=None):
     os.makedirs(workspace, exist_ok=True)
     if config is None:
         config = load_config(None)
-    state = st.new_state(goal, workspace, config)
+    template = (config or {}).get("docs_dir") or "docs"
+    slug = None
+    if "{slug}" in template:
+        # New milestones never write into a previous milestone's sealed
+        # directory: uniquify the slug until the resolved dir is free.
+        base = st.slugify(name)
+        slug = base
+        k = 1
+        while os.path.exists(
+            os.path.join(
+                workspace,
+                os.path.normpath(
+                    template.replace("{slug}", slug)
+                ).strip("/"),
+            )
+        ):
+            k += 1
+            slug = "%s-%d" % (base, k)
+    else:
+        fixed = os.path.normpath(template).strip("/")
+        if fixed != "docs" and os.path.exists(
+            os.path.join(workspace, fixed)
+        ):
+            raise FileExistsError(
+                "docs_dir %r already exists in the workspace — a fixed "
+                "docs_dir cannot host two milestones; use a {slug} "
+                "template or remove/rename the directory" % fixed
+            )
+    state = st.new_state(goal, workspace, config, name=name, slug=slug)
     st.append_event(state, "initialized", goal=goal)
     path = state_path or default_state_path(workspace)
     st.save_new(path, state)
@@ -1602,6 +1646,13 @@ def cmd_init(args):
             args.workspace,
             config=load_config(args.config),
             state_path=args.state,
+            name=(
+                args.name
+                or os.path.basename(
+                    os.path.abspath(args.workspace).rstrip("/")
+                )
+                or "run"
+            ),
         )
     except FileExistsError as exc:
         print(str(exc), file=sys.stderr)
@@ -1734,6 +1785,8 @@ def main(argv=None):
 
     p_init = sub.add_parser("init", help="create a new run state")
     p_init.add_argument("--goal", required=True)
+    p_init.add_argument("--name", default=None,
+                        help="milestone name (slug feeds docs_dir)")
     p_init.add_argument("--workspace", required=True)
     p_init.add_argument("--config", default=None)
     p_init.add_argument("--state", default=None)

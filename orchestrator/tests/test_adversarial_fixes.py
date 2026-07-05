@@ -617,7 +617,7 @@ class TestPromptSanitizationAndBounds(unittest.TestCase):
         entry_lines = [l for l in block.splitlines() if l.startswith("- [")]
         self.assertEqual(len(entry_lines), prompts.REGISTRY_MAX_ENTRIES)
         self.assertIn("150 older entries omitted", block)
-        self.assertIn("docs/adjudications.md", block)
+        self.assertIn("the milestone's adjudications.md ledger", block)
         # The MOST RECENT entries are the ones kept.
         self.assertIn("/F250]", entry_lines[-1])
 

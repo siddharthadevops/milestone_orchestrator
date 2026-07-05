@@ -404,8 +404,15 @@ def create_run(home, payload):
                     "this prevents run history landing in a parent or "
                     "unrelated repo). Run: git -C %s init" % workspace,
                 )
+        name_for_init = (
+            payload.get("name")
+            or os.path.basename(workspace.rstrip("/"))
+            or "run"
+        )
         try:
-            driver.init_run(goal.strip(), workspace, config=config)
+            driver.init_run(
+                goal.strip(), workspace, config=config, name=name_for_init
+            )
         except FileExistsError as exc:
             raise ApiError(409, str(exc) + ' (use "attach": true to adopt it)')
 

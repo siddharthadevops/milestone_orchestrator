@@ -982,6 +982,35 @@ class TestSuiteDiscoveryProtocol(DriverTestCase):
                         self.assertFalse(has, kind)
 
 
+class TestDocsDirCollision(DriverTestCase):
+    def test_reused_name_uniquifies_the_slug(self):
+        with tempfile.TemporaryDirectory(prefix="orch-mock-") as ws:
+            git_init_workspace(ws)
+            os.makedirs(
+                os.path.join(ws, "implementation", "milestones", "my-feat"))
+            cfg = make_config(
+                docs_dir="implementation/milestones/{slug}")
+            path = drv.init_run("goal", ws, config=cfg, name="My Feat")
+            state = st.load(path)
+            self.assertEqual(
+                state["docs_dir"], "implementation/milestones/my-feat-2")
+
+    def test_fixed_docs_dir_collision_refused(self):
+        with tempfile.TemporaryDirectory(prefix="orch-mock-") as ws:
+            git_init_workspace(ws)
+            os.makedirs(os.path.join(ws, "implementation", "m1"))
+            cfg = make_config(docs_dir="implementation/m1")
+            with self.assertRaises(FileExistsError):
+                drv.init_run("goal", ws, config=cfg, name="x")
+
+    def test_escaping_docs_dir_rejected(self):
+        with tempfile.TemporaryDirectory(prefix="orch-mock-") as ws:
+            git_init_workspace(ws)
+            cfg = make_config(docs_dir="../outside/{slug}")
+            with self.assertRaises(ValueError):
+                drv.init_run("goal", ws, config=cfg, name="x")
+
+
 class TestActProfiles(DriverTestCase):
     """Per-act leadership: who drafts/implements/fixes, with which
     model/effort — configured at launch (config acts) and hot-editable

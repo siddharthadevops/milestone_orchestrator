@@ -22,7 +22,8 @@ cat > "$CFG" <<EOF
   "max_seal_attempts": 4,
   "git": {"enabled": true},
   "acts": {"fixer": "codex", "delta_review": "codex", "consultation": "opposite"},
-  "max_fix_loops": 4
+  "max_fix_loops": 4,
+  "docs_dir": "docs"
 }
 EOF
 
