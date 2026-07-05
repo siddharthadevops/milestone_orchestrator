@@ -49,6 +49,11 @@
   .chip.dirty { color: var(--warn); }
   .chip.pass { color: var(--ok); border-color: #bbe7c9; }
   .chip.fail { color: var(--bad); }
+  .chip.work { color: #18181b; border-color: #d4d4d8; }
+  .chip.sev23 { color: #c2610c; border-color: #fcd9a8; background: #fff7ed; }
+  .chip.sev01 { color: #db2777; border-color: #f9c7dd; background: #fdf2f8; }
+  .unit.ghost { opacity: .45; }
+  .unit-title { color: #71717a; font-size: 11px; margin-left: 6px; }
   .chip.working { color: var(--accent); border-color: #c3d4fb;
                   background: var(--accent-soft); display: inline-flex;
                   align-items: center; gap: 6px; }
@@ -216,11 +221,18 @@ const ACTIVITY = {
   delta_review: "delta review", pre_seal_verify: "verifying",
   sealing: "double seal",
 };
+function fmtDHMS(secs) {
+  const t = Math.max(0, Math.round(secs));
+  const d = Math.floor(t / 86400), h = Math.floor((t % 86400) / 3600),
+        m = Math.floor((t % 3600) / 60), sx = t % 60;
+  if (d) return `${d}d ${h}h ${m}m ${sx}s`;
+  if (h) return `${h}h ${m}m ${sx}s`;
+  if (m) return `${m}m ${sx}s`;
+  return `${sx}s`;
+}
 function elapsed(t0) {
   if (!t0) return "";
-  const secs = Math.max(0, Math.floor(Date.now() / 1000 - t0));
-  const m = Math.floor(secs / 60), sx = secs % 60;
-  return m ? `${m}m${String(sx).padStart(2, "0")}s` : `${sx}s`;
+  return fmtDHMS(Date.now() / 1000 - t0);
 }
 function runTime(sum, s) {
   if (!sum || !sum.created_epoch) return "";
@@ -273,8 +285,7 @@ const KIND_SHORT = {
 function shortKind(k) { return KIND_SHORT[k] || k; }
 function fmtDur(secs) {
   if (secs === null || secs === undefined) return "";
-  const t = Math.round(secs), m = Math.floor(t / 60), sx = t % 60;
-  return m ? ` · ${m}m ${sx}s` : ` · ${sx}s`;
+  return ` · ${fmtDHMS(secs)}`;
 }
 const DRAFT_SHORT = {draft_skeleton: "draft", draft_slice_note: "draft",
                      implement: "impl"};
@@ -282,19 +293,27 @@ function draftChip(d) {
   if (!d) return "";
   const kind = DRAFT_SHORT[d.kind] || d.kind;
   const who = d.family ? `${esc(d.family)} ` : "";
-  return `<span class="chip clean">${who}${esc(kind)}${fmtDur(d.duration_s)}</span>`;
+  return `<span class="chip work">${who}${esc(kind)}${fmtDur(d.duration_s)}</span>`;
+}
+const WORK_KINDS = {fix_findings: 1, verification: 1};
+function sevClass(sev) {
+  return (sev === "P0" || sev === "P1") ? "sev01" : "sev23";
 }
 function roundChip(r) {
   const kind = shortKind(r.kind);
   if (r.invalidated)
     return `<span class="chip fail" title="${esc(r.invalidated)}">${esc(r.family)} ${esc(kind)} · INVALID</span>`;
-  const cls = r.findings === 0 ? "clean" : "dirty";
+  const cls = WORK_KINDS[r.kind] ? "work"
+    : r.findings === 0 ? "clean" : sevClass(r.severity);
   return `<span class="chip ${cls}">${esc(r.family)} ${esc(kind)} · ${r.findings}f${fmtDur(r.duration_s)}</span>`;
 }
 function sealChip(s) {
-  const cls = s.passed ? "pass" : "fail";
-  const label = s.passed ? "pass" : (s.invalidated ? "invalid" : "findings");
-  return `<span class="chip ${cls}">seal a${s.attempt} ${label}${fmtDur(s.duration_s)}</span>`;
+  const dur = fmtDur(s.duration_s);
+  if (s.passed)
+    return `<span class="chip pass">seal a${s.attempt} pass${dur}</span>`;
+  if (s.invalidated)
+    return `<span class="chip fail" title="${esc(s.invalidated)}">seal a${s.attempt} invalid${dur}</span>`;
+  return `<span class="chip ${sevClass(s.severity)}">seal a${s.attempt} findings${dur}</span>`;
 }
 async function refreshDetail() {
   if (!selected) return;
@@ -322,10 +341,24 @@ async function refreshDetail() {
       <button class="btn danger" ${running ? "disabled" : ""} onclick="del()">Forget</button>
     </div>`;
     if (sum) {
-      html += `<div class="card"><h3>Pipeline</h3>` + (sum.units || []).map(u => `
+      const sliceTitle = id => {
+        const sl = (sum.slices || []).find(x => x.id === id);
+        return sl ? `<span class="unit-title">${esc(sl.title)}</span>` : "";
+      };
+      const unitTitle = key => {
+        const m = key.match(/^slice_(?:doc|impl)-(\d+)$/);
+        return m ? sliceTitle(parseInt(m[1], 10)) : "";
+      };
+      const unitRow = u => {
+        let time = "";
+        if (u.opened_epoch && u.closed_epoch)
+          time = ` · ${fmtDHMS(u.closed_epoch - u.opened_epoch)}`;
+        else if (u.opened_epoch && running && u.unit === sum.current_unit)
+          time = ` · ${elapsed(u.opened_epoch)}`;
+        return `
         <div class="unit">
-          <div class="unit-head"><span class="unit-name">${esc(u.unit)}</span>
-            <span class="st ${esc(u.status)}">${esc(u.status)}</span></div>
+          <div class="unit-head"><span class="unit-name">${esc(u.unit)}</span>${unitTitle(u.unit)}
+            <span class="st ${esc(u.status)}">${esc(u.status)}${time}</span></div>
           <div class="chips">${draftChip(u.draft)}${
             [].concat(
               (u.rounds || []).map(r => ({at: r.at || "", html: roundChip(r)})),
@@ -333,7 +366,27 @@ async function refreshDetail() {
             ).sort((a, b) => a.at < b.at ? -1 : a.at > b.at ? 1 : 0)
              .map(c => c.html).join("")}
             ${u.unit === sum.current_unit && running ? workingChip(s) : ""}</div>
-        </div>`).join("") + `</div>`;
+        </div>`;
+      };
+      const ghostRow = (key, sl) => `
+        <div class="unit ghost">
+          <div class="unit-head"><span class="unit-name">${esc(key)}</span>${sliceTitle(sl.id)}
+            <span class="st">pending</span></div>
+        </div>`;
+      const byKey = {};
+      (sum.units || []).forEach(u => { byKey[u.unit] = u; });
+      const seen = {};
+      let rows = "";
+      if (byKey.skeleton) { rows += unitRow(byKey.skeleton); seen.skeleton = 1; }
+      (sum.slices || []).forEach(sl => {
+        const pad = String(sl.id).padStart(2, "0");
+        [`slice_doc-${pad}`, `slice_impl-${pad}`].forEach(k => {
+          if (byKey[k]) { rows += unitRow(byKey[k]); seen[k] = 1; }
+          else rows += ghostRow(k, sl);
+        });
+      });
+      (sum.units || []).forEach(u => { if (!seen[u.unit]) rows += unitRow(u); });
+      html += `<div class="card"><h3>Pipeline</h3>` + rows + `</div>`;
       html += `<div class="card"><h3>Events</h3>` +
         (sum.last_events || []).slice().reverse().map(e => {
           const extra = Object.entries(e)

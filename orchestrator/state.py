@@ -646,8 +646,33 @@ def _epoch(iso):
         return None
 
 
+_SEVERITY_ORDER = {"P0": 0, "P1": 1, "P2": 2, "P3": 3}
+
+
+def _worst_severity(findings):
+    """The most severe P-level among findings (P0 worst), None if clean."""
+    worst = None
+    for f in findings or []:
+        sev = f.get("severity")
+        if sev in _SEVERITY_ORDER and (
+            worst is None or _SEVERITY_ORDER[sev] < _SEVERITY_ORDER[worst]
+        ):
+            worst = sev
+    return worst
+
+
 def summary(state):
     unit = current_unit(state)
+    opened_at = {}
+    closed_at = {}
+    for e in state["events"]:
+        uk = e.get("unit")
+        if not uk:
+            continue
+        if e.get("type") == "unit_opened" and uk not in opened_at:
+            opened_at[uk] = _epoch(e.get("at"))
+        if e.get("type") == "unit_transition" and e.get("to_status") == U_SEALED:
+            closed_at[uk] = _epoch(e.get("at"))
     units_view = []
     for u in state["units"]:
         units_view.append(
@@ -655,6 +680,11 @@ def summary(state):
                 "unit": unit_key(u),
                 "status": u["status"],
                 "artifact": u["artifact"],
+                "opened_epoch": (
+                    opened_at.get(unit_key(u))
+                    or _epoch((u.get("draft") or {}).get("at"))
+                ),
+                "closed_epoch": closed_at.get(unit_key(u)),
                 "draft": (
                     {
                         "kind": u["draft"]["kind"],
@@ -671,6 +701,9 @@ def summary(state):
                         "family": r["family"],
                         "kind": r["kind"],
                         "findings": len(r["result"].get("findings", [])),
+                        "severity": _worst_severity(
+                            r["result"].get("findings", [])
+                        ),
                         "invalidated": r.get("invalidated"),
                         "duration_s": r.get("duration_s"),
                         "at": r["at"],
@@ -693,6 +726,14 @@ def summary(state):
                         "duration_s": sum(
                             h.get("duration_s") or 0 for h in s["halves"].values()
                         ) or None,
+                        "severity": _worst_severity(
+                            [
+                                f
+                                for h in s["halves"].values()
+                                if h and h.get("result")
+                                for f in h["result"].get("findings", [])
+                            ]
+                        ),
                         "at": s["at"],
                     }
                     for s in u["seals"]
