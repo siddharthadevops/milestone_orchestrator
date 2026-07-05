@@ -146,8 +146,9 @@ body/work_area_store.ex` — moduledoc "Stored value" and `interpret/1`):
 `{name, display_name, primary, additional, executor_id, version, status}`.
 All keys present, or the agent_99 reader rejects the record as malformed:
 `name` valid UTF-8, non-blank, ≤128 bytes, no `/`, no control characters;
-`display_name` same constraints, trimmed (older records may omit it and
-read back as name); `primary` and each `additional` element
+`display_name` trimmed, valid UTF-8, non-blank, ≤128 bytes, no control
+characters — slashes ARE allowed; only `name` rejects `/` (older records
+may omit it and read back as name); `primary` and each `additional` element
 `{path, device}` where `path` is an ABSOLUTE, CANONICAL path (starts with
 `/`; no empty, `.` or `..` segments; no trailing slash except `/` itself —
 `Agent99.Body.Root.new/2`) and `device` a non-blank string or integer;
@@ -174,6 +175,18 @@ work_area.version). Local backing guarantees, mechanism-free and pinned
 by tests: each write becomes visible atomically (no torn reads) and
 concurrent writers serialize; where it lives and how it locks is the
 implementation's choice.
+
+**Per-family storage shape (fusion-critical)**: the envelope above applies
+to OUR families only (`policy:`, `run:*`) — agent_99 never reads those.
+The `refs/work_area:<name>` family is stored RAW: the top-level work-area
+map exactly as `Agent99.Body.WorkAreaStore` reads it (that store uses LPC
+`Datastore.update/5` plus a hand-rolled CAS over the Client primitives,
+NOT the `Cas` envelope adapter; its optimistic concurrency is the record's
+own domain `version`). Its delete is agent_99's own tombstone record
+`{name, deleted: true, version}` — never the envelope tombstone. Work-area
+values must stay inside the LPC value codec's safe domain so agent_99
+decodes them into its atom-keyed record; the "JSON-plain, string-keyed"
+rule above governs our families, not this one.
 
 **Key grammar**: one reserved namespace constant (default
 `milestone_orchestrator`, single config point, final name TBD). Families:
@@ -204,8 +217,9 @@ work area's roots and must land inside one of them — never outside.
 Scope vocabularies are the EXISTING ones — no new names: worker kinds are
 `contracts.py`'s KIND_* values (`draft_skeleton`, `draft_slice_note`,
 `implement`, `review_round`, `delta_review`, `seal_half`,
-`fix_findings`); unit kinds are `prompts.py`'s (`skeleton`, `slice_doc`,
-implementation units).
+`fix_findings`); unit kinds are `state.py`'s exact constants (`skeleton`,
+`slice_doc`, `slice_impl`) — `prompts.py`'s DOC_UNIT_KINDS is just the
+document subset. No prose names.
 
 **Closed verifier vocabulary V1** (the whole set; a new kind is an
 orchestrator milestone, never project config): `path_exists(field)` ·
@@ -251,10 +265,12 @@ normative contracts inline — the drafter COPIES them, never re-derives;
 (b) reviewers must apply the contrast discipline manually: verify every
 compatibility claim against the cited agent_99/LPC sources, not against
 this note's prose (exactly that manual contrast killed two false claims
-in the advisory rounds); (c) the r2 pricing pilot
+in the advisory rounds); (c) the pricing pilot
 (`project-concept-pricing-pilot.json`, beside this note) is the worked
 example of the future contract and a ready-made fixture for the
-validator's tests.
+validator's tests — its file:line citations are anchored to the reviewed
+COMMIT named in its provenance (this note keeps moving; the fixture's
+ground truth must not).
 
 ## Prompt and gate machinery
 
