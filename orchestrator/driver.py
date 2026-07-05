@@ -1156,10 +1156,19 @@ class Driver(object):
             threads = [
                 threading.Thread(target=worker, args=(fam,)) for fam in families
             ]
-            for t in threads:
-                t.start()
-            for t in threads:
-                t.join()
+            self._mark_busy(
+                "%s-seal-a%d (%s)"
+                % (st.unit_key(unit), attempt_no, "+".join(families)),
+                contracts.KIND_SEAL_HALF,
+                None,
+            )
+            try:
+                for t in threads:
+                    t.start()
+                for t in threads:
+                    t.join()
+            finally:
+                self._clear_busy()
             if errors:
                 fail_attempt(
                     "concurrent seal attempt failed: "
@@ -1179,10 +1188,17 @@ class Driver(object):
         else:
             snap = self._snapshot()
             for fam in families:
+                self._mark_busy(
+                    "%s-seal-a%d-%s" % (st.unit_key(unit), attempt_no, fam),
+                    contracts.KIND_SEAL_HALF,
+                    fam,
+                )
                 try:
                     halves[fam] = run_half_pure(fam)
                 except _SealHalfFailure as exc:
                     fail_attempt(str(exc))
+                finally:
+                    self._clear_busy()
                 new_snap = self._snapshot()
                 changed = self._snapshot_diff(snap, new_snap)
                 if changed:

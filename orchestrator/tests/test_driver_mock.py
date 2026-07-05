@@ -796,6 +796,91 @@ class TestSealHalfTampering(DriverTestCase):
 # (i) fixer protocol enforcement
 
 
+class TestSealInFlightMarker(DriverTestCase):
+    """Seal halves must write the cosmetic in-flight marker
+    (.orchestrator/current.json) like every other worker call, so the
+    panel can show WHO is sealing and for how long — the double seal is
+    the longest phase and used to run with no live counter at all."""
+
+    def test_sequential_seal_halves_write_and_clear_marker(self):
+        import json as _json
+        with tempfile.TemporaryDirectory(prefix="orch-mock-") as ws:
+            path = init_state(ws, make_config())
+            seen = []
+
+            def probe(workspace):
+                marker = os.path.join(
+                    workspace, ".orchestrator", "current.json")
+                try:
+                    with open(marker, "r", encoding="utf-8") as fh:
+                        seen.append(_json.load(fh))
+                except OSError:
+                    seen.append(None)
+
+            mock = runners.MockRunner([
+                skeleton_script()[0],
+                step("review_round", report("review_round"), family="codex"),
+                step("review_round", report("review_round"), family="claude"),
+                step("seal_half", report("seal_half"), family="codex",
+                     side_effect=probe),
+                step("seal_half", report("seal_half"), family="claude",
+                     side_effect=probe),
+            ])
+            driver = drv.Driver(path, runner=mock)
+            self.step_until(
+                driver, lambda s: s["units"][0]["status"] == st.U_SEALED)
+            self.assertEqual(mock.script, [])
+            self.assertEqual(len(seen), 2)
+            for rec in seen:
+                self.assertIsNotNone(
+                    rec, "no in-flight marker during a seal half")
+                self.assertEqual(rec["kind"], "seal_half")
+                self.assertIn("started_at", rec)
+            self.assertEqual([r["family"] for r in seen],
+                             ["codex", "claude"])
+            # Cleared once the attempt is over.
+            self.assertFalse(os.path.exists(
+                os.path.join(ws, ".orchestrator", "current.json")))
+
+    def test_concurrent_seal_writes_attempt_level_marker(self):
+        import json as _json
+        with tempfile.TemporaryDirectory(prefix="orch-mock-") as ws:
+            path = init_state(ws, make_config(seal_concurrent=True))
+            seen = []
+
+            def probe(workspace):
+                marker = os.path.join(
+                    workspace, ".orchestrator", "current.json")
+                try:
+                    with open(marker, "r", encoding="utf-8") as fh:
+                        seen.append(_json.load(fh))
+                except OSError:
+                    seen.append(None)
+
+            mock = runners.MockRunner([
+                skeleton_script()[0],
+                step("review_round", report("review_round"), family="codex"),
+                step("review_round", report("review_round"), family="claude"),
+                step("seal_half", report("seal_half"), family="codex",
+                     side_effect=probe),
+                step("seal_half", report("seal_half"), family="claude",
+                     side_effect=probe),
+            ])
+            driver = drv.Driver(path, runner=mock)
+            self.step_until(
+                driver, lambda s: s["units"][0]["status"] == st.U_SEALED)
+            self.assertEqual(len(seen), 2)
+            for rec in seen:
+                self.assertIsNotNone(
+                    rec, "no in-flight marker during concurrent seal")
+                self.assertEqual(rec["kind"], "seal_half")
+                # Attempt-level marker: one record for both halves, no
+                # per-family attribution (threads must not race on it).
+                self.assertIsNone(rec["family"])
+            self.assertFalse(os.path.exists(
+                os.path.join(ws, ".orchestrator", "current.json")))
+
+
 class TestFixerProtocolFailures(DriverTestCase):
     def _dirty_round_prefix(self):
         return [
