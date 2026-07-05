@@ -54,12 +54,15 @@ than converging later:
 - **policy**: the safeguards, as versioned policy objects (id, version,
   enabled, scope, and the contract field each one adds — see gate machinery
   below). These are the future workspace capability policies, in miniature.
-- **work_areas**: `[{name, primary_root, additional_roots, description}]` —
-  named sets of filesystem roots, exactly agent_99's work-area shape. A run
-  launches against `(project, work_area)`: the **primary_root** is the git
-  repo the driver owns and executes in; **additional_roots** are read-only
-  grants. Reuse sources are additional roots carrying role metadata:
-  `{inventory, registry, consumption}` — the directory planners must
+- **work_areas**: named sets of filesystem roots in agent_99's ACTUAL
+  stored shape — `{name, display_name, primary: {path, device},
+  additional: [{path, device}, ...], status}` (executor_id provenance joins
+  at fusion; codex review F1: an invented flat `primary_root` field would
+  be believed-compatible but need translation later). A run launches
+  against `(project, work_area)`: **primary.path** is the git repo the
+  driver owns and executes in; **additional** roots are read-only grants.
+  Reuse-source role metadata rides BESIDE the agent_99 fields, never inside
+  them: `{inventory, registry, consumption}` — the directory planners must
   enumerate, the milestone registry to read, and the sanctioned consumption
   model (submodule + path dep, hex, HTTP client...). The ledger records the
   work-area name on every run.
@@ -91,13 +94,15 @@ Design rules that follow: (1) safeguards are versioned policy objects from
 day one; (2) the project slug + work-area name are the stable path-free
 handles a future agent_99 adapter (or Brain) uses; (3) NAMING COLLISION,
 resolve now: what the orchestrator's current API calls `workspace` is a
-work-area **primary_root**, NOT a workspace — the machine API's schema doc
-states this and grows a `primary_root` alias, so the future adapter is a
-rename-free projection.
+work-area **primary root** (`primary.path`), NOT a workspace — the machine
+API's schema doc MUST state this and grow a `primary_root` alias (queued as
+build-now scope in machine-api-and-persona-projection.md), so the future
+adapter is a rename-free projection.
 
 ## Local datastore contract (fusion-ready storage)
 
-agent_99's workspace is a KV datastore (LPC `LifeProductWorkspaces`):
+agent_99's workspace — itself the tenancy/policy boundary, not a store —
+ATTACHES a KV datastore facility (LPC `LifeProductWorkspaces`):
 `put/get/cas/list_entries` over binary keys, with a revision-envelope CAS
 adapter (`%{revision, value, deleted?}`, monotonic +1, tombstone deletes,
 `:absent` sentinel) and per-key-family state machines (work areas live at
@@ -113,7 +118,7 @@ adopts this contract LOCALLY:
 - **Key families**: `refs/work_area:<name>` (identical shape to agent_99's,
   including the pending/ready/unavailable machine — locally, the panel plays
   the Body's declare role and the launcher's validation plays the executor's
-  reconcile role, e.g. "primary_root is a git repo root" → ready);
+  reconcile role, e.g. "primary.path is a git repo root" → ready);
   `policy:<id>` (versioned safeguards); `run:<id>/status` and
   `run:<id>/digest` (projections).
 - **Authority is per-family, and OURS is bottom-up.** agent_99's work-area
