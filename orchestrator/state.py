@@ -671,6 +671,10 @@ def summary(state):
                 ],
             }
         )
+    families = state["config"].get("families_order", [])
+    current_fam = None
+    if unit is not None and unit.get("family_index", 0) < len(families):
+        current_fam = families[unit["family_index"]]
     return {
         "goal": state["goal"],
         "workspace": state["workspace"],
@@ -678,6 +682,7 @@ def summary(state):
         "slices": state["milestone"]["slices"],
         "current_unit": unit_key(unit) if unit else None,
         "current_unit_status": unit["status"] if unit else None,
+        "current_family": current_fam,
         "failure": state["failure"],
         "units": units_view,
         "events_total": len(state["events"]),

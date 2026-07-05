@@ -309,6 +309,7 @@ def run_status(entry):
         "milestone_status": None,
         "current_unit": None,
         "current_unit_status": None,
+        "current_family": None,
         "failure_reason": None,
         "events_total": 0,
         "state_error": None,
@@ -318,6 +319,7 @@ def run_status(entry):
         info["milestone_status"] = summ["milestone_status"]
         info["current_unit"] = summ["current_unit"]
         info["current_unit_status"] = summ["current_unit_status"]
+        info["current_family"] = summ.get("current_family")
         info["failure_reason"] = (summ["failure"] or {}).get("reason")
         info["events_total"] = summ["events_total"]
     except Exception as exc:

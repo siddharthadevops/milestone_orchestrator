@@ -217,6 +217,7 @@ class TestCalculatorE2E(unittest.TestCase):
                 "slices",
                 "current_unit",
                 "current_unit_status",
+                "current_family",
                 "failure",
                 "units",
                 "events_total",
