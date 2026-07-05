@@ -22,6 +22,8 @@ import unittest
 
 from orchestrator import contracts
 from orchestrator.runners import (
+    format_changes,
+    snapshot_changes,
     MockRunner,
     RunnerError,
     SubprocessRunner,
@@ -1120,6 +1122,143 @@ class TestSnapshotWorkspace(unittest.TestCase):
             snapshot_workspace(self.workspace),
             snapshot_workspace(self.workspace),
         )
+
+
+# ---------------------------------------------------------------------------
+# git-universe snapshots (paths=...) and snapshot diffs
+
+
+class TestSnapshotWithPaths(unittest.TestCase):
+    """paths= restricts the tamper universe to what the repository can see
+    (gitops.snapshot_paths): ignored artifact churn is invisible, while
+    changes/deletions of listed paths are still detected and nameable."""
+
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.workspace = self._tmp.name
+        self._write("a.txt", "alpha")
+        self._write(os.path.join("src", "b.txt"), "beta")
+        self.paths = ["a.txt", "src/b.txt"]
+
+    def _write(self, rel, content):
+        path = os.path.join(self.workspace, rel)
+        os.makedirs(os.path.dirname(path) or self.workspace, exist_ok=True)
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write(content)
+
+    def test_unlisted_churn_is_invisible(self):
+        # The whole point: a reviewer that ran the project's build does not
+        # tamper the workspace when the artifacts are outside the universe.
+        before = snapshot_workspace(self.workspace, paths=self.paths)
+        self._write(os.path.join("_build", "app.beam"), "artifact")
+        self._write(os.path.join("deps", "lib", "x.ex"), "dep")
+        after = snapshot_workspace(self.workspace, paths=self.paths)
+        self.assertEqual(before, after)
+        self.assertEqual(snapshot_changes(before, after), [])
+
+    def test_listed_content_change_detected_and_named(self):
+        before = snapshot_workspace(self.workspace, paths=self.paths)
+        self._write(os.path.join("src", "b.txt"), "beta CHANGED")
+        after = snapshot_workspace(self.workspace, paths=self.paths)
+        self.assertEqual(snapshot_changes(before, after), ["src/b.txt"])
+
+    def test_listed_deletion_detected(self):
+        before = snapshot_workspace(self.workspace, paths=self.paths)
+        os.unlink(os.path.join(self.workspace, "a.txt"))
+        after = snapshot_workspace(self.workspace, paths=self.paths)
+        self.assertEqual(snapshot_changes(before, after), ["a.txt"])
+        self.assertEqual(after["a.txt"], "missing")
+
+    def test_new_path_in_after_universe_detected(self):
+        # An untracked non-ignored file created by the worker enters the
+        # after-listing (git sees it) and must surface as a change.
+        before = snapshot_workspace(self.workspace, paths=self.paths)
+        self._write("evil.txt", "reviewer edit")
+        after = snapshot_workspace(
+            self.workspace, paths=self.paths + ["evil.txt"]
+        )
+        self.assertEqual(snapshot_changes(before, after), ["evil.txt"])
+
+    def test_exclude_patterns_still_filter_listed_paths(self):
+        # Defense in depth: even if .orchestrator/ were not git-ignored in
+        # some repo, runtime bookkeeping never enters the universe.
+        self._write(os.path.join(".orchestrator", "raw", "r1.txt"), "raw")
+        snap = snapshot_workspace(
+            self.workspace, paths=self.paths + [".orchestrator/raw/r1.txt"]
+        )
+        self.assertEqual(sorted(snap), ["a.txt", "src/b.txt"])
+
+    def test_tracked_file_named_like_cache_dir_stays_in_universe(self):
+        # Exclusion patterns are directory patterns: a tracked FILE whose
+        # basename matches one (*.egg-info) must not silently leave the
+        # tamper universe in git mode.
+        self._write("notes.egg-info", "v1")
+        paths = self.paths + ["notes.egg-info"]
+        before = snapshot_workspace(self.workspace, paths=paths)
+        self.assertIn("notes.egg-info", before)
+        self._write("notes.egg-info", "v2 EDITED")
+        after = snapshot_workspace(self.workspace, paths=paths)
+        self.assertEqual(snapshot_changes(before, after), ["notes.egg-info"])
+
+    def test_directory_entry_folds_subtree_walk(self):
+        # ls-files reports submodules/nested repos as one bare directory
+        # path; the snapshot must still cover their CONTENTS, or a
+        # report-only worker could edit inside them undetected.
+        self._write(os.path.join("nested", "inner.txt"), "v1")
+        paths = self.paths + ["nested/"]
+        before = snapshot_workspace(self.workspace, paths=paths)
+        self.assertIn(os.path.join("nested", "inner.txt"), before)
+        self._write(os.path.join("nested", "inner.txt"), "v2 EDITED")
+        after = snapshot_workspace(self.workspace, paths=paths)
+        self.assertEqual(
+            snapshot_changes(before, after),
+            [os.path.join("nested", "inner.txt")],
+        )
+
+    def test_git_info_exclude_is_part_of_the_universe(self):
+        # Appending an ignore rule mid-call must itself register as a
+        # change — otherwise it cloaks same-call file plants.
+        self._write(os.path.join(".git", "info", "exclude"), "# none\n")
+        before = snapshot_workspace(self.workspace, paths=self.paths)
+        self.assertIn(".git/info/exclude", before)
+        self._write(os.path.join(".git", "info", "exclude"),
+                    "# none\nbackdoor.ex\n")
+        after = snapshot_workspace(self.workspace, paths=self.paths)
+        self.assertEqual(snapshot_changes(before, after),
+                         [".git/info/exclude"])
+
+    def test_symlink_target_recorded(self):
+        os.symlink("a.txt", os.path.join(self.workspace, "ln"))
+        snap = snapshot_workspace(self.workspace, paths=self.paths + ["ln"])
+        self.assertEqual(snap["ln"], "link -> a.txt")
+
+
+class TestSnapshotChangesFormatting(unittest.TestCase):
+    def test_changes_cover_added_removed_and_modified(self):
+        before = {"a": "file 1", "b": "file 2", "c": "file 3"}
+        after = {"a": "file 1", "b": "file X", "d": "file 4"}
+        self.assertEqual(snapshot_changes(before, after), ["b", "c", "d"])
+
+    def test_format_empty(self):
+        self.assertEqual(format_changes([]), "no visible changes")
+
+    def test_format_short_list_verbatim(self):
+        self.assertEqual(
+            format_changes(["x.txt", "y.txt"]), "files: x.txt, y.txt"
+        )
+
+    def test_format_sentinel_rendered_verbatim(self):
+        sentinel = "(tamper universe changed mid-call: git -> walk snapshot)"
+        self.assertEqual(format_changes([sentinel]), sentinel)
+
+    def test_format_clips_long_lists(self):
+        changed = ["f%02d" % i for i in range(12)]
+        out = format_changes(changed, limit=8)
+        self.assertIn("f00", out)
+        self.assertIn("f07", out)
+        self.assertNotIn("f08", out)
+        self.assertIn("(+4 more)", out)
 
 
 if __name__ == "__main__":

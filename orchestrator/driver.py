@@ -207,10 +207,43 @@ class Driver(object):
         st.save(self.state_path, self.state)
 
     def _snapshot(self):
-        return runners.snapshot_workspace(
+        """(mode, entries) content snapshot for tamper checks.
+
+        With git enabled the tamper universe is what the repository can
+        see (tracked + untracked non-ignored): a report-only reviewer
+        that runs the project's build/tests is not invalidated by
+        .gitignore'd artifact churn (_build, deps, caches). If git cannot
+        list, the raw walk is used and the mode says so — _snapshot_diff
+        refuses to compare universes of different modes, so a mid-call
+        git breakage (e.g. a worker damaging .git) yields one honest
+        invalidation instead of a bogus everything-changed file list."""
+        paths = None
+        mode = "walk"
+        if gitops.enabled(self.config):
+            try:
+                paths = gitops.snapshot_paths(self.workspace)
+                mode = "git"
+            except gitops.GitError:
+                paths = None
+        entries = runners.snapshot_workspace(
             self.workspace,
             extra_exclude=self.config.get("snapshot_exclude_dirs"),
+            paths=paths,
         )
+        return mode, entries
+
+    @staticmethod
+    def _snapshot_diff(before, after):
+        """Changed paths between two _snapshot() results; a mode mismatch
+        is itself evidence (the git universe appeared/vanished mid-call)."""
+        before_mode, before_entries = before
+        after_mode, after_entries = after
+        if before_mode != after_mode:
+            return [
+                "(tamper universe changed mid-call: %s -> %s snapshot)"
+                % (before_mode, after_mode)
+            ]
+        return runners.snapshot_changes(before_entries, after_entries)
 
     @contextlib.contextmanager
     def _exclusive(self):
@@ -573,13 +606,13 @@ class Driver(object):
     def _report_call(self, unit, family, prompt, kind, raw_name):
         """Run a report-only call with mechanical no-edit enforcement.
 
-        Returns (output, result, raw_path, tampered): when the reviewer
-        modified the workspace, tampered is True and the output must be
-        discarded by the caller."""
+        Returns (output, result, raw_path, changed): when the reviewer
+        modified the workspace, changed is the non-empty list of paths
+        that differ and the output must be discarded by the caller."""
         before = self._snapshot()
         output, result, raw_path = self._call(family, prompt, kind, raw_name)
-        tampered = self._snapshot() != before
-        return output, result, raw_path, tampered
+        changed = self._snapshot_diff(before, self._snapshot())
+        return output, result, raw_path, changed
 
     def _restore_or_fail(self, unit, why):
         if not gitops.enabled(self.config):
@@ -777,21 +810,22 @@ class Driver(object):
         n_delta = 1 + len(
             [r for r in unit["rounds"] if r["kind"] == contracts.KIND_DELTA_REVIEW]
         )
-        output, result, raw_path, tampered = self._report_call(
+        output, result, raw_path, changed = self._report_call(
             unit,
             family,
             prompt,
             contracts.KIND_DELTA_REVIEW,
             "%s-delta%d" % (st.unit_key(unit), n_delta),
         )
-        if tampered:
+        if changed:
             # The pending fix delta and the tampering are now entangled;
             # restoring would destroy the fixer's work. Stop with the facts.
             st.fail_run(
                 self.state,
-                "delta reviewer (%s) modified the workspace during a "
+                "delta reviewer (%s) modified the workspace (%s) during a "
                 "report-only call; its edits are entangled with the pending "
-                "fix delta — operator inspection required" % family,
+                "fix delta — operator inspection required"
+                % (family, runners.format_changes(changed)),
                 unit=unit,
             )
             self._save()
@@ -961,14 +995,14 @@ class Driver(object):
             self._artifact(unit),
             self._registry(),
         )
-        output, result, raw_path, tampered = self._report_call(
+        output, result, raw_path, changed = self._report_call(
             unit,
             family,
             prompt,
             contracts.KIND_REVIEW_ROUND,
             "%s-%s-r%d" % (st.unit_key(unit), family, done + 1),
         )
-        if tampered:
+        if changed:
             # Rounds run on a clean worktree (everything is amended), so a
             # tampering reviewer is fully revertible: restore, discard the
             # output, record the incident as an invalidated round (it
@@ -985,8 +1019,9 @@ class Driver(object):
                  "findings": []},
                 raw_path=raw_path,
                 duration=result.duration_s,
-                meta={"invalidated": "reviewer modified the workspace; "
-                      "output discarded, workspace restored"},
+                meta={"invalidated": "reviewer modified the workspace "
+                      "(%s); output discarded, workspace restored"
+                      % runners.format_changes(changed)},
             )
             return "%s round INVALID (reviewer edited); restored and retrying" % family
         self._check_worker_blocked(unit, output, contracts.KIND_REVIEW_ROUND)
@@ -1115,13 +1150,14 @@ class Driver(object):
                         "%s: %s" % (fam, errors[fam]) for fam in sorted(errors)
                     )
                 )
-            after = self._snapshot()
-            if after != before:
+            changed = self._snapshot_diff(before, self._snapshot())
+            if changed:
                 for fam in halves:
                     halves[fam]["workspace_modified"] = True
                 invalidated = (
-                    "workspace changed during concurrent seal attempt; "
+                    "workspace changed during concurrent seal attempt (%s); "
                     "cannot attribute; attempt invalid"
+                    % runners.format_changes(changed)
                 )
         else:
             snap = self._snapshot()
@@ -1131,12 +1167,14 @@ class Driver(object):
                 except _SealHalfFailure as exc:
                     fail_attempt(str(exc))
                 new_snap = self._snapshot()
-                if new_snap != snap:
+                changed = self._snapshot_diff(snap, new_snap)
+                if changed:
                     halves[fam]["workspace_modified"] = True
                     invalidated = (
-                        "seal half %s modified the workspace; its output is "
-                        "invalid and the attempt does not count as evidence"
-                        % fam
+                        "seal half %s modified the workspace (%s); its "
+                        "output is invalid and the attempt does not count "
+                        "as evidence"
+                        % (fam, runners.format_changes(changed))
                     )
                     tamper_family = fam
                     snap = new_snap

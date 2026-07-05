@@ -375,44 +375,121 @@ def _readlink_quiet(path):
         return "?"
 
 
-def snapshot_workspace(workspace, extra_exclude=None):
-    """Content digest of the workspace tree (excluding runtime dirs).
+def _hash_file(path):
+    h = hashlib.sha256()
+    try:
+        with open(path, "rb") as fh:
+            for chunk in iter(lambda: fh.read(65536), b""):
+                h.update(chunk)
+    except OSError:
+        return "unreadable"
+    return "file %s" % h.hexdigest()
 
-    Used to enforce, mechanically, that seal halves do not edit anything and
-    that both halves reviewed the same artifact. Every filesystem entry
-    contributes to the digest: file contents, directories (so a new empty
-    directory is detected), symlink targets (so a new or retargeted symlink,
-    broken or not, is detected), and unreadable files (recorded as existing
-    even though their content cannot be hashed).
+
+def _walk_entries(workspace, root, exclude, entries):
+    """Fold a filesystem walk of `root` into `entries`, keyed by paths
+    relative to `workspace` (walk-mode coverage: files, dirs, symlinks)."""
+    for r, dirs, files in os.walk(root):
+        dirs[:] = sorted(d for d in dirs if not _dir_excluded(d, exclude))
+        for name in dirs:
+            path = os.path.join(r, name)
+            rel = os.path.relpath(path, workspace)
+            if os.path.islink(path):
+                entries[rel] = "link -> %s" % _readlink_quiet(path)
+            else:
+                entries[rel] = "dir"
+        for name in sorted(files):
+            path = os.path.join(r, name)
+            rel = os.path.relpath(path, workspace)
+            if os.path.islink(path):
+                entries[rel] = "link -> %s" % _readlink_quiet(path)
+            else:
+                entries[rel] = _hash_file(path)
+
+
+def snapshot_workspace(workspace, extra_exclude=None, paths=None):
+    """Map of workspace entries -> content descriptors (the tamper check).
+
+    Used to enforce, mechanically, that report-only workers edit nothing
+    and that both seal halves reviewed the same artifact. Snapshots
+    compare with ==; snapshot_changes() names the paths that differ.
+
+    Two universes:
+    - paths=None (git-disabled runs): raw filesystem walk. Every entry
+      contributes: file contents, directories (a new empty directory is
+      detected), symlink targets (a new or retargeted symlink, broken or
+      not, is detected), and unreadable files (recorded as existing even
+      though their content cannot be hashed).
+    - paths=<relative paths> (git-enabled runs; gitops.snapshot_paths):
+      only those paths are hashed — tracked plus untracked-non-ignored —
+      so build artifacts and caches that .gitignore excludes cannot
+      invalidate a report-only call that ran the project's own tooling.
+      A listed path missing from disk is recorded as such, so deletions
+      of tracked files are still detected.
     """
     exclude = set(SNAPSHOT_EXCLUDE_DIRS)
     if extra_exclude:
         exclude.update(extra_exclude)
-    entries = []
-    for root, dirs, files in os.walk(workspace):
-        dirs[:] = sorted(d for d in dirs if not _dir_excluded(d, exclude))
-        for name in dirs:
-            path = os.path.join(root, name)
-            rel = os.path.relpath(path, workspace)
+    entries = {}
+    if paths is not None:
+        for rel in paths:
+            rel = rel.rstrip("/")
+            parts = rel.split("/")
+            # Exclusion patterns are DIRECTORY patterns (walk-mode
+            # semantics): they never drop a plain file by its basename —
+            # a tracked file named like a cache dir (x.egg-info) stays in
+            # the universe.
+            if any(_dir_excluded(part, exclude) for part in parts[:-1]):
+                continue
+            path = os.path.join(workspace, rel)
             if os.path.islink(path):
-                entries.append("link %s -> %s" % (rel, _readlink_quiet(path)))
+                entries[rel] = "link -> %s" % _readlink_quiet(path)
+            elif os.path.isdir(path):
+                # A directory entry (submodule gitlink or an untracked
+                # nested repository, which ls-files reports as one bare
+                # path). A constant marker would blind the tamper check
+                # to everything inside it, so fold a full walk of the
+                # subtree into the snapshot — same coverage the legacy
+                # walk had.
+                if _dir_excluded(parts[-1], exclude):
+                    continue
+                entries[rel] = "dir"
+                _walk_entries(workspace, path, exclude, entries)
+            elif os.path.exists(path):
+                entries[rel] = _hash_file(path)
             else:
-                entries.append("dir %s" % rel)
-        for name in sorted(files):
-            path = os.path.join(root, name)
-            rel = os.path.relpath(path, workspace)
-            if os.path.islink(path):
-                entries.append("link %s -> %s" % (rel, _readlink_quiet(path)))
-                continue
-            h = hashlib.sha256()
-            try:
-                with open(path, "rb") as fh:
-                    for chunk in iter(lambda: fh.read(65536), b""):
-                        h.update(chunk)
-            except OSError:
-                entries.append("unreadable %s" % rel)
-                continue
-            entries.append("file %s %s" % (h.hexdigest(), rel))
-    entries.sort()
-    digest = hashlib.sha256("\n".join(entries).encode("utf-8")).hexdigest()
-    return digest
+                entries[rel] = "missing"
+        # The ignore surface git consults is part of the universe too:
+        # otherwise a report-only worker could append a rule to
+        # .git/info/exclude and plant files the after-listing omits.
+        # (Residual, accepted: a NEW nested .gitignore containing '*'
+        # cloaks itself and its directory; such plants stay git-invisible
+        # everywhere — they can never reach a diff, commit, or seal.)
+        info_exclude = os.path.join(workspace, ".git", "info", "exclude")
+        if os.path.isfile(info_exclude):
+            entries[".git/info/exclude"] = _hash_file(info_exclude)
+        return entries
+    _walk_entries(workspace, workspace, exclude, entries)
+    return entries
+
+
+def snapshot_changes(before, after):
+    """Sorted relative paths whose snapshot entries differ (added, removed,
+    or content-changed)."""
+    keys = set(before) | set(after)
+    return sorted(k for k in keys if before.get(k) != after.get(k))
+
+
+def format_changes(changed, limit=8):
+    """Human-readable summary of a snapshot diff for failure/invalidation
+    records — the exact paths are what turns a tamper verdict from a
+    mystery into a diagnosis."""
+    if not changed:
+        return "no visible changes"
+    if len(changed) == 1 and changed[0].startswith("("):
+        # Sentinel evidence (e.g. a mid-call snapshot-mode flip), not a
+        # path: render it verbatim instead of dressing it as a file.
+        return changed[0]
+    head = ", ".join(changed[:limit])
+    more = len(changed) - limit
+    return "files: %s%s" % (head, " (+%d more)" % more if more > 0 else "")

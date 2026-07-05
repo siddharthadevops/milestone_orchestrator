@@ -409,6 +409,64 @@ class TestReviewRoundTampering(DriverTestCase):
                           rounds[0]["invalidated"])
 
 
+    def test_gitignored_churn_does_not_invalidate_review(self):
+        # Live-incident regression (LPC N30): claude reviewers ran the
+        # project's build/tests as their prompt instructs, .gitignore'd
+        # artifacts (_build/) churned, and the walk-based snapshot
+        # invalidated round after round — 150 wasted worker-minutes. With
+        # git enabled the tamper universe honors .gitignore, so artifact
+        # churn is not tampering.
+        with tempfile.TemporaryDirectory(prefix="orch-mock-") as ws:
+            with open(os.path.join(ws, ".gitignore"), "w",
+                      encoding="utf-8") as fh:
+                fh.write("_build/\n")
+            path = init_state(ws, make_config())
+            mock = runners.MockRunner([
+                draft_step(),
+                step("review_round", report("review_round"), family="codex",
+                     side_effect=write_file(
+                         os.path.join("_build", "app.beam"), "artifact\n")),
+                step("review_round", report("review_round"), family="claude",
+                     side_effect=write_file(
+                         os.path.join("_build", "app.beam"), "recompiled\n")),
+                step("seal_half", report("seal_half"), family="codex"),
+                step("seal_half", report("seal_half"), family="claude"),
+            ])
+            driver = drv.Driver(path, runner=mock)
+            self.step_until(driver,
+                            lambda s: s["units"][0]["status"] == st.U_SEALED)
+            self.assertEqual(mock.script, [])
+            state = st.load(path)
+            unit = state["units"][0]
+            # Both rounds clean, none invalidated, no extra retry rounds.
+            self.assertEqual(len(unit["rounds"]), 2)
+            for r in unit["rounds"]:
+                self.assertNotIn("invalidated", r)
+            # The artifact churn survived (nothing restored over it).
+            self.assertTrue(
+                os.path.exists(os.path.join(ws, "_build", "app.beam")))
+
+    def test_tamper_invalidation_names_the_changed_files(self):
+        with tempfile.TemporaryDirectory(prefix="orch-mock-") as ws:
+            path = init_state(ws, make_config())
+            mock = runners.MockRunner([
+                draft_step(),
+                step("review_round", report("review_round"), family="codex",
+                     side_effect=write_file("evil.txt", "reviewer edit\n")),
+                step("review_round", report("review_round"), family="codex"),
+                step("review_round", report("review_round"), family="claude"),
+                step("seal_half", report("seal_half"), family="codex"),
+                step("seal_half", report("seal_half"), family="claude"),
+            ])
+            driver = drv.Driver(path, runner=mock)
+            self.step_until(driver,
+                            lambda s: s["units"][0]["status"] == st.U_SEALED)
+            state = st.load(path)
+            invalidated = state["units"][0]["rounds"][0]["invalidated"]
+            self.assertIn("reviewer modified the workspace", invalidated)
+            self.assertIn("evil.txt", invalidated)
+
+
 # ---------------------------------------------------------------------------
 # (g) delta-review tampering
 

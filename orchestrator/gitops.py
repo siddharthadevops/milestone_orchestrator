@@ -73,6 +73,7 @@ def _run(workspace, *args, check=True):
             cwd=workspace,
             capture_output=True,
             text=True,
+            errors="surrogateescape",
             timeout=GIT_TIMEOUT,
             env=_scrubbed_env(),
         )
@@ -302,6 +303,21 @@ def ensure_repo(workspace, extra_ignore_dirs=None):
                     "Initialize milestone workspace",
                 )
         _run(workspace, "config", "--local", BASELINE_MARK, "true")
+
+
+def snapshot_paths(workspace):
+    """Relative paths of everything the repository can see: tracked files
+    plus untracked files that are NOT ignored. This is the tamper-check
+    universe when git is enabled — build artifacts and caches excluded by
+    .gitignore never enter it, so a report-only worker that runs the
+    project's build or test commands is not invalidated by artifact churn.
+    Deleted tracked files stay in the list (the snapshot records them as
+    missing, so deletions are still detected)."""
+    _assert_workspace_root(workspace)
+    proc = _run(
+        workspace, "ls-files", "-z", "--cached", "--others", "--exclude-standard"
+    )
+    return sorted({rel for rel in proc.stdout.split("\0") if rel})
 
 
 def worktree_diff(workspace, max_chars=DIFF_MAX_CHARS):
