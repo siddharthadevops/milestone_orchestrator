@@ -1,31 +1,24 @@
 {
- "_provenance": "Advisory review r9 of project-concept.md by codex gpt-5.5/xhigh, 2026-07-05, piloting the price-tag contrast contract (no validator existed yet), under the operator scope-freeze. r9 reviewed the note AS OF commit 7c1cf8c. Its single P2 (the r8 version rule over-corrected: rename_display_name preserves version, test-pinned) was conceded and fixed by DELEGATING to per-operation store behavior instead of stating any blanket rule. Historic first: the contrast table itself flagged I3 as SPECULATIVE — the blanket bump rule had no nameable victim — the first speculative verdict of the pilot series, emitted against the very note that designed the verdict. 12 invariants. Earlier pilots (r2-r8) in git history.",
- "findings": [
-  {
-   "id": "F1",
-   "severity": "P2",
-   "summary": "The r8 version correction is now over-broad. The note says work-area `version` is bumped on EVERY record change (`implementation/brainstorming/project-concept.md:165`) and the r8 pilot repeats that as the conceded fix (`implementation/brainstorming/project-concept-pricing-pilot.json:2`), but Agent99 has a real stored-record change that does not bump version: `rename_display_name` preserves version (`/Users/siddhartha/Development/source/life_prod/agent_99/apps/agent_99/lib/agent_99/body/work_area_store.ex:181`, `/Users/siddhartha/Development/source/life_prod/agent_99/apps/agent_99/lib/agent_99/body/work_area_store.ex:530`) and the test pins a display-name rename at version 1 (`/Users/siddhartha/Development/source/life_prod/agent_99/apps/agent_99/test/agent_99/body/work_area_store_test.exs:115`, `/Users/siddhartha/Development/source/life_prod/agent_99/apps/agent_99/test/agent_99/body/work_area_store_test.exs:124`). Since expected-state delivery exposes `version` while display_name is only the UI label (`/Users/siddhartha/Development/source/life_prod/agent_99/apps/agent_99_workspace/test/agent_99_workspace/executor_channel_test.exs:514`, `/Users/siddhartha/Development/source/life_prod/agent_99/apps/agent_99/lib/agent_99/body/work_area_store.ex:182`), a drafter can make label edits look like lifecycle/provenance changes to future executor consumers instead of Agent99-compatible label-only edits.",
-   "contests": null
-  }
- ],
+ "_provenance": "Advisory review r10 of project-concept.md by codex gpt-5.5/xhigh, 2026-07-05 — the CONVERGENCE round: zero findings, 12 invariants all priced_ok, citations resolve against commit 45f6968, which is the frozen final text of the note. Series: r1-r9 produced 22 findings (1 P1, 17 P2, 4 P3), all conceded and fixed (one P3 accepted then mooted); scope-freeze from r7; blanket-rule delegation from r9. This fixture is the worked example for the future skeleton price-tag contract and the primary test fixture for its validator. Earlier pilots (r2-r9) live in this files git history.",
+ "findings": [],
  "invariants_contrast": [
   {
    "id": "I1",
-   "statement": "A project is a generic named ecosystem spanning repositories or roots; runs bind to a project and work area rather than a single workspace path.",
+   "statement": "A project is a generic named ecosystem spanning repositories or roots; runs resolve project/work-area membership at init and show workers standing safeguards.",
    "consumer": {
-    "answer": "Operators, launch flow, workers receiving project context, and future Agent99 adapters consume this boundary.",
+    "answer": "Operators, launch flow, workers, reviewers, and future adapters consume the project/work-area boundary.",
     "evidence": "implementation/brainstorming/project-concept.md:34"
    },
    "payload": {
-    "answer": "The project record carries policy, work_areas, and optional defaults.",
+    "answer": "The record carries policy, work_areas, and optional defaults.",
     "evidence": "implementation/brainstorming/project-concept.md:54"
    },
    "frequency": {
-    "answer": "Low-frequency configuration, resolved at run init.",
+    "answer": "Low-frequency configuration resolved at run init, then reflected in prompts and ledger events.",
     "evidence": "implementation/brainstorming/project-concept.md:44"
    },
    "victim": {
-    "answer": "Cross-repo product work is harmed if reuse law stays per-run or per-path and misses ecosystem sources.",
+    "answer": "Cross-repo product work is harmed when reuse law stays per-run or per-path and misses existing ecosystem surfaces.",
     "evidence": "implementation/brainstorming/project-concept.md:15"
    },
    "cost": {
@@ -42,21 +35,21 @@
   },
   {
    "id": "I2",
-   "statement": "Orchestrator project maps to Agent99 workspace, orchestrator work_areas map to Agent99 work areas, and current API workspace must become or alias primary_root.",
+   "statement": "Orchestrator project maps to Agent99 workspace; orchestrator work_areas map to Agent99 work areas; current API workspace must be documented/aliased as primary_root.",
    "consumer": {
-    "answer": "The future Agent99 adapter, Brain-facing vocabulary, run launcher, and machine API clients consume this mapping.",
+    "answer": "Future Agent99 adapters, Brain-facing vocabulary, launch flow, and machine API clients consume this mapping.",
     "evidence": "implementation/brainstorming/project-concept.md:88"
    },
    "payload": {
-    "answer": "Agent99 workspace is the autonomy/policy boundary; work area is a named set of explicit roots.",
+    "answer": "Agent99 workspace is the policy boundary, and work area is the named set of roots whose primary root becomes the CLI cwd.",
     "evidence": "/Users/siddhartha/Development/source/life_prod/agent_99/docs/architecture.md:197"
    },
    "frequency": {
-    "answer": "Read during project-bound launch and every machine API response exposing the current path vocabulary.",
-    "evidence": "implementation/brainstorming/project-concept.md:95"
+    "answer": "Read during launch and in every API surface that exposes the path-shaped workspace field.",
+    "evidence": "implementation/brainstorming/machine-api-and-persona-projection.md:50"
    },
    "victim": {
-    "answer": "The adapter and operator are harmed if a repo path is mistaken for the Agent99 workspace boundary.",
+    "answer": "The future adapter and operator are harmed if a repo path is mistaken for the Agent99 workspace/policy boundary.",
     "evidence": "implementation/brainstorming/project-concept.md:96"
    },
    "cost": {
@@ -66,16 +59,16 @@
     "answer": "Keep calling the repo path workspace; rejected because it preserves the naming collision."
    },
    "ecosystem_equivalent": {
-    "answer": "adopt: Agent99 already defines workspace and work-area architecture; gap: current service launch still takes a path-shaped workspace.",
-    "evidence": "/Users/siddhartha/Development/source/life_prod/agent_99/docs/architecture.md:221"
+    "answer": "adopt: Agent99 already defines workspace/work-area architecture; gap: current service launch still takes workspace as a path.",
+    "evidence": "/Users/siddhartha/Development/source/life_prod/agent_99/docs/architecture.md:221, orchestrator/service.py:337"
    },
    "verdict": "priced_ok"
   },
   {
    "id": "I3",
-   "statement": "Work-area raw records carry Agent99's full stored domain; the note currently says version bumps on EVERY record change.",
+   "statement": "Work-area raw records use Agent99's full stored domain, with version behavior mirrored per WorkAreaStore operation: pending->ready bumps 1->2, display-name rename preserves version.",
    "consumer": {
-    "answer": "Agent99 WorkAreaStore, executor expected-state delivery, launch resolution, and future fusion consume the record and version.",
+    "answer": "Agent99 WorkAreaStore, launcher resolution, future fusion, and work-area CRUD consumers observe the record and version semantics.",
     "evidence": "implementation/brainstorming/project-concept.md:150"
    },
    "payload": {
@@ -83,74 +76,74 @@
     "evidence": "/Users/siddhartha/Development/source/life_prod/agent_99/apps/agent_99/lib/agent_99/body/work_area_store.ex:43"
    },
    "frequency": {
-    "answer": "Read at launch, listing, inspection, and expected-state delivery; bounded by configured work areas.",
-    "evidence": "/Users/siddhartha/Development/source/life_prod/agent_99/apps/agent_99/lib/agent_99/body/work_area_store.ex:215"
+    "answer": "Low-frequency work-area declaration, transition, rename, delete, listing, and launch resolution; bounded by configured work areas.",
+    "evidence": "/Users/siddhartha/Development/source/life_prod/agent_99/apps/agent_99/lib/agent_99/body/work_area_store.ex:90"
    },
    "victim": {
-    "answer": "Executor expected-state consumers need material descriptor/status/provenance versions; no victim is named for display-name-only version bumps.",
-    "evidence": "derived: expected-state maps carry version, while display_name is only a UI label and Agent99 preserves version on rename."
+    "answer": "Future Agent99-readable consumers are harmed if lifecycle/provenance transitions expose stale versions or label-only edits look like material changes.",
+    "evidence": "/Users/siddhartha/Development/source/life_prod/agent_99/apps/agent_99/test/agent_99/body/work_area_store_test.exs:115, /Users/siddhartha/Development/source/life_prod/agent_99/apps/agent_99/test/agent_99/body/work_area_store_test.exs:270"
    },
    "cost": {
-    "answer": "Requires exact Agent99-compatible validation and tests for material bumps plus the display_name exception."
+    "answer": "Requires exact domain validation plus per-operation version tests rather than one blanket rule."
    },
    "cheaper_alternative": {
-    "answer": "Use Agent99's narrower version rule; rejected only for stale descriptor/status/provenance changes, not for UI-label edits."
+    "answer": "Use a simple always-bump or descriptor-only rule; rejected because both contradict pinned Agent99 behavior."
    },
    "ecosystem_equivalent": {
-    "answer": "reject: Agent99 does not bump display-name-only changes; it preserves the version.",
-    "evidence": "/Users/siddhartha/Development/source/life_prod/agent_99/apps/agent_99/test/agent_99/body/work_area_store_test.exs:115"
+    "answer": "adopt: WorkAreaStore already implements and tests the per-operation behavior.",
+    "evidence": "/Users/siddhartha/Development/source/life_prod/agent_99/apps/agent_99/lib/agent_99/body/work_area_store.ex:127, /Users/siddhartha/Development/source/life_prod/agent_99/apps/agent_99/lib/agent_99/body/work_area_store.ex:181"
    },
-   "verdict": "speculative"
+   "verdict": "priced_ok"
   },
   {
    "id": "I4",
-   "statement": "refs/work_area:<name> records are raw Agent99-readable maps, not KV envelopes, and raw-family concurrency CASes the entire current value.",
+   "statement": "refs/work_area:<name> is stored raw, not enveloped; raw-family concurrency CASes the entire current value, not the domain version.",
    "consumer": {
     "answer": "Agent99 WorkAreaStore, future fusion, and any local raw-family writer consume this storage split.",
-    "evidence": "implementation/brainstorming/project-concept.md:192"
+    "evidence": "implementation/brainstorming/project-concept.md:191"
    },
    "payload": {
-    "answer": "The raw value is the top-level work-area map; concurrency uses client.cas(key, current_value, new_value).",
-    "evidence": "implementation/brainstorming/project-concept.md:193"
+    "answer": "The payload is the top-level Agent99 work-area map; writes compare the whole current stored value.",
+    "evidence": "implementation/brainstorming/project-concept.md:194"
    },
    "frequency": {
-    "answer": "Low-frequency work-area CRUD and executor transition paths; bounded by configured work areas.",
+    "answer": "Low-frequency work-area CRUD and transition paths; bounded by configured work areas.",
     "evidence": "/Users/siddhartha/Development/source/life_prod/agent_99/apps/agent_99/lib/agent_99/body/work_area_store.ex:467"
    },
    "victim": {
-    "answer": "The future Agent99 reader is harmed if raw work areas are enveloped or CASed against a domain version token instead of the current value.",
-    "evidence": "implementation/brainstorming/project-concept.md:197"
+    "answer": "The future Agent99 reader is harmed if raw records are enveloped or if a version-token CAS loses label/status/provenance updates.",
+    "evidence": "implementation/brainstorming/project-concept.md:199"
    },
    "cost": {
     "answer": "Requires a separate raw-family path, whole-value CAS discipline, and compatibility tests."
    },
    "cheaper_alternative": {
-    "answer": "Use one enveloped JSON store for all families; rejected because Agent99 reads work areas raw."
+    "answer": "Use one enveloped JSON store for every family; rejected because Agent99 reads work areas raw."
    },
    "ecosystem_equivalent": {
-    "answer": "adopt: Agent99 already provides the raw record domain and whole-value CAS path.",
+    "answer": "adopt: Agent99 already provides raw record storage and whole-value CAS transitions.",
     "evidence": "/Users/siddhartha/Development/source/life_prod/agent_99/apps/agent_99/lib/agent_99/body/work_area_store.ex:489"
    },
    "verdict": "priced_ok"
   },
   {
    "id": "I5",
-   "statement": "Raw work-area delete writes Agent99's tombstone {name, deleted: true, version} with positive version, prior version + 1.",
+   "statement": "Raw work-area delete writes Agent99's tombstone {name, deleted: true, version} with positive prior-version-plus-one version, never the generic envelope tombstone.",
    "consumer": {
     "answer": "Agent99 WorkAreaStore, list filtering, point reads, and future fusion consume this tombstone shape.",
-    "evidence": "implementation/brainstorming/project-concept.md:199"
+    "evidence": "implementation/brainstorming/project-concept.md:201"
    },
    "payload": {
-    "answer": "The tombstone carries only name, deleted true, and version; WorkAreaStore recognizes it only when version is greater than zero.",
+    "answer": "The tombstone carries name, deleted true, and a positive version recognized by WorkAreaStore.",
     "evidence": "/Users/siddhartha/Development/source/life_prod/agent_99/apps/agent_99/lib/agent_99/body/work_area_store.ex:581"
    },
    "frequency": {
-    "answer": "Low-frequency work-area delete path; bounded by operator CRUD actions.",
+    "answer": "Low-frequency operator delete path; bounded by work-area CRUD actions.",
     "evidence": "/Users/siddhartha/Development/source/life_prod/agent_99/apps/agent_99/lib/agent_99/body/work_area_store.ex:200"
    },
    "victim": {
     "answer": "The operator and future adapter are harmed if a deleted work area reads back as malformed instead of unknown/deleted.",
-    "evidence": "/Users/siddhartha/Development/source/life_prod/agent_99/apps/agent_99/lib/agent_99/body/work_area_store.ex:287"
+    "evidence": "/Users/siddhartha/Development/source/life_prod/agent_99/apps/agent_99/test/agent_99/body/work_area_store_test.exs:466"
    },
    "cost": {
     "answer": "Requires reading the prior record before delete, computing version + 1, and testing positive tombstones."
@@ -160,27 +153,27 @@
    },
    "ecosystem_equivalent": {
     "answer": "adopt: WorkAreaStore already writes and recognizes this tombstone shape.",
-    "evidence": "/Users/siddhartha/Development/source/life_prod/agent_99/apps/agent_99/lib/agent_99/body/work_area_store.ex:536"
+    "evidence": "/Users/siddhartha/Development/source/life_prod/agent_99/apps/agent_99/lib/agent_99/body/work_area_store.ex:537"
    },
    "verdict": "priced_ok"
   },
   {
    "id": "I6",
-   "statement": "Our work_area_meta, policy, and run families use the LPC-style CAS envelope; raw work areas do not.",
+   "statement": "work_area_meta, policy, and run families use the LPC-style revision envelope; raw work areas do not.",
    "consumer": {
-    "answer": "The project store, service, panel, future fusion pump, and future Brain visibility mirror consume this storage split.",
-    "evidence": "implementation/brainstorming/project-concept.md:189"
+    "answer": "Project store, service, panel, future fusion pump, and future Brain visibility mirror consume this split.",
+    "evidence": "implementation/brainstorming/project-concept.md:172"
    },
    "payload": {
-    "answer": "The stored envelope carries revision, value, and deleted?; public reads carry exists?, revision, and value.",
-    "evidence": "/Users/siddhartha/Development/source/life_prod/life_product_components/elixir/apps/life_product_workspaces/lib/life_product_workspaces/cas.ex:31"
+    "answer": "Stored envelope carries revision, value, deleted?; public reads carry exists?, revision, and value.",
+    "evidence": "/Users/siddhartha/Development/source/life_prod/life_product_components/elixir/apps/life_product_workspaces/lib/life_product_workspaces/cas.ex:9"
    },
    "frequency": {
-    "answer": "Low-frequency project edits plus bounded status/digest projection writes during runs.",
-    "evidence": "implementation/brainstorming/project-concept.md:279"
+    "answer": "Low-frequency project edits plus bounded run status/digest projection writes during runs.",
+    "evidence": "implementation/brainstorming/project-concept.md:278"
    },
    "victim": {
-    "answer": "The operator and future Brain are harmed if fusion needs migration or loses projected run visibility.",
+    "answer": "The operator and future Brain are harmed if fusion requires migration or loses projected run visibility.",
     "evidence": "implementation/brainstorming/project-concept.md:116"
    },
    "cost": {
@@ -190,8 +183,8 @@
     "answer": "A plain JSON file is cheaper; rejected because fusion is meant to be a transport swap."
    },
    "ecosystem_equivalent": {
-    "answer": "adopt: LPC provides Client and Cas contracts; gap: the orchestrator lacks local project KV.",
-    "evidence": "/Users/siddhartha/Development/source/life_prod/life_product_components/elixir/apps/life_product_workspaces/lib/life_product_workspaces/client.ex:82"
+    "answer": "adopt: LPC provides Client and Cas contracts; gap: the orchestrator has no local project KV.",
+    "evidence": "/Users/siddhartha/Development/source/life_prod/life_product_components/elixir/apps/life_product_workspaces/lib/life_product_workspaces/client.ex:82, orchestrator/state.py:125"
    },
    "verdict": "priced_ok"
   },
@@ -199,29 +192,29 @@
    "id": "I7",
    "statement": "Key grammar uses one reserved namespace for our families, while refs/work_area:<name> is Agent99-native and never namespaced; citations and verifier paths must stay inside work-area roots.",
    "consumer": {
-    "answer": "The project store, future fusion pump, verifier, and prompt-driven workers consume the key and path-containment rules.",
-    "evidence": "implementation/brainstorming/project-concept.md:207"
-   },
-   "payload": {
-    "answer": "Families include raw work_area, work_area_meta, policy, run status, and reserved run digest keys; paths must land inside a work-area root.",
+    "answer": "Project store, future fusion pump, verifier, and prompt-driven workers consume key and path-containment rules.",
     "evidence": "implementation/brainstorming/project-concept.md:209"
    },
+   "payload": {
+    "answer": "Families include raw work_area, enveloped work_area_meta, policy, run status, and reserved run digest; cited/verifier paths stay inside roots.",
+    "evidence": "implementation/brainstorming/project-concept.md:211"
+   },
    "frequency": {
-    "answer": "Every project-store access and every mechanical verifier path/citation check.",
-    "evidence": "implementation/brainstorming/project-concept.md:214"
+    "answer": "Every project-store key access and every mechanical verifier path/citation check.",
+    "evidence": "implementation/brainstorming/project-concept.md:216"
    },
    "victim": {
     "answer": "The operator is harmed if verifier paths escape granted roots or if future fusion hides work areas from Agent99's fixed reader.",
     "evidence": "implementation/brainstorming/project-concept.md:119"
    },
    "cost": {
-    "answer": "Requires key builders, root containment checks, namespace configuration, and collision tests."
+    "answer": "Requires key builders, namespace configuration, root containment checks, and collision tests."
    },
    "cheaper_alternative": {
     "answer": "Ad hoc keys and filesystem paths are cheaper; rejected because they are collision-prone and can escape the work area."
    },
    "ecosystem_equivalent": {
-    "answer": "adopt: LPC provides binary key primitives and refs helpers; gap: the project namespace/key grammar is new.",
+    "answer": "adopt: LPC provides refs helpers for the raw family; gap: project namespace/key grammar is new.",
     "evidence": "/Users/siddhartha/Development/source/life_prod/life_product_components/elixir/apps/life_product_workspaces/lib/life_product_workspaces/datastore.ex:63"
    },
    "verdict": "priced_ok"
@@ -230,16 +223,16 @@
    "id": "I8",
    "statement": "Safeguards are versioned policy objects that add required contract fields, not prose-only warnings.",
    "consumer": {
-    "answer": "Prompt builders, worker-output validators, reviewers, and future Agent99 policy consume these objects.",
-    "evidence": "implementation/brainstorming/project-concept.md:217"
+    "answer": "Prompt builders, worker-output validators, reviewers, and future Agent99 policy surfaces consume these objects.",
+    "evidence": "implementation/brainstorming/project-concept.md:219"
    },
    "payload": {
     "answer": "Each policy carries id, version, enabled, scope, prompt text, contract schema, and mechanical checks.",
-    "evidence": "implementation/brainstorming/project-concept.md:219"
+    "evidence": "implementation/brainstorming/project-concept.md:221"
    },
    "frequency": {
-    "answer": "Evaluated for every worker call whose worker kind and unit kind match the policy scope.",
-    "evidence": "implementation/brainstorming/project-concept.md:236"
+    "answer": "Evaluated for every worker call whose worker kind and unit kind match policy scope.",
+    "evidence": "implementation/brainstorming/project-concept.md:238"
    },
    "victim": {
     "answer": "Consuming products and shared packages are harmed when warnings are missed and shared behavior is duplicated locally.",
@@ -253,28 +246,28 @@
    },
    "ecosystem_equivalent": {
     "answer": "adopt: Agent99 has versioned capability policy objects; gap: orchestrator contracts are fixed schemas today.",
-    "evidence": "/Users/siddhartha/Development/source/life_prod/agent_99/docs/cli-body-connector.md:88"
+    "evidence": "/Users/siddhartha/Development/source/life_prod/agent_99/docs/cli-body-connector.md:88, orchestrator/contracts.py:217"
    },
    "verdict": "priced_ok"
   },
   {
    "id": "I9",
-   "statement": "Contract extensions are declarative JSON over a closed verifier vocabulary and use the existing repair-retry path.",
+   "statement": "Contract extensions are declarative JSON over a closed verifier vocabulary and use the existing repair-retry path; projects cannot inject code or shell.",
    "consumer": {
-    "answer": "The driver, validator, policy authors, reviewers, and workers consume the verifier vocabulary.",
-    "evidence": "implementation/brainstorming/project-concept.md:243"
+    "answer": "Driver, validator, policy authors, workers, and reviewers consume the closed verifier vocabulary.",
+    "evidence": "implementation/brainstorming/project-concept.md:245"
    },
    "payload": {
-    "answer": "V1 carries path_exists, citation_exists, dir_listing_matches, non_empty, and enum; failed checks get one repair retry.",
-    "evidence": "implementation/brainstorming/project-concept.md:243"
+    "answer": "V1 carries path_exists, citation_exists, dir_listing_matches, non_empty, and enum; failed checks use one repair retry.",
+    "evidence": "implementation/brainstorming/project-concept.md:245"
    },
    "frequency": {
     "answer": "Every in-scope worker output validation; exactly one repair retry on contract violation.",
     "evidence": "orchestrator/runners.py:389"
    },
    "victim": {
-    "answer": "The operator and local machine are harmed if project config can inject code/shell or pass unverifiable claims.",
-    "evidence": "implementation/brainstorming/project-concept.md:342"
+    "answer": "The operator and local machine are harmed if project config can inject code/shell or pass unverifiable reuse claims.",
+    "evidence": "implementation/brainstorming/project-concept.md:350"
    },
    "cost": {
     "answer": "Requires verifier dispatch, schema checks, path containment checks, repair messages, and tests for every verifier."
@@ -283,56 +276,56 @@
     "answer": "Arbitrary project plugins are more flexible; rejected because the closed vocabulary prevents code/shell injection."
    },
    "ecosystem_equivalent": {
-    "answer": "gap: the orchestrator has repair-retry validation but no project extension registry or verifier vocabulary.",
-    "evidence": "orchestrator/contracts.py:217"
+    "answer": "gap: orchestrator has repair-retry validation but no project extension registry or verifier vocabulary.",
+    "evidence": "orchestrator/contracts.py:272"
    },
    "verdict": "priced_ok"
   },
   {
    "id": "I10",
-   "statement": "The ledger records project_resolved once per run and project_safeguard_seen once per policy id/version shown to workers; run-scoped amendments win on conflict.",
+   "statement": "Ledger records project_resolved once per run and project_safeguard_seen once per policy id/version shown to workers; amendments win on conflict.",
    "consumer": {
-    "answer": "Reviewers, fixers, seal halves, the operator, and future Persona/Brain surfaces consume these events to judge worker knowledge and precedence.",
-    "evidence": "implementation/brainstorming/project-concept.md:252"
+    "answer": "Reviewers, fixers, seal halves, operators, and future Persona/Brain surfaces consume these events to judge worker knowledge and precedence.",
+    "evidence": "implementation/brainstorming/project-concept.md:254"
    },
    "payload": {
-    "answer": "Events carry {project, work_area} and {policy_id, version, text[:300]}; amendments remain more specific later intent.",
-    "evidence": "implementation/brainstorming/project-concept.md:252"
+    "answer": "Events carry project/work_area and policy_id/version/text[:300]; run-scoped amendments remain higher-precedence operator intent.",
+    "evidence": "implementation/brainstorming/project-concept.md:254"
    },
    "frequency": {
-    "answer": "Once at run init for project resolution, first-seen per safeguard id/version, and applied whenever safeguards conflict with amendments.",
-    "evidence": "implementation/brainstorming/project-concept.md:257"
+    "answer": "Once at run init for project resolution and first-seen per safeguard id/version in prompts.",
+    "evidence": "implementation/brainstorming/project-concept.md:254"
    },
    "victim": {
-    "answer": "A reviewer or fixer is harmed if a worker is blamed for a safeguard absent from its prompt or if a later operator amendment loses precedence.",
+    "answer": "A reviewer or fixer is harmed if a worker is blamed for a safeguard absent from its prompt or if a later run amendment loses precedence.",
     "evidence": "implementation/brainstorming/project-concept.md:45"
    },
    "cost": {
-    "answer": "Adds ledger event types, dedup logic, prompt integration, version re-recording tests, and conflict ordering."
+    "answer": "Adds ledger event types, dedup/re-record logic, prompt integration, and conflict-ordering tests."
    },
    "cheaper_alternative": {
     "answer": "Do not ledger prompt exposure; rejected because amendment_seen already makes worker knowledge auditable."
    },
    "ecosystem_equivalent": {
-    "answer": "adopt: current amendments record first-seen prompt exposure with clipped text.",
+    "answer": "adopt: amendment_seen already records first-seen prompt exposure; gap: project events are new.",
     "evidence": "orchestrator/driver.py:523"
    },
    "verdict": "priced_ok"
   },
   {
    "id": "I11",
-   "statement": "Skeletons and slice notes touching reusable surfaces must include a cited adopt/gap/reject reuse audit, and reviewers must contrast it.",
+   "statement": "Skeletons and slice notes touching reusable surfaces must include cited adopt/gap/reject reuse audits, and reviewers must contrast each decision.",
    "consumer": {
-    "answer": "Planners, reviewers, fixers, source repos, and consuming products consume the audit decisions.",
-    "evidence": "implementation/brainstorming/project-concept.md:310"
+    "answer": "Planning workers, reviewers, fixers, source repositories, and consuming products consume the audit decisions.",
+    "evidence": "implementation/brainstorming/project-concept.md:312"
    },
    "payload": {
-    "answer": "The audit carries package/source decisions with citations; reviewers carry per-package concur/dissent entries with their own citations.",
-    "evidence": "implementation/brainstorming/project-concept.md:318"
+    "answer": "Audit rows enumerate package/source decisions with citations; review rows carry concur/dissent with reviewer citations.",
+    "evidence": "implementation/brainstorming/project-concept.md:315"
    },
    "frequency": {
     "answer": "Planning and review time only; bounded by relevant reuse packages and audit rows.",
-    "evidence": "implementation/brainstorming/project-concept.md:312"
+    "evidence": "implementation/brainstorming/project-concept.md:314"
    },
    "victim": {
     "answer": "Consuming products and LPC are harmed when existing shared behavior is duplicated locally.",
@@ -355,19 +348,19 @@
    "statement": "Greenfield rule: there are zero existing project records, work areas, policies, or KV entries; no migrations, compat shims, tolerant readers, or deprecation cycles for nonexistent data.",
    "consumer": {
     "answer": "Reviewers, skeleton drafters, implementers, and fixture authors consume this rule when judging compatibility scope.",
-    "evidence": "implementation/brainstorming/project-concept.md:262"
+    "evidence": "implementation/brainstorming/project-concept.md:264"
    },
    "payload": {
-    "answer": "Compatibility means matching Agent99's current readers for future fusion, while the orchestrator writes the full new domain.",
-    "evidence": "implementation/brainstorming/project-concept.md:264"
+    "answer": "Compatibility means matching Agent99's current readers for future fusion while the orchestrator writes the full new domain.",
+    "evidence": "implementation/brainstorming/project-concept.md:269"
    },
    "frequency": {
     "answer": "Applies throughout this pre-milestone design and every implementation/review claim derived from it.",
-    "evidence": "implementation/brainstorming/project-concept.md:262"
+    "evidence": "implementation/brainstorming/project-concept.md:264"
    },
    "victim": {
     "answer": "The operator and future implementer are harmed if review/fix work spends scope on migrations or tolerant readers for data that cannot exist.",
-    "evidence": "implementation/brainstorming/project-concept.md:264"
+    "evidence": "implementation/brainstorming/project-concept.md:270"
    },
    "cost": {
     "answer": "Costs explicit fail-closed contracts and review discipline; saves migration, deprecation, and legacy-reader machinery."
