@@ -377,12 +377,13 @@ def set_discovered_suite(state, command):
     time — this is the zero-config path."""
     command = str(command or "").strip()
     if not command or state.get("suite_command") == command:
-        return
+        return False
     previous = state.get("suite_command")
     state["suite_command"] = command
     append_event(
         state, "suite_discovered", command=command, previous=previous
     )
+    return True
 
 
 def record_draft(state, unit, kind, result, raw_path=None, family=None,

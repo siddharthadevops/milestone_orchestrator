@@ -344,6 +344,45 @@ class TestPhantomFixEmptyDelta(DriverTestCase):
             state = st.load(path)
             self.assertEqual(state["milestone"]["status"], st.M_FAILED)
 
+    def test_suite_arming_fix_is_not_a_phantom(self):
+        """Live case (M164 r55): the honest fix for a vacuous-gate
+        finding is supplying suite_command — a STATE fix with zero file
+        edits. Once adopted, the 'fixed' disposition is earned and the
+        episode closes green instead of tripping the phantom retry."""
+        with tempfile.TemporaryDirectory(prefix="orch-adv-") as ws:
+            path = init_state(ws, make_config(verification=[]))
+            driver = drv.Driver(path, runner=runners.MockRunner([
+                draft_step(),
+                step("review_round",
+                     report("review_round",
+                            [finding("F1", "no official suite recorded",
+                                     severity="P1")]),
+                     family="codex"),
+                step("fix_findings", dict(
+                    fix_ok([triaged("F1", "fixed",
+                                    "no official suite recorded",
+                                    severity="P1")]),
+                    suite_command="mix test",
+                )),
+                step("review_round", report("review_round"),
+                     family="codex"),
+                step("review_round", report("review_round"),
+                     family="claude"),
+                step("seal_half", report("seal_half"), family="codex"),
+                step("seal_half", report("seal_half"), family="claude"),
+            ]))
+            self.step_until(
+                driver, lambda s: s["units"][0]["status"] == st.U_SEALED,
+                max_steps=30,
+            )
+            state = st.load(path)
+            self.assertIsNone(state["failure"])
+            self.assertEqual(state["suite_command"], "mix test")
+            self.assertFalse([e for e in state["events"]
+                              if e["type"] == "phantom_fix_retry"])
+            self.assertTrue([e for e in state["events"]
+                             if e["type"] == "suite_discovered"])
+
     def test_pure_rejection_episode_still_closes_green(self):
         """The legitimate empty-delta case: all rejections, no edit claims
         (consultation transcripts under .orchestrator/ are bookkeeping,

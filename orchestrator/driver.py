@@ -1009,7 +1009,12 @@ class Driver(object):
             # may ARM a run that has none yet (live case: a reviewer
             # flagged the vacuous gate, the fixer supplied `mix test` —
             # dropping it on the floor forced a re-flag loop).
-            st.set_discovered_suite(self.state, output["suite_command"])
+            if st.set_discovered_suite(self.state, output["suite_command"]):
+                # Arming the suite IS a real fix even with zero file
+                # edits: exempt THIS fix round's 'fixed' dispositions
+                # from the phantom check. One-shot by construction —
+                # adoption only fires when it actually changes state.
+                unit["suite_armed_by_fix"] = True
         st.record_round(
             self.state,
             unit,
@@ -1060,6 +1065,7 @@ class Driver(object):
                 break
         if last_fix is None:
             return []
+        armed_now = unit.pop("suite_armed_by_fix", None)
         claims = []
         changed = []
         for p in last_fix.get("files_changed") or []:
@@ -1073,6 +1079,11 @@ class Driver(object):
             claims.append("files_changed=%s" % (changed,))
         for f in last_fix.get("findings", []):
             if f.get("disposition") == "fixed":
+                if armed_now:
+                    # This fix ARMED the run's suite command — a real
+                    # state-level fix; its 'fixed' verdicts are earned
+                    # even without file edits.
+                    continue
                 claims.append("finding %s disposed 'fixed'" % f.get("id"))
             if f.get("prevention"):
                 claims.append(
