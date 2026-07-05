@@ -603,20 +603,47 @@ def add_amendment(home, run_id, body):
     if len(text) > 4000:
         raise ApiError(400, "amendment text too long (max 4000 chars)")
     amendments = read_amendments(entry)
+    # Ids never reuse a deleted slot: a re-used id would be silently
+    # matched by the driver's amendment_seen dedup and skip its ledger
+    # trail event.
+    highest = 0
+    for a in amendments:
+        aid = str(a.get("id") or "")
+        if aid.startswith("A") and aid[1:].isdigit():
+            highest = max(highest, int(aid[1:]))
     amendments.append(
         {
-            "id": "A%d" % (len(amendments) + 1),
+            "id": "A%d" % (highest + 1),
             "text": text,
             "at": st.now_iso(),
         }
     )
+    _write_amendments(entry, amendments)
+    return amendments
+
+
+def delete_amendment(home, run_id, amendment_id):
+    """Remove an operator amendment; subsequent worker calls simply stop
+    carrying it (the ledger keeps the historical amendment_seen trail)."""
+    reg = registry.load(home)
+    entry = registry.get(reg, run_id)
+    if entry is None:
+        raise ApiError(404, "unknown run %r" % run_id)
+    amendments = read_amendments(entry)
+    kept = [a for a in amendments if str(a.get("id")) != amendment_id]
+    if len(kept) == len(amendments):
+        raise ApiError(404, "unknown amendment %r" % amendment_id)
+    _write_amendments(entry, kept)
+    return kept
+
+
+def _write_amendments(entry, amendments):
     path = _amendments_path(entry)
     os.makedirs(os.path.dirname(path), exist_ok=True)
     tmp = path + ".tmp"
     with open(tmp, "w", encoding="utf-8") as fh:
         json.dump({"amendments": amendments}, fh, indent=1)
     os.replace(tmp, path)
-    return amendments
 
 
 def run_detail(home, run_id, log_tail=80):
@@ -760,7 +787,11 @@ def make_handler(home):
             try:
                 route, query = self._route()
                 parts = route.rstrip("/").split("/")
-                if len(parts) == 4 and route.startswith("/api/runs/"):
+                if (len(parts) == 6 and route.startswith("/api/runs/")
+                        and parts[4] == "amendments"):
+                    amendments = delete_amendment(home, parts[3], parts[5])
+                    self._json(200, {"ok": True, "amendments": amendments})
+                elif len(parts) == 4 and route.startswith("/api/runs/"):
                     self._json(200, {"ok": True, **delete_run(
                         home, parts[3], purge=query.get("purge") == "1")})
                 else:

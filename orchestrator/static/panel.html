@@ -64,6 +64,9 @@
   .unit + .unit { margin-top: 10px; }
   .amend { font-size: 12px; padding: 4px 0; border-bottom: 1px dashed var(--line); }
   .amend .t { color: #71717a; margin-right: 6px; font-size: 11px; }
+  .amend-x { float: right; border: none; background: none; color: #a1a1aa;
+    cursor: pointer; font-size: 14px; line-height: 1; padding: 0 4px; }
+  .amend-x:hover { color: var(--bad); }
   .amendform { display: flex; gap: 6px; margin-top: 8px; align-items: flex-start; }
   .amendform textarea { flex: 1; font: inherit; font-size: 12px; padding: 6px;
     border: 1px solid var(--line); border-radius: 6px; resize: vertical;
@@ -359,7 +362,7 @@ async function refreshDetail() {
     if (sum) {
       html += `<div class="card"><h3>Operator amendments</h3>` +
         ((d.amendments || []).map(a =>
-          `<div class="amend"><span class="t">${esc(a.id)} · ${esc((a.at || "").slice(0, 16).replace("T", " "))}</span>${esc(a.text)}</div>`
+          `<div class="amend"><span class="t">${esc(a.id)} · ${esc((a.at || "").slice(0, 16).replace("T", " "))}</span>${esc(a.text)}<button class="amend-x" title="Remove — stops binding from the next worker call" onclick="delAmend('${esc(a.id)}')">×</button></div>`
         ).join("") || `<div class="amend-hint">none — notes added here bind every subsequent worker call</div>`) +
         `<div class="amendform">
            <textarea id="amendText" rows="4" placeholder="Binding constraint, e.g. 'Do not touch hot paths: no new indexes, no extra SQL, no machinery in message send.'"></textarea>
@@ -461,6 +464,13 @@ async function refreshDetail() {
     document.getElementById("detail").innerHTML =
       `<div class="failure">${esc(e.message)}</div>`;
   }
+}
+async function delAmend(aid) {
+  if (!confirm(`Remove amendment ${aid}? It stops binding from the next worker call.`)) return;
+  try {
+    await api(`/api/runs/${selected}/amendments/${aid}`, {method: "DELETE"});
+  } catch (e) { alert(e.message); }
+  refreshDetail();
 }
 async function addAmend() {
   const el = document.getElementById("amendText");

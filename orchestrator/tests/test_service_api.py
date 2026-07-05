@@ -489,6 +489,27 @@ class AmendmentsApiTest(ServiceApiTest):
         self.assertEqual([a["id"] for a in body["amendments"]],
                          ["A1", "A2"])
 
+    def test_delete_amendment_and_no_id_reuse(self):
+        ws = self.workspace("ws-amend-del")
+        status, body = self.create_run(ws)
+        rid = body["run"]["id"]
+        for text in ("First.", "Second."):
+            self.request_json(
+                "POST", "/api/runs/%s/amendments" % rid, {"text": text})
+        status, body = self.request_json(
+            "DELETE", "/api/runs/%s/amendments/A1" % rid)
+        self.assertEqual(status, 200)
+        self.assertEqual([a["id"] for a in body["amendments"]], ["A2"])
+        # A new amendment must NOT reuse the deleted A1 slot (the driver
+        # dedups amendment_seen by id; reuse would skip the ledger trail).
+        status, body = self.request_json(
+            "POST", "/api/runs/%s/amendments" % rid, {"text": "Third."})
+        self.assertEqual([a["id"] for a in body["amendments"]],
+                         ["A2", "A3"])
+        status, _ = self.request_json(
+            "DELETE", "/api/runs/%s/amendments/A9" % rid)
+        self.assertEqual(status, 404)
+
     def test_amendment_validation(self):
         ws = self.workspace("ws-amend-bad")
         status, body = self.create_run(ws)
