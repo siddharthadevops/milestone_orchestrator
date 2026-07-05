@@ -53,6 +53,13 @@
   .chip.sev23 { color: #c2610c; border-color: #fcd9a8; background: #fff7ed; }
   .chip.sev01 { color: #db2777; border-color: #f9c7dd; background: #fdf2f8; }
   .unit.ghost { opacity: .45; }
+  .pipe-cat { margin: 16px 0 6px; padding-top: 10px; font-size: 11px;
+    font-weight: 600; letter-spacing: .07em; text-transform: uppercase;
+    color: #71717a; border-top: 1px solid #e4e4e7; }
+  .pipe-cat:first-of-type { margin-top: 4px; padding-top: 0; border-top: 0; }
+  .pipe-cat .unit-title { text-transform: none; letter-spacing: 0;
+    font-weight: 500; }
+  .unit + .unit { margin-top: 10px; }
   .unit-title { color: #71717a; font-size: 11px; margin-left: 6px; }
   .chip.working { color: var(--accent); border-color: #c3d4fb;
                   background: var(--accent-soft); display: inline-flex;
@@ -345,10 +352,8 @@ async function refreshDetail() {
         const sl = (sum.slices || []).find(x => x.id === id);
         return sl ? `<span class="unit-title">${esc(sl.title)}</span>` : "";
       };
-      const unitTitle = key => {
-        const m = key.match(/^slice_(?:doc|impl)-(\d+)$/);
-        return m ? sliceTitle(parseInt(m[1], 10)) : "";
-      };
+      const catRow = (label, title) =>
+        `<div class="pipe-cat">${esc(label)}${title}</div>`;
       const unitRow = u => {
         let time = "";
         if (u.opened_epoch && u.closed_epoch)
@@ -357,7 +362,7 @@ async function refreshDetail() {
           time = ` · ${elapsed(u.opened_epoch)}`;
         return `
         <div class="unit">
-          <div class="unit-head"><span class="unit-name">${esc(u.unit)}</span>${unitTitle(u.unit)}
+          <div class="unit-head"><span class="unit-name">${esc(u.unit)}</span>
             <span class="st ${esc(u.status)}">${esc(u.status)}${time}</span></div>
           <div class="chips">${draftChip(u.draft)}${
             [].concat(
@@ -368,21 +373,25 @@ async function refreshDetail() {
             ${u.unit === sum.current_unit && running ? workingChip(s) : ""}</div>
         </div>`;
       };
-      const ghostRow = (key, sl) => `
+      const ghostRow = key => `
         <div class="unit ghost">
-          <div class="unit-head"><span class="unit-name">${esc(key)}</span>${sliceTitle(sl.id)}
+          <div class="unit-head"><span class="unit-name">${esc(key)}</span>
             <span class="st">pending</span></div>
         </div>`;
       const byKey = {};
       (sum.units || []).forEach(u => { byKey[u.unit] = u; });
       const seen = {};
       let rows = "";
-      if (byKey.skeleton) { rows += unitRow(byKey.skeleton); seen.skeleton = 1; }
+      if (byKey.skeleton) {
+        rows += catRow("Skeleton", "") + unitRow(byKey.skeleton);
+        seen.skeleton = 1;
+      }
       (sum.slices || []).forEach(sl => {
         const pad = String(sl.id).padStart(2, "0");
+        rows += catRow(`Slice ${pad}`, sliceTitle(sl.id));
         [`slice_doc-${pad}`, `slice_impl-${pad}`].forEach(k => {
           if (byKey[k]) { rows += unitRow(byKey[k]); seen[k] = 1; }
-          else rows += ghostRow(k, sl);
+          else rows += ghostRow(k);
         });
       });
       (sum.units || []).forEach(u => { if (!seen[u.unit]) rows += unitRow(u); });
