@@ -242,10 +242,11 @@
     <datalist id="dl_a_implementer"></datalist>
     <datalist id="dl_a_fixer"></datalist>
     <div class="hint">Options adapt to the agent: claude ids
-      (fable-5 / opus-4.8 / sonnet-5, efforts low→max) or the codex
-      catalog (gpt-5.5 …, efforts low→xhigh). Empty = family default
-      (claude: opus-4.8/max, codex: gpt-5.5/xhigh). Editable mid-run
-      from the run view.</div></div>
+      (fable-5 / opus-4.8 / sonnet-5, efforts low→max plus
+      <b>ultracode</b> = xhigh + standing multi-agent workflows; pick
+      agent claude to see it) or the codex catalog (gpt-5.5 …, efforts
+      low→xhigh). Empty = family default (claude: opus-4.8/max, codex:
+      gpt-5.5/xhigh). Editable mid-run from the run view.</div></div>
   <div class="field">
     <button class="btn" type="button" id="f_more_btn"
       onclick="toggleMore()">More options ▾</button></div>
@@ -304,7 +305,7 @@
   <datalist id="dl_ra_fixer"></datalist>
   <div class="hint" style="margin-top:8px">Empty = launch config / defaults.
     Binds from the NEXT act resolution (drivers started before this feature
-    need one Stop → Start).</div>
+    need one Stop → Start). ultracode is claude-only.</div>
   <div class="formrow">
     <span></span>
     <button class="btn"
@@ -869,7 +870,7 @@ const MODEL_OPTS = {
   codex: ["gpt-5.5", "gpt-5.4", "gpt-5.3-codex-spark", "gpt-5.4-mini"],
 };
 const EFFORT_OPTS = {
-  claude: ["low", "medium", "high", "xhigh", "max"],
+  claude: ["low", "medium", "high", "xhigh", "max", "ultracode"],
   codex: ["low", "medium", "high", "xhigh"],
 };
 function agentModels(agent) {

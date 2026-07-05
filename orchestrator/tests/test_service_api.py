@@ -555,6 +555,19 @@ class ActsApiTest(ServiceApiTest):
         status, _ = self.request_json(
             "POST", "/api/runs/%s/acts" % rid, {"fixer": {"model": "x" * 200}})
         self.assertEqual(status, 400)
+        status, _ = self.request_json(
+            "POST", "/api/runs/%s/acts" % rid,
+            {"fixer": {"agent": "codex", "effort": "ultracode"}})
+        self.assertEqual(status, 400)
+        status, _ = self.request_json(
+            "POST", "/api/runs/%s/acts" % rid,
+            {"fixer": {"effort": "ultracode"}})
+        self.assertEqual(status, 400)
+        status, body = self.request_json(
+            "POST", "/api/runs/%s/acts" % rid,
+            {"fixer": {"agent": "claude", "effort": "ultracode"}})
+        self.assertEqual(status, 200)
+        self.assertEqual(body["acts"]["fixer"]["effort"], "ultracode")
 
 
 class StoryApiTest(ServiceApiTest):

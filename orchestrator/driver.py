@@ -71,6 +71,11 @@ DEFAULT_CONFIG = {
     # gpt-5.4-mini) with reasoning efforts low|medium|high|xhigh set via
     # `-c model_reasoning_effort=...` (bare value: failed TOML parse
     # falls back to the literal string, per codex --help).
+    # Pseudo effort "ultracode" (claude-only): the runner translates it to
+    # --effort xhigh + --settings '{"ultracode": true}' + the trigger
+    # keyword prepended to the prompt (runners.resolve_ultracode) — the
+    # session mode requires effective effort xhigh, so no other tier can
+    # carry it. codex rejects it.
     "model_defaults": {
         "claude": {"model": "claude-opus-4-8", "effort": "max"},
         "codex": {"model": "gpt-5.5", "effort": "xhigh"},
@@ -556,6 +561,18 @@ class Driver(object):
         dm, de = self._family_defaults(family)
         model = model or dm
         effort = effort or de
+        if (effort == runners.ULTRACODE_EFFORT
+                and family != runners.ULTRACODE_FAMILY):
+            # Operator config error — fail crisply here instead of routing
+            # it through infra retries / the failure classifier.
+            st.fail_run(
+                self.state,
+                "effort 'ultracode' is claude-only but the %s act resolved "
+                "to family %r; fix acts/model_defaults" % (kind, family),
+                unit=st.current_unit(self.state),
+            )
+            self._save()
+            raise StopStep("ultracode on non-claude family")
         retries = self.config.get("infra_retry_backoff_s")
         if retries is None:
             retries = [10, 30]

@@ -21,6 +21,7 @@ import time
 import unittest
 
 from orchestrator import contracts
+from orchestrator import runners
 from orchestrator.runners import (
     format_changes,
     snapshot_changes,
@@ -1336,6 +1337,62 @@ class TestSnapshotChangesFormatting(unittest.TestCase):
         self.assertIn("f07", out)
         self.assertNotIn("f08", out)
         self.assertIn("(+4 more)", out)
+
+
+class TestUltracodeResolution(unittest.TestCase):
+    """"ultracode" is a claude-only pseudo effort tier: the CLI enum
+    rejects the word, so the runner translates it (xhigh + the session
+    settings flag + the trigger keyword) before the process spawns."""
+
+    def test_claude_ultracode_translates(self):
+        prompt, effort, extra = runners.resolve_ultracode(
+            "claude", "KIND: implement\nbody", "ultracode")
+        self.assertEqual(effort, runners.ULTRACODE_CLI_EFFORT)
+        self.assertEqual(
+            prompt, runners.ULTRACODE_KEYWORD + "\nKIND: implement\nbody")
+        self.assertEqual(tuple(extra), runners.ULTRACODE_EXTRA_ARGS)
+        # The prepended keyword line must not break KIND detection.
+        self.assertEqual(runners.prompt_kind(prompt), "implement")
+
+    def test_non_ultracode_passes_through(self):
+        for effort in ("high", None):
+            out = runners.resolve_ultracode("claude", "p", effort)
+            self.assertEqual(out, ("p", effort, ()))
+
+    def test_codex_ultracode_is_a_config_error(self):
+        with self.assertRaisesRegex(RunnerError, "claude-only"):
+            runners.resolve_ultracode("codex", "p", "ultracode")
+
+    def test_subprocess_claude_gets_xhigh_settings_and_keyword(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            script = os.path.join(tmp, "argv_and_stdin.py")
+            with open(script, "w", encoding="utf-8") as fh:
+                fh.write(textwrap.dedent("""\
+                    import sys
+                    print("|".join(sys.argv[1:]))
+                    sys.stdout.write(sys.stdin.read())
+                    """))
+            ws = os.path.join(tmp, "ws")
+            os.makedirs(ws)
+            runner = SubprocessRunner(
+                {"claude": [sys.executable, script,
+                            "--model", "{model}", "--effort", "{effort}"]},
+                {},
+            )
+            result = runner.call("claude", "PROMPT BODY", ws,
+                                 model="m", effort="ultracode")
+            lines = result.text.splitlines()
+            self.assertIn("--effort|xhigh", lines[0])
+            self.assertIn('--settings|{"ultracode": true}', lines[0])
+            self.assertNotIn("--effort|ultracode", lines[0])
+            self.assertEqual(lines[1:], ["ultracode", "PROMPT BODY"])
+
+    def test_subprocess_codex_ultracode_raises_before_spawn(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            runner = SubprocessRunner(
+                {"codex": [os.path.join(tmp, "does-not-exist")]}, {})
+            with self.assertRaisesRegex(RunnerError, "claude-only"):
+                runner.call("codex", "p", tmp, effort="ultracode")
 
 
 if __name__ == "__main__":

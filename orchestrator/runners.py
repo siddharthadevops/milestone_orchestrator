@@ -146,6 +146,39 @@ def extract_json(text):
 # ---------------------------------------------------------------------------
 # Subprocess runner
 
+# "ultracode" modality: a claude-only pseudo effort tier. The CLI's effort
+# enum rejects the word; the real session mode is the settings key
+# {"ultracode": true}, and it is only ACTIVE while the effective effort
+# resolves to xhigh — any other --effort value defeats it (verified in the
+# claude 2.1.201 binary). The runner therefore translates the pseudo tier
+# into: --effort xhigh, the session settings flag appended to argv, and the
+# trigger keyword prepended as the prompt's own first line (the per-turn
+# Workflow nudge; the standing session reminder does the heavy lifting).
+ULTRACODE_EFFORT = "ultracode"
+ULTRACODE_FAMILY = "claude"
+ULTRACODE_CLI_EFFORT = "xhigh"
+ULTRACODE_KEYWORD = "ultracode"
+ULTRACODE_EXTRA_ARGS = ("--settings", '{"ultracode": true}')
+
+
+def resolve_ultracode(family, prompt, effort):
+    """(prompt, effort, extra_argv) actually sent to the CLI.
+
+    Non-ultracode efforts pass through untouched. Ultracode on any family
+    other than claude is an operator config error, not a call to make."""
+    if effort != ULTRACODE_EFFORT:
+        return prompt, effort, ()
+    if family != ULTRACODE_FAMILY:
+        raise RunnerError(
+            "effort %r is claude-only (got family %r)"
+            % (ULTRACODE_EFFORT, family)
+        )
+    return (
+        ULTRACODE_KEYWORD + "\n" + prompt,
+        ULTRACODE_CLI_EFFORT,
+        ULTRACODE_EXTRA_ARGS,
+    )
+
 
 def apply_model_effort(argv, model, effort):
     """Apply per-act model/effort to a command template.
@@ -195,7 +228,9 @@ class SubprocessRunner(object):
              timeout_override=None):
         if family not in self.commands:
             raise RunnerError("no command configured for family %r" % family)
+        prompt, effort, extra_argv = resolve_ultracode(family, prompt, effort)
         template = apply_model_effort(self.commands[family], model, effort)
+        template = template + list(extra_argv)
         output_file = None
         argv = []
         for arg in template:

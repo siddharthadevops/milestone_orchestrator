@@ -708,6 +708,11 @@ def set_acts(home, run_id, body):
                         400, "act %r field %r must be a short string"
                         % (key, f))
                 entry_out[f] = v
+        if (entry_out.get("effort") == "ultracode"
+                and entry_out.get("agent") != "claude"):
+            raise ApiError(
+                400, "act %r: effort 'ultracode' is claude-only; set "
+                "agent to 'claude' explicitly" % key)
         if entry_out:
             acts[key] = entry_out
     path = _acts_path(entry)
