@@ -66,7 +66,8 @@
   .amend .t { color: #71717a; margin-right: 6px; font-size: 11px; }
   .amendform { display: flex; gap: 6px; margin-top: 8px; align-items: flex-start; }
   .amendform textarea { flex: 1; font: inherit; font-size: 12px; padding: 6px;
-    border: 1px solid var(--line); border-radius: 6px; resize: vertical; }
+    border: 1px solid var(--line); border-radius: 6px; resize: vertical;
+    min-height: 90px; }
   .amend-hint { font-size: 11px; color: #71717a; margin-top: 4px; }
   .unit-title { color: #71717a; font-size: 11px; margin-left: 6px; }
   .chip.working { color: var(--accent); border-color: #c3d4fb;
@@ -361,7 +362,7 @@ async function refreshDetail() {
           `<div class="amend"><span class="t">${esc(a.id)} · ${esc((a.at || "").slice(0, 16).replace("T", " "))}</span>${esc(a.text)}</div>`
         ).join("") || `<div class="amend-hint">none — notes added here bind every subsequent worker call</div>`) +
         `<div class="amendform">
-           <textarea id="amendText" rows="2" placeholder="Binding constraint, e.g. 'Do not touch hot paths: no new indexes, no extra SQL, no machinery in message send.'"></textarea>
+           <textarea id="amendText" rows="4" placeholder="Binding constraint, e.g. 'Do not touch hot paths: no new indexes, no extra SQL, no machinery in message send.'"></textarea>
            <button class="btn" onclick="addAmend()">Add</button>
          </div>
          <div class="amend-hint">Applies from the next worker call. Drivers started before this feature exists need one Stop → Start to begin reading amendments.</div></div>`;
@@ -436,7 +437,26 @@ async function refreshDetail() {
     }
     html += `<div class="card"><h3>Driver log</h3>
       <pre class="log mono">${esc((d.log || []).join(""))}</pre></div>`;
+    const prev = document.getElementById("amendText");
+    const draft = prev ? {
+      value: prev.value,
+      height: prev.style.height,
+      focused: document.activeElement === prev,
+      selStart: prev.selectionStart,
+      selEnd: prev.selectionEnd,
+    } : null;
     document.getElementById("detail").innerHTML = html;
+    if (draft) {
+      const el = document.getElementById("amendText");
+      if (el) {
+        el.value = draft.value;
+        if (draft.height) el.style.height = draft.height;
+        if (draft.focused) {
+          el.focus();
+          el.setSelectionRange(draft.selStart, draft.selEnd);
+        }
+      }
+    }
   } catch (e) {
     document.getElementById("detail").innerHTML =
       `<div class="failure">${esc(e.message)}</div>`;
