@@ -719,6 +719,78 @@ def set_acts(home, run_id, body):
     return acts
 
 
+def run_story(home, run_id, item):
+    """The full record behind one pipeline chip — fetched on click, so
+    the 2s-poll summary stays lean. item forms: round:<round_id>,
+    seal:<unit>:<attempt>, draft:<unit>."""
+    reg = registry.load(home)
+    entry = registry.get(reg, run_id)
+    if entry is None:
+        raise ApiError(404, "unknown run %r" % run_id)
+    try:
+        state = st.load(entry["state_path"])
+    except Exception as exc:
+        raise ApiError(409, "state unreadable: %s" % exc)
+    kind, _, ref = (item or "").partition(":")
+    if kind == "round":
+        for unit in state["units"]:
+            for r in unit["rounds"]:
+                if r["id"] == ref:
+                    return {
+                        "story": "round",
+                        "unit": st.unit_key(unit),
+                        "id": r["id"],
+                        "family": r["family"],
+                        "kind": r["kind"],
+                        "at": r["at"],
+                        "duration_s": r.get("duration_s"),
+                        "model": r.get("model"),
+                        "effort": r.get("effort"),
+                        "invalidated": r.get("invalidated"),
+                        "raw_path": r.get("raw_path"),
+                        "source_round_id": r.get("source_round_id"),
+                        "queued": r.get("queued"),
+                        "result": r.get("result"),
+                    }
+        raise ApiError(404, "unknown round %r" % ref)
+    if kind == "seal":
+        unit_key, _, attempt = ref.rpartition(":")
+        for unit in state["units"]:
+            if st.unit_key(unit) != unit_key:
+                continue
+            for s_ in unit["seals"]:
+                if str(s_["attempt"]) == attempt:
+                    return {
+                        "story": "seal",
+                        "unit": unit_key,
+                        "attempt": s_["attempt"],
+                        "passed": s_["passed"],
+                        "at": s_["at"],
+                        "invalidated": s_.get("invalidated"),
+                        "halves": s_.get("halves"),
+                    }
+        raise ApiError(404, "unknown seal %r" % ref)
+    if kind == "draft":
+        for unit in state["units"]:
+            if st.unit_key(unit) == ref and unit.get("draft"):
+                d = unit["draft"]
+                return {
+                    "story": "draft",
+                    "unit": ref,
+                    "kind": d.get("kind"),
+                    "family": d.get("family"),
+                    "model": d.get("model"),
+                    "effort": d.get("effort"),
+                    "duration_s": d.get("duration_s"),
+                    "at": d.get("at"),
+                    "raw_path": d.get("raw_path"),
+                    "artifact": unit.get("artifact"),
+                    "result": d.get("result"),
+                }
+        raise ApiError(404, "unknown draft %r" % ref)
+    raise ApiError(400, "item must be round:/seal:/draft:")
+
+
 def run_detail(home, run_id, log_tail=80):
     reap_exited_drivers(home)
     reg = registry.load(home)
@@ -816,6 +888,12 @@ def make_handler(home):
                         self._json(200, {"ok": True, **run_detail(home, parts[3])})
                     elif len(parts) == 5 and parts[4] == "log":
                         self._json(200, {"ok": True, "lines": run_log(home, parts[3], 200)})
+                    elif len(parts) == 5 and parts[4] == "story":
+                        self._json(200, {
+                            "ok": True,
+                            **run_story(home, parts[3],
+                                        query.get("item", "")),
+                        })
                     else:
                         self._json(404, {"ok": False, "error": "not found"})
                 else:

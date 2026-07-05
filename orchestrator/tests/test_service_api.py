@@ -557,5 +557,70 @@ class ActsApiTest(ServiceApiTest):
         self.assertEqual(status, 400)
 
 
+class StoryApiTest(ServiceApiTest):
+    def _seed(self, ws):
+        status, body = self.create_run(ws)
+        rid = body["run"]["id"]
+        reg = registry.load(self.home)
+        entry = registry.get(reg, rid)
+        state = st.load(entry["state_path"])
+        unit = state["units"][0]
+        unit["draft"] = {
+            "kind": "draft_skeleton", "family": "codex", "model": "gpt",
+            "effort": None, "duration_s": 12.5,
+            "at": "2026-07-05T10:00:00+0200", "raw_path": "raw/d.txt",
+            "result": {"status": "ok", "kind": "draft_skeleton",
+                       "artifact": "docs/skeleton.md",
+                       "slices": [{"id": 1, "title": "core"}]},
+        }
+        unit["artifact"] = "docs/skeleton.md"
+        unit["rounds"].append({
+            "id": "skeleton-codex-r1", "family": "codex",
+            "kind": "review_round", "at": "2026-07-05T10:10:00+0200",
+            "duration_s": 33.0, "raw_path": "raw/r1.txt",
+            "result": {"status": "ok", "kind": "review_round",
+                       "findings": [{"id": "F1", "severity": "P2",
+                                     "summary": "boundary unclear"}]},
+        })
+        unit["seals"].append({
+            "attempt": 1, "passed": True, "invalidated": None,
+            "at": "2026-07-05T11:00:00+0200",
+            "halves": {"codex": {"result": {"findings": []},
+                                 "duration_s": 60.0,
+                                 "raw_path": "raw/s1.txt",
+                                 "workspace_modified": False}},
+        })
+        st.save(entry["state_path"], state)
+        return rid
+
+    def test_round_seal_and_draft_stories(self):
+        ws = self.workspace("ws-story")
+        rid = self._seed(ws)
+        status, body = self.request_json(
+            "GET", "/api/runs/%s/story?item=round:skeleton-codex-r1" % rid)
+        self.assertEqual(status, 200)
+        self.assertEqual(body["story"], "round")
+        self.assertEqual(body["result"]["findings"][0]["id"], "F1")
+        status, body = self.request_json(
+            "GET", "/api/runs/%s/story?item=seal:skeleton:1" % rid)
+        self.assertEqual(status, 200)
+        self.assertTrue(body["passed"])
+        self.assertIn("codex", body["halves"])
+        status, body = self.request_json(
+            "GET", "/api/runs/%s/story?item=draft:skeleton" % rid)
+        self.assertEqual(status, 200)
+        self.assertEqual(body["result"]["artifact"], "docs/skeleton.md")
+
+    def test_story_errors(self):
+        ws = self.workspace("ws-story-bad")
+        rid = self._seed(ws)
+        status, _ = self.request_json(
+            "GET", "/api/runs/%s/story?item=round:nope" % rid)
+        self.assertEqual(status, 404)
+        status, _ = self.request_json(
+            "GET", "/api/runs/%s/story?item=weird:x" % rid)
+        self.assertEqual(status, 400)
+
+
 if __name__ == "__main__":
     unittest.main()
