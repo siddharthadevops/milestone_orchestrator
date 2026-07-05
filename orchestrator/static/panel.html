@@ -54,8 +54,10 @@
   .chip.sev01 { color: #db2777; border-color: #f9c7dd; background: #fdf2f8; }
   .unit.ghost { opacity: .45; }
   .pipe-cat { margin: 16px 0 6px; padding-top: 10px; font-size: 11px;
-    font-weight: 600; letter-spacing: .07em; text-transform: uppercase;
-    color: #71717a; border-top: 1px solid #e4e4e7; }
+    font-weight: 700; letter-spacing: .07em; text-transform: uppercase;
+    color: #18181b; border-top: 1px solid #e4e4e7;
+    display: flex; justify-content: space-between; align-items: baseline; }
+  .pipe-cat .st { text-transform: none; letter-spacing: 0; font-weight: 500; }
   .pipe-cat:first-of-type { margin-top: 4px; padding-top: 0; border-top: 0; }
   .pipe-cat .unit-title { text-transform: none; letter-spacing: 0;
     font-weight: 500; }
@@ -91,7 +93,7 @@
   .unit { padding: 8px 0; border-bottom: 1px solid var(--line); }
   .unit:last-child { border-bottom: none; }
   .unit-head { display: flex; justify-content: space-between; }
-  .unit-name { font-weight: 600; font-size: 13px; }
+  .unit-name { font-weight: 500; font-size: 12px; color: #71717a; }
   .st { font-size: 12px; color: var(--dim); }
   .st.sealed { color: var(--ok); } .st.failed { color: var(--bad); }
   .st.rounds, .st.sealing, .st.seal_fix, .st.verify_fix { color: var(--warn); }
@@ -352,8 +354,10 @@ async function refreshDetail() {
         const sl = (sum.slices || []).find(x => x.id === id);
         return sl ? `<span class="unit-title">${esc(sl.title)}</span>` : "";
       };
-      const catRow = (label, title) =>
-        `<div class="pipe-cat">${esc(label)}${title}</div>`;
+      const catRow = (label, title, stat) =>
+        `<div class="pipe-cat"><span>${esc(label)}${title}</span>` +
+        (stat ? `<span class="st ${esc(stat)}">${esc(stat)}</span>` : "") +
+        `</div>`;
       const unitRow = u => {
         let time = "";
         if (u.opened_epoch && u.closed_epoch)
@@ -383,12 +387,16 @@ async function refreshDetail() {
       const seen = {};
       let rows = "";
       if (byKey.skeleton) {
-        rows += catRow("Skeleton", "") + unitRow(byKey.skeleton);
+        rows += catRow("Skeleton", "", byKey.skeleton.status)
+              + unitRow(byKey.skeleton);
         seen.skeleton = 1;
       }
       (sum.slices || []).forEach(sl => {
         const pad = String(sl.id).padStart(2, "0");
-        rows += catRow(`Slice ${pad}`, sliceTitle(sl.id));
+        const doc = byKey[`slice_doc-${pad}`], impl = byKey[`slice_impl-${pad}`];
+        const slStat = impl ? impl.status
+          : (doc && doc.status !== "sealed") ? doc.status : "pending";
+        rows += catRow(`Slice ${pad}`, sliceTitle(sl.id), slStat);
         [`slice_doc-${pad}`, `slice_impl-${pad}`].forEach(k => {
           if (byKey[k]) { rows += unitRow(byKey[k]); seen[k] = 1; }
           else rows += ghostRow(k);
