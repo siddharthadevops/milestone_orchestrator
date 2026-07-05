@@ -6,9 +6,10 @@ On `continue` / `continua`, read this index, then follow Active Continuation.
 When the active target is a milestone, read its `README.md`, then its latest
 work-log entry.
 
-Delivery follows the local canon:
-
-[`../../canon/process/README.md`](../../canon/process/README.md)
+Milestones S0–S9 were delivered under the retired manual canon. Since
+2026-07-05 milestones run under the deterministic orchestrator (see
+[`../../WORKSPACE.md`](../../WORKSPACE.md)); new entries land in this index
+automatically.
 
 ## Milestones
 
@@ -23,8 +24,12 @@ Delivery follows the local canon:
 | S6 | Review phase gate logging | Process canon | Closed (reviewed release `v0.7.0`) | Process layout | [README](review-phase-gate-logging/README.md) |
 | S7 | Documentation altitude rule | Process canon | Closed (reviewed release `v0.8.0`) | Process layout | [README](documentation-altitude-rule/README.md) |
 | S8 | Review fix convergence | Process canon | Closed (reviewed release `v0.9.0`) | Process layout | [README](review-fix-convergence/README.md) |
+| S9 | Codex timeout and agent self-review | Process canon | Abandoned 2026-07-05 (superseded by the orchestrator pivot) | Process layout | [README](codex-timeout-and-agent-self-review/README.md) |
 
 ## Active Continuation
 
-No active milestone. For any future canon change, read the roadmap before
-opening a new milestone.
+No active milestone. S9 was abandoned mid-skeleton on 2026-07-05: the
+deterministic orchestrator superseded both of its concerns (worker timeouts
+were removed entirely, and fresh-context review is structural in the
+reviewer/fixer separation). Future canon changes launch as orchestrator
+milestones.

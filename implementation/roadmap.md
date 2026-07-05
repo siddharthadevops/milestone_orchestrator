@@ -50,10 +50,20 @@ batched whole-artifact fixes, pre-relaunch self-review of pending diffs,
 exhaustive review prompts, and review-log evidence fields, without changing
 review gates or seal independence.
 
+S9 (Codex review watchdogs at 15 minutes; fresh-agent pre-relaunch
+self-review) was abandoned mid-skeleton on 2026-07-05: the deterministic
+orchestrator pivot superseded both concerns — worker calls are now unbounded
+by design, and every review round runs in a fresh context under the
+reviewer/fixer separation.
+
 ## Next Direction
 
-Open future canon changes as new milestones. Keep consuming product
-repositories pinned to reviewed tags.
+Future canon changes run as orchestrator milestones over this repository
+(see [`../WORKSPACE.md`](../WORKSPACE.md)). Consumers vendor and pin
+nothing; every run records its orchestrator commit (`orchestrator_rev`) as
+provenance. Queued need notes, in order: project concept, skeleton
+code-first discipline, machine API + persona projection
+(`implementation/brainstorming/`).
 
 ## Non-Goals
 
