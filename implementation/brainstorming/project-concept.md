@@ -162,8 +162,10 @@ may omit it and read back as name); `primary` and each `additional` element
 `Agent99.Body.Root.new/2`) and `device` a non-blank string or integer;
 roots distinct; `executor_id` non-blank string — here the local
 orchestrator's identity (provenance is non-authoritative in agent_99 by
-design); `version` non-negative integer, bumped on every descriptor
-change; `status` exactly `"pending" | "ready" | "unavailable"`.
+design); `version` non-negative integer, bumped on EVERY record change —
+descriptor edits, status transitions, and executor handoff alike
+(agent_99's tests pin pending → ready as version 1 → 2); `status` exactly
+`"pending" | "ready" | "unavailable"`.
 
 **KV envelope** (source: LPC `life_product_workspaces/lib/
 life_product_workspaces/cas.ex`): every entry is stored as
