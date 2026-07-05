@@ -144,7 +144,9 @@ sources during two advisory review rounds; treat them as pinned.
 **Work-area stored value** (source: `agent_99/apps/agent_99/lib/agent_99/
 body/work_area_store.ex` — moduledoc "Stored value" and `interpret/1`):
 `{name, display_name, primary, additional, executor_id, version, status}`.
-All keys present, or the agent_99 reader rejects the record as malformed:
+All keys present — except `display_name`, which agent_99's reader treats
+as optional and defaults from `name` on read (WE always write the full
+domain) — or the agent_99 reader rejects the record as malformed:
 `name` valid UTF-8, non-blank, ≤128 bytes, no `/`, no control characters;
 `display_name` trimmed, valid UTF-8, non-blank, ≤128 bytes, no control
 characters — slashes ARE allowed; only `name` rejects `/` (older records
@@ -239,6 +241,20 @@ mirroring `amendment_seen`.
 on conflict (the more specific, later intent); both render with operator
 authority; reviewers treat safeguard violations exactly like amendment
 violations.
+
+## Greenfield (no existing data)
+
+Everything this milestone builds is new: there are ZERO existing project
+records, work areas, policies, or KV entries anywhere — no legacy data,
+no legacy readers of our namespace, nothing to migrate. Compatibility
+means exactly ONE thing here: the shapes above match agent_99's CURRENT
+readers, for future fusion. Do NOT invent: migration paths,
+backward-compat shims, schema-evolution machinery beyond the version
+fields already specified, tolerant readers for record variants that
+cannot exist, or deprecation cycles. ("Older records may omit
+display_name" describes agent_99's reader behavior, not our data — we
+always write the full domain.) A finding or design that demands
+compatibility with data that does not exist is invalid at this altitude.
 
 ## Deliverables (work list surfaced by the r2 pricing pilot)
 
