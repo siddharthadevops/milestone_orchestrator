@@ -61,7 +61,8 @@ than converging later:
   compatibility claims — do not weaken it again). A run launches against
   `(project, work_area)`: **primary.path** is the git repo the driver owns
   and executes in; **additional** roots are read-only grants. Reuse-source
-  role metadata rides BESIDE the agent_99 fields, never inside them:
+  role metadata rides BESIDE the agent_99 fields, never inside them —
+  stored in its own `work_area_meta:<name>` family (see key grammar):
   `{inventory, registry, consumption}` — the directory planners must
   enumerate, the milestone registry to read, and the sanctioned consumption
   model (submodule + path dep, hex, HTTP client...). The ledger records the
@@ -185,16 +186,21 @@ map exactly as `Agent99.Body.WorkAreaStore` reads it (that store uses LPC
 `Datastore.update/5` plus a hand-rolled CAS over the Client primitives,
 NOT the `Cas` envelope adapter; its optimistic concurrency is the record's
 own domain `version`). Its delete is agent_99's own tombstone record
-`{name, deleted: true, version}` — never the envelope tombstone. Work-area
+`{name, deleted: true, version}` with `version` a POSITIVE integer,
+written as the prior record's version + 1 — their reader only recognizes
+tombstones with `version > 0` — never the envelope tombstone. Work-area
 values must stay inside the LPC value codec's safe domain so agent_99
 decodes them into its atom-keyed record; the "JSON-plain, string-keyed"
 rule above governs our families, not this one.
 
 **Key grammar**: one reserved namespace constant (default
 `milestone_orchestrator`, single config point, final name TBD). Families:
-`refs/work_area:<name>` · `policy:<id>` · `run:<run_id>/status` ·
-`run:<run_id>/digest` (digest RESERVED here, implemented by the
-machine-api milestone). Citations and verifier paths resolve against the
+`refs/work_area:<name>` (raw, agent_99-native) ·
+`work_area_meta:<name>` (OURS, enveloped: the reuse-source role metadata
+for that work area's roots — `{reuse_sources: [{root, inventory,
+registry, consumption}]}`; agent_99 never reads it) · `policy:<id>` ·
+`run:<run_id>/status` · `run:<run_id>/digest` (digest RESERVED here,
+implemented by the machine-api milestone). Citations and verifier paths resolve against the
 work area's roots and must land inside one of them — never outside.
 
 **Policy object** (one JSON document per safeguard at `policy:<id>`):
