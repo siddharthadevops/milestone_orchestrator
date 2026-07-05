@@ -49,6 +49,19 @@
   .chip.dirty { color: var(--warn); }
   .chip.pass { color: var(--ok); border-color: #bbe7c9; }
   .chip.fail { color: var(--bad); }
+  .chip.working { color: var(--accent); border-color: #c3d4fb;
+                  background: var(--accent-soft); display: inline-flex;
+                  align-items: center; gap: 6px; }
+  .spin { width: 10px; height: 10px; border-radius: 50%; flex: none;
+          border: 2px solid #c3d4fb; border-top-color: var(--accent);
+          animation: orb .8s linear infinite; }
+  @keyframes orb { to { transform: rotate(360deg); } }
+  .goalline.clamp { display: -webkit-box; -webkit-line-clamp: 3;
+                    -webkit-box-orient: vertical; overflow: hidden;
+                    white-space: pre-wrap; }
+  .goalline.full { white-space: pre-wrap; }
+  .morelink { color: var(--accent); cursor: pointer; font-size: 12px;
+              user-select: none; }
 
   /* right: state */
   section { flex: 1; overflow-y: auto; padding: 20px 26px; }
@@ -182,6 +195,8 @@
 
 <script>
 let selected = null;
+let goalOpen = false;
+function toggleGoal() { goalOpen = !goalOpen; refreshDetail(); }
 function esc(s) {
   return String(s == null ? "" : s).replace(/[&<>"]/g,
     c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
@@ -195,6 +210,18 @@ async function api(path, opts) {
 function msChip(s) {
   return `<span class="chip ${esc(s || "")}">${esc(s || "?")}</span>`;
 }
+const ACTIVITY = {
+  pending: "drafting", pre_review_verify: "verifying",
+  rounds: "review round", fixing: "fixing findings",
+  delta_review: "delta review", pre_seal_verify: "verifying",
+  sealing: "double seal",
+};
+function workingChip(r) {
+  if (r.process !== "running" || !r.current_unit_status) return "";
+  const label = ACTIVITY[r.current_unit_status] || r.current_unit_status;
+  return `<span class="chip working"><span class="spin"></span>` +
+         `${esc(r.current_unit)} · ${esc(label)}</span>`;
+}
 async function refreshRuns() {
   try {
     const data = await api("/api/runs");
@@ -206,13 +233,15 @@ async function refreshRuns() {
         <div class="name"><span class="dot ${r.process}"></span>
           ${esc(r.name)} ${msChip(r.milestone_status)}</div>
         <div class="ws mono">${esc(r.workspace)}</div>
-        <div class="ws">${esc(r.current_unit ? r.current_unit + " · " + r.current_unit_status : "")}</div>
+        <div class="ws">${r.process === "running"
+          ? workingChip(r)
+          : esc(r.current_unit ? r.current_unit + " · " + r.current_unit_status : "")}</div>
       </div>`).join("") ||
       '<div class="empty">No milestones yet.</div>';
     if (selected) refreshDetail();
   } catch (e) { /* keep last render */ }
 }
-function select(id) { selected = id; refreshRuns(); refreshDetail(); }
+function select(id) { selected = id; goalOpen = false; refreshRuns(); refreshDetail(); }
 function roundChip(r) {
   const kind = r.kind === "review_round" ? "r" : r.kind;
   if (r.invalidated)
@@ -232,9 +261,14 @@ async function refreshDetail() {
     const s = d.status, sum = d.summary;
     const running = s.process === "running";
     let html = `<h2>${esc(s.name)} ${msChip(s.milestone_status)}
+        ${workingChip(s)}
         <span class="st">${running ? "· driver running (pid " + s.pid + ")" : "· driver stopped"}</span></h2>
       <div class="goalline mono">${esc(s.workspace)}</div>`;
-    if (sum) html += `<div class="goalline">${esc(sum.goal)}</div>`;
+    if (sum) {
+      const long = (sum.goal || "").split("\n").length > 3 || (sum.goal || "").length > 320;
+      html += `<div class="goalline ${goalOpen ? "full" : "clamp"}" id="goalText">${esc(sum.goal)}</div>` +
+        (long ? `<div class="morelink" onclick="toggleGoal()">${goalOpen ? "less \u25b4" : "more \u25be"}</div>` : "");
+    }
     if (s.failure_reason)
       html += `<div class="failure">RUN FAILED\n${esc(s.failure_reason)}</div>`;
     html += `<div class="toolbar">
