@@ -506,9 +506,21 @@ class TestPortedCanonContentRules(unittest.TestCase):
             unit_kind="slice_impl", governing="docs/slice-01.md",
         ))
         self.assertIn("report every defect you can verify in a complete "
-                      "pass of the delta and the files it touches", prompt)
-        self.assertIn("CANONICAL REFERENCE: judge the target against "
-                      "docs/slice-01.md (sealed)", prompt)
+                      "pass of the delta", prompt)
+        # Delta-scoped reference: consistency check, never a full re-judge
+        # (a full-review-shaped delta costs full-review wall clock).
+        self.assertIn("CANONICAL REFERENCE: docs/slice-01.md (sealed) is "
+                      "the standard behind the artifact", prompt)
+        self.assertIn("do not re-judge the artifact against it", prompt)
+        self.assertNotIn("judge the target against", prompt)
+
+    def test_delta_review_bounds_its_cost(self):
+        prompt = normalized(prompts.build_delta_review(
+            FAMILY, WORKSPACE, GOAL, UNIT, "diff --git a/x b/x\n", [],
+            unit_kind="slice_impl", governing="docs/slice-01.md",
+        ))
+        self.assertIn("do NOT audit entire touched files", prompt)
+        self.assertIn("Never run the full verification suite here", prompt)
 
     def test_doc_unit_kinds_match_state_constants(self):
         from orchestrator import state as st_mod

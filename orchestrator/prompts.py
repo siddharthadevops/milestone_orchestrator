@@ -341,11 +341,14 @@ FIX_SELF_CHECK_BLOCK = (
 DELTA_COVERAGE_LINE = (
     "DELTA CHECK\n"
     "- Do not stop at the first finding: report every defect you can\n"
-    "  verify in a complete pass of the delta and the files it touches.\n"
-    "  An exhaustive pass with zero findings is a valid outcome.\n"
+    "  verify in a complete pass of the delta. An exhaustive pass with\n"
+    "  zero findings is a valid outcome.\n"
     "- Check the delta actually covers what its fix pass claims, and\n"
     "  that surrounding surfaces in the touched worker-drafted artifacts\n"
     "  (statuses, acceptance criteria) stay consistent.\n"
+    "- Run commands only when the changed lines themselves warrant it\n"
+    "  (e.g. one focused test on the changed behavior). Never run the\n"
+    "  full verification suite here — the driver runs it at gates.\n"
 )
 
 # The canon requires this exact sentence for all review phases
@@ -381,6 +384,20 @@ def _amendments_block(amendments):
             text = text[: AMENDMENT_TEXT_CLIP - 3] + "..."
         lines.append("[%s] %s" % (_oneline(a.get("id"), ID_CLIP) or "?", text))
     return "\n".join(lines) + "\n\n"
+
+
+def _delta_governing_line(governing):
+    """Delta-scoped canonical reference: the delta must not CONTRADICT the
+    sealed standard — re-judging the whole artifact against it is a full
+    round's job and turns a cheap incremental review into a full one."""
+    if not governing:
+        return ""
+    return (
+        "CANONICAL REFERENCE: %s (sealed) is the standard behind the\n"
+        "artifact. Check only that the DELTA does not contradict it — do\n"
+        "not re-judge the artifact against it; full rounds and seals do\n"
+        "that.\n\n" % governing
+    )
 
 
 def _governing_line(governing):
@@ -538,13 +555,15 @@ def build_delta_review(family, workspace, goal, unit_desc, diff_text, registry,
         + "REPORT ONLY.\n"
         + "GOAL: %s\n\n" % goal
         + _amendments_block(amendments)
-        + _governing_line(governing)
+        + _delta_governing_line(governing)
         + "Below is the exact uncommitted diff a fixer just produced. Review\n"
-        "ONLY this delta in the context of the files it touches:\n"
-        "correctness of the change, consistency with the surrounding\n"
-        "code/document, collateral damage in the touched files. Do NOT\n"
-        "re-review the rest of the workspace — full rounds cover it. An\n"
-        "empty findings list means the delta is correct and will be\n"
+        "ONLY this delta: correctness of the change, consistency with the\n"
+        "immediately surrounding code/document, and collateral damage in\n"
+        "what the change directly affects (callers/callees of changed\n"
+        "code). Read beyond the touched hunks only as far as verifying\n"
+        "the change requires — do NOT audit entire touched files and do\n"
+        "NOT re-review the rest of the workspace; full rounds cover both.\n"
+        "An empty findings list means the delta is correct and will be\n"
         "amended into the unit's commit.\n\n"
         "PENDING DIFF\n"
         "------------\n"
