@@ -48,13 +48,18 @@ DEFAULT_CONFIG = {
             "claude",
             "-p",
             "--model",
-            "opus",
+            "{model}",
             "--effort",
-            "max",
+            "{effort}",
             "--permission-mode",
             "bypassPermissions",
         ],
     },
+    # Family-level model/effort used when an act does not override them.
+    # {model}/{effort} placeholders in the command template are filled per
+    # call; templates without placeholders (codex: its model lives in its
+    # own CLI config) ignore overrides.
+    "model_defaults": {"claude": {"model": "opus", "effort": "max"}},
     # No timeouts by default: worker calls run as long as the work needs
     # (an implement call may legitimately run hours of test suites). A
     # fixed cap killed a real 15-minute-plus implement mid-flight; a hung
@@ -80,6 +85,13 @@ DEFAULT_CONFIG = {
     # (same family as the act's origin: the reviewer whose findings are
     # being fixed, or the fixer whose delta is being reviewed), or
     # "opposite". This release pins the cheap acts to codex for speed.
+    # Acts may also be objects: {"agent": "claude", "model": "sonnet",
+    # "effort": "high"} — who leads drafting ("drafter": skeleton + slice
+    # notes), implementation ("implementer") and fixes ("fixer"), and with
+    # which model/effort. Absent drafter/implementer fall back to
+    # fix_family (legacy behavior). The operator can hot-edit all of this
+    # mid-run via <workspace>/.orchestrator/acts.json (driver re-reads it
+    # before every act resolution; reviews/seals stay family-rotated).
     "acts": {"fixer": "codex", "delta_review": "codex",
              "consultation": "opposite"},
     # Fixer+delta iterations allowed per fix episode before failing.
@@ -433,13 +445,17 @@ class Driver(object):
         except OSError:
             pass
 
-    def _call(self, family, prompt, kind, raw_name):
+    def _call(self, family, prompt, kind, raw_name, model=None, effort=None):
         """Validated worker call; on protocol/runner failure, fail the run
         with the explanation recorded, then re-raise as StopStep."""
+        dm, de = self._family_defaults(family)
+        model = model or dm
+        effort = effort or de
         self._mark_busy(raw_name, kind, family)
         try:
             output, result = runners.call_worker(
-                self.runner, family, prompt, kind, self.workspace
+                self.runner, family, prompt, kind, self.workspace,
+                model=model, effort=effort,
             )
         except (runners.RunnerError, runners.WorkerProtocolError) as exc:
             self._clear_busy()
@@ -535,7 +551,10 @@ class Driver(object):
 
     def _do_draft(self):
         unit = st.current_unit(self.state)
-        family = self._fix_family()
+        act = (
+            "implementer" if unit["kind"] == st.UNIT_SLICE_IMPL else "drafter"
+        )
+        family, model, effort = self._act_profile(act)
         goal = self.state["goal"]
         amendments = self._amendments()
         if unit["kind"] == st.UNIT_SKELETON:
@@ -563,11 +582,13 @@ class Driver(object):
                 amendments=amendments,
             )
         output, result, raw_path = self._call(
-            family, prompt, kind, "%s-draft" % st.unit_key(unit)
+            family, prompt, kind, "%s-draft" % st.unit_key(unit),
+            model=model, effort=effort,
         )
         self._check_worker_blocked(unit, output, kind)
         st.record_draft(self.state, unit, kind, output, raw_path,
-                        family=family, duration=result.duration_s)
+                        family=family, duration=result.duration_s,
+                        model=model, effort=effort)
         if kind == contracts.KIND_IMPLEMENT and output.get("suite_command"):
             st.set_discovered_suite(self.state, output["suite_command"])
         if unit["kind"] == st.UNIT_SKELETON:
@@ -613,16 +634,59 @@ class Driver(object):
     def _registry(self):
         return st.adjudicated_rejections(self.state)
 
-    def _resolve_act(self, act, origin_family):
-        """Resolve an act's family per config: literal name, "self", or
-        "opposite" (relative to the act's origin)."""
-        policy = (self.config.get("acts") or {}).get(act, "codex")
+    def _acts_overlay(self):
+        """Operator-editable mid-run act assignments
+        (<workspace>/.orchestrator/acts.json) — same lock-free pattern as
+        amendments: the panel writes, the driver only reads, re-read
+        before every act resolution so a change binds the next call."""
+        path = os.path.join(self.workspace, ".orchestrator", "acts.json")
+        try:
+            with open(path, "r", encoding="utf-8") as fh:
+                data = json.load(fh)
+            return data if isinstance(data, dict) else {}
+        except (OSError, ValueError):
+            return {}
+
+    def _act_profile(self, act, origin_family=None, default_family=None):
+        """(family, model, effort) for an act. Policy forms: a family
+        name, "self"/"opposite" (relative to origin), or an object
+        {"agent": ..., "model": ..., "effort": ...}. Hot overlay wins
+        over config; an absent policy falls back to default_family (or
+        fix_family). model/effort None mean family defaults."""
+        acts = dict(self.config.get("acts") or {})
+        for key, val in self._acts_overlay().items():
+            if val:
+                acts[key] = val
+        policy = acts.get(act)
+        model = effort = None
+        if isinstance(policy, dict):
+            model = (policy.get("model") or "").strip() or None
+            effort = (policy.get("effort") or "").strip() or None
+            policy = (
+                policy.get("agent") or policy.get("family") or ""
+            ).strip() or None
+        if not policy:
+            return (default_family or self._fix_family()), model, effort
         families = self.config["families_order"]
         if policy == "self":
-            return origin_family or families[0]
-        if policy == "opposite":
-            return self._opposite(origin_family or families[0])
-        return policy
+            fam = origin_family or families[0]
+        elif policy == "opposite":
+            fam = self._opposite(origin_family or families[0])
+        else:
+            fam = policy
+        return fam, model, effort
+
+    def _family_defaults(self, family):
+        d = (self.config.get("model_defaults") or {}).get(family) or {}
+        return d.get("model"), d.get("effort")
+
+    def _resolve_act(self, act, origin_family):
+        """Family-only view of _act_profile (legacy call sites/tests)."""
+        fam, _m, _e = self._act_profile(
+            act, origin_family,
+            default_family="codex" if act == "fixer" else None,
+        )
+        return fam
 
     def _validate_contests(self, unit, output, kind):
         """Structural check: a finding's contests.rejection_id must exist in
@@ -742,7 +806,9 @@ class Driver(object):
             )
             self._save()
             raise StopStep("fix loop cap")
-        family = self._resolve_act("fixer", source.get("family"))
+        family, fix_model, fix_effort = self._act_profile(
+            "fixer", source.get("family"), default_family="codex"
+        )
         consultation_family = self._resolve_act("consultation", family)
         prompt = prompts.build_fix_findings(
             family,
@@ -769,6 +835,8 @@ class Driver(object):
             prompt,
             contracts.KIND_FIX_FINDINGS,
             "%s-fix%d" % (st.unit_key(unit), n_fix),
+            model=fix_model,
+            effort=fix_effort,
         )
         self._check_worker_blocked(unit, output, contracts.KIND_FIX_FINDINGS)
         try:
@@ -800,9 +868,16 @@ class Driver(object):
             # — including any contests links — in the immutable history;
             # state.adjudicated_rejections() derives overturned
             # adjudications (a contested finding conceded as 'fixed') from
-            # it.
-            meta={"source_round_id": source.get("source_round_id"),
-                  "queued": copy.deepcopy(unit.get("fix_queue") or [])},
+            # it. model/effort record which experiment produced this fix.
+            meta={
+                "source_round_id": source.get("source_round_id"),
+                "queued": copy.deepcopy(unit.get("fix_queue") or []),
+                **(
+                    {"model": fix_model, "effort": fix_effort}
+                    if (fix_model or fix_effort)
+                    else {}
+                ),
+            },
         )
         self._maybe_update_slices(unit, output)
         unit["fix_loop_rounds"] = unit.get("fix_loop_rounds", 0) + 1
@@ -1226,12 +1301,15 @@ class Driver(object):
             )
             raw_name = "%s-seal-a%d-%s" % (st.unit_key(unit), attempt_no, family)
             try:
+                dm, de = self._family_defaults(family)
                 output, result = runners.call_worker(
                     self.runner,
                     family,
                     prompt,
                     contracts.KIND_SEAL_HALF,
                     self.workspace,
+                    model=dm,
+                    effort=de,
                 )
             except (runners.RunnerError, runners.WorkerProtocolError) as exc:
                 self._save_protocol_raws(raw_name, exc)

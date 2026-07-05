@@ -341,7 +341,7 @@ def set_discovered_suite(state, command):
 
 
 def record_draft(state, unit, kind, result, raw_path=None, family=None,
-                 duration=None):
+                 duration=None, model=None, effort=None):
     """Write-once record of the unit's draft/implement call."""
     if unit["status"] != U_PENDING:
         raise IllegalTransition(
@@ -353,6 +353,8 @@ def record_draft(state, unit, kind, result, raw_path=None, family=None,
     unit["draft"] = {
         "kind": kind,
         "family": family,
+        "model": model,
+        "effort": effort,
         "duration_s": duration,
         "at": now_iso(),
         "raw_path": raw_path,

@@ -525,5 +525,37 @@ class AmendmentsApiTest(ServiceApiTest):
         self.assertEqual(status, 404)
 
 
+class ActsApiTest(ServiceApiTest):
+    def test_set_and_read_acts(self):
+        ws = self.workspace("ws-acts")
+        status, body = self.create_run(ws)
+        rid = body["run"]["id"]
+        status, body = self.request_json(
+            "POST", "/api/runs/%s/acts" % rid,
+            {"implementer": {"agent": "claude", "model": "sonnet",
+                             "effort": "high"},
+             "fixer": "codex",
+             "drafter": None})
+        self.assertEqual(status, 200)
+        self.assertEqual(body["acts"]["implementer"]["model"], "sonnet")
+        self.assertNotIn("drafter", body["acts"])
+        status, body = self.request_json("GET", "/api/runs/%s" % rid)
+        self.assertEqual(body["acts"]["fixer"], "codex")
+        with open(os.path.join(ws, ".orchestrator", "acts.json"),
+                  encoding="utf-8") as fh:
+            self.assertEqual(json.load(fh)["implementer"]["effort"], "high")
+
+    def test_acts_validation(self):
+        ws = self.workspace("ws-acts-bad")
+        status, body = self.create_run(ws)
+        rid = body["run"]["id"]
+        status, _ = self.request_json(
+            "POST", "/api/runs/%s/acts" % rid, {"reviewer": "claude"})
+        self.assertEqual(status, 400)
+        status, _ = self.request_json(
+            "POST", "/api/runs/%s/acts" % rid, {"fixer": {"model": "x" * 200}})
+        self.assertEqual(status, 400)
+
+
 if __name__ == "__main__":
     unittest.main()

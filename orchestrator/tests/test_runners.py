@@ -1003,6 +1003,42 @@ class TestMockRunner(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
+# apply_model_effort (per-act agent/model/effort experiments)
+
+
+class TestApplyModelEffort(unittest.TestCase):
+    TPL = ["claude", "-p", "--model", "{model}", "--effort", "{effort}"]
+    LEGACY = ["claude", "-p", "--model", "opus", "--effort", "max"]
+    CODEX = ["codex", "exec", "--output-last-message", "{output_file}"]
+
+    def test_placeholders_substituted(self):
+        from orchestrator.runners import apply_model_effort
+        self.assertEqual(
+            apply_model_effort(self.TPL, "sonnet", "high"),
+            ["claude", "-p", "--model", "sonnet", "--effort", "high"],
+        )
+
+    def test_placeholder_without_value_is_config_error(self):
+        from orchestrator.runners import apply_model_effort, RunnerError
+        with self.assertRaises(RunnerError):
+            apply_model_effort(self.TPL, None, "high")
+
+    def test_legacy_template_flag_replacement(self):
+        # Frozen pre-placeholder configs (live runs) still honor hot
+        # overrides via --model/--effort value replacement.
+        from orchestrator.runners import apply_model_effort
+        self.assertEqual(
+            apply_model_effort(self.LEGACY, "sonnet", None),
+            ["claude", "-p", "--model", "sonnet", "--effort", "max"],
+        )
+
+    def test_no_placeholder_no_flag_ignores_overrides(self):
+        from orchestrator.runners import apply_model_effort
+        self.assertEqual(
+            apply_model_effort(self.CODEX, "sonnet", "high"), self.CODEX
+        )
+
+
 # implement suite_command (verification protocol discovery)
 
 

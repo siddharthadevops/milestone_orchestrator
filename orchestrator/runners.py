@@ -147,6 +147,33 @@ def extract_json(text):
 # Subprocess runner
 
 
+def apply_model_effort(argv, model, effort):
+    """Apply per-act model/effort to a command template.
+
+    Preferred: {model}/{effort} placeholders in the template. Fallback for
+    templates frozen before placeholders existed: replace the value right
+    after a --model/--effort flag. Templates with neither (e.g. codex,
+    whose model/effort live in its own config) ignore the overrides. A
+    placeholder left without a value is a config error — passing the
+    literal brace-string to a CLI would fail cryptically."""
+    out = list(argv)
+    for name, value in (("{model}", model), ("{effort}", effort)):
+        if any(name in a for a in out):
+            if not value:
+                raise RunnerError(
+                    "command template uses %s but no value was resolved "
+                    "(set model_defaults for the family or the act)" % name
+                )
+            out = [a.replace(name, value) for a in out]
+        elif value:
+            flag = "--model" if name == "{model}" else "--effort"
+            for i, a in enumerate(out[:-1]):
+                if a == flag:
+                    out[i + 1] = value
+                    break
+    return out
+
+
 class SubprocessRunner(object):
     """Runs a family's configured command with the prompt on stdin.
 
@@ -164,10 +191,10 @@ class SubprocessRunner(object):
         self.cwd = cwd
         self.env = env
 
-    def call(self, family, prompt, workspace):
+    def call(self, family, prompt, workspace, model=None, effort=None):
         if family not in self.commands:
             raise RunnerError("no command configured for family %r" % family)
-        template = self.commands[family]
+        template = apply_model_effort(self.commands[family], model, effort)
         output_file = None
         argv = []
         for arg in template:
@@ -266,10 +293,15 @@ class MockRunner(object):
     def __init__(self, script):
         self.script = list(script)
         self.calls = []  # (family, kind, prompt)
+        self.call_meta = []  # {"family","kind","model","effort"} per call
 
-    def call(self, family, prompt, workspace):
+    def call(self, family, prompt, workspace, model=None, effort=None):
         kind = prompt_kind(prompt)
         self.calls.append((family, kind, prompt))
+        self.call_meta.append(
+            {"family": family, "kind": kind, "model": model,
+             "effort": effort}
+        )
         if not self.script:
             raise AssertionError(
                 "MockRunner script exhausted; unexpected call family=%s kind=%s"
@@ -317,20 +349,21 @@ REPAIR_SUFFIX = (
 )
 
 
-def call_worker(runner, family, prompt, kind, workspace):
+def call_worker(runner, family, prompt, kind, workspace,
+                model=None, effort=None):
     """Run the CLI and return (validated_output, RunnerResult).
 
     Exactly one repair retry on contract violation; then
     WorkerProtocolError. RunnerError passes through untouched.
     """
-    result = runner.call(family, prompt, workspace)
+    result = runner.call(family, prompt, workspace, model=model, effort=effort)
     try:
         obj = extract_json(result.text)
         return contracts.validate_worker_output(obj, kind), result
     except (ValueError, contracts.ContractError) as exc:
         first_error = str(exc)
     repair_prompt = prompt + (REPAIR_SUFFIX % first_error)
-    result2 = runner.call(family, repair_prompt, workspace)
+    result2 = runner.call(family, repair_prompt, workspace, model=model, effort=effort)
     try:
         obj = extract_json(result2.text)
         return contracts.validate_worker_output(obj, kind), result2

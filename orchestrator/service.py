@@ -646,6 +646,68 @@ def _write_amendments(entry, amendments):
     os.replace(tmp, path)
 
 
+ACT_KEYS = ("drafter", "implementer", "fixer", "delta_review",
+            "consultation")
+
+
+def _acts_path(entry):
+    return os.path.join(entry["workspace"], ".orchestrator", "acts.json")
+
+
+def read_acts(entry):
+    try:
+        with open(_acts_path(entry), "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+        return data if isinstance(data, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def set_acts(home, run_id, body):
+    """Write the operator's hot act assignments (who drafts / implements /
+    fixes, with which model/effort). Same lock-free pattern as
+    amendments: this file is operator-owned; the driver re-reads it
+    before every act resolution, so a change binds the next call (for
+    drivers new enough to read it)."""
+    reg = registry.load(home)
+    entry = registry.get(reg, run_id)
+    if entry is None:
+        raise ApiError(404, "unknown run %r" % run_id)
+    if not isinstance(body, dict):
+        raise ApiError(400, "acts body must be an object")
+    acts = {}
+    for key, val in body.items():
+        if key not in ACT_KEYS:
+            raise ApiError(400, "unknown act %r (allowed: %s)"
+                           % (key, ", ".join(ACT_KEYS)))
+        if val in (None, "", {}):
+            continue  # cleared -> fall back to config/defaults
+        if isinstance(val, str):
+            acts[key] = val.strip()
+            continue
+        if not isinstance(val, dict):
+            raise ApiError(400, "act %r must be a string or object" % key)
+        entry_out = {}
+        for f in ("agent", "model", "effort"):
+            v = (val.get(f) or "").strip() if isinstance(
+                val.get(f), str) else val.get(f)
+            if v:
+                if not isinstance(v, str) or len(v) > 100:
+                    raise ApiError(
+                        400, "act %r field %r must be a short string"
+                        % (key, f))
+                entry_out[f] = v
+        if entry_out:
+            acts[key] = entry_out
+    path = _acts_path(entry)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as fh:
+        json.dump(acts, fh, indent=1)
+    os.replace(tmp, path)
+    return acts
+
+
 def run_detail(home, run_id, log_tail=80):
     reap_exited_drivers(home)
     reg = registry.load(home)
@@ -659,6 +721,7 @@ def run_detail(home, run_id, log_tail=80):
         detail["summary_error"] = str(exc)
     detail["log"] = read_log_tail(home, run_id, log_tail)
     detail["amendments"] = read_amendments(entry)
+    detail["acts"] = read_acts(entry)
     return detail
 
 
@@ -774,6 +837,9 @@ def make_handler(home):
                         self._json(
                             200, {"ok": True, "amendments": amendments}
                         )
+                    elif len(parts) == 5 and parts[4] == "acts":
+                        acts = set_acts(home, parts[3], self._body())
+                        self._json(200, {"ok": True, "acts": acts})
                     else:
                         self._json(404, {"ok": False, "error": "not found"})
                 else:

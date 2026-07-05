@@ -982,6 +982,80 @@ class TestSuiteDiscoveryProtocol(DriverTestCase):
                         self.assertFalse(has, kind)
 
 
+class TestActProfiles(DriverTestCase):
+    """Per-act leadership: who drafts/implements/fixes, with which
+    model/effort — configured at launch (config acts) and hot-editable
+    mid-run via .orchestrator/acts.json."""
+
+    def test_drafter_act_routes_family_and_model(self):
+        import json as _json
+        with tempfile.TemporaryDirectory(prefix="orch-mock-") as ws:
+            cfg = make_config()
+            cfg["acts"] = dict(cfg["acts"])
+            cfg["acts"]["drafter"] = {
+                "agent": "claude", "model": "sonnet", "effort": "high",
+            }
+            path = init_state(ws, cfg)
+            script = skeleton_script()
+            script[0]["expect_family"] = "claude"
+            mock = runners.MockRunner([script[0]])
+            driver = drv.Driver(path, runner=mock)
+            driver.step()
+            meta = mock.call_meta[0]
+            self.assertEqual(meta["family"], "claude")
+            self.assertEqual(meta["model"], "sonnet")
+            self.assertEqual(meta["effort"], "high")
+            state = st.load(path)
+            d = state["units"][0]["draft"]
+            self.assertEqual((d["family"], d["model"], d["effort"]),
+                             ("claude", "sonnet", "high"))
+
+    def test_family_defaults_fill_when_act_has_no_override(self):
+        with tempfile.TemporaryDirectory(prefix="orch-mock-") as ws:
+            cfg = make_config()
+            cfg["model_defaults"] = {"claude": {"model": "opus",
+                                                "effort": "max"}}
+            cfg["acts"] = dict(cfg["acts"])
+            cfg["acts"]["drafter"] = "claude"
+            path = init_state(ws, cfg)
+            script = skeleton_script()
+            script[0]["expect_family"] = "claude"
+            mock = runners.MockRunner([script[0]])
+            drv.Driver(path, runner=mock).step()
+            meta = mock.call_meta[0]
+            self.assertEqual((meta["model"], meta["effort"]),
+                             ("opus", "max"))
+
+    def test_hot_overlay_rebinds_fixer_mid_run(self):
+        import json as _json
+        with tempfile.TemporaryDirectory(prefix="orch-mock-") as ws:
+            path = init_state(ws, make_config())
+            script = skeleton_script()
+            mock = runners.MockRunner(script[:2])
+            driver = drv.Driver(path, runner=mock)
+            driver.step()  # draft
+            driver.step()  # verify gate
+            driver.step()  # codex review (finding queued)
+            # Operator hot-edits the fixer act before the fix call.
+            os.makedirs(os.path.join(ws, ".orchestrator"), exist_ok=True)
+            with open(os.path.join(ws, ".orchestrator", "acts.json"),
+                      "w", encoding="utf-8") as fh:
+                _json.dump({"fixer": {"agent": "claude",
+                                      "model": "haiku",
+                                      "effort": "low"}}, fh)
+            fam, model, effort = driver._act_profile(
+                "fixer", "codex", default_family="codex")
+            self.assertEqual((fam, model, effort),
+                             ("claude", "haiku", "low"))
+            # And a corrupt overlay degrades to config, never crashes.
+            with open(os.path.join(ws, ".orchestrator", "acts.json"),
+                      "w", encoding="utf-8") as fh:
+                fh.write("{broken")
+            fam, model, effort = driver._act_profile(
+                "fixer", "codex", default_family="codex")
+            self.assertEqual(fam, "codex")
+
+
 class TestFixerProtocolFailures(DriverTestCase):
     def _dirty_round_prefix(self):
         return [

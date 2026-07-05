@@ -204,7 +204,7 @@ class FamilyRunner(object):
         self.exceptions = dict(exceptions or {})
         self.calls = []
 
-    def call(self, family, prompt, workspace):
+    def call(self, family, prompt, workspace, model=None, effort=None):
         kind = runners.prompt_kind(prompt)
         self.calls.append((family, kind))
         key = (family, kind)
