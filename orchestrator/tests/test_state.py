@@ -309,6 +309,7 @@ class TestNewState(TempWorkspaceCase):
                 "verify_episode_seq": {"pre_review": 0, "pre_seal": 0},
                 "closed_record": None,
                 "gate_commit": None,
+                "failed_from": None,
                 "fix_queue": [],
                 "fix_source": None,
                 "fix_loop_rounds": 0,
@@ -1351,16 +1352,26 @@ class TestAppendOnly(TempWorkspaceCase):
         )
         self._assert_rejected_and_disk_unchanged(bad)
 
-    def test_failed_unit_is_frozen_too(self):
+    def test_failed_unit_is_resumable_not_frozen(self):
+        """Failed units are deliberately NOT frozen: resume_run (an explicit
+        operator action) restores them. Their history lists stay
+        append-only regardless."""
+        path = os.path.join(self.workspace, ".orchestrator", "state-resume.json")
         state = make_state(self.workspace)
-        unit = unit_in_status(state, st.U_ROUNDS)
-        st.fail_run(state, "round cap", unit=unit)
-        path = os.path.join(self.workspace, "failed-state.json")
+        unit = state["units"][0]
+        st.fail_run(state, "transient CLI failure", unit=unit)
         st.save(path, state)
-        bad = copy.deepcopy(state)
-        bad["units"][0]["artifact"] = "docs/rewritten.md"
-        with self.assertRaises(st.HistoryRewriteError):
-            st.save(path, bad)
+        self.assertEqual(unit["status"], st.U_FAILED)
+        self.assertEqual(unit["failed_from"], st.U_PENDING)
+        restored = st.resume_run(state)
+        self.assertEqual(restored, {"skeleton": st.U_PENDING})
+        self.assertIsNone(state["failure"])
+        self.assertEqual(state["milestone"]["status"], st.M_OPEN)
+        self.assertEqual(state["events"][-1]["type"], "resumed")
+        st.save(path, state)  # no HistoryRewriteError
+        # nothing to resume twice
+        with self.assertRaises(ValueError):
+            st.resume_run(state)
 
     def test_appending_history_is_fine(self):
         st.append_event(self.state, "verification", unit="slice_doc-01", ok=True)

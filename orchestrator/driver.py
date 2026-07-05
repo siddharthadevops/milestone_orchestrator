@@ -1315,6 +1315,21 @@ def cmd_status(args):
     return 0
 
 
+def cmd_resume(args):
+    path = _state_path(args)
+    state = st.load(path)
+    try:
+        restored = st.resume_run(state)
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+    st.save(path, state)
+    for unit, status in restored.items():
+        print("resumed %s -> %s" % (unit, status))
+    print("run resumed; relaunch with `run` (or the panel's Start)")
+    return 0
+
+
 def cmd_next(args):
     state = st.load(_state_path(args))
     print(repr(decide(state)))
@@ -1394,6 +1409,7 @@ def main(argv=None):
 
     for name, func in (
         ("status", cmd_status),
+        ("resume", cmd_resume),
         ("next", cmd_next),
         ("step", cmd_step),
         ("run", cmd_run),

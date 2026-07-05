@@ -121,6 +121,7 @@ def _new_unit(kind, slice_id):
         "verify_episode_seq": {"pre_review": 0, "pre_seal": 0},
         "closed_record": None,      # slice_impl closure bookkeeping
         "gate_commit": None,        # short sha of this unit's seal gate commit
+        "failed_from": None,        # status at failure time (resume target)
         # The active fix episode (working fields; history lives in rounds):
         "fix_queue": [],            # findings currently queued for the fixer
         "fix_source": None,         # {"type": verification|round|seal|delta,
@@ -170,8 +171,11 @@ def assert_append_only(old_state, new_state_):
             raise HistoryRewriteError("%s: identity changed" % uctx)
         _assert_list_prefix(old_unit.get("rounds", []), nu.get("rounds", []), uctx + ".rounds")
         _assert_list_prefix(old_unit.get("seals", []), nu.get("seals", []), uctx + ".seals")
-        # A sealed or failed unit is frozen except for closure bookkeeping.
-        if old_unit.get("status") in (U_SEALED, U_FAILED):
+        # A SEALED unit is frozen except for post-seal bookkeeping. Failed
+        # units are deliberately NOT frozen: resume_run (an explicit
+        # operator action, recorded as a `resumed` event) restores them;
+        # their rounds/seals history stays append-only like everyone's.
+        if old_unit.get("status") == U_SEALED:
             # closed_record and gate_commit are post-seal bookkeeping
             # written by the driver itself right after the terminal
             # transition; everything else in a terminal unit is frozen.
@@ -455,17 +459,62 @@ def record_seal_attempt(state, unit, halves, passed, invalidated=None):
 
 
 def fail_run(state, reason, unit=None):
-    """Terminal failure: record the explanation and stop. The next driver
-    invocation will refuse to continue until the operator intervenes."""
+    """Terminal failure: record the explanation and stop. Resumable by a
+    deliberate operator action (resume_run) — e.g. after a transient CLI
+    failure like a logged-out reviewer — which restores the failed unit to
+    the status it was in when it failed."""
     state["failure"] = {
         "at": now_iso(),
         "reason": reason,
         "unit": unit_key(unit) if unit else None,
     }
     if unit is not None and unit["status"] not in (U_SEALED, U_FAILED):
+        unit["failed_from"] = unit["status"]
         unit["status"] = U_FAILED
     state["milestone"]["status"] = M_FAILED
     append_event(state, "run_failed", reason=reason, unit=state["failure"]["unit"])
+
+
+def resume_run(state):
+    """Operator-deliberate revival of a failed run (transient CLI failures:
+    a logged-out reviewer, a quota window, a network hiccup).
+
+    Clears the failure, reopens the milestone, and restores every failed
+    unit to the status it was in when it failed (`failed_from`; a heuristic
+    covers states recorded before that field existed). History is never
+    rewritten — the run_failed event stays and a `resumed` event is
+    appended. Raises ValueError when there is nothing to resume."""
+    if state.get("failure") is None:
+        raise ValueError("nothing to resume: the run has no recorded failure")
+    restored = {}
+    for unit in state["units"]:
+        if unit["status"] != U_FAILED:
+            continue
+        target = unit.get("failed_from")
+        if target not in UNIT_STATUSES or target in (U_FAILED, U_SEALED):
+            # Pre-failed_from states: infer the least-surprising spot.
+            if unit.get("fix_queue"):
+                target = U_FIXING
+            elif unit["rounds"]:
+                target = U_ROUNDS
+            elif unit.get("draft"):
+                target = U_PRE_REVIEW_VERIFY
+            else:
+                target = U_PENDING
+        unit["status"] = target
+        unit["failed_from"] = None
+        restored[unit_key(unit)] = target
+    old_reason = state["failure"].get("reason")
+    state["failure"] = None
+    if state["milestone"]["status"] == M_FAILED:
+        state["milestone"]["status"] = M_OPEN
+    append_event(
+        state,
+        "resumed",
+        restored=restored,
+        previous_failure=(old_reason or "")[:300],
+    )
+    return restored
 
 
 def close_slice(state, unit):

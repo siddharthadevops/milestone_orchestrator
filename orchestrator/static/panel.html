@@ -238,7 +238,9 @@ async function refreshDetail() {
     if (s.failure_reason)
       html += `<div class="failure">RUN FAILED\n${esc(s.failure_reason)}</div>`;
     html += `<div class="toolbar">
-      <button class="btn primary" ${running || s.milestone_status === "closed" ? "disabled" : ""}
+      ${s.failure_reason && !running
+        ? `<button class="btn primary" onclick="act('resume')">Resume</button>` : ""}
+      <button class="btn ${s.failure_reason ? "" : "primary"}" ${running || s.milestone_status === "closed" || s.failure_reason ? "disabled" : ""}
         onclick="act('start')">Start</button>
       <button class="btn" ${running ? "" : "disabled"} onclick="act('stop')">Stop</button>
       <button class="btn danger" ${running ? "disabled" : ""} onclick="del()">Forget</button>

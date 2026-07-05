@@ -480,6 +480,29 @@ def _wait_driver_exit(entry, timeout_s):
     return not driver_alive(entry)
 
 
+def resume_run(home, run_id):
+    """Revive a failed run (clears the failure, restores unit status) and
+    start its driver again."""
+    reap_exited_drivers(home)
+    reg = registry.load(home)
+    entry = registry.get(reg, run_id)
+    if entry is None:
+        raise ApiError(404, "unknown run %r" % run_id)
+    if driver_alive(entry):
+        raise ApiError(409, "run %s is already running" % run_id)
+    try:
+        state = st.load(entry["state_path"])
+    except Exception as exc:
+        raise ApiError(409, "state unreadable: %s" % exc)
+    try:
+        st.resume_run(state)
+    except ValueError as exc:
+        raise ApiError(409, str(exc))
+    st.save(entry["state_path"], state)
+    _evict_summary(entry["state_path"])
+    return start_run(home, run_id)
+
+
 def delete_run(home, run_id, purge=False):
     reap_exited_drivers(home)
     reg = registry.load(home)
@@ -636,6 +659,9 @@ def make_handler(home):
                         self._json(200, {"ok": True, "run": run_status(entry)})
                     elif len(parts) == 5 and parts[4] == "stop":
                         self._json(200, {"ok": True, **stop_run(home, parts[3])})
+                    elif len(parts) == 5 and parts[4] == "resume":
+                        entry = resume_run(home, parts[3])
+                        self._json(200, {"ok": True, "run": run_status(entry)})
                     else:
                         self._json(404, {"ok": False, "error": "not found"})
                 else:
