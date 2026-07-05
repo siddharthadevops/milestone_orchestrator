@@ -246,11 +246,8 @@ async function refreshRuns() {
     document.getElementById("runs").innerHTML = runs.map(r => `
       <div class="run ${r.id === selected ? "sel" : ""}" onclick="select('${esc(r.id)}')">
         <div class="name"><span class="dot ${r.process}"></span>
-          ${esc(r.name)} ${msChip(r.milestone_status)}</div>
+          ${esc(r.name)}</div>
         <div class="ws mono">${esc(r.workspace)}</div>
-        <div class="ws">${r.process === "running"
-          ? workingChip(r)
-          : esc(r.current_unit ? r.current_unit + " · " + r.current_unit_status : "")}</div>
       </div>`).join("") ||
       '<div class="empty">No milestones yet.</div>';
     if (selected) refreshDetail();
