@@ -36,10 +36,24 @@ secondary source, never the primary basis for an architectural claim.
 Every load-bearing assumption the skeleton relies on is listed and cited to
 code (`file:line`). Anything the drafter could not verify in code is declared
 `UNVERIFIED` explicitly — silent assumption is the failure mode being killed.
+Delivered as structured contract entries too (same doctrine as section 3):
+the driver existence-checks the citations mechanically; reviewers sample
+their semantics.
 
 ### 3. Price tag on every invariant / guarantee / mechanism — mandatory
 
-Each one must answer, in the skeleton text:
+Delivered AS CONTRACT FIELDS, not prose (the project-concept doctrine: an
+LLM fills a required slot far more reliably than it obeys an instruction).
+The skeleton worker's JSON output carries one structured entry per
+invariant/guarantee/mechanism — no bare booleans; every factual claim
+carries a file:line citation — and the entries are echoed into the skeleton
+doc as a table. Driver-side mechanical checks reject the contract without
+spending a token: cited paths must exist; the entry list must be non-empty
+when the note declares guarantees; a SPECULATIVE entry without recorded
+operator approval blocks the seal. Reviewers verify the semantics of each
+entry; the driver verifies existence.
+
+Each entry must answer:
 
 - **Who consumes/observes this, exactly?** Verified identity in code —
   a service, an app backend, a human surface. Never "the client" by prior.
@@ -78,6 +92,10 @@ never design inputs.
 At the skeleton seal, the milestone record (and panel) surface the "what you
 are paying for" list: every invariant with its price tag and any SPECULATIVE
 flags — a two-minute operator veto at the point of maximum leverage.
+Because the price tags arrive as structured contract entries (section 3),
+this card is GENERATED deterministically from the ledger — same doctrine as
+the milestone records: no LLM prose, so it cannot disagree with what the
+workers actually committed to.
 
 ## Non-goals
 
