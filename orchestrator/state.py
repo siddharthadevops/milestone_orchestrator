@@ -96,6 +96,10 @@ def new_state(goal, workspace, config):
             _new_unit(UNIT_SKELETON, None),
         ],
         "events": [],
+        # The repo's official full-suite command, discovered by the first
+        # implement worker (its contract's suite_command field). Gates use
+        # it when config verification is not explicitly set.
+        "suite_command": None,
         "failure": None,
         "config": config,
     }
@@ -320,6 +324,22 @@ def transition_unit(state, unit, new_status, reason=None):
     )
 
 
+def set_discovered_suite(state, command):
+    """Record the official suite command the implementer discovered. The
+    ledger gets a suite_discovered event; re-discovery of a different
+    command overwrites (latest implementer knows best) with a fresh
+    event. Explicit config verification always wins over this at gate
+    time — this is the zero-config path."""
+    command = str(command or "").strip()
+    if not command or state.get("suite_command") == command:
+        return
+    previous = state.get("suite_command")
+    state["suite_command"] = command
+    append_event(
+        state, "suite_discovered", command=command, previous=previous
+    )
+
+
 def record_draft(state, unit, kind, result, raw_path=None, family=None,
                  duration=None):
     """Write-once record of the unit's draft/implement call."""
@@ -505,6 +525,13 @@ def resume_run(state):
                 target = U_PRE_REVIEW_VERIFY
             else:
                 target = U_PENDING
+        if target == U_SEALING:
+            # A run that died while sealing re-enters through the pre-seal
+            # gate: a crashed/killed seal half may have left unverified
+            # edits behind, and seal reviewers are told the suite passed
+            # at the last gate — that claim must be re-proven, not
+            # assumed across a failure boundary. The gate is idempotent.
+            target = U_PRE_SEAL_VERIFY
         unit["status"] = target
         unit["failed_from"] = None
         restored[unit_key(unit)] = target
@@ -752,6 +779,7 @@ def summary(state):
         "current_unit": unit_key(unit) if unit else None,
         "current_unit_status": unit["status"] if unit else None,
         "current_family": current_fam,
+        "suite_command": state.get("suite_command"),
         "created_epoch": _epoch(state.get("created_at")),
         "last_event_epoch": _epoch(
             state["events"][-1]["at"] if state["events"] else None

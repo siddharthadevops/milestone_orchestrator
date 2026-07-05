@@ -63,7 +63,10 @@ DEFAULT_CONFIG = {
     # can still set per-family caps here when a run warrants them.
     "timeouts": {},
     "verification": [],
-    "verification_timeout": 600,
+    # Unlimited by default, same philosophy as worker timeouts: a real
+    # suite may take 15+ minutes and a gate that kills it converts honest
+    # work into failures. Set a number (seconds) to cap it per run.
+    "verification_timeout": None,
     "max_rounds_per_family": 12,
     "max_seal_attempts": 8,
     "max_verify_fix_attempts": 4,
@@ -327,6 +330,27 @@ class Driver(object):
     def _artifact(self, unit):
         return unit["artifact"] or "(workspace)"
 
+    def _verification_commands(self, unit):
+        """Gate commands for a unit: explicit config verification wins;
+        otherwise the suite command the implementer discovered — applied
+        to implementation units only (doc artifacts cannot break a test
+        suite, and a discovered suite may cost many minutes per run)."""
+        configured = self.config.get("verification") or []
+        if configured:
+            return list(configured)
+        discovered = self.state.get("suite_command")
+        if discovered and unit["kind"] == st.UNIT_SLICE_IMPL:
+            return [discovered]
+        return []
+
+    def _verified_suite(self, unit):
+        """The gate command string reviewers may rely on, or None. Unit
+        status flow guarantees rounds/sealing are only reachable through
+        a passing verification gate, so a non-empty command here means
+        the gate genuinely ran it green."""
+        cmds = self._verification_commands(unit)
+        return " && ".join(cmds) if cmds else None
+
     def _governing(self, unit):
         """The sealed document the unit's artifact answers to (the
         reviewer's explicit standard): the skeleton for a slice note, the
@@ -535,7 +559,7 @@ class Driver(object):
                 goal,
                 sl,
                 self._slice_note_artifact(unit["slice_id"]),
-                self.config["verification"],
+                self._verification_commands(unit),
                 amendments=amendments,
             )
         output, result, raw_path = self._call(
@@ -544,6 +568,8 @@ class Driver(object):
         self._check_worker_blocked(unit, output, kind)
         st.record_draft(self.state, unit, kind, output, raw_path,
                         family=family, duration=result.duration_s)
+        if kind == contracts.KIND_IMPLEMENT and output.get("suite_command"):
+            st.set_discovered_suite(self.state, output["suite_command"])
         if unit["kind"] == st.UNIT_SKELETON:
             self.state["milestone"]["slices"] = output["slices"]
         if gitops.enabled(self.config):
@@ -753,6 +779,15 @@ class Driver(object):
             raise StopStep(str(exc))
         self._validate_adjudication_refs(unit, output)
         self._validate_contested_dispositions(unit, output)
+        if (
+            source.get("type") == "verification"
+            and isinstance(output.get("suite_command"), str)
+            and output["suite_command"].strip()
+        ):
+            # The gate's command itself may have been the defect (typo or
+            # hallucinated discovery): the verification fixer is the only
+            # in-protocol chance to correct it.
+            st.set_discovered_suite(self.state, output["suite_command"])
         st.record_round(
             self.state,
             unit,
@@ -851,6 +886,11 @@ class Driver(object):
                 raise StopStep("fixer claimed edits with an empty delta")
             unit["fix_queue"] = []
             unit["fix_source"] = None
+            if return_to in (st.U_PRE_REVIEW_VERIFY, st.U_PRE_SEAL_VERIFY):
+                # Zero edits since the gate last proved this tree green:
+                # let _do_verify reuse that result instead of re-running
+                # a potentially long suite for a bit-identical tree.
+                unit["skip_next_verify"] = True
             st.transition_unit(
                 self.state, unit, return_to, reason="no delta (fix episode green)"
             )
@@ -949,22 +989,47 @@ class Driver(object):
         stage_key = (
             "pre_review" if stage == st.U_PRE_REVIEW_VERIFY else "pre_seal"
         )
-        commands = self.config["verification"]
-        self._mark_busy("verification (%s)" % stage_key, "verification", None)
-        try:
-            ok, output = run_verification(
-                commands, self.workspace, self.config.get("verification_timeout", 600)
+        commands = self._verification_commands(unit)
+        if unit.pop("skip_next_verify", None) and commands:
+            # The fix episode that routed here closed with an EMPTY delta
+            # (all findings rejected, zero edits): the tree is bit-
+            # identical to the one the last gate proved green, so a
+            # 15-minute suite re-run would buy nothing. The reuse is
+            # recorded, never silent.
+            st.append_event(
+                self.state,
+                "verification",
+                unit=st.unit_key(unit),
+                stage=stage,
+                ok=True,
+                commands=list(commands),
+                reused=True,
+                output_tail="(reused: empty-delta fix episode, tree "
+                            "unchanged since the last green gate)",
             )
-        finally:
-            self._clear_busy()
-        st.append_event(
-            self.state,
-            "verification",
-            unit=st.unit_key(unit),
-            stage=stage,
-            ok=ok,
-            output_tail=(output or "")[-2000:],
-        )
+            ok = True
+        else:
+            unit.pop("skip_next_verify", None)
+            self._mark_busy(
+                "verification (%s)" % stage_key, "verification", None
+            )
+            try:
+                ok, output = run_verification(
+                    commands, self.workspace,
+                    self.config.get("verification_timeout"),
+                )
+            finally:
+                self._clear_busy()
+            st.append_event(
+                self.state,
+                "verification",
+                unit=st.unit_key(unit),
+                stage=stage,
+                ok=ok,
+                commands=list(commands),
+                vacuous=(not commands) or None,
+                output_tail=(output or "")[-2000:],
+            )
         if ok:
             # The cap bounds consecutive fix attempts for the CURRENT
             # failing stage; a pass closes the episode.
@@ -1062,6 +1127,7 @@ class Driver(object):
             unit_kind=unit["kind"],
             governing=self._governing(unit),
             amendments=self._amendments(),
+            verified_suite=self._verified_suite(unit),
         )
         output, result, raw_path, changed = self._report_call(
             unit,
@@ -1147,6 +1213,7 @@ class Driver(object):
         invalidated = None
         tamper_family = None  # sequential mode can attribute the tampering
         amendments = self._amendments()  # once, before any half thread
+        verified_suite = self._verified_suite(unit)
 
         def run_half_pure(family):
             """One seal half, mutating NO shared state (thread-safe): any
@@ -1155,7 +1222,7 @@ class Driver(object):
             prompt = prompts.build_seal_half(
                 family, self.workspace, goal, desc, artifact, registry,
                 unit_kind=unit["kind"], governing=self._governing(unit),
-                amendments=amendments,
+                amendments=amendments, verified_suite=verified_suite,
             )
             raw_name = "%s-seal-a%d-%s" % (st.unit_key(unit), attempt_no, family)
             try:
@@ -1377,25 +1444,48 @@ class StopStep(RuntimeError):
 
 
 def run_verification(commands, workspace, timeout):
-    """Run every verification command; returns (all_ok, combined_output)."""
+    """Run every verification command; returns (all_ok, combined_output).
+
+    Commands may be worker-discovered strings (suite_command), so they run
+    with the same stop semantics as workers: own session, tracked so the
+    driver's SIGTERM handler SIGKILLs the whole group (a TERM-trapping or
+    hung suite must not survive the Stop button), stdin closed and CI=1
+    set so watch-mode/interactive runners run once and exit. Execution
+    assumes the operator already trusts workers with full permissions;
+    sandboxed-worker configs must set explicit config verification
+    instead of relying on discovery."""
     if not commands:
         return True, "(no verification configured)"
+    env = dict(os.environ)
+    env.setdefault("CI", "1")
     chunks = []
     for cmd in commands:
+        proc = subprocess.Popen(
+            cmd,
+            shell=True,
+            cwd=workspace,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            env=env,
+            start_new_session=True,
+        )
+        runners._track_worker(proc)
         try:
-            proc = subprocess.run(
-                cmd,
-                shell=True,
-                cwd=workspace,
-                capture_output=True,
-                text=True,
-                timeout=timeout,
-            )
-        except subprocess.TimeoutExpired:
-            chunks.append("$ %s\nTIMEOUT after %ss" % (cmd, timeout))
-            return False, "\n".join(chunks)
+            try:
+                out, err = proc.communicate(timeout=timeout)
+            except subprocess.TimeoutExpired:
+                runners._kill_group(proc)
+                proc.communicate()
+                chunks.append("$ %s\nTIMEOUT after %ss" % (cmd, timeout))
+                return False, "\n".join(chunks)
+        finally:
+            runners._untrack_worker(proc)
         chunks.append(
-            "$ %s\nexit=%d\n%s%s" % (cmd, proc.returncode, proc.stdout, proc.stderr)
+            "$ %s\nexit=%d\n%s%s" % (cmd, proc.returncode, out, err)
         )
         if proc.returncode != 0:
             return False, "\n".join(chunks)

@@ -626,5 +626,69 @@ class TestOperatorAmendments(unittest.TestCase):
         self.assertIn("...", prompt)
 
 
+class TestVerificationProtocol(unittest.TestCase):
+    """Zero-config verification: the implementer reports suite_command,
+    the driver runs it at gates, and reviewers are told a machine-run
+    green suite exists — so they never burn wall clock re-running it."""
+
+    def test_review_and_seal_carry_verified_suite_block(self):
+        for build in (prompts.build_review_round, prompts.build_seal_half):
+            prompt = normalized(build(
+                FAMILY, WORKSPACE, GOAL, UNIT, "docs/x.md", [],
+                unit_kind="slice_impl", verified_suite="mix test"))
+            self.assertIn("VERIFICATION STATUS", prompt)
+            # The command is the implementer's CLAIM; the result is the
+            # machine's. Reviewers audit the claim, never re-run it.
+            self.assertIn("The command `mix test` was reported by the "
+                          "implementer as the repo's official full suite",
+                          prompt)
+            self.assertIn("passed at the last gate (which ran before any "
+                          "later fix deltas)", prompt)
+            self.assertIn("a trivial, narrowed, or wrong suite command is "
+                          "itself a P1 finding", prompt)
+            self.assertIn("Do NOT run it (or any full suite) yourself",
+                          prompt)
+            self.assertIn("verified by the fixer with a focused check",
+                          prompt)
+
+    def test_impl_unit_without_suite_gets_the_inverse_block(self):
+        # Absence is an asserted, reviewable claim — never a silent
+        # default: no-suite impl reviews re-arm the reviewers.
+        for build in (prompts.build_review_round, prompts.build_seal_half):
+            prompt = normalized(build(
+                FAMILY, WORKSPACE, GOAL, UNIT, "docs/x.md", [],
+                unit_kind="slice_impl", verified_suite=None))
+            self.assertIn("NO mechanical verification ran for this unit",
+                          prompt)
+            self.assertIn("that omission is itself a P1 finding", prompt)
+            self.assertIn("Focused test runs are permitted here", prompt)
+
+    def test_block_absent_for_doc_units_without_suite(self):
+        for build in (prompts.build_review_round, prompts.build_seal_half):
+            prompt = build(FAMILY, WORKSPACE, GOAL, UNIT, "docs/x.md", [],
+                           unit_kind="skeleton", verified_suite=None)
+            self.assertNotIn("VERIFICATION STATUS", prompt)
+
+    def test_implement_reports_suite_and_skips_full_run(self):
+        prompt = normalized(prompts.build_implement(
+            FAMILY, WORKSPACE, GOAL, SLICE, "docs/slice-01.md", []))
+        self.assertIn("do NOT run the repo's full test suite at the end",
+                      prompt)
+        self.assertIn("Report the repo's official full-suite command",
+                      prompt)
+        self.assertIn("your suite_command will arm the gates", prompt)
+        armed = normalized(prompts.build_implement(
+            FAMILY, WORKSPACE, GOAL, SLICE, "docs/slice-01.md",
+            ["mix test"]))
+        self.assertIn("Gate commands currently armed: mix test", armed)
+
+    def test_fixer_never_runs_the_full_suite(self):
+        prompt = normalized(prompts.build_fix_findings(
+            FAMILY, WORKSPACE, GOAL, UNIT, FINDINGS, [], "claude",
+            ["claude", "-p"], unit_kind="slice_impl"))
+        self.assertIn("never the repo's full suite; the driver re-runs it "
+                      "mechanically at the next gate", prompt)
+
+
 if __name__ == "__main__":
     unittest.main()

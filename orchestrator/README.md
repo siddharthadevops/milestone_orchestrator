@@ -78,7 +78,13 @@ the selected run — pipeline, rounds, seals, failure banner, event log,
 driver log — with Start / Stop / Forget. "New milestone" takes a workspace
 path plus a goal text **or a work-description doc path** (its content
 becomes the goal, snapshotted at launch), an optional verification command,
-and an optional advanced config JSON merged over defaults. Panel launches
+and an optional advanced config JSON merged over defaults. Verification
+is zero-config by default: the implement worker reports the repo's
+official full-suite command (`suite_command` in its contract), the
+driver arms the implementation-unit gates with it (explicit config
+`verification` always wins and runs on every unit), each gate execution
+lands in the ledger, and `verification_timeout` defaults to unlimited —
+suites may legitimately run for hours. Panel launches
 enable `git.enabled` by default — the full gate/amend/delta-review
 discipline described above; pass `{"git": {"enabled": false}}` in the
 advanced config for a deliberate pure-state run. Both path fields
@@ -241,8 +247,11 @@ Tiers:
 - **Snapshot exclusions.** Workspace snapshots skip runtime dirs and
   common Python tool caches (`.git`, `.orchestrator`, `__pycache__`,
   `.pytest_cache`, `.mypy_cache`, `.ruff_cache`, `.hypothesis`, `.tox`,
-  `*.egg-info`), so a read-only seal half that runs the verification suite
-  is not falsely invalidated by cache writes. Add tool-specific cache
+  `*.egg-info`), so a report-only worker whose focused checks write tool
+  caches is not falsely invalidated (with git enabled the tamper universe
+  additionally honors `.gitignore`). Reviewers and seal halves are told
+  NOT to run the full suite — the driver runs it mechanically at the
+  verification gates. Add tool-specific cache
   directory names (or fnmatch patterns) via the `snapshot_exclude_dirs`
   config list. Cache FILES written at the workspace root (e.g. coverage's
   `.coverage`) are not excludable; point such tools elsewhere (e.g.

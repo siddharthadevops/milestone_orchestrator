@@ -331,7 +331,9 @@ FIX_EVIDENCE_BLOCK = (
 
 FIX_SELF_CHECK_BLOCK = (
     "- Run local/focused checks after each modification when they are\n"
-    "  cheap or directly relevant. Before returning, re-check your own\n"
+    "  cheap or directly relevant — never the repo's full suite; the\n"
+    "  driver re-runs it mechanically at the next gate. Before\n"
+    "  returning, re-check your own\n"
     "  pending diff: it must actually cover every finding you mark\n"
     "  'fixed', and surfaces you touched in worker-drafted artifacts\n"
     "  (statuses, acceptance criteria) must stay consistent —\n"
@@ -384,6 +386,39 @@ def _amendments_block(amendments):
             text = text[: AMENDMENT_TEXT_CLIP - 3] + "..."
         lines.append("[%s] %s" % (_oneline(a.get("id"), ID_CLIP) or "?", text))
     return "\n".join(lines) + "\n\n"
+
+
+def _verified_suite_block(verified_suite, unit_kind=None):
+    """Injected into full-round and seal prompts. When a gate ran, the
+    suite result is machine truth — but the COMMAND is the implementer's
+    claim, and judging its legitimacy is review work. When no gate ran
+    on an implementation unit, that absence is itself a reviewable
+    claim, never a silent default."""
+    if verified_suite:
+        return (
+            "VERIFICATION STATUS\n"
+            "- The command `%s` was reported by the implementer as the\n"
+            "  repo's official full suite. It runs mechanically at the\n"
+            "  driver's gates and passed at the last gate (which ran\n"
+            "  before any later fix deltas); it re-runs before any seal.\n"
+            "- Confirm from repo evidence (Makefile, package.json,\n"
+            "  mix.exs, CI config) that it IS the official full suite: a\n"
+            "  trivial, narrowed, or wrong suite command is itself a P1\n"
+            "  finding.\n"
+            "- Do NOT run it (or any full suite) yourself. Base claims on\n"
+            "  code-level evidence; a finding that needs runtime\n"
+            "  confirmation will be verified by the fixer with a focused\n"
+            "  check.\n" % verified_suite
+        )
+    if unit_kind == "slice_impl":
+        return (
+            "VERIFICATION STATUS\n"
+            "- NO mechanical verification ran for this unit: the\n"
+            "  implementer reported no official test suite. If the repo\n"
+            "  HAS one, that omission is itself a P1 finding. Focused\n"
+            "  test runs are permitted here to verify your claims.\n"
+        )
+    return ""
 
 
 def _delta_governing_line(governing):
@@ -497,7 +532,9 @@ def build_draft_slice_note(family, workspace, goal, slice_info, skeleton_path,
 
 def build_implement(family, workspace, goal, slice_info, note_path, verification,
                     amendments=None):
-    ver = "\n".join("  %s" % c for c in verification) or "  (none configured)"
+    ver = "\n".join("  %s" % c for c in verification) or (
+        "  (none yet — your suite_command will arm the gates)"
+    )
     return (
         _header(contracts.KIND_IMPLEMENT, family, workspace)
         + "\nTASK: implement slice %d (%s) exactly per its sealed note.\n"
@@ -505,8 +542,14 @@ def build_implement(family, workspace, goal, slice_info, note_path, verification
         + "GOAL: %s\n" % goal
         + "SLICE NOTE: %s\n\n" % note_path
         + _amendments_block(amendments)
-        + "Implement the scope, including its tests. The verification\n"
-        "commands that must pass (run from the workspace root):\n"
+        + "Implement the scope, including its tests. Run focused checks on\n"
+        "what you touch while working, but do NOT run the repo's full\n"
+        "test suite at the end — the driver runs it mechanically at the\n"
+        "gate right after you return, and re-runs it before any seal.\n"
+        "Report the repo's official full-suite command (as run from the\n"
+        "workspace root) in `suite_command` — it must be non-interactive\n"
+        "and run the suite exactly once and exit (never a watch mode).\n"
+        "Gate commands currently armed:\n"
         + ver
         + "\n\n"
         + REUSE_GATE_BLOCK
@@ -525,7 +568,8 @@ def build_implement(family, workspace, goal, slice_info, note_path, verification
 
 
 def build_review_round(family, workspace, goal, unit_desc, artifact, registry,
-                       unit_kind=None, governing=None, amendments=None):
+                       unit_kind=None, governing=None, amendments=None,
+                       verified_suite=None):
     return (
         _header(contracts.KIND_REVIEW_ROUND, family, workspace)
         + "\nTASK: full review round of %s. REPORT ONLY.\n" % unit_desc
@@ -537,6 +581,7 @@ def build_review_round(family, workspace, goal, unit_desc, artifact, registry,
         + "You fix nothing and triage nothing — a separate fixer call\n"
         "will verify your findings against the real files and concede or\n"
         "dissent.\n\n"
+        + _verified_suite_block(verified_suite, unit_kind)
         + _review_quality_block(unit_kind)
         + _registry_block(registry)
         + "\n"
@@ -579,7 +624,8 @@ def build_delta_review(family, workspace, goal, unit_desc, diff_text, registry,
 
 
 def build_seal_half(family, workspace, goal, unit_desc, artifact, registry,
-                    unit_kind=None, governing=None, amendments=None):
+                    unit_kind=None, governing=None, amendments=None,
+                    verified_suite=None):
     return (
         _header(contracts.KIND_SEAL_HALF, family, workspace)
         + "\nTASK: independent final seal review of %s. REPORT ONLY.\n"
@@ -592,6 +638,7 @@ def build_seal_half(family, workspace, goal, unit_desc, artifact, registry,
         "check on a target other agents already reviewed and fixed.\n"
         + EXHAUSTIVE_SENTENCE
         + "You fix nothing and triage nothing.\n\n"
+        + _verified_suite_block(verified_suite, unit_kind)
         + _review_quality_block(unit_kind)
         + _registry_block(registry)
         + "\n"

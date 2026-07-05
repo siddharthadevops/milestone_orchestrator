@@ -343,7 +343,9 @@ async function refreshDetail() {
     let html = `<h2>${esc(s.name)} ${msChip(s.milestone_status)}
         ${workingChip(s)}
         <span class="st">${running ? "· driver running (pid " + s.pid + ")" : "· driver stopped"}${runTime(sum, s)}</span></h2>
-      <div class="goalline mono">${esc(s.workspace)}</div>`;
+      <div class="goalline mono">${esc(s.workspace)}${
+        sum && sum.suite_command
+          ? ` · suite: ${esc(sum.suite_command)}` : ""}</div>`;
     if (sum) {
       const long = (sum.goal || "").split("\n").length > 3 || (sum.goal || "").length > 320;
       html += `<div class="goalline ${goalOpen ? "full" : "clamp"}" id="goalText">${esc(sum.goal)}</div>` +

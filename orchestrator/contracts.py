@@ -252,6 +252,23 @@ def validate_worker_output(obj, kind):
         _require(obj, "artifact", str, ctx)
     elif kind == KIND_IMPLEMENT:
         _require(obj, "files_changed", list, ctx)
+        if obj.get("suite_command") is not None:
+            sc = obj["suite_command"]
+            if not isinstance(sc, str) or not sc.strip():
+                raise ContractError(
+                    "%s: suite_command, when present, must be a non-empty "
+                    "string" % ctx
+                )
+            lowered = sc.strip().lower()
+            if (
+                lowered in ("true", "false", ":", "exit 0", "exit")
+                or lowered.startswith("echo ")
+                or lowered.startswith("printf ")
+            ):
+                raise ContractError(
+                    "%s: suite_command %r is a no-op, not a test suite"
+                    % (ctx, sc)
+                )
     elif kind in REPORT_KINDS:
         findings = _require(obj, "findings", list, ctx)
         for i, f in enumerate(findings):
@@ -328,6 +345,14 @@ Kind draft_slice_note adds:
 
 Kind implement adds:
   "files_changed": ["<workspace-relative paths you created or edited>", ...]
+  "suite_command": "<the repo's official full-test-suite command, exactly
+   as you would run it from the workspace root (e.g. 'mix test'); it must
+   be non-interactive and run the suite exactly ONCE and exit — never a
+   watch mode; null or omitted if the repo has no suite>"
+
+Kind fix_findings may ALSO include "suite_command" when the queued
+findings came from a failing verification gate and the gate's command
+itself was wrong — the driver adopts the corrected command.
 
 REVIEW kinds (review_round / delta_review / seal_half) add:
   "findings": [

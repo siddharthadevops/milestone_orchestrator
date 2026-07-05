@@ -1003,6 +1003,33 @@ class TestMockRunner(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
+# implement suite_command (verification protocol discovery)
+
+
+class TestImplementSuiteCommand(unittest.TestCase):
+    def base(self, **extra):
+        obj = {"status": "ok", "kind": "implement", "files_changed": ["x.py"]}
+        obj.update(extra)
+        return obj
+
+    def test_absent_and_null_are_valid(self):
+        contracts.validate_worker_output(self.base(), "implement")
+        contracts.validate_worker_output(
+            self.base(suite_command=None), "implement")
+
+    def test_string_command_is_valid(self):
+        contracts.validate_worker_output(
+            self.base(suite_command="mix test"), "implement")
+
+    def test_empty_or_nonstring_rejected(self):
+        with self.assertRaises(contracts.ContractError):
+            contracts.validate_worker_output(
+                self.base(suite_command="   "), "implement")
+        with self.assertRaises(contracts.ContractError):
+            contracts.validate_worker_output(
+                self.base(suite_command=42), "implement")
+
+
 # snapshot_workspace
 
 

@@ -934,6 +934,54 @@ class TestOperatorAmendmentsFlow(DriverTestCase):
             self.assertNotIn("OPERATOR AMENDMENTS", prompt)
 
 
+class TestSuiteDiscoveryProtocol(DriverTestCase):
+    """Zero-config verification: the implementer's suite_command arms the
+    mechanical gates for implementation units; doc units stay cheap; the
+    discovery and every gate run land in the ledger."""
+
+    def test_discovered_suite_arms_impl_gates_only(self):
+        with tempfile.TemporaryDirectory(prefix="orch-mock-") as ws:
+            path = init_state(ws, make_config(verification=[]))
+            impl = impl_script()
+            # The discovered command IS the demo's verification predicate,
+            # so discovery must drive the exact verify-fail -> fix -> green
+            # machinery the configured path drives.
+            impl[0]["response"]["suite_command"] = VERIFY_CMD
+            mock = runners.MockRunner(
+                skeleton_script() + doc_script() + impl
+            )
+            driver = drv.Driver(path, runner=mock)
+            _actions, final = self.drive(driver)
+            self.assertEqual(final.type, drv.A_DONE)
+            self.assertEqual(mock.script, [])
+
+            state = st.load(path)
+            self.assertEqual(state["suite_command"], VERIFY_CMD)
+            discoveries = [e for e in state["events"]
+                           if e["type"] == "suite_discovered"]
+            self.assertEqual([e["command"] for e in discoveries],
+                             [VERIFY_CMD])
+
+            # Gates: doc units ran nothing; impl gates ran the discovery.
+            ver = [e for e in state["events"] if e["type"] == "verification"]
+            self.assertTrue(ver)
+            for e in ver:
+                if e["unit"].startswith("slice_impl"):
+                    self.assertEqual(e["commands"], [VERIFY_CMD], e)
+                else:
+                    self.assertEqual(e["commands"], [], e)
+
+            # Reviewers of the impl unit are told the machine ran the
+            # suite; doc reviewers are not.
+            for fam, kind, prompt in mock.calls:
+                if kind in ("review_round", "seal_half"):
+                    has = "VERIFICATION STATUS" in prompt
+                    if "slice 1 implementation" in prompt:
+                        self.assertTrue(has, kind)
+                    else:
+                        self.assertFalse(has, kind)
+
+
 class TestFixerProtocolFailures(DriverTestCase):
     def _dirty_round_prefix(self):
         return [
