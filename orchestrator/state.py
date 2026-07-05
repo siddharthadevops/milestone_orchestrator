@@ -370,15 +370,15 @@ def record_round(state, unit, family, kind, result, raw_path=None, duration=None
     if meta:
         rec.update(copy.deepcopy(meta))
     unit["rounds"].append(rec)
-    append_event(
-        state,
-        "round_recorded",
-        unit=unit_key(unit),
-        round=rec["id"],
-        kind=kind,
-        findings=len(result.get("findings", [])),
-        invalidated=rec.get("invalidated"),
-    )
+    event_fields = {
+        "unit": unit_key(unit),
+        "round": rec["id"],
+        "kind": kind,
+        "findings": len(result.get("findings", [])),
+    }
+    if rec.get("invalidated"):
+        event_fields["invalidated"] = rec["invalidated"]
+    append_event(state, "round_recorded", **event_fields)
     return rec
 
 

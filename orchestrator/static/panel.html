@@ -254,10 +254,14 @@ async function refreshDetail() {
       html += `<div class="card"><h3>Events</h3>` +
         (sum.last_events || []).slice().reverse().map(e => {
           const extra = Object.entries(e)
-            .filter(([k]) => !["seq","at","type"].includes(k))
+            .filter(([k, v]) => !["seq","at","type"].includes(k)
+                    && v !== null && v !== undefined)
             .map(([k, v]) => `${k}=${typeof v === "object" ? JSON.stringify(v) : v}`).join(" ");
+          const bad = e.invalidated
+            ? '<span class="chip fail" style="margin-right:6px">INVALID</span>'
+            : "";
           return `<div class="evt"><span class="t">#${e.seq}</span>` +
-                 `<span class="ty">${esc(e.type)}</span>${esc(extra)}</div>`;
+                 `<span class="ty">${esc(e.type)}</span>${bad}${esc(extra)}</div>`;
         }).join("") + `</div>`;
     } else if (d.summary_error) {
       html += `<div class="failure">state unreadable: ${esc(d.summary_error)}</div>`;
