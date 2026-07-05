@@ -351,8 +351,9 @@ Kind implement adds:
    watch mode; null or omitted if the repo has no suite>"
 
 Kind fix_findings may ALSO include "suite_command" when the queued
-findings came from a failing verification gate and the gate's command
-itself was wrong — the driver adopts the corrected command.
+findings came from a failing verification gate (correcting a wrong
+command) or when the run has no recorded suite yet (arming it) — the
+driver adopts it.
 
 REVIEW kinds (review_round / delta_review / seal_half) add:
   "findings": [

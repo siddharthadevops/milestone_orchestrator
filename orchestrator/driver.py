@@ -861,13 +861,17 @@ class Driver(object):
         self._validate_adjudication_refs(unit, output)
         self._validate_contested_dispositions(unit, output)
         if (
-            source.get("type") == "verification"
-            and isinstance(output.get("suite_command"), str)
+            isinstance(output.get("suite_command"), str)
             and output["suite_command"].strip()
+            and (
+                source.get("type") == "verification"
+                or not self.state.get("suite_command")
+            )
         ):
-            # The gate's command itself may have been the defect (typo or
-            # hallucinated discovery): the verification fixer is the only
-            # in-protocol chance to correct it.
+            # A verification fixer may CORRECT a wrong command; any fixer
+            # may ARM a run that has none yet (live case: a reviewer
+            # flagged the vacuous gate, the fixer supplied `mix test` —
+            # dropping it on the floor forced a re-flag loop).
             st.set_discovered_suite(self.state, output["suite_command"])
         st.record_round(
             self.state,
