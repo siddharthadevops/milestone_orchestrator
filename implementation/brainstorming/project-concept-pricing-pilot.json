@@ -1,321 +1,370 @@
 {
- "_provenance": "Advisory review r2 of project-concept.md by codex gpt-5.5/xhigh, 2026-07-05, piloting the price-tag contrast contract before any validator existed. Worked example for the future skeleton contract and fixture for its validator tests. Finding F1 was conceded and fixed in commit 6268f58.",
+ "_provenance": "Advisory review r3 of project-concept.md by codex gpt-5.5/xhigh, 2026-07-05, piloting the price-tag contrast contract (no validator existed yet). r3 ran against the precision-pass text (d66686c); its four findings were conceded and fixed in the following commit. The r2 pilot lives in git history of this file. Worked example for the future skeleton contract and fixture for its validator tests.",
  "findings": [
   {
    "id": "F1",
-   "severity": "P1",
-   "summary": "The note still does not deliver its promised zero-translation Agent99 work-area compatibility. It says project work_areas use `{name, display_name, primary, additional, status}` and that `refs/work_area:<name>` adopts the same revision-envelope local KV shape, but the real Agent99 store persists direct `refs/work_area:<name>` maps requiring `executor_id` and `version` and interprets those fields as mandatory (`implementation/brainstorming/project-concept.md:57`, `implementation/brainstorming/project-concept.md:112`, `/Users/siddhartha/Development/source/life_prod/agent_99/apps/agent_99/lib/agent_99/body/work_area_store.ex:43`, `/Users/siddhartha/Development/source/life_prod/agent_99/apps/agent_99/lib/agent_99/body/work_area_store.ex:588`). Following the note would produce records that need translation or are unreadable by the cited store.",
+   "severity": "P2",
+   "summary": "The work-area stored-value contract is still not safe to copy: it permits `name`/`display_name` as merely non-blank and root `path` as merely non-blank (`implementation/brainstorming/project-concept.md:148-151`), but Agent99 rejects names over 128 bytes, names with `/` or control chars, display names over 128 bytes/control chars, and root paths that are not absolute canonical paths (`/Users/siddhartha/Development/source/life_prod/agent_99/apps/agent_99/lib/agent_99/body/work_area_store.ex:687`, `/Users/siddhartha/Development/source/life_prod/agent_99/apps/agent_99/lib/agent_99/body/work_area_store.ex:710`, `/Users/siddhartha/Development/source/life_prod/agent_99/apps/agent_99/lib/agent_99/body/root.ex:25`). Copying the note can still produce records that violate the claimed verbatim-readable Agent99 domain.",
+   "contests": null
+  },
+  {
+   "id": "F2",
+   "severity": "P2",
+   "summary": "The normative policy object uses `\"kinds\": [\"draft_doc\"]` (`implementation/brainstorming/project-concept.md:178`), but `draft_doc` is not an orchestrator worker kind: the current worker kinds are `draft_skeleton`, `draft_slice_note`, `implement`, `review_round`, `delta_review`, `seal_half`, and `fix_findings` (`orchestrator/contracts.py:39`), while `skeleton`/`slice_doc` are unit kinds (`orchestrator/prompts.py:197`). Since the note says policy scope is expressed in worker kinds/unit kinds (`implementation/brainstorming/project-concept.md:278`), the built-in reuse-audit policy would not bind without an undocumented translation.",
+   "contests": null
+  },
+  {
+   "id": "F3",
+   "severity": "P2",
+   "summary": "The KV contract conflates LPC raw envelope, public CAS record, and native listing semantics. The note says the adapter shape is `{revision, value, deleted?}` and that listings skip tombstones by default (`implementation/brainstorming/project-concept.md:156-162`), but LPC public `Cas` returns `%{exists?, revision, value}` (`/Users/siddhartha/Development/source/life_prod/life_product_components/elixir/apps/life_product_workspaces/lib/life_product_workspaces/cas.ex:31`), `deleted?` is the raw stored envelope (`/Users/siddhartha/Development/source/life_prod/life_product_components/elixir/apps/life_product_workspaces/lib/life_product_workspaces/cas.ex:278`), and native listing just delegates to the client (`/Users/siddhartha/Development/source/life_prod/life_product_components/elixir/apps/life_product_workspaces/lib/life_product_workspaces/datastore.ex:87`). LPC’s native-listing note explicitly says tombstones are listed keys that consumers must inspect (`/Users/siddhartha/Development/source/life_prod/life_product_components/elixir/implementation/milestones/native-workspace-datastore-listing/slices/02-native-ref-inventory.md:116`).",
+   "contests": null
+  },
+  {
+   "id": "F4",
+   "severity": "P3",
+   "summary": "The KV section pins local storage mechanics as normative: `file(s) under the service home, atomic replace + flock` (`implementation/brainstorming/project-concept.md:165`). That is implementation mechanism, not an observable cross-slice contract; the note should instead name the invariant and tests those mechanics protect, such as no torn writes and serialized concurrent writers.",
    "contests": null
   }
  ],
  "invariants_contrast": [
   {
    "id": "I1",
-   "statement": "A project is a generic named ecosystem of one or more repositories or roots, not a life_prod-specific schema.",
+   "statement": "A project is a generic named ecosystem spanning repositories or roots, not a life_prod-specific schema.",
    "consumer": {
-    "answer": "Operators configuring milestones, workers receiving project context, and future adapters that address runs by project/work area consume this generic boundary.",
+    "answer": "Operators, the launch flow, workers receiving project context, and a future Agent99 adapter consume the project boundary.",
     "evidence": "implementation/brainstorming/project-concept.md:34"
    },
    "payload": {
-    "answer": "The data carries a named project plus its roots; life_prod is only an illustration, and the same machinery is expected to cover solo repos and document folders.",
+    "answer": "The payload is a named project with roots/work areas/policies/defaults; `life_prod` is only an illustration.",
     "evidence": "implementation/brainstorming/project-concept.md:36"
    },
    "frequency": {
-    "answer": "Low-frequency configuration data, read at run launch rather than per worker token.",
-    "evidence": "derived: projects are configured once and resolved at run init per implementation/brainstorming/project-concept.md:44"
+    "answer": "Low-frequency configuration, resolved once at run init.",
+    "evidence": "implementation/brainstorming/project-concept.md:44"
    },
    "victim": {
-    "answer": "A non-life_prod operator is harmed if the system hard-codes one ecosystem and cannot launch their project.",
+    "answer": "A non-life_prod operator or any run needing sibling-repo reuse is harmed if the machinery hard-codes one ecosystem.",
     "evidence": "implementation/brainstorming/project-concept.md:37"
    },
    "cost": {
-    "answer": "Adds a project model and lookup path; no runtime hot-path cost beyond launch resolution."
+    "answer": "Adds project CRUD, project/work-area lookup, launch resolution, and prompt plumbing."
    },
    "cheaper_alternative": {
-    "answer": "Keep only workspace paths; rejected because runs are workspace-scoped while real work spans ecosystems."
+    "answer": "Keep a single workspace path; rejected because runs are workspace-scoped while real work spans ecosystems."
    },
    "ecosystem_equivalent": {
-    "answer": "gap: orchestrator state currently stores a single workspace path, not a project abstraction.",
-    "evidence": "orchestrator/state.py:123"
+    "answer": "gap: current orchestrator state stores a single `workspace` path, not a project abstraction.",
+    "evidence": "orchestrator/state.py:125"
    },
    "verdict": "priced_ok"
   },
   {
    "id": "I2",
-   "statement": "At run init, the ledger records the project and every safeguard shown to workers, mirroring amendment_seen.",
+   "statement": "Orchestrator project maps to Agent99 workspace; orchestrator work_areas map to Agent99 work areas.",
    "consumer": {
-    "answer": "Reviewers, fixers, seal halves, and the operator consume this to judge a round against what its workers actually saw.",
-    "evidence": "implementation/brainstorming/project-concept.md:45"
+    "answer": "The future Agent99 adapter, Brain-facing vocabulary, and run launcher consume this mapping.",
+    "evidence": "implementation/brainstorming/project-concept.md:87"
    },
    "payload": {
-    "answer": "The ledger carries the project plus per-safeguard seen events such as `project_safeguard_seen`.",
-    "evidence": "implementation/brainstorming/project-concept.md:46"
+    "answer": "Agent99 workspace is the policy boundary; work area is a named set of explicit roots with primary and additional roots.",
+    "evidence": "/Users/siddhartha/Development/source/life_prod/agent_99/docs/architecture.md:199"
    },
    "frequency": {
-    "answer": "Once per run for project membership and first-seen per safeguard; bounded by configured safeguards.",
-    "evidence": "implementation/brainstorming/project-concept.md:45"
+    "answer": "Read during every project-bound run launch, bounded to one selected work area per run.",
+    "evidence": "implementation/brainstorming/project-concept.md:62"
    },
    "victim": {
-    "answer": "A fixer or reviewer is harmed if a missing safeguard is treated as worker negligence rather than absent context.",
-    "evidence": "implementation/brainstorming/project-concept.md:47"
+    "answer": "The adapter and operator are harmed if a repo path is mistaken for the workspace policy boundary.",
+    "evidence": "implementation/brainstorming/project-concept.md:96"
    },
    "cost": {
-    "answer": "Small ledger event additions and prompt plumbing; recurring storage grows with safeguards shown."
+    "answer": "Requires explicit project/work-area handles and a primary_root alias for today’s path-shaped API."
    },
    "cheaper_alternative": {
-    "answer": "Run-scoped amendments alone are cheaper, but the note rejects them because amendments die with the run."
+    "answer": "Keep calling the repo path `workspace`; rejected because it collides with Agent99’s workspace boundary."
    },
    "ecosystem_equivalent": {
-    "answer": "adopt: current amendments already render into prompts and record `amendment_seen`; project safeguards extend that pattern.",
-    "evidence": "orchestrator/driver.py:496"
+    "answer": "adopt: Agent99 already defines workspace and work-area architecture.",
+    "evidence": "/Users/siddhartha/Development/source/life_prod/agent_99/docs/architecture.md:221"
    },
    "verdict": "priced_ok"
   },
   {
    "id": "I3",
-   "statement": "Project work_areas are intended to be Agent99 work areas: primary root plus additional roots, with reuse metadata beside the Agent99 fields.",
+   "statement": "Project work-area records must be verbatim-readable by Agent99 WorkAreaStore.",
    "consumer": {
-    "answer": "The driver launch flow, future Agent99 adapter, Brain, and worker prompts consume the work_area to choose cwd and read-only roots.",
-    "evidence": "implementation/brainstorming/project-concept.md:62"
-   },
-   "payload": {
-    "answer": "The note says the payload carries name, display_name, primary.path/device, additional path/device entries, status, and sidecar inventory/registry/consumption metadata.",
+    "answer": "Agent99 WorkAreaStore, the future fusion adapter, and the launch resolver consume these records.",
     "evidence": "implementation/brainstorming/project-concept.md:57"
    },
+   "payload": {
+    "answer": "Actual source payload is an atom-keyed map with name, display_name, primary, additional, executor_id, version, and status; root descriptors must pass Agent99 root validation.",
+    "evidence": "/Users/siddhartha/Development/source/life_prod/agent_99/apps/agent_99/lib/agent_99/body/work_area_store.ex:43"
+   },
    "frequency": {
-    "answer": "Read on every run launch and whenever project configuration changes; bounded by configured work areas.",
-    "evidence": "implementation/brainstorming/project-concept.md:62"
+    "answer": "Read at launch, listing, and work-area inspection; bounded by configured work areas.",
+    "evidence": "/Users/siddhartha/Development/source/life_prod/agent_99/apps/agent_99/lib/agent_99/body/work_area_store.ex:215"
    },
    "victim": {
-    "answer": "The future Agent99 adapter and operator are harmed if the stored shape cannot be projected without translation or loses root provenance.",
-    "evidence": "implementation/brainstorming/project-concept.md:85"
+    "answer": "The operator and future adapter are harmed if project records need translation or are rejected as malformed.",
+    "evidence": "implementation/brainstorming/project-concept.md:59"
    },
    "cost": {
-    "answer": "Moderate: root descriptors need device identity, validation, UI editing, and launch-time selection."
+    "answer": "Requires canonical path/device capture, Agent99-compatible validation, sidecar metadata separation, and acceptance tests."
    },
    "cheaper_alternative": {
-    "answer": "A flat primary_root path was tried and rejected because it would look compatible but require later translation."
+    "answer": "A flat `primary_root` path is cheaper, but was already rejected because it is not Agent99’s work-area shape."
    },
    "ecosystem_equivalent": {
-    "answer": "gap: Agent99 provides the store, but its actual stored record also requires executor_id and version.",
+    "answer": "partial adopt: Agent99 provides the record domain/store, while the orchestrator lacks project work-area storage today.",
     "evidence": "/Users/siddhartha/Development/source/life_prod/agent_99/apps/agent_99/lib/agent_99/body/work_area_store.ex:43"
    },
    "verdict": "priced_ok"
   },
   {
    "id": "I4",
-   "statement": "Project policy safeguards are versioned policy objects that later become Agent99 workspace capability policies with zero translation.",
+   "statement": "Project storage uses a local KV compatible with LifeProductWorkspaces primitives and revision-envelope CAS.",
    "consumer": {
-    "answer": "Workers see the policy prompt block; the driver validates the added contract field; future Agent99 workspace policy consumes the same id/version/scope handles.",
-    "evidence": "implementation/brainstorming/project-concept.md:54"
-   },
-   "payload": {
-    "answer": "Each policy carries id, version, enabled, scope, and the contract field it adds.",
-    "evidence": "implementation/brainstorming/project-concept.md:54"
-   },
-   "frequency": {
-    "answer": "Evaluated for every worker call whose kind/unit falls inside the policy scope.",
-    "evidence": "implementation/brainstorming/project-concept.md:173"
-   },
-   "victim": {
-    "answer": "The operator is harmed if standing safeguards degrade into prose and stop binding future runs.",
-    "evidence": "implementation/brainstorming/project-concept.md:10"
-   },
-   "cost": {
-    "answer": "Adds policy serialization, versioning, scope matching, and validation tests."
-   },
-   "cheaper_alternative": {
-    "answer": "Plain repo docs are cheaper, but the note rejects them as advisory prose that did not bind runs."
-   },
-   "ecosystem_equivalent": {
-    "answer": "adopt: Agent99 docs already model capabilities as versioned policy objects.",
-    "evidence": "/Users/siddhartha/Development/source/life_prod/agent_99/docs/cli-body-connector.md:88"
-   },
-   "verdict": "priced_ok"
-  },
-  {
-   "id": "I5",
-   "statement": "Project storage uses a local KV compatible with LifeProductWorkspaces get/put/cas/list_entries and a revision-envelope CAS adapter.",
-   "consumer": {
-    "answer": "The service, panel, future fusion pump, and future workspace datastore mirror consume the local KV contract.",
-    "evidence": "implementation/brainstorming/project-concept.md:41"
-   },
-   "payload": {
-    "answer": "Entries carry binary keys, JSON-plain values, revision envelopes, tombstone deletes, and project key families for work areas, policy, status, and digest projections.",
+    "answer": "The service, panel, project store, future fusion pump, and future Brain visibility mirror consume this contract.",
     "evidence": "implementation/brainstorming/project-concept.md:112"
    },
+   "payload": {
+    "answer": "The real ecosystem payload combines Client get/put/cas/list_entries primitives with Cas public records `%{exists?, revision, value}` over raw revision envelopes.",
+    "evidence": "/Users/siddhartha/Development/source/life_prod/life_product_components/elixir/apps/life_product_workspaces/lib/life_product_workspaces/cas.ex:31"
+   },
    "frequency": {
-    "answer": "Low-frequency for project edits; bounded status/digest projection writes per run update.",
+    "answer": "Low-frequency for project edits, plus bounded status/digest projection writes during runs.",
     "evidence": "implementation/brainstorming/project-concept.md:122"
    },
    "victim": {
-    "answer": "The operator and future Brain are harmed if fusion requires migration or loses projected run visibility.",
+    "answer": "The operator and future Brain are harmed if fusion needs migration or loses projected run visibility.",
     "evidence": "implementation/brainstorming/project-concept.md:115"
    },
    "cost": {
-    "answer": "Adds a file-backed KV, CAS semantics, list paging, serialization stability, and migration/fusion tests."
+    "answer": "Adds a local KV module, CAS/revision semantics, tombstone handling, serialization stability, and tests."
    },
    "cheaper_alternative": {
-    "answer": "A simpler JSON file is cheaper, but rejected because future fusion must be a transport swap rather than data migration."
+    "answer": "A plain JSON file is cheaper, but rejected because fusion is meant to be a transport swap."
    },
    "ecosystem_equivalent": {
-    "answer": "partial adopt: LPC exposes get/put/cas/list_entries and a CAS envelope; orchestrator lacks a local implementation today.",
+    "answer": "partial adopt: LPC provides Client and Cas contracts; the orchestrator has no local project KV.",
     "evidence": "/Users/siddhartha/Development/source/life_prod/life_product_components/elixir/apps/life_product_workspaces/lib/life_product_workspaces/client.ex:82"
    },
    "verdict": "priced_ok"
   },
   {
-   "id": "I6",
-   "statement": "Durable truth stays in state.json and git records; the datastore holds only descriptors and projections, so wipes are recoverable.",
+   "id": "I5",
+   "statement": "Durable truth stays in `.orchestrator/state.json` and committed repo ledgers; KV stores only descriptors and projections.",
    "consumer": {
-    "answer": "The operator, driver, and future mirrored server consume this split to know which data may be regenerated.",
+    "answer": "The driver, operator, panel, and future mirrored server consume this durability split.",
     "evidence": "implementation/brainstorming/project-concept.md:130"
    },
    "payload": {
-    "answer": "The durable payload is run ledgers and committed milestone records; the datastore payload is descriptors and projections only.",
+    "answer": "State and committed milestone records are durable; project datastore entries are re-declarable descriptors and projections.",
     "evidence": "implementation/brainstorming/project-concept.md:131"
    },
    "frequency": {
-    "answer": "Always-on invariant across every run and projection write; not a hot compute path.",
-    "evidence": "implementation/brainstorming/project-concept.md:130"
+    "answer": "Always-on invariant across every run state save and projection write.",
+    "evidence": "orchestrator/state.py:6"
    },
    "victim": {
-    "answer": "The operator is harmed if a development server wipe deletes run truth instead of only mirrored projections.",
+    "answer": "The operator is harmed if a server datastore wipe destroys run truth instead of only mirrored visibility data.",
     "evidence": "implementation/brainstorming/project-concept.md:134"
    },
    "cost": {
-    "answer": "Requires regeneration paths and discipline around what may be stored in KV."
+    "answer": "Requires regeneration/re-pump paths and strict boundaries around what may be written to KV."
    },
    "cheaper_alternative": {
-    "answer": "Putting all run state in KV is simpler for sharing, but rejected because wipe-safety depends on git and state.json durability."
+    "answer": "Putting all run state in shared KV is simpler for sharing, but rejected because wipe-safety depends on local ledgers and git."
    },
    "ecosystem_equivalent": {
-    "answer": "adopt: current orchestrator already treats state.json as ledger truth.",
-    "evidence": "orchestrator/prompts.py:78"
+    "answer": "adopt: current orchestrator state already enforces append-only history and atomic state writes.",
+    "evidence": "orchestrator/state.py:6"
+   },
+   "verdict": "priced_ok"
+  },
+  {
+   "id": "I6",
+   "statement": "Safeguards are versioned policy objects that add required contract fields, not prose-only warnings.",
+   "consumer": {
+    "answer": "Prompt builders, worker-output validators, reviewers, and future Agent99 capability policy consume these policy objects.",
+    "evidence": "implementation/brainstorming/project-concept.md:174"
+   },
+   "payload": {
+    "answer": "Each policy carries id, version, enabled, scope, prompt text, contract field schema, and mechanical checks.",
+    "evidence": "implementation/brainstorming/project-concept.md:177"
+   },
+   "frequency": {
+    "answer": "Evaluated for every worker call whose worker kind and unit kind match the policy scope.",
+    "evidence": "implementation/brainstorming/project-concept.md:275"
+   },
+   "victim": {
+    "answer": "Consuming repos and shared packages are harmed when a prose safeguard is missed and existing shared behavior is duplicated locally.",
+    "evidence": "implementation/brainstorming/project-concept.md:15"
+   },
+   "cost": {
+    "answer": "Adds policy serialization, versioning, scope matching, contract merging, UI editing, and fixture coverage."
+   },
+   "cheaper_alternative": {
+    "answer": "Plain repo docs or warnings are cheaper, but the motivating incident showed that warnings did not prevent duplication."
+   },
+   "ecosystem_equivalent": {
+    "answer": "partial adopt: Agent99 has versioned capability policy objects, while orchestrator contracts are fixed worker-kind schemas today.",
+    "evidence": "/Users/siddhartha/Development/source/life_prod/agent_99/docs/cli-body-connector.md:88"
    },
    "verdict": "priced_ok"
   },
   {
    "id": "I7",
-   "statement": "Every worker prompt gets a PROJECT CONTEXT block with ecosystem map and safeguards at amendment-like authority.",
+   "statement": "Project contract extensions are declarative JSON over a closed verifier vocabulary and use the existing repair-retry path.",
    "consumer": {
-    "answer": "All worker kinds consume the prompt block; reviewers treat violations as findings.",
-    "evidence": "implementation/brainstorming/project-concept.md:139"
+    "answer": "The driver, contract validator, policy authors, and reviewers consume the verifier vocabulary.",
+    "evidence": "implementation/brainstorming/project-concept.md:192"
    },
    "payload": {
-    "answer": "The prompt carries ecosystem map plus safeguards rendered with the same authority posture as operator amendments.",
-    "evidence": "implementation/brainstorming/project-concept.md:139"
+    "answer": "V1 carries `path_exists`, `citation_exists`, `dir_listing_matches`, `non_empty`, and `enum`; failed checks produce the same one-retry contract repair flow.",
+    "evidence": "implementation/brainstorming/project-concept.md:192"
    },
    "frequency": {
-    "answer": "Every worker call; bounded by prompt size and configured safeguards.",
-    "evidence": "implementation/brainstorming/project-concept.md:139"
+    "answer": "Every in-scope worker output validation; exactly one repair retry on contract violation.",
+    "evidence": "orchestrator/runners.py:389"
    },
    "victim": {
-    "answer": "Workers and reviewers are harmed if standing project law is absent from the actual prompt they answer.",
-    "evidence": "implementation/brainstorming/project-concept.md:46"
+    "answer": "The operator and local machine are harmed if project config can inject arbitrary code/shell or if unverifiable audit claims pass.",
+    "evidence": "implementation/brainstorming/project-concept.md:279"
    },
    "cost": {
-    "answer": "Recurring token cost in every prompt plus prompt-builder tests."
+    "answer": "Requires verifier dispatch, schema checks, path containment checks, repair error messages, and coverage for each verifier."
    },
    "cheaper_alternative": {
-    "answer": "Keep project law only in repo docs; rejected because repo docs are advisory and were missed."
+    "answer": "Arbitrary project plugins would be more flexible, but rejected because closed vocabulary prevents code/shell injection."
    },
    "ecosystem_equivalent": {
-    "answer": "adopt: amendments already bind later worker calls through prompt rendering.",
-    "evidence": "orchestrator/prompts.py:369"
+    "answer": "gap: orchestrator has the repair-retry path, but no project extension registry or verifier vocabulary.",
+    "evidence": "orchestrator/contracts.py:217"
    },
    "verdict": "priced_ok"
   },
   {
    "id": "I8",
-   "statement": "Skeletons and slice notes that touch a reusable surface must include a cited adopt/gap/reject reuse audit per relevant package.",
+   "statement": "The ledger records `project_resolved` once and `project_safeguard_seen` once per policy id/version shown to workers.",
    "consumer": {
-    "answer": "Planners, reviewers, consuming repos, and source repos consume the audit before any local invention is allowed.",
-    "evidence": "implementation/brainstorming/project-concept.md:141"
+    "answer": "Reviewers, fixers, seal halves, and the operator consume these events to judge workers against what they actually saw.",
+    "evidence": "implementation/brainstorming/project-concept.md:201"
    },
    "payload": {
-    "answer": "The audit table carries package inventory, registry rows, adopt/gap/reject decisions, and sibling-repo file:line citations.",
-    "evidence": "implementation/brainstorming/project-concept.md:142"
+    "answer": "Events carry `{project, work_area}` and `{policy_id, version, text[:300]}`.",
+    "evidence": "implementation/brainstorming/project-concept.md:201"
    },
    "frequency": {
-    "answer": "Planning-time only for skeletons and slice notes; bounded by relevant packages and surfaces.",
-    "evidence": "implementation/brainstorming/project-concept.md:141"
+    "answer": "Once at run init for project resolution, and first-seen per safeguard id/version; bounded by configured policies.",
+    "evidence": "implementation/brainstorming/project-concept.md:201"
    },
    "victim": {
-    "answer": "Consuming products and LPC are harmed when existing shared behavior is duplicated locally, as in the motivating chat incident.",
-    "evidence": "implementation/brainstorming/project-concept.md:15"
+    "answer": "A reviewer or fixer is harmed if a worker is blamed for violating a safeguard that was not in its prompt.",
+    "evidence": "implementation/brainstorming/project-concept.md:45"
    },
    "cost": {
-    "answer": "Adds cross-repo reading, citation work, audit tables, and review burden before implementation."
+    "answer": "Adds ledger event types, dedup logic, prompt integration, and tests for version re-recording."
    },
    "cheaper_alternative": {
-    "answer": "A louder prohibition is cheaper, but the note explicitly rejects it because the prior ban failed."
+    "answer": "Do not ledger prompt exposure; rejected because amendment_seen already exists to make worker knowledge auditable."
    },
    "ecosystem_equivalent": {
-    "answer": "gap: current prompts require reuse posture, but not this enumerated package-level audit contract.",
-    "evidence": "orchestrator/prompts.py:244"
+    "answer": "adopt: current amendments record first-seen prompt exposure with clipped text.",
+    "evidence": "orchestrator/driver.py:515"
    },
    "verdict": "priced_ok"
   },
   {
    "id": "I9",
-   "statement": "Reviewers independently verify each reuse audit decision with per-package concur/dissent entries and citations; dissent backs a finding.",
+   "statement": "Skeletons and slice notes touching reusable surfaces must include a cited adopt/gap/reject reuse audit, and reviewers must contrast it.",
    "consumer": {
-    "answer": "Reviewers, fixers, and the driver consume the contrast entries to make reuse verification slot-driven.",
-    "evidence": "implementation/brainstorming/project-concept.md:149"
+    "answer": "Planners, reviewers, fixers, source repos, and consuming products consume the audit decisions.",
+    "evidence": "implementation/brainstorming/project-concept.md:245"
    },
    "payload": {
-    "answer": "Each review entry carries package, concur or dissent, the reviewer citation, and any finding linked to a dissent.",
-    "evidence": "implementation/brainstorming/project-concept.md:152"
+    "answer": "The audit carries package inventory, registry rows, adopt/gap/reject decisions, file:line citations, and reviewer concur/dissent entries.",
+    "evidence": "implementation/brainstorming/project-concept.md:247"
    },
    "frequency": {
-    "answer": "Every review of an audit-bearing planning artifact; bounded by the audit's decision count.",
-    "evidence": "implementation/brainstorming/project-concept.md:153"
+    "answer": "Planning and review time only; bounded by relevant reuse packages and audit rows.",
+    "evidence": "implementation/brainstorming/project-concept.md:245"
    },
    "victim": {
-    "answer": "The operator is harmed if an audit table is trusted without independent verification and duplicates pass review.",
-    "evidence": "implementation/brainstorming/project-concept.md:150"
+    "answer": "Consuming products and LPC are harmed when existing shared behavior is duplicated locally, as in the Agent99 chat incident.",
+    "evidence": "implementation/brainstorming/project-concept.md:15"
    },
    "cost": {
-    "answer": "Adds reviewer token cost and JSON fields proportional to audit rows."
+    "answer": "Adds cross-repo reading, citation work, audit tables, reviewer contrast fields, and semantic review burden."
    },
    "cheaper_alternative": {
-    "answer": "Reviewer prose could mention reuse informally, but the note rejects prose-only safeguards in favor of slots."
+    "answer": "A stronger warning is cheaper, but rejected because the prior prohibition failed."
    },
    "ecosystem_equivalent": {
-    "answer": "partial adopt: skeleton price-tag contrast has the same independent-answer pattern; reuse-audit contrast is new.",
-    "evidence": "implementation/brainstorming/skeleton-code-first-discipline.md:80"
+    "answer": "gap: current prompts require Reuse Posture, not a per-package adopt/gap/reject audit with mechanical slots.",
+    "evidence": "orchestrator/prompts.py:253"
    },
    "verdict": "priced_ok"
   },
   {
    "id": "I10",
-   "statement": "Project contract extensions are declarative JSON over a closed verifier vocabulary; projects cannot inject code or shell.",
+   "statement": "Run-scoped operator amendments win over project safeguards on conflict.",
    "consumer": {
-    "answer": "The driver, worker contracts, and operators consume this to safely compose project-specific obligations with base contracts.",
-    "evidence": "implementation/brainstorming/project-concept.md:171"
+    "answer": "Prompt builders, workers, reviewers, and fixers consume the conflict-precedence rule.",
+    "evidence": "implementation/brainstorming/project-concept.md:206"
    },
    "payload": {
-    "answer": "A policy bundles prompt block, contract field name, per-entry schema, scope, and mechanical checks such as path_exists, citation_exists, dir_listing_matches, non_empty, and enum.",
-    "evidence": "implementation/brainstorming/project-concept.md:171"
+    "answer": "The rule carries amendment-over-safeguard precedence, operator-authority rendering for both, and review treatment of safeguard violations.",
+    "evidence": "implementation/brainstorming/project-concept.md:206"
    },
    "frequency": {
-    "answer": "Every in-scope worker output validation; repair-retry path runs only on invalid output.",
-    "evidence": "implementation/brainstorming/project-concept.md:178"
+    "answer": "Every worker prompt and review where both a safeguard and an amendment are in scope; bounded by configured policies and amendments.",
+    "evidence": "derived: conflict only exists when both prompt channels are present"
    },
    "victim": {
-    "answer": "The operator and local machine are harmed if project config can run arbitrary verifier code or shell.",
-    "evidence": "implementation/brainstorming/project-concept.md:175"
+    "answer": "The operator is harmed if a later, more specific run instruction loses to stale standing project policy.",
+    "evidence": "derived: precedence protects the operator's later run-scoped intent"
    },
    "cost": {
-    "answer": "Adds extension-schema parsing, verifier dispatch, coverage checks, and tests for repair-retry integration."
+    "answer": "Adds merge ordering, conflict documentation, and tests for prompt/render precedence."
    },
    "cheaper_alternative": {
-    "answer": "Arbitrary project plugins would be more flexible, but rejected by the closed vocabulary and no-code/no-shell rule."
+    "answer": "Project policy always wins is simpler, but rejected because it would override the more specific later instruction."
    },
    "ecosystem_equivalent": {
-    "answer": "gap: core contracts validate fixed worker kinds today, with no project extension registry.",
-    "evidence": "orchestrator/contracts.py:217"
+    "answer": "partial adopt: amendments already render as binding operator text, but project safeguards do not exist yet.",
+    "evidence": "orchestrator/prompts.py:369"
+   },
+   "verdict": "priced_ok"
+  },
+  {
+   "id": "I11",
+   "statement": "The machine API must clarify that current `workspace` means work-area `primary_root` and add a `primary_root` alias.",
+   "consumer": {
+    "answer": "Machine API clients, the Agent99 executor adapter, and future schema readers consume this naming correction.",
+    "evidence": "implementation/brainstorming/project-concept.md:96"
+   },
+   "payload": {
+    "answer": "The public schema carries current path-shaped `workspace` plus explicit `primary_root`; Agent99 workspace remains the policy boundary.",
+    "evidence": "implementation/brainstorming/machine-api-and-persona-projection.md:50"
+   },
+   "frequency": {
+    "answer": "Every run launch/status/API response that exposes the current workspace path.",
+    "evidence": "orchestrator/service.py:337"
+   },
+   "victim": {
+    "answer": "The Agent99 adapter is harmed if it treats a repo path as the workspace tenancy/policy boundary.",
+    "evidence": "implementation/brainstorming/project-concept.md:96"
+   },
+   "cost": {
+    "answer": "Adds schema documentation, an alias in responses/requests, and compatibility tests."
+   },
+   "cheaper_alternative": {
+    "answer": "Keep only `workspace`; rejected because it preserves the naming collision."
+   },
+   "ecosystem_equivalent": {
+    "answer": "gap: current service launch requires a path-shaped `workspace`; the sibling note queues the alias.",
+    "evidence": "orchestrator/service.py:337"
    },
    "verdict": "priced_ok"
   }

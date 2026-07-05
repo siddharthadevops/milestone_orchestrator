@@ -145,9 +145,12 @@ sources during two advisory review rounds; treat them as pinned.
 body/work_area_store.ex` — moduledoc "Stored value" and `interpret/1`):
 `{name, display_name, primary, additional, executor_id, version, status}`.
 All keys present, or the agent_99 reader rejects the record as malformed:
-`name`/`display_name` non-blank strings (older records may omit
-display_name and read back as name); `primary` and each `additional`
-element `{path: non-blank string, device: non-blank string | integer}`,
+`name` valid UTF-8, non-blank, ≤128 bytes, no `/`, no control characters;
+`display_name` same constraints, trimmed (older records may omit it and
+read back as name); `primary` and each `additional` element
+`{path, device}` where `path` is an ABSOLUTE, CANONICAL path (starts with
+`/`; no empty, `.` or `..` segments; no trailing slash except `/` itself —
+`Agent99.Body.Root.new/2`) and `device` a non-blank string or integer;
 roots distinct; `executor_id` non-blank string — here the local
 orchestrator's identity (provenance is non-authoritative in agent_99 by
 design); `version` non-negative integer, bumped on every descriptor
@@ -155,14 +158,22 @@ change; `status` exactly `"pending" | "ready" | "unavailable"`.
 
 **KV envelope** (source: LPC `life_product_workspaces/lib/
 life_product_workspaces/cas.ex`): every entry is stored as
-`{revision: positive integer, value, deleted?: boolean}`. A never-written
-key reads as absent with `nil` revision; the first write is revision 1,
-then monotonic +1; CAS takes the expected revision (`nil` = create-only);
-delete writes a tombstone (`deleted?: true`) — never physical removal;
-listings skip tombstones by default. Values are JSON-plain, string-keyed,
-serialization-stable. The control revision is INDEPENDENT of any domain
-version inside the value (policy.version, work_area.version). Local
-backing: file(s) under the service home, atomic replace + flock.
+two DISTINCT shapes. The STORED envelope is `{revision: positive integer,
+value, deleted?: boolean}`; the PUBLIC read record is `{exists?: boolean,
+revision: nil | positive integer, value}` — `exists?` false for
+tombstoned or never-written keys, never-written reads with `nil`
+revision. First write is revision 1, then monotonic +1; CAS takes the
+expected revision (`nil` = create-only); delete writes a tombstone
+(`deleted?: true`) — never physical removal. LISTINGS INCLUDE TOMBSTONES
+(LPC native-listing rule: a listed key is not necessarily live —
+consumers inspect the envelope); convenience filtering may exist only as
+a documented local wrapper, never as the primitive's behavior. Values are
+JSON-plain, string-keyed, serialization-stable. The control revision is
+INDEPENDENT of any domain version inside the value (policy.version,
+work_area.version). Local backing guarantees, mechanism-free and pinned
+by tests: each write becomes visible atomically (no torn reads) and
+concurrent writers serialize; where it lives and how it locks is the
+implementation's choice.
 
 **Key grammar**: one reserved namespace constant (default
 `milestone_orchestrator`, single config point, final name TBD). Families:
@@ -175,7 +186,8 @@ work area's roots and must land inside one of them — never outside.
 
 ```json
 {"id": "lpc-reuse-audit", "version": 1, "enabled": true,
- "scope": {"kinds": ["draft_doc"], "unit_kinds": ["skeleton", "slice_doc"]},
+ "scope": {"kinds": ["draft_skeleton", "draft_slice_note"],
+           "unit_kinds": ["skeleton", "slice_doc"]},
  "prompt": "<the block the worker sees, amendment-authority rendering>",
  "contract": {
    "field": "reuse_audit", "required": true,
@@ -188,6 +200,12 @@ work area's roots and must land inside one of them — never outside.
                "root": "<path relative to a work-area root>",
                "match_field": "package"}]}}
 ```
+
+Scope vocabularies are the EXISTING ones — no new names: worker kinds are
+`contracts.py`'s KIND_* values (`draft_skeleton`, `draft_slice_note`,
+`implement`, `review_round`, `delta_review`, `seal_half`,
+`fix_findings`); unit kinds are `prompts.py`'s (`skeleton`, `slice_doc`,
+implementation units).
 
 **Closed verifier vocabulary V1** (the whole set; a new kind is an
 orchestrator milestone, never project config): `path_exists(field)` ·
