@@ -321,6 +321,16 @@ class Driver(object):
     def _artifact(self, unit):
         return unit["artifact"] or "(workspace)"
 
+    def _governing(self, unit):
+        """The sealed document the unit's artifact answers to (the
+        reviewer's explicit standard): the skeleton for a slice note, the
+        slice note for an implementation, nothing for the skeleton."""
+        if unit["kind"] == st.UNIT_SLICE_DOC:
+            return "docs/skeleton.md"
+        if unit["kind"] == st.UNIT_SLICE_IMPL:
+            return "docs/slice-%02d.md" % unit["slice_id"]
+        return None
+
     def _save_protocol_raws(self, raw_name, exc):
         """Persist the raw texts of a protocol-violating call (original and
         repair retry) so the operator can inspect what the model actually
@@ -672,6 +682,7 @@ class Driver(object):
                 if source.get("type") == "verification"
                 else None
             ),
+            unit_kind=unit["kind"],
         )
         n_fix = 1 + len(
             [r for r in unit["rounds"] if r["kind"] == contracts.KIND_FIX_FINDINGS]
@@ -806,6 +817,8 @@ class Driver(object):
             self._unit_desc(unit),
             delta,
             self._registry(),
+            unit_kind=unit["kind"],
+            governing=self._governing(unit),
         )
         n_delta = 1 + len(
             [r for r in unit["rounds"] if r["kind"] == contracts.KIND_DELTA_REVIEW]
@@ -994,6 +1007,8 @@ class Driver(object):
             self._unit_desc(unit),
             self._artifact(unit),
             self._registry(),
+            unit_kind=unit["kind"],
+            governing=self._governing(unit),
         )
         output, result, raw_path, changed = self._report_call(
             unit,
@@ -1084,7 +1099,8 @@ class Driver(object):
             failure raises _SealHalfFailure; raw outputs go to per-family
             files only."""
             prompt = prompts.build_seal_half(
-                family, self.workspace, goal, desc, artifact, registry
+                family, self.workspace, goal, desc, artifact, registry,
+                unit_kind=unit["kind"], governing=self._governing(unit),
             )
             raw_name = "%s-seal-a%d-%s" % (st.unit_key(unit), attempt_no, family)
             try:

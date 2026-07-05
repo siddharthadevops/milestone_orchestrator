@@ -63,9 +63,14 @@ def _access_block(edit_allowed):
         lines += [
             "- REPORT-ONLY: do not create, edit, delete, or move any file,",
             "  anywhere. Workspace modifications are detected mechanically",
-            "  and invalidate your entire output.",
+            "  and invalidate your entire output. If you believe a file",
+            "  should change, report a finding instead of changing it.",
         ]
     lines += [
+        "- Never include secrets, credentials, tokens, private keys, raw",
+        "  PII, or raw sensitive operational data in anything you write",
+        "  or send — outputs, artifact edits, or consultation dialogues —",
+        "  and avoid unrelated personal material found while reading.",
         '- If something makes it impossible to proceed correctly, return',
         '  status "blocked" with a precise blocked_reason; the run stops',
         "  and the operator reads your explanation in the log.",
@@ -161,16 +166,239 @@ def _consultation_block(opposite_family, opposite_cmd):
     return (
         "CONSULTATION PROTOCOL (for rejections)\n"
         "Before rejecting any finding you must run ONE consultation dialogue\n"
-        "with the %s family, passing it the disputed finding, your proposed\n"
-        "resolution, and the evidence you checked. Command (prompt on\n"
-        "stdin):\n"
+        "with the %s family, passing it the artifact (or its path), the\n"
+        "disputed finding, your proposed resolution, and the evidence you\n"
+        "checked. Command (prompt on stdin):\n"
         "  %s\n"
         "Save the transcript under WORKSPACE/.orchestrator/scratch/ and\n"
         "summarize the outcome in the finding's consultation.resolution\n"
-        "field. Exception: rejected_adjudicated (a duplicate of an entry in\n"
-        "the ADJUDICATED REJECTIONS list) needs NO consultation — cite the\n"
-        "entry id in adjudication_ref instead.\n"
+        "field. Run at most two dialogue rounds, stopping earlier if\n"
+        "agreement is clear. If the dialogue cannot run or leaves no\n"
+        "clear resolution, an unresolved dispute means a justified\n"
+        "rejection is NOT possible: mark the finding 'blocked' — never\n"
+        "silently concede, never reject. Never reject a P0 or P1 finding\n"
+        "without a clear consultation resolution. Exception:\n"
+        "rejected_adjudicated (a duplicate of an entry in the ADJUDICATED\n"
+        "REJECTIONS list) needs NO consultation — cite the entry id in\n"
+        "adjudication_ref instead.\n"
     ) % (opposite_family, cmd)
+
+
+# ---------------------------------------------------------------------------
+# Content-discipline rules ported VERBATIM from the manual canon
+# (canon/process/README.md, canon/process/codex-review.md). The canon's
+# PROCESS rules died with the manual era — the driver enforces them
+# mechanically — but these judgment rules carry ten canon versions of
+# refinement, and the exact wording is the asset. Never port process
+# vocabulary here (dispositions, VERDICT lines, durable-log bookkeeping).
+# Deliberately NOT ported: the local-context rules (README.md:72-78,86)
+# — this regime has no implementation/local-context.md input channel.
+
+# Unit kinds whose artifact is a document (state.UNIT_SKELETON /
+# UNIT_SLICE_DOC); altitude discipline applies to these only.
+DOC_UNIT_KINDS = ("skeleton", "slice_doc")
+
+ALTITUDE_BLOCK = (
+    "ALTITUDE (documentation discipline)\n"
+    "- Documentation scope states observable contracts, invariants, and\n"
+    "  the tests that pin them. Mechanism — internal names, call\n"
+    "  ordering, state enumeration, control flow — belongs to\n"
+    "  implementation.\n"
+    "- The operational test: a statement that can be falsified only by\n"
+    "  reading the implementation diff, and not by observing behavior or\n"
+    "  running a named test, is mechanism. Reduce it to the contract it\n"
+    "  protects.\n"
+    "- Mechanism-level detail is allowed only where it pins a named\n"
+    "  public or cross-slice contract — a signature, an error\n"
+    "  vocabulary, a seam another slice or consumer depends on. The\n"
+    "  artifact must name that pinned contract.\n"
+    "- Avoid pseudo-code, defensive FAQs, repetition, and future\n"
+    "  milestone chains. If a document starts specifying control flow\n"
+    "  that belongs in code, reduce it to observable contracts,\n"
+    "  invariants, and tests.\n"
+    "- Documentation artifacts are contracts for implementation and\n"
+    "  review. Keep them short and executable.\n"
+)
+
+ALTITUDE_REVIEW_BLOCK = (
+    "- Check altitude in BOTH directions: under-specified observable\n"
+    "  contracts and over-specified mechanism (control flow in prose)\n"
+    "  are both findings; over-specified mechanism is P3 by default and\n"
+    "  P2 when acceptance criteria or tests anchor to mechanism instead\n"
+    "  of observable behavior.\n"
+    "- Reducing over-specified mechanism to its unchanged contract is\n"
+    "  not a substantial scope or design change: the contract is\n"
+    "  unchanged, only its expression compresses. Do not flag such a\n"
+    "  reduction as lost content — do verify the contract really is\n"
+    "  unchanged.\n"
+)
+
+ALTITUDE_FIX_BLOCK = (
+    "- Fix documentation findings at altitude: a valid finding about\n"
+    "  unspecified behavior is fixed by recording the observable\n"
+    "  contract, invariant, or test, not the mechanism that produces it.\n"
+    "- Reducing over-specified mechanism to its unchanged contract is\n"
+    "  not a substantial scope or design change.\n"
+)
+
+REUSE_GATE_BLOCK = (
+    "REUSE GATE\n"
+    "- Before proposing new machinery, first check existing project\n"
+    "  code, existing project contracts, pinned shared dependencies, and\n"
+    "  already-approved platform surfaces. Prefer reuse, extension,\n"
+    "  wrapping, parameterization, or documentation over parallel\n"
+    "  machinery.\n"
+)
+
+REUSE_POSTURE_LINE = (
+    "- Include a short `Reuse Posture` section: what was checked; what\n"
+    "  is reused or extended; why any new machinery is necessary; how\n"
+    "  the new path stays compatible with existing contracts.\n"
+)
+
+REUSE_REVIEW_BLOCK = (
+    "REUSE\n"
+    "- When the artifact proposes new machinery, check the reuse gate:\n"
+    "  existing project code, contracts, pinned shared dependencies, and\n"
+    "  already-approved platform surfaces come first.\n"
+)
+
+REUSE_POSTURE_REVIEW_LINE = (
+    "- Every skeleton and slice note must include a short `Reuse\n"
+    "  Posture` section; a missing or hollow one is a finding.\n"
+)
+
+SKELETON_SCOPE_BLOCK = (
+    "SKELETON SCOPE\n"
+    "- A slice is the smallest reviewable, approvable, and closeable\n"
+    "  delivery unit. Keep slices narrow: one clear intent, one\n"
+    "  reviewable surface, no unrelated scope.\n"
+    "- Plan slices so the expected change diff aims to stay under about\n"
+    "  500 changed lines where practical. Generated, lockfile, and\n"
+    "  mechanical changes do not count toward that aim. Do not split\n"
+    "  cohesive work artificially.\n"
+    "- Skeletons are planning contracts, not slice notes. They keep\n"
+    "  rough slice intent and shared invariants, then leave scope,\n"
+    "  files, tests, risks, and acceptance detail to the just-in-time\n"
+    "  slice note. Do not draft slice notes during skeleton work.\n"
+)
+
+SLICE_SIZING_LINE = (
+    "- The slice aims to stay under about 500 changed lines where\n"
+    "  practical (generated, lockfile, and mechanical changes do not\n"
+    "  count); if it is expected to exceed the target, record the\n"
+    "  reason in the slice note.\n"
+)
+
+SLICE_NOTE_CONTENT_BLOCK = (
+    "SLICE NOTE CONTENT\n"
+    "- A complete slice note covers: scope, non-goals, expected files,\n"
+    "  dependencies, acceptance criteria, tests, risks, and reuse\n"
+    "  posture — as observable contracts, not implementation detail.\n"
+    + SLICE_SIZING_LINE
+)
+
+PLANNING_CONTEXT_LINE = (
+    "PLANNING CONTEXT\n"
+    "- If the workspace contains brainstorming or `_drafts` planning\n"
+    "  material, it is non-canonical context: it does not authorize\n"
+    "  implementation and does not override sealed artifacts. An\n"
+    "  artifact leaning on it must explicitly record how it Adopts /\n"
+    "  Revises / Rejects the relevant decisions.\n"
+)
+
+ADOPT_CHECK_REVIEW_LINE = (
+    "PLANNING CONTEXT\n"
+    "- If the artifact leans on brainstorming or `_drafts` material,\n"
+    "  check that it explicitly records the relevant Adopt / Revise /\n"
+    "  Reject decision instead of silently approving linked material.\n"
+)
+
+EVIDENCE_BLOCK = (
+    "EVIDENCE\n"
+    "- The local filesystem checkout is the source of truth for content\n"
+    "  inspection; prefer local search and file-reading tools for speed.\n"
+    "  Use git for scope, diff comparison, relevant history, and\n"
+    "  commit/ref verification.\n"
+)
+
+FIX_EVIDENCE_BLOCK = (
+    "- Do not triage from memory or chat, and do not treat prior review\n"
+    "  output as authority. A prior finding may identify what to\n"
+    "  inspect, but the decision must come from the current artifact and\n"
+    "  direct evidence.\n"
+)
+
+FIX_SELF_CHECK_BLOCK = (
+    "- Run local/focused checks after each modification when they are\n"
+    "  cheap or directly relevant. Before returning, re-check your own\n"
+    "  pending diff: it must actually cover every finding you mark\n"
+    "  'fixed', and surfaces you touched in worker-drafted artifacts\n"
+    "  (statuses, acceptance criteria) must stay consistent —\n"
+    "  corrections fold into this same pass.\n"
+)
+
+DELTA_COVERAGE_LINE = (
+    "DELTA CHECK\n"
+    "- Do not stop at the first finding: report every defect you can\n"
+    "  verify in a complete pass of the delta and the files it touches.\n"
+    "  An exhaustive pass with zero findings is a valid outcome.\n"
+    "- Check the delta actually covers what its fix pass claims, and\n"
+    "  that surrounding surfaces in the touched worker-drafted artifacts\n"
+    "  (statuses, acceptance criteria) stay consistent.\n"
+)
+
+# The canon requires this exact sentence for all review phases
+# (codex-review.md:277); full and seal rounds carry it verbatim, the
+# delta review carries the delta-scoped variant in DELTA_COVERAGE_LINE.
+EXHAUSTIVE_SENTENCE = (
+    "Do not stop at the first finding: report every defect you can\n"
+    "verify in a complete pass of the artifact and the code it cites.\n"
+    "An exhaustive pass with zero findings is a valid outcome.\n"
+)
+
+
+def _governing_line(governing):
+    """Name the sealed document the reviewed artifact answers to — the
+    explicit standard the reviewer judges against."""
+    if not governing:
+        return ""
+    return (
+        "CANONICAL REFERENCE: judge the target against %s (sealed) — the\n"
+        "standard this artifact must satisfy. The reference itself stays\n"
+        "reviewable content: a defect you newly discover in it is a\n"
+        "finding, never grounds for blocked.\n\n" % governing
+    )
+
+
+def _review_quality_block(unit_kind):
+    parts = [EVIDENCE_BLOCK, REUSE_REVIEW_BLOCK]
+    if unit_kind in DOC_UNIT_KINDS:
+        parts.append(REUSE_POSTURE_REVIEW_LINE)
+        parts.append(ALTITUDE_BLOCK)
+        parts.append(ALTITUDE_REVIEW_BLOCK)
+        parts.append(
+            SKELETON_SCOPE_BLOCK if unit_kind == "skeleton"
+            else SLICE_NOTE_CONTENT_BLOCK
+        )
+        parts.append(ADOPT_CHECK_REVIEW_LINE)
+    return "".join(parts) + "\n"
+
+
+def _delta_quality_block(unit_kind):
+    parts = [EVIDENCE_BLOCK, DELTA_COVERAGE_LINE]
+    if unit_kind in DOC_UNIT_KINDS:
+        parts.append(ALTITUDE_BLOCK)
+        parts.append(ALTITUDE_REVIEW_BLOCK)
+    return "".join(parts) + "\n"
+
+
+def _fix_quality_block(unit_kind):
+    parts = [EVIDENCE_BLOCK, FIX_EVIDENCE_BLOCK, FIX_SELF_CHECK_BLOCK]
+    if unit_kind in DOC_UNIT_KINDS:
+        parts.append(ALTITUDE_BLOCK)
+        parts.append(ALTITUDE_FIX_BLOCK)
+    return "".join(parts) + "\n"
 
 
 # ---------------------------------------------------------------------------
@@ -184,8 +412,14 @@ def build_draft_skeleton(family, workspace, goal):
         + "GOAL: %s\n\n" % goal
         + "Write a concise skeleton document at docs/skeleton.md inside the\n"
         "workspace: goal restatement, boundary/non-goals, and a short table\n"
-        "of planned slices (small, independently reviewable increments).\n"
-        "Keep it thin: intent and contracts, no implementation detail.\n\n"
+        "of planned slices. Keep it thin: intent and contracts, no\n"
+        "implementation detail.\n\n"
+        + SKELETON_SCOPE_BLOCK
+        + ALTITUDE_BLOCK
+        + REUSE_GATE_BLOCK
+        + REUSE_POSTURE_LINE
+        + PLANNING_CONTEXT_LINE
+        + "\n"
         + _access_block(edit_allowed=True)
         + "\n"
         + contracts.CONTRACT_TEXT
@@ -201,8 +435,15 @@ def build_draft_slice_note(family, workspace, goal, slice_info, skeleton_path):
         + "SKELETON: %s (sealed; stay inside its boundary)\n\n" % skeleton_path
         + "Write docs/slice-%02d.md: scope as observable contracts and the\n"
         % slice_info["id"]
-        + "tests that pin them, non-goals, acceptance criteria. State WHAT\n"
-        "must be observably true, not HOW code will do it.\n\n"
+        + "tests that pin them, non-goals, expected files, dependencies,\n"
+        "acceptance criteria, risks, and reuse posture. State WHAT must be\n"
+        "observably true, not HOW code will do it.\n\n"
+        + SLICE_SIZING_LINE
+        + ALTITUDE_BLOCK
+        + REUSE_GATE_BLOCK
+        + REUSE_POSTURE_LINE
+        + PLANNING_CONTEXT_LINE
+        + "\n"
         + _access_block(edit_allowed=True)
         + "\n"
         + contracts.CONTRACT_TEXT
@@ -221,6 +462,11 @@ def build_implement(family, workspace, goal, slice_info, note_path, verification
         "commands that must pass (run from the workspace root):\n"
         + ver
         + "\n\n"
+        + REUSE_GATE_BLOCK
+        + PLANNING_CONTEXT_LINE
+        + "- Run local/focused checks after each modification when they\n"
+        "  are cheap or directly relevant.\n"
+        + "\n"
         + _access_block(edit_allowed=True)
         + "\n"
         + contracts.CONTRACT_TEXT
@@ -231,18 +477,19 @@ def build_implement(family, workspace, goal, slice_info, note_path, verification
 # Review kinds (report-only)
 
 
-def build_review_round(family, workspace, goal, unit_desc, artifact, registry):
+def build_review_round(family, workspace, goal, unit_desc, artifact, registry,
+                       unit_kind=None, governing=None):
     return (
         _header(contracts.KIND_REVIEW_ROUND, family, workspace)
         + "\nTASK: full review round of %s. REPORT ONLY.\n" % unit_desc
         + "GOAL: %s\n" % goal
         + "TARGET: %s (plus any code/tests it governs)\n\n" % artifact
-        + "Do a complete pass of the target and the code it cites. Do not\n"
-        "stop at the first defect: report every defect you can verify in\n"
-        "this pass (an exhaustive pass with zero findings is a valid\n"
-        "outcome). You fix nothing and triage nothing — a separate fixer\n"
-        "call will verify your findings against the real files and concede\n"
-        "or dissent.\n\n"
+        + _governing_line(governing)
+        + EXHAUSTIVE_SENTENCE
+        + "You fix nothing and triage nothing — a separate fixer call\n"
+        "will verify your findings against the real files and concede or\n"
+        "dissent.\n\n"
+        + _review_quality_block(unit_kind)
         + _registry_block(registry)
         + "\n"
         + _access_block(edit_allowed=False)
@@ -251,13 +498,15 @@ def build_review_round(family, workspace, goal, unit_desc, artifact, registry):
     )
 
 
-def build_delta_review(family, workspace, goal, unit_desc, diff_text, registry):
+def build_delta_review(family, workspace, goal, unit_desc, diff_text, registry,
+                       unit_kind=None, governing=None):
     return (
         _header(contracts.KIND_DELTA_REVIEW, family, workspace)
         + "\nTASK: incremental review of the pending fix delta on %s.\n"
         % unit_desc
         + "REPORT ONLY.\n"
         + "GOAL: %s\n\n" % goal
+        + _governing_line(governing)
         + "Below is the exact uncommitted diff a fixer just produced. Review\n"
         "ONLY this delta in the context of the files it touches:\n"
         "correctness of the change, consistency with the surrounding\n"
@@ -269,6 +518,7 @@ def build_delta_review(family, workspace, goal, unit_desc, diff_text, registry):
         "------------\n"
         + (diff_text or "(empty diff)")
         + "\n------------\n\n"
+        + _delta_quality_block(unit_kind)
         + _registry_block(registry)
         + "\n"
         + _access_block(edit_allowed=False)
@@ -277,17 +527,20 @@ def build_delta_review(family, workspace, goal, unit_desc, diff_text, registry):
     )
 
 
-def build_seal_half(family, workspace, goal, unit_desc, artifact, registry):
+def build_seal_half(family, workspace, goal, unit_desc, artifact, registry,
+                    unit_kind=None, governing=None):
     return (
         _header(contracts.KIND_SEAL_HALF, family, workspace)
         + "\nTASK: independent final seal review of %s. REPORT ONLY.\n"
         % unit_desc
         + "GOAL: %s\n" % goal
         + "TARGET: %s (plus any code/tests it governs)\n\n" % artifact
+        + _governing_line(governing)
         + "You are one half of a double seal: a fresh, independent, final\n"
-        "check on a target other agents already reviewed and fixed. Do a\n"
-        "complete pass; report every defect you can verify. You fix\n"
-        "nothing and triage nothing.\n\n"
+        "check on a target other agents already reviewed and fixed.\n"
+        + EXHAUSTIVE_SENTENCE
+        + "You fix nothing and triage nothing.\n\n"
+        + _review_quality_block(unit_kind)
         + _registry_block(registry)
         + "\n"
         + _access_block(edit_allowed=False)
@@ -310,6 +563,7 @@ def build_fix_findings(
     consultation_family,
     consultation_cmd,
     verification_output=None,
+    unit_kind=None,
 ):
     lines = []
     for f in findings:
@@ -359,6 +613,7 @@ def build_fix_findings(
         "  the new evidence on its merits (fix or reject WITH a fresh\n"
         "  consultation).\n"
         "- impossible either way -> 'blocked' (the run stops).\n\n"
+        + _fix_quality_block(unit_kind)
         + _registry_block(registry)
         + "\n"
         + _access_block(edit_allowed=True)

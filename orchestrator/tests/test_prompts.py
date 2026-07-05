@@ -323,5 +323,238 @@ class TestExistingPromptInvariants(unittest.TestCase):
         self.assertIn("settled finding", prompt)
 
 
+class TestPortedCanonContentRules(unittest.TestCase):
+    """The manual canon's refined CONTENT rules (altitude, reuse gate,
+    evidence discipline, exhaustiveness, consultation caps) ported
+    verbatim from canon/process/*.md. Process rules stay dead — the
+    driver enforces them — but these judgment rules must reach the
+    right workers with the canon's exact wording."""
+
+    FALSIFIABILITY = (
+        "a statement that can be falsified only by reading the "
+        "implementation diff, and not by observing behavior or running a "
+        "named test, is mechanism"
+    )
+    EXHAUSTIVE = (
+        "Do not stop at the first finding: report every defect you can "
+        "verify in a complete pass of the artifact and the code it cites. "
+        "An exhaustive pass with zero findings is a valid outcome."
+    )
+
+    def review(self, kind):
+        return normalized(prompts.build_review_round(
+            FAMILY, WORKSPACE, GOAL, UNIT, "docs/x.md", [],
+            unit_kind=kind, governing="docs/skeleton.md",
+        ))
+
+    def seal(self, kind):
+        return normalized(prompts.build_seal_half(
+            FAMILY, WORKSPACE, GOAL, UNIT, "docs/x.md", [],
+            unit_kind=kind, governing="docs/skeleton.md",
+        ))
+
+    def fix(self, kind):
+        return normalized(prompts.build_fix_findings(
+            FAMILY, WORKSPACE, GOAL, UNIT, FINDINGS, [], "claude",
+            ["claude", "-p"], unit_kind=kind,
+        ))
+
+    def delta(self, kind):
+        return normalized(prompts.build_delta_review(
+            FAMILY, WORKSPACE, GOAL, UNIT, "diff --git a/x b/x\n", [],
+            unit_kind=kind,
+        ))
+
+    def test_altitude_reaches_doc_drafts(self):
+        for prompt in (
+            normalized(prompts.build_draft_skeleton(FAMILY, WORKSPACE, GOAL)),
+            normalized(prompts.build_draft_slice_note(
+                FAMILY, WORKSPACE, GOAL, SLICE, "docs/skeleton.md")),
+        ):
+            self.assertIn("ALTITUDE (documentation discipline)", prompt)
+            self.assertIn(self.FALSIFIABILITY, prompt)
+            self.assertIn(
+                "Mechanism-level detail is allowed only where it pins a "
+                "named public or cross-slice contract", prompt)
+
+    def test_altitude_is_doc_unit_conditional_in_reviews(self):
+        for build in (self.review, self.seal, self.delta, self.fix):
+            for kind in ("skeleton", "slice_doc"):
+                self.assertIn("ALTITUDE (documentation discipline)",
+                              build(kind), build.__name__)
+            self.assertNotIn("ALTITUDE (documentation discipline)",
+                             build("slice_impl"), build.__name__)
+
+    def test_bidirectional_altitude_check_with_severities(self):
+        for kind in ("skeleton", "slice_doc"):
+            for prompt in (self.review(kind), self.seal(kind)):
+                self.assertIn("under-specified observable contracts and "
+                              "over-specified mechanism", prompt)
+                self.assertIn("P3 by default and P2 when acceptance "
+                              "criteria or tests anchor to mechanism",
+                              prompt)
+
+    def test_fix_at_altitude_reaches_doc_fixers_only(self):
+        rule = "Fix documentation findings at altitude"
+        self.assertIn(rule, self.fix("skeleton"))
+        self.assertIn(rule, self.fix("slice_doc"))
+        self.assertNotIn(rule, self.fix("slice_impl"))
+
+    def test_reduction_is_not_scope_change_for_delta(self):
+        self.assertIn(
+            "Reducing over-specified mechanism to its unchanged contract",
+            self.delta("slice_doc"),
+        )
+
+    def test_reuse_gate_reaches_authors_and_reviewers(self):
+        gate = ("Prefer reuse, extension, wrapping, parameterization, or "
+                "documentation over parallel machinery")
+        posture = "Reuse Posture"
+        built = build_all()
+        for name in ("draft_skeleton", "draft_slice_note", "implement"):
+            self.assertIn(gate, normalized(built[name]), name)
+        for name in ("draft_skeleton", "draft_slice_note"):
+            self.assertIn(posture, normalized(built[name]), name)
+        for kind in ("skeleton", "slice_doc"):
+            self.assertIn(posture, self.review(kind))
+            self.assertIn(posture, self.seal(kind))
+        # Implementation reviews check the reuse GATE but never demand a
+        # Reuse Posture section from code (the section duty is doc-only).
+        for prompt in (self.review("slice_impl"), self.seal("slice_impl")):
+            self.assertIn("check the reuse gate", prompt)
+            self.assertNotIn("Reuse Posture", prompt)
+
+    def test_skeleton_scope_rules(self):
+        for prompt in (
+            normalized(prompts.build_draft_skeleton(FAMILY, WORKSPACE, GOAL)),
+            self.review("skeleton"),
+            self.seal("skeleton"),
+        ):
+            self.assertIn("Skeletons are planning contracts, not slice "
+                          "notes", prompt)
+            self.assertIn("stay under about 500 changed lines where "
+                          "practical", prompt)
+            self.assertIn("Do not split cohesive work artificially", prompt)
+            self.assertNotIn("record the reason in the slice note", prompt)
+
+    def test_slice_note_checklist_reaches_author_and_reviewers(self):
+        checklist = ("scope, non-goals, expected files, dependencies, "
+                     "acceptance criteria, tests, risks, and reuse posture")
+        self.assertIn(checklist, self.review("slice_doc"))
+        self.assertIn(checklist, self.seal("slice_doc"))
+        note = normalized(prompts.build_draft_slice_note(
+            FAMILY, WORKSPACE, GOAL, SLICE, "docs/skeleton.md"))
+        self.assertIn("expected files, dependencies, acceptance criteria, "
+                      "risks, and reuse posture", note)
+        sizing = "record the reason in the slice note"
+        self.assertIn(sizing, note)
+        self.assertIn(sizing, self.review("slice_doc"))
+        self.assertIn(sizing, self.seal("slice_doc"))
+
+    def test_exhaustive_sentence_exact_in_review_and_seal(self):
+        # The canon requires this exact sentence for all review phases.
+        self.assertIn(self.EXHAUSTIVE, self.review("slice_impl"))
+        self.assertIn(self.EXHAUSTIVE, self.seal("slice_impl"))
+
+    def test_canonical_reference_line(self):
+        self.assertIn(
+            "CANONICAL REFERENCE: judge the target against "
+            "docs/skeleton.md (sealed)", self.review("slice_doc"))
+        no_gov = normalized(prompts.build_review_round(
+            FAMILY, WORKSPACE, GOAL, UNIT, "docs/x.md", [],
+            unit_kind="skeleton", governing=None))
+        self.assertNotIn("CANONICAL REFERENCE", no_gov)
+
+    def test_evidence_discipline_in_reviews_and_fix(self):
+        rule = ("The local filesystem checkout is the source of truth for "
+                "content inspection")
+        for prompt in (self.review("slice_impl"), self.seal("slice_impl"),
+                       self.delta("slice_impl"), self.fix("slice_impl")):
+            self.assertIn(rule, prompt)
+
+    def test_fixer_triage_evidence_rules(self):
+        prompt = self.fix("slice_impl")
+        self.assertIn("Do not triage from memory or chat, and do not "
+                      "treat prior review output as authority", prompt)
+        self.assertIn("the decision must come from the current artifact "
+                      "and direct evidence", prompt)
+
+    def test_consultation_cap_and_severity_gate(self):
+        prompt = self.fix("slice_impl")
+        self.assertIn("Run at most two dialogue rounds, stopping earlier "
+                      "if agreement is clear", prompt)
+        self.assertIn("Never reject a P0 or P1 finding without a clear "
+                      "consultation resolution", prompt)
+
+    def test_unresolved_consultation_blocks_never_concedes(self):
+        # Canon: an unresolved dispute escalates (README.md:250-252); the
+        # regime's escalation is 'blocked'. A silent concede-and-fix
+        # branch must never exist — it would apply disputed findings
+        # with no operator visibility and no registry record.
+        prompt = self.fix("slice_impl")
+        self.assertIn("an unresolved dispute means a justified rejection "
+                      "is NOT possible", prompt)
+        self.assertIn("never silently concede, never reject", prompt)
+        self.assertNotIn("reasonably fixable", prompt)
+        self.assertIn("an unresolved or unavailable consultation means a "
+                      "justified rejection is NOT possible",
+                      normalized(contracts.CONTRACT_TEXT))
+
+    def test_delta_review_is_exhaustive_and_knows_its_standard(self):
+        prompt = normalized(prompts.build_delta_review(
+            FAMILY, WORKSPACE, GOAL, UNIT, "diff --git a/x b/x\n", [],
+            unit_kind="slice_impl", governing="docs/slice-01.md",
+        ))
+        self.assertIn("report every defect you can verify in a complete "
+                      "pass of the delta and the files it touches", prompt)
+        self.assertIn("CANONICAL REFERENCE: judge the target against "
+                      "docs/slice-01.md (sealed)", prompt)
+
+    def test_doc_unit_kinds_match_state_constants(self):
+        from orchestrator import state as st_mod
+        self.assertEqual(
+            tuple(sorted(prompts.DOC_UNIT_KINDS)),
+            tuple(sorted((st_mod.UNIT_SKELETON, st_mod.UNIT_SLICE_DOC))),
+        )
+
+    def test_never_send_secrets_in_every_builder(self):
+        for name, prompt in build_all().items():
+            with self.subTest(builder=name):
+                self.assertIn(
+                    "Never include secrets, credentials, tokens, private "
+                    "keys, raw PII", normalized(prompt))
+
+    def test_report_finding_instead_of_editing(self):
+        for name in REPORT_BUILDERS:
+            self.assertIn(
+                "If you believe a file should change, report a finding "
+                "instead of changing it", normalized(build_all()[name]))
+
+    def test_brainstorming_adopt_revise_reject(self):
+        drafts = ("draft_skeleton", "draft_slice_note", "implement")
+        built = build_all()
+        for name in drafts:
+            self.assertIn("Adopts / Revises / Rejects",
+                          normalized(built[name]), name)
+        self.assertIn("Adopt / Revise / Reject decision",
+                      self.review("skeleton"))
+
+    def test_registry_scan_unaffected_by_new_sections(self):
+        # The content blocks sit BEFORE the registry block, so the fake
+        # CLI's registry scan (ADJUDICATED REJECTIONS .. ACCESS) never
+        # crosses them; the registry entries must still render after the
+        # quality blocks.
+        registry = [{"id": "ADJ-9", "unit": UNIT, "severity": "P3",
+                     "summary": "settled", "rationale": "checked"}]
+        prompt = prompts.build_seal_half(
+            FAMILY, WORKSPACE, GOAL, UNIT, "docs/x.md", registry,
+            unit_kind="slice_doc", governing="docs/skeleton.md")
+        self.assertLess(prompt.index("ALTITUDE"),
+                        prompt.index("ADJUDICATED REJECTIONS"))
+        self.assertLess(prompt.index("ADJUDICATED REJECTIONS"),
+                        prompt.index("ACCESS"))
+        self.assertIn("ADJ-9", prompt)
+
+
 if __name__ == "__main__":
     unittest.main()

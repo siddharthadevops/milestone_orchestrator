@@ -364,5 +364,7 @@ Kind fix_findings adds:
   findings duplicating an entry of the ADJUDICATED REJECTIONS list without
   new evidence: cite it in adjudication_ref, no consultation needed, do
   not re-litigate. Use "blocked" only when neither fixing nor a justified
-  rejection is possible; the run will stop and show your reason.
+  rejection is possible (an unresolved or unavailable consultation means a
+  justified rejection is NOT possible); the run will stop and show your
+  reason.
 """
