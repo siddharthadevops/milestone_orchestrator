@@ -270,6 +270,30 @@ def recent_paths(home):
 # Core operations (HTTP-independent; unit-testable directly)
 
 
+def read_in_flight(entry, alive):
+    """The driver's cosmetic in-flight marker (what call is executing right
+    now). Only meaningful while the driver is alive; a stale marker from a
+    crashed driver is ignored."""
+    if not alive:
+        return None
+    path = os.path.join(
+        os.path.dirname(entry["state_path"]), "current.json"
+    )
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+    except (OSError, ValueError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    return {
+        "label": data.get("label"),
+        "kind": data.get("kind"),
+        "family": data.get("family"),
+        "started_at": data.get("started_at"),
+    }
+
+
 def run_status(entry):
     """Derived, cheap status for the run list."""
     alive = driver_alive(entry)
@@ -281,6 +305,7 @@ def run_status(entry):
         "goal_doc": entry.get("goal_doc"),
         "process": "running" if alive else "stopped",
         "pid": entry.get("pid") if alive else None,
+        "in_flight": read_in_flight(entry, alive),
         "milestone_status": None,
         "current_unit": None,
         "current_unit_status": None,

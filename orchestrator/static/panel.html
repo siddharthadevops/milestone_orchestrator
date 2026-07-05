@@ -216,8 +216,23 @@ const ACTIVITY = {
   delta_review: "delta review", pre_seal_verify: "verifying",
   sealing: "double seal",
 };
+function elapsed(t0) {
+  if (!t0) return "";
+  const secs = Math.max(0, Math.floor(Date.now() / 1000 - t0));
+  const m = Math.floor(secs / 60), sx = secs % 60;
+  return m ? `${m}m${String(sx).padStart(2, "0")}s` : `${sx}s`;
+}
+function inFlightChip(r) {
+  const f = r.in_flight;
+  if (!f || !f.kind) return "";
+  const who = f.family ? `${f.family} ` : "";
+  return `<span class="chip working" title="${esc(f.label || "")}">` +
+         `<span class="spin"></span>${esc(who)}${esc(f.kind)} · ${elapsed(f.started_at)}</span>`;
+}
 function workingChip(r) {
   if (r.process !== "running" || !r.current_unit_status) return "";
+  const live = inFlightChip(r);
+  if (live) return live;
   const label = ACTIVITY[r.current_unit_status] || r.current_unit_status;
   return `<span class="chip working"><span class="spin"></span>` +
          `${esc(r.current_unit)} · ${esc(label)}</span>`;
@@ -285,7 +300,8 @@ async function refreshDetail() {
           <div class="unit-head"><span class="unit-name">${esc(u.unit)}</span>
             <span class="st ${esc(u.status)}">${esc(u.status)}</span></div>
           <div class="chips">${(u.rounds || []).map(roundChip).join("")}
-            ${(u.seals || []).map(sealChip).join("")}</div>
+            ${(u.seals || []).map(sealChip).join("")}
+            ${u.unit === sum.current_unit && running ? inFlightChip(s) : ""}</div>
         </div>`).join("") + `</div>`;
       html += `<div class="card"><h3>Events</h3>` +
         (sum.last_events || []).slice().reverse().map(e => {

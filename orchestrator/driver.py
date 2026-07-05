@@ -24,6 +24,7 @@ import signal
 import subprocess
 import sys
 import threading
+import time
 
 try:
     import fcntl
@@ -294,19 +295,49 @@ class Driver(object):
         for i, text in enumerate(getattr(exc, "raw_texts", []) or [], 1):
             self._save_raw("%s-protoerr%d" % (raw_name, i), text)
 
+    def _busy_path(self):
+        return os.path.join(self.workspace, ".orchestrator", "current.json")
+
+    def _mark_busy(self, label, kind, family):
+        """Cosmetic in-flight marker for the panel (NOT part of the state
+        ledger): what call is executing right now and since when. Written
+        atomically; concurrent seal halves may interleave markers
+        (last-write-wins), which is acceptable for a progress display."""
+        try:
+            os.makedirs(os.path.dirname(self._busy_path()), exist_ok=True)
+            tmp = self._busy_path() + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as fh:
+                json.dump(
+                    {"label": label, "kind": kind, "family": family,
+                     "started_at": time.time()},
+                    fh,
+                )
+            os.replace(tmp, self._busy_path())
+        except OSError:
+            pass  # never let the progress display break a run
+
+    def _clear_busy(self):
+        try:
+            os.unlink(self._busy_path())
+        except OSError:
+            pass
+
     def _call(self, family, prompt, kind, raw_name):
         """Validated worker call; on protocol/runner failure, fail the run
         with the explanation recorded, then re-raise as StopStep."""
+        self._mark_busy(raw_name, kind, family)
         try:
             output, result = runners.call_worker(
                 self.runner, family, prompt, kind, self.workspace
             )
         except (runners.RunnerError, runners.WorkerProtocolError) as exc:
+            self._clear_busy()
             self._save_protocol_raws(raw_name, exc)
             st.fail_run(self.state, "%s call failed: %s" % (kind, exc),
                         unit=st.current_unit(self.state))
             self._save()
             raise StopStep(str(exc))
+        self._clear_busy()
         raw_path = self._save_raw(raw_name, result.text)
         return output, result, raw_path
 
@@ -820,9 +851,13 @@ class Driver(object):
             "pre_review" if stage == st.U_PRE_REVIEW_VERIFY else "pre_seal"
         )
         commands = self.config["verification"]
-        ok, output = run_verification(
-            commands, self.workspace, self.config.get("verification_timeout", 600)
-        )
+        self._mark_busy("verification (%s)" % stage_key, "verification", None)
+        try:
+            ok, output = run_verification(
+                commands, self.workspace, self.config.get("verification_timeout", 600)
+            )
+        finally:
+            self._clear_busy()
         st.append_event(
             self.state,
             "verification",
