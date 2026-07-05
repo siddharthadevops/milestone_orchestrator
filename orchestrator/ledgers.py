@@ -137,6 +137,8 @@ def render_review_log(state):
                 triage = _fmt_dispositions(_dispositions(result))
                 if consultations:
                     triage += " (%d consulted)" % consultations
+                if r.get("invalidated"):
+                    triage = "INVALIDATED: %s" % r["invalidated"]
                 lines.append(
                     "| %s | %s | %s | %d | %s | `%s` |"
                     % (

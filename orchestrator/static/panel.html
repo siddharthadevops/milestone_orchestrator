@@ -214,8 +214,10 @@ async function refreshRuns() {
 }
 function select(id) { selected = id; refreshRuns(); refreshDetail(); }
 function roundChip(r) {
-  const cls = r.findings === 0 ? "clean" : "dirty";
   const kind = r.kind === "review_round" ? "r" : r.kind;
+  if (r.invalidated)
+    return `<span class="chip fail" title="${esc(r.invalidated)}">${esc(r.family)} ${esc(kind)} · INVALID</span>`;
+  const cls = r.findings === 0 ? "clean" : "dirty";
   return `<span class="chip ${cls}">${esc(r.family)} ${esc(kind)} · ${r.findings}f</span>`;
 }
 function sealChip(s) {

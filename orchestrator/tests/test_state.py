@@ -1611,7 +1611,10 @@ class TestSummary(TempWorkspaceCase):
         # rounds view: one clean round per family
         self.assertEqual(len(skel_view["rounds"]), 2)
         for r in skel_view["rounds"]:
-            self.assertEqual(set(r.keys()), {"id", "family", "kind", "findings", "at"})
+            self.assertEqual(
+            set(r.keys()),
+            {"id", "family", "kind", "findings", "invalidated", "at"},
+        )
             self.assertEqual(r["findings"], 0)
         # seals view: one passed attempt with per-family finding counts
         self.assertEqual(len(skel_view["seals"]), 1)

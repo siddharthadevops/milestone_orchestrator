@@ -377,6 +377,7 @@ def record_round(state, unit, family, kind, result, raw_path=None, duration=None
         round=rec["id"],
         kind=kind,
         findings=len(result.get("findings", [])),
+        invalidated=rec.get("invalidated"),
     )
     return rec
 
@@ -597,6 +598,7 @@ def summary(state):
                         "family": r["family"],
                         "kind": r["kind"],
                         "findings": len(r["result"].get("findings", [])),
+                        "invalidated": r.get("invalidated"),
                         "at": r["at"],
                     }
                     for r in u["rounds"]
