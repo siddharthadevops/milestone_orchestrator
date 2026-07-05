@@ -159,6 +159,18 @@ adopts this contract LOCALLY:
      a real directory listing of the reuse source; missing/short audits are
      rejected at the contract layer (same posture as the no-op suite_command
      denylist). Reviewers verify semantics; the driver verifies existence.
+5. **Project contract extensions are declarative JSON.** A policy object
+   bundles, versioned together: the prompt block (the instruction the worker
+   sees), the contract field it adds (name + per-entry schema + scope: which
+   worker kinds / unit kinds it applies to), and its mechanical checks —
+   parameters over a CLOSED verifier vocabulary implemented by the
+   orchestrator (e.g. path_exists, citation_exists, dir_listing_matches,
+   non_empty, enum). Projects compose these primitives; they can never
+   inject code or shell. The driver merges the base kind contract with the
+   in-scope extensions and validates both in the same repair-retry path as
+   the core protocol; the ledger records the policy id+version each worker
+   was bound by. A new verifier kind is an orchestrator milestone, not
+   project config.
 
 ## Panel / service surface
 
