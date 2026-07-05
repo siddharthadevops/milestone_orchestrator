@@ -55,22 +55,14 @@ than converging later:
   enabled, scope, and the contract field each one adds — see gate machinery
   below). These are the future workspace capability policies, in miniature.
 - **work_areas**: named sets of filesystem roots in agent_99's FULL stored
-  record domain — `{name, display_name, primary: {path, device},
-  additional: [{path, device}, ...], executor_id, version, status}`. Every
-  field is mandatory there: the store's reader rejects records missing
-  `executor_id`/`version` as malformed (codex r2 F1 — the r1 wording
-  "provenance joins at fusion" would have produced unreadable records).
-  The local store therefore writes the full domain from day one:
-  `executor_id` is the local orchestrator's identity (provenance is
-  non-authoritative in agent_99 by design), `version` the monotonic
-  descriptor version. Records are then verbatim-readable by
-  `Agent99.Body.WorkAreaStore` — zero translation, this time actually
-  true. (r1 F1 already killed the invented flat `primary_root`.) A run
-  launches
-  against `(project, work_area)`: **primary.path** is the git repo the
-  driver owns and executes in; **additional** roots are read-only grants.
-  Reuse-source role metadata rides BESIDE the agent_99 fields, never inside
-  them: `{inventory, registry, consumption}` — the directory planners must
+  record domain, every field written from day one so records are
+  verbatim-readable by `Agent99.Body.WorkAreaStore` (exact domain in
+  "Normative contracts" below; two advisory rounds killed weaker
+  compatibility claims — do not weaken it again). A run launches against
+  `(project, work_area)`: **primary.path** is the git repo the driver owns
+  and executes in; **additional** roots are read-only grants. Reuse-source
+  role metadata rides BESIDE the agent_99 fields, never inside them:
+  `{inventory, registry, consumption}` — the directory planners must
   enumerate, the milestone registry to read, and the sanctioned consumption
   model (submodule + path dep, hex, HTTP client...). The ledger records the
   work-area name on every run.
@@ -141,6 +133,110 @@ adopts this contract LOCALLY:
   The datastore (local now, shared later) holds only descriptors and
   projections. If the server data is ever wiped during development, nothing
   is lost: re-declare work areas, re-pump projections.
+
+## Normative contracts (V1 — implement exactly these, do not re-derive)
+
+This milestone runs on the pre-project orchestrator (see Bootstrap note),
+so the precision the future contract machinery would enforce must live
+here, in the goal doc. These shapes were verified against the cited
+sources during two advisory review rounds; treat them as pinned.
+
+**Work-area stored value** (source: `agent_99/apps/agent_99/lib/agent_99/
+body/work_area_store.ex` — moduledoc "Stored value" and `interpret/1`):
+`{name, display_name, primary, additional, executor_id, version, status}`.
+All keys present, or the agent_99 reader rejects the record as malformed:
+`name`/`display_name` non-blank strings (older records may omit
+display_name and read back as name); `primary` and each `additional`
+element `{path: non-blank string, device: non-blank string | integer}`,
+roots distinct; `executor_id` non-blank string — here the local
+orchestrator's identity (provenance is non-authoritative in agent_99 by
+design); `version` non-negative integer, bumped on every descriptor
+change; `status` exactly `"pending" | "ready" | "unavailable"`.
+
+**KV envelope** (source: LPC `life_product_workspaces/lib/
+life_product_workspaces/cas.ex`): every entry is stored as
+`{revision: positive integer, value, deleted?: boolean}`. A never-written
+key reads as absent with `nil` revision; the first write is revision 1,
+then monotonic +1; CAS takes the expected revision (`nil` = create-only);
+delete writes a tombstone (`deleted?: true`) — never physical removal;
+listings skip tombstones by default. Values are JSON-plain, string-keyed,
+serialization-stable. The control revision is INDEPENDENT of any domain
+version inside the value (policy.version, work_area.version). Local
+backing: file(s) under the service home, atomic replace + flock.
+
+**Key grammar**: one reserved namespace constant (default
+`milestone_orchestrator`, single config point, final name TBD). Families:
+`refs/work_area:<name>` · `policy:<id>` · `run:<run_id>/status` ·
+`run:<run_id>/digest` (digest RESERVED here, implemented by the
+machine-api milestone). Citations and verifier paths resolve against the
+work area's roots and must land inside one of them — never outside.
+
+**Policy object** (one JSON document per safeguard at `policy:<id>`):
+
+```json
+{"id": "lpc-reuse-audit", "version": 1, "enabled": true,
+ "scope": {"kinds": ["draft_doc"], "unit_kinds": ["skeleton", "slice_doc"]},
+ "prompt": "<the block the worker sees, amendment-authority rendering>",
+ "contract": {
+   "field": "reuse_audit", "required": true,
+   "entry": {"source": {"type": "string"},
+             "package": {"type": "string"},
+             "decision": {"enum": ["adopt", "gap", "reject"]},
+             "evidence": {"type": "citation"}},
+   "checks": [{"kind": "citation_exists", "field": "evidence"},
+              {"kind": "dir_listing_matches",
+               "root": "<path relative to a work-area root>",
+               "match_field": "package"}]}}
+```
+
+**Closed verifier vocabulary V1** (the whole set; a new kind is an
+orchestrator milestone, never project config): `path_exists(field)` ·
+`citation_exists(field)` (the path half of `file:line` exists) ·
+`dir_listing_matches(root, match_field)` (entry set equality against a
+real directory listing) · `non_empty(field)` · `enum(field, values)`.
+Checks run in the same repair-retry path as the base worker protocol; a
+failed check produces the same worker-visible error + one retry as a
+malformed base contract does today.
+
+**Ledger events**: `project_resolved {project, work_area}` once at run
+init; `project_safeguard_seen {policy_id, version, text[:300]}` the first
+time each (id, version) pair enters a prompt — a version bump re-records,
+mirroring `amendment_seen`.
+
+**Precedence**: run-scoped operator amendments WIN over project safeguards
+on conflict (the more specific, later intent); both render with operator
+authority; reviewers treat safeguard violations exactly like amendment
+violations.
+
+## Deliverables (work list surfaced by the r2 pricing pilot)
+
+The pilot's `ecosystem_equivalent: gap` entries are the implementation
+map: (1) project/work-area resolution at run init + the two ledger events
+(today `state.py` knows only a single workspace path); (2) the local KV
+store module with the envelope semantics above; (3) policy schema,
+verifier vocabulary, and contract-extension merge in the repair-retry
+path (today `contracts.py` validates fixed kinds only); (4) PROJECT
+CONTEXT prompt block; (5) service/panel: project + work-area CRUD
+(declare → pending; launcher validation plays the executor's reconcile →
+ready), launch flow binding `(project, work_area)`, `GET /api/projects`;
+(6) the reuse-audit policy shipped as a BUILT-IN template any project can
+enable and parameterize. Pinned by tests: envelope semantics, each
+verifier, the contract merge, safeguard_seen dedup/re-record, and
+verbatim agent_99 work-area domain acceptance.
+
+## Bootstrap note (this milestone runs on the old format)
+
+The machinery this milestone builds does not exist while it is being
+built: no PROJECT CONTEXT block, no reuse-audit slots, no price-tag
+contrast contract. Compensations, explicit: (a) this note carries the
+normative contracts inline — the drafter COPIES them, never re-derives;
+(b) reviewers must apply the contrast discipline manually: verify every
+compatibility claim against the cited agent_99/LPC sources, not against
+this note's prose (exactly that manual contrast killed two false claims
+in the advisory rounds); (c) the r2 pricing pilot
+(`project-concept-pricing-pilot.json`, beside this note) is the worked
+example of the future contract and a ready-made fixture for the
+validator's tests.
 
 ## Prompt and gate machinery
 
