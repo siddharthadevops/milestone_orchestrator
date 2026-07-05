@@ -89,6 +89,22 @@ The taxonomy grows from evidence, not from speculation.
 - Panel: round chips and seal halves link their raw; the failure banner
   links the protoerr raws directly. Truncated view with "open full".
 
+## Content-discipline failures (added 2026-07-05, from the M164 incident)
+
+A second family, DISTINCT from infra errors: the CLI worked and its
+output is contract-valid, but a claim contradicts mechanical reality.
+No classifier needed — the driver identifies these deterministically —
+and blind auto-resume is WRONG for them (a plain resume can restore
+into the state that re-fires the same check instantly).
+
+| type | example | right reaction |
+|---|---|---|
+| `phantom_fix` | fixer disposes 'fixed' with an empty worktree delta (M164 fix19: supplied suite_command in JSON, edited nothing) | do not fail the run on the FIRST offense: discard the phantom round, re-run the fixer once (mirror of the JSON repair-retry); fail on the second. If failed anyway, typed resume restores to FIXING, never delta_review |
+| (future) | tamper by report-only worker | already handled in-driver (restore + invalidated round) — listed as the family's precedent |
+
+Design rule extracted: every failure type carries its own resume
+target and retry budget; "resume" stops being one-size-fits-all.
+
 ## Open questions for the operator
 
 1. Retry counts/backoff for `network`/`busy` before the typed failure
