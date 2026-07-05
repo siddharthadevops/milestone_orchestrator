@@ -521,6 +521,18 @@ class TestPortedCanonContentRules(unittest.TestCase):
             tuple(sorted((st_mod.UNIT_SKELETON, st_mod.UNIT_SLICE_DOC))),
         )
 
+    def test_killed_notice_reaches_the_fixer(self):
+        prompt = normalized(prompts.build_fix_findings(
+            FAMILY, WORKSPACE, GOAL, UNIT, FINDINGS, [], "claude",
+            ["claude", "-p"], killed_notice=True))
+        self.assertIn("KILLED-CALL NOTICE", prompt)
+        self.assertIn("the pending diff may contain its PARTIAL work",
+                      prompt)
+        clean = prompts.build_fix_findings(
+            FAMILY, WORKSPACE, GOAL, UNIT, FINDINGS, [], "claude",
+            ["claude", "-p"])
+        self.assertNotIn("KILLED-CALL NOTICE", clean)
+
     def test_never_send_secrets_in_every_builder(self):
         for name, prompt in build_all().items():
             with self.subTest(builder=name):

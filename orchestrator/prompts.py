@@ -666,6 +666,7 @@ def build_fix_findings(
     unit_kind=None,
     amendments=None,
     phantom_retry=False,
+    killed_notice=False,
 ):
     lines = []
     for f in findings:
@@ -691,6 +692,16 @@ def build_fix_findings(
             "VERIFICATION OUTPUT (the failing suite that produced these "
             "findings; tail):\n" + verification_output[-4000:] + "\n\n"
         )
+    killed_block = ""
+    if killed_notice:
+        killed_block = (
+            "KILLED-CALL NOTICE\n"
+            "A previous fixer attempt on this queue was killed mid-edit\n"
+            "(operator stop or crash): the pending diff may contain its\n"
+            "PARTIAL work. Review the pending diff first; complete,\n"
+            "correct, or remove that partial work as part of your triage\n"
+            "so the episode's delta ends up coherent.\n\n"
+        )
     phantom_block = ""
     if phantom_retry:
         phantom_block = (
@@ -707,6 +718,7 @@ def build_fix_findings(
         _header(contracts.KIND_FIX_FINDINGS, family, workspace)
         + "\nTASK: triage and fix the queued findings on %s.\n" % unit_desc
         + "GOAL: %s\n\n" % goal
+        + killed_block
         + phantom_block
         + _amendments_block(amendments)
         + "QUEUED FINDINGS (claims, not facts — verify each against the\n"

@@ -985,6 +985,109 @@ class TestSuiteDiscoveryProtocol(DriverTestCase):
                         self.assertFalse(has, kind)
 
 
+class TestUncleanStopRepair(DriverTestCase):
+    """A driver killed mid-call leaves its in-flight marker; the next
+    startup repairs safely: restore_clean only where the pre-call tree
+    was provably HEAD, a KILLED NOTICE where legitimate work is mixed."""
+
+    def _marker(self, ws, kind, label="x-call"):
+        import json as _json
+        os.makedirs(os.path.join(ws, ".orchestrator"), exist_ok=True)
+        with open(os.path.join(ws, ".orchestrator", "current.json"), "w",
+                  encoding="utf-8") as fh:
+            _json.dump({"label": label, "kind": kind, "family": "codex",
+                        "started_at": 0}, fh)
+
+    def _dirty(self, ws):
+        with open(os.path.join(ws, "junk-from-dead-worker.md"), "w",
+                  encoding="utf-8") as fh:
+            fh.write("partial write\n")
+
+    def test_killed_reviewer_in_rounds_restores_clean_tree(self):
+        with tempfile.TemporaryDirectory(prefix="orch-mock-") as ws:
+            path = init_state(ws, make_config())
+            mock = runners.MockRunner([skeleton_script()[0]])
+            driver = drv.Driver(path, runner=mock)
+            self.step_until(
+                driver, lambda s: s["units"][0]["status"] == st.U_ROUNDS,
+                max_steps=6,
+            )
+            # Simulate: reviewer killed mid-call after editing.
+            self._dirty(ws)
+            self._marker(ws, "review_round")
+            driver2 = drv.Driver(path, runner=runners.MockRunner([]))
+            self.assertFalse(os.path.exists(
+                os.path.join(ws, "junk-from-dead-worker.md")))
+            state = st.load(path)
+            self.assertTrue([e for e in state["events"]
+                             if e["type"] == "unclean_stop_restored"])
+            self.assertFalse(os.path.exists(
+                os.path.join(ws, ".orchestrator", "current.json")))
+
+    def test_killed_fixer_fresh_episode_restores(self):
+        with tempfile.TemporaryDirectory(prefix="orch-mock-") as ws:
+            path = init_state(ws, make_config())
+            mock = runners.MockRunner([
+                skeleton_script()[0],
+                step("review_round",
+                     report("review_round",
+                            [finding("F1", "needs non-goals")]),
+                     family="codex"),
+            ])
+            driver = drv.Driver(path, runner=mock)
+            self.step_until(
+                driver, lambda s: s["units"][0]["status"] == st.U_FIXING,
+                max_steps=8,
+            )
+            self._dirty(ws)
+            self._marker(ws, "fix_findings")
+            drv.Driver(path, runner=runners.MockRunner([]))
+            self.assertFalse(os.path.exists(
+                os.path.join(ws, "junk-from-dead-worker.md")))
+            state = st.load(path)
+            self.assertTrue([e for e in state["events"]
+                             if e["type"] == "unclean_stop_restored"])
+
+    def test_killed_fixer_mid_loop_gets_notice_not_restore(self):
+        with tempfile.TemporaryDirectory(prefix="orch-mock-") as ws:
+            path = init_state(ws, make_config())
+            mock = runners.MockRunner([
+                skeleton_script()[0],
+                step("review_round",
+                     report("review_round",
+                            [finding("F1", "needs non-goals")]),
+                     family="codex"),
+            ])
+            driver = drv.Driver(path, runner=mock)
+            self.step_until(
+                driver, lambda s: s["units"][0]["status"] == st.U_FIXING,
+                max_steps=8,
+            )
+            # Simulate a mid-loop kill: legitimate prior work exists.
+            state = st.load(path)
+            state["units"][0]["fix_loop_rounds"] = 2
+            st.save(path, state)
+            self._dirty(ws)
+            self._marker(ws, "fix_findings")
+            drv.Driver(path, runner=runners.MockRunner([]))
+            # Legitimate-looking dirt untouched; notice flag set.
+            self.assertTrue(os.path.exists(
+                os.path.join(ws, "junk-from-dead-worker.md")))
+            state = st.load(path)
+            self.assertTrue(state["units"][0].get("killed_fix_notice"))
+            self.assertTrue([e for e in state["events"]
+                             if e["type"] == "unclean_stop_noticed"])
+
+    def test_clean_marker_from_verification_is_ignored(self):
+        with tempfile.TemporaryDirectory(prefix="orch-mock-") as ws:
+            path = init_state(ws, make_config())
+            self._marker(ws, "verification")
+            drv.Driver(path, runner=runners.MockRunner([]))
+            state = st.load(path)
+            self.assertFalse([e for e in state["events"]
+                              if e["type"].startswith("unclean_stop")])
+
+
 class TestDocsDirCollision(DriverTestCase):
     def test_reused_name_uniquifies_the_slug(self):
         with tempfile.TemporaryDirectory(prefix="orch-mock-") as ws:

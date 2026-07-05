@@ -243,6 +243,7 @@ class Driver(object):
                 if self.state["failure"] is None:
                     st.fail_run(self.state, "git unavailable: %s" % exc)
                     self._save()
+        self._consume_stale_marker()
 
     # -- helpers ----------------------------------------------------------
 
@@ -401,6 +402,74 @@ class Driver(object):
         said; state.failure keeps only the truncated error strings."""
         for i, text in enumerate(getattr(exc, "raw_texts", []) or [], 1):
             self._save_raw("%s-protoerr%d" % (raw_name, i), text)
+
+    def _consume_stale_marker(self):
+        """A driver that died mid-call (Stop, crash, SIGKILL) leaves its
+        in-flight marker behind. On startup, use it to repair what the
+        death may have dirtied — without ever destroying legitimate work:
+
+        - killed EDIT call with zero completed fixes in the episode, or a
+          killed call in a clean-tree phase (rounds/sealing): the
+          pre-call worktree was exactly HEAD, so restore_clean is safe;
+        - killed fixer mid-loop (legitimate prior fix work is mixed with
+          the partial dead work): no destructive action — the next fixer
+          gets a KILLED NOTICE instead (killed_fix_notice flag).
+        """
+        path = self._busy_path()
+        try:
+            with open(path, "r", encoding="utf-8") as fh:
+                marker = json.load(fh)
+        except (OSError, ValueError):
+            return
+        try:
+            os.unlink(path)
+        except OSError:
+            pass
+        if not gitops.enabled(self.config):
+            return
+        kind = marker.get("kind")
+        unit = st.current_unit(self.state)
+        if unit is None or kind in (None, "verification"):
+            return
+        try:
+            dirty = bool(gitops.worktree_diff(self.workspace).strip())
+        except gitops.GitError:
+            return
+        status = unit["status"]
+        clean_tree_phase = status in (
+            st.U_ROUNDS, st.U_SEALING, st.U_PRE_SEAL_VERIFY,
+            st.U_PRE_REVIEW_VERIFY,
+        )
+        fresh_episode_fix = (
+            kind == contracts.KIND_FIX_FINDINGS
+            and status == st.U_FIXING
+            and not unit.get("fix_loop_rounds")
+        )
+        if dirty and (clean_tree_phase or fresh_episode_fix):
+            try:
+                gitops.restore_clean(self.workspace)
+            except gitops.GitError:
+                return
+            st.append_event(
+                self.state,
+                "unclean_stop_restored",
+                unit=st.unit_key(unit),
+                killed_call=marker.get("label"),
+                kind=kind,
+            )
+            self._save()
+            return
+        if kind == contracts.KIND_FIX_FINDINGS and status in (
+            st.U_FIXING, st.U_DELTA_REVIEW
+        ):
+            unit["killed_fix_notice"] = marker.get("label") or True
+            st.append_event(
+                self.state,
+                "unclean_stop_noticed",
+                unit=st.unit_key(unit),
+                killed_call=marker.get("label"),
+            )
+            self._save()
 
     def _amendments_path(self):
         return os.path.join(self.workspace, ".orchestrator", "amendments.json")
@@ -906,6 +975,7 @@ class Driver(object):
             unit_kind=unit["kind"],
             amendments=self._amendments(),
             phantom_retry=bool(unit.get("phantom_retried")),
+            killed_notice=bool(unit.pop("killed_fix_notice", None)),
         )
         n_fix = 1 + len(
             [r for r in unit["rounds"] if r["kind"] == contracts.KIND_FIX_FINDINGS]
