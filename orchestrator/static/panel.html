@@ -274,7 +274,15 @@ function shortKind(k) { return KIND_SHORT[k] || k; }
 function fmtDur(secs) {
   if (secs === null || secs === undefined) return "";
   const t = Math.round(secs), m = Math.floor(t / 60), sx = t % 60;
-  return m ? ` · ${m}m${String(sx).padStart(2, "0")}s` : ` · ${sx}s`;
+  return m ? ` · ${m}m ${sx}s` : ` · ${sx}s`;
+}
+const DRAFT_SHORT = {draft_skeleton: "draft", draft_slice_note: "draft",
+                     implement: "impl"};
+function draftChip(d) {
+  if (!d) return "";
+  const kind = DRAFT_SHORT[d.kind] || d.kind;
+  const who = d.family ? `${esc(d.family)} ` : "";
+  return `<span class="chip clean">${who}${esc(kind)}${fmtDur(d.duration_s)}</span>`;
 }
 function roundChip(r) {
   const kind = shortKind(r.kind);
@@ -318,8 +326,12 @@ async function refreshDetail() {
         <div class="unit">
           <div class="unit-head"><span class="unit-name">${esc(u.unit)}</span>
             <span class="st ${esc(u.status)}">${esc(u.status)}</span></div>
-          <div class="chips">${(u.rounds || []).map(roundChip).join("")}
-            ${(u.seals || []).map(sealChip).join("")}
+          <div class="chips">${draftChip(u.draft)}${
+            [].concat(
+              (u.rounds || []).map(r => ({at: r.at || "", html: roundChip(r)})),
+              (u.seals || []).map(x => ({at: x.at || "", html: sealChip(x)}))
+            ).sort((a, b) => a.at < b.at ? -1 : a.at > b.at ? 1 : 0)
+             .map(c => c.html).join("")}
             ${u.unit === sum.current_unit && running ? workingChip(s) : ""}</div>
         </div>`).join("") + `</div>`;
       html += `<div class="card"><h3>Events</h3>` +

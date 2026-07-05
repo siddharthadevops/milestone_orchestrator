@@ -489,11 +489,12 @@ class Driver(object):
                 self._slice_note_artifact(unit["slice_id"]),
                 self.config["verification"],
             )
-        output, _result, raw_path = self._call(
+        output, result, raw_path = self._call(
             family, prompt, kind, "%s-draft" % st.unit_key(unit)
         )
         self._check_worker_blocked(unit, output, kind)
-        st.record_draft(self.state, unit, kind, output, raw_path)
+        st.record_draft(self.state, unit, kind, output, raw_path,
+                        family=family, duration=result.duration_s)
         if unit["kind"] == st.UNIT_SKELETON:
             self.state["milestone"]["slices"] = output["slices"]
         if gitops.enabled(self.config):

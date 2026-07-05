@@ -1617,7 +1617,13 @@ class TestSummary(TempWorkspaceCase):
         self.assertEqual(len(summ["units"]), 2)
         skel_view, doc_view = summ["units"]
         self.assertEqual(
-            set(skel_view.keys()), {"unit", "status", "artifact", "rounds", "seals"}
+            set(skel_view.keys()),
+            {"unit", "status", "artifact", "draft", "rounds", "seals"},
+        )
+        # The draft chip data: write-once record surfaced for the panel.
+        self.assertEqual(
+            set(skel_view["draft"].keys()),
+            {"kind", "family", "duration_s", "at"},
         )
         self.assertEqual(skel_view["unit"], "skeleton")
         self.assertEqual(skel_view["status"], st.U_SEALED)

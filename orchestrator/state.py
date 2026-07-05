@@ -320,7 +320,8 @@ def transition_unit(state, unit, new_status, reason=None):
     )
 
 
-def record_draft(state, unit, kind, result, raw_path=None):
+def record_draft(state, unit, kind, result, raw_path=None, family=None,
+                 duration=None):
     """Write-once record of the unit's draft/implement call."""
     if unit["status"] != U_PENDING:
         raise IllegalTransition(
@@ -331,6 +332,8 @@ def record_draft(state, unit, kind, result, raw_path=None):
         raise IllegalTransition("unit %s: draft already recorded" % unit_key(unit))
     unit["draft"] = {
         "kind": kind,
+        "family": family,
+        "duration_s": duration,
         "at": now_iso(),
         "raw_path": raw_path,
         "result": copy.deepcopy(result),
@@ -652,6 +655,16 @@ def summary(state):
                 "unit": unit_key(u),
                 "status": u["status"],
                 "artifact": u["artifact"],
+                "draft": (
+                    {
+                        "kind": u["draft"]["kind"],
+                        "family": u["draft"].get("family"),
+                        "duration_s": u["draft"].get("duration_s"),
+                        "at": u["draft"]["at"],
+                    }
+                    if u.get("draft")
+                    else None
+                ),
                 "rounds": [
                     {
                         "id": r["id"],
