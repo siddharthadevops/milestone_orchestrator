@@ -97,7 +97,7 @@
                   align-items: center; gap: 6px; }
   .spin { width: 10px; height: 10px; border-radius: 50%; flex: none;
           border: 2px solid #c3d4fb; border-top-color: var(--accent);
-          animation: orb .8s linear infinite; }
+          animation: orb 1.6s linear infinite; }
   @keyframes orb { to { transform: rotate(360deg); } }
   .goalline.clamp { display: -webkit-box; -webkit-line-clamp: 3;
                     -webkit-box-orient: vertical; overflow: hidden;
@@ -375,12 +375,19 @@ function runTime(sum, s) {
   }
   return "";
 }
+// Renders are innerHTML swaps, so a plain spinner restarts its animation at
+// every poll. Phase-lock it to the wall clock with a negative delay: the
+// recreated element resumes at the angle it would have had uninterrupted.
+const SPIN_MS = 1600; // keep in sync with the .spin animation duration
+function spinEl() {
+  return `<span class="spin" style="animation-delay:-${Date.now() % SPIN_MS}ms"></span>`;
+}
 function inFlightChip(r) {
   const f = r.in_flight;
   if (!f || !f.kind) return "";
   const who = f.family ? `${f.family} ` : "";
   return `<span class="chip working" title="${esc(f.label || "")}">` +
-         `<span class="spin"></span>${esc(who)}${esc(shortKind(f.kind))} · ${elapsed(f.started_at)}</span>`;
+         `${spinEl()}${esc(who)}${esc(shortKind(f.kind))} · ${elapsed(f.started_at)}</span>`;
 }
 function workingChip(r) {
   if (r.process !== "running" || !r.current_unit_status) return "";
@@ -389,7 +396,7 @@ function workingChip(r) {
   const who = r.current_unit_status === "rounds" && r.current_family
     ? r.current_family + " " : "";
   const label = ACTIVITY[r.current_unit_status] || r.current_unit_status;
-  return `<span class="chip working"><span class="spin"></span>` +
+  return `<span class="chip working">${spinEl()}` +
          `${esc(who)}${esc(label)}</span>`;
 }
 async function refreshRuns() {
@@ -456,10 +463,15 @@ function debtChip(u) {
   if (!n) return "";
   return `<span class="chip clean clicky" onclick="showStory('debt:${esc(u.unit)}')">${n} P3 deferred</span>`;
 }
+let detailSeq = 0;
 async function refreshDetail() {
   if (!selected) return;
+  // Poll ticks and select() clicks race; a slow response must never
+  // overwrite a newer render (stale run, vanished cards).
+  const seq = ++detailSeq, runId = selected;
   try {
-    const d = await api("/api/runs/" + selected);
+    const d = await api("/api/runs/" + runId);
+    if (seq !== detailSeq || runId !== selected) return;
     const s = d.status, sum = d.summary;
     const running = s.process === "running";
     let html = `<h2>${esc(s.name)} ${msChip(s.milestone_status)}
@@ -495,30 +507,32 @@ async function refreshDetail() {
       <button class="btn" ${running ? "" : "disabled"} onclick="act('stop')">Stop</button>
       <button class="btn danger" ${running ? "disabled" : ""} onclick="del()">Forget</button>
     </div>`;
+    // Amendments and acts come straight from their own files — never gate
+    // them on the state summary, which can be transiently unreadable.
+    html += `<div class="card"><h3>Operator amendments</h3>` +
+      ((d.amendments || []).map(a =>
+        `<div class="amend"><span class="t">${esc(a.id)} · ${esc((a.at || "").slice(0, 16).replace("T", " "))}</span>${esc(a.text)}<button class="amend-x" title="Remove — stops binding from the next worker call" onclick="delAmend('${esc(a.id)}')">×</button></div>`
+      ).join("") || `<div class="amend-hint">none — notes added here bind every subsequent worker call</div>`) +
+      `<div class="amendform">
+         <textarea id="amendText" rows="4" placeholder="Binding constraint, e.g. 'Do not touch hot paths: no new indexes, no extra SQL, no machinery in message send.'"></textarea>
+         <button class="btn" onclick="addAmend()">Add</button>
+       </div>
+       <div class="amend-hint">Applies from the next worker call. Drivers started before this feature exists need one Stop → Start to begin reading amendments.</div></div>`;
+    const curActs = d.acts || {};
+    lastActs = curActs;
+    const actLabel = {drafter: "draft", implementer: "impl", fixer: "fix"};
+    const actsSum = ["drafter", "implementer", "fixer"].map(a => {
+      const v = curActs[a];
+      const e = typeof v === "string" ? {agent: v} : (v || {});
+      const bits = [e.agent, e.model, e.effort].filter(Boolean).join(" · ");
+      return `${actLabel[a]}: ${bits || "default"}`;
+    }).join("   —   ");
+    html += `<div class="card"><h3>Acts (who leads what)</h3>
+      <div class="amendform">
+        <span class="amend-hint mono" style="flex:1">${esc(actsSum)}</span>
+        <button class="btn" onclick="openActs()">Edit…</button>
+      </div></div>`;
     if (sum) {
-      html += `<div class="card"><h3>Operator amendments</h3>` +
-        ((d.amendments || []).map(a =>
-          `<div class="amend"><span class="t">${esc(a.id)} · ${esc((a.at || "").slice(0, 16).replace("T", " "))}</span>${esc(a.text)}<button class="amend-x" title="Remove — stops binding from the next worker call" onclick="delAmend('${esc(a.id)}')">×</button></div>`
-        ).join("") || `<div class="amend-hint">none — notes added here bind every subsequent worker call</div>`) +
-        `<div class="amendform">
-           <textarea id="amendText" rows="4" placeholder="Binding constraint, e.g. 'Do not touch hot paths: no new indexes, no extra SQL, no machinery in message send.'"></textarea>
-           <button class="btn" onclick="addAmend()">Add</button>
-         </div>
-         <div class="amend-hint">Applies from the next worker call. Drivers started before this feature exists need one Stop → Start to begin reading amendments.</div></div>`;
-      const curActs = d.acts || {};
-      lastActs = curActs;
-      const actLabel = {drafter: "draft", implementer: "impl", fixer: "fix"};
-      const actsSum = ["drafter", "implementer", "fixer"].map(a => {
-        const v = curActs[a];
-        const e = typeof v === "string" ? {agent: v} : (v || {});
-        const bits = [e.agent, e.model, e.effort].filter(Boolean).join(" · ");
-        return `${actLabel[a]}: ${bits || "default"}`;
-      }).join("   —   ");
-      html += `<div class="card"><h3>Acts (who leads what)</h3>
-        <div class="amendform">
-          <span class="amend-hint mono" style="flex:1">${esc(actsSum)}</span>
-          <button class="btn" onclick="openActs()">Edit…</button>
-        </div></div>`;
       const sliceTitle = id => {
         const sl = (sum.slices || []).find(x => x.id === id);
         return sl ? `<span class="unit-title">${esc(sl.title)}</span>` : "";
@@ -626,8 +640,17 @@ async function refreshDetail() {
       if (el) el.value = val;
     }
   } catch (e) {
-    document.getElementById("detail").innerHTML =
-      `<div class="failure">${esc(e.message)}</div>`;
+    if (seq !== detailSeq || runId !== selected) return;
+    // Keep the last good render on a transient fetch error; just flag it.
+    const det = document.getElementById("detail");
+    let banner = document.getElementById("detailStale");
+    if (!banner) {
+      banner = document.createElement("div");
+      banner.id = "detailStale";
+      banner.className = "failure";
+      det.prepend(banner);
+    }
+    banner.textContent = `refresh failed: ${e.message} — showing last known state, retrying`;
   }
 }
 async function showStory(item) {
