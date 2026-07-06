@@ -293,3 +293,24 @@
 
 - codex half: 0 finding(s); workspace_modified=False; raw `.orchestrator/raw/slice_impl-04-seal-a1-codex.txt`
 
+## slice_doc-05 (Run-init project resolution + project_resolved)
+
+- draft: kind `draft_slice_note`, artifact `implementation/milestones/canon-project-concept-isolated/slices/slice-05.md` (raw: `.orchestrator/raw/slice_doc-05-draft.txt`)
+
+| Round | Kind | Family | Findings | Triage | Raw |
+|---|---|---|---|---|---|
+| slice_doc-05-codex-r1 | review_round | codex | 0 | clean | `.orchestrator/raw/slice_doc-05-codex-r1.txt` |
+| slice_doc-05-claude-r1 | review_round | claude | 0 | clean | `.orchestrator/raw/slice_doc-05-claude-r1.txt` |
+| slice_doc-05-codex-r2 | fix_findings | codex | 1 | 1 fixed | `.orchestrator/raw/slice_doc-05-fix1.txt` |
+| slice_doc-05-codex-r3 | delta_review | codex | 0 | clean | `.orchestrator/raw/slice_doc-05-delta1.txt` |
+
+### Seal attempt a1 — findings
+
+- codex half: 1 finding(s); workspace_modified=False; raw `.orchestrator/raw/slice_doc-05-seal-a1-codex.txt`
+  - [P2] AC9/test plan tries to prove post-init root-stability by “re-confirming with different roots,” but Slice 2’s confirm path rejects descriptor mismatches and writes nothing. That makes the changed-roots case hollow: a re-resolving implementation could still silently rebind if the work area is actually changed later. Require a real root mutation, e.g. content-change declare then confirm ready, before asserting no run rebind.
+
+### Seal attempt a2 — PASSED
+
+- claude half: 0 finding(s); workspace_modified=False; raw `.orchestrator/raw/slice_doc-05-seal-a2-claude.txt`
+- codex half: 0 finding(s); workspace_modified=False; raw `.orchestrator/raw/slice_doc-05-seal-a2-codex.txt`
+
