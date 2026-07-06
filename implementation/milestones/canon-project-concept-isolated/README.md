@@ -409,4 +409,5 @@ fast paths.
 | slice_doc-01 (Local KV store + key grammar) | sealed | 15 | a1:findings, a2:findings, a3:pass | 6b199fa |
 | slice_impl-01 (Local KV store + key grammar) | sealed | 16 | a1:findings, a2:findings, a3:findings, a4:findings, a5:pass | 0b4d92f |
 | slice_doc-02 (Agent99-compatible work-area store) | sealed | 29 | a1:pass | a191edb |
-| slice_impl-02 (Agent99-compatible work-area store) | sealed | 8 | a1:pass | - |
+| slice_impl-02 (Agent99-compatible work-area store) | sealed | 8 | a1:pass | 76ff235 |
+| slice_doc-03 (Project record + policy config model) | sealed | 18 | a1:pass | - |
