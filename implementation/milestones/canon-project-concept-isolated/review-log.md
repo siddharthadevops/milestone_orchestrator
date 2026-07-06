@@ -272,3 +272,24 @@
 
 - codex half: 0 finding(s); workspace_modified=False; raw `.orchestrator/raw/slice_doc-04-seal-a1-codex.txt`
 
+## slice_impl-04 (Verifier vocabulary + contract-extension merge)
+
+- draft: kind `implement`, artifact `-` (raw: `.orchestrator/raw/slice_impl-04-draft.txt`)
+
+| Round | Kind | Family | Findings | Triage | Raw |
+|---|---|---|---|---|---|
+| slice_impl-04-codex-r1 | review_round | codex | 1 | 1 reported | `.orchestrator/raw/slice_impl-04-codex-r1.txt` |
+| slice_impl-04-codex-r2 | fix_findings | codex | 1 | 1 fixed | `.orchestrator/raw/slice_impl-04-fix1.txt` |
+| slice_impl-04-codex-r3 | delta_review | codex | 0 | clean | `.orchestrator/raw/slice_impl-04-delta1.txt` |
+| slice_impl-04-codex-r4 | review_round | codex | 1 | 1 reported | `.orchestrator/raw/slice_impl-04-codex-r2.txt` |
+| slice_impl-04-codex-r5 | fix_findings | codex | 1 | 1 fixed | `.orchestrator/raw/slice_impl-04-fix2.txt` |
+| slice_impl-04-codex-r6 | delta_review | codex | 1 | 1 reported | `.orchestrator/raw/slice_impl-04-delta2.txt` |
+| slice_impl-04-codex-r7 | fix_findings | codex | 1 | 1 fixed | `.orchestrator/raw/slice_impl-04-fix3.txt` |
+| slice_impl-04-codex-r8 | delta_review | codex | 0 | clean | `.orchestrator/raw/slice_impl-04-delta3.txt` |
+| slice_impl-04-codex-r9 | review_round | codex | 0 | clean | `.orchestrator/raw/slice_impl-04-codex-r3.txt` |
+| slice_impl-04-claude-r1 | review_round | claude | 0 | clean | `.orchestrator/raw/slice_impl-04-claude-r1.txt` |
+
+### Seal attempt a1 — PASSED
+
+- codex half: 0 finding(s); workspace_modified=False; raw `.orchestrator/raw/slice_impl-04-seal-a1-codex.txt`
+

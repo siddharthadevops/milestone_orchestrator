@@ -412,4 +412,5 @@ fast paths.
 | slice_impl-02 (Agent99-compatible work-area store) | sealed | 8 | a1:pass | 76ff235 |
 | slice_doc-03 (Project record + policy config model) | sealed | 18 | a1:pass | b37aee7 |
 | slice_impl-03 (Project record + policy config model) | sealed | 5 | a1:pass | a1c0723 |
-| slice_doc-04 (Verifier vocabulary + contract-extension merge) | sealed | 20 | a1:pass | - |
+| slice_doc-04 (Verifier vocabulary + contract-extension merge) | sealed | 20 | a1:pass | 0a3c02b |
+| slice_impl-04 (Verifier vocabulary + contract-extension merge) | sealed | 10 | a1:pass | - |

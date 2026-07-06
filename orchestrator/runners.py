@@ -378,23 +378,44 @@ REPAIR_SUFFIX = (
 
 
 def call_worker(runner, family, prompt, kind, workspace,
-                model=None, effort=None):
+                model=None, effort=None, extensions=None, roots=None):
     """Run the CLI and return (validated_output, RunnerResult).
 
     Exactly one repair retry on contract violation; then
     WorkerProtocolError. RunnerError passes through untouched.
+
+    extensions/roots (optional): the in-scope compiled project contract
+    extensions (verifiers.CompiledExtension) and the granted work-area
+    roots. Absent or empty, validation is exactly the base kind contract —
+    unchanged behavior. Supplied, the merged validation runs at the same
+    point and raises the same ContractError family, so a failed extension
+    check is repaired (once) exactly like a malformed base contract; the
+    extension layer's policy-config and operational faults are NOT part of
+    the repairable exception family and propagate without a retry (they
+    are never the worker's fault).
     """
+    if extensions:
+        from . import verifiers
+
+        def _validate(obj):
+            return verifiers.validate_merged_output(
+                obj, kind, extensions, roots
+            )
+    else:
+        def _validate(obj):
+            return contracts.validate_worker_output(obj, kind)
+
     result = runner.call(family, prompt, workspace, model=model, effort=effort)
     try:
         obj = extract_json(result.text)
-        return contracts.validate_worker_output(obj, kind), result
+        return _validate(obj), result
     except (ValueError, contracts.ContractError) as exc:
         first_error = str(exc)
     repair_prompt = prompt + (REPAIR_SUFFIX % first_error)
     result2 = runner.call(family, repair_prompt, workspace, model=model, effort=effort)
     try:
         obj = extract_json(result2.text)
-        return contracts.validate_worker_output(obj, kind), result2
+        return _validate(obj), result2
     except (ValueError, contracts.ContractError) as exc:
         raise WorkerProtocolError(
             "family %s produced contract-violating output twice for kind %s: "
