@@ -627,6 +627,14 @@ def resume_run(state):
             target = U_PRE_SEAL_VERIFY
         unit["status"] = target
         unit["failed_from"] = None
+        # Grant a FRESH fix/verify budget: a run that failed by exhausting
+        # max_fix_loops (or max_verify_fix_attempts) would otherwise re-fail
+        # instantly on resume, since these counters carry across the failure
+        # boundary. Resetting them makes resume a genuine "try again" — the
+        # convergence cap is a soft ceiling the operator (or the guard's
+        # emergency resume) can lift, not a dead end.
+        unit["fix_loop_rounds"] = 0
+        unit["verify_fix_attempts"] = {"pre_review": 0, "pre_seal": 0}
         restored[unit_key(unit)] = target
     old_reason = state["failure"].get("reason")
     state["failure"] = None

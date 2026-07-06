@@ -304,8 +304,9 @@ class TestTypedInfraFailures(DriverTestCase):
             raw_dir = os.path.join(ws, ".orchestrator", "raw")
             classify_raws = [f for f in os.listdir(raw_dir) if "classify" in f]
             self.assertTrue(classify_raws, os.listdir(raw_dir))
-            body = open(os.path.join(raw_dir, classify_raws[0]),
-                        encoding="utf-8").read()
+            with open(os.path.join(raw_dir, classify_raws[0]),
+                      encoding="utf-8") as _fh:
+                body = _fh.read()
             self.assertIn("CLASSIFIER PROMPT", body)
             self.assertIn("busy", body)  # the classifier's actual reply
 

@@ -1736,6 +1736,22 @@ class TestTypedResume(TempWorkspaceCase):
         self.assertEqual(unit["status"], st.U_FIXING)
         self.assertEqual(list(restored.values()), [st.U_FIXING])
 
+    def test_resume_grants_a_fresh_fix_budget(self):
+        # A convergence failure (fix_loop_rounds exhausted) must be
+        # RECOVERABLE: resume resets the counter so it does not re-fail
+        # instantly. Otherwise "did not converge" is a dead end and the
+        # guard's emergency resume would spin uselessly.
+        state = make_state(self.workspace)
+        unit = unit_in_status(state, st.U_FIXING)
+        unit["fix_loop_rounds"] = 6
+        unit["verify_fix_attempts"] = {"pre_review": 4, "pre_seal": 0}
+        st.fail_run(state, "did not converge after 6 loops", unit=unit)
+        st.resume_run(state)
+        self.assertEqual(unit["status"], st.U_FIXING)
+        self.assertEqual(unit["fix_loop_rounds"], 0)
+        self.assertEqual(unit["verify_fix_attempts"],
+                         {"pre_review": 0, "pre_seal": 0})
+
     def test_quota_failure_records_type_and_resume_at(self):
         state = make_state(self.workspace)
         st.fail_run(state, "usage limit", type_="quota",

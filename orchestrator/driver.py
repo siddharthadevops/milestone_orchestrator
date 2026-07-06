@@ -119,8 +119,10 @@ DEFAULT_CONFIG = {
     # before every act resolution; reviews/seals stay family-rotated).
     "acts": {"fixer": "codex", "delta_review": "codex",
              "consultation": "opposite"},
-    # Fixer+delta iterations allowed per fix episode before failing.
-    "max_fix_loops": 6,
+    # Fixer+delta iterations allowed per fix episode before failing. A
+    # deliberate resume grants a fresh budget (state.resume_run resets the
+    # counter), so this is a soft ceiling, not a dead end.
+    "max_fix_loops": 20,
     # P3 debt deferral (off by default). When on, a review round (DOC phase
     # only) or a seal (both phases) whose findings are ALL P3 gets an
     # opposite-family reclassification per finding; if every one is verified
