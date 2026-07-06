@@ -1578,12 +1578,22 @@ class Driver(object):
             amendments=self._amendments(),
             verified_suite=self._verified_suite(unit),
         )
+        # Raw/label numbering counts ALL history (like fix/delta and the
+        # ledger round ids): the amnesty-relative `done` must never make a
+        # new raw file reuse — and overwrite — a historical round's name.
+        label_no = 1 + len(
+            [
+                r
+                for r in st.family_rounds(unit, family)
+                if r["kind"] == contracts.KIND_REVIEW_ROUND
+            ]
+        )
         output, result, raw_path, changed = self._report_call(
             unit,
             family,
             prompt,
             contracts.KIND_REVIEW_ROUND,
-            "%s-%s-r%d" % (st.unit_key(unit), family, done + 1),
+            "%s-%s-r%d" % (st.unit_key(unit), family, label_no),
         )
         if changed:
             # Rounds run on a clean worktree (everything is amended), so a
