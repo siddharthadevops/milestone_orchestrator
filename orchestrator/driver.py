@@ -1549,8 +1549,11 @@ class Driver(object):
         done = len(
             [
                 r
-                for r in st.family_rounds(unit, family)
-                if r["kind"] == contracts.KIND_REVIEW_ROUND
+                # Count from the amnesty marker (moved at each resume), not
+                # from all history: resume grants a fresh review budget.
+                for r in unit["rounds"][unit.get("rounds_amnesty") or 0:]
+                if r["family"] == family
+                and r["kind"] == contracts.KIND_REVIEW_ROUND
             ]
         )
         if done >= self.config["max_rounds_per_family"]:
@@ -1675,7 +1678,10 @@ class Driver(object):
 
     def _do_seal_attempt(self):
         unit = st.current_unit(self.state)
-        if len(unit["seals"]) >= self.config["max_seal_attempts"]:
+        # The cap counts from the amnesty marker (moved at each resume);
+        # attempt numbering below stays global over the full history.
+        seals_done = len(unit["seals"]) - (unit.get("seals_amnesty") or 0)
+        if seals_done >= self.config["max_seal_attempts"]:
             st.fail_run(
                 self.state,
                 "max_seal_attempts=%d reached on %s"

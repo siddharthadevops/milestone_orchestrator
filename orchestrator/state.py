@@ -172,6 +172,12 @@ def _new_unit(kind, slice_id):
         "closed_record": None,      # slice_impl closure bookkeeping
         "gate_commit": None,        # short sha of this unit's seal gate commit
         "failed_from": None,        # status at failure time (resume target)
+        # Indexes into `rounds`/`seals` set at each resume; the per-family
+        # review-round cap and the seal-attempt cap count only records after
+        # them (both lists are immutable history, so the caps need markers
+        # to be resettable). Seal attempt NUMBERING stays global.
+        "rounds_amnesty": 0,
+        "seals_amnesty": 0,
         # The active fix episode (working fields; history lives in rounds):
         "fix_queue": [],            # findings currently queued for the fixer
         "fix_source": None,         # {"type": verification|round|seal|delta,
@@ -635,6 +641,12 @@ def resume_run(state):
         # emergency resume) can lift, not a dead end.
         unit["fix_loop_rounds"] = 0
         unit["verify_fix_attempts"] = {"pre_review": 0, "pre_seal": 0}
+        # The review-round cap (max_rounds_per_family) and the seal-attempt
+        # cap (max_seal_attempts) count immutable history, so they would
+        # re-fire instantly on resume; move the amnesty markers so the caps
+        # only count post-resume records.
+        unit["rounds_amnesty"] = len(unit["rounds"])
+        unit["seals_amnesty"] = len(unit["seals"])
         restored[unit_key(unit)] = target
     old_reason = state["failure"].get("reason")
     state["failure"] = None

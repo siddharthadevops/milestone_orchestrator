@@ -314,6 +314,8 @@ class TestNewState(TempWorkspaceCase):
                 "closed_record": None,
                 "gate_commit": None,
                 "failed_from": None,
+                "rounds_amnesty": 0,
+                "seals_amnesty": 0,
                 "fix_queue": [],
                 "fix_source": None,
                 "fix_loop_rounds": 0,
@@ -1751,6 +1753,42 @@ class TestTypedResume(TempWorkspaceCase):
         self.assertEqual(unit["fix_loop_rounds"], 0)
         self.assertEqual(unit["verify_fix_attempts"],
                          {"pre_review": 0, "pre_seal": 0})
+
+    def test_resume_grants_a_fresh_review_round_budget(self):
+        # The max_rounds_per_family cap counts immutable rounds history, so
+        # without an amnesty marker a run failed on it would re-fail
+        # instantly on every resume (the guard's emergency resume included).
+        state = make_state(self.workspace)
+        unit = unit_in_status(state, st.U_ROUNDS)
+        for _ in range(12):
+            unit["rounds"].append(
+                {"family": "codex", "kind": "review_round", "result": {}}
+            )
+        st.fail_run(
+            state, "family codex reached max_rounds_per_family=12", unit=unit
+        )
+        st.resume_run(state)
+        self.assertEqual(unit["status"], st.U_ROUNDS)
+        self.assertEqual(unit["rounds_amnesty"], 12)
+        post = [
+            r
+            for r in unit["rounds"][unit["rounds_amnesty"]:]
+            if r["family"] == "codex" and r["kind"] == "review_round"
+        ]
+        self.assertEqual(post, [])  # the cap's view is empty again
+
+    def test_resume_grants_a_fresh_seal_attempt_budget(self):
+        # Same dead-end as the review-round cap: seals are immutable
+        # history, so the max_seal_attempts cap needs the amnesty marker.
+        state = make_state(self.workspace)
+        unit = unit_in_status(state, st.U_SEALING)
+        unit["seals"] = [{"attempt": i + 1} for i in range(8)]
+        st.fail_run(state, "max_seal_attempts=8 reached", unit=unit)
+        st.resume_run(state)
+        self.assertEqual(unit["seals_amnesty"], 8)
+        # The cap's view (records after the marker) is empty again, while
+        # attempt numbering keeps counting the full history.
+        self.assertEqual(len(unit["seals"]) - unit["seals_amnesty"], 0)
 
     def test_quota_failure_records_type_and_resume_at(self):
         state = make_state(self.workspace)
