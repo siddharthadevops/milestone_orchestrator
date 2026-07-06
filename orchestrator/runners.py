@@ -146,38 +146,31 @@ def extract_json(text):
 # ---------------------------------------------------------------------------
 # Subprocess runner
 
-# "ultracode" modality: a claude-only pseudo effort tier. The CLI's effort
-# enum rejects the word; the real session mode is the settings key
-# {"ultracode": true}, and it is only ACTIVE while the effective effort
-# resolves to xhigh — any other --effort value defeats it (verified in the
-# claude 2.1.201 binary). The runner therefore translates the pseudo tier
-# into: --effort xhigh, the session settings flag appended to argv, and the
-# trigger keyword prepended as the prompt's own first line (the per-turn
-# Workflow nudge; the standing session reminder does the heavy lifting).
-ULTRACODE_EFFORT = "ultracode"
-ULTRACODE_FAMILY = "claude"
-ULTRACODE_CLI_EFFORT = "xhigh"
-ULTRACODE_KEYWORD = "ultracode"
-ULTRACODE_EXTRA_ARGS = ("--settings", '{"ultracode": true}')
+# Families whose CLI can spawn background, multi-turn "workflow"
+# orchestration. That model is fundamentally incompatible with the
+# orchestrator's one-shot contract: the worker fires an async workflow and
+# returns an interim "I'll continue next turn" message — but a `-p` call
+# has no next turn, so the process exits without the required JSON and the
+# call fails as contract-violating. We force the feature OFF in the worker
+# environment (claude reads CLAUDE_CODE_DISABLE_WORKFLOWS), so a claude
+# worker CANNOT defer and must produce its result in the single call.
+# Central and unbypassable: it does not depend on any config command,
+# survives every stop/start/resume/relaunch, and applies to every claude
+# call regardless of model or effort.
+WORKFLOW_DISABLED_ENV = {"claude": {"CLAUDE_CODE_DISABLE_WORKFLOWS": "1"}}
 
 
-def resolve_ultracode(family, prompt, effort):
-    """(prompt, effort, extra_argv) actually sent to the CLI.
-
-    Non-ultracode efforts pass through untouched. Ultracode on any family
-    other than claude is an operator config error, not a call to make."""
-    if effort != ULTRACODE_EFFORT:
-        return prompt, effort, ()
-    if family != ULTRACODE_FAMILY:
-        raise RunnerError(
-            "effort %r is claude-only (got family %r)"
-            % (ULTRACODE_EFFORT, family)
-        )
-    return (
-        ULTRACODE_KEYWORD + "\n" + prompt,
-        ULTRACODE_CLI_EFFORT,
-        ULTRACODE_EXTRA_ARGS,
-    )
+def _worker_env(base_env, family):
+    """Environment for a worker subprocess: the driver's environment plus
+    any family-specific hardening (workflow disable). Returns None when
+    there is nothing to add and no base override, so the child simply
+    inherits — the historical behaviour for families with no override."""
+    overrides = WORKFLOW_DISABLED_ENV.get(family)
+    if not overrides:
+        return base_env
+    env = dict(base_env if base_env is not None else os.environ)
+    env.update(overrides)
+    return env
 
 
 def apply_model_effort(argv, model, effort):
@@ -228,9 +221,7 @@ class SubprocessRunner(object):
              timeout_override=None):
         if family not in self.commands:
             raise RunnerError("no command configured for family %r" % family)
-        prompt, effort, extra_argv = resolve_ultracode(family, prompt, effort)
         template = apply_model_effort(self.commands[family], model, effort)
-        template = template + list(extra_argv)
         output_file = None
         argv = []
         for arg in template:
@@ -253,7 +244,7 @@ class SubprocessRunner(object):
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 cwd=self.cwd or workspace,
-                env=self.env,
+                env=_worker_env(self.env, family),
                 start_new_session=True,
                 text=True,
                 encoding="utf-8",

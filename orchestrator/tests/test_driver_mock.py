@@ -1191,39 +1191,6 @@ class TestActProfiles(DriverTestCase):
             self.assertEqual((meta["model"], meta["effort"]),
                              ("opus", "max"))
 
-    def test_ultracode_reaches_runner_verbatim(self):
-        # The DRIVER never translates the modality: MockRunner sees the
-        # raw "ultracode" and history records it (the subprocess runner
-        # owns the CLI translation).
-        with tempfile.TemporaryDirectory(prefix="orch-mock-") as ws:
-            cfg = make_config()
-            cfg["acts"] = dict(cfg["acts"])
-            cfg["acts"]["drafter"] = {"agent": "claude",
-                                      "effort": "ultracode"}
-            path = init_state(ws, cfg)
-            script = skeleton_script()
-            script[0]["expect_family"] = "claude"
-            mock = runners.MockRunner([script[0]])
-            drv.Driver(path, runner=mock).step()
-            self.assertEqual(mock.call_meta[0]["effort"], "ultracode")
-            state = st.load(path)
-            self.assertEqual(state["units"][0]["draft"]["effort"],
-                             "ultracode")
-
-    def test_ultracode_on_codex_act_fails_run(self):
-        with tempfile.TemporaryDirectory(prefix="orch-mock-") as ws:
-            cfg = make_config()
-            cfg["acts"] = dict(cfg["acts"])
-            cfg["acts"]["drafter"] = {"agent": "codex",
-                                      "effort": "ultracode"}
-            path = init_state(ws, cfg)
-            mock = runners.MockRunner([])
-            action, note = drv.Driver(path, runner=mock).step()
-            self.assertIn("run failed", note)
-            state = st.load(path)
-            self.assertIn("claude-only", state["failure"]["reason"])
-            self.assertEqual(mock.call_meta, [])
-
     def test_hot_overlay_rebinds_fixer_mid_run(self):
         import json as _json
         with tempfile.TemporaryDirectory(prefix="orch-mock-") as ws:

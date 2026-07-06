@@ -1339,60 +1339,48 @@ class TestSnapshotChangesFormatting(unittest.TestCase):
         self.assertIn("(+4 more)", out)
 
 
-class TestUltracodeResolution(unittest.TestCase):
-    """"ultracode" is a claude-only pseudo effort tier: the CLI enum
-    rejects the word, so the runner translates it (xhigh + the session
-    settings flag + the trigger keyword) before the process spawns."""
+class TestWorkflowDisable(unittest.TestCase):
+    """claude workers must run with background workflows force-disabled,
+    so the one-shot call can never be deferred to a nonexistent next turn.
+    Central, effort-independent, and applied via the worker environment."""
 
-    def test_claude_ultracode_translates(self):
-        prompt, effort, extra = runners.resolve_ultracode(
-            "claude", "KIND: implement\nbody", "ultracode")
-        self.assertEqual(effort, runners.ULTRACODE_CLI_EFFORT)
-        self.assertEqual(
-            prompt, runners.ULTRACODE_KEYWORD + "\nKIND: implement\nbody")
-        self.assertEqual(tuple(extra), runners.ULTRACODE_EXTRA_ARGS)
-        # The prepended keyword line must not break KIND detection.
-        self.assertEqual(runners.prompt_kind(prompt), "implement")
+    def _echo_env_runner(self, family, tmp):
+        script = os.path.join(tmp, "echo_env.py")
+        with open(script, "w", encoding="utf-8") as fh:
+            fh.write(textwrap.dedent("""\
+                import os, sys
+                sys.stdout.write(
+                    os.environ.get("CLAUDE_CODE_DISABLE_WORKFLOWS", "UNSET"))
+                """))
+        return SubprocessRunner({family: [sys.executable, script]}, {})
 
-    def test_non_ultracode_passes_through(self):
-        for effort in ("high", None):
-            out = runners.resolve_ultracode("claude", "p", effort)
-            self.assertEqual(out, ("p", effort, ()))
-
-    def test_codex_ultracode_is_a_config_error(self):
-        with self.assertRaisesRegex(RunnerError, "claude-only"):
-            runners.resolve_ultracode("codex", "p", "ultracode")
-
-    def test_subprocess_claude_gets_xhigh_settings_and_keyword(self):
+    def test_claude_worker_has_workflows_disabled(self):
         with tempfile.TemporaryDirectory() as tmp:
-            script = os.path.join(tmp, "argv_and_stdin.py")
-            with open(script, "w", encoding="utf-8") as fh:
-                fh.write(textwrap.dedent("""\
-                    import sys
-                    print("|".join(sys.argv[1:]))
-                    sys.stdout.write(sys.stdin.read())
-                    """))
             ws = os.path.join(tmp, "ws")
             os.makedirs(ws)
-            runner = SubprocessRunner(
-                {"claude": [sys.executable, script,
-                            "--model", "{model}", "--effort", "{effort}"]},
-                {},
-            )
-            result = runner.call("claude", "PROMPT BODY", ws,
-                                 model="m", effort="ultracode")
-            lines = result.text.splitlines()
-            self.assertIn("--effort|xhigh", lines[0])
-            self.assertIn('--settings|{"ultracode": true}', lines[0])
-            self.assertNotIn("--effort|ultracode", lines[0])
-            self.assertEqual(lines[1:], ["ultracode", "PROMPT BODY"])
+            result = self._echo_env_runner("claude", tmp).call(
+                "claude", "p", ws, model="m", effort="max")
+            self.assertEqual(result.text, "1")
 
-    def test_subprocess_codex_ultracode_raises_before_spawn(self):
+    def test_codex_worker_env_untouched(self):
         with tempfile.TemporaryDirectory() as tmp:
-            runner = SubprocessRunner(
-                {"codex": [os.path.join(tmp, "does-not-exist")]}, {})
-            with self.assertRaisesRegex(RunnerError, "claude-only"):
-                runner.call("codex", "p", tmp, effort="ultracode")
+            ws = os.path.join(tmp, "ws")
+            os.makedirs(ws)
+            result = self._echo_env_runner("codex", tmp).call(
+                "codex", "p", ws, model="m", effort="high")
+            self.assertEqual(result.text, "UNSET")
+
+    def test_helper_returns_base_env_for_unhardened_family(self):
+        # No override -> the base env object is passed through unchanged
+        # (None means "inherit", the historical default).
+        self.assertIsNone(runners._worker_env(None, "codex"))
+        base = {"X": "1"}
+        self.assertIs(runners._worker_env(base, "codex"), base)
+
+    def test_helper_adds_override_for_claude(self):
+        env = runners._worker_env({"X": "1"}, "claude")
+        self.assertEqual(env["CLAUDE_CODE_DISABLE_WORKFLOWS"], "1")
+        self.assertEqual(env["X"], "1")
 
 
 if __name__ == "__main__":
