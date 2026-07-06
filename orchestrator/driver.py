@@ -114,6 +114,15 @@ DEFAULT_CONFIG = {
              "consultation": "opposite"},
     # Fixer+delta iterations allowed per fix episode before failing.
     "max_fix_loops": 6,
+    # P3 debt deferral (off by default). When on, a review round (DOC phase
+    # only) or a seal (both phases) whose findings are ALL P3 gets an
+    # opposite-family reclassification per finding; if every one is verified
+    # safe to defer, the P3s are recorded as tracked debt and the unit
+    # advances/seals instead of firing a fix cycle. Any P0-P2 present, any
+    # delta review, and impl-phase rounds are unaffected (findings fixed
+    # normally). A refused verdict or a failed reclassify call sends the
+    # findings to the normal fix flow (safe default).
+    "p3_reclassify_debt": False,
     # Infra-failure handling (errclass): short in-place retries for
     # network/busy before a typed failure, and the opposite-family LLM
     # classifier fallback for noisy failure output. The service guard
@@ -1406,6 +1415,93 @@ class Driver(object):
         )
         return "verification failed; findings queued for the fixer"
 
+    def _reclassify_p3_batch(self, unit, items):
+        """Opposite-family second opinion on deferring lone P3s as debt.
+
+        `items` is a list of (finding, raising_family). Returns
+        (all_deferrable, debt_entries). Safe by construction: a refused
+        verdict, a blocked/failed reclassify call, or a reclassifier that
+        edits the workspace all make the batch non-deferrable (and a
+        tampering reclassifier is reverted), so the caller takes the normal
+        fix path."""
+        before = self._snapshot()
+        debt = []
+        all_ok = True
+        self._mark_busy(
+            "%s-reclassify (%d P3)" % (st.unit_key(unit), len(items)),
+            contracts.KIND_RECLASSIFY, None,
+        )
+        try:
+            for finding, raising_family in items:
+                opp = self._opposite(raising_family)
+                defer_ok, reason = False, "reclassification unavailable"
+                if opp == raising_family:
+                    # No independent opposite family (single-family config):
+                    # cross-family verification is impossible, so a P3 is
+                    # never deferred — it takes the normal fix path.
+                    reason = "no independent reclassifier (single family)"
+                else:
+                    # Finding ids are arbitrary reviewer strings; sanitize
+                    # the raw-filename component so an id with a path
+                    # separator cannot make _save_raw raise.
+                    safe_id = "".join(
+                        c if (c.isalnum() or c in "_.-") else "_"
+                        for c in str(finding.get("id", ""))
+                    )[:64] or "f"
+                    prompt = prompts.build_reclassify(
+                        opp, self.workspace, finding, self._artifact(unit),
+                        unit_kind=unit["kind"], amendments=self._amendments(),
+                    )
+                    raw_name = "%s-reclassify-%s-%s" % (
+                        st.unit_key(unit), raising_family, safe_id)
+                    try:
+                        dm, de = self._family_defaults(opp)
+                        output, result = runners.call_worker(
+                            self.runner, opp, prompt,
+                            contracts.KIND_RECLASSIFY,
+                            self.workspace, model=dm, effort=de,
+                        )
+                        self._save_raw(raw_name, result.text)
+                        if output.get("status") == "ok":
+                            defer_ok = bool(output.get("defer_ok"))
+                            reason = str(output.get("reason") or "")[:300]
+                        else:
+                            reason = "reclassifier blocked"
+                    except (runners.RunnerError,
+                            runners.WorkerProtocolError) as exc:
+                        self._save_protocol_raws(raw_name, exc)
+                        reason = ("reclassify call failed: %s" % exc)[:300]
+                st.append_event(
+                    self.state, "reclassify_recorded",
+                    unit=st.unit_key(unit),
+                    finding_id="%s-%s" % (raising_family, finding.get("id")),
+                    reclassifier=opp, defer_ok=defer_ok, reason=reason,
+                )
+                if defer_ok:
+                    debt.append({
+                        "id": "%s-%s" % (raising_family, finding["id"]),
+                        "severity": "P3",
+                        "summary": finding.get("summary", ""),
+                        "raised_by": raising_family,
+                        "cleared_by": opp,
+                        "reason": reason,
+                    })
+                else:
+                    all_ok = False
+        finally:
+            self._clear_busy()
+        if self._snapshot_diff(before, self._snapshot()):
+            # A reclassifier edited the workspace: void any deferral (the
+            # reclassify_recorded events above no longer stand) and restore.
+            st.append_event(
+                self.state, "reclassify_voided", unit=st.unit_key(unit),
+                reason="reclassifier modified the workspace; deferral voided",
+            )
+            self._restore_or_fail(
+                unit, "reclassifier modified the workspace")
+            return False, []
+        return all_ok, debt
+
     def _do_review_round(self):
         unit = st.current_unit(self.state)
         family = st.current_family(self.state, unit)
@@ -1471,19 +1567,33 @@ class Driver(object):
             return "%s round INVALID (reviewer edited); restored and retrying" % family
         self._check_worker_blocked(unit, output, contracts.KIND_REVIEW_ROUND)
         self._validate_contests(unit, output, contracts.KIND_REVIEW_ROUND)
+        findings = output.get("findings", [])
+        # P3-debt deferral: DOC phase only, and only a round that is ALL P3
+        # (any P0-P2 fires a normal fix and the P3s ride along). Each P3
+        # gets an opposite-family reclassification; only if every one is
+        # verified safe do we defer them as debt and advance.
+        deferred = None
+        if (findings
+                and self.config.get("p3_reclassify_debt")
+                and unit["kind"] in (st.UNIT_SKELETON, st.UNIT_SLICE_DOC)
+                and contracts.all_p3(findings)):
+            all_ok, debt = self._reclassify_p3_batch(
+                unit, [(f, family) for f in findings])
+            if all_ok:
+                deferred = debt
         rec = st.record_round(
-            self.state,
-            unit,
-            family,
-            contracts.KIND_REVIEW_ROUND,
-            output,
-            raw_path=raw_path,
-            duration=result.duration_s,
+            self.state, unit, family, contracts.KIND_REVIEW_ROUND, output,
+            raw_path=raw_path, duration=result.duration_s,
+            meta={"deferred_clean": True} if deferred else None,
         )
-        n = len(output.get("findings", []))
-        if n == 0:
+        if not findings:
             st.advance_family_if_clean(self.state, unit, output)
             return "%s round: clean" % family
+        if deferred is not None:
+            st.record_debt(self.state, unit, deferred, "round", rec["id"])
+            st.advance_family_deferred(self.state, unit)
+            return ("%s round: %d P3 deferred as debt (verified by %s)"
+                    % (family, len(deferred), self._opposite(family)))
         st.enter_fix_episode(
             self.state,
             unit,
@@ -1494,14 +1604,15 @@ class Driver(object):
                     "summary": f["summary"],
                     "contests": f.get("contests"),
                 }
-                for f in output["findings"]
+                for f in findings
             ],
             "round",
             family,
             rec["id"],
             st.U_ROUNDS,
         )
-        return "%s round: %d finding(s); queued for the fixer" % (family, n)
+        return "%s round: %d finding(s); queued for the fixer" % (
+            family, len(findings))
 
     def _do_seal_attempt(self):
         unit = st.current_unit(self.state)
@@ -1686,12 +1797,41 @@ class Driver(object):
         clean = all(
             contracts.findings_clean(halves[fam]["result"]) for fam in families
         )
-        passed = clean and invalidated is None
+        # P3-debt deferral at the seal (both phases): if the seal is not
+        # clean but its findings are ALL P3, each gets an opposite-family
+        # reclassification; if every one is verified safe the P3s become
+        # tracked debt and the seal PASSES rather than reopening the unit
+        # (double-seal re-runs are the most expensive churn).
+        deferred = None
+        if (not clean and invalidated is None
+                and self.config.get("p3_reclassify_debt")):
+            seal_findings = [
+                (f, fam)
+                for fam in families
+                for f in halves[fam]["result"].get("findings", [])
+            ]
+            if contracts.all_p3([f for f, _ in seal_findings]):
+                all_ok, debt = self._reclassify_p3_batch(unit, seal_findings)
+                if all_ok:
+                    deferred = debt
+        passed = (clean or deferred is not None) and invalidated is None
         st.record_seal_attempt(self.state, unit, halves, passed, invalidated)
         if passed:
-            st.transition_unit(self.state, unit, st.U_SEALED, reason="double seal clean")
+            if deferred:
+                st.record_debt(
+                    self.state, unit, deferred, "seal",
+                    "%s-seal-a%d" % (st.unit_key(unit), attempt_no))
+            st.transition_unit(
+                self.state, unit, st.U_SEALED,
+                reason=("double seal clean" if not deferred
+                        else "double seal: %d P3 deferred as debt"
+                        % len(deferred)))
             self._after_seal(unit)
-            return "seal attempt %d PASSED; %s sealed" % (attempt_no, st.unit_key(unit))
+            return "seal attempt %d PASSED (%s); %s sealed" % (
+                attempt_no,
+                "clean" if not deferred
+                else "%d P3 deferred as debt" % len(deferred),
+                st.unit_key(unit))
         if invalidated is not None:
             # Seals run on a clean worktree (everything amended), so a
             # tampering half is fully revertible: restore the sealed

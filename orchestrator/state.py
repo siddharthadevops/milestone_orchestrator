@@ -179,6 +179,7 @@ def _new_unit(kind, slice_id):
                                     #  "source_round_id": ...,
                                     #  "return_to": status after green+amend}
         "fix_loop_rounds": 0,       # fixer+delta iterations on this episode
+        "debt": [],                 # P3s deferred as tracked debt (append-only)
     }
 
 
@@ -481,11 +482,37 @@ def advance_family_if_clean(state, unit, last_result):
         )
 
 
+def _round_effectively_clean(round_rec):
+    """A round is 'clean enough' to advance/seal when it reported no
+    findings OR when its only findings were P3s all deferred as tracked
+    debt (meta.deferred_clean, set by the reclassify path)."""
+    from . import contracts
+
+    if contracts.findings_clean(round_rec.get("result", {})):
+        return True
+    # record_round flattens meta fields to the record's top level.
+    return bool(round_rec.get("deferred_clean"))
+
+
+def advance_family_deferred(state, unit):
+    """Advance the family after a review round whose only findings were P3s
+    all deferred as debt — equivalent to a clean round for family ordering.
+    (The clean case goes through advance_family_if_clean.)"""
+    families = state["config"]["families_order"]
+    unit["family_index"] += 1
+    if unit["family_index"] >= len(families):
+        transition_unit(state, unit, U_PRE_SEAL_VERIFY,
+                        reason="all families clean (P3 deferred as debt)")
+    else:
+        append_event(
+            state, "family_clean", unit=unit_key(unit),
+            next_family=families[unit["family_index"]], deferred_debt=True,
+        )
+
+
 def can_open_seal(state, unit):
     """Seal opens only when every configured family has a recorded clean
     round and the unit passed pre-seal verification (status sealing)."""
-    from . import contracts
-
     families = state["config"]["families_order"]
     for fam in families:
         rounds = family_rounds(unit, fam)
@@ -494,7 +521,7 @@ def can_open_seal(state, unit):
             for r in rounds
             if r["kind"] == "review_round" and not r.get("invalidated")
         ]
-        if not review_rounds or not contracts.findings_clean(review_rounds[-1]["result"]):
+        if not review_rounds or not _round_effectively_clean(review_rounds[-1]):
             return False
     return True
 
@@ -717,6 +744,24 @@ def enter_fix_episode(state, unit, findings, source_type, source_family,
     unit.pop("phantom_retried", None)
     transition_unit(state, unit, U_FIXING,
                     reason="%s findings queued for fixing" % source_type)
+
+
+def record_debt(state, unit, entries, source, source_round_id):
+    """Record P3 findings deferred as tracked debt (opposite-family verified
+    safe). `entries` is a list of {id, summary, raised_by, cleared_by,
+    reason}. Appended to the unit's debt list and the ledger for operator
+    visibility; the unit is NOT sent to the fixer for these."""
+    unit.setdefault("debt", [])
+    for e in entries:
+        unit["debt"].append(dict(e))
+    append_event(
+        state, "debt_recorded",
+        unit=unit_key(unit),
+        source=source,
+        source_round_id=source_round_id,
+        count=len(entries),
+        ids=[e.get("id") for e in entries],
+    )
 
 
 # ---------------------------------------------------------------------------

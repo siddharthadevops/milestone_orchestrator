@@ -93,11 +93,17 @@ def build_all():
             "claude",
             ["claude", "-p"],
         ),
+        "reclassify": prompts.build_reclassify(
+            FAMILY,
+            WORKSPACE,
+            {"id": "F1", "severity": "P3", "summary": "a stale word"},
+            "docs/slice-01.md",
+        ),
     }
 
 
 class TestProcessAuthorityInEveryBuilder(unittest.TestCase):
-    """(1) All 7 builders emit PROCESS AUTHORITY with its load-bearing
+    """(1) All builders emit PROCESS AUTHORITY with its load-bearing
     phrases — the section lives in _access_block, which every builder
     includes, so a regression in any one builder means the block was
     dropped or bypassed."""

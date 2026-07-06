@@ -317,6 +317,7 @@ class TestNewState(TempWorkspaceCase):
                 "fix_queue": [],
                 "fix_source": None,
                 "fix_loop_rounds": 0,
+                "debt": [],
             },
         )
         self.assertEqual(st.unit_key(unit), "skeleton")

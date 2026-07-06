@@ -44,6 +44,11 @@ KIND_REVIEW_ROUND = "review_round"
 KIND_DELTA_REVIEW = "delta_review"
 KIND_SEAL_HALF = "seal_half"
 KIND_FIX_FINDINGS = "fix_findings"
+# Opposite-family second opinion on whether a lone P3 is safe to DEFER as
+# tracked debt (genuinely trivial, no correctness/behaviour/coverage impact
+# and no implementation-drift risk). A one-way gate: it can refuse deferral
+# but never launders a real issue into debt.
+KIND_RECLASSIFY = "reclassify"
 
 KINDS = (
     KIND_DRAFT_SKELETON,
@@ -53,6 +58,7 @@ KINDS = (
     KIND_DELTA_REVIEW,
     KIND_SEAL_HALF,
     KIND_FIX_FINDINGS,
+    KIND_RECLASSIFY,
 )
 
 # Reviewers report; they never edit (enforced via snapshots/git restore).
@@ -293,6 +299,14 @@ def validate_worker_output(obj, kind):
                     "%s: slices, when present, must be non-empty" % ctx
                 )
             validate_slices(slices, "%s.slices" % ctx)
+    elif kind == KIND_RECLASSIFY:
+        if not isinstance(obj.get("defer_ok"), bool):
+            raise ContractError(
+                "%s: defer_ok must be a JSON boolean" % ctx
+            )
+        reason = _require(obj, "reason", str, ctx)
+        if not reason.strip():
+            raise ContractError("%s: reason must be non-empty" % ctx)
     return obj
 
 
@@ -313,6 +327,16 @@ def validate_fix_coverage(output, queued_findings):
 def findings_clean(obj):
     """A validated review output is clean when it reports no findings."""
     return len(obj.get("findings", [])) == 0
+
+
+def all_p3(findings):
+    """True when there is at least one finding and EVERY finding is P3 —
+    the 'lone trivial nit(s)' case eligible for the reclassify/debt path.
+    Any P0/P1/P2 present means a fix round fires anyway (P3s ride along)."""
+    findings = list(findings or [])
+    return bool(findings) and all(
+        f.get("severity") == "P3" for f in findings
+    )
 
 
 def blocking_findings(obj):

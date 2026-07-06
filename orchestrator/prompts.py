@@ -650,6 +650,56 @@ def build_seal_half(family, workspace, goal, unit_desc, artifact, registry,
 
 
 # ---------------------------------------------------------------------------
+# Reclassify kind (opposite-family second opinion for P3 debt deferral)
+
+
+RECLASSIFY_CONTRACT = """OUTPUT CONTRACT (mandatory)
+Respond with EXACTLY ONE JSON object and nothing else — no prose outside it,
+no markdown fences:
+{"status": "ok",
+ "kind": "reclassify",
+ "defer_ok": true or false,
+ "reason": "<one sentence: the concrete basis for your verdict>"}
+"""
+
+
+def build_reclassify(family, workspace, finding, artifact, unit_kind=None,
+                     amendments=None):
+    """Opposite-family judge on whether a lone P3 finding is safe to DEFER
+    as tracked debt. It answers ONE question and can only REFUSE deferral —
+    it never downgrades a real issue into debt."""
+    return (
+        _header(contracts.KIND_RECLASSIFY, family, workspace)
+        + "\nTASK: second opinion on a single P3 finding. REPORT ONLY — you\n"
+        "edit nothing and review nothing else.\n\n"
+        + _amendments_block(amendments)
+        + "Another reviewer (the opposite family) raised the P3 below on\n"
+        "%s. Before it is deferred as tracked debt instead of fixed now,\n"
+        "you give an independent verdict on ONE question:\n\n"
+        % (artifact,)
+        + "  Is it SAFE to defer this as debt — i.e., is it genuinely a P3\n"
+        "  (cosmetic / wording / accounting; NO effect on correctness,\n"
+        "  behaviour, test coverage, or a pinned contract) AND does it pose\n"
+        "  NO risk of implementation drift (it would not mislead a later\n"
+        "  implementer into wrong code)?\n\n"
+        + "Answer defer_ok=true ONLY if BOTH hold. Answer defer_ok=false if\n"
+        "the finding is actually more severe than P3, touches\n"
+        "correctness/behaviour/coverage/a pinned contract, or could cause\n"
+        "drift — it will then be fixed now, not deferred. This is a\n"
+        "one-way gate: your job is to CATCH a mis-deferral, never to excuse\n"
+        "a real problem. When unsure, answer defer_ok=false.\n\n"
+        + "FINDING (severity %s, id %s):\n%s\n\n"
+        % (finding.get("severity"), finding.get("id"),
+           finding.get("summary", ""))
+        + "Read the actual %s to judge; do not take the summary on trust.\n\n"
+        % (artifact,)
+        + _access_block(edit_allowed=False)
+        + "\n"
+        + RECLASSIFY_CONTRACT
+    )
+
+
+# ---------------------------------------------------------------------------
 # Fix kind
 
 

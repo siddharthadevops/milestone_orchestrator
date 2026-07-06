@@ -232,6 +232,23 @@ def render_review_log(state):
                     lines.append(
                         "  - [%s] %s" % (f.get("severity"), f.get("summary"))
                     )
+        debt = unit.get("debt") or []
+        if debt:
+            lines += [
+                "",
+                "**Deferred debt (P3, opposite-family verified):**",
+            ]
+            for d in debt:
+                lines.append(
+                    "- `%s` (raised %s, cleared %s): %s — %s"
+                    % (
+                        d.get("id"),
+                        d.get("raised_by"),
+                        d.get("cleared_by"),
+                        d.get("summary"),
+                        d.get("reason"),
+                    )
+                )
         lines.append("")
     return "\n".join(lines) + "\n"
 
