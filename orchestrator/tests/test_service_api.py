@@ -264,6 +264,26 @@ class ServiceApiTest(unittest.TestCase):
         self.assertIsNone(entry["pid"])
         self.assertEqual(entry["state_path"], state_path)
 
+    def test_service_forces_seal_defaults_on(self):
+        # Live runs seal concurrently and single-half on the first attempt.
+        ws = self.workspace("ws-seal-defaults")
+        status, _ = self.create_run(ws)
+        self.assertEqual(status, 201)
+        cfg = st.load(driver.default_state_path(ws))["config"]
+        self.assertTrue(cfg["seal_concurrent"])
+        self.assertTrue(cfg["single_seal_first_attempt"])
+
+    def test_service_seal_defaults_overridable(self):
+        # An explicit advanced-config value still wins over the forced default.
+        ws = self.workspace("ws-seal-override")
+        status, _ = self.create_run(
+            ws, config={"single_seal_first_attempt": False,
+                        "seal_concurrent": False})
+        self.assertEqual(status, 201)
+        cfg = st.load(driver.default_state_path(ws))["config"]
+        self.assertFalse(cfg["single_seal_first_attempt"])
+        self.assertFalse(cfg["seal_concurrent"])
+
     def test_create_same_workspace_twice_409(self):
         ws = self.workspace("ws-dupe")
         status, _ = self.create_run(ws)

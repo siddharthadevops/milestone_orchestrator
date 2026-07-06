@@ -396,7 +396,15 @@ def create_run(home, payload):
         # the demo config, and matching driver.DEFAULT_CONFIG's own note.
         # An explicit {"git": {"enabled": false}} in the advanced config
         # still wins (merged below), for deliberate pure-state runs.
-        driver.merge_config(config, {"git": {"enabled": True}})
+        # Live runs also seal concurrently (the two double-seal halves run in
+        # parallel) and run a single half on the first attempt (a1's last
+        # reviewer is byte-redundant; any finding reopens to the full double
+        # seal). Both are overridable in the advanced config, merged below.
+        driver.merge_config(config, {
+            "git": {"enabled": True},
+            "seal_concurrent": True,
+            "single_seal_first_attempt": True,
+        })
         user_cfg = payload.get("config")
         if user_cfg is not None:
             if not isinstance(user_cfg, dict):

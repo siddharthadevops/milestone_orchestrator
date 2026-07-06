@@ -541,11 +541,14 @@ class TestMergeConfigSingleSource(ServiceFixesTestCase):
              "config": override},
         )
         panel_cfg = st.load(entry["state_path"])["config"]
-        # Same merge semantics as the CLI, with ONE deliberate service
-        # default on top: panel runs launch the full enforced flow, so git
-        # is enabled unless the operator explicitly disables it.
+        # Same merge semantics as the CLI, with the deliberate service
+        # defaults on top: panel runs launch the full enforced flow (git on),
+        # seal concurrently, and run a single seal half on the first attempt —
+        # each unless the operator explicitly disables it.
         expected = json.loads(json.dumps(cli_cfg))
         expected["git"] = {"enabled": True}
+        expected["seal_concurrent"] = True
+        expected["single_seal_first_attempt"] = True
         self.assertEqual(panel_cfg, expected)
 
     def test_service_default_enables_git_and_explicit_override_wins(self):

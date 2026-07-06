@@ -147,6 +147,18 @@ class TestServicePanelE2E(unittest.TestCase):
             },
             "timeouts": {"codex": 60, "claude": 60},
             "verification": ["python3 run_checks.py"],
+            # This scenario deliberately exercises the sequential double-seal
+            # REOPEN path (the fake worker raises a README finding on claude's
+            # a1 half -> fix -> a2). Pin both seal defaults the service would
+            # otherwise force on: single_seal_first_attempt would skip claude's
+            # a1 half, and seal_concurrent would run both halves in parallel —
+            # which races the fake worker's file-based call counter (a test
+            # artifact; real workers share no such state). Sequential + full
+            # double seal keeps this end-to-end scenario deterministic. The
+            # single-seal and concurrency defaults are covered by
+            # test_single_seal_first_attempt and the seal_concurrent unit tests.
+            "single_seal_first_attempt": False,
+            "seal_concurrent": False,
         }
 
     def _create_run(self, autostart):

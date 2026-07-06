@@ -94,6 +94,13 @@ DEFAULT_CONFIG = {
     "max_seal_attempts": 8,
     "max_verify_fix_attempts": 4,
     "seal_concurrent": False,
+    # First seal attempt runs a single half (the last reviewer's redundant
+    # re-review is dropped); any finding reopens to the full double seal.
+    # Off for pure-state/CLI runs; the service forces it on. See
+    # _seal_families for why a1 is the only byte-identical, empirically-quiet
+    # case. Parallelization is decided by half count, not this flag: >1 half
+    # runs concurrently (when seal_concurrent), a lone a1 half runs directly.
+    "single_seal_first_attempt": False,
     # Gate commits + the reviewed-point index discipline (see gitops.py).
     # Off by default for pure-state CLI runs; the demo config and the
     # service panel (service.create_run forces it on unless the operator
@@ -1621,6 +1628,26 @@ class Driver(object):
         return "%s round: %d finding(s); queued for the fixer" % (
             family, len(findings))
 
+    def _seal_families(self, unit, attempt_no):
+        """Families that run a seal half this attempt.
+
+        On the FIRST attempt the frozen candidate is byte-identical to what
+        every family just reviewed clean — a1 opens only after every family's
+        review round is clean and a read-only pre-seal verify. So the last
+        reviewer (families_order[-1], whose round immediately preceded the
+        seal) is re-reviewing the exact bytes it just blessed; empirically its
+        a1 half never fires while the first family's fresh pass still catches
+        real defects. single_seal_first_attempt therefore drops that last
+        half on a1 only. Any finding reopens the unit and a2+ runs the full
+        double seal, because the artifact has by then changed. Never reduces
+        below one family (single-family configs keep their only sealer)."""
+        families = self.config["families_order"]
+        if (attempt_no == 1
+                and self.config.get("single_seal_first_attempt")
+                and len(families) > 1):
+            return families[:-1]
+        return families
+
     def _do_seal_attempt(self):
         unit = st.current_unit(self.state)
         if len(unit["seals"]) >= self.config["max_seal_attempts"]:
@@ -1633,7 +1660,15 @@ class Driver(object):
             self._save()
             raise StopStep("seal cap")
         attempt_no = len(unit["seals"]) + 1
-        families = self.config["families_order"]
+        all_families = self.config["families_order"]
+        families = self._seal_families(unit, attempt_no)
+        if families != all_families:
+            st.append_event(
+                self.state, "seal_single_first_attempt",
+                unit=st.unit_key(unit), attempt=attempt_no,
+                ran=list(families),
+                skipped=[f for f in all_families if f not in families],
+            )
         goal = self.state["goal"]
         desc = self._unit_desc(unit)
         artifact = self._artifact(unit)
@@ -1712,7 +1747,9 @@ class Driver(object):
             self._save()
             raise StopStep(reason)
 
-        if self.config.get("seal_concurrent"):
+        if len(families) > 1 and self.config.get("seal_concurrent"):
+            # Parallelize only when there is more than one half to run: a lone
+            # a1 half has nothing to parallelize and takes the direct path.
             before = self._snapshot()
             errors = {}
             error_raws = []
@@ -1828,11 +1865,12 @@ class Driver(object):
                 st.record_debt(
                     self.state, unit, deferred, "seal",
                     "%s-seal-a%d" % (st.unit_key(unit), attempt_no))
+            seal_kind = "single seal" if len(families) == 1 else "double seal"
             st.transition_unit(
                 self.state, unit, st.U_SEALED,
-                reason=("double seal clean" if not deferred
-                        else "double seal: %d P3 deferred as debt"
-                        % len(deferred)))
+                reason=("%s clean" % seal_kind if not deferred
+                        else "%s: %d P3 deferred as debt"
+                        % (seal_kind, len(deferred))))
             self._after_seal(unit)
             return "seal attempt %d PASSED (%s); %s sealed" % (
                 attempt_no,
