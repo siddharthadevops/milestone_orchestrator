@@ -13,3 +13,5 @@ orchestrator/examples/calculator/work/
 .pytest_cache/
 .ruff_cache/
 .tox/
+
+.run/
