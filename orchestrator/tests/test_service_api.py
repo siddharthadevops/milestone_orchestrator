@@ -105,7 +105,15 @@ class ServiceApiTest(unittest.TestCase):
         return path
 
     def create_run(self, ws, **extra):
-        payload = {"workspace": ws, "goal": "Test goal", "autostart": False}
+        # Endpoint tests use the legacy flat-`docs` layout so the run's
+        # runtime is at the historical <ws>/.orchestrator/ location these
+        # tests reference. The per-milestone `.run/` layout is exercised
+        # separately in TestPerMilestoneLayout. `docs_dir` is merged in
+        # (not replaced) so a test's own config keys still take effect.
+        cfg = {"docs_dir": "docs"}
+        cfg.update(extra.pop("config", None) or {})
+        payload = {"workspace": ws, "goal": "Test goal", "autostart": False,
+                   "config": cfg}
         payload.update(extra)
         return self.request_json("POST", "/api/runs", payload)
 
@@ -266,7 +274,9 @@ class ServiceApiTest(unittest.TestCase):
 
     def test_attach_adopts_existing_state_once(self):
         ws = self.workspace("ws-attach")
-        driver.init_run("adopted goal", ws)
+        # Bare attach adopts the workspace-root (legacy) state location.
+        driver.init_run("adopted goal", ws,
+                        state_path=driver.default_state_path(ws))
         status, body = self.request_json(
             "POST",
             "/api/runs",
@@ -291,7 +301,8 @@ class ServiceApiTest(unittest.TestCase):
         # would be silently ignored, so the API must reject it instead of
         # returning 201 as if it were honored.
         ws = self.workspace("ws-attach-strict")
-        driver.init_run("ORIGINAL GOAL", ws)
+        driver.init_run("ORIGINAL GOAL", ws,
+                        state_path=driver.default_state_path(ws))
         for extra in (
             {"goal": "NEW GOAL"},
             {"goal_doc": os.path.join(self.tmp.name, "whatever.md")},
@@ -620,6 +631,83 @@ class StoryApiTest(ServiceApiTest):
         status, _ = self.request_json(
             "GET", "/api/runs/%s/story?item=weird:x" % rid)
         self.assertEqual(status, 400)
+
+
+class TestPerMilestoneLayout(ServiceApiTest):
+    """A new run keeps its state + runtime inside the milestone directory
+    (<docs_dir>/.run/), so a second milestone in the same repo never
+    collides with a closed one. This is the default {slug} docs_dir layout
+    (no config override)."""
+
+    def _new_run(self, ws, name, goal="g"):
+        status, body = self.request_json(
+            "POST", "/api/runs",
+            {"workspace": ws, "goal": goal, "name": name,
+             "autostart": False})
+        self.assertEqual(status, 201, body)
+        entry = registry.get(registry.load(self.home), body["run"]["id"])
+        return entry
+
+    def test_state_lives_in_milestone_dir_not_workspace_root(self):
+        ws = self.workspace("ws-layout")
+        entry = self._new_run(ws, "My Feature")
+        rel = os.path.relpath(entry["state_path"], ws)
+        self.assertEqual(
+            rel,
+            os.path.join("implementation", "milestones", "my-feature",
+                         ".run", "state.json"))
+        self.assertTrue(os.path.isfile(entry["state_path"]))
+        # No legacy workspace-root runtime dir was created.
+        self.assertFalse(os.path.exists(os.path.join(ws, ".orchestrator")))
+
+    def test_second_milestone_same_workspace_does_not_collide(self):
+        ws = self.workspace("ws-two")
+        e1 = self._new_run(ws, "Feature", goal="one")
+        e2 = self._new_run(ws, "Feature", goal="two")  # no longer 409s
+        self.assertNotEqual(e1["state_path"], e2["state_path"])
+        self.assertIn(os.path.join("milestones", "feature", ".run"),
+                      e1["state_path"])
+        self.assertIn(os.path.join("milestones", "feature-2", ".run"),
+                      e2["state_path"])
+        self.assertTrue(os.path.isfile(e1["state_path"]))
+        self.assertTrue(os.path.isfile(e2["state_path"]))
+
+    def test_cli_workspace_resolves_and_flags_ambiguity(self):
+        ws = self.workspace("ws-resolve")
+        e1 = self._new_run(ws, "Alpha")
+        # One run: --workspace resolves to it.
+        self.assertEqual(
+            os.path.abspath(driver.resolve_workspace_state(ws)),
+            os.path.abspath(e1["state_path"]))
+        # Two runs: ambiguous -> SystemExit (operator must pass --state).
+        self._new_run(ws, "Beta")
+        with self.assertRaises(SystemExit):
+            driver.resolve_workspace_state(ws)
+
+    def test_attach_rejects_state_from_another_workspace(self):
+        ws_a = self.workspace("ws-a")
+        ws_b = self.workspace("ws-b")
+        entry_a = self._new_run(ws_a, "A")
+        # Attaching A's state under workspace B must be refused.
+        status, body = self.request_json(
+            "POST", "/api/runs",
+            {"workspace": ws_b, "attach": True, "autostart": False,
+             "state_path": entry_a["state_path"]})
+        self.assertEqual(status, 400)
+        self.assertIn("belongs to workspace", body["error"])
+
+    def test_operator_files_land_beside_state(self):
+        ws = self.workspace("ws-amend-layout")
+        entry = self._new_run(ws, "Amd")
+        rid = entry["id"]
+        status, _ = self.request_json(
+            "POST", "/api/runs/%s/amendments" % rid, {"text": "be careful"})
+        self.assertEqual(status, 200)
+        runtime = os.path.dirname(entry["state_path"])
+        self.assertTrue(os.path.isfile(
+            os.path.join(runtime, "amendments.json")))
+        self.assertFalse(os.path.exists(
+            os.path.join(ws, ".orchestrator", "amendments.json")))
 
 
 if __name__ == "__main__":

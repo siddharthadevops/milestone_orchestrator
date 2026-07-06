@@ -415,6 +415,7 @@ def call_worker(runner, family, prompt, kind, workspace,
 SNAPSHOT_EXCLUDE_DIRS = {
     ".git",
     ".orchestrator",
+    ".run",  # per-milestone runtime dir (state, raw, operator files)
     "__pycache__",
     ".pytest_cache",
     ".mypy_cache",

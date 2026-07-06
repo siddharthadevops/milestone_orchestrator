@@ -340,13 +340,13 @@ def create_run(home, payload):
     workspace = os.path.abspath(os.path.expanduser(workspace))
 
     attach = bool(payload.get("attach"))
-    state_path = driver.default_state_path(workspace)
     goal_doc = None
 
     if attach:
-        # Attach adopts the on-disk state exactly as it is; a supplied
+        # Attach adopts an on-disk state exactly as it is; a supplied
         # goal/goal_doc/config would be silently ignored — reject instead
-        # of pretending it was honored.
+        # of pretending it was honored. Adopts the legacy workspace-root
+        # state, or an explicit `state_path` for a per-milestone run.
         for key in ("goal", "goal_doc", "config"):
             if payload.get(key) is not None:
                 raise ApiError(
@@ -354,8 +354,26 @@ def create_run(home, payload):
                     "attach adopts the existing state as-is; %r cannot be "
                     "combined with it" % key,
                 )
+        state_path = payload.get("state_path")
+        if state_path:
+            state_path = os.path.abspath(os.path.expanduser(state_path))
+        else:
+            state_path = driver.default_state_path(workspace)
         if not os.path.exists(state_path):
             raise ApiError(400, "attach requested but no state at %s" % state_path)
+        # The adopted state must belong to THIS workspace: otherwise the
+        # driver would run against `workspace` while mutating another repo's
+        # ledger. (Guards an explicit cross-workspace state_path.)
+        try:
+            adopted_ws = st.load(state_path).get("workspace")
+        except Exception as exc:
+            raise ApiError(409, "state unreadable: %s" % exc)
+        if os.path.abspath(adopted_ws or "") != os.path.abspath(workspace):
+            raise ApiError(
+                400,
+                "state at %s belongs to workspace %r, not %r"
+                % (state_path, adopted_ws, workspace),
+            )
     else:
         goal = payload.get("goal")
         goal_doc = payload.get("goal_doc")
@@ -410,7 +428,11 @@ def create_run(home, payload):
             or "run"
         )
         try:
-            driver.init_run(
+            # init_run resolves the (uniquified) milestone dir and returns
+            # the real state path — for a per-milestone docs_dir that is
+            # <milestone>/.run/state.json, so a new run never collides with
+            # a closed one in the same repo.
+            state_path = driver.init_run(
                 goal.strip(), workspace, config=config, name=name_for_init
             )
         except FileExistsError as exc:
@@ -581,8 +603,9 @@ def _purge_state_files(state_path):
 
 
 def _amendments_path(entry):
+    # Beside the state file (the run's runtime dir), matching the driver.
     return os.path.join(
-        entry["workspace"], ".orchestrator", "amendments.json"
+        os.path.dirname(entry["state_path"]), "amendments.json"
     )
 
 
@@ -662,7 +685,8 @@ ACT_KEYS = ("drafter", "implementer", "fixer", "delta_review",
 
 
 def _acts_path(entry):
-    return os.path.join(entry["workspace"], ".orchestrator", "acts.json")
+    # Beside the state file (the run's runtime dir), matching the driver.
+    return os.path.join(os.path.dirname(entry["state_path"]), "acts.json")
 
 
 def read_acts(entry):

@@ -364,8 +364,15 @@ class Driver(object):
     def _opposite_cmd(self, family):
         return self.config["commands"].get(self._opposite(family), [])
 
+    def _runtime_dir(self):
+        # All runtime bookkeeping lives beside the state file: for a
+        # per-milestone run that is <milestone>/.run/, for a legacy run
+        # <workspace>/.orchestrator/. Deriving from the state path keeps
+        # both layouts working with identical code.
+        return os.path.dirname(self.state_path)
+
     def _raw_dir(self):
-        path = os.path.join(self.workspace, ".orchestrator", "raw")
+        path = os.path.join(self._runtime_dir(), "raw")
         os.makedirs(path, exist_ok=True)
         return path
 
@@ -529,7 +536,7 @@ class Driver(object):
             self._save()
 
     def _amendments_path(self):
-        return os.path.join(self.workspace, ".orchestrator", "amendments.json")
+        return os.path.join(self._runtime_dir(), "amendments.json")
 
     def _amendments(self):
         """Operator amendments, re-read before every worker call so a note
@@ -567,7 +574,7 @@ class Driver(object):
         return amendments
 
     def _busy_path(self):
-        return os.path.join(self.workspace, ".orchestrator", "current.json")
+        return os.path.join(self._runtime_dir(), "current.json")
 
     def _mark_busy(self, label, kind, family):
         """Cosmetic in-flight marker for the panel (NOT part of the state
@@ -840,11 +847,11 @@ class Driver(object):
         return st.adjudicated_rejections(self.state)
 
     def _acts_overlay(self):
-        """Operator-editable mid-run act assignments
-        (<workspace>/.orchestrator/acts.json) — same lock-free pattern as
-        amendments: the panel writes, the driver only reads, re-read
-        before every act resolution so a change binds the next call."""
-        path = os.path.join(self.workspace, ".orchestrator", "acts.json")
+        """Operator-editable mid-run act assignments (acts.json beside the
+        state file) — same lock-free pattern as amendments: the panel
+        writes, the driver only reads, re-read before every act resolution
+        so a change binds the next call."""
+        path = os.path.join(self._runtime_dir(), "acts.json")
         try:
             with open(path, "r", encoding="utf-8") as fh:
                 data = json.load(fh)
@@ -1127,9 +1134,9 @@ class Driver(object):
         changed = []
         for p in last_fix.get("files_changed") or []:
             norm = os.path.normpath(str(p))
-            if norm == ".orchestrator" or norm.startswith(
-                ".orchestrator" + os.sep
-            ):
+            # Runtime-bookkeeping paths (either layout) are not real edits.
+            if any(seg in (".orchestrator", ".run")
+                   for seg in norm.split(os.sep)):
                 continue
             changed.append(p)
         if changed:
@@ -1982,7 +1989,19 @@ def run_verification(commands, workspace, timeout):
 # CLI
 
 
-def default_state_path(workspace):
+def default_state_path(workspace, docs_dir=None):
+    """Where a run's state (and its sibling runtime: raw/, amendments.json,
+    acts.json, current.json) lives.
+
+    New milestones (a per-milestone docs_dir like
+    implementation/milestones/<slug>) keep their runtime INSIDE the
+    milestone directory, in a gitignored `.run/` subdir — so each milestone
+    is self-contained and a new run never collides with a closed one.
+    Legacy flat-`docs` runs keep the historical workspace-root
+    `.orchestrator/` location. Runtime is always the state file's own
+    directory, so both layouts work with the same driver code."""
+    if docs_dir and os.path.normpath(docs_dir) not in ("", ".", "docs"):
+        return os.path.join(workspace, docs_dir, ".run", "state.json")
     return os.path.join(workspace, ".orchestrator", "state.json")
 
 
@@ -2026,7 +2045,7 @@ def init_run(goal, workspace, config=None, state_path=None, name=None):
             )
     state = st.new_state(goal, workspace, config, name=name, slug=slug)
     st.append_event(state, "initialized", goal=goal)
-    path = state_path or default_state_path(workspace)
+    path = state_path or default_state_path(workspace, state.get("docs_dir"))
     st.save_new(path, state)
     return path
 
@@ -2053,11 +2072,43 @@ def cmd_init(args):
     return 0
 
 
+def resolve_workspace_state(workspace):
+    """Locate a run's state file given only the workspace root.
+
+    Prefers the legacy <ws>/.orchestrator/state.json; otherwise finds a
+    per-milestone <ws>/<...>/.run/state.json. Raises SystemExit(2) when
+    there is no run, or more than one (the operator must then pass --state
+    to disambiguate, since one repo can now host several milestones)."""
+    workspace = os.path.abspath(workspace)
+    legacy = default_state_path(workspace)
+    if os.path.isfile(legacy):
+        return legacy
+    prune = (runners.SNAPSHOT_EXCLUDE_DIRS - {".run"}) | {
+        "node_modules", "deps", "_build", "target", "vendor", "build"
+    }
+    found = []
+    for root, dirs, files in os.walk(workspace):
+        dirs[:] = [d for d in dirs if d not in prune]
+        if os.path.basename(root) == ".run" and "state.json" in files:
+            found.append(os.path.join(root, "state.json"))
+            dirs[:] = []  # do not descend below a runtime dir
+    if len(found) == 1:
+        return found[0]
+    if not found:
+        print("error: no run state found under %s (pass --state PATH)"
+              % workspace, file=sys.stderr)
+    else:
+        print("error: %d runs under %s; pass --state PATH to pick one:\n  %s"
+              % (len(found), workspace, "\n  ".join(sorted(found))),
+              file=sys.stderr)
+    raise SystemExit(2)
+
+
 def _state_path(args):
     if args.state:
         return args.state
     if args.workspace:
-        return default_state_path(os.path.abspath(args.workspace))
+        return resolve_workspace_state(args.workspace)
     print(
         "error: pass --state PATH or --workspace DIR to locate the state file",
         file=sys.stderr,

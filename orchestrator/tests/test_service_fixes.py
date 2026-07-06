@@ -483,6 +483,9 @@ class TestInitRunAtomic(ServiceFixesTestCase):
 
     def test_concurrent_inits_exactly_one_wins(self):
         ws = self.workspace("ws-initrace")
+        # Race for ONE explicit state path: the property under test is the
+        # os.link exclusive claim, independent of the path-layout policy.
+        path = os.path.join(ws, ".orchestrator", "state.json")
         n = 8
         barrier = threading.Barrier(n)
         outcomes = [None] * n
@@ -490,7 +493,7 @@ class TestInitRunAtomic(ServiceFixesTestCase):
         def racer(i):
             barrier.wait(timeout=30)
             try:
-                driver.init_run("goal-%d" % i, ws)
+                driver.init_run("goal-%d" % i, ws, state_path=path)
                 outcomes[i] = "ok"
             except FileExistsError:
                 outcomes[i] = "exists"
@@ -504,7 +507,7 @@ class TestInitRunAtomic(ServiceFixesTestCase):
         self.assertEqual(outcomes.count("ok"), 1, outcomes)
         self.assertEqual(outcomes.count("exists"), n - 1, outcomes)
         winner = outcomes.index("ok")
-        state = st.load(driver.default_state_path(ws))
+        state = st.load(path)
         self.assertEqual(state["goal"], "goal-%d" % winner)
 
 
@@ -532,12 +535,12 @@ class TestMergeConfigSingleSource(ServiceFixesTestCase):
         cli_cfg = driver.load_config(cfg_file)
         # Panel path.
         ws = self.workspace("ws-mergeparity")
-        service.create_run(
+        entry = service.create_run(
             self.home,
             {"workspace": ws, "goal": "parity", "autostart": False,
              "config": override},
         )
-        panel_cfg = st.load(driver.default_state_path(ws))["config"]
+        panel_cfg = st.load(entry["state_path"])["config"]
         # Same merge semantics as the CLI, with ONE deliberate service
         # default on top: panel runs launch the full enforced flow, so git
         # is enabled unless the operator explicitly disables it.
@@ -551,19 +554,19 @@ class TestMergeConfigSingleSource(ServiceFixesTestCase):
         # service enables git; a silently pure-state panel run would lose
         # delta reviews, amends, and revertible tamper recovery).
         ws = self.workspace("ws-gitdefault")
-        service.create_run(
+        entry = service.create_run(
             self.home, {"workspace": ws, "goal": "g", "autostart": False}
         )
-        cfg = st.load(driver.default_state_path(ws))["config"]
+        cfg = st.load(entry["state_path"])["config"]
         self.assertEqual(cfg["git"], {"enabled": True})
         # An explicit pure-state request is honored.
         ws2 = self.workspace("ws-gitoff")
-        service.create_run(
+        entry2 = service.create_run(
             self.home,
             {"workspace": ws2, "goal": "g", "autostart": False,
              "config": {"git": {"enabled": False}}},
         )
-        cfg2 = st.load(driver.default_state_path(ws2))["config"]
+        cfg2 = st.load(entry2["state_path"])["config"]
         self.assertEqual(cfg2["git"], {"enabled": False})
 
 
