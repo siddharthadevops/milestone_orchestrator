@@ -134,3 +134,44 @@
 - claude half: 0 finding(s); workspace_modified=False; raw `.orchestrator/raw/slice_impl-01-seal-a5-claude.txt`
 - codex half: 0 finding(s); workspace_modified=False; raw `.orchestrator/raw/slice_impl-01-seal-a5-codex.txt`
 
+## slice_doc-02 (Agent99-compatible work-area store)
+
+- draft: kind `draft_slice_note`, artifact `implementation/milestones/canon-project-concept-isolated/slices/slice-02.md` (raw: `.orchestrator/raw/slice_doc-02-draft.txt`)
+
+| Round | Kind | Family | Findings | Triage | Raw |
+|---|---|---|---|---|---|
+| slice_doc-02-codex-r1 | review_round | codex | 2 | 2 reported | `.orchestrator/raw/slice_doc-02-codex-r1.txt` |
+| slice_doc-02-codex-r2 | fix_findings | codex | 2 | 2 fixed | `.orchestrator/raw/slice_doc-02-fix1.txt` |
+| slice_doc-02-codex-r3 | delta_review | codex | 0 | clean | `.orchestrator/raw/slice_doc-02-delta1.txt` |
+| slice_doc-02-codex-r4 | review_round | codex | 2 | 2 reported | `.orchestrator/raw/slice_doc-02-codex-r2.txt` |
+| slice_doc-02-codex-r5 | fix_findings | codex | 2 | 2 fixed | `.orchestrator/raw/slice_doc-02-fix2.txt` |
+| slice_doc-02-codex-r6 | delta_review | codex | 0 | clean | `.orchestrator/raw/slice_doc-02-delta2.txt` |
+| slice_doc-02-codex-r7 | review_round | codex | 1 | 1 reported | `.orchestrator/raw/slice_doc-02-codex-r3.txt` |
+| slice_doc-02-codex-r8 | fix_findings | codex | 1 | 1 fixed | `.orchestrator/raw/slice_doc-02-fix3.txt` |
+| slice_doc-02-codex-r9 | delta_review | codex | 0 | clean | `.orchestrator/raw/slice_doc-02-delta3.txt` |
+| slice_doc-02-codex-r10 | review_round | codex | 1 | 1 reported | `.orchestrator/raw/slice_doc-02-codex-r4.txt` |
+| slice_doc-02-codex-r11 | fix_findings | codex | 1 | 1 fixed | `.orchestrator/raw/slice_doc-02-fix4.txt` |
+| slice_doc-02-codex-r12 | delta_review | codex | 0 | clean | `.orchestrator/raw/slice_doc-02-delta4.txt` |
+| slice_doc-02-codex-r13 | review_round | codex | 3 | 3 reported | `.orchestrator/raw/slice_doc-02-codex-r5.txt` |
+| slice_doc-02-codex-r14 | fix_findings | codex | 3 | 3 fixed | `.orchestrator/raw/slice_doc-02-fix5.txt` |
+| slice_doc-02-codex-r15 | delta_review | codex | 0 | clean | `.orchestrator/raw/slice_doc-02-delta5.txt` |
+| slice_doc-02-codex-r16 | review_round | codex | 1 | 1 reported | `.orchestrator/raw/slice_doc-02-codex-r6.txt` |
+| slice_doc-02-codex-r17 | fix_findings | codex | 1 | 1 fixed | `.orchestrator/raw/slice_doc-02-fix6.txt` |
+| slice_doc-02-codex-r18 | delta_review | codex | 0 | clean | `.orchestrator/raw/slice_doc-02-delta6.txt` |
+| slice_doc-02-codex-r19 | review_round | codex | 2 | 2 reported | `.orchestrator/raw/slice_doc-02-codex-r7.txt` |
+| slice_doc-02-codex-r20 | fix_findings | codex | 2 | 2 fixed | `.orchestrator/raw/slice_doc-02-fix7.txt` |
+| slice_doc-02-codex-r21 | delta_review | codex | 0 | clean | `.orchestrator/raw/slice_doc-02-delta7.txt` |
+| slice_doc-02-codex-r22 | review_round | codex | 0 | clean | `.orchestrator/raw/slice_doc-02-codex-r8.txt` |
+| slice_doc-02-claude-r1 | review_round | claude | 3 | 3 reported | `.orchestrator/raw/slice_doc-02-claude-r1.txt` |
+| slice_doc-02-codex-r23 | fix_findings | codex | 3 | 3 fixed | `.orchestrator/raw/slice_doc-02-fix8.txt` |
+| slice_doc-02-codex-r24 | delta_review | codex | 0 | clean | `.orchestrator/raw/slice_doc-02-delta8.txt` |
+| slice_doc-02-claude-r2 | review_round | claude | 1 | 1 reported | `.orchestrator/raw/slice_doc-02-claude-r2.txt` |
+| slice_doc-02-codex-r25 | fix_findings | codex | 1 | 1 fixed | `.orchestrator/raw/slice_doc-02-fix9.txt` |
+| slice_doc-02-codex-r26 | delta_review | codex | 0 | clean | `.orchestrator/raw/slice_doc-02-delta9.txt` |
+| slice_doc-02-claude-r3 | review_round | claude | 0 | clean | `.orchestrator/raw/slice_doc-02-claude-r3.txt` |
+
+### Seal attempt a1 — PASSED
+
+- claude half: 0 finding(s); workspace_modified=False; raw `.orchestrator/raw/slice_doc-02-seal-a1-claude.txt`
+- codex half: 0 finding(s); workspace_modified=False; raw `.orchestrator/raw/slice_doc-02-seal-a1-codex.txt`
+

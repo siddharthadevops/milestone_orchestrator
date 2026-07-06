@@ -5,5 +5,5 @@
 - closed at: 2026-07-06T15:00:38+0200
 - rounds: 16
 - seal attempts: 5
-- gate commit: (this commit)
+- gate commit: 0b4d92f
 - review state: review_clean (double seal passed on an unchanged workspace)
