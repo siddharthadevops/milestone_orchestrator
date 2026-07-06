@@ -621,6 +621,17 @@ class StoryApiTest(ServiceApiTest):
                                  "raw_path": "raw/s1.txt",
                                  "workspace_modified": False}},
         })
+        unit["debt"] = [{
+            "id": "claude-F9", "severity": "P3", "summary": "stale word",
+            "raised_by": "claude", "cleared_by": "codex",
+            "reason": "cosmetic; no drift",
+        }]
+        state["events"].append({
+            "seq": 999, "at": "2026-07-05T10:20:00+0200",
+            "type": "reclassify_recorded", "unit": "skeleton",
+            "finding_id": "claude-F9", "reclassifier": "codex",
+            "defer_ok": True, "reason": "cosmetic; no drift",
+        })
         st.save(entry["state_path"], state)
         return rid
 
@@ -641,6 +652,25 @@ class StoryApiTest(ServiceApiTest):
             "GET", "/api/runs/%s/story?item=draft:skeleton" % rid)
         self.assertEqual(status, 200)
         self.assertEqual(body["result"]["artifact"], "docs/skeleton.md")
+
+    def test_debt_story_and_summary_expose_deferred_p3(self):
+        # The reclassify leaves no round, so the panel needs the deferred P3
+        # both as a summary chip and a clickable story.
+        ws = self.workspace("ws-debt")
+        rid = self._seed(ws)
+        # summary carries the debt so the chip can render after the run ends
+        _, detail = self.request_json("GET", "/api/runs/%s" % rid)
+        skel = detail["summary"]["units"][0]
+        self.assertEqual(len(skel["debt"]), 1)
+        self.assertEqual(skel["debt"][0]["cleared_by"], "codex")
+        # the story shows what was resolved
+        status, body = self.request_json(
+            "GET", "/api/runs/%s/story?item=debt:skeleton" % rid)
+        self.assertEqual(status, 200)
+        self.assertEqual(body["story"], "debt")
+        self.assertEqual(body["debt"][0]["id"], "claude-F9")
+        self.assertEqual(body["reclassify"][0]["defer_ok"], True)
+        self.assertEqual(body["reclassify"][0]["reclassifier"], "codex")
 
     def test_story_errors(self):
         ws = self.workspace("ws-story-bad")

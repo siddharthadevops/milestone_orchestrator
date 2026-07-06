@@ -820,7 +820,30 @@ def run_story(home, run_id, item):
                     "result": d.get("result"),
                 }
         raise ApiError(404, "unknown draft %r" % ref)
-    raise ApiError(400, "item must be round:/seal:/draft:")
+    if kind == "debt":
+        for unit in state["units"]:
+            if st.unit_key(unit) != ref:
+                continue
+            reclassify = [
+                {
+                    "finding_id": e.get("finding_id"),
+                    "reclassifier": e.get("reclassifier"),
+                    "defer_ok": e.get("defer_ok"),
+                    "reason": e.get("reason"),
+                    "at": e.get("at"),
+                }
+                for e in state["events"]
+                if e.get("type") == "reclassify_recorded"
+                and e.get("unit") == ref
+            ]
+            return {
+                "story": "debt",
+                "unit": ref,
+                "debt": unit.get("debt", []),
+                "reclassify": reclassify,
+            }
+        raise ApiError(404, "unknown unit %r" % ref)
+    raise ApiError(400, "item must be round:/seal:/draft:/debt:")
 
 
 def run_detail(home, run_id, log_tail=80):

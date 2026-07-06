@@ -448,6 +448,14 @@ function sealChip(s, unitKey) {
     return `<span class="chip fail${click}" title="${esc(s.invalidated)}">seal a${s.attempt} invalid${dur}</span>`;
   return `<span class="chip ${sevClass(s.severity)}${click}">seal a${s.attempt} findings${dur}</span>`;
 }
+function debtChip(u) {
+  // The opposite-family reclassification leaves no round, so its resolution
+  // (P3 deferred as tracked debt) would vanish with the in-flight chip.
+  // Persist it as a clickable chip.
+  const n = (u.debt || []).length;
+  if (!n) return "";
+  return `<span class="chip clean clicky" onclick="showStory('debt:${esc(u.unit)}')">${n} P3 deferred</span>`;
+}
 async function refreshDetail() {
   if (!selected) return;
   try {
@@ -475,7 +483,9 @@ async function refreshDetail() {
       else if (auto) when = " — auto-resume pending";
       else if (ftype === "login")
         when = " — needs operator login (`claude /login`), never auto-resumed";
-      html += `<div class="failure"><span class="chip ${auto ? "sev23" : "fail"}">${esc(ftype)}</span>${esc(when)}\nRUN FAILED\n${esc(s.failure_reason)}</div>`;
+      const cev = f.classify_evidence
+        ? `\nclassified via: ${f.classify_evidence}` : "";
+      html += `<div class="failure"><span class="chip ${auto ? "sev23" : "fail"}">${esc(ftype)}</span>${esc(when)}\nRUN FAILED\n${esc(s.failure_reason)}${esc(cev)}</div>`;
     }
     html += `<div class="toolbar">
       ${s.failure_reason && !running
@@ -532,7 +542,7 @@ async function refreshDetail() {
               (u.rounds || []).map(r => ({at: r.at || "", html: roundChip(r)})),
               (u.seals || []).map(x => ({at: x.at || "", html: sealChip(x, u.unit)}))
             ).sort((a, b) => a.at < b.at ? -1 : a.at > b.at ? 1 : 0)
-             .map(c => c.html).join("")}
+             .map(c => c.html).join("")}${debtChip(u)}
             ${u.unit === sum.current_unit && running ? workingChip(s) : ""}</div>
         </div>`;
       };
@@ -693,6 +703,17 @@ async function showStory(item) {
     if (res.slices && res.slices.length)
       body += `<div class="story-note">slices:\n${esc(res.slices.map(x => x.id + ". " + x.title).join("\n"))}</div>`;
     if (res.notes) body += `<div class="story-note">${esc(res.notes)}</div>`;
+  } else if (d.story === "debt") {
+    title = `${d.unit} — deferred P3 debt`;
+    const debt = d.debt || [];
+    body += debt.length ? debt.map(x => `<div class="story-finding">
+        <span class="sev P3">P3</span> <b>${esc(x.id || "")}</b> ${esc(x.summary || "")}
+        <div class="story-disp">raised by ${esc(x.raised_by || "?")} → deferred by ${esc(x.cleared_by || "?")}: ${esc(x.reason || "")}</div>
+      </div>`).join("") : `<div class="story-finding">no deferred debt</div>`;
+    const refused = (d.reclassify || []).filter(e => !e.defer_ok);
+    if (refused.length)
+      body += `<div class="story-note">reclassify refusals (sent to the fixer instead):\n` +
+        esc(refused.map(e => `${e.finding_id} [${e.reclassifier}] — ${e.reason}`).join("\n")) + `</div>`;
   } else {
     title = "Story";
     body += `<div class="story-note">${esc(JSON.stringify(d, null, 1))}</div>`;

@@ -877,6 +877,20 @@ def summary(state):
                     }
                     for s in u["seals"]
                 ],
+                # Deferred P3 debt (opposite-family reclassification). The
+                # reclassify calls leave no round, so without this the panel
+                # loses the resolution once the in-flight chip clears.
+                "debt": [
+                    {
+                        "id": dd.get("id"),
+                        "severity": dd.get("severity"),
+                        "summary": dd.get("summary"),
+                        "raised_by": dd.get("raised_by"),
+                        "cleared_by": dd.get("cleared_by"),
+                        "reason": dd.get("reason"),
+                    }
+                    for dd in u.get("debt", [])
+                ],
             }
         )
     families = state["config"].get("families_order", [])
