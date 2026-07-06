@@ -1051,6 +1051,14 @@ GUARD_INTERVAL_S = 60
 # and waits for the operator (quota windows genuinely move, so they get
 # a generous budget; transient types get a short one).
 AUTO_RESUME_CAPS = {"quota": 12, "network": 4, "busy": 4, "timeout": 4}
+# Emergency resume of an UNCLASSIFIED failure ("unknown"): the classifier
+# could not type it (a novel banner, or a correlated outage that took the
+# classifier down too). Retried forever, this far apart. No cap by
+# deliberate operator choice: a stuck run should keep probing rather than
+# sit dead — a transient clears, an irrecoverable one costs only a cheap
+# periodic re-check, and the operator can always Stop it.
+EMERGENCY_RESUME_MIN = 15
+EMERGENCY_RESUME_S = EMERGENCY_RESUME_MIN * 60
 
 
 def append_log(home, run_id, text):
@@ -1104,6 +1112,29 @@ def guard_scan(home):
             if not failure:
                 continue
             ftype = failure.get("type") or "unknown"
+            if ftype == "unknown":
+                # Emergency resume: a failure we could not classify is retried
+                # FOREVER, EMERGENCY_RESUME_MIN apart, no cap. The run re-fails
+                # with a fresh timestamp, so the cadence holds regardless of
+                # the driver's replay events; the first probe waits a full
+                # interval after the failure so we never retry straight into
+                # an ongoing outage.
+                failed_at = st._epoch(failure.get("at")) or 0
+                last = max(entry.get("last_emergency_resume_at") or 0,
+                           failed_at)
+                if now - last < EMERGENCY_RESUME_S:
+                    actions.append((run_id, "emergency-spaced"))
+                    continue
+                resume_run(home, run_id)
+                registry.update(home, run_id, last_emergency_resume_at=now)
+                append_log(
+                    home, run_id,
+                    "[guard] emergency resume of an unclassified failure; "
+                    "retrying every %d min until it clears or you Stop it\n"
+                    % EMERGENCY_RESUME_MIN,
+                )
+                actions.append((run_id, "emergency-resume"))
+                continue
             if ftype not in errclass.AUTO_RESUMABLE:
                 continue
             resume_at = failure.get("resume_at")

@@ -179,12 +179,48 @@ class TestAutoResumeGuard(ServiceFixesTestCase):
         self.assertNotIn((entry["id"], "resumed:quota"), actions)
         self.assertEqual(calls, [])
 
-    def test_login_and_unknown_never_auto_resume(self):
-        for ftype in ("login", "unknown"):
-            entry = self._failed_run("ws-guard-%s" % ftype, ftype)
-            calls = self._patched_resume()
-            service.guard_scan(self.home)
-            self.assertEqual(calls, [], ftype)
+    def test_login_never_auto_resumes(self):
+        # login is UNDERSTOOD (needs the operator to log in); retrying is
+        # pointless, so it stays operator-gated — unlike unknown.
+        entry = self._failed_run("ws-guard-login", "login")
+        calls = self._patched_resume()
+        service.guard_scan(self.home)
+        self.assertEqual(calls, [])
+
+    def _backdate_failure(self, entry, iso="2020-01-01T00:00:00+0000"):
+        state = st.load(entry["state_path"])
+        state["failure"]["at"] = iso
+        st.save(entry["state_path"], state)
+
+    def test_unknown_failure_emergency_resumes_when_interval_elapsed(self):
+        # An unclassified failure is retried forever, spaced 15 min apart.
+        entry = self._failed_run("ws-guard-emrg", "unknown")
+        self._backdate_failure(entry)  # 15-min interval has long elapsed
+        calls = self._patched_resume()
+        actions = service.guard_scan(self.home)
+        self.assertIn((entry["id"], "emergency-resume"), actions)
+        self.assertEqual(calls, [entry["id"]])
+
+    def test_fresh_unknown_failure_waits_the_interval(self):
+        # Just-failed: don't retry straight into an ongoing outage.
+        entry = self._failed_run("ws-guard-fresh", "unknown")
+        calls = self._patched_resume()
+        actions = service.guard_scan(self.home)
+        self.assertIn((entry["id"], "emergency-spaced"), actions)
+        self.assertEqual(calls, [])
+
+    def test_emergency_resume_has_no_cap(self):
+        # Unlike typed resumes, an unknown never exhausts a budget: even with
+        # a large simulated history it resumes again once the interval passes.
+        entry = self._failed_run("ws-guard-forever", "unknown")
+        self._backdate_failure(entry)
+        registry.update(self.home, entry["id"],
+                        last_emergency_resume_at=0)  # last probe long ago
+        calls = self._patched_resume()
+        actions = service.guard_scan(self.home)
+        self.assertIn((entry["id"], "emergency-resume"), actions)
+        self.assertEqual(calls, [entry["id"]])
+        self.assertNotIn((entry["id"], "capped:unknown"), actions)
 
     def test_cap_stands_down(self):
         entry = self._failed_run("ws-guard-cap", "network")
