@@ -386,16 +386,47 @@ class Driver(object):
 
     def _verification_commands(self, unit):
         """Gate commands for a unit: explicit config verification wins;
-        otherwise the suite command the implementer discovered — applied
-        to implementation units only (doc artifacts cannot break a test
-        suite, and a discovered suite may cost many minutes per run)."""
+        a fixer-supplied suite correction can replace a stale explicit
+        gate; otherwise the suite command the implementer discovered —
+        applied to implementation units only (doc artifacts cannot break
+        a test suite, and a discovered suite may cost many minutes per
+        run)."""
         configured = self.config.get("verification") or []
+        corrected = self._corrected_suite_command()
+        if corrected:
+            return [corrected]
         if configured:
             return list(configured)
         discovered = self.state.get("suite_command")
         if discovered and unit["kind"] == st.UNIT_SLICE_IMPL:
             return [discovered]
         return []
+
+    def _corrected_suite_command(self):
+        """A fix_findings output with suite_command is allowed to correct
+        a wrong verification gate. Without this, stale explicit config keeps
+        winning and the same suite-command finding is reborn."""
+        discovered = self.state.get("suite_command")
+        configured = self.config.get("verification") or []
+        if (
+            not discovered
+            or len(configured) != 1
+            or configured == [discovered]
+        ):
+            return None
+        for unit in self.state.get("units", []):
+            for round_info in unit.get("rounds", []):
+                if round_info.get("kind") != contracts.KIND_FIX_FINDINGS:
+                    continue
+                result = round_info.get("result") or {}
+                if result.get("suite_command") != discovered:
+                    continue
+                if any(
+                    f.get("disposition") == "fixed"
+                    for f in result.get("findings", [])
+                ):
+                    return discovered
+        return None
 
     def _verified_suite(self, unit):
         """The gate command string reviewers may rely on, or None. Unit

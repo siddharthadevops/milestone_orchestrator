@@ -32,7 +32,7 @@ import subprocess
 import tempfile
 import unittest
 
-from orchestrator import driver as drv
+from orchestrator import contracts, driver as drv
 from orchestrator import runners
 from orchestrator import state as st
 
@@ -983,6 +983,36 @@ class TestSuiteDiscoveryProtocol(DriverTestCase):
                         self.assertTrue(has, kind)
                     else:
                         self.assertFalse(has, kind)
+
+    def test_suite_fix_overrides_stale_config_verification(self):
+        with tempfile.TemporaryDirectory(prefix="orch-mock-") as ws:
+            stale = "python3 -m unittest discover -s orchestrator/tests"
+            corrected = stale + " -t ."
+            path = init_state(ws, make_config(verification=[stale]))
+            state = st.load(path)
+            st.set_discovered_suite(state, corrected)
+            state["units"][0]["rounds"].append({
+                "id": "skeleton-codex-r2",
+                "family": "codex",
+                "kind": contracts.KIND_FIX_FINDINGS,
+                "result": {
+                    "status": "ok",
+                    "kind": contracts.KIND_FIX_FINDINGS,
+                    "suite_command": corrected,
+                    "findings": [
+                        {"id": "F1", "severity": "P1",
+                         "summary": "wrong suite",
+                         "disposition": "fixed"},
+                    ],
+                    "files_changed": [],
+                },
+            })
+            st.save(path, state)
+            driver = drv.Driver(path, runner=runners.MockRunner([]))
+            self.assertEqual(
+                driver._verification_commands(driver.state["units"][0]),
+                [corrected],
+            )
 
 
 class TestUncleanStopRepair(DriverTestCase):

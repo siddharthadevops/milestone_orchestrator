@@ -82,7 +82,9 @@ and an optional advanced config JSON merged over defaults. Verification
 is zero-config by default: the implement worker reports the repo's
 official full-suite command (`suite_command` in its contract), the
 driver arms the implementation-unit gates with it (explicit config
-`verification` always wins and runs on every unit), each gate execution
+`verification` normally wins and runs on every unit; a `fix_findings`
+`suite_command` that fixes a stale explicit gate replaces it for later
+gates), each gate execution
 lands in the ledger, and `verification_timeout` defaults to unlimited —
 suites may legitimately run for hours. Panel launches
 enable `git.enabled` by default — the full gate/amend/delta-review
