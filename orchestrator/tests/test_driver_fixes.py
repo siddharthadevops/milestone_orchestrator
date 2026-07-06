@@ -238,7 +238,8 @@ class _FailingRunner(object):
         self.then = list(then or [])
         self.calls = 0
 
-    def call(self, family, prompt, workspace, model=None, effort=None):
+    def call(self, family, prompt, workspace, model=None, effort=None,
+             timeout_override=None):
         self.calls += 1
         if self.failures:
             raise self.failures.pop(0)
@@ -277,6 +278,36 @@ class TestTypedInfraFailures(DriverTestCase):
             state = st.load(path)
             self.assertEqual(state["failure"]["type"], "login")
             self.assertIsNone(state["failure"]["resume_at"])
+
+    def test_classifier_io_is_persisted_and_evidence_recorded(self):
+        # An LLM-classified failure must leave an auditable trail: the
+        # classifier's prompt+response saved as a raw, plus its verdict in
+        # the failure record. Regression: the canon at-capacity strand was
+        # unauditable because the classifier's I/O was discarded.
+        with tempfile.TemporaryDirectory(prefix="orch-fix-") as ws:
+            cfg = make_config(infra_retry_backoff_s=[],  # no retry sleeps
+                              error_classifier=True)     # exercise the LLM
+            path = init_state(ws, cfg)
+            runner = _FailingRunner(
+                [runners.RunnerError(
+                    "family codex exited 1 with no output; stderr tail: "
+                    "a novel banner patterns do not recognize")],
+                then=[{"error_type": "busy", "resume_at": None,
+                       "evidence": "opposite family judged it transient"}],
+            )
+            driver = drv.Driver(path, runner=runner)
+            driver.step()
+            state = st.load(path)
+            self.assertEqual(state["failure"]["type"], "busy")
+            self.assertEqual(state["failure"]["classify_evidence"],
+                             "opposite family judged it transient")
+            raw_dir = os.path.join(ws, ".orchestrator", "raw")
+            classify_raws = [f for f in os.listdir(raw_dir) if "classify" in f]
+            self.assertTrue(classify_raws, os.listdir(raw_dir))
+            body = open(os.path.join(raw_dir, classify_raws[0]),
+                        encoding="utf-8").read()
+            self.assertIn("CLASSIFIER PROMPT", body)
+            self.assertIn("busy", body)  # the classifier's actual reply
 
     def test_network_blip_retried_in_place_then_succeeds(self):
         with tempfile.TemporaryDirectory(prefix="orch-fix-") as ws:

@@ -557,27 +557,34 @@ def record_seal_attempt(state, unit, halves, passed, invalidated=None):
     return rec
 
 
-def fail_run(state, reason, unit=None, type_="unknown", resume_at=None):
+def fail_run(state, reason, unit=None, type_="unknown", resume_at=None,
+             evidence=None):
     """Terminal failure: record the explanation and stop. Resumable by a
     deliberate operator action (resume_run) or, for auto-resumable typed
     failures (quota/network/busy/timeout), by the service guard at
     resume_at. type_ and resume_at come from errclass; "unknown" and
-    "login" are never auto-resumed."""
+    "login" are never auto-resumed. evidence is the classifier's distilled
+    verdict ("pattern match" / "classifier returned ..." / "classifier
+    unavailable: ...") — recorded so an "unknown" is auditable."""
     state["failure"] = {
         "at": now_iso(),
         "reason": reason,
         "unit": unit_key(unit) if unit else None,
         "type": type_,
         "resume_at": resume_at,
+        "classify_evidence": evidence,
     }
     if unit is not None and unit["status"] not in (U_SEALED, U_FAILED):
         unit["failed_from"] = unit["status"]
         unit["status"] = U_FAILED
     state["milestone"]["status"] = M_FAILED
-    append_event(
-        state, "run_failed", reason=reason, unit=state["failure"]["unit"],
+    event_fields = dict(
+        reason=reason, unit=state["failure"]["unit"],
         failure_type=type_, resume_at=resume_at,
     )
+    if evidence:
+        event_fields["classify_evidence"] = evidence
+    append_event(state, "run_failed", **event_fields)
 
 
 def resume_run(state):

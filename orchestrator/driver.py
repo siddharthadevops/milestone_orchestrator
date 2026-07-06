@@ -628,7 +628,7 @@ class Driver(object):
                 self._clear_busy()
                 self._save_protocol_raws(raw_name, exc)
                 etype, resume_at, evidence = self._classify_failure(
-                    family, exc
+                    family, exc, raw_name=raw_name
                 )
                 if etype in ("network", "busy") and attempt < len(retries):
                     # Short in-place retries BEFORE failing: transient
@@ -657,6 +657,7 @@ class Driver(object):
                     unit=st.current_unit(self.state),
                     type_=etype,
                     resume_at=resume_at,
+                    evidence=evidence,
                 )
                 self._save()
                 raise StopStep(str(exc))
@@ -665,10 +666,15 @@ class Driver(object):
         raw_path = self._save_raw(raw_name, result.text)
         return output, result, raw_path
 
-    def _classify_failure(self, family, exc):
+    def _classify_failure(self, family, exc, raw_name=None):
         """Type a failed worker call: deterministic patterns over the raw
         outputs (and the exception text), opposite-family LLM classifier
-        as a non-blocking fallback (config error_classifier)."""
+        as a non-blocking fallback (config error_classifier).
+
+        When the LLM stage runs, its prompt+response (or the error, if the
+        classifier call itself failed) are persisted as a
+        <raw_name>-classify-<family>.txt artifact so an "unknown" verdict is
+        auditable after the fact."""
         texts = list(getattr(exc, "raw_texts", []) or [])
         texts.append(str(exc))
         if isinstance(exc, runners.RunnerError) and "timed out" in str(exc):
@@ -679,7 +685,24 @@ class Driver(object):
             opposite_family=self._opposite(family),
             workspace=self.workspace,
             use_llm=bool(self.config.get("error_classifier", True)),
+            on_llm_raw=self._classify_raw_saver(raw_name),
         )
+
+    def _classify_raw_saver(self, raw_name):
+        """A best-effort sink that persists the failure classifier's I/O.
+        Returns None when there is no raw_name to key the artifact on."""
+        if not raw_name:
+            return None
+
+        def _save(classifier_family, prompt, raw):
+            self._save_raw(
+                "%s-classify-%s" % (raw_name, classifier_family),
+                "CLASSIFIER PROMPT\n=================\n%s\n\n"
+                "CLASSIFIER RESPONSE\n===================\n%s\n"
+                % (prompt, raw if raw is not None else "(no response)"),
+            )
+
+        return _save
 
     def _maybe_update_slices(self, unit, output):
         """A fix call on the skeleton unit may report an updated slice plan
@@ -1722,9 +1745,12 @@ class Driver(object):
             }
 
         def fail_attempt(reason, raw_texts=None, failed_family=None):
-            etype, resume_at = "unknown", None
+            # Runs on the main thread (sequential path directly; concurrent
+            # path only after every half has joined), so _save_raw here never
+            # races the seal worker threads.
+            etype, resume_at, evidence = "unknown", None, None
             if raw_texts:
-                etype, resume_at, _ev = errclass.classify_failure(
+                etype, resume_at, evidence = errclass.classify_failure(
                     raw_texts,
                     runner=self.runner,
                     opposite_family=self._opposite(
@@ -1732,6 +1758,10 @@ class Driver(object):
                     ),
                     workspace=self.workspace,
                     use_llm=bool(self.config.get("error_classifier", True)),
+                    on_llm_raw=self._classify_raw_saver(
+                        "%s-seal-a%d-classify"
+                        % (st.unit_key(unit), attempt_no)
+                    ),
                 )
                 resume_at = errclass.normalize_resume_at(resume_at)
                 if etype in errclass.AUTO_RESUMABLE and not resume_at:
@@ -1743,7 +1773,7 @@ class Driver(object):
                         "in %d minutes" % fallback_min
                     )
             st.fail_run(self.state, reason, unit=unit, type_=etype,
-                        resume_at=resume_at)
+                        resume_at=resume_at, evidence=evidence)
             self._save()
             raise StopStep(reason)
 

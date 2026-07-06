@@ -68,6 +68,14 @@ _PATTERNS = (
         r"service unavailable",
         r"server busy",
         r"too many requests",
+        # Provider capacity banners. These are recognized deterministically
+        # because a correlated outage takes the LLM classifier down too —
+        # when no family can be asked, the provider's own capacity signal is
+        # the only thing left to read. (codex: "Selected model is at
+        # capacity. Please try a different model."; Anthropic: overloaded_error)
+        r"at capacity",
+        r"try a different model",
+        r"overloaded_error",
         r"(?:error|status|http)[^\n]{0,24}\b(?:429|503|529)\b",
         r"\b(?:429|503|529)\b[^\n]{0,24}(?:error|unavailable|overload)",
     )),
@@ -220,21 +228,30 @@ CLASSIFIER_TIMEOUT_S = 120
 _RAW_CLIP = 4000
 
 
-def llm_classify(runner, family, raw_texts, workspace):
+def llm_classify(runner, family, raw_texts, workspace, on_raw=None):
     """One opposite-family attempt at classifying noisy failure output.
     NEVER raises and never blocks beyond its own timeout: any problem
-    returns ("unknown", None, <why>)."""
+    returns ("unknown", None, <why>).
+
+    on_raw(family, prompt, response_or_error), if given, is invoked
+    best-effort with the classifier's prompt and its raw response — or the
+    error string when the classifier CALL itself failed. This is the only
+    worker call whose output is otherwise never persisted, so without it an
+    "unknown" verdict is unauditable (you cannot tell "the classifier was
+    itself down" from "the classifier judged it garbage")."""
     joined = "\n---\n".join(
         (t or "")[-_RAW_CLIP:] for t in raw_texts if (t or "").strip()
     )
     if not joined.strip():
         return "unknown", None, "no raw output to classify"
     prompt = CLASSIFIER_PROMPT % joined
+    raw = None
     try:
         result = runner.call(
             family, prompt, workspace,
             timeout_override=CLASSIFIER_TIMEOUT_S,
         )
+        raw = result.text
         obj = runners.extract_json(result.text)
         etype = obj.get("error_type")
         if etype not in TYPES:
@@ -242,14 +259,24 @@ def llm_classify(runner, family, raw_texts, workspace):
         resume_at = normalize_resume_at(obj.get("resume_at"))
         return etype, resume_at, str(obj.get("evidence") or "")[:300]
     except Exception as exc:  # the classifier must never worsen a failure
+        if raw is None:
+            raw = "CLASSIFIER CALL FAILED: %s" % exc
         return "unknown", None, "classifier unavailable: %s" % exc
+    finally:
+        if on_raw is not None:
+            try:
+                on_raw(family, prompt, raw)
+            except Exception:
+                pass
 
 
 def classify_failure(raw_texts, runner=None, opposite_family=None,
-                     workspace=None, use_llm=True):
+                     workspace=None, use_llm=True, on_llm_raw=None):
     """Full chain: patterns first, LLM fallback, unknown last.
 
-    Returns (type, resume_at_iso_or_None, evidence)."""
+    Returns (type, resume_at_iso_or_None, evidence). on_llm_raw is forwarded
+    to llm_classify to persist the classifier's I/O when the LLM stage runs.
+    """
     for text in raw_texts:
         etype = classify_text(text)
         if etype:
@@ -258,5 +285,6 @@ def classify_failure(raw_texts, runner=None, opposite_family=None,
             )
             return etype, resume_at, "pattern match"
     if use_llm and runner is not None and opposite_family:
-        return llm_classify(runner, opposite_family, raw_texts, workspace)
+        return llm_classify(runner, opposite_family, raw_texts, workspace,
+                            on_raw=on_llm_raw)
     return "unknown", None, "no pattern matched"

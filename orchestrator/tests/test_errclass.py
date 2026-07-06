@@ -46,6 +46,23 @@ class TestPatterns(unittest.TestCase):
         self.assertIsNone(errclass.classify_text("some content nonsense"))
         self.assertIsNone(errclass.classify_text(""))
 
+    def test_provider_capacity_banners_are_busy(self):
+        # Correlated outages take the LLM classifier down too, so the
+        # provider's own capacity banner must be deterministically typed
+        # (regression: a live seal_half stranded on "unknown" because these
+        # were unclassified). See the canon incident 2026-07-06.
+        codex = ("family codex exited 1 with no output; stderr tail: "
+                 "ERROR: Selected model is at capacity. Please try a "
+                 "different model.")
+        self.assertEqual(errclass.classify_text(codex), "busy")
+        self.assertIn("busy", errclass.AUTO_RESUMABLE)
+        self.assertEqual(
+            errclass.classify_text('API error {"type":"overloaded_error"}'),
+            "busy")
+        # Length guard still prevents worker prose from cosplaying as infra.
+        self.assertIsNone(
+            errclass.classify_text("discussing server capacity " * 40))
+
 
 class TestParseResumeAt(unittest.TestCase):
     NOW = datetime(2026, 7, 5, 23, 50, tzinfo=timezone.utc)
@@ -151,6 +168,47 @@ class TestClassifyChain(unittest.TestCase):
             workspace="/ws",
         )
         self.assertEqual(etype, "unknown")
+
+    def test_on_llm_raw_captures_classifier_response(self):
+        # The classifier's I/O must be surfaced for persistence, so an
+        # "unknown" verdict is auditable after the fact.
+        runner = _FakeRunner('{"error_type": "network"}')
+        seen = []
+        errclass.classify_failure(
+            ["mystery"], runner=runner, opposite_family="claude",
+            workspace="/ws",
+            on_llm_raw=lambda fam, prompt, raw: seen.append((fam, prompt, raw)),
+        )
+        self.assertEqual(len(seen), 1)
+        fam, prompt, raw = seen[0]
+        self.assertEqual(fam, "claude")
+        self.assertIn("mystery", prompt)            # the failing text
+        self.assertIn("network", raw)               # claude's actual reply
+
+    def test_on_llm_raw_captures_the_error_when_classifier_call_fails(self):
+        # The correlated-outage case: the classifier CALL itself throws. The
+        # sink must still receive the error so we can tell "classifier down"
+        # from "classifier judged it garbage".
+        runner = _FakeRunner(raise_exc=RuntimeError("claude also at capacity"))
+        seen = []
+        etype, _, _ = errclass.classify_failure(
+            ["mystery"], runner=runner, opposite_family="claude",
+            workspace="/ws",
+            on_llm_raw=lambda fam, prompt, raw: seen.append(raw),
+        )
+        self.assertEqual(etype, "unknown")
+        self.assertEqual(len(seen), 1)
+        self.assertIn("claude also at capacity", seen[0])
+
+    def test_on_llm_raw_not_called_when_patterns_decide(self):
+        runner = _FakeRunner('{"error_type": "busy"}')
+        seen = []
+        errclass.classify_failure(
+            ["Error: 529 overloaded"], runner=runner,
+            opposite_family="claude", workspace="/ws",
+            on_llm_raw=lambda *a: seen.append(a),
+        )
+        self.assertEqual(seen, [])  # pattern matched; LLM never ran
 
 
 class TestHostileProse(unittest.TestCase):
