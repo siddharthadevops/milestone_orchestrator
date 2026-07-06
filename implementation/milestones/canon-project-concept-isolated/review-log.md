@@ -80,3 +80,57 @@
 - claude half: 0 finding(s); workspace_modified=False; raw `.orchestrator/raw/slice_doc-01-seal-a3-claude.txt`
 - codex half: 0 finding(s); workspace_modified=False; raw `.orchestrator/raw/slice_doc-01-seal-a3-codex.txt`
 
+## slice_impl-01 (Local KV store + key grammar)
+
+- draft: kind `implement`, artifact `-` (raw: `.orchestrator/raw/slice_impl-01-draft.txt`)
+
+| Round | Kind | Family | Findings | Triage | Raw |
+|---|---|---|---|---|---|
+| slice_impl-01-codex-r1 | review_round | codex | 0 | clean | `.orchestrator/raw/slice_impl-01-codex-r1.txt` |
+| slice_impl-01-claude-r1 | review_round | claude | 0 | clean | `.orchestrator/raw/slice_impl-01-claude-r1.txt` |
+| slice_impl-01-codex-r2 | fix_findings | codex | 1 | 1 fixed | `.orchestrator/raw/slice_impl-01-fix1.txt` |
+| slice_impl-01-codex-r3 | delta_review | codex | 0 | clean | `.orchestrator/raw/slice_impl-01-delta1.txt` |
+| slice_impl-01-codex-r4 | fix_findings | codex | 3 | 3 fixed | `.orchestrator/raw/slice_impl-01-fix2.txt` |
+| slice_impl-01-codex-r5 | delta_review | codex | 1 | 1 reported | `.orchestrator/raw/slice_impl-01-delta2.txt` |
+| slice_impl-01-codex-r6 | fix_findings | codex | 1 | 1 fixed | `.orchestrator/raw/slice_impl-01-fix3.txt` |
+| slice_impl-01-codex-r7 | delta_review | codex | 0 | clean | `.orchestrator/raw/slice_impl-01-delta3.txt` |
+| slice_impl-01-codex-r8 | fix_findings | codex | 1 | 1 fixed | `.orchestrator/raw/slice_impl-01-fix4.txt` |
+| slice_impl-01-codex-r9 | delta_review | codex | 1 | 1 reported | `.orchestrator/raw/slice_impl-01-delta4.txt` |
+| slice_impl-01-codex-r10 | fix_findings | codex | 1 | 1 fixed | `.orchestrator/raw/slice_impl-01-fix5.txt` |
+| slice_impl-01-codex-r11 | delta_review | codex | 0 | clean | `.orchestrator/raw/slice_impl-01-delta5.txt` |
+| slice_impl-01-codex-r12 | fix_findings | codex | 1 | 1 fixed | `.orchestrator/raw/slice_impl-01-fix6.txt` |
+| slice_impl-01-codex-r13 | delta_review | codex | 1 | 1 reported | `.orchestrator/raw/slice_impl-01-delta6.txt` |
+| slice_impl-01-codex-r14 | fix_findings | codex | 1 | 1 fixed | `.orchestrator/raw/slice_impl-01-fix7.txt` |
+| slice_impl-01-codex-r15 | delta_review | codex | 0 | clean | `.orchestrator/raw/slice_impl-01-delta7.txt` |
+
+### Seal attempt a1 — findings
+
+- claude half: 0 finding(s); workspace_modified=False; raw `.orchestrator/raw/slice_impl-01-seal-a1-claude.txt`
+- codex half: 1 finding(s); workspace_modified=False; raw `.orchestrator/raw/slice_impl-01-seal-a1-codex.txt`
+  - [P1] CAS is not type-exact for JSON booleans vs integers. `LocalKVClient.cas` compares decoded Python values with normal equality, so an expected `true` can match a stored numeric `1` (and nested dict/list values have the same issue); envelope revision CAS also accepts `True` as revision `1`. The slice requires whole-value CAS/revision matching to reject stale or different values, not silently overwrite them.
+
+### Seal attempt a2 — findings
+
+- claude half: 1 finding(s); workspace_modified=False; raw `.orchestrator/raw/slice_impl-01-seal-a2-claude.txt`
+  - [P2] orchestrator/kvstore.py uses PEP 604 union annotations in dataclass fields — `rev: int | None` (line 38) and `reason: str | None` (line 45) — with no `from __future__ import annotations`, so they are evaluated eagerly at class-definition time. On Python 3.9 this raises `TypeError: unsupported operand type(s) for |: 'type' and 'NoneType'` at import, which errors the entire test_kvstore module and fails AC12's suite. This violates the repo's documented 'Python 3.9+ standard library only' baseline (orchestrator/README.md:45), a convention every other orchestrator module honors (no PEP 604 unions and no `__future__` import anywhere else). Verified by AST: no `__future__` import present and both annotations are eager BinOp('|') expressions. Trivial fix: use `typing.Optional[int]`/`Optional[str]`, add `from __future__ import annotations`, or widen the fields (e.g. `object`).
+- codex half: 2 finding(s); workspace_modified=False; raw `.orchestrator/raw/slice_impl-01-seal-a2-codex.txt`
+  - [P1] The point-KV primitive is not the raw LPC Client seam the slice promises: it JSON-canonicalizes every point value and rejects non-JSON/non-string-keyed values, while the JSON restriction is scoped to enveloped OUR families only. That prevents the later raw refs/work_area family from using this same primitive for agent_99-native whole-value CAS without adding a parallel store or translation layer.
+  - [P2] The atomic-visibility test can pass even if readers observe a torn/corrupt file by raising in background threads: reader exceptions are not captured, so the test leaves errors empty and still succeeds. AC7 is therefore not actually pinned by the suite as the slice requires.
+
+### Seal attempt a3 — findings
+
+- claude half: 0 finding(s); workspace_modified=False; raw `.orchestrator/raw/slice_impl-01-seal-a3-claude.txt`
+- codex half: 1 finding(s); workspace_modified=False; raw `.orchestrator/raw/slice_impl-01-seal-a3-codex.txt`
+  - [P1] The shared point-KV store is JSON-only, so Slice 2 cannot store or whole-value-CAS the raw agent_99 work-area safe-term maps required at refs/work_area:<name>; the raw family is explicitly outside the JSON-plain/string-keyed envelope rule.
+
+### Seal attempt a4 — findings
+
+- claude half: 1 finding(s); workspace_modified=False; raw `.orchestrator/raw/slice_impl-01-seal-a4-claude.txt`
+  - [P3] The sealed slice-01.md was edited in the implementation commit (23801bc) to add a safe-term/Atom codec to the point primitive (Section A 'atom-keyed LPC-safe term maps', the AC6 atom clause, and a dedicated Risks bullet), and kvstore.py ships it (Atom dataclass + _encode_term/_decode_term + the _encode_point_value term fallback, ~90 LOC). This mechanism serves the raw work-area family's atom-keyed domain, which the milestone pins under I3/I4 and the note itself assigns to Slice 2 ('No raw work-area logic ... provides only the LPC-safe-term whole-value-CAS primitive'); its only Slice-1 consumer is the forward-looking test test_point_store_accepts_atom_keyed_raw_work_area_terms (the envelope adapter, kvstore.py:473/494, uses only the JSON path). Yet the Proportionality (A1) section still asserts 'This slice introduces no mechanism beyond pinned invariants I6 and I7' and enumerates only four mechanisms (KV store, revision envelope, key grammar, containment predicate) plus the digest-key latitude, neither naming nor pricing the safe-term codec. The A1 accounting is thus internally inconsistent with the note's own body and the shipped code. Remedy: reconcile the Proportionality section — either name the pulled-forward safe-term codec with its victim (Slice 2's raw work-area family / fusion byte-compatibility with agent_99's atom-keyed WorkAreaStore reader, verified at work_area_store.ex:43/581/588 and codec.ex:17) and cost, or defer the codec to Slice 2 where its live consumer lands. The codec itself is technically correct and goal-doc-aligned; this is an accuracy/consistency defect in a binding-amendment section, not a correctness bug.
+- codex half: 0 finding(s); workspace_modified=False; raw `.orchestrator/raw/slice_impl-01-seal-a4-codex.txt`
+
+### Seal attempt a5 — PASSED
+
+- claude half: 0 finding(s); workspace_modified=False; raw `.orchestrator/raw/slice_impl-01-seal-a5-claude.txt`
+- codex half: 0 finding(s); workspace_modified=False; raw `.orchestrator/raw/slice_impl-01-seal-a5-codex.txt`
+

@@ -8,7 +8,9 @@ that honors LPC's revision-envelope CAS contract for OUR families, the
 reserved-namespace key grammar (including the agent_99-native raw
 work-area key that is never namespaced), and the root-containment
 predicate that keeps verifier/citation paths inside granted work-area
-roots. It pins fixture invariants **I6** and **I7** and defines the seams
+roots. The point primitive stores LPC-safe terms; the envelope adapter
+then narrows OUR families to JSON-plain values. It pins fixture invariants
+**I6** and **I7** and defines the seams
 Slices 2 (raw work-area family), 3/8 (policy + run projections), and 4
 (verifiers) consume. It writes NO family values and wires into no run,
 service, prompt, or ledger — those are later slices.
@@ -27,8 +29,10 @@ Mirrors LPC `Client`'s datastore primitives (put/get/cas/list_entries —
 This is the single point store both the envelope adapter (B) and Slice 2's
 raw work-area family build on; there is no parallel store.
 
-- Keys are binary strings; values are stored and echoed verbatim. The
-  reserved **absent** marker is not a storable value.
+- Keys are binary strings; values are stored and echoed verbatim. The point
+  primitive accepts JSON-plain values and the atom-keyed LPC-safe term maps
+  the raw `refs/work_area:<name>` family needs; the reserved **absent**
+  marker is not a storable value.
 - `get(key)` returns the stored value or a reserved **absent** marker,
   distinct from every storable value, for a never-written key.
 - `cas(key, expected, value)` writes `value` iff the current stored value
@@ -87,8 +91,9 @@ families agent_99 never reads. It does NOT apply to `refs/work_area:`
   perturbs the envelope revision, and vice versa.
 - Values are **JSON-plain, string-keyed, and serialization-stable**: only
   JSON scalars, lists, and maps with string keys are accepted; a stored
-  value round-trips byte-identically. (Load-bearing for fusion's byte pump
-  and for Slice 2's whole-value CAS.)
+  value round-trips byte-identically. This restriction is adapter-level
+  for OUR enveloped families only; it does not constrain the point
+  primitive or the raw work-area family.
 
 ### C. Key grammar + reserved namespace
 
@@ -140,12 +145,14 @@ Pure, no I/O beyond resolving the path.
 
 - **No family value schemas.** The `work_area_meta` value
   (`{reuse_sources: [...]}`), the policy object, and the run-status
-  projection shape are Slices 2/3/8. This slice stores and round-trips
-  opaque JSON values only.
+  projection shape are Slices 2/3/8. This slice treats family payloads as
+  opaque values: JSON-plain through the envelope adapter for OUR families,
+  and LPC-safe raw terms through the point-store primitive for the raw
+  work-area family.
 - **No raw work-area logic.** Domain validation, the pending→ready version
   bump, the display-name rename, and agent_99's `{name, deleted: true,
   version}` tombstone are Slice 2. This slice provides only the
-  whole-value-CAS primitive that family will use.
+  LPC-safe-term whole-value-CAS primitive that family will use.
 - **No verifiers.** The closed V1 verifier vocabulary and the contract-
   extension merge are Slice 4. This slice provides only the containment
   predicate they call.
@@ -216,11 +223,16 @@ No existing production file changes in this slice.
 - **Adopted verbatim (the compatibility target):** LPC's revision-envelope
   stored/public shapes and semantics; the exact
   `refs/work_area:<name>` native key.
-- **New machinery, and why (each a fixture-priced gap, not a parallel):**
+- **New fixture-priced machinery, and why (not a parallel):**
   a local file-backed project KV (none exists — I6 gap `state.py:125`);
   the reserved-namespace key grammar + builders (new — I7 gap); the
   root-containment predicate (new — I7 cost line "root containment
   checks").
+- **Pulled-forward Slice-2 seam (A1-accounted below, not fixture-priced):**
+  the point-store's small LPC-safe-term codec for the raw work-area seam
+  (needed so Slice 2 can use the same point store for atom-keyed
+  `refs/work_area:` values instead of adding a second raw store or coercing
+  agent_99-readable records into JSON).
 - **Compatibility:** the envelope shapes match LPC's current reader and
   the raw key is byte-identical to agent_99's fixed reader, so fusion
   stays a transport swap; the store exposes only data APIs plus the pure
@@ -229,14 +241,23 @@ No existing production file changes in this slice.
 
 ## Proportionality (amendment A1)
 
-This slice introduces **no mechanism beyond pinned invariants I6 and I7**.
 The KV store, revision envelope, key grammar, and containment predicate
 are each named in I6/I7's payload and cost lines; atomic visibility and
 serialized writers reuse `registry.py`'s existing idiom rather than adding
-a subsystem. Nothing is SPECULATIVE and nothing requires operator
-approval. The only latitude taken — a reserved but unwritten `digest` key
-— adds one string constant, not a mechanism, and the skeleton already
-mandates reserving it.
+a subsystem. This slice also pulls forward one Slice-2 seam:
+
+- **LPC-safe-term point-value codec.** VICTIM: Slice 2's raw
+  `refs/work_area:` family and future fusion with agent_99's atom-keyed
+  WorkAreaStore reader; without this codec, the shared point store would
+  either coerce raw records into string-keyed JSON or force a second raw
+  storage path. COST: a small `Atom` wrapper plus encode/decode branches
+  and one focused raw-work-area CAS/listing test; no new file, service,
+  background process, config surface, or second store.
+
+Nothing is SPECULATIVE and nothing requires operator approval. The only
+other latitude taken — a reserved but unwritten `digest` key — adds one
+string constant, not a mechanism, and the skeleton already mandates
+reserving it.
 
 ## Acceptance Criteria
 
@@ -267,7 +288,9 @@ mandates reserving it.
    not; `list_entries` returns LPC-shaped sorted pages with `items`,
    `next_cursor`, `{key, rev}`, optional `value`, prefix/cursor/limit
    behavior, and tombstoned keys; a raced writer receives a conflict, never
-   a silent overwrite.
+   a silent overwrite; an atom-keyed raw work-area map can be stored,
+   listed, and whole-value-CASed without being coerced to a string-keyed
+   JSON object.
 7. **Atomic visibility + serialized writers.** Under concurrent writers no
    reader observes a torn/partial value, and of two racing create-only
    writes exactly one wins.
@@ -306,10 +329,11 @@ backing store a `tempfile.TemporaryDirectory`):
   of create-only + rewrite-against-tombstone (AC4),
   revision-vs-domain-version independence (AC5), and serialization
   stability (round-trip byte-identity).
-- **Point-KV primitive** — put/get, the reserved absent marker, whole-value
-  CAS write/conflict, native `rev` bumps only on successful writes,
-  LPC-shaped paged listings with prefix/cursor/limit and optional values
-  (AC6), and listings-include-tombstones (AC8).
+- **Point-KV primitive** — put/get, the reserved absent marker, atom-keyed
+  raw work-area term storage, whole-value CAS write/conflict, native `rev`
+  bumps only on successful writes, LPC-shaped paged listings with
+  prefix/cursor/limit and optional values (AC6), and
+  listings-include-tombstones (AC8).
 - **File-backed persistence** — reopen from the same temporary backing
   directory and verify point values, native `rev` metadata, envelope reads,
   envelope revisions, and tombstones survive unchanged (AC9).
@@ -336,9 +360,12 @@ orchestrator/tests -t .` (AC12).
 - **Returning only keys from the list primitive** would break agent_99's
   work-area listing consumer, which drains LPC-shaped pages and reads
   `{key, value, rev}` rows. The paged listing test (AC6) is load-bearing.
-- **Unstable value serialization or accepting outside the JSON-plain,
-  string-keyed value domain** would silently break Slice 2's whole-value
-  CAS or the future LPC-compatible byte pump. The value-domain and
+- **Coercing the point primitive to JSON-only storage** would make the raw
+  `refs/work_area:` family lose agent_99's atom-keyed safe-term shape.
+  The raw-term whole-value-CAS test (AC6) is load-bearing.
+- **Unstable envelope serialization or accepting outside the JSON-plain,
+  string-keyed value domain for OUR families** would silently break the
+  future LPC-compatible byte pump. The envelope value-domain and
   serialization-stable round-trip tests (AC1) are load-bearing.
 - **A containment predicate that resolves without canonicalizing symlinks**
   would let a verifier path escape a granted root (I7 victim). The
