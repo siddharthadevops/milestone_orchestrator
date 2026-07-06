@@ -225,3 +225,19 @@
 - claude half: 0 finding(s); workspace_modified=False; raw `.orchestrator/raw/slice_doc-03-seal-a1-claude.txt`
 - codex half: 0 finding(s); workspace_modified=False; raw `.orchestrator/raw/slice_doc-03-seal-a1-codex.txt`
 
+## slice_impl-03 (Project record + policy config model)
+
+- draft: kind `implement`, artifact `-` (raw: `.orchestrator/raw/slice_impl-03-draft.txt`)
+
+| Round | Kind | Family | Findings | Triage | Raw |
+|---|---|---|---|---|---|
+| slice_impl-03-codex-r1 | review_round | codex | 0 | clean | `.orchestrator/raw/slice_impl-03-codex-r1.txt` |
+| slice_impl-03-claude-r1 | review_round | claude | 2 | 2 reported | `.orchestrator/raw/slice_impl-03-claude-r1.txt` |
+| slice_impl-03-codex-r2 | fix_findings | codex | 2 | 2 fixed | `.orchestrator/raw/slice_impl-03-fix1.txt` |
+| slice_impl-03-codex-r3 | delta_review | codex | 0 | clean | `.orchestrator/raw/slice_impl-03-delta1.txt` |
+| slice_impl-03-claude-r2 | review_round | claude | 0 | clean | `.orchestrator/raw/slice_impl-03-claude-r2.txt` |
+
+### Seal attempt a1 — PASSED
+
+- codex half: 0 finding(s); workspace_modified=False; raw `.orchestrator/raw/slice_impl-03-seal-a1-codex.txt`
+
