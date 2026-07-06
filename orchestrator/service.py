@@ -1071,9 +1071,13 @@ def make_handler(home):
 
 GUARD_INTERVAL_S = 60
 # Consecutive auto-resumes per failure type before the guard stands down
-# and waits for the operator (quota windows genuinely move, so they get
-# a generous budget; transient types get a short one).
-AUTO_RESUME_CAPS = {"quota": 12, "network": 4, "busy": 4, "timeout": 4}
+# and waits for the operator. Sized so the probing window covers a full
+# sleeping-operator night: with the linear 10min*n spacing, 12 attempts
+# spread over ~13 cumulative hours — a sustained provider outage (the
+# 2026-07-06 correlated capacity blackout classified `busy`) must not
+# strand a run at 4 probes / ~100 minutes. Progress still resets the
+# counter, so the cap only ever bites consecutive no-progress failures.
+AUTO_RESUME_CAPS = {"quota": 12, "network": 12, "busy": 12, "timeout": 12}
 # Emergency resume of an UNCLASSIFIED failure ("unknown"): the classifier
 # could not type it (a novel banner, or a correlated outage that took the
 # classifier down too). Retried forever, this far apart. No cap by
