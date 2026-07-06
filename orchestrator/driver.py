@@ -31,7 +31,8 @@ try:
 except ImportError:  # pragma: no cover - non-POSIX: flock degrades to the
     fcntl = None     # staleness check in step(); documented in the README
 
-from . import contracts, errclass, gitops, ledgers, prompts, runners
+from . import contracts, errclass, gitops, kvstore, ledgers, projects
+from . import prompts, runners, workareas
 from . import state as st
 
 DEFAULT_CONFIG = {
@@ -1846,16 +1847,190 @@ def default_state_path(workspace):
     return os.path.join(workspace, ".orchestrator", "state.json")
 
 
-def init_run(goal, workspace, config=None, state_path=None, name=None):
+# Init-specific project refusal causes. Causes raised out of Slice 2's
+# validation/read seams reuse the workareas vocabulary verbatim
+# (invalid_project, invalid_name, unknown_work_area, malformed_work_area,
+# work_area_not_ready); an invalid defaults object reuses
+# projects.INVALID_DEFAULTS. Only the causes no store seam owns are minted
+# here.
+WORKSPACE_MISMATCH = "workspace_mismatch"
+MISSING_PRIMARY_PATH = "missing_primary_path"
+
+_BINDING_REQUIRED_KEYS = ("directory", "project", "work_area")
+
+
+class ProjectResolutionError(RuntimeError):
+    """A project binding handed to init_run could not be resolved. Raised
+    BEFORE anything is created — no state file, no directory, no KV write —
+    so a refused init leaves nothing to resume or clean up. `cause` carries
+    one machine-readable reason (Slice 2's validation/read vocabulary,
+    projects.INVALID_DEFAULTS, or the init-specific WORKSPACE_MISMATCH /
+    MISSING_PRIMARY_PATH) so the service launcher can map project refusals
+    to 400-class API errors without string-matching. Deliberately distinct
+    from FileExistsError (state already exists — also unchanged)."""
+
+    def __init__(self, cause, message):
+        RuntimeError.__init__(self, message)
+        self.cause = cause
+
+
+def _resolve_project_binding(binding, workspace, config_override):
+    """Resolve a (project, work_area) binding through Slice 2's sealed
+    READY-gated seam (WorkAreaStore.resolve), READ-ONLY: a successful
+    resolution writes no KV entry and creates no directory (the store is
+    not even opened until the pure validations pass and its project
+    directory is known to exist). Returns (workspace, project_block,
+    effective_config):
+
+    - workspace: the resolved work area's primary.path — the repo the
+      driver owns and executes in. A caller-supplied workspace must equal
+      it EXACTLY (no symlink-resolving or normalizing comparison is
+      attempted: ambiguity refuses);
+    - project_block: {directory, project, work_area, primary, additional}
+      — the state seam Slices 6 and 8 consume, roots verbatim in Slice 2's
+      public {path, device} shape;
+    - effective_config: DEFAULT_CONFIG <- binding defaults <-
+      config_override, each applied with merge_config (the single merge
+      source): launch intent wins over standing project defaults, which
+      win over built-ins.
+    """
+    if not isinstance(binding, dict):
+        raise ValueError("project binding must be a dict")
+    unknown = sorted(set(binding) - set(_BINDING_REQUIRED_KEYS) - {"defaults"})
+    if unknown:
+        raise ValueError("project binding has unknown keys: %s" % unknown)
+    missing = [k for k in _BINDING_REQUIRED_KEYS if k not in binding]
+    if missing:
+        raise ValueError("project binding is missing keys: %s" % missing)
+    directory = binding["directory"]
+    if not isinstance(directory, str) or not directory.strip():
+        raise ValueError(
+            "project binding directory must be a non-empty string"
+        )
+    directory = os.path.abspath(directory)
+
+    try:
+        project = workareas.validate_project_slug(binding["project"])
+        work_area = workareas.validate_name(binding["work_area"])
+    except workareas.WorkAreaValidationError as exc:
+        raise ProjectResolutionError(
+            exc.reason, "invalid project binding: %s" % exc.reason
+        ) from exc
+
+    # Defaults are validated before any store access so every refusal —
+    # this one included — creates nothing (opening the KV would
+    # materialize the project directory and its lock file).
+    defaults = None
+    if "defaults" in binding:
+        try:
+            if not isinstance(binding["defaults"], dict):
+                raise ValueError("defaults must be a JSON object")
+            defaults = kvstore.canonical_json_value(binding["defaults"])
+        except ValueError as exc:
+            raise ProjectResolutionError(
+                projects.INVALID_DEFAULTS,
+                "project defaults must be a JSON-plain object: %s" % exc,
+            ) from exc
+
+    if not os.path.isdir(os.path.join(directory, project)):
+        raise ProjectResolutionError(
+            workareas.UNKNOWN,
+            "project %r has no work-area store under %s"
+            % (project, directory),
+        )
+    resolved = workareas.WorkAreaStore(directory, project).resolve(work_area)
+    if not resolved.ok:
+        raise ProjectResolutionError(
+            resolved.reason,
+            "cannot resolve work area %r of project %r: %s"
+            % (work_area, project, resolved.reason),
+        )
+    primary = resolved.value["primary"]
+    additional = resolved.value["additional"]
+
+    if workspace is None:
+        workspace = primary["path"]
+    elif workspace != primary["path"]:
+        raise ProjectResolutionError(
+            WORKSPACE_MISMATCH,
+            "supplied workspace %r is not work area %r's primary.path %r; "
+            "a project-bound run executes in the primary root (omit the "
+            "workspace to derive it)" % (workspace, work_area,
+                                         primary["path"]),
+        )
+    if not os.path.isdir(primary["path"]):
+        raise ProjectResolutionError(
+            MISSING_PRIMARY_PATH,
+            "work area %r's primary.path %r is not an existing directory; "
+            "init never fabricates the executed repo"
+            % (work_area, primary["path"]),
+        )
+
+    config = load_config(None)
+    if defaults is not None:
+        merge_config(config, defaults)
+    if config_override:
+        merge_config(config, config_override)
+    project_block = {
+        "directory": directory,
+        "project": project,
+        "work_area": work_area,
+        "primary": primary,
+        "additional": additional,
+    }
+    return workspace, project_block, config
+
+
+def init_run(goal, workspace=None, config=None, state_path=None, name=None,
+             project=None, config_override=None):
     """Create a new run state. `config` is a merged config dict (see
     load_config) or None for defaults. Returns the state path.
     Raises FileExistsError instead of overwriting an existing state; the
     claim is atomic (st.save_new, exclusive hard link), so two concurrent
-    inits of the same workspace cannot both win — no exists() TOCTOU."""
-    workspace = os.path.abspath(workspace)
-    os.makedirs(workspace, exist_ok=True)
-    if config is None:
-        config = load_config(None)
+    inits of the same workspace cannot both win — no exists() TOCTOU.
+
+    `project` (optional) binds the run to a (project, work_area) pair:
+    {"directory": <service-level store dir>, "project": <slug>,
+    "work_area": <name>} plus optional "defaults" (the project record's
+    standing config conventions). Resolution happens once, here, read-only
+    (see _resolve_project_binding): the run's workspace IS the work area's
+    primary.path — which must already exist; a bound init never creates
+    the executed repo — the resolved block lands in the state document,
+    and the ledger records exactly one project_resolved event. A binding
+    that cannot be resolved raises ProjectResolutionError and creates
+    nothing. Because project defaults must merge BENEATH per-launch
+    intent, a bound init takes the launch's own override separately, as
+    `config_override`, never pre-merged into `config`. Without a binding,
+    behavior is byte-identical to the pre-project seam."""
+    if project is not None:
+        if config is not None:
+            raise ValueError(
+                "project-bound init orders project defaults beneath the "
+                "launch's own intent; pass the launch override as "
+                "config_override, not a pre-merged config"
+            )
+        if config_override is not None and not isinstance(
+            config_override, dict
+        ):
+            raise ValueError("config_override must be a dict")
+        workspace, project_block, config = _resolve_project_binding(
+            project, workspace, config_override
+        )
+    else:
+        if config_override is not None:
+            raise ValueError(
+                "config_override applies only to project-bound init; "
+                "merge launch overrides into config instead"
+            )
+        if workspace is None:
+            raise ValueError(
+                "workspace is required without a project binding"
+            )
+        project_block = None
+        workspace = os.path.abspath(workspace)
+        os.makedirs(workspace, exist_ok=True)
+        if config is None:
+            config = load_config(None)
     template = (config or {}).get("docs_dir") or "docs"
     slug = None
     if "{slug}" in template:
@@ -1884,8 +2059,21 @@ def init_run(goal, workspace, config=None, state_path=None, name=None):
                 "docs_dir cannot host two milestones; use a {slug} "
                 "template or remove/rename the directory" % fixed
             )
-    state = st.new_state(goal, workspace, config, name=name, slug=slug)
+    state = st.new_state(goal, workspace, config, name=name, slug=slug,
+                         project=project_block)
     st.append_event(state, "initialized", goal=goal)
+    if project_block is not None:
+        # Frozen ledger shape: payload exactly {project, work_area}, once
+        # per run, at init (project-concept.md:254, fixture I10).
+        # Exactly-once needs no guard of its own: this is the only append
+        # site, save_new's exclusive claim makes init itself exactly-once,
+        # and nothing re-resolves after init.
+        st.append_event(
+            state,
+            "project_resolved",
+            project=project_block["project"],
+            work_area=project_block["work_area"],
+        )
     path = state_path or default_state_path(workspace)
     st.save_new(path, state)
     return path

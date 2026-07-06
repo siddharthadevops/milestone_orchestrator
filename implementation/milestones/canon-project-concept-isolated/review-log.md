@@ -314,3 +314,16 @@
 - claude half: 0 finding(s); workspace_modified=False; raw `.orchestrator/raw/slice_doc-05-seal-a2-claude.txt`
 - codex half: 0 finding(s); workspace_modified=False; raw `.orchestrator/raw/slice_doc-05-seal-a2-codex.txt`
 
+## slice_impl-05 (Run-init project resolution + project_resolved)
+
+- draft: kind `implement`, artifact `-` (raw: `.orchestrator/raw/slice_impl-05-draft.txt`)
+
+| Round | Kind | Family | Findings | Triage | Raw |
+|---|---|---|---|---|---|
+| slice_impl-05-codex-r1 | review_round | codex | 0 | clean | `.orchestrator/raw/slice_impl-05-codex-r1.txt` |
+| slice_impl-05-claude-r1 | review_round | claude | 0 | clean | `.orchestrator/raw/slice_impl-05-claude-r1.txt` |
+
+### Seal attempt a1 — PASSED
+
+- codex half: 0 finding(s); workspace_modified=False; raw `.orchestrator/raw/slice_impl-05-seal-a1-codex.txt`
+

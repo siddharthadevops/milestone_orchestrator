@@ -414,4 +414,5 @@ fast paths.
 | slice_impl-03 (Project record + policy config model) | sealed | 5 | a1:pass | a1c0723 |
 | slice_doc-04 (Verifier vocabulary + contract-extension merge) | sealed | 20 | a1:pass | 0a3c02b |
 | slice_impl-04 (Verifier vocabulary + contract-extension merge) | sealed | 10 | a1:pass | c6e13e1 |
-| slice_doc-05 (Run-init project resolution + project_resolved) | sealed | 4 | a1:findings, a2:pass | - |
+| slice_doc-05 (Run-init project resolution + project_resolved) | sealed | 4 | a1:findings, a2:pass | 8546ee2 |
+| slice_impl-05 (Run-init project resolution + project_resolved) | sealed | 2 | a1:pass | - |

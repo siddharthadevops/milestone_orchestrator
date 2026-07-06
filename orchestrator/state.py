@@ -110,7 +110,7 @@ def _orchestrator_rev():
     return rev if proc.returncode == 0 and rev else None
 
 
-def new_state(goal, workspace, config, name=None, slug=None):
+def new_state(goal, workspace, config, name=None, slug=None, project=None):
     docs_template = (config or {}).get("docs_dir") or "docs"
     docs_dir = os.path.normpath(
         docs_template.replace("{slug}", slug or slugify(name))
@@ -119,7 +119,7 @@ def new_state(goal, workspace, config, name=None, slug=None):
         raise ValueError(
             "docs_dir must stay inside the workspace: %r" % docs_dir
         )
-    return {
+    state = {
         "schema_version": SCHEMA_VERSION,
         "goal": goal,
         "workspace": workspace,
@@ -148,6 +148,14 @@ def new_state(goal, workspace, config, name=None, slug=None):
         "failure": None,
         "config": config,
     }
+    if project is not None:
+        # The resolved (project, work_area) binding a project-bound init
+        # records: {directory, project, work_area, primary, additional}.
+        # Like docs_dir, resolved once at init and stable for the run's
+        # life; the key is ABSENT for a project-less run, never
+        # present-null, so pre-project state documents gain nothing.
+        state["project"] = project
+    return state
 
 
 def _new_unit(kind, slice_id):
