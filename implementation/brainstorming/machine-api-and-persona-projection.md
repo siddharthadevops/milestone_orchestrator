@@ -51,8 +51,32 @@ state.py's ledger:
    `events`), including the naming note: API `workspace` = work-area
    `primary_root` (alias added), per project-concept.md.
 
-Deferred deliberately: MCP wrapper, SSE/push, worker sandbox-rung matrix,
+Deferred deliberately: MCP wrapper, worker sandbox-rung matrix,
 lease/audit wiring, any non-localhost binding.
+
+## Event-driven push (planned; replaces 2s polling)
+
+The 2s poll is wasteful by construction: real state changes are bounded by
+worker-call cadence (minutes per call), so a 15-minute call produces ~1
+substantial change against ~450 polled reads. The append-only ledger is
+the exact change signal — every substantial change IS an appended event
+with a monotonic `seq`, and the driver knows precisely when it appends.
+
+Design (additive over the cursor already specified, same `since=<seq>`
+semantics — push transport, not a redesign):
+- Hook the emit right after `append_event` + save. Push the DELTA (new
+  events since the client's `seq`) or the recomputed `run_status`
+  projection — NEVER the whole `state.json` (it grows unbounded; pushing
+  it each time defeats the efficiency gained).
+- Filter to SUBSTANTIAL events — those that change the rendered
+  `attention`/summary (`unit_transition`, `round_recorded`, `run_failed`,
+  `sealed`); coalesce/skip noise (`infra_retry`, `amendment_seen`).
+- Two hops: (local) SSE/WebSocket from the service replaces the panel's
+  2s poll; (remote/web) the executor writes the `run:<id>/status` and
+  `run:<id>/digest` projections to Life's datastore on each substantial
+  event and the web reacts via Phoenix PubSub (reuses the KV-contract
+  convergence — the LiveView reads the key like any datastore family), or
+  the executor pushes to the Body over WS for fan-out.
 
 ## Persona projection
 
