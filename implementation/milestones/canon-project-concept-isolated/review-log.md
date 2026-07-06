@@ -40,3 +40,43 @@
 - claude half: 0 finding(s); workspace_modified=False; raw `.orchestrator/raw/skeleton-seal-a2-claude.txt`
 - codex half: 0 finding(s); workspace_modified=False; raw `.orchestrator/raw/skeleton-seal-a2-codex.txt`
 
+## slice_doc-01 (Local KV store + key grammar)
+
+- draft: kind `draft_slice_note`, artifact `implementation/milestones/canon-project-concept-isolated/slices/slice-01.md` (raw: `.orchestrator/raw/slice_doc-01-draft.txt`)
+
+| Round | Kind | Family | Findings | Triage | Raw |
+|---|---|---|---|---|---|
+| slice_doc-01-codex-r1 | review_round | codex | 3 | 3 reported | `.orchestrator/raw/slice_doc-01-codex-r1.txt` |
+| slice_doc-01-codex-r2 | fix_findings | codex | 3 | 3 fixed | `.orchestrator/raw/slice_doc-01-fix1.txt` |
+| slice_doc-01-codex-r3 | delta_review | codex | 0 | clean | `.orchestrator/raw/slice_doc-01-delta1.txt` |
+| slice_doc-01-codex-r4 | review_round | codex | 1 | 1 reported | `.orchestrator/raw/slice_doc-01-codex-r2.txt` |
+| slice_doc-01-codex-r5 | fix_findings | codex | 1 | 1 fixed | `.orchestrator/raw/slice_doc-01-fix2.txt` |
+| slice_doc-01-codex-r6 | delta_review | codex | 0 | clean | `.orchestrator/raw/slice_doc-01-delta2.txt` |
+| slice_doc-01-codex-r7 | review_round | codex | 0 | clean | `.orchestrator/raw/slice_doc-01-codex-r3.txt` |
+| slice_doc-01-claude-r1 | review_round | claude | 1 | 1 reported | `.orchestrator/raw/slice_doc-01-claude-r1.txt` |
+| slice_doc-01-codex-r8 | fix_findings | codex | 1 | 1 fixed | `.orchestrator/raw/slice_doc-01-fix3.txt` |
+| slice_doc-01-codex-r9 | delta_review | codex | 0 | clean | `.orchestrator/raw/slice_doc-01-delta3.txt` |
+| slice_doc-01-claude-r2 | review_round | claude | 0 | clean | `.orchestrator/raw/slice_doc-01-claude-r2.txt` |
+| slice_doc-01-codex-r10 | fix_findings | codex | 2 | 2 fixed | `.orchestrator/raw/slice_doc-01-fix4.txt` |
+| slice_doc-01-codex-r11 | delta_review | codex | 0 | clean | `.orchestrator/raw/slice_doc-01-delta4.txt` |
+| slice_doc-01-codex-r12 | fix_findings | codex | 1 | 1 fixed | `.orchestrator/raw/slice_doc-01-fix5.txt` |
+| slice_doc-01-codex-r13 | delta_review | codex | 0 | clean | `.orchestrator/raw/slice_doc-01-delta5.txt` |
+
+### Seal attempt a1 — findings
+
+- claude half: 0 finding(s); workspace_modified=False; raw `.orchestrator/raw/slice_doc-01-seal-a1-claude.txt`
+- codex half: 2 finding(s); workspace_modified=False; raw `.orchestrator/raw/slice_doc-01-seal-a1-codex.txt`
+  - [P2] The slice claims a file-backed KV, but acceptance/tests never require data to survive reopening from the same backing directory. An in-memory store could satisfy AC1-AC10, so the skeleton's file-backed storage contract is not pinned.
+  - [P3] Expected Files says all four seams must be pure/deterministic, but the point-KV and envelope adapter seams are explicitly stateful storage APIs. That contradicts the observable put/cas/delete/list contract and should be narrowed to the pure key builders/containment predicate.
+
+### Seal attempt a2 — findings
+
+- claude half: 1 finding(s); workspace_modified=False; raw `.orchestrator/raw/slice_doc-01-seal-a2-claude.txt`
+  - [P3] Reuse Posture Dependencies line (slice-01.md:195) attributes `temp+os.replace` to `orchestrator/state.py`'s `save_new`/`save`, but `save_new` (state.py:254) finalizes with `os.link` (an atomic exclusive hard-link claim, chosen precisely for race-free create), NOT `os.replace`; only `save` (state.py:276) uses `os.replace`. Minor citation inaccuracy in the reuse posture — the substantive reuse claim (an atomic temp-file + atomic-finalize idiom exists in state.py) holds, the primary atomicity idiom the slice leans on is registry.py, and no contract, acceptance criterion, or test is affected.
+- codex half: 0 finding(s); workspace_modified=False; raw `.orchestrator/raw/slice_doc-01-seal-a2-codex.txt`
+
+### Seal attempt a3 — PASSED
+
+- claude half: 0 finding(s); workspace_modified=False; raw `.orchestrator/raw/slice_doc-01-seal-a3-claude.txt`
+- codex half: 0 finding(s); workspace_modified=False; raw `.orchestrator/raw/slice_doc-01-seal-a3-codex.txt`
+

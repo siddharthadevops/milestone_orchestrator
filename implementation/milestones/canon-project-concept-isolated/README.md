@@ -405,4 +405,5 @@ fast paths.
 
 | Unit | Status | Rounds | Seal attempts | Gate commit |
 |---|---|---|---|---|
-| skeleton | sealed | 20 | a1:findings, a2:pass | - |
+| skeleton | sealed | 20 | a1:findings, a2:pass | e5c2474 |
+| slice_doc-01 (Local KV store + key grammar) | sealed | 15 | a1:findings, a2:findings, a3:pass | - |
