@@ -387,8 +387,9 @@ REJECTED — adopt their concepts, not their engines:
   current doctrine finish under it; the reform applies to runs created
   after it lands.
 
-## Decisions (taken 2026-07-07 under recorded operator doctrine — each
-## vetoable during live debugging; 5 and 8 RESERVED for the operator)
+## Decisions (all 16 settled 2026-07-07 — 14 taken under recorded
+## operator doctrine and vetoable during live debugging; 5 and 8 decided
+## directly by the operator)
 
 1. Gate vocabulary — **P0/P1 always open a fix cycle unrated**; rating
    calls are spent only on P2/P3, where the threshold can actually
@@ -405,10 +406,21 @@ REJECTED — adopt their concepts, not their engines:
    `fact | value | authority (file:line) | touch/do-not-touch`.
    Variants would breed format nitpicking, the disease being treated.
    Unused columns stay empty.
-5. **RESERVED (operator): profile set and names.** Recommendation: two
-   (`strict`, `light`) to start — the thresholds inside a profile are
-   already the fine dial; a third preset can be cloned later the moment
-   a real run needs it.
+5. Profile set — **DECIDED (operator): profiles are not a fixed enum;
+   they are operator-COMPOSED artifacts** built in a panel constructor
+   (forms over the stage schema: pick loops, add actions, attach fuser,
+   choose evaluator rules, save under a name — the acts-dialog pattern
+   scaled up). Phase 1 ships TWO seed profiles hardcoded (`strict`,
+   `light`); the constructor UI lands in a later phase over the same
+   JSON store. Profiles are **swappable at RUNTIME** (essential for the
+   testing phase) with strict semantics: swap ≠ edit — a profile is
+   never mutated in place; the run REPOINTS to another profile, the
+   change takes effect at the next stage/loop boundary (never mid
+   fan-out; the amendments/acts overlay pattern), a
+   `profile_changed: A@hash -> B@hash` ledger event + timeline chip
+   records it, and the run is marked `profile_mixed` — its meter data
+   excluded from anchored series by default (experiment data, not
+   calibration).
 6. Gap reports MAY carry the builder's proposed resolution — **allowed,
    explicitly marked `proposal, not decision`**; the upstream fixer must
    verify independently against sources before adopting (contract
@@ -418,10 +430,12 @@ REJECTED — adopt their concepts, not their engines:
    reclassify-chip pattern: `gap → skeleton` (amber) placed
    chronologically, clickable to the report story; the upstream repair
    appears on the upstream unit's own row.
-8. **RESERVED (operator): the strict fuser discard bar.**
-   Recommendation: evidence alone in `light`; evidence + opposite-family
-   concur in `strict`. The concur costs one cheap call per discard and
-   only in strict, where wrongly discarded findings are most expensive.
+8. Fuser discard bar — **DECIDED (operator): a per-stage fuser knob**
+   (`discard: evidence | evidence+concur`), configurable like every
+   other dial, hardcoded in the seeds to start: `strict` = evidence +
+   opposite-family concur (a cheap extra call only where a wrong
+   discard is most expensive), `light` = citing evidence alone. The
+   ledger audits every discard either way.
 9. Fan-out dimensions — **battery + three standing lenses**
    (grounding-citations-exist, contract self-consistency, altitude),
    defined IN the profile and sealed with it: the dimension list is
