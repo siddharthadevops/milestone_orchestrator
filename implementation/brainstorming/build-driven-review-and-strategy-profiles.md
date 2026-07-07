@@ -105,7 +105,7 @@ In EVERY profile, identically:
   so no driver invents it): draft/implement outputs gain a third status
   value — `"status": "gap"` alongside `ok|blocked` — with a mandatory
   `"gaps"` array; each entry: `{target: goal|skeleton|slice_doc-NN,
-  missing_or_conflict: <what>, where: <file:line on the upstream>,
+  missing_or_conflict: <what>, where: <file:line on the upstream; for target goal with an inline-typed goal, a verbatim quote of the conflicting goal text instead — third-review fix>,
   forced_decision: <the choice it forces>, proposal: null | <marked
   proposal, never self-service>, plain: <lay sentence>, example:
   <smallest concrete scenario>}`. A gap response carries NO artifact
@@ -119,7 +119,11 @@ In EVERY profile, identically:
   BUILD the reopen: a `reopen_for_repair` transition (sealed ->
   repairing) with its ledger event, gate-commit discipline for the
   repaired artifact, and the reseal path. New machinery, priced as
-  such.
+  such. SLICE-PLAN CONTRACT under skeleton repair (third-review fix):
+  a repair may APPEND new slices and may EDIT slices whose units are
+  still unopened; it may NOT remove or renumber a slice whose units
+  exist — that requires the operator. Appended slices join the unit
+  sequence after the current one.
 - Builders never rate their own blockers: a low self-rating would be
   permission to continue, which is drift through the back door. Any
   build-changing gap halts, no gray scale.
@@ -177,8 +181,15 @@ seal half that raised ONLY findings rated at-or-below the threshold by
 the opposite family counts as approval WITH RECORDED DEBT — the
 deferral events and debt entries are the approval's written remainder.
 Any change after a family's approval requires that family to look
-again (a2+ full double seal). Decision 2's single-family reseal
-applies to DOC units only, never implementations.
+again (a2+ full double seal) — with ONE named, bounded relaxation
+(third-review fix, resolving the P1 conflict with Decision 2): for a
+DOC repair in a light profile rated below high, cross-family approval
+of the repaired bytes may COMPOSE as {diff-scoped delta review by the
+family opposite the repair fixer} + {whole-artifact seal half by the
+other family}. Both families look at the change; one look is
+diff-scoped — that weaker bar is exactly the light-profile tradeoff,
+purchased only under the rating. Strict requires whole-artifact looks
+from both, always. Implementations: never composed, never relaxed.
 
 Profiles decompose into config dials (several already exist:
 `p3_defer_max_risk`, `p3_reclassify_debt`); the panel's new-run form
@@ -276,7 +287,7 @@ gate (seal) is invariant and outside the composition.
   - **Loop** — the dispatch shape over actions: `single`, `parallel`
     (concurrent fan-out, one tamper snapshot around the batch,
     partial-tolerant), `until_clean` (repeat while the evaluator passes
-    findings), `alternate_families` — the CURRENT sequential process,
+    findings), `family_until_clean` — the CURRENT process, named correctly (third-review fix: the driver runs ONE family until its latest review is clean, then advances — it never alternates round-by-round),
     preserved as just another loop, so compatibility costs nothing.
   - **Fuser** — optional continuation certain loops use when they
     parallelize: dedupe, contrast-vs-code, re-rate. Candidates in,
@@ -290,7 +301,10 @@ gate (seal) is invariant and outside the composition.
     citing evidence in `light`, evidence plus an opposite-family concur
     in `strict` — and a fuser rating counts as the opposite-family
     rating only when the fuser IS opposite to the finding's raising
-    family.
+    family. A MERGED finding's raising-family set is the union of its
+    sources (third-review fix): one raised by BOTH families carries the
+    highest bar — no fuser may discard or downgrade it alone; the other
+    family's concur is required in every profile.
   - **Evaluator** — the DETERMINISTIC per-stage gate: a config rule
     over findings — `all` (everything passes to consideration: the
     right rule when the pass was cheap/lay and fine judgment comes
@@ -340,7 +354,11 @@ gate (seal) is invariant and outside the composition.
   drafter — who has no upstream unit — targets `goal`, which routes to
   the OPERATOR as a blocked-with-report (chip + the report's forced
   decision), because the goal document is operator-authored and only
-  its author repairs it. The legacy mode survives as pure
+  its author repairs it. The operator's resolution BINDS through the
+  existing amendment mechanism (third-review fix): the goal snapshot
+  stays immutable; the resolution lands as an amendment (binding from
+  the next worker call) plus a `goal_gap_resolved` ledger event citing
+  the gap — no new state semantics invented. The legacy mode survives as pure
   config (an impl action pinned exit-0-always), so migration is a
   profile choice, not a code fork. FENCED (corrected by review — an
   exit-0-always action contradicts the constitutional gap semantics):
@@ -354,6 +372,12 @@ gate (seal) is invariant and outside the composition.
   same gap bouncing = stalled -> operator). The mechanical suite gate
   slots in as the impl loop's non-LLM evaluator — the one place the
   exit-code metaphor is literal.
+
+DEBT RESOLUTION (third-review fix): tracked debt is closeable — a
+fix, repair, or seal that resolves a deferred finding cites its debt
+id; the driver records `debt_resolved` and the chip shows
+resolved/open counts. Unresolved debt survives to the milestone close
+record; it is never silently dropped.
 
 ### 9. The deterministic progress meter — an alarm no rhetoric can fool
 
@@ -372,6 +396,15 @@ the ledger already stores. Three derived signals:
   trip);
 - churn ratio: (added+deleted)/|net| high = the same lines rewritten
   repeatedly.
+
+The triggered evaluation is a TYPED contract (third-review fix):
+kind `progress_eval` returns `{trajectory: converging | mixed |
+stalled, reason}` — converging: findings/gaps new and narrowing, fixes
+landing net change; stalled: the same issue bouncing or net-zero work
+repeating. Deterministic mapping, a profile field: converging ->
+continue; mixed -> continue + alarm chip; stalled -> pause the unit +
+operator chip. Every evaluation lands as a `progress_evaluated` ledger
+event with the trajectory and reason.
 
 It cannot be argued with: it reads diffs, not prose. Composition:
 **deterministic tripwire -> LLM judgment -> threshold -> operator** —
@@ -471,7 +504,9 @@ REJECTED — adopt their concepts, not their engines:
 
 ## Non-goals
 
-- No relaxation of implementation double seals in any profile.
+- No relaxation of the cross-family approval invariant for
+  implementations, in any profile (stated precisely in §5; the a1
+  redundant-half drop is part of the invariant, not a relaxation).
 - No automatic classification of review depth — the profile is an
   explicit operator choice at run creation.
 - No post-hoc compression of existing sealed docs.
@@ -519,7 +554,10 @@ REJECTED — adopt their concepts, not their engines:
    change takes effect at the next stage/loop boundary (never mid
    fan-out; the amendments/acts overlay pattern), a
    `profile_changed: A@hash -> B@hash` ledger event + timeline chip
-   records it, and the run is marked `profile_mixed` — its meter data
+   records it, EVERY stage-start ledger event carries the governing
+   profile hash (third-review fix: per-stage attribution is read from
+   the ledger, not inferred from the chip), and the run is marked
+   `profile_mixed` — its meter data
    excluded from anchored series by default (experiment data, not
    calibration).
 6. Gap reports MAY carry the builder's proposed resolution — **allowed,
