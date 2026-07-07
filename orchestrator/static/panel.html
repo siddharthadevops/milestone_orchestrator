@@ -157,10 +157,24 @@
   #docview { width: min(1200px, 96vw); }
   .gitlink { color: var(--dim); font-size: 11px; text-decoration: none;
              border: 1px solid var(--line); border-radius: 9px;
-             padding: 1px 8px; white-space: nowrap; }
+             padding: 1px 8px; white-space: nowrap; cursor: pointer;
+             background: #fff; font-family: "SF Mono", ui-monospace, Menlo,
+             monospace; }
   .gitlink:hover { color: var(--accent); border-color: #c3d4fb;
                    background: var(--accent-soft); }
   .unit-right { display: flex; align-items: baseline; gap: 8px; }
+
+  /* local commit viewer */
+  #commitview { width: min(1200px, 96vw); }
+  .diffbody { max-height: 72vh; overflow: auto; background: #fff;
+              border: 1px solid var(--line); border-radius: 8px;
+              padding: 10px 12px; font-size: 12px; line-height: 1.45; }
+  .diffbody div { white-space: pre; }
+  .dl-add { color: #15803d; background: #f0fdf4; }
+  .dl-del { color: #b91c1c; background: #fef2f2; }
+  .dl-hunk { color: var(--accent); background: var(--accent-soft); }
+  .dl-meta { color: #52525b; font-weight: 600; }
+  .dl-head { color: var(--dim); }
   .dv-meta { color: var(--dim); font-size: 11.5px; margin: -8px 0 10px; }
   .mdbody { max-height: 72vh; overflow-y: auto; font-size: 13.5px;
             line-height: 1.55; }
@@ -312,6 +326,16 @@
   <div id="storyBody" class="storybody"></div>
   <div class="formrow"><span></span>
     <button class="btn" onclick="document.getElementById('story').close()">Close</button>
+  </div>
+</dialog>
+
+<dialog id="commitview">
+  <h2 id="cv_title">Gate commit</h2>
+  <div class="dv-meta mono" id="cv_meta"></div>
+  <div id="cv_body" class="diffbody mono"></div>
+  <div class="formrow">
+    <span id="cv_weblink" style="margin-right:auto;font-size:12px"></span>
+    <button class="btn" onclick="document.getElementById('commitview').close()">Close</button>
   </div>
 </dialog>
 
@@ -649,6 +673,38 @@ function mdRender(src) {
   flush();
   return html;
 }
+/* ---- local commit viewer (gate commits) ---- */
+let lastWebBase = null;  // refreshed with each detail poll
+function diffHtml(text) {
+  return String(text || "").split("\n").map(l => {
+    let cls = "";
+    if (/^(diff --git|index |new file|deleted file|similarity|rename )/.test(l)) cls = "dl-meta";
+    else if (/^(\+\+\+|---)/.test(l)) cls = "dl-meta";
+    else if (l.startsWith("@@")) cls = "dl-hunk";
+    else if (l.startsWith("+")) cls = "dl-add";
+    else if (l.startsWith("-")) cls = "dl-del";
+    else if (/^(commit |Author:|Date:)/.test(l)) cls = "dl-head";
+    return `<div class="${cls}">${esc(l) || "&nbsp;"}</div>`;
+  }).join("");
+}
+async function showCommit(unitKey) {
+  let d;
+  try {
+    d = await api(`/api/runs/${selected}/commit?unit=${encodeURIComponent(unitKey)}`);
+  } catch (e) { alert(e.message); return; }
+  document.getElementById("cv_title").textContent =
+    `${unitKey} — gate commit ${d.sha}`;
+  document.getElementById("cv_meta").textContent =
+    d.truncated ? "(truncated)" : "";
+  document.getElementById("cv_body").innerHTML = diffHtml(d.text);
+  document.getElementById("cv_weblink").innerHTML = lastWebBase
+    ? `<a class="morelink" href="${esc(lastWebBase)}/commit/${esc(d.sha)}"
+         target="_blank" rel="noopener">open on git web ↗</a>
+       <span class="dim" style="font-size:11px"> (404 until the branch is pushed)</span>`
+    : "";
+  document.getElementById("commitview").showModal();
+}
+
 let dvContent = "";
 async function showDoc(unitKey) {
   let d;
@@ -748,11 +804,12 @@ async function refreshDetail() {
         `<div class="pipe-cat"><span>${esc(label)}${title}</span>` +
         (stat ? `<span class="st ${esc(stat)}">${esc(stat)}</span>` : "") +
         `</div>`;
-      const gitBase = d.commit_web_base;
-      const gitLink = u => (gitBase && u.gate_sha)
-        ? `<a class="gitlink mono" href="${esc(gitBase)}/commit/${esc(u.gate_sha)}"
-             target="_blank" rel="noopener"
-             title="gate commit on git web">${esc(u.gate_sha)}</a>` : "";
+      lastWebBase = d.commit_web_base;
+      // Opens the LOCAL commit viewer (git show in the workspace): unlike
+      // a direct web link it never 404s on not-yet-pushed gate commits.
+      const gitLink = u => u.gate_sha
+        ? `<span class="gitlink" title="view gate commit"
+             onclick="showCommit('${esc(u.unit)}')">${esc(u.gate_sha)}</span>` : "";
       const unitRow = u => {
         let time = "";
         if (u.opened_epoch && u.closed_epoch)

@@ -21,6 +21,9 @@ run's live state) and a JSON API:
     GET    /api/runs/<id>/artifact ?unit=<unit_key> — the unit's recorded
                                    markdown artifact (skeleton/slice doc),
                                    served for the panel's doc viewer
+    GET    /api/runs/<id>/commit   ?unit=<unit_key> — the unit's gate
+                                   commit as `git show` text (local commit
+                                   viewer; works without any push)
     POST   /api/runs/<id>/start    spawn the driver loop in background
     POST   /api/runs/<id>/stop     SIGTERM the driver's process group (the
                                    driver forwards the stop to in-flight
@@ -939,6 +942,53 @@ def run_artifact(home, run_id, unit_key):
     }
 
 
+COMMIT_MAX = 512 * 1024  # bytes of `git show` served per fetch
+
+
+def run_commit(home, run_id, unit_key):
+    """The unit's gate commit as `git show` text (message + stat + patch),
+    for the panel's local commit viewer. Like run_artifact, the client
+    names a UNIT; the sha comes from the run's own state, and the diff is
+    read from the run's workspace — it works whether or not the commit was
+    ever pushed to a web remote."""
+    reg = registry.load(home)
+    entry = registry.get(reg, run_id)
+    if entry is None:
+        raise ApiError(404, "unknown run %r" % run_id)
+    try:
+        state = st.load(entry["state_path"])
+    except Exception as exc:
+        raise ApiError(409, "state unreadable: %s" % exc)
+    unit = next(
+        (u for u in state["units"] if st.unit_key(u) == unit_key), None
+    )
+    if unit is None:
+        raise ApiError(404, "unknown unit %r" % unit_key)
+    sha = unit.get("gate_commit")
+    if not sha:
+        raise ApiError(404, "unit %r has no gate commit" % unit_key)
+    workspace = state.get("workspace") or entry["workspace"]
+    try:
+        proc = subprocess.run(
+            ["git", "-C", workspace, "show", "--stat", "--patch",
+             "--no-color", sha],
+            capture_output=True, text=True, timeout=15,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise ApiError(409, "git show failed: %s" % exc)
+    if proc.returncode != 0:
+        raise ApiError(
+            409, "git show %s failed: %s" % (sha, proc.stderr.strip())
+        )
+    text = proc.stdout
+    return {
+        "unit": unit_key,
+        "sha": sha,
+        "truncated": len(text.encode("utf-8", "replace")) > COMMIT_MAX,
+        "text": text[:COMMIT_MAX],
+    }
+
+
 def run_detail(home, run_id, log_tail=80):
     reap_exited_drivers(home)
     reg = registry.load(home)
@@ -1048,6 +1098,12 @@ def make_handler(home):
                             "ok": True,
                             **run_artifact(home, parts[3],
                                            query.get("unit", "")),
+                        })
+                    elif len(parts) == 5 and parts[4] == "commit":
+                        self._json(200, {
+                            "ok": True,
+                            **run_commit(home, parts[3],
+                                         query.get("unit", "")),
                         })
                     else:
                         self._json(404, {"ok": False, "error": "not found"})

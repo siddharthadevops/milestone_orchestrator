@@ -717,6 +717,53 @@ class StoryApiTest(ServiceApiTest):
             "GET", "/api/runs/%s/artifact?unit=skeleton" % body["run"]["id"])
         self.assertEqual(status, 404)
 
+    def test_commit_serves_gate_commit_diff(self):
+        # The local commit viewer: `git show` of the unit's recorded gate
+        # commit, straight from the workspace — no push required.
+        ws = self.workspace("ws-commit")
+        rid = self._seed(ws)
+        with open(os.path.join(ws, "f.txt"), "w", encoding="utf-8") as fh:
+            fh.write("hello\n")
+        subprocess.run(["git", "-C", ws, "add", "."], check=True)
+        subprocess.run(
+            ["git", "-C", ws, "-c", "user.email=t@t", "-c", "user.name=t",
+             "commit", "-q", "-m", "Seal milestone skeleton"], check=True)
+        sha = subprocess.run(
+            ["git", "-C", ws, "rev-parse", "--short", "HEAD"],
+            capture_output=True, text=True, check=True).stdout.strip()
+        entry = registry.get(registry.load(self.home), rid)
+        state = st.load(entry["state_path"])
+        state["units"][0]["gate_commit"] = sha
+        st.save(entry["state_path"], state)
+        status, body = self.request_json(
+            "GET", "/api/runs/%s/commit?unit=skeleton" % rid)
+        self.assertEqual(status, 200)
+        self.assertEqual(body["sha"], sha)
+        self.assertIn("Seal milestone skeleton", body["text"])
+        self.assertIn("f.txt", body["text"])
+        self.assertIn("+hello", body["text"])
+        self.assertFalse(body["truncated"])
+
+    def test_commit_errors(self):
+        ws = self.workspace("ws-commit-bad")
+        rid = self._seed(ws)
+        # seeded unit has no gate commit recorded
+        status, _ = self.request_json(
+            "GET", "/api/runs/%s/commit?unit=skeleton" % rid)
+        self.assertEqual(status, 404)
+        # unknown unit
+        status, _ = self.request_json(
+            "GET", "/api/runs/%s/commit?unit=nope" % rid)
+        self.assertEqual(status, 404)
+        # recorded sha that git cannot resolve (rewritten/lost) -> 409
+        entry = registry.get(registry.load(self.home), rid)
+        state = st.load(entry["state_path"])
+        state["units"][0]["gate_commit"] = "deadbee"
+        st.save(entry["state_path"], state)
+        status, _ = self.request_json(
+            "GET", "/api/runs/%s/commit?unit=skeleton" % rid)
+        self.assertEqual(status, 409)
+
     def test_story_errors(self):
         ws = self.workspace("ws-story-bad")
         rid = self._seed(ws)
