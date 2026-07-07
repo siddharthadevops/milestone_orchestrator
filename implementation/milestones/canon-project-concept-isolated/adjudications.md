@@ -2,4 +2,14 @@
 
 # Adjudicated Rejections
 
-(none)
+Settled findings: re-raising one requires referencing its id with
+genuinely new evidence (`contests`).
+
+## [slice_impl-07-codex-r53/F1]
+
+- unit: slice_impl-07
+- severity: P1
+- finding: Claim that removing the envelope validation from RevisionEnvelopeStore.put contradicts sealed no-repair envelope semantics
+- rationale: Codex (gpt-5.5, model_reasoning_effort=xhigh; transcript at .orchestrator/scratch/f1-consult-round1-transcript.txt) concurred with rejection in a single round: the fail-closed validation on put was introduced by this slice's wip commit f068817, not by the sealed baseline — sealed slice-01 put (commit 0b4d92f) reads the prior envelope only for its revision and never validates it, and the sealed slice-07 note pins that kvstore.py may only gain the empty-store initializer. The pending diff restores exactly that sealed state (git diff 0b4d92f shows only the initializer added to kvstore.py and zero delta in test_kvstore.py). The greenfield 'no corrupt-record recovery' language rejects, rather than mandates, defenses for malformed envelopes that cannot exist in our writer-owned families; store-file corruption still fails closed in _load_doc. F1 mistakes a new WIP guard for sealed contract and is invalid.
+- prevention: orchestrator/kvstore.py (Added a comment inside RevisionEnvelopeStore.put's update closure stating that put is an unconditional overwrite by contract (LPC put semantics), reads the prior envelope only for its revision and never validates or repairs it, while store-file corruption still fails closed in _load_doc — so the deliberate absence of prior-envelope validation can no longer be read as an accidental weakening.)
+

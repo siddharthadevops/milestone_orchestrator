@@ -839,7 +839,7 @@ def summary(state):
     current_fam = None
     if unit is not None and unit.get("family_index", 0) < len(families):
         current_fam = families[unit["family_index"]]
-    return {
+    out = {
         "goal": state["goal"],
         "workspace": state["workspace"],
         "milestone_status": state["milestone"]["status"],
@@ -859,3 +859,12 @@ def summary(state):
         "events_total": len(state["events"]),
         "last_events": state["events"][-30:],
     }
+    block = state.get("project")
+    if block is not None:
+        # The two path-free handles of a project-bound run (goal doc:
+        # "run status carries the project name"). Mirrors the state block:
+        # ABSENT for a project-less run, never present-null, so
+        # pre-project summaries stay key-identical.
+        out["project"] = block["project"]
+        out["work_area"] = block["work_area"]
+    return out

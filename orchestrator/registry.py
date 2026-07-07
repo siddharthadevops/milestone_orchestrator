@@ -91,8 +91,16 @@ def locked(home):
         fh.close()
 
 
-def new_entry(run_id, name, workspace, state_path, goal_doc=None):
-    return {
+def new_entry(
+    run_id,
+    name,
+    workspace,
+    state_path,
+    goal_doc=None,
+    project=None,
+    work_area=None,
+):
+    entry = {
         "id": run_id,
         "name": name,
         "workspace": workspace,
@@ -102,6 +110,10 @@ def new_entry(run_id, name, workspace, state_path, goal_doc=None):
         "pid": None,
         "last_spawn_at": None,
     }
+    if project is not None:
+        entry["project"] = project
+        entry["work_area"] = work_area
+    return entry
 
 
 def get(reg, run_id):
@@ -226,6 +238,66 @@ def remember_recent(home, kind, value):
         # ValueError covers UnicodeEncodeError from a value carrying lone
         # surrogates (JSON \uXXXX escapes in a crafted request body).
         pass  # never fail the caller over form memory
+
+
+# ---------------------------------------------------------------------------
+# Projects record (service-owned standing projects: declared slugs + their
+# persisted defaults, plus retained-state claims from plain-forgotten runs).
+# Same atomic-write posture as the registry; mutations happen under
+# locked(home) at the call sites (never here — nested flock would deadlock).
+
+PROJECTS_SCHEMA_VERSION = 1
+
+
+def projects_record_path(home):
+    return os.path.join(home, "projects.json")
+
+
+def projects_base(home):
+    """The ONE service-level base directory of project KV stores: each
+    declared project owns <base>/<slug>/."""
+    return os.path.join(home, "projects")
+
+
+def load_projects_record(home):
+    path = projects_record_path(home)
+    if not os.path.exists(path):
+        return {
+            "schema_version": PROJECTS_SCHEMA_VERSION,
+            "projects": [],
+            "retained_states": [],
+        }
+    with open(path, "r", encoding="utf-8") as fh:
+        rec = json.load(fh)
+    if rec.get("schema_version") != PROJECTS_SCHEMA_VERSION:
+        raise RuntimeError(
+            "projects record schema_version %r != %d"
+            % (rec.get("schema_version"), PROJECTS_SCHEMA_VERSION)
+        )
+    rec.setdefault("projects", [])
+    rec.setdefault("retained_states", [])
+    return rec
+
+
+def save_projects_record(home, rec):
+    os.makedirs(home, exist_ok=True)
+    path = projects_record_path(home)
+    fd, tmp = tempfile.mkstemp(prefix=".projects-", suffix=".json", dir=home)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            json.dump(rec, fh, indent=2, ensure_ascii=False)
+            fh.write("\n")
+        os.replace(tmp, path)
+    finally:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+
+
+def get_project(rec, slug):
+    for project in rec["projects"]:
+        if project.get("slug") == slug:
+            return project
+    return None
 
 
 def session_leader_alive(pid):

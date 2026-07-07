@@ -457,6 +457,27 @@ class LocalKVClient:
                 os.unlink(tmp)
 
 
+def initialize_empty_store(directory, filename=STORE_FILENAME):
+    """Materialize a readable zero-entry store file, writing NO key.
+
+    Create-only: an existing store file is left byte-untouched (and a
+    corrupt one raises instead of being clobbered — nothing repairs).
+    LocalKVClient deliberately reads a MISSING file as an empty store, so
+    without this a declared-but-empty project would be indistinguishable
+    from a lost store; consumers that fail closed on a missing file (the
+    driver's standing-law reads, the service's project listing) need the
+    file itself as the declaration's evidence. Returns the store path.
+    """
+    client = LocalKVClient(directory, filename=filename)
+
+    def update(doc):
+        # Checked under the store lock: persist only when no file exists
+        # yet; _load_doc already validated (or raised on) an existing one.
+        return client.path, not os.path.exists(client.path)
+
+    return client._mutate(update)
+
+
 class RevisionEnvelopeStore:
     """LPC-style revision envelope over LocalKVClient for our families."""
 
@@ -474,6 +495,10 @@ class RevisionEnvelopeStore:
 
         def update(doc):
             raw = self._raw_from_doc(doc, key)
+            # Unconditional overwrite by contract (LPC put semantics): the
+            # prior envelope is read only for its revision, never validated
+            # or repaired here; store-file corruption still fails closed in
+            # _load_doc before this runs.
             revision = 1 if raw is ABSENT else raw["revision"] + 1
             env = {
                 "revision": revision,

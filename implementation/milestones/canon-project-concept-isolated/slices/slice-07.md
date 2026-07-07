@@ -187,7 +187,12 @@ touches only OUR meta family, never the agent_99 raw record.
   label-only edit, I3). **Delete** writes agent_99's positive-version
   tombstone through the sealed store; in the same successful API operation,
   the service tombstones sibling meta so the name reads and lists as unknown,
-  and re-declaring the same name starts with no retained meta.
+  and re-declaring the same name starts with no retained meta. Cleanup
+  ordering is pinned: the raw tombstone is the FIRST write — a failed
+  delete leaves the record live WITH its reuse-source meta, never a live
+  record whose standing roles were silently erased — and declare clears
+  any orphaned sibling meta of a non-live name before creating the fresh
+  record, so a failed final meta write cannot resurrect stale roles.
 - **Reuse-source meta**: get/put of the enveloped `work_area_meta:<name>`
   value, validated by Slice 2's sealed shape (exactly
   `{reuse_sources: [{root, inventory, registry, consumption}]}`,
@@ -563,10 +568,13 @@ re-derived. New mechanism beyond the pinned invariants, one line each:
   plus one retained-state claim on plain forget.
 - **Meta authoring endpoints (B).** VICTIM: slice-06's rendered roles and
   the reuse-audit slice — without an authoring surface `reuse_sources` is
-  dead config no operator can create, and without a live-record guard/clear a
-  deleted or re-declared name can carry stale roles into project context.
-  COST: two thin endpoints over the sealed read/put, one live-record read
-  before meta get/put, and a meta tombstone on work-area delete.
+  dead config no operator can create; without a live-record guard/clear a
+  deleted or re-declared name can carry stale roles into project context;
+  and without raw-tombstone-first ordering a failed delete silently erases
+  a live record's standing roles. COST: two thin endpoints over the sealed
+  read/put, one live-record read before meta get/put, a meta tombstone on
+  work-area delete (ordered after the raw tombstone), and a declare-time
+  clear of orphaned meta on non-live names.
 - **Summary project handles (E).** VICTIM: the panel slice and the pump
   (both read summaries), and the goal's pinned "run status carries the
   project name". COST: two additive keys for bound runs.

@@ -441,3 +441,80 @@
 
 - codex half: 0 finding(s); workspace_modified=False; raw `.orchestrator/raw/slice_doc-07-seal-a1-codex.txt`
 
+## slice_impl-07 (Service API: project/work-area CRUD + launch binding)
+
+- draft: kind `implement`, artifact `-` (raw: `.orchestrator/raw/slice_impl-07-draft.txt`)
+
+| Round | Kind | Family | Findings | Triage | Raw |
+|---|---|---|---|---|---|
+| slice_impl-07-codex-r1 | review_round | codex | 4 | 4 reported | `.orchestrator/raw/slice_impl-07-codex-r1.txt` |
+| slice_impl-07-codex-r2 | fix_findings | codex | 4 | 4 fixed | `.orchestrator/raw/slice_impl-07-fix1.txt` |
+| slice_impl-07-codex-r3 | delta_review | codex | 1 | 1 reported | `.orchestrator/raw/slice_impl-07-delta1.txt` |
+| slice_impl-07-codex-r4 | fix_findings | codex | 1 | 1 fixed | `.orchestrator/raw/slice_impl-07-fix2.txt` |
+| slice_impl-07-codex-r5 | delta_review | codex | 1 | 1 reported | `.orchestrator/raw/slice_impl-07-delta2.txt` |
+| slice_impl-07-codex-r6 | fix_findings | codex | 1 | 1 fixed | `.orchestrator/raw/slice_impl-07-fix3.txt` |
+| slice_impl-07-codex-r7 | delta_review | codex | 1 | 1 reported | `.orchestrator/raw/slice_impl-07-delta3.txt` |
+| slice_impl-07-codex-r8 | fix_findings | codex | 1 | 1 fixed | `.orchestrator/raw/slice_impl-07-fix4.txt` |
+| slice_impl-07-codex-r9 | delta_review | codex | 1 | 1 reported | `.orchestrator/raw/slice_impl-07-delta4.txt` |
+| slice_impl-07-codex-r10 | fix_findings | codex | 1 | 1 fixed | `.orchestrator/raw/slice_impl-07-fix5.txt` |
+| slice_impl-07-codex-r11 | delta_review | codex | 1 | 1 reported | `.orchestrator/raw/slice_impl-07-delta5.txt` |
+| slice_impl-07-codex-r12 | fix_findings | codex | 1 | 1 fixed | `.orchestrator/raw/slice_impl-07-fix6.txt` |
+| slice_impl-07-codex-r13 | delta_review | codex | 1 | 1 reported | `.orchestrator/raw/slice_impl-07-delta6.txt` |
+| slice_impl-07-codex-r14 | fix_findings | codex | 1 | 1 fixed | `.orchestrator/raw/slice_impl-07-fix7.txt` |
+| slice_impl-07-codex-r15 | delta_review | codex | 1 | 1 reported | `.orchestrator/raw/slice_impl-07-delta7.txt` |
+| slice_impl-07-codex-r16 | fix_findings | codex | 1 | 1 fixed | `.orchestrator/raw/slice_impl-07-fix8.txt` |
+| slice_impl-07-codex-r17 | delta_review | codex | 1 | 1 reported | `.orchestrator/raw/slice_impl-07-delta8.txt` |
+| slice_impl-07-codex-r18 | fix_findings | codex | 1 | 1 fixed | `.orchestrator/raw/slice_impl-07-fix9.txt` |
+| slice_impl-07-codex-r19 | delta_review | codex | 0 | clean | `.orchestrator/raw/slice_impl-07-delta9.txt` |
+| slice_impl-07-codex-r20 | review_round | codex | 2 | 2 reported | `.orchestrator/raw/slice_impl-07-codex-r2.txt` |
+| slice_impl-07-codex-r21 | fix_findings | codex | 2 | 2 fixed | `.orchestrator/raw/slice_impl-07-fix10.txt` |
+| slice_impl-07-codex-r22 | delta_review | codex | 0 | clean | `.orchestrator/raw/slice_impl-07-delta10.txt` |
+| slice_impl-07-codex-r23 | review_round | codex | 3 | 3 reported | `.orchestrator/raw/slice_impl-07-codex-r3.txt` |
+| slice_impl-07-codex-r24 | fix_findings | codex | 3 | 3 fixed | `.orchestrator/raw/slice_impl-07-fix11.txt` |
+| slice_impl-07-codex-r25 | delta_review | codex | 0 | clean | `.orchestrator/raw/slice_impl-07-delta11.txt` |
+| slice_impl-07-codex-r26 | review_round | codex | 2 | 2 reported | `.orchestrator/raw/slice_impl-07-codex-r4.txt` |
+| slice_impl-07-codex-r27 | fix_findings | codex | 2 | 2 fixed | `.orchestrator/raw/slice_impl-07-fix12.txt` |
+| slice_impl-07-codex-r28 | delta_review | codex | 1 | 1 reported | `.orchestrator/raw/slice_impl-07-delta12.txt` |
+| slice_impl-07-codex-r29 | fix_findings | codex | 1 | 1 fixed | `.orchestrator/raw/slice_impl-07-fix13.txt` |
+| slice_impl-07-codex-r30 | delta_review | codex | 0 | clean | `.orchestrator/raw/slice_impl-07-delta13.txt` |
+| slice_impl-07-codex-r31 | review_round | codex | 3 | 3 reported | `.orchestrator/raw/slice_impl-07-codex-r5.txt` |
+| slice_impl-07-codex-r32 | fix_findings | codex | 3 | 3 fixed | `.orchestrator/raw/slice_impl-07-fix14.txt` |
+| slice_impl-07-codex-r33 | delta_review | codex | 0 | clean | `.orchestrator/raw/slice_impl-07-delta14.txt` |
+| slice_impl-07-codex-r34 | review_round | codex | 1 | 1 reported | `.orchestrator/raw/slice_impl-07-codex-r6.txt` |
+| slice_impl-07-codex-r35 | fix_findings | codex | 1 | 1 fixed | `.orchestrator/raw/slice_impl-07-fix15.txt` |
+| slice_impl-07-codex-r36 | delta_review | codex | 1 | 1 reported | `.orchestrator/raw/slice_impl-07-delta15.txt` |
+| slice_impl-07-codex-r37 | fix_findings | codex | 1 | 1 fixed | `.orchestrator/raw/slice_impl-07-fix16.txt` |
+| slice_impl-07-codex-r38 | delta_review | codex | 0 | clean | `.orchestrator/raw/slice_impl-07-delta16.txt` |
+| slice_impl-07-codex-r39 | review_round | codex | 0 | clean | `.orchestrator/raw/slice_impl-07-codex-r7.txt` |
+| slice_impl-07-claude-r1 | review_round | claude | 3 | 3 reported | `.orchestrator/raw/slice_impl-07-claude-r1.txt` |
+| slice_impl-07-codex-r40 | fix_findings | codex | 3 | 3 fixed | `.orchestrator/raw/slice_impl-07-fix17.txt` |
+| slice_impl-07-codex-r41 | delta_review | codex | 2 | 2 reported | `.orchestrator/raw/slice_impl-07-delta17.txt` |
+| slice_impl-07-codex-r42 | fix_findings | codex | 2 | 2 fixed | `.orchestrator/raw/slice_impl-07-fix18.txt` |
+| slice_impl-07-codex-r43 | delta_review | codex | 1 | 1 reported | `.orchestrator/raw/slice_impl-07-delta18.txt` |
+| slice_impl-07-codex-r44 | fix_findings | codex | 1 | 1 fixed | `.orchestrator/raw/slice_impl-07-fix19.txt` |
+| slice_impl-07-codex-r45 | delta_review | codex | 1 | 1 reported | `.orchestrator/raw/slice_impl-07-delta19.txt` |
+| slice_impl-07-codex-r46 | fix_findings | codex | 1 | 1 fixed | `.orchestrator/raw/slice_impl-07-fix20.txt` |
+| slice_impl-07-codex-r47 | delta_review | codex | 0 | clean | `.orchestrator/raw/slice_impl-07-delta20.txt` |
+| slice_impl-07-claude-r2 | review_round | claude | 2 | 2 reported | `.orchestrator/raw/slice_impl-07-claude-r2.txt` |
+| slice_impl-07-codex-r48 | fix_findings | codex | 2 | 2 fixed | `.orchestrator/raw/slice_impl-07-fix21.txt` |
+| slice_impl-07-codex-r49 | delta_review | codex | 1 | 1 reported | `.orchestrator/raw/slice_impl-07-delta21.txt` |
+| slice_impl-07-codex-r50 | fix_findings | codex | 1 | 1 fixed | `.orchestrator/raw/slice_impl-07-fix22.txt` |
+| slice_impl-07-codex-r51 | delta_review | codex | 1 | 1 reported | `.orchestrator/raw/slice_impl-07-delta22.txt` |
+| slice_impl-07-claude-r3 | fix_findings | claude | 1 | 1 fixed | `.orchestrator/raw/slice_impl-07-fix23.txt` |
+| slice_impl-07-codex-r52 | delta_review | codex | 0 | clean | `.orchestrator/raw/slice_impl-07-delta23.txt` |
+| slice_impl-07-claude-r4 | review_round | claude | 2 | 2 reported | `.orchestrator/raw/slice_impl-07-claude-r3.txt` |
+| slice_impl-07-claude-r5 | fix_findings | claude | 2 | 2 fixed | `.orchestrator/raw/slice_impl-07-fix24.txt` |
+| slice_impl-07-codex-r53 | delta_review | codex | 1 | 1 reported | `.orchestrator/raw/slice_impl-07-delta24.txt` |
+| slice_impl-07-claude-r6 | fix_findings | claude | 1 | 1 rejected (1 consulted) | `.orchestrator/raw/slice_impl-07-fix25.txt` |
+| slice_impl-07-codex-r54 | delta_review | codex | 0 | clean | `.orchestrator/raw/slice_impl-07-delta25.txt` |
+| slice_impl-07-claude-r7 | review_round | claude | 2 | 2 reported | `.orchestrator/raw/slice_impl-07-claude-r4.txt` |
+| slice_impl-07-claude-r8 | fix_findings | claude | 2 | 2 fixed | `.orchestrator/raw/slice_impl-07-fix26.txt` |
+| slice_impl-07-codex-r55 | delta_review | codex | 1 | 1 reported | `.orchestrator/raw/slice_impl-07-delta26.txt` |
+| slice_impl-07-claude-r9 | fix_findings | claude | 1 | 1 fixed | `.orchestrator/raw/slice_impl-07-fix27.txt` |
+| slice_impl-07-codex-r56 | delta_review | codex | 0 | clean | `.orchestrator/raw/slice_impl-07-delta27.txt` |
+| slice_impl-07-claude-r10 | review_round | claude | 0 | clean | `.orchestrator/raw/slice_impl-07-claude-r5.txt` |
+
+### Seal attempt a1 — PASSED
+
+- codex half: 0 finding(s); workspace_modified=False; raw `.orchestrator/raw/slice_impl-07-seal-a1-codex.txt`
+
