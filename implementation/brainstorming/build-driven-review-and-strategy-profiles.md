@@ -254,6 +254,31 @@ gate (seal) is invariant and outside the composition.
   resume), battery presence, report-only + tamper snapshots on every
   review, and full ledger recording of every stage.
 
+- **The algebra is recursive: implementation and the operating mode are
+  loops too (operator refinement, 2026-07-07).** Implementation is a
+  loop with the same architecture — only the ACTIONS differ (implement/
+  fix instead of review). And the unit lifecycle itself is the outer
+  loop: a deterministic controller reading typed exit codes from inner
+  loops. The current process, expressed in the algebra, is
+  `review_loop(until clean) -> impl_loop(exit 0 ALWAYS)` — today's
+  implement action cannot fail softly; its only escapes are "done"
+  (with any gap resolved silently inside: the built-in drift channel)
+  or hard `blocked` (run dead awaiting the operator). The reform gives
+  implementation actions an honest return: a CLOSED, TYPED exit
+  vocabulary — `done | gap(report) | blocked` (no free integers; `gap`
+  carries the structured report including its cited repair TARGET: this
+  slice doc or the skeleton). The operating mode becomes:
+  `review_loop(profile) -> impl_loop -> {done: seal; gap: repair the
+  cited upstream through its own gate, then re-enter impl; blocked:
+  operator}` — repeated until done. The legacy mode survives as pure
+  config (an impl action pinned exit-0-always), so migration is a
+  profile choice, not a code fork. The back-edge is budgeted and judged
+  like every loop: cycle caps with resume amnesties, and the
+  convergence rubric (gaps shrinking and changing = converging; the
+  same gap bouncing = stalled -> operator). The mechanical suite gate
+  slots in as the impl loop's non-LLM evaluator — the one place the
+  exit-code metaphor is literal.
+
 ## Already-live pieces this composes with
 
 - Drift-risk rating + threshold decision (`b9d0a75`), A/B-validated.
@@ -317,3 +342,13 @@ hard requirement of `plain`.
 11. Fast-tier model choices per family (e.g. claude fan-out on a
     fast/cheap model, fuser on max) — fixed in the profile or
     per-run overridable through the acts mechanism?
+12. Repair blast radius: when an impl gap repairs the SKELETON, which
+    sealed slice docs re-verify — only what the gap report cites
+    (directed re-verification), or everything downstream of the edited
+    sections? (Proposal: cited-only, with the repair fixer obligated to
+    list collateral sections it touched, each triggering its own
+    directed re-verification.)
+13. Back-edge budget: how many impl->doc->impl cycles before the
+    operator is surfaced — a fixed cap with amnesty-on-resume (the
+    existing pattern), or the convergence rubric (same gap bouncing =
+    stall) as the primary judge with the cap as backstop?
