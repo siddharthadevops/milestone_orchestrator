@@ -327,3 +327,29 @@
 
 - codex half: 0 finding(s); workspace_modified=False; raw `.orchestrator/raw/slice_impl-05-seal-a1-codex.txt`
 
+## slice_doc-06 (PROJECT CONTEXT block + project_safeguard_seen)
+
+- draft: kind `draft_slice_note`, artifact `implementation/milestones/canon-project-concept-isolated/slices/slice-06.md` (raw: `.orchestrator/raw/slice_doc-06-draft.txt`)
+
+| Round | Kind | Family | Findings | Triage | Raw |
+|---|---|---|---|---|---|
+| slice_doc-06-codex-r1 | review_round | codex | 2 | 2 reported | `.orchestrator/raw/slice_doc-06-codex-r1.txt` |
+| slice_doc-06-codex-r2 | fix_findings | codex | 2 | 2 fixed | `.orchestrator/raw/slice_doc-06-fix1.txt` |
+| slice_doc-06-codex-r3 | delta_review | codex | 1 | 1 reported | `.orchestrator/raw/slice_doc-06-delta1.txt` |
+| slice_doc-06-codex-r4 | fix_findings | codex | 1 | 1 fixed | `.orchestrator/raw/slice_doc-06-fix2.txt` |
+| slice_doc-06-codex-r5 | delta_review | codex | 1 | 1 reported | `.orchestrator/raw/slice_doc-06-delta2.txt` |
+| slice_doc-06-codex-r6 | fix_findings | codex | 1 | 1 fixed | `.orchestrator/raw/slice_doc-06-fix3.txt` |
+| slice_doc-06-codex-r7 | delta_review | codex | 0 | clean | `.orchestrator/raw/slice_doc-06-delta3.txt` |
+| slice_doc-06-codex-r8 | review_round | codex | 3 | 3 reported | `.orchestrator/raw/slice_doc-06-codex-r2.txt` |
+| slice_doc-06-codex-r9 | fix_findings | codex | 3 | 3 fixed | `.orchestrator/raw/slice_doc-06-fix4.txt` |
+| slice_doc-06-codex-r10 | delta_review | codex | 0 | clean | `.orchestrator/raw/slice_doc-06-delta4.txt` |
+| slice_doc-06-codex-r11 | review_round | codex | 1 | 1 reported | `.orchestrator/raw/slice_doc-06-codex-r3.txt` |
+| slice_doc-06-codex-r12 | fix_findings | codex | 1 | 1 fixed | `.orchestrator/raw/slice_doc-06-fix5.txt` |
+| slice_doc-06-codex-r13 | delta_review | codex | 0 | clean | `.orchestrator/raw/slice_doc-06-delta5.txt` |
+| slice_doc-06-codex-r14 | review_round | codex | 0 | clean | `.orchestrator/raw/slice_doc-06-codex-r4.txt` |
+| slice_doc-06-claude-r1 | review_round | claude | 0 | clean | `.orchestrator/raw/slice_doc-06-claude-r1.txt` |
+
+### Seal attempt a1 — PASSED
+
+- codex half: 0 finding(s); workspace_modified=False; raw `.orchestrator/raw/slice_doc-06-seal-a1-codex.txt`
+
