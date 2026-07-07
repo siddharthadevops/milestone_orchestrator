@@ -1630,7 +1630,7 @@ class TestSummary(TempWorkspaceCase):
             set(skel_view.keys()),
             {"unit", "status", "artifact", "gate_sha", "wip_sha", "draft",
              "rounds", "seals", "opened_epoch", "closed_epoch", "debt",
-             "reclassify_kept"},
+             "reclassify"},
         )
         # The draft chip data: write-once record surfaced for the panel.
         self.assertEqual(

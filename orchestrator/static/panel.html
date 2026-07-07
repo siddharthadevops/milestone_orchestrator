@@ -533,17 +533,14 @@ function sealChip(s, unitKey) {
     return `<span class="chip fail${click}" title="${esc(s.invalidated)}">seal a${s.attempt} invalid${dur}</span>`;
   return `<span class="chip ${sevClass(s.severity)}${click}">seal a${s.attempt} findings${dur}</span>`;
 }
-function debtChip(u) {
-  // The opposite-family reclassification leaves no round, so its outcome
-  // would vanish with the in-flight chip. Persist BOTH outcomes as a
-  // clickable chip: deferred (as tracked debt) and kept (risk rated above
-  // the threshold, sent to the fixer) — the story shows every rating.
-  const n = (u.debt || []).length, k = u.reclassify_kept || 0;
-  if (!n && !k) return "";
-  const bits = [];
-  if (n) bits.push(`${n} P3 deferred`);
-  if (k) bits.push(`${k} P3 kept`);
-  return `<span class="chip ${n ? "clean" : "sev23"} clicky" onclick="showStory('debt:${esc(u.unit)}')">${bits.join(" · ")}</span>`;
+function reclassifyChip(ev, unitKey) {
+  // One chip per reclassify outcome, placed chronologically among the
+  // unit's round/seal chips (and left there): deferred -> tracked debt,
+  // kept -> rated above the run threshold, sent to the fixer.
+  const risk = ev.drift_risk || "unrated";
+  const label = ev.defer_ok ? `P3 debt · ${risk}` : `P3 kept · ${risk}`;
+  const title = `${ev.finding_id || ""}${ev.threshold ? ` (threshold ${ev.threshold})` : ""}`;
+  return `<span class="chip ${ev.defer_ok ? "clean" : "sev23"} clicky" title="${esc(title)}" onclick="showStory('debt:${esc(unitKey)}')">${esc(label)}</span>`;
 }
 function docChip(u) {
   // Sealed doc units (skeleton, slice docs) record their markdown artifact;
@@ -836,9 +833,10 @@ async function refreshDetail() {
           <div class="chips">${draftChip(u.draft, u.unit)}${docChip(u)}${
             [].concat(
               (u.rounds || []).map(r => ({at: r.at || "", html: roundChip(r)})),
-              (u.seals || []).map(x => ({at: x.at || "", html: sealChip(x, u.unit)}))
+              (u.seals || []).map(x => ({at: x.at || "", html: sealChip(x, u.unit)})),
+              (u.reclassify || []).map(e => ({at: e.at || "", html: reclassifyChip(e, u.unit)}))
             ).sort((a, b) => a.at < b.at ? -1 : a.at > b.at ? 1 : 0)
-             .map(c => c.html).join("")}${debtChip(u)}
+             .map(c => c.html).join("")}
             ${u.unit === sum.current_unit && running ? workingChip(s) : ""}</div>
         </div>`;
       };
