@@ -61,9 +61,9 @@ reviewer/fixer separation.
 Future canon changes run as orchestrator milestones over this repository
 (see [`../WORKSPACE.md`](../WORKSPACE.md)). Consumers vendor and pin
 nothing; every run records its orchestrator commit (`orchestrator_rev`) as
-provenance. Queued need notes, in order: project concept, skeleton
-code-first discipline, machine API + persona projection
-(`implementation/brainstorming/`).
+provenance. Queued need notes, in order: project concept, build-driven
+review and strategy profiles, skeleton code-first discipline, machine API
++ persona projection (`implementation/brainstorming/`).
 
 ## Non-Goals
 
