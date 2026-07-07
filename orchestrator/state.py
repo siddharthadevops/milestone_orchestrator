@@ -839,6 +839,10 @@ def summary(state):
                 "unit": unit_key(u),
                 "status": u["status"],
                 "artifact": u["artifact"],
+                # Short sha of the unit's finalized seal gate commit — the
+                # only sha that survives the amend discipline (wip/amended
+                # shas are rewritten away). Panel links it to git web.
+                "gate_sha": u.get("gate_commit"),
                 "opened_epoch": (
                     opened_at.get(unit_key(u))
                     or _epoch((u.get("draft") or {}).get("at"))

@@ -672,6 +672,17 @@ class StoryApiTest(ServiceApiTest):
         self.assertEqual(body["reclassify"][0]["defer_ok"], True)
         self.assertEqual(body["reclassify"][0]["reclassifier"], "codex")
 
+    def test_run_detail_carries_commit_web_base(self):
+        ws = self.workspace("ws-webbase")
+        subprocess.run(
+            ["git", "-C", ws, "remote", "add", "origin",
+             "https://github.com/me/proj.git"], check=True)
+        service._WEB_BASE_CACHE.clear()
+        _, body = self.create_run(ws)
+        _, detail = self.request_json("GET", "/api/runs/%s" % body["run"]["id"])
+        self.assertEqual(
+            detail["commit_web_base"], "https://github.com/me/proj")
+
     def test_artifact_serves_unit_doc(self):
         # The panel's doc viewer: the client names a UNIT and gets the
         # markdown the run's state recorded for it.
@@ -792,6 +803,68 @@ class TestPerMilestoneLayout(ServiceApiTest):
             os.path.join(runtime, "amendments.json")))
         self.assertFalse(os.path.exists(
             os.path.join(ws, ".orchestrator", "amendments.json")))
+
+
+class CommitWebBaseTest(unittest.TestCase):
+    """commit_web_base derives an https web URL from a workspace's origin
+    remote so the panel can link gate commits. No HTTP server needed."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(prefix="orch-webbase-")
+        service._WEB_BASE_CACHE.clear()
+
+    def tearDown(self):
+        service._WEB_BASE_CACHE.clear()
+        self.tmp.cleanup()
+
+    def repo(self, name, origin=None):
+        path = os.path.join(self.tmp.name, name)
+        os.makedirs(path)
+        subprocess.run(["git", "init", "-q", path], check=True)
+        if origin:
+            subprocess.run(
+                ["git", "-C", path, "remote", "add", "origin", origin],
+                check=True,
+            )
+        return path
+
+    def test_https_origin(self):
+        ws = self.repo("a", "https://github.com/me/proj.git")
+        self.assertEqual(
+            service.commit_web_base(ws), "https://github.com/me/proj")
+
+    def test_scp_ssh_origin(self):
+        ws = self.repo("b", "git@github.com:me/proj.git")
+        self.assertEqual(
+            service.commit_web_base(ws), "https://github.com/me/proj")
+
+    def test_no_origin_is_none(self):
+        self.assertIsNone(service.commit_web_base(self.repo("c")))
+
+    def test_local_path_origin_followed_one_hop(self):
+        # The self-hosting clone recipe: the milestone clone's origin is the
+        # canon checkout itself; the link should reach the canon's web remote.
+        upstream = self.repo("canon", "https://github.com/me/canon.git")
+        clone = self.repo("clone", upstream)
+        self.assertEqual(
+            service.commit_web_base(clone), "https://github.com/me/canon")
+
+    def test_local_hop_without_web_remote_is_none(self):
+        upstream = self.repo("bare-canon")
+        clone = self.repo("clone2", upstream)
+        self.assertIsNone(service.commit_web_base(clone))
+
+    def test_cached_per_workspace(self):
+        ws = self.repo("d", "https://github.com/me/x.git")
+        self.assertEqual(
+            service.commit_web_base(ws), "https://github.com/me/x")
+        subprocess.run(
+            ["git", "-C", ws, "remote", "set-url", "origin",
+             "https://github.com/me/y.git"], check=True)
+        # remotes effectively never change under a running service; the
+        # cached answer sticks (2s polls must not spawn git each tick)
+        self.assertEqual(
+            service.commit_web_base(ws), "https://github.com/me/x")
 
 
 if __name__ == "__main__":

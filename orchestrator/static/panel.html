@@ -154,7 +154,13 @@
 
   /* doc viewer (unit markdown artifacts) */
   .chip.doc { color: var(--accent); border-color: #c3d4fb; }
-  #docview { width: 860px; max-width: 94vw; }
+  #docview { width: min(1200px, 96vw); }
+  .gitlink { color: var(--dim); font-size: 11px; text-decoration: none;
+             border: 1px solid var(--line); border-radius: 9px;
+             padding: 1px 8px; white-space: nowrap; }
+  .gitlink:hover { color: var(--accent); border-color: #c3d4fb;
+                   background: var(--accent-soft); }
+  .unit-right { display: flex; align-items: baseline; gap: 8px; }
   .dv-meta { color: var(--dim); font-size: 11.5px; margin: -8px 0 10px; }
   .mdbody { max-height: 72vh; overflow-y: auto; font-size: 13.5px;
             line-height: 1.55; }
@@ -742,6 +748,11 @@ async function refreshDetail() {
         `<div class="pipe-cat"><span>${esc(label)}${title}</span>` +
         (stat ? `<span class="st ${esc(stat)}">${esc(stat)}</span>` : "") +
         `</div>`;
+      const gitBase = d.commit_web_base;
+      const gitLink = u => (gitBase && u.gate_sha)
+        ? `<a class="gitlink mono" href="${esc(gitBase)}/commit/${esc(u.gate_sha)}"
+             target="_blank" rel="noopener"
+             title="gate commit on git web">${esc(u.gate_sha)}</a>` : "";
       const unitRow = u => {
         let time = "";
         if (u.opened_epoch && u.closed_epoch)
@@ -751,7 +762,7 @@ async function refreshDetail() {
         return `
         <div class="unit">
           <div class="unit-head"><span class="unit-name">${esc(u.unit)}</span>
-            <span class="st ${esc(u.status)}">${esc(u.status)}${time}</span></div>
+            <span class="unit-right">${gitLink(u)}<span class="st ${esc(u.status)}">${esc(u.status)}${time}</span></span></div>
           <div class="chips">${draftChip(u.draft, u.unit)}${docChip(u)}${
             [].concat(
               (u.rounds || []).map(r => ({at: r.at || "", html: roundChip(r)})),

@@ -15,7 +15,9 @@ run's live state) and a JSON API:
                                    config?, autostart?, attach?}; attach adopts
                                    an existing state exactly as it is on disk
                                    (goal/goal_doc/config are rejected with it)
-    GET    /api/runs/<id>          entry + full state summary + log tail
+    GET    /api/runs/<id>          entry + full state summary + log tail +
+                                   commit_web_base (workspace origin as an
+                                   https web URL, for gate-commit links)
     GET    /api/runs/<id>/artifact ?unit=<unit_key> — the unit's recorded
                                    markdown artifact (skeleton/slice doc),
                                    served for the panel's doc viewer
@@ -44,6 +46,7 @@ it to anything else.
 import argparse
 import json
 import os
+import re
 import signal
 import subprocess
 import sys
@@ -851,6 +854,52 @@ def run_story(home, run_id, item):
 
 ARTIFACT_MAX = 1 * 1024 * 1024  # bytes served to the doc viewer per fetch
 
+# workspace -> https web base (or None). Remotes effectively never change
+# under a running service, and the panel polls run_detail every 2s, so the
+# git subprocess must not run per poll.
+_WEB_BASE_CACHE = {}
+_WEB_BASE_LOCK = threading.Lock()
+
+
+def _origin_url(path):
+    try:
+        proc = subprocess.run(
+            ["git", "-C", path, "remote", "get-url", "origin"],
+            capture_output=True, text=True, timeout=5,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return ""
+    return proc.stdout.strip() if proc.returncode == 0 else ""
+
+
+def commit_web_base(workspace):
+    """The https web base for linking a workspace's commits
+    (<base>/commit/<sha>), derived from its origin remote. A local-path
+    origin — the self-hosting clone recipe — is followed one hop so canon
+    milestone clones link to the canon's own web remote. None when no web
+    remote can be derived (the panel then simply shows no links)."""
+    with _WEB_BASE_LOCK:
+        if workspace in _WEB_BASE_CACHE:
+            return _WEB_BASE_CACHE[workspace]
+    base = None
+    path = workspace
+    for _ in range(2):  # origin, plus at most one local-path hop
+        url = _origin_url(path)
+        if url.startswith(("http://", "https://")):
+            base = url[:-4] if url.endswith(".git") else url
+            break
+        scpish = re.match(r"^(?:ssh://)?git@([^:/]+)[:/](.+?)(?:\.git)?/?$", url)
+        if scpish:
+            base = "https://%s/%s" % scpish.group(1, 2)
+            break
+        if url and os.path.isdir(os.path.expanduser(url)):
+            path = os.path.expanduser(url)
+            continue
+        break
+    with _WEB_BASE_LOCK:
+        _WEB_BASE_CACHE[workspace] = base
+    return base
+
 
 def run_artifact(home, run_id, unit_key):
     """The markdown artifact recorded on one unit (skeleton doc, slice
@@ -904,6 +953,7 @@ def run_detail(home, run_id, log_tail=80):
     detail["log"] = read_log_tail(home, run_id, log_tail)
     detail["amendments"] = read_amendments(entry)
     detail["acts"] = read_acts(entry)
+    detail["commit_web_base"] = commit_web_base(entry["workspace"])
     return detail
 
 

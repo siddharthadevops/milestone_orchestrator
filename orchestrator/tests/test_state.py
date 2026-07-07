@@ -1628,8 +1628,8 @@ class TestSummary(TempWorkspaceCase):
         skel_view, doc_view = summ["units"]
         self.assertEqual(
             set(skel_view.keys()),
-            {"unit", "status", "artifact", "draft", "rounds", "seals",
-             "opened_epoch", "closed_epoch", "debt"},
+            {"unit", "status", "artifact", "gate_sha", "draft", "rounds",
+             "seals", "opened_epoch", "closed_epoch", "debt"},
         )
         # The draft chip data: write-once record surfaced for the panel.
         self.assertEqual(
@@ -1691,6 +1691,16 @@ class TestSummary(TempWorkspaceCase):
         self.assertEqual(
             [r["findings"] for r in summ["units"][0]["rounds"]], [1, 1, 0]
         )
+
+    def test_summary_carries_gate_sha(self):
+        # The panel links each sealed unit to its gate commit on git web;
+        # unsealed units have no sha yet.
+        state = make_state(self.workspace)
+        summ = st.summary(state)
+        self.assertIsNone(summ["units"][0]["gate_sha"])
+        state["units"][0]["gate_commit"] = "abc1234"
+        summ = st.summary(state)
+        self.assertEqual(summ["units"][0]["gate_sha"], "abc1234")
 
     def test_summary_of_closed_milestone(self):
         state = make_state(self.workspace)
