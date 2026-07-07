@@ -279,6 +279,40 @@ gate (seal) is invariant and outside the composition.
   slots in as the impl loop's non-LLM evaluator — the one place the
   exit-code metaphor is literal.
 
+### 9. The deterministic progress meter — an alarm no rhetoric can fool
+
+Besides the LLM progress evaluation (convergence rubric), a PURE metric
+watches every loop, computed from data the ledger already records:
+worker time per episode (`duration_s` on every round) over lines changed
+in the PURE artifact — the unit's own document for doc units, the
+declared code changes minus generated bookkeeping (review-log, milestone
+record, adjudications) for impl units — diffed between the amend shas
+the ledger already stores. Three derived signals:
+
+- time-per-net-line rising across episodes;
+- net-zero cycles: an episode whose cumulative artifact diff vs N amends
+  back is empty or near-empty (the measured travel-var case: 80 worker
+  minutes, three calls, net diff ~0 — a full add-then-remove round
+  trip);
+- churn ratio: (added+deleted)/|net| high = the same lines rewritten
+  repeatedly.
+
+It cannot be argued with: it reads diffs, not prose. Composition:
+**deterministic tripwire -> LLM judgment -> threshold -> operator** —
+the free metric decides WHEN the expensive opposite-family progress
+evaluation runs (never per-round); that evaluation judges trajectory
+quality (new-and-narrower findings vs the same gap bouncing); the
+profile threshold decides continue/stall; the operator sees an alarm
+chip carrying all three layers of evidence. Alarms are first-class
+ledger events. In the algebra, this extends the evaluator's inputs from
+findings to process metrics.
+
+Because the amend shas are all in the ledger, the meter is computable
+RETROACTIVELY: thresholds get calibrated by backtesting against recorded
+runs (the 15-review LPC skeleton, the travel-var episode) so the shipped
+defaults are values that would have fired there and stayed silent on
+healthy runs — no speculation.
+
 ## Already-live pieces this composes with
 
 - Drift-risk rating + threshold decision (`b9d0a75`), A/B-validated.
@@ -352,3 +386,7 @@ hard requirement of `plain`.
     operator is surfaced — a fixed cap with amnesty-on-resume (the
     existing pattern), or the convergence rubric (same gap bouncing =
     stall) as the primary judge with the cap as backstop?
+14. Alarm action when the deterministic meter trips: chip + trigger the
+    LLM progress evaluation only (proposal), or also pause the unit
+    until the evaluation returns? And the backtested default thresholds
+    per signal (time-per-net-line, net-zero window N, churn ratio).
