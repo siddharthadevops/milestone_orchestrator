@@ -16,6 +16,9 @@ run's live state) and a JSON API:
                                    an existing state exactly as it is on disk
                                    (goal/goal_doc/config are rejected with it)
     GET    /api/runs/<id>          entry + full state summary + log tail
+    GET    /api/runs/<id>/artifact ?unit=<unit_key> — the unit's recorded
+                                   markdown artifact (skeleton/slice doc),
+                                   served for the panel's doc viewer
     POST   /api/runs/<id>/start    spawn the driver loop in background
     POST   /api/runs/<id>/stop     SIGTERM the driver's process group (the
                                    driver forwards the stop to in-flight
@@ -846,6 +849,47 @@ def run_story(home, run_id, item):
     raise ApiError(400, "item must be round:/seal:/draft:/debt:")
 
 
+ARTIFACT_MAX = 1 * 1024 * 1024  # bytes served to the doc viewer per fetch
+
+
+def run_artifact(home, run_id, unit_key):
+    """The markdown artifact recorded on one unit (skeleton doc, slice
+    doc), fetched on demand for the panel's doc viewer. The client names
+    a UNIT, never a filesystem path: only paths the run's own state
+    recorded are ever read."""
+    reg = registry.load(home)
+    entry = registry.get(reg, run_id)
+    if entry is None:
+        raise ApiError(404, "unknown run %r" % run_id)
+    try:
+        state = st.load(entry["state_path"])
+    except Exception as exc:
+        raise ApiError(409, "state unreadable: %s" % exc)
+    unit = next(
+        (u for u in state["units"] if st.unit_key(u) == unit_key), None
+    )
+    if unit is None:
+        raise ApiError(404, "unknown unit %r" % unit_key)
+    rel = unit.get("artifact")
+    if not rel:
+        raise ApiError(404, "unit %r has no artifact" % unit_key)
+    path = rel if os.path.isabs(rel) else os.path.join(
+        state.get("workspace") or entry["workspace"], rel
+    )
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as fh:
+            content = fh.read(ARTIFACT_MAX + 1)
+    except OSError as exc:
+        raise ApiError(404, "artifact unreadable: %s" % exc)
+    return {
+        "unit": unit_key,
+        "artifact": rel,
+        "path": path,
+        "truncated": len(content) > ARTIFACT_MAX,
+        "content": content[:ARTIFACT_MAX],
+    }
+
+
 def run_detail(home, run_id, log_tail=80):
     reap_exited_drivers(home)
     reg = registry.load(home)
@@ -948,6 +992,12 @@ def make_handler(home):
                             "ok": True,
                             **run_story(home, parts[3],
                                         query.get("item", "")),
+                        })
+                    elif len(parts) == 5 and parts[4] == "artifact":
+                        self._json(200, {
+                            "ok": True,
+                            **run_artifact(home, parts[3],
+                                           query.get("unit", "")),
                         })
                     else:
                         self._json(404, {"ok": False, "error": "not found"})

@@ -152,6 +152,42 @@
   .pathrow { display: flex; gap: 6px; }
   .pathrow input { flex: 1; }
 
+  /* doc viewer (unit markdown artifacts) */
+  .chip.doc { color: var(--accent); border-color: #c3d4fb; }
+  #docview { width: 860px; max-width: 94vw; }
+  .dv-meta { color: var(--dim); font-size: 11.5px; margin: -8px 0 10px; }
+  .mdbody { max-height: 72vh; overflow-y: auto; font-size: 13.5px;
+            line-height: 1.55; }
+  .mdbody h1 { font-size: 20px; margin: 14px 0 8px; padding-bottom: 6px;
+               border-bottom: 1px solid var(--line); }
+  .mdbody h2 { font-size: 17px; margin: 14px 0 6px; padding-bottom: 4px;
+               border-bottom: 1px solid var(--line); }
+  .mdbody h3 { font-size: 14.5px; margin: 12px 0 4px; }
+  .mdbody h4, .mdbody h5, .mdbody h6 { font-size: 13.5px; margin: 10px 0 4px; }
+  .mdbody h1:first-child, .mdbody h2:first-child { margin-top: 0; }
+  .mdbody p { margin: 6px 0; }
+  .mdbody ul, .mdbody ol { margin: 6px 0 6px 22px; }
+  .mdbody li { margin: 2px 0; }
+  .mdbody code { font-family: "SF Mono", ui-monospace, Menlo, monospace;
+                 font-size: 12px; background: #f4f5f7;
+                 border: 1px solid var(--line); border-radius: 4px;
+                 padding: 1px 4px; }
+  .mdbody pre { background: #f8f9fb; border: 1px solid var(--line);
+                border-radius: 8px; padding: 10px 12px; margin: 8px 0;
+                overflow-x: auto; }
+  .mdbody pre code { background: none; border: none; padding: 0;
+                     white-space: pre; }
+  .mdbody blockquote { border-left: 3px solid var(--line); color: #52525b;
+                       padding: 2px 12px; margin: 8px 0; }
+  .mdbody hr { border: none; border-top: 1px solid var(--line);
+               margin: 12px 0; }
+  .md-tblwrap { overflow-x: auto; margin: 8px 0; }
+  .mdbody table { border-collapse: collapse; font-size: 12.5px; }
+  .mdbody th, .mdbody td { border: 1px solid var(--line); padding: 4px 8px;
+                           text-align: left; vertical-align: top; }
+  .mdbody th { background: var(--panel); }
+  pre.mdraw { white-space: pre-wrap; font-size: 12px; }
+
   /* file/dir picker */
   #picker { width: 640px; }
   .pk-bar { display: flex; gap: 6px; margin-bottom: 10px; }
@@ -270,6 +306,17 @@
   <div id="storyBody" class="storybody"></div>
   <div class="formrow"><span></span>
     <button class="btn" onclick="document.getElementById('story').close()">Close</button>
+  </div>
+</dialog>
+
+<dialog id="docview">
+  <h2 id="dv_title">Document</h2>
+  <div class="dv-meta mono" id="dv_path"></div>
+  <div id="dv_body" class="mdbody"></div>
+  <div class="formrow">
+    <label style="font-size:12px;margin-right:auto">
+      <input type="checkbox" id="dv_raw" onchange="dvRender()"> raw</label>
+    <button class="btn" onclick="document.getElementById('docview').close()">Close</button>
   </div>
 </dialog>
 
@@ -463,6 +510,160 @@ function debtChip(u) {
   if (!n) return "";
   return `<span class="chip clean clicky" onclick="showStory('debt:${esc(u.unit)}')">${n} P3 deferred</span>`;
 }
+function docChip(u) {
+  // Sealed doc units (skeleton, slice docs) record their markdown artifact;
+  // surface it as a chip that opens the in-panel viewer.
+  if (!u.artifact) return "";
+  const name = String(u.artifact).split("/").pop();
+  return `<span class="chip doc clicky" title="${esc(u.artifact)}" onclick="showDoc('${esc(u.unit)}')">&#128196; ${esc(name)}</span>`;
+}
+
+/* ---- markdown viewer (unit artifacts) ---- */
+// Minimal self-contained renderer (the panel has no external deps):
+// headings, fenced code, lists (nested), blockquotes, tables, hr,
+// inline code/bold/italic/links. Everything is escaped BEFORE any
+// tags are introduced, so artifact content can never inject markup.
+function mdInline(s) {
+  return s.split(/(`+[^`]*`+)/).map(p => {
+    const code = p.match(/^(`+)([\s\S]*)\1$/);
+    if (code) return `<code>${esc(code[2])}</code>`;
+    let t = esc(p);
+    t = t.replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, (all, txt, url) =>
+      /^(https?:|#)/.test(url)
+        ? `<a href="${url}" target="_blank" rel="noopener">${txt}</a>` : all);
+    t = t.replace(/\*\*([^*]+)\*\*/g, "<b>$1</b>");
+    t = t.replace(/(^|[\s(])\*([^*\n]+)\*(?=[\s).,;:]|$)/g, "$1<i>$2</i>");
+    t = t.replace(/(^|[\s(])_([^_\n]+)_(?=[\s).,;:]|$)/g, "$1<i>$2</i>");
+    return t;
+  }).join("");
+}
+function mdListBlock(lines, i) {
+  const items = [];
+  while (i < lines.length) {
+    const m = lines[i].match(/^(\s*)([-*+]|\d+[.)])\s+(.*)$/);
+    if (m) {
+      items.push({ind: m[1].length, ord: /^\d/.test(m[2]), text: [m[3]]});
+      i++;
+      continue;
+    }
+    if (items.length && lines[i].trim() && /^\s{2,}/.test(lines[i])) {
+      items[items.length - 1].text.push(lines[i].trim());  // hanging indent
+      i++;
+      continue;
+    }
+    break;
+  }
+  let html = "";
+  const stack = [];
+  for (const it of items) {
+    while (stack.length && it.ind < stack[stack.length - 1].ind)
+      html += stack.pop().close;
+    if (!stack.length || it.ind > stack[stack.length - 1].ind) {
+      const tag = it.ord ? "ol" : "ul";
+      html += `<${tag}><li>`;
+      stack.push({ind: it.ind, close: `</li></${tag}>`});
+    } else {
+      html += `</li><li>`;
+    }
+    html += mdInline(it.text.join(" "));
+  }
+  while (stack.length) html += stack.pop().close;
+  return [html, i];
+}
+function mdRender(src) {
+  const lines = String(src || "").replace(/\r\n?/g, "\n").split("\n");
+  let html = "", i = 0, para = [];
+  const flush = () => {
+    if (para.length) { html += `<p>${mdInline(para.join(" "))}</p>`; para = []; }
+  };
+  const tblRow = l =>
+    l.trim().replace(/^\|/, "").replace(/\|$/, "").split("|").map(c => c.trim());
+  while (i < lines.length) {
+    const line = lines[i];
+    const fence = line.match(/^\s*(```|~~~)/);
+    if (fence) {
+      flush();
+      const buf = [];
+      i++;
+      while (i < lines.length && !lines[i].trim().startsWith(fence[1])) {
+        buf.push(lines[i]);
+        i++;
+      }
+      i++;  // closing fence (or EOF)
+      html += `<pre><code>${esc(buf.join("\n"))}</code></pre>`;
+      continue;
+    }
+    if (!line.trim()) { flush(); i++; continue; }
+    const h = line.match(/^(#{1,6})\s+(.*)$/);
+    if (h) {
+      flush();
+      html += `<h${h[1].length}>${mdInline(h[2])}</h${h[1].length}>`;
+      i++;
+      continue;
+    }
+    if (/^\s*(-{3,}|\*{3,}|_{3,})\s*$/.test(line)) {
+      flush(); html += "<hr>"; i++; continue;
+    }
+    if (/^\s*>/.test(line)) {
+      flush();
+      const buf = [];
+      while (i < lines.length && /^\s*>/.test(lines[i])) {
+        buf.push(lines[i].replace(/^\s*>\s?/, ""));
+        i++;
+      }
+      html += `<blockquote>${mdRender(buf.join("\n"))}</blockquote>`;
+      continue;
+    }
+    if (line.includes("|") && i + 1 < lines.length
+        && /^\s*\|?[\s:-]+(\|[\s:-]*)+\|?\s*$/.test(lines[i + 1])
+        && lines[i + 1].includes("-")) {
+      flush();
+      const head = tblRow(line);
+      i += 2;
+      let body = "";
+      while (i < lines.length && lines[i].trim() && lines[i].includes("|")) {
+        body += `<tr>${tblRow(lines[i]).map(c => `<td>${mdInline(c)}</td>`).join("")}</tr>`;
+        i++;
+      }
+      html += `<div class="md-tblwrap"><table><thead><tr>` +
+        head.map(c => `<th>${mdInline(c)}</th>`).join("") +
+        `</tr></thead><tbody>${body}</tbody></table></div>`;
+      continue;
+    }
+    if (/^(\s*)([-*+]|\d+[.)])\s+/.test(line)) {
+      flush();
+      const [block, next] = mdListBlock(lines, i);
+      html += block;
+      i = next;
+      continue;
+    }
+    para.push(line.trim());
+    i++;
+  }
+  flush();
+  return html;
+}
+let dvContent = "";
+async function showDoc(unitKey) {
+  let d;
+  try {
+    d = await api(`/api/runs/${selected}/artifact?unit=${encodeURIComponent(unitKey)}`);
+  } catch (e) { alert(e.message); return; }
+  dvContent = d.content || "";
+  document.getElementById("dv_title").textContent = unitKey;
+  document.getElementById("dv_path").textContent =
+    d.path + (d.truncated ? " (truncated)" : "");
+  document.getElementById("dv_raw").checked = false;
+  dvRender();
+  document.getElementById("docview").showModal();
+}
+function dvRender() {
+  document.getElementById("dv_body").innerHTML =
+    document.getElementById("dv_raw").checked
+      ? `<pre class="mdraw mono">${esc(dvContent)}</pre>`
+      : mdRender(dvContent);
+}
+
 let detailSeq = 0;
 async function refreshDetail() {
   if (!selected) return;
@@ -551,7 +752,7 @@ async function refreshDetail() {
         <div class="unit">
           <div class="unit-head"><span class="unit-name">${esc(u.unit)}</span>
             <span class="st ${esc(u.status)}">${esc(u.status)}${time}</span></div>
-          <div class="chips">${draftChip(u.draft, u.unit)}${
+          <div class="chips">${draftChip(u.draft, u.unit)}${docChip(u)}${
             [].concat(
               (u.rounds || []).map(r => ({at: r.at || "", html: roundChip(r)})),
               (u.seals || []).map(x => ({at: x.at || "", html: sealChip(x, u.unit)}))
@@ -718,7 +919,7 @@ async function showStory(item) {
   } else if (d.story === "draft") {
     title = `${d.unit} — ${esc(DRAFT_SHORT[d.kind] || d.kind)}`;
     const res = d.result || {};
-    if (d.artifact) body += `<div class="story-meta">artifact: ${esc(d.artifact)}</div>`;
+    if (d.artifact) body += `<div class="story-meta">artifact: <span class="morelink" onclick="showDoc('${esc(d.unit)}')">${esc(d.artifact)}</span></div>`;
     if (res.files_changed && res.files_changed.length)
       body += `<div class="story-note">files_changed (${res.files_changed.length}):\n${esc(res.files_changed.join("\n"))}</div>`;
     if (res.suite_command)

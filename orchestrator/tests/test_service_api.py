@@ -672,6 +672,40 @@ class StoryApiTest(ServiceApiTest):
         self.assertEqual(body["reclassify"][0]["defer_ok"], True)
         self.assertEqual(body["reclassify"][0]["reclassifier"], "codex")
 
+    def test_artifact_serves_unit_doc(self):
+        # The panel's doc viewer: the client names a UNIT and gets the
+        # markdown the run's state recorded for it.
+        ws = self.workspace("ws-artifact")
+        rid = self._seed(ws)
+        os.makedirs(os.path.join(ws, "docs"), exist_ok=True)
+        with open(os.path.join(ws, "docs", "skeleton.md"), "w",
+                  encoding="utf-8") as fh:
+            fh.write("# Skeleton\n\nbody text\n")
+        status, body = self.request_json(
+            "GET", "/api/runs/%s/artifact?unit=skeleton" % rid)
+        self.assertEqual(status, 200)
+        self.assertEqual(body["artifact"], "docs/skeleton.md")
+        self.assertIn("# Skeleton", body["content"])
+        self.assertFalse(body["truncated"])
+
+    def test_artifact_errors(self):
+        ws = self.workspace("ws-artifact-bad")
+        rid = self._seed(ws)
+        # recorded artifact whose file does not exist on disk
+        status, _ = self.request_json(
+            "GET", "/api/runs/%s/artifact?unit=skeleton" % rid)
+        self.assertEqual(status, 404)
+        # unknown unit
+        status, _ = self.request_json(
+            "GET", "/api/runs/%s/artifact?unit=nope" % rid)
+        self.assertEqual(status, 404)
+        # unit with no artifact recorded yet
+        ws2 = self.workspace("ws-artifact-none")
+        status, body = self.create_run(ws2)
+        status, _ = self.request_json(
+            "GET", "/api/runs/%s/artifact?unit=skeleton" % body["run"]["id"])
+        self.assertEqual(status, 404)
+
     def test_story_errors(self):
         ws = self.workspace("ws-story-bad")
         rid = self._seed(ws)
