@@ -218,13 +218,41 @@ gate (seal) is invariant and outside the composition.
   mandatory: a fan-out hitting a quota window returns what it returns;
   the fuser works with the arrived subset and the missing dimensions
   requeue — a partial batch never fails the block.
-- **Block composition per profile.** The rounds phase becomes a declared
-  sequence, e.g. `["parallel_battery", "open_rounds"]` (parallel sweep,
-  then the classic loop over what remains), `["parallel_battery"] * N`
-  (sweep loops with the fuser as gate), or `["open_rounds"]` alone —
-  which IS the current process, preserved as just another block, so
-  compatibility costs nothing. decide() stays deterministic: blocks are
-  config data; acts-style per-block model/effort selection.
+- **The component algebra (operator refinement, 2026-07-07).** Four
+  orthogonal primitives compose the review phase; profiles are saved
+  compositions:
+  - **Action** — one atomic review call: `{scope (a battery question, a
+    standing lens, or open), family, model, effort}`. Produces raw
+    candidate findings.
+  - **Loop** — the dispatch shape over actions: `single`, `parallel`
+    (concurrent fan-out, one tamper snapshot around the batch,
+    partial-tolerant), `until_clean` (repeat while the evaluator passes
+    findings), `alternate_families` — the CURRENT sequential process,
+    preserved as just another loop, so compatibility costs nothing.
+  - **Fuser** — optional continuation certain loops use when they
+    parallelize: dedupe, contrast-vs-code, re-rate. Candidates in,
+    vetted candidates out. Valid only after a `parallel` loop; discards
+    only with citing evidence; fully ledger-recorded.
+  - **Evaluator** — the DETERMINISTIC per-stage gate: a config rule
+    over findings — `all` (everything passes to consideration: the
+    right rule when the pass was cheap/lay and fine judgment comes
+    later), `>= Pn`, `drift_risk <= threshold`,
+    `battery_complete` — deciding what opens a fix cycle, what records
+    as debt, what merely logs. No LLM inside the evaluator: models live
+    in actions and the fuser; the evaluator is pure decide() applying
+    rules.
+  - **Profile** — a NAMED, SAVED, reusable sequence of stages
+    `loop(actions) -> [fuser] -> evaluator`, stored as JSON documents
+    under the service home (`~/.impl_roadmap/profiles/`), selectable in
+    the panel's new-run form, and SNAPSHOTTED into the run's config at
+    creation — editing a profile later never mutates a live or closed
+    run's semantics (the existing config-snapshot doctrine). Once the
+    project-concept milestone lands, a project's KV may carry its
+    default profile.
+  Invariants live OUTSIDE the algebra and no profile can compose them
+  away: the final double seal, the gap semantics (stop-report-repair-
+  resume), battery presence, report-only + tamper snapshots on every
+  review, and full ledger recording of every stage.
 
 ## Already-live pieces this composes with
 
