@@ -68,8 +68,13 @@ read's own reason where it owns the read, the service's store tokens where
 the service opens the store); sealed reason tokens ride VERBATIM (no
 string-matching for the panel). Policy ids share the sealed
 fragment grammar (`kvstore.validate_fragment`, `kvstore.py:96`: non-blank,
-no `/`, no control characters — spaces legal) and ride as URL-encoded path
-segments; every sealed-valid id round-trips.
+no `/`, no control characters — spaces legal) and NEVER ride as URL path
+segments (amendment A2): the grammar admits ids like `.` and `..`, which
+browsers normalize away inside URL paths before any route sees them, so
+the upsert takes the id from the body's own object and the delete takes
+it from an URL-encoded `id` QUERY parameter — query components are exempt
+from path normalization, so every sealed-valid id round-trips (pinned by
+`test_delete_id_rides_query_never_a_path_segment`).
 
 - **`POST /api/projects/<slug>/policies`** — body is the FULL sealed policy
   object `{id, version, enabled, scope, prompt, contract}` (raw, never
@@ -89,21 +94,50 @@ segments; every sealed-valid id round-trips.
     carries only the domain object, because control revision ⟂ domain
     version is the frozen storage rule and exposing both invites exactly
     the confusion slice-03 separates.
-  - **A valid re-put over a malformed stored entry succeeds** and replaces
-    it (the sealed put validates the NEW value and never reads the old) —
-    this is the API-level recovery for one corrupt policy entry, consistent
-    with greenfield's no-repair reads: nothing tolerant-reads the old
-    value; it is replaced whole.
-- **`DELETE /api/projects/<slug>/policies/<id>`** → 200
+  - **A valid re-put over a malformed stored VALUE inside a VALID envelope
+    succeeds** and replaces it wholesale (the sealed put validates the NEW
+    value and reads the prior envelope only for its revision, never
+    validating or repairing the old value) — the API-level recovery for
+    one corrupt policy value, consistent with greenfield's no-repair
+    reads. Amendment A2 narrows the promise to EXACTLY that case: an
+    entry whose stored ENVELOPE is itself invalid (e.g. missing its
+    revision) cannot ride the put path — a gated envelope read before
+    the put (the delete's sealed-read gate, at envelope level) refuses
+    500 `malformed_store`, writing nothing. The gate, not the raw put,
+    owns the refusal: the raw sealed put reads the prior envelope only
+    for its revision, so on its own it would silently overwrite a
+    corrupt envelope whose revision is still readable — the gate
+    refuses EVERY invalid envelope, revision-readable or not. The operator
+    remedy there is store-level, because descriptors are disposable by
+    design (goal doctrine): remove the project's store file, DELETE the
+    now-storeless project, and re-declare it fresh. The DELETE step is
+    slice-07's guarded delete UNCHANGED: losing the store lifts only the
+    standing-law half of the guard, so bound or unprovable run states —
+    registered runs, or plain-forgotten retained states — still refuse
+    409 `project_in_use` until they are purge-deleted or read back
+    unbound (slice-07 A pins that matrix). The store-level legs are
+    observable end to end, pinned by
+    `test_invalid_envelope_blocks_both_verbs_remedy_is_store_level`.
+- **`DELETE /api/projects/<slug>/policies?id=<url-encoded id>`** → 200
   `{"ok": true, "policy": {"id": <id>, "deleted": true}}`, only for a LIVE
-  policy. The gate is one sealed read first: an unknown, tombstoned, or
+  policy. The id rides ONLY as the query parameter — no path-segment
+  delete route exists (amendment A2, rationale above); a missing or blank
+  `id` parameter is a blank fragment, refused 400 `invalid_policy` by the
+  sealed grammar — after the project-bound gates above, which run first on
+  every project route (a declared project's missing store still refuses
+  500 `missing_store` before any id is looked at), with no policy key
+  consulted and nothing written. The gate is one sealed read
+  first: an unknown, tombstoned, or
   never-written id refuses 404 `unknown_policy` and WRITES NOTHING — the
   raw envelope delete happily tombstones never-written keys
   (`kvstore.py:549`) and listings include tombstones by the frozen contract
   (`skeleton.md:128`–`:130`), so an ungated delete of a typo'd id would
   "succeed" and mint a junk tombstone key every listing carries forever. A
-  malformed stored value at the id refuses 5xx `malformed_policy` and
-  writes nothing (fail-closed; the recovery is the re-put above). A live
+  malformed stored policy at the id — VALUE or ENVELOPE; the sealed read
+  owns this read and answers with its own reason — refuses 5xx
+  `malformed_policy` and writes nothing (fail-closed; the recovery for a
+  malformed value is the re-put above, for an invalid envelope the
+  store-level remedy above). A live
   policy's delete tombstones its key through the sealed envelope delete:
   the id then leaves the project entry's `policy` list and its key reads
   `exists?: false`.
@@ -162,7 +196,24 @@ segments; every sealed-valid id round-trips.
   validates it — the sealed shape rides verbatim both ways. This is the
   human authoring surface for the roles slice-06 renders into PROJECT
   CONTEXT and the reuse-audit slice consumes.
-- All work-area refusals surface their sealed tokens verbatim.
+- **Dot-segment names are panel-unaddressable** (amendment A2's transport
+  rule, applied to work-area names): `.` and `..` are sealed-valid names —
+  `workareas.validate_name` (`workareas.py:111`) bans only blank,
+  oversize, `/`, and control characters, and unlike `validate_project_slug`
+  (`workareas.py:106`) does NOT exclude them — but slice-07's sealed
+  routes carry the name as a URL path segment, and browsers normalize dot
+  segments away before any route sees them: a work-area DELETE on `..`
+  would reach the PROJECT delete route. The panel therefore neither
+  authors nor addresses such names — declare, relabel, delete, and meta
+  refuse client-side with an explanatory message. This is the ONE
+  panel-authored refusal in this slice, and it is a transport-
+  addressability refusal, not domain validation: the sealed work-area
+  domain is unchanged and narrowed nowhere but at this browser transport,
+  the sealed slice-07 API is unchanged, and non-normalizing machine
+  clients still round-trip such names. Pinned by
+  `test_panel_excludes_dot_segment_work_area_names`.
+- All service-side work-area refusals surface their sealed tokens
+  verbatim.
 
 ### D. The safeguard editor (panel)
 
@@ -243,7 +294,9 @@ OBJECTS operator-editable — standing law, I8's UI-editing half.
   more.
 - **No new read model and no client-side validation.** Policy reads ride
   the assembled ProjectEntry; the panel never revalidates or reshapes
-  sealed values (work-area records, meta, policies).
+  sealed values (work-area records, meta, policies). The one carve-out is
+  C's dot-segment transport guard, which refuses URL addressability, not
+  value shape — no domain rule is duplicated client-side.
 - **No automatic versioning, no version derivation, no policy edit
   history.** Version is operator intent (sealed slice-03 non-goal); git and
   the ledger's `project_safeguard_seen` trail are the history — the KV
@@ -372,6 +425,14 @@ one line each:
   reuse-audit slice — without it `reuse_sources` stays authorable only by
   hand-rolled curl against a goal that pins the record as panel-editable.
   COST: one textarea form over the existing meta route.
+- **Work-area dot-segment transport guard (C).** VICTIM: the operator
+  whose browser silently mis-addresses a work-area named `.` or `..` —
+  the sealed routes put the name in a URL path segment, browsers
+  normalize dot segments away before any route sees them, so a work-area
+  DELETE on `..` reaches the PROJECT delete route: a destructive request
+  landing on the wrong resource. COST: one client-side guard function
+  plus four call sites in `panel.html`; no service or sealed-domain
+  change.
 - **Version-bump + precedence hint text (D).** Copy, not mechanism; it
   prevents silently-unrecorded safeguard changes. COST: two sentences.
 
@@ -407,10 +468,19 @@ verb (the service's verb set is a standing convention).
    `{"id", "deleted": true}`, removes it from the project entry, and its
    key reads tombstoned; deleting an unknown, never-written, or
    already-deleted id refuses 404 `unknown_policy` AND writes nothing (the
-   store's key listing is unchanged); a malformed stored policy refuses
-   5xx `malformed_policy` and writes nothing, while a valid re-put over it
-   succeeds and replaces it; an id containing spaces round-trips
-   URL-encoded.
+   store's key listing is unchanged); a malformed stored VALUE in a valid
+   envelope refuses 5xx `malformed_policy` and writes nothing, while a
+   valid re-put over it succeeds and replaces it; an invalid stored
+   ENVELOPE refuses BOTH verbs writing nothing (put 500 `malformed_store`,
+   delete 500 `malformed_policy`) and the store-level remedy — remove the
+   store file, delete the now-storeless project (still slice-07's guarded
+   delete: bound or unprovable run states refuse 409 `project_in_use`
+   until purged), re-declare fresh — is
+   observable end to end; the delete id rides ONLY as the URL-encoded `id`
+   query parameter: sealed-valid ids including `.`, `..`, and spaced ids
+   round-trip, a missing or blank id refuses 400 `invalid_policy`, and no
+   path-segment delete route exists (amendment A2; the named tests are
+   under Tests / Verification).
 5. **Guard reachability (A).** Creating a policy through the API makes
    `DELETE /api/projects/<slug>` refuse 409 `project_in_use`; deleting the
    policy through the API unblocks it — the standing-law lifecycle is
@@ -435,18 +505,29 @@ existing file):
 
 - **Upsert matrix** — create, read-back-in-entry, wholesale overwrite,
   no-control-revision response, verbatim `invalid_policy` /
-  `malformed_policy` / project-gate refusals, URL-encoded id round-trip
-  (AC1, AC3, AC4's encoding leg).
+  `malformed_policy` / project-gate refusals (AC1, AC3).
 - **Version discipline** — same-version rewrite, bumped-version rewrite,
   enabled-only flip preserving version (AC2).
 - **Delete matrix** — live delete + tombstoned readback + entry removal;
   the no-write pin for unknown/tombstoned ids (key-listing snapshot equal
-  before and after the 404); malformed-entry delete refusal vs re-put
-  recovery (AC4).
+  before and after the 404); amendment A2's pins by name:
+  `test_malformed_value_delete_refuses_and_reput_recovers` (malformed
+  VALUE in a valid envelope: delete refuses, valid re-put recovers),
+  `test_invalid_envelope_blocks_both_verbs_remedy_is_store_level`
+  (invalid envelope: both verbs refuse writing nothing; the store-level
+  remedy observable end to end), and
+  `test_delete_id_rides_query_never_a_path_segment` (query-parameter id:
+  `.` / `..` / spaced ids round-trip; blank id refused; no path-segment
+  route exists) (AC4).
 - **Guard lifecycle** — API-created policy blocks project delete, API
   delete unblocks (AC5).
 - **Served-page markers** — the three surfaces' hooks plus existing
   markers (AC6).
+- **Dot-segment name guard** —
+  `test_panel_excludes_dot_segment_work_area_names`: the served page
+  carries the guard function and its four call sites — declare, relabel,
+  delete, meta (C; no JS harness exists, so the guard is pinned at the
+  AC6 served-page level).
 - **Regression** — the pre-existing suite unmodified (AC7).
 
 Full slice verification: `python3 -m unittest discover -s orchestrator/tests

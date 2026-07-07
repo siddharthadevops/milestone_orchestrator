@@ -48,6 +48,50 @@ work-area name rides as a URL-encoded path segment):
     POST   /api/projects/<slug>/work-areas/<name>/meta   raw sealed value
                                    {reuse_sources: [{root, inventory,
                                    registry, consumption}]}
+    POST   /api/projects/<slug>/policies
+                                   safeguard upsert: the body is the FULL
+                                   sealed policy object {id, version,
+                                   enabled, scope, prompt, contract}, raw;
+                                   create and overwrite are one operation
+                                   keyed by the body's own id, the object
+                                   replaces the stored one WHOLESALE, and
+                                   version rides verbatim (never
+                                   auto-bumped). The response carries the
+                                   stored domain object only — the
+                                   envelope's control revision stays
+                                   internal to the store.
+    DELETE /api/projects/<slug>/policies?id=<url-encoded id>
+                                   tombstone one LIVE policy. The id rides
+                                   as a query parameter, NEVER a path
+                                   segment: the sealed fragment grammar
+                                   admits ids like "." and ".." that
+                                   browsers normalize away inside URL
+                                   paths (amendment A2), and query
+                                   components are exempt, so every
+                                   sealed-valid id round-trips. A sealed
+                                   read gates the raw envelope delete:
+                                   unknown/tombstoned/never-written ids
+                                   refuse 404 unknown_policy and write
+                                   NOTHING (an ungated delete would mint a
+                                   junk tombstone key that every listing
+                                   carries forever).
+
+Corrupt-policy recovery (amendment A2 narrows it): a malformed policy
+VALUE inside a VALID envelope refuses reads/deletes with malformed_policy
+and is recovered by a valid re-put, which replaces it wholesale — the
+sealed put validates only the NEW value and reads the prior envelope just
+for its revision. An entry whose stored ENVELOPE is itself invalid cannot
+ride that path: a gated envelope read before the put — the same sealed
+read that gates the delete, at envelope level — refuses 500
+malformed_store for EVERY invalid envelope, including corrupt envelopes
+whose revision is still readable (which the raw sealed put would silently
+overwrite); the delete refuses 500 malformed_policy. Both write nothing.
+The remedy there is store-level — descriptors are disposable by
+design: remove the project's store file, DELETE the (now storeless)
+project, and re-declare it fresh. That delete stays guarded: a lost store
+lifts only the standing-law half of the guard, and bound or unprovable
+run states still refuse 409 project_in_use until purge-deleted or read
+back unbound.
 
 A launch (POST /api/runs) may bind {project, work_area} instead of a bare
 workspace path: the stored descriptor's roots are validated against the
@@ -546,6 +590,94 @@ def _read_work_area_meta_checked(store, name):
     return meta["value"] if meta["exists?"] else None
 
 
+# Slice 3's policy reasons -> HTTP class, mirroring _WORK_AREA_STATUS:
+# validation 400, unknown 404, store corruption 5xx.
+_POLICY_STATUS = {
+    projects.UNKNOWN: 404,
+    projects.MALFORMED: 500,
+}
+
+
+def _policy_error(reason):
+    return ApiError(_POLICY_STATUS.get(reason, 400), reason)
+
+
+def _policy_store(home, slug):
+    return projects.PolicyStore(registry.projects_base(home), slug)
+
+
+def put_policy(home, slug, body):
+    """Safeguard upsert: the body is the FULL sealed policy object,
+    validated ONLY by the sealed slice-03 validator (the service adds no
+    validation and never reshapes); create and overwrite are one operation
+    keyed by the body's own id, and version is operator intent stored
+    verbatim. The response carries the stored domain object alone — the
+    envelope's control revision is independent of the domain version and
+    exposing both invites exactly the confusion slice-03 separates. A
+    valid re-put replaces a malformed stored VALUE wholesale (the sealed
+    put reads the prior envelope only for its revision, never validating
+    the old value). An invalid stored ENVELOPE refuses instead: the gated
+    envelope read below owns that refusal, because the raw sealed put
+    only fails on its own for envelopes whose revision is unreadable —
+    a corrupt envelope that still carries a readable revision would be
+    silently overwritten, and amendment A2 reserves invalid envelopes
+    for the store-level remedy (see the module docstring)."""
+    with registry.locked(home):
+        slug, _rec = _require_declared(home, slug)
+        _require_store_file(home, slug)
+        store = _policy_store(home, slug)
+        try:
+            value = projects.validate_policy_value(body)
+        except projects.PolicyValidationError as exc:
+            raise ApiError(400, exc.reason)
+        try:
+            # Envelope gate (mirrors the delete's sealed-read gate): the
+            # sealed envelope read validates the stored envelope shape and
+            # raises RuntimeError on ANY invalid envelope — including ones
+            # the raw put would overwrite — while passing live, tombstoned,
+            # never-written, and malformed-VALUE entries through untouched.
+            store.envelopes.read(store.keys.policy(value["id"]))
+            stored = store.put(value)
+        except projects.PolicyValidationError as exc:
+            raise ApiError(400, exc.reason)
+        except (KeyError, RuntimeError, TypeError):
+            raise ApiError(500, MALFORMED_STORE)
+        except OSError:
+            raise ApiError(500, UNREADABLE_STORE)
+        return stored["value"]
+
+
+def delete_policy(home, slug, policy_id):
+    """Gated safeguard delete: one sealed read FIRST, because the raw
+    envelope delete happily tombstones never-written keys and listings
+    include tombstones by the frozen contract — an ungated delete of a
+    typo'd id would "succeed" and mint a junk key every listing carries
+    forever. Unknown/tombstoned ids refuse 404 writing nothing; a
+    malformed stored policy (value OR envelope — the sealed read owns
+    this read and answers with its own reason) refuses 5xx writing
+    nothing. The id arrives from the URL-encoded `id` query parameter,
+    never a path segment (amendment A2: the sealed grammar admits "." and
+    "..", which browsers normalize away inside URL paths)."""
+    with registry.locked(home):
+        slug, _rec = _require_declared(home, slug)
+        _require_store_file(home, slug)
+        store = _policy_store(home, slug)
+        try:
+            current = store.read(policy_id)
+            if not current.ok:
+                raise _policy_error(current.reason)
+            deleted = store.delete(current.value["id"])
+        except ApiError:
+            raise
+        except (KeyError, RuntimeError, TypeError):
+            raise ApiError(500, MALFORMED_STORE)
+        except OSError:
+            raise ApiError(500, UNREADABLE_STORE)
+        if not deleted.ok:
+            raise ApiError(500, MALFORMED_STORE)
+        return {"id": current.value["id"], "deleted": True}
+
+
 def project_route_segments(route):
     """Decoded path segments after /api/projects. Slugs and work-area
     names ride URL-encoded, so every Slice 2-valid value (spaces
@@ -557,8 +689,13 @@ def project_route_segments(route):
     ]
 
 
-def projects_api(home, method, segments, body):
-    """Dispatch one /api/projects request. Returns (status, payload)."""
+def projects_api(home, method, segments, body, query=None):
+    """Dispatch one /api/projects request. Returns (status, payload).
+
+    `query` carries the decoded query parameters for the one route that
+    uses them: the policy delete's `id` (a query parameter by amendment
+    A2, so ids the sealed grammar allows but browsers would normalize
+    away as path segments still round-trip)."""
     n = len(segments)
     if n == 0:
         if method == "GET":
@@ -580,6 +717,18 @@ def projects_api(home, method, segments, body):
             return 200, {
                 "ok": True,
                 "work_area": declare_work_area(home, segments[0], body),
+            }
+    elif n == 2 and segments[1] == "policies":
+        if method == "POST":
+            return 200, {
+                "ok": True, "policy": put_policy(home, segments[0], body)
+            }
+        if method == "DELETE":
+            return 200, {
+                "ok": True,
+                "policy": delete_policy(
+                    home, segments[0], (query or {}).get("id", "")
+                ),
             }
     elif n == 3 and segments[1] == "work-areas":
         slug, name = segments[0], segments[2]
@@ -1922,7 +2071,8 @@ def make_handler(home):
                         home, parts[3], purge=query.get("purge") == "1")})
                 elif route == "/api/projects" or route.startswith("/api/projects/"):
                     status, payload = projects_api(
-                        home, "DELETE", project_route_segments(route), None
+                        home, "DELETE", project_route_segments(route), None,
+                        query=query,
                     )
                     self._json(status, payload)
                 else:

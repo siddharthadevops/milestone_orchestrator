@@ -1672,6 +1672,23 @@ class TestGuardedDelete(ProjectsServiceTestCase):
         os.unlink(state_path)  # the operator's repair
         self.expect(200, "DELETE", self.project_path())
 
+    def test_policy_lifecycle_drives_the_guard_end_to_end_over_http(self):
+        # Slice 8 AC5: slice-07 could only seed this guard through the
+        # store directly; the standing-law lifecycle is now drivable
+        # entirely over HTTP.
+        self.expect(200, "POST",
+                    self.project_path(PROJECT) + "/policies",
+                    policy_object())
+        self.refused(409, "project_in_use", "DELETE", self.project_path())
+        self.expect(
+            200, "DELETE",
+            self.project_path(PROJECT) + "/policies?id="
+            + self.q("lpc-reuse-audit"),
+        )
+        self.expect(200, "DELETE", self.project_path())
+        body = self.expect(200, "GET", "/api/projects")
+        self.assertEqual(body["projects"], [])
+
     def test_redeclare_after_delete_starts_empty(self):
         self.create_project("reborn", defaults={"docs_dir": "notes/{slug}"})
         primary = self.plain_dir("reborn-root")
@@ -1698,6 +1715,329 @@ class TestGuardedDelete(ProjectsServiceTestCase):
         )
         with open(self.kv_file("reborn"), "r", encoding="utf-8") as fh:
             self.assertEqual(json.load(fh), {"entries": {}})
+
+
+# ---------------------------------------------------------------------------
+# Slice 8, contract A: the policy authoring routes. Upsert through the
+# sealed PolicyStore, verbatim version discipline, the gated delete, and
+# amendment A2's two pins: the id rides a QUERY parameter (never a path
+# segment browsers could normalize away) and the corrupt-entry recovery
+# promise is narrowed to malformed VALUES inside VALID envelopes.
+
+
+class TestPolicyAuthoring(ProjectsServiceTestCase):
+    def setUp(self):
+        super().setUp()
+        self.create_project()
+
+    # -- helpers -------------------------------------------------------------
+
+    def policies_path(self, slug=PROJECT):
+        return self.project_path(slug) + "/policies"
+
+    def delete_path(self, policy_id, slug=PROJECT):
+        """The A2 route shape: the policy id as an URL-encoded query
+        parameter."""
+        return "%s?id=%s" % (self.policies_path(slug), self.q(policy_id))
+
+    def put_policy_api(self, policy, slug=PROJECT):
+        return self.expect(
+            200, "POST", self.policies_path(slug), policy
+        )["policy"]
+
+    def entry_policies(self, slug=PROJECT):
+        return self.expect(
+            200, "GET", self.project_path(slug)
+        )["project"]["policy"]
+
+    @staticmethod
+    def key_of(policy_id):
+        return kvstore.KeyBuilder().policy(policy_id)
+
+    def store_keys(self, slug=PROJECT):
+        client = kvstore.LocalKVClient(self.store_dir(slug))
+        return [i["key"] for i in client.list_entries()["items"]]
+
+    def store_bytes(self, slug=PROJECT):
+        """The strongest write-nothing pin: the store file's exact bytes."""
+        with open(self.kv_file(slug), "rb") as fh:
+            return fh.read()
+
+    # -- upsert matrix (AC1) ---------------------------------------------------
+
+    def test_upsert_creates_and_overwrites_wholesale(self):
+        policy = policy_object()
+        body = self.expect(200, "POST", self.policies_path(), policy)
+        # The response is the stored validated value under "policy" and
+        # nothing else: the envelope's control revision stays internal.
+        self.assertEqual(set(body), {"ok", "policy"})
+        self.assertEqual(set(body["policy"]), projects.POLICY_KEYS)
+        self.assertEqual(body["policy"], policy)
+        self.assertEqual(self.entry_policies(), [policy])
+        # Overwrite under the same id replaces the object WHOLESALE.
+        changed = policy_object()
+        changed["version"] = 2
+        changed["prompt"] = "Enumerate, cite, decide."
+        changed["scope"] = {
+            "kinds": ["implement", "review_round"],
+            "unit_kinds": ["slice_impl"],
+        }
+        self.assertEqual(self.put_policy_api(changed), changed)
+        self.assertEqual(self.entry_policies(), [changed])
+
+    def test_version_and_enabled_ride_verbatim(self):
+        policy = policy_object()
+        self.put_policy_api(policy)
+        key = self.key_of(policy["id"])
+        first = self.envelopes().read(key)["revision"]
+        # A re-put with the SAME version reads back with that version:
+        # nothing auto-bumps, even on a substance change.
+        same = dict(policy, prompt="Changed substance, same version.")
+        self.assertEqual(self.put_policy_api(same)["version"], 1)
+        self.assertEqual(self.entry_policies()[0]["prompt"], same["prompt"])
+        # A bumped version reads back bumped, verbatim.
+        bumped = dict(same, version=5)
+        self.assertEqual(self.put_policy_api(bumped)["version"], 5)
+        # The toggle's API path: ONLY enabled flips, version untouched.
+        flipped = dict(bumped, enabled=False)
+        stored = self.put_policy_api(flipped)
+        self.assertEqual((stored["version"], stored["enabled"]), (5, False))
+        # The control revision advanced with every write yet never leaked
+        # into the domain object: control revision ⟂ domain version.
+        env = self.envelopes().read(key)
+        self.assertEqual(env["revision"], first + 3)
+        self.assertEqual(env["value"], stored)
+
+    # -- refusals (AC3) --------------------------------------------------------
+
+    def test_refusal_matrix_rides_verbatim_tokens(self):
+        self.refused(400, "invalid_policy", "POST", self.policies_path(),
+                     policy_object("a/b"))
+        missing = policy_object()
+        del missing["prompt"]
+        extra = policy_object()
+        extra["surprise"] = True
+        unknown_kind = policy_object()
+        unknown_kind["scope"] = {
+            "kinds": ["reviewer"], "unit_kinds": ["slice_impl"]
+        }
+        zero_version = policy_object()
+        zero_version["version"] = 0
+        for bad in (missing, extra, unknown_kind, zero_version):
+            with self.subTest(bad=sorted(bad)):
+                self.refused(400, "malformed_policy", "POST",
+                             self.policies_path(), bad)
+        self.assertEqual(self.entry_policies(), [])  # nothing landed
+        # The project-bound gates of every project route, on both verbs.
+        self.refused(400, "invalid_project", "POST",
+                     self.policies_path(slug="a/b"), policy_object())
+        self.refused(404, "unknown_project", "POST",
+                     self.policies_path(slug="ghost"), policy_object())
+        self.refused(400, "invalid_project", "DELETE",
+                     self.delete_path("x", slug="a/b"))
+        self.refused(404, "unknown_project", "DELETE",
+                     self.delete_path("x", slug="ghost"))
+        # No new read surface: policies are read from the assembled entry.
+        status, body = self.request_json("GET", self.policies_path())
+        self.assertEqual((status, body["error"]), (404, "not found"))
+
+    def test_missing_store_refuses_and_the_write_resurrects_nothing(self):
+        os.unlink(self.kv_file())
+        self.refused(500, "missing_store", "POST", self.policies_path(),
+                     policy_object())
+        self.refused(500, "missing_store", "DELETE", self.delete_path("x"))
+        # Never a silent re-create: the lost store stays lost.
+        self.assertFalse(os.path.exists(self.kv_file()))
+
+    def test_corrupt_and_unreadable_store_refuse_stably(self):
+        with open(self.kv_file(), "w", encoding="utf-8") as fh:
+            fh.write("{ not json")
+        # The service opens the store for the put -> its store token; the
+        # sealed read owns the delete's gate read -> its own reason.
+        self.refused(500, "malformed_store", "POST", self.policies_path(),
+                     policy_object())
+        self.refused(500, "malformed_policy", "DELETE",
+                     self.delete_path("x"))
+        with mock.patch.object(
+            kvstore.LocalKVClient, "_load_doc",
+            side_effect=OSError("permission denied"),
+        ):
+            self.refused(500, "unreadable_store", "POST",
+                         self.policies_path(), policy_object())
+            self.refused(500, "unreadable_store", "DELETE",
+                         self.delete_path("x"))
+
+    # -- delete matrix (AC4) ---------------------------------------------------
+
+    def test_delete_gate_matrix(self):
+        policy = policy_object()
+        self.put_policy_api(policy)
+        key = self.key_of(policy["id"])
+        # Live delete: exact response, entry removal, tombstoned readback
+        # — and the key STAYS listed (frozen tombstones-in-listings).
+        body = self.expect(200, "DELETE", self.delete_path(policy["id"]))
+        self.assertEqual(body["policy"],
+                         {"id": policy["id"], "deleted": True})
+        self.assertEqual(self.entry_policies(), [])
+        record = self.envelopes().read(key)
+        self.assertFalse(record["exists?"])
+        self.assertEqual(record["revision"], 2)
+        self.assertIn(key, self.store_keys())
+        # Tombstoned and never-written ids refuse 404 and write NOTHING:
+        # no junk tombstone key is ever minted.
+        for ghost in (policy["id"], "never-written"):
+            with self.subTest(ghost=ghost):
+                before = self.store_bytes()
+                self.refused(404, "unknown_policy", "DELETE",
+                             self.delete_path(ghost))
+                self.assertEqual(self.store_bytes(), before)
+        self.assertNotIn(self.key_of("never-written"), self.store_keys())
+        # A tombstoned id is re-creatable fresh through the same upsert;
+        # its envelope revision continues past the tombstone.
+        self.put_policy_api(policy)
+        self.assertEqual(self.entry_policies(), [policy])
+        self.assertEqual(self.envelopes().read(key)["revision"], 3)
+
+    def test_malformed_value_delete_refuses_and_reput_recovers(self):
+        # Amendment A2 narrows the recovery promise to exactly this case:
+        # a malformed policy VALUE inside a VALID envelope. The sealed put
+        # validates only the NEW value and reads the prior envelope just
+        # for its revision, so a valid re-put replaces it wholesale.
+        key = self.key_of("broken")
+        self.envelopes().put(key, {"not": "a policy"})
+        before = self.store_bytes()
+        self.refused(500, "malformed_policy", "DELETE",
+                     self.delete_path("broken"))
+        self.assertEqual(self.store_bytes(), before)  # fail-closed
+        # The assembled read model fails closed too, reason verbatim.
+        self.refused(500, "malformed_policy", "GET", self.project_path())
+        # The API-level recovery: a valid re-put succeeds and replaces it.
+        fixed = policy_object("broken")
+        self.assertEqual(self.put_policy_api(fixed), fixed)
+        self.assertEqual(self.entry_policies(), [fixed])
+        self.assertEqual(self.envelopes().read(key)["revision"], 2)
+        # The recovered policy deletes normally.
+        self.expect(200, "DELETE", self.delete_path("broken"))
+        self.assertEqual(self.entry_policies(), [])
+
+    def test_invalid_envelope_blocks_both_verbs_remedy_is_store_level(self):
+        # Amendment A2's second pin: an entry whose stored ENVELOPE is
+        # itself invalid cannot be replaced through the put route nor
+        # tombstoned through the gated delete — BOTH verbs are gated by
+        # the sealed envelope read. The gate matters most for corrupt
+        # envelopes that still carry a readable revision: the raw sealed
+        # put would silently overwrite those (it reads the prior envelope
+        # only for its revision), so the matrix covers both the
+        # revision-unreadable and the revision-readable corruptions.
+        # Both verbs refuse writing nothing; the remedy is store-level,
+        # because descriptors are disposable by design: remove the store
+        # file, delete the now-storeless project, re-declare fresh.
+        client = kvstore.LocalKVClient(self.store_dir())
+        key = self.key_of("wedged")
+        intact = policy_object("wedged")
+        for shape in (
+            {"value": policy_object("wedged"), "deleted?": False},  # no rev
+            "not-even-a-dict",
+            # Revision readable, envelope still invalid:
+            {"revision": 3, "deleted?": False},  # value key missing
+            {"revision": 3, "value": intact, "deleted?": "yes"},  # bad flag
+            {"revision": 3, "value": intact, "deleted?": False,
+             "extra": 1},  # foreign key
+            {"revision": True, "value": intact, "deleted?": False},  # bool
+        ):
+            with self.subTest(shape=repr(shape)[:60]):
+                client.put(key, shape)
+                before = self.store_bytes()
+                self.refused(500, "malformed_store", "POST",
+                             self.policies_path(), policy_object("wedged"))
+                self.assertEqual(self.store_bytes(), before)
+                self.refused(500, "malformed_policy", "DELETE",
+                             self.delete_path("wedged"))
+                self.assertEqual(self.store_bytes(), before)
+        # The exact operator remedy, observable end to end.
+        os.unlink(self.kv_file())
+        self.expect(200, "DELETE", self.project_path())
+        created = self.create_project()
+        self.assertEqual(
+            created, {"slug": PROJECT, "work_areas": [], "policy": []}
+        )
+
+    def test_delete_id_rides_query_never_a_path_segment(self):
+        # Amendment A2's first pin. The sealed fragment grammar admits
+        # ids like "." and ".." that browsers NORMALIZE AWAY inside URL
+        # path segments (a policy delete could silently become a project
+        # delete), so the id rides as an URL-encoded query parameter and
+        # every sealed-valid id round-trips.
+        for policy_id in (".", "..", "dotted id", "50% & +plus"):
+            with self.subTest(policy_id=policy_id):
+                policy = policy_object(policy_id)
+                self.put_policy_api(policy)
+                self.assertEqual(self.entry_policies(), [policy])
+                self.expect(200, "DELETE", self.delete_path(policy_id))
+                self.assertEqual(self.entry_policies(), [])
+        # A missing or blank id parameter is a blank fragment: refused by
+        # the sealed grammar (the project-bound gates still run first);
+        # no policy key is consulted and nothing is written.
+        self.refused(400, "invalid_policy", "DELETE", self.policies_path())
+        self.refused(400, "invalid_policy", "DELETE",
+                     self.policies_path() + "?id=")
+        # No path-segment delete route EXISTS: the dotted forms browsers
+        # rewrite can never address a policy — or the project — here.
+        live = policy_object("..")
+        self.put_policy_api(live)
+        for segment in ("%2E%2E", "..", "."):
+            with self.subTest(segment=segment):
+                status, body = self.request_json(
+                    "DELETE", self.policies_path() + "/" + segment
+                )
+                self.assertEqual((status, body["error"]),
+                                 (404, "not found"))
+        self.assertEqual(self.entry_policies(), [live])  # nothing deleted
+        body = self.expect(200, "GET", "/api/projects")  # project intact
+        self.assertEqual(len(body["projects"]), 1)
+
+    # -- served-page markers (AC6) ---------------------------------------------
+
+    def test_served_page_carries_the_operator_surfaces(self):
+        req = urllib.request.Request(self.base + "/")
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            self.assertEqual(resp.status, 200)
+            text = resp.read().decode("utf-8")
+        # Pre-existing markers stay intact (test_root_serves_panel).
+        self.assertIn("impl roadmap", text)
+        self.assertIn('id="runs"', text)
+        # The standing projects surface and its opener.
+        self.assertIn('id="projects"', text)
+        self.assertIn('id="projList"', text)
+        self.assertIn("openProjects()", text)
+        # The safeguard editor dialog.
+        self.assertIn('id="sgeditor"', text)
+        self.assertIn('id="sg_json"', text)
+        # The launch-binding controls.
+        self.assertIn('id="f_project"', text)
+        self.assertIn('id="f_area"', text)
+        self.assertIn('id="f_resolved"', text)
+        # Every control rides the one read model and the policy routes.
+        self.assertIn("/api/projects", text)
+        self.assertIn("/policies", text)
+
+    def test_panel_excludes_dot_segment_work_area_names(self):
+        # Amendment A2's transport rule, applied to work-area NAMES: "."
+        # and ".." are sealed-valid names, but encodeURIComponent leaves
+        # dots bare and browsers normalize dot segments out of URL paths
+        # before any route sees them — a work-area DELETE on ".." would
+        # reach the PROJECT delete route. The panel therefore neither
+        # authors nor addresses such names (the sealed slice-07 API is
+        # unchanged; non-normalizing machine clients still round-trip
+        # them). No JS harness exists, so the guard is pinned at the
+        # served-page level (the AC6 posture): the guard function plus
+        # its four call sites — declare, relabel, delete, meta.
+        req = urllib.request.Request(self.base + "/")
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            self.assertEqual(resp.status, 200)
+            text = resp.read().decode("utf-8")
+        self.assertIn("function waDotSegment", text)
+        self.assertEqual(text.count("waDotSegment("), 5)
 
 
 if __name__ == "__main__":

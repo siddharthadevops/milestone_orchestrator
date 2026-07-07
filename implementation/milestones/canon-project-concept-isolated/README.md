@@ -420,4 +420,5 @@ fast paths.
 | slice_impl-06 (PROJECT CONTEXT block + project_safeguard_seen) | sealed | 11 | a1:findings, a2:findings, a3:findings, a4:pass | b0f9da8 |
 | slice_doc-07 (Service API: project/work-area CRUD + launch binding) | sealed | 36 | a1:pass | 8f0d969 |
 | slice_impl-07 (Service API: project/work-area CRUD + launch binding) | sealed | 66 | a1:pass | 486b2d7 |
-| slice_doc-08 (Panel operator surface) | sealed | 2 | a1:pass | - |
+| slice_doc-08 (Panel operator surface) | sealed | 2 | a1:pass | 7c06c8d |
+| slice_impl-08 (Panel operator surface) | sealed | 13 | a1:findings, a2:findings, a3:findings, a4:pass | - |

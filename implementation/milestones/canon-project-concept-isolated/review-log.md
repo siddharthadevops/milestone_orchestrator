@@ -531,3 +531,46 @@
 
 - codex half: 0 finding(s); workspace_modified=False; raw `.orchestrator/raw/slice_doc-08-seal-a1-codex.txt`
 
+## slice_impl-08 (Panel operator surface)
+
+- draft: kind `implement`, artifact `-` (raw: `.orchestrator/raw/slice_impl-08-draft.txt`)
+
+| Round | Kind | Family | Findings | Triage | Raw |
+|---|---|---|---|---|---|
+| slice_impl-08-codex-r1 | review_round | codex | 2 | 2 reported | `.orchestrator/raw/slice_impl-08-codex-r1.txt` |
+| slice_impl-08-claude-r1 | fix_findings | claude | 2 | 2 fixed | `.orchestrator/raw/slice_impl-08-fix1.txt` |
+| slice_impl-08-codex-r2 | delta_review | codex | 2 | 2 reported | `.orchestrator/raw/slice_impl-08-delta1.txt` |
+| slice_impl-08-claude-r2 | fix_findings | claude | 2 | 2 fixed | `.orchestrator/raw/slice_impl-08-fix2.txt` |
+| slice_impl-08-codex-r3 | delta_review | codex | 0 | clean | `.orchestrator/raw/slice_impl-08-delta2.txt` |
+| slice_impl-08-codex-r4 | review_round | codex | 0 | clean | `.orchestrator/raw/slice_impl-08-codex-r2.txt` |
+| slice_impl-08-claude-r3 | review_round | claude | 0 | clean | `.orchestrator/raw/slice_impl-08-claude-r1.txt` |
+| slice_impl-08-claude-r4 | fix_findings | claude | 1 | 1 fixed | `.orchestrator/raw/slice_impl-08-fix3.txt` |
+| slice_impl-08-codex-r5 | delta_review | codex | 0 | clean | `.orchestrator/raw/slice_impl-08-delta3.txt` |
+| slice_impl-08-claude-r5 | fix_findings | claude | 2 | 2 fixed | `.orchestrator/raw/slice_impl-08-fix4.txt` |
+| slice_impl-08-codex-r6 | delta_review | codex | 0 | clean | `.orchestrator/raw/slice_impl-08-delta4.txt` |
+| slice_impl-08-claude-r6 | fix_findings | claude | 1 | 1 fixed | `.orchestrator/raw/slice_impl-08-fix5.txt` |
+| slice_impl-08-codex-r7 | delta_review | codex | 0 | clean | `.orchestrator/raw/slice_impl-08-delta5.txt` |
+
+### Seal attempt a1 — findings
+
+- codex half: 1 finding(s); workspace_modified=False; raw `.orchestrator/raw/slice_impl-08-seal-a1-codex.txt`
+  - [P2] Work-area CRUD still sends sealed-valid '.'/'..' names through browser-normalized path segments.
+
+### Seal attempt a2 — findings
+
+- claude half: 1 finding(s); workspace_modified=False; raw `.orchestrator/raw/slice_impl-08-seal-a2-claude.txt`
+  - [P3] The panel ships a `waDotSegment` guard plus a dedicated test that blocks declaring/managing work-area names '.' and '..' (sealed-valid names per workareas.validate_name, which — unlike validate_project_slug:106 — does NOT reject them), but the sealed slice-08 note documents this new client-side validation path nowhere: contract C states no name restriction, the A1 Proportionality section lists five mechanisms and omits this sixth, and Tests/Verification never names test_panel_excludes_dot_segment_work_area_names — so the note and implementation disagree on what was built and the panel is silently stricter than the sealed API.
+- codex half: 1 finding(s); workspace_modified=False; raw `.orchestrator/raw/slice_impl-08-seal-a2-codex.txt`
+  - [P2] The implementation adds a panel-only ban on work-area names `.` and `..`, but the sealed work-area domain still allows them and the slice note does not record that narrower panel contract or its A1 victim/cost accounting.
+
+### Seal attempt a3 — findings
+
+- claude half: 0 finding(s); workspace_modified=False; raw `.orchestrator/raw/slice_impl-08-seal-a3-claude.txt`
+- codex half: 1 finding(s); workspace_modified=False; raw `.orchestrator/raw/slice_impl-08-seal-a3-codex.txt`
+  - [P1] Policy upsert does not enforce the invalid-envelope refusal for corrupt envelopes that still contain a revision.
+
+### Seal attempt a4 — PASSED
+
+- claude half: 0 finding(s); workspace_modified=False; raw `.orchestrator/raw/slice_impl-08-seal-a4-claude.txt`
+- codex half: 0 finding(s); workspace_modified=False; raw `.orchestrator/raw/slice_impl-08-seal-a4-codex.txt`
+
