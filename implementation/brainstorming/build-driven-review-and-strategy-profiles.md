@@ -222,8 +222,12 @@ gate (seal) is invariant and outside the composition.
   orthogonal primitives compose the review phase; profiles are saved
   compositions:
   - **Action** — one atomic review call: `{scope (a battery question, a
-    standing lens, or open), family, model, effort}`. Produces raw
-    candidate findings.
+    standing lens, open, or delta — the re-review of a pending fix
+    diff, today's delta_review as a scope), family, model, effort}`.
+    Produces raw candidate findings. Scopes cover doc AND impl units:
+    an `until_clean` loop re-enters after a fix either with a cheap
+    `delta` action or by re-running its full composition — a per-stage
+    knob.
   - **Loop** — the dispatch shape over actions: `single`, `parallel`
     (concurrent fan-out, one tamper snapshot around the batch,
     partial-tolerant), `until_clean` (repeat while the evaluator passes
