@@ -1196,7 +1196,8 @@ async function loadRecents() {
 /* ---- directory / file picker ---- */
 const picker = { mode: "dir", target: null, path: null, parent: null, sep: "/" };
 let pkSeq = 0;  // request sequence: stale /api/fs responses must not win
-function openPicker(mode, targetId) {
+function openPicker(mode, targetId, append) {
+  picker.append = !!append;
   picker.mode = mode;
   picker.target = targetId;
   picker.path = null;    // no listing loaded yet: "Use this directory" and
@@ -1257,7 +1258,13 @@ function pickerJoin(name) {
 }
 function pickerUseDir() {
   if (!picker.path) return;  // nothing successfully listed yet
-  document.getElementById(picker.target).value = picker.path;
+  const el = document.getElementById(picker.target);
+  if (picker.append) {
+    // Multi-root targets (one absolute path per line): picking APPENDS.
+    el.value = (el.value.trim() ? el.value.trim() + "\n" : "") + picker.path;
+  } else {
+    el.value = picker.path;
+  }
   document.getElementById("picker").close();
 }
 document.getElementById("pk_list").addEventListener("click", (ev) => {
@@ -1596,6 +1603,7 @@ function projectCard(p, i) {
       <div class="pathrow">
         <textarea id="wa_add_${key}" class="mono" rows="1"
           placeholder="additional read-only roots — one absolute path per line"></textarea>
+        <button class="btn" onclick="openPicker('dir', 'wa_add_' + waKey(projState.list[${i}].slug), true)">Add…</button>
         <button class="btn primary" onclick="declareArea(${i})">Declare</button>
       </div>
       <div class="hint">Declares pending v1; the first bound launch
