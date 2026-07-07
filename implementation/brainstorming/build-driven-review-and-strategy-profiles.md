@@ -80,8 +80,12 @@ The live reclassify machinery generalizes from "lone P3s at seal time" to
 the whole document gate: findings carry the reviewer's severity AND the
 opposite-family drift-risk rating where the gate needs it; the run's
 profile threshold decides deterministically what opens a fix cycle and
-what records as tracked debt (timeline chips, already live). Workers rate;
-config decides; every rating is auditable in the ledger. The existing
+what records as tracked debt (timeline chips, already live). THE ONE
+CANONICAL RULE, everywhere this note says "gate" (fixed by review — two
+sections phrased it in opposite directions): **rating <= threshold ->
+tracked debt (or log); rating > threshold -> fix cycle.** A "light"
+profile with threshold `medium` therefore fixes only high/xhigh. Workers
+rate; config decides; every rating is auditable in the ledger. The existing
 scale (`low | medium | high | xhigh`, `contracts.DRIFT_RISK_LEVELS`) is
 the vocabulary.
 
@@ -99,10 +103,15 @@ In EVERY profile, identically:
 - The report is a structured contract field (per gap: what is missing or
   in conflict, where — file:line on the upstream doc — and what decision
   it forces). The driver routes it as a repair queue on the upstream
-  unit: fix at P1 quality, delta review, reseal if the unit was sealed
-  (the amendment+reseal path exists — M164 skeleton resealed a3/a4),
-  then the downstream unit resumes with fresh budgets (the resume
-  amnesty markers, already live).
+  unit: fix at P1 quality, delta review, reseal, then the downstream
+  unit resumes with fresh budgets (the resume amnesty markers, already
+  live). HONEST SCOPE (corrected by review): today a SEALED unit is
+  terminal — the M164 "reseals" were failed seal ATTEMPTS reopening a
+  not-yet-sealed unit, not a reopen of a sealed one. The reform must
+  BUILD the reopen: a `reopen_for_repair` transition (sealed ->
+  repairing) with its ledger event, gate-commit discipline for the
+  repaired artifact, and the reseal path. New machinery, priced as
+  such.
 - Builders never rate their own blockers: a low self-rating would be
   permission to continue, which is drift through the back door. Any
   build-changing gap halts, no gray scale.
@@ -141,7 +150,18 @@ cost-of-being-wrong):
 | Doc gate | every finding opens a fix cycle | only rated >= high opens; rest -> tracked debt |
 | Doc register | dense contract prose allowed | lay register + hard table (§6) |
 | Gap semantics | stop-report-repair-resume | stop-report-repair-resume (identical) |
-| Implementation double seal | full, never relaxed | full, never relaxed |
+| Implementation seal | full cross-family approval, always (see precise invariant below) | full cross-family approval, always |
+
+THE SEAL INVARIANT, stated precisely (corrected by review — "double
+seal never relaxed" contradicted live production, where
+`single_seal_first_attempt` already applies to every unit kind): what
+can never be relaxed is CROSS-FAMILY APPROVAL OF THE SEALED BYTES —
+every family has approved the exact bytes that seal, through its clean
+round or its seal half. The a1 single seal satisfies this (it drops
+only the last reviewer's half, byte-identical to what that family just
+approved in rounds); any change after a family's approval requires that
+family to look again (a2+ full double seal). Decision 2's single-family
+reseal applies to DOC units only, never implementations.
 
 Profiles decompose into config dials (several already exist:
 `p3_defer_max_risk`, `p3_reclassify_debt`); the panel's new-run form
@@ -217,7 +237,11 @@ gate (seal) is invariant and outside the composition.
   workspace change voids the batch). Partial-result tolerance is
   mandatory: a fan-out hitting a quota window returns what it returns;
   the fuser works with the arrived subset and the missing dimensions
-  requeue — a partial batch never fails the block.
+  requeue — a partial batch never fails the block. BUT (fixed by
+  review) partial tolerance never waives the battery: the stage's
+  evaluator CANNOT pass the unit until every MANDATORY dimension has
+  completed — requeued mandatory dimensions block advancement; only
+  optional lenses may end a stage unrun.
 - **The component algebra (operator refinement, 2026-07-07).** Four
   orthogonal primitives compose the review phase; profiles are saved
   compositions:
@@ -236,7 +260,13 @@ gate (seal) is invariant and outside the composition.
   - **Fuser** — optional continuation certain loops use when they
     parallelize: dedupe, contrast-vs-code, re-rate. Candidates in,
     vetted candidates out. Valid only after a `parallel` loop; discards
-    only with citing evidence; fully ledger-recorded.
+    only with citing evidence; fully ledger-recorded. Re-rating bar
+    (fixed by review): a fuser re-rating that would FLIP a finding
+    across the gate threshold carries the same bar as a discard —
+    citing evidence in `light`, evidence plus an opposite-family concur
+    in `strict` — and a fuser rating counts as the opposite-family
+    rating only when the fuser IS opposite to the finding's raising
+    family.
   - **Evaluator** — the DETERMINISTIC per-stage gate: a config rule
     over findings — `all` (everything passes to consideration: the
     right rule when the pass was cheap/lay and fine judgment comes
@@ -278,9 +308,21 @@ gate (seal) is invariant and outside the composition.
   slice doc or the skeleton). The operating mode becomes:
   `review_loop(profile) -> impl_loop -> {done: seal; gap: repair the
   cited upstream through its own gate, then re-enter impl; blocked:
-  operator}` — repeated until done. The legacy mode survives as pure
+  operator}` — repeated until done. The gap TARGET vocabulary is closed
+  and covers the top of the chain (fixed by review): a slice
+  implementer targets its slice doc or the skeleton; the skeleton
+  drafter — who has no upstream unit — targets `goal`, which routes to
+  the OPERATOR as a blocked-with-report (chip + the report's forced
+  decision), because the goal document is operator-authored and only
+  its author repairs it. The legacy mode survives as pure
   config (an impl action pinned exit-0-always), so migration is a
-  profile choice, not a code fork. The back-edge is budgeted and judged
+  profile choice, not a code fork. FENCED (corrected by review — an
+  exit-0-always action contradicts the constitutional gap semantics):
+  `legacy` is a grandfathered COMPATIBILITY ARTIFACT, valid only for
+  bit-equivalence testing and for reproducing pre-reform behavior; it
+  is excluded from the constitution's claims, cannot be composed into
+  new profiles (a reform profile may not embed an exit-0-always
+  action), and the panel labels it as such. The back-edge is budgeted and judged
   like every loop: cycle caps with resume amnesties, and the
   convergence rubric (gaps shrinking and changing = converging; the
   same gap bouncing = stalled -> operator). The mechanical suite gate
@@ -345,6 +387,23 @@ profile config + panel selection, the two-register doc templates and
 their review rubrics, generalized threshold gating of doc rounds, and the
 hard requirement of `plain`.
 
+## Planning-context decisions on project-concept.md (fixed by review)
+
+This note consumes material from the project-concept milestone; the
+required Adopt/Revise/Reject record:
+
+- **Adopt (deferred dependency)**: the project KV as the future home of
+  per-project DEFAULT profiles — consumed only AFTER project-concept
+  lands; until then profiles live and resolve entirely in the service
+  home. Nothing in this milestone blocks on project-concept.
+- **Adopt as prototype, Revise into general form**: the reuse-audit
+  structured contract field (enumerated adopt/gap/reject entries with
+  file:line evidence, presence-checked) — revised from a single
+  safeguard into the form of the WHOLE question battery (§4).
+- **Reject (for this milestone)**: storing profiles or meter data in
+  the project KV now, and any per-project profile resolution logic —
+  premature until the KV exists and a second project needs it.
+
 ## Reuse posture (the battery, applied to this milestone itself)
 
 Existing workflow engines were checked as the loop-interpreter base and
@@ -394,9 +453,10 @@ REJECTED — adopt their concepts, not their engines:
 1. Gate vocabulary — **P0/P1 always open a fix cycle unrated**; rating
    calls are spent only on P2/P3, where the threshold can actually
    change the outcome. Rating a P0 adds cost and no information.
-2. Repair scope on a sealed upstream — **threshold-rated**: strict
-   reseals full double, light reseals single-family for gaps rated
-   below high. Same dial as everything else.
+2. Repair scope on a sealed upstream — **threshold-rated, DOC units
+   only**: strict reseals full double, light reseals single-family for
+   gaps rated below high. Implementation reseals always satisfy the
+   cross-family approval invariant (see the seal invariant in §5).
 3. Battery per unit kind — **skeleton carries the full battery per
    need** (victim / machinery / consumers / cheaper-alternative /
    pricing); **slice docs inherit** and answer only what is
@@ -466,8 +526,12 @@ REJECTED — adopt their concepts, not their engines:
     **its first 3 runs**, then thresholds arm on its own data.
 15. Profile identity — **both**: human `name@version` as the label,
     content hash as the truth (recorded in the run config snapshot;
-    verified on load — a mutated profile file fails loudly). The seal
-    bit lives in the profile file and is hash-verified. A run MAY
+    verified on load — a mutated profile fails loudly). Corrected by
+    review (the seal bit cannot live inside the hashed content — sealing
+    would change the identity): the hash covers the CANONICAL SEMANTIC
+    CONTENT only (the stages composition and its dials, canonical JSON);
+    name, version label, seal bit, and timestamps are METADATA outside
+    the hash. Sealing flips metadata; the identity is stable. A run MAY
     reference an unsealed profile; that first production reference is
     what seals it.
 16. Metric store — **service home, keyed by profile identity**
