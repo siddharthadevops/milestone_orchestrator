@@ -31,7 +31,8 @@ try:
 except ImportError:  # pragma: no cover - non-POSIX: flock degrades to the
     fcntl = None     # staleness check in step(); documented in the README
 
-from . import contracts, errclass, gitops, ledgers, prompts, runners
+from . import contracts, errclass, gitops, kvstore, ledgers, projects
+from . import prompts, runners, verifiers, workareas
 from . import state as st
 
 DEFAULT_CONFIG = {
@@ -262,6 +263,15 @@ class _SealHalfFailure(RuntimeError):
         RuntimeError.__init__(self, message)
         self.raw_texts = list(raw_texts or [])
         self.family = family
+
+
+class _StandingLawError(RuntimeError):
+    """Internal: a project-bound run's standing law (the policy store or
+    the work-area meta family) could not be read or validated for a worker
+    call. Routed into a recorded run failure — never a silent skip (a run
+    proceeding without its standing safeguards is the incident this
+    machinery exists to prevent), never a worker repair (the fault is the
+    operator's store, not the worker's output)."""
 
 
 class Driver(object):
@@ -591,6 +601,146 @@ class Driver(object):
                     )
         return amendments
 
+    def _read_standing_law(self, worker_kind, unit_kind):
+        """LIVE read of the project's standing law for one worker call:
+        (in-scope enabled policies, reuse-source roles or None), through
+        the sealed Slice 3 selection and Slice 2 meta seams. Any fault is
+        a _StandingLawError: unlike amendments.json (a lock-free hot-edit
+        file whose tolerant read returns nothing on a mid-write race), the
+        policy store is a CAS-disciplined KV validated on write — malformed
+        content there is corruption, and silently proceeding WITHOUT
+        standing law is the one behavior this surface must never exhibit."""
+        block = self.state["project"]
+        directory, project = block["directory"], block["project"]
+        store_dir = os.path.join(directory, project)
+        if not os.path.isdir(store_dir):
+            # Opening a client would silently recreate an EMPTY store and
+            # run the call with no law at all; refuse before that.
+            raise _StandingLawError(
+                "project %r has no readable store under %s (removed after "
+                "init?); repair the store and resume" % (project, directory)
+            )
+        store_file = os.path.join(store_dir, kvstore.STORE_FILENAME)
+        if not os.path.isfile(store_file):
+            # The project directory alone is not evidence of standing law:
+            # LocalKVClient would treat a missing file as an empty store.
+            raise _StandingLawError(
+                "project %r has no readable KV file at %s (removed after "
+                "init?); repair the store and resume" % (project, store_file)
+            )
+        try:
+            selected = projects.PolicyStore(directory, project).in_scope(
+                worker_kind, unit_kind
+            )
+        except OSError as exc:
+            raise _StandingLawError(
+                "policy store of project %r is unreadable while selecting "
+                "safeguards for (%s, %s): %s; repair the store and resume"
+                % (project, worker_kind, unit_kind, exc)
+            )
+        if not selected.ok:
+            raise _StandingLawError(
+                "policy store of project %r failed while selecting "
+                "safeguards for (%s, %s): %s; repair the store and resume"
+                % (project, worker_kind, unit_kind, selected.reason)
+            )
+        work_area = block["work_area"]
+        try:
+            record = workareas.WorkAreaStore(directory, project).read_meta(
+                work_area
+            )
+        except (OSError, RuntimeError) as exc:
+            raise _StandingLawError(
+                "work_area_meta:%s of project %r is unreadable: %s; repair "
+                "the store and resume" % (work_area, project, exc)
+            )
+        if not record["exists?"]:
+            # The meta family is optional by Slice 2's design: the map
+            # renders without roles.
+            return selected.value, None
+        try:
+            meta = workareas._meta_value(record["value"])
+        except ValueError as exc:
+            raise _StandingLawError(
+                "work_area_meta:%s of project %r is malformed (%s); repair "
+                "the store and resume" % (work_area, project, exc)
+            )
+        return selected.value, meta["reuse_sources"]
+
+    def _record_safeguards_seen(self, policies):
+        """`project_safeguard_seen`, mirroring `amendment_seen`: appended
+        the first time each (policy id, version) pair enters a prompt of
+        this run, with the same 300-character text clip; a version bump
+        re-records under the new version (the frozen ledger shape). Runs
+        BEFORE the worker call, so a call that later fails still leaves
+        what its worker was shown in the persisted ledger."""
+        seen = {
+            (e.get("policy_id"), e.get("version"))
+            for e in self.state["events"]
+            if e.get("type") == "project_safeguard_seen"
+        }
+        for policy in policies:
+            key = (policy["id"], policy["version"])
+            if key in seen:
+                continue
+            seen.add(key)
+            st.append_event(
+                self.state,
+                "project_safeguard_seen",
+                policy_id=policy["id"],
+                version=policy["version"],
+                text=str(policy["prompt"])[:300],
+            )
+
+    def _project_prompt_inputs(self, unit, kind):
+        """Standing project law for one worker call of a project-bound
+        run: (project_context, extensions, roots) — the PROJECT CONTEXT
+        builder input, the compiled in-scope contract extensions, and the
+        grant universe. (None, None, None) for a project-less run, whose
+        builders and validation then behave byte-identically to today.
+
+        Selection and meta are read live per call through this method;
+        callers choose the cadence (every ordinary call; ONCE per seal
+        attempt, so both halves share one snapshot — one judgment
+        surface). Roots and handles come from the state project block
+        recorded at init, never a live resolve: the map always describes
+        exactly the universe containment enforces, and a mid-run store
+        edit to the work-area record changes neither. Selection, meta,
+        and compile faults fail the run, loudly, consuming no worker call
+        (Slice 4's non-repairable error split, reused); the same call
+        that renders an obligation supplies its compiled extension to
+        enforcement — never one without the other."""
+        block = self.state.get("project")
+        if block is None:
+            return None, None, None
+        try:
+            policies, reuse_sources = self._read_standing_law(
+                kind, unit["kind"]
+            )
+            extensions = verifiers.compile_extensions(policies)
+        except (_StandingLawError, verifiers.VerifierError) as exc:
+            st.fail_run(
+                self.state,
+                "project standing law unavailable for the %s call: %s"
+                % (kind, exc),
+                unit=unit,
+            )
+            self._save()
+            raise StopStep(str(exc))
+        self._record_safeguards_seen(policies)
+        roots = [block["primary"]["path"]] + [
+            root["path"] for root in block["additional"]
+        ]
+        project_context = {
+            "project": block["project"],
+            "work_area": block["work_area"],
+            "primary": block["primary"],
+            "additional": block["additional"],
+            "reuse_sources": reuse_sources,
+            "safeguards": policies,
+        }
+        return project_context, extensions, roots
+
     def _busy_path(self):
         return os.path.join(self._runtime_dir(), "current.json")
 
@@ -618,9 +768,14 @@ class Driver(object):
         except OSError:
             pass
 
-    def _call(self, family, prompt, kind, raw_name, model=None, effort=None):
+    def _call(self, family, prompt, kind, raw_name, model=None, effort=None,
+              extensions=None, roots=None):
         """Validated worker call; on protocol/runner failure, fail the run
-        with the explanation recorded, then re-raise as StopStep."""
+        with the explanation recorded, then re-raise as StopStep.
+
+        extensions/roots: the in-scope compiled project contract
+        extensions and the run's grant universe (_project_prompt_inputs).
+        Absent, validation is exactly the base kind contract."""
         dm, de = self._family_defaults(family)
         model = model or dm
         effort = effort or de
@@ -634,7 +789,22 @@ class Driver(object):
                 output, result = runners.call_worker(
                     self.runner, family, prompt, kind, self.workspace,
                     model=model, effort=effort,
+                    extensions=extensions, roots=roots,
                 )
+            except verifiers.VerifierError as exc:
+                # Slice 4's non-repairable family (the operator's policy or
+                # the environment, e.g. a missing reuse-source directory —
+                # never the worker): a recorded run failure the operator
+                # repairs and resumes; no repair retry is burned.
+                self._clear_busy()
+                st.fail_run(
+                    self.state,
+                    "%s call: project standing-law fault (never the "
+                    "worker's): %s" % (kind, exc),
+                    unit=st.current_unit(self.state),
+                )
+                self._save()
+                raise StopStep(str(exc))
             except (runners.RunnerError, runners.WorkerProtocolError) as exc:
                 self._clear_busy()
                 self._save_protocol_raws(raw_name, exc)
@@ -804,14 +974,21 @@ class Driver(object):
         family, model, effort = self._act_profile(act)
         goal = self.state["goal"]
         amendments = self._amendments()
+        kind = {
+            st.UNIT_SKELETON: contracts.KIND_DRAFT_SKELETON,
+            st.UNIT_SLICE_DOC: contracts.KIND_DRAFT_SLICE_NOTE,
+            st.UNIT_SLICE_IMPL: contracts.KIND_IMPLEMENT,
+        }[unit["kind"]]
+        project_context, extensions, roots = self._project_prompt_inputs(
+            unit, kind
+        )
         if unit["kind"] == st.UNIT_SKELETON:
-            kind = contracts.KIND_DRAFT_SKELETON
             prompt = prompts.build_draft_skeleton(
                 family, self.workspace, goal, amendments=amendments,
                 artifact_path=ledgers.skeleton_path(self.state),
+                project_context=project_context,
             )
         elif unit["kind"] == st.UNIT_SLICE_DOC:
-            kind = contracts.KIND_DRAFT_SLICE_NOTE
             sl = self._slice_info(unit["slice_id"])
             prompt = prompts.build_draft_slice_note(
                 family, self.workspace, goal, sl, self._skeleton_artifact(),
@@ -819,9 +996,9 @@ class Driver(object):
                 note_path=ledgers.slice_note_path(
                     self.state, unit["slice_id"]
                 ),
+                project_context=project_context,
             )
         else:
-            kind = contracts.KIND_IMPLEMENT
             sl = self._slice_info(unit["slice_id"])
             prompt = prompts.build_implement(
                 family,
@@ -831,10 +1008,11 @@ class Driver(object):
                 self._slice_note_artifact(unit["slice_id"]),
                 self._verification_commands(unit),
                 amendments=amendments,
+                project_context=project_context,
             )
         output, result, raw_path = self._call(
             family, prompt, kind, "%s-draft" % st.unit_key(unit),
-            model=model, effort=effort,
+            model=model, effort=effort, extensions=extensions, roots=roots,
         )
         self._check_worker_blocked(unit, output, kind)
         st.record_draft(self.state, unit, kind, output, raw_path,
@@ -1006,14 +1184,18 @@ class Driver(object):
                 self._save()
                 raise StopStep("contested finding killed by pointer")
 
-    def _report_call(self, unit, family, prompt, kind, raw_name):
+    def _report_call(self, unit, family, prompt, kind, raw_name,
+                     extensions=None, roots=None):
         """Run a report-only call with mechanical no-edit enforcement.
 
         Returns (output, result, raw_path, changed): when the reviewer
         modified the workspace, changed is the non-empty list of paths
         that differ and the output must be discarded by the caller."""
         before = self._snapshot()
-        output, result, raw_path = self._call(family, prompt, kind, raw_name)
+        output, result, raw_path = self._call(
+            family, prompt, kind, raw_name, extensions=extensions,
+            roots=roots,
+        )
         changed = self._snapshot_diff(before, self._snapshot())
         return output, result, raw_path, changed
 
@@ -1063,6 +1245,9 @@ class Driver(object):
             "fixer", source.get("family"), default_family="codex"
         )
         consultation_family = self._resolve_act("consultation", family)
+        project_context, extensions, roots = self._project_prompt_inputs(
+            unit, contracts.KIND_FIX_FINDINGS
+        )
         prompt = prompts.build_fix_findings(
             family,
             self.workspace,
@@ -1081,6 +1266,7 @@ class Driver(object):
             amendments=self._amendments(),
             phantom_retry=bool(unit.get("phantom_retried")),
             killed_notice=bool(unit.pop("killed_fix_notice", None)),
+            project_context=project_context,
         )
         n_fix = 1 + len(
             [r for r in unit["rounds"] if r["kind"] == contracts.KIND_FIX_FINDINGS]
@@ -1092,6 +1278,8 @@ class Driver(object):
             "%s-fix%d" % (st.unit_key(unit), n_fix),
             model=fix_model,
             effort=fix_effort,
+            extensions=extensions,
+            roots=roots,
         )
         self._check_worker_blocked(unit, output, contracts.KIND_FIX_FINDINGS)
         try:
@@ -1268,6 +1456,9 @@ class Driver(object):
                 fixer_family = r["family"]
                 break
         family = self._resolve_act("delta_review", fixer_family)
+        project_context, extensions, roots = self._project_prompt_inputs(
+            unit, contracts.KIND_DELTA_REVIEW
+        )
         prompt = prompts.build_delta_review(
             family,
             self.workspace,
@@ -1278,6 +1469,7 @@ class Driver(object):
             unit_kind=unit["kind"],
             governing=self._governing(unit),
             amendments=self._amendments(),
+            project_context=project_context,
         )
         n_delta = 1 + len(
             [r for r in unit["rounds"] if r["kind"] == contracts.KIND_DELTA_REVIEW]
@@ -1288,6 +1480,8 @@ class Driver(object):
             prompt,
             contracts.KIND_DELTA_REVIEW,
             "%s-delta%d" % (st.unit_key(unit), n_delta),
+            extensions=extensions,
+            roots=roots,
         )
         if changed:
             # The pending fix delta and the tampering are now entangled;
@@ -1501,9 +1695,13 @@ class Driver(object):
                         c if (c.isalnum() or c in "_.-") else "_"
                         for c in str(finding.get("id", ""))
                     )[:64] or "f"
+                    pc, _rx, _rr = self._project_prompt_inputs(
+                        unit, contracts.KIND_RECLASSIFY
+                    )
                     prompt = prompts.build_reclassify(
                         opp, self.workspace, finding, self._artifact(unit),
                         unit_kind=unit["kind"], amendments=self._amendments(),
+                        project_context=pc,
                     )
                     raw_name = "%s-reclassify-%s-%s" % (
                         st.unit_key(unit), raising_family, safe_id)
@@ -1590,6 +1788,9 @@ class Driver(object):
             )
             self._save()
             raise StopStep("round cap")
+        project_context, extensions, roots = self._project_prompt_inputs(
+            unit, contracts.KIND_REVIEW_ROUND
+        )
         prompt = prompts.build_review_round(
             family,
             self.workspace,
@@ -1601,6 +1802,7 @@ class Driver(object):
             governing=self._governing(unit),
             amendments=self._amendments(),
             verified_suite=self._verified_suite(unit),
+            project_context=project_context,
         )
         # Raw/label numbering counts ALL history (like fix/delta and the
         # ledger round ids): the amnesty-relative `done` must never make a
@@ -1618,6 +1820,8 @@ class Driver(object):
             prompt,
             contracts.KIND_REVIEW_ROUND,
             "%s-%s-r%d" % (st.unit_key(unit), family, label_no),
+            extensions=extensions,
+            roots=roots,
         )
         if changed:
             # Rounds run on a clean worktree (everything is amended), so a
@@ -1743,6 +1947,15 @@ class Driver(object):
         tamper_family = None  # sequential mode can attribute the tampering
         amendments = self._amendments()  # once, before any half thread
         verified_suite = self._verified_suite(unit)
+        # A seal attempt is ONE judgment surface: selection/compile/meta
+        # run once here, in the main thread (fail-closed before any half
+        # runs; the seen ledger gains at most one event per pair), and
+        # both halves share the snapshot — an edit between sequential
+        # halves binds the next call after the attempt, never the second
+        # half. Same once-before-half-threads pattern as amendments.
+        project_context, project_extensions, project_roots = (
+            self._project_prompt_inputs(unit, contracts.KIND_SEAL_HALF)
+        )
 
         def run_half_pure(family):
             """One seal half, mutating NO shared state (thread-safe): any
@@ -1752,6 +1965,7 @@ class Driver(object):
                 family, self.workspace, goal, desc, artifact, registry,
                 unit_kind=unit["kind"], governing=self._governing(unit),
                 amendments=amendments, verified_suite=verified_suite,
+                project_context=project_context,
             )
             raw_name = "%s-seal-a%d-%s" % (st.unit_key(unit), attempt_no, family)
             try:
@@ -1764,6 +1978,17 @@ class Driver(object):
                     self.workspace,
                     model=dm,
                     effort=de,
+                    extensions=project_extensions,
+                    roots=project_roots,
+                )
+            except verifiers.VerifierError as exc:
+                # Slice 4's non-repairable family (operator/environment,
+                # never the worker); no state mutation here — the caller
+                # records the failure.
+                raise _SealHalfFailure(
+                    "%s call: project standing-law fault (never the "
+                    "worker's): %s" % (contracts.KIND_SEAL_HALF, exc),
+                    family=family,
                 )
             except (runners.RunnerError, runners.WorkerProtocolError) as exc:
                 self._save_protocol_raws(raw_name, exc)
@@ -2115,16 +2340,190 @@ def default_state_path(workspace, docs_dir=None):
     return os.path.join(workspace, ".orchestrator", "state.json")
 
 
-def init_run(goal, workspace, config=None, state_path=None, name=None):
+# Init-specific project refusal causes. Causes raised out of Slice 2's
+# validation/read seams reuse the workareas vocabulary verbatim
+# (invalid_project, invalid_name, unknown_work_area, malformed_work_area,
+# work_area_not_ready); an invalid defaults object reuses
+# projects.INVALID_DEFAULTS. Only the causes no store seam owns are minted
+# here.
+WORKSPACE_MISMATCH = "workspace_mismatch"
+MISSING_PRIMARY_PATH = "missing_primary_path"
+
+_BINDING_REQUIRED_KEYS = ("directory", "project", "work_area")
+
+
+class ProjectResolutionError(RuntimeError):
+    """A project binding handed to init_run could not be resolved. Raised
+    BEFORE anything is created — no state file, no directory, no KV write —
+    so a refused init leaves nothing to resume or clean up. `cause` carries
+    one machine-readable reason (Slice 2's validation/read vocabulary,
+    projects.INVALID_DEFAULTS, or the init-specific WORKSPACE_MISMATCH /
+    MISSING_PRIMARY_PATH) so the service launcher can map project refusals
+    to 400-class API errors without string-matching. Deliberately distinct
+    from FileExistsError (state already exists — also unchanged)."""
+
+    def __init__(self, cause, message):
+        RuntimeError.__init__(self, message)
+        self.cause = cause
+
+
+def _resolve_project_binding(binding, workspace, config_override):
+    """Resolve a (project, work_area) binding through Slice 2's sealed
+    READY-gated seam (WorkAreaStore.resolve), READ-ONLY: a successful
+    resolution writes no KV entry and creates no directory (the store is
+    not even opened until the pure validations pass and its project
+    directory is known to exist). Returns (workspace, project_block,
+    effective_config):
+
+    - workspace: the resolved work area's primary.path — the repo the
+      driver owns and executes in. A caller-supplied workspace must equal
+      it EXACTLY (no symlink-resolving or normalizing comparison is
+      attempted: ambiguity refuses);
+    - project_block: {directory, project, work_area, primary, additional}
+      — the state seam Slices 6 and 8 consume, roots verbatim in Slice 2's
+      public {path, device} shape;
+    - effective_config: DEFAULT_CONFIG <- binding defaults <-
+      config_override, each applied with merge_config (the single merge
+      source): launch intent wins over standing project defaults, which
+      win over built-ins.
+    """
+    if not isinstance(binding, dict):
+        raise ValueError("project binding must be a dict")
+    unknown = sorted(set(binding) - set(_BINDING_REQUIRED_KEYS) - {"defaults"})
+    if unknown:
+        raise ValueError("project binding has unknown keys: %s" % unknown)
+    missing = [k for k in _BINDING_REQUIRED_KEYS if k not in binding]
+    if missing:
+        raise ValueError("project binding is missing keys: %s" % missing)
+    directory = binding["directory"]
+    if not isinstance(directory, str) or not directory.strip():
+        raise ValueError(
+            "project binding directory must be a non-empty string"
+        )
+    directory = os.path.abspath(directory)
+
+    try:
+        project = workareas.validate_project_slug(binding["project"])
+        work_area = workareas.validate_name(binding["work_area"])
+    except workareas.WorkAreaValidationError as exc:
+        raise ProjectResolutionError(
+            exc.reason, "invalid project binding: %s" % exc.reason
+        ) from exc
+
+    # Defaults are validated before any store access so every refusal —
+    # this one included — creates nothing (opening the KV would
+    # materialize the project directory and its lock file).
+    defaults = None
+    if "defaults" in binding:
+        try:
+            if not isinstance(binding["defaults"], dict):
+                raise ValueError("defaults must be a JSON object")
+            defaults = kvstore.canonical_json_value(binding["defaults"])
+        except ValueError as exc:
+            raise ProjectResolutionError(
+                projects.INVALID_DEFAULTS,
+                "project defaults must be a JSON-plain object: %s" % exc,
+            ) from exc
+
+    if not os.path.isdir(os.path.join(directory, project)):
+        raise ProjectResolutionError(
+            workareas.UNKNOWN,
+            "project %r has no work-area store under %s"
+            % (project, directory),
+        )
+    resolved = workareas.WorkAreaStore(directory, project).resolve(work_area)
+    if not resolved.ok:
+        raise ProjectResolutionError(
+            resolved.reason,
+            "cannot resolve work area %r of project %r: %s"
+            % (work_area, project, resolved.reason),
+        )
+    primary = resolved.value["primary"]
+    additional = resolved.value["additional"]
+
+    if workspace is None:
+        workspace = primary["path"]
+    elif workspace != primary["path"]:
+        raise ProjectResolutionError(
+            WORKSPACE_MISMATCH,
+            "supplied workspace %r is not work area %r's primary.path %r; "
+            "a project-bound run executes in the primary root (omit the "
+            "workspace to derive it)" % (workspace, work_area,
+                                         primary["path"]),
+        )
+    if not os.path.isdir(primary["path"]):
+        raise ProjectResolutionError(
+            MISSING_PRIMARY_PATH,
+            "work area %r's primary.path %r is not an existing directory; "
+            "init never fabricates the executed repo"
+            % (work_area, primary["path"]),
+        )
+
+    config = load_config(None)
+    if defaults is not None:
+        merge_config(config, defaults)
+    if config_override:
+        merge_config(config, config_override)
+    project_block = {
+        "directory": directory,
+        "project": project,
+        "work_area": work_area,
+        "primary": primary,
+        "additional": additional,
+    }
+    return workspace, project_block, config
+
+
+def init_run(goal, workspace=None, config=None, state_path=None, name=None,
+             project=None, config_override=None):
     """Create a new run state. `config` is a merged config dict (see
     load_config) or None for defaults. Returns the state path.
     Raises FileExistsError instead of overwriting an existing state; the
     claim is atomic (st.save_new, exclusive hard link), so two concurrent
-    inits of the same workspace cannot both win — no exists() TOCTOU."""
-    workspace = os.path.abspath(workspace)
-    os.makedirs(workspace, exist_ok=True)
-    if config is None:
-        config = load_config(None)
+    inits of the same workspace cannot both win — no exists() TOCTOU.
+
+    `project` (optional) binds the run to a (project, work_area) pair:
+    {"directory": <service-level store dir>, "project": <slug>,
+    "work_area": <name>} plus optional "defaults" (the project record's
+    standing config conventions). Resolution happens once, here, read-only
+    (see _resolve_project_binding): the run's workspace IS the work area's
+    primary.path — which must already exist; a bound init never creates
+    the executed repo — the resolved block lands in the state document,
+    and the ledger records exactly one project_resolved event. A binding
+    that cannot be resolved raises ProjectResolutionError and creates
+    nothing. Because project defaults must merge BENEATH per-launch
+    intent, a bound init takes the launch's own override separately, as
+    `config_override`, never pre-merged into `config`. Without a binding,
+    behavior is byte-identical to the pre-project seam."""
+    if project is not None:
+        if config is not None:
+            raise ValueError(
+                "project-bound init orders project defaults beneath the "
+                "launch's own intent; pass the launch override as "
+                "config_override, not a pre-merged config"
+            )
+        if config_override is not None and not isinstance(
+            config_override, dict
+        ):
+            raise ValueError("config_override must be a dict")
+        workspace, project_block, config = _resolve_project_binding(
+            project, workspace, config_override
+        )
+    else:
+        if config_override is not None:
+            raise ValueError(
+                "config_override applies only to project-bound init; "
+                "merge launch overrides into config instead"
+            )
+        if workspace is None:
+            raise ValueError(
+                "workspace is required without a project binding"
+            )
+        project_block = None
+        workspace = os.path.abspath(workspace)
+        os.makedirs(workspace, exist_ok=True)
+        if config is None:
+            config = load_config(None)
     template = (config or {}).get("docs_dir") or "docs"
     slug = None
     if "{slug}" in template:
@@ -2153,8 +2552,21 @@ def init_run(goal, workspace, config=None, state_path=None, name=None):
                 "docs_dir cannot host two milestones; use a {slug} "
                 "template or remove/rename the directory" % fixed
             )
-    state = st.new_state(goal, workspace, config, name=name, slug=slug)
+    state = st.new_state(goal, workspace, config, name=name, slug=slug,
+                         project=project_block)
     st.append_event(state, "initialized", goal=goal)
+    if project_block is not None:
+        # Frozen ledger shape: payload exactly {project, work_area}, once
+        # per run, at init (project-concept.md:254, fixture I10).
+        # Exactly-once needs no guard of its own: this is the only append
+        # site, save_new's exclusive claim makes init itself exactly-once,
+        # and nothing re-resolves after init.
+        st.append_event(
+            state,
+            "project_resolved",
+            project=project_block["project"],
+            work_area=project_block["work_area"],
+        )
     path = state_path or default_state_path(workspace, state.get("docs_dir"))
     st.save_new(path, state)
     return path

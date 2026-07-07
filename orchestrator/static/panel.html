@@ -224,6 +224,34 @@
   .pick:hover { background: var(--accent-soft); }
   .pick .ico { flex: none; }
   .pk-note { font-size: 11px; color: var(--dim); margin-bottom: 8px; }
+
+  /* standing projects surface (slice 8) */
+  #projects { width: 820px; }
+  #projList { max-height: 58vh; overflow-y: auto; }
+  .proj-head { display: flex; align-items: baseline; gap: 10px;
+               margin-bottom: 4px; flex-wrap: wrap; }
+  .proj-head h3 { margin-bottom: 0; }
+  .proj-head .spacer { margin-left: auto; }
+  .subhead { font-size: 11px; text-transform: uppercase;
+             letter-spacing: .07em; color: var(--dim); margin: 12px 0 4px; }
+  .wa, .pol { padding: 6px 0; border-top: 1px dashed var(--line);
+              font-size: 12.5px; }
+  .ops { float: right; display: flex; gap: 4px; }
+  .kv { color: var(--dim); font-size: 11.5px; }
+  .kv.mono { overflow-wrap: anywhere; }
+  .wa-form input, .wa-form textarea { border: 1px solid var(--line);
+    border-radius: 8px; padding: 6px 10px; font: inherit; font-size: 13px; }
+  .wa-form input, .wa-form textarea { flex: 1; }
+  .wa-form textarea { resize: vertical; }
+  .wa-form .pathrow { margin-bottom: 6px; }
+  .jsonarea { width: 100%; min-height: 240px; font-family: "SF Mono",
+    ui-monospace, Menlo, monospace; font-size: 12px; border: 1px solid
+    var(--line); border-radius: 8px; padding: 8px; resize: vertical; }
+  .run .handles { color: var(--accent); font-size: 12px; overflow: hidden;
+                  text-overflow: ellipsis; white-space: nowrap; }
+  .field .pathrow select { flex: 1; border: 1px solid var(--line);
+    border-radius: 8px; padding: 7px 10px; font: inherit; background: #fff;
+    min-width: 0; }
 </style>
 </head>
 <body>
@@ -236,6 +264,7 @@
   <aside>
     <div class="actions">
       <button class="btn primary" onclick="openForm()">+ New milestone</button>
+      <button class="btn" onclick="openProjects()">Projects</button>
     </div>
     <div id="runs"></div>
   </aside>
@@ -247,10 +276,17 @@
   <h2>Launch milestone</h2>
   <div class="field"><label>Name</label>
     <input id="f_name" placeholder="my-feature"></div>
+  <div class="field"><label>Project binding (optional — launch against a
+      declared work area instead of a bare path)</label>
+    <div class="pathrow">
+      <select id="f_project" onchange="onLaunchProject()"></select>
+      <select id="f_area" onchange="onLaunchArea()"></select>
+    </div>
+    <div class="hint" id="f_resolved"></div></div>
   <div class="field"><label>Workspace directory *</label>
     <div class="pathrow">
       <input id="f_ws" class="mono" list="dl_ws" placeholder="/path/to/project/work">
-      <button class="btn" type="button" onclick="openPicker('dir','f_ws')">Browse…</button>
+      <button class="btn" type="button" id="f_ws_browse" onclick="openPicker('dir','f_ws')">Browse…</button>
     </div>
     <datalist id="dl_ws"></datalist>
     <div class="hint">Must be the ROOT of an existing git repository
@@ -409,6 +445,45 @@
   </div>
 </dialog>
 
+<dialog id="projects">
+  <h2>Projects — standing configuration</h2>
+  <div class="hint" style="margin-bottom:10px">Operator-owned ecosystems:
+    work areas (the roots runs execute against) and safeguards (standing
+    law shown to every bound worker). Configuration outlives runs; edits
+    bind the next launch or worker call.</div>
+  <div id="projError" style="color:var(--bad);font-size:12px;margin-bottom:8px"></div>
+  <div id="projList"></div>
+  <div class="card">
+    <h3>New project</h3>
+    <div class="wa-form">
+      <div class="pathrow">
+        <input id="np_slug" placeholder="slug * (e.g. life-prod)">
+        <input id="np_defaults" class="mono"
+          placeholder='defaults JSON object (optional)'>
+        <button class="btn primary" onclick="createProject()">Create</button>
+      </div>
+    </div>
+    <div class="hint">Declaring materializes the project's empty local KV
+      store; work areas and safeguards are added on its card above.</div>
+  </div>
+  <div class="formrow"><span></span>
+    <button class="btn" onclick="document.getElementById('projects').close()">Close</button>
+  </div>
+</dialog>
+
+<dialog id="sgeditor">
+  <h2 id="sg_title">Edit</h2>
+  <div class="field">
+    <textarea id="sg_json" class="jsonarea" spellcheck="false"></textarea>
+    <div class="hint" id="sg_hint"></div>
+  </div>
+  <div class="formrow">
+    <span id="sg_error" style="color:var(--bad);font-size:12px;margin-right:auto"></span>
+    <button class="btn" onclick="document.getElementById('sgeditor').close()">Cancel</button>
+    <button class="btn primary" onclick="saveSgEditor()">Save</button>
+  </div>
+</dialog>
+
 <script>
 let selected = null;
 let goalOpen = false;
@@ -489,6 +564,7 @@ async function refreshRuns() {
       <div class="run ${r.id === selected ? "sel" : ""}" onclick="select('${esc(r.id)}')">
         <div class="name"><span class="dot ${r.process}"></span>
           ${esc(r.name)}</div>
+        ${r.project ? `<div class="handles">${esc(r.project)} / ${esc(r.work_area)}</div>` : ""}
         <div class="ws mono">${esc(r.workspace)}</div>
       </div>`).join("") ||
       '<div class="empty">No milestones yet.</div>';
@@ -746,6 +822,8 @@ async function refreshDetail() {
         ${workingChip(s)}
         <span class="st">${running ? "· driver running (pid " + s.pid + ")" : "· driver stopped"}${runTime(sum, s)}</span></h2>
       <div class="goalline mono">${esc(s.workspace)}${
+        s.project
+          ? ` · ${esc(s.project)} / ${esc(s.work_area)}` : ""}${
         sum && sum.suite_command
           ? ` · suite: ${esc(sum.suite_command)}` : ""}</div>`;
     if (sum) {
@@ -1102,6 +1180,7 @@ async function del() {
 function openForm() {
   document.getElementById("formError").textContent = "";
   loadRecents();
+  loadLaunchProjects();
   document.getElementById("form").showModal();
 }
 async function loadRecents() {
@@ -1245,11 +1324,24 @@ async function submitForm() {
   err.textContent = "";
   const payload = {
     name: document.getElementById("f_name").value.trim() || undefined,
-    workspace: document.getElementById("f_ws").value.trim(),
     goal: document.getElementById("f_goal").value.trim() || undefined,
     goal_doc: document.getElementById("f_doc").value.trim() || undefined,
     autostart: document.getElementById("f_auto").checked,
   };
+  const binding = launchBinding();
+  if (binding === undefined) {
+    err.textContent =
+      "select a work area for the project binding (or set it back to none)";
+    return;
+  }
+  if (binding) {
+    // A bound launch posts the two path-free handles WITHOUT a
+    // workspace path — it derives from the work area's primary root.
+    payload.project = binding.project;
+    payload.work_area = binding.work_area;
+  } else {
+    payload.workspace = document.getElementById("f_ws").value.trim();
+  }
   const verify = document.getElementById("f_verify").value.trim();
   const cfgText = document.getElementById("f_cfg").value.trim();
   let config = {};
@@ -1274,6 +1366,446 @@ async function submitForm() {
     refreshRuns();
   } catch (e) { err.textContent = e.message; }
 }
+
+/* ---- launch binding: (project, work area) as an alternative to the
+       bare workspace path. Choices load when the form opens; the panel
+       only DISPLAYS what the sealed handle-driven seam resolves. ---- */
+let launchProjects = [];
+async function loadLaunchProjects() {
+  launchProjects = [];
+  let fault = "";
+  try {
+    const data = await api("/api/projects");
+    launchProjects = data.projects || [];
+  } catch (e) {
+    // The path mode must stay usable; the load fault is shown in the
+    // binding's own hint line, token verbatim.
+    fault = "projects unavailable: " + e.message;
+  }
+  const sel = document.getElementById("f_project");
+  sel.innerHTML =
+    `<option value="">— none (launch by workspace path) —</option>` +
+    launchProjects.map((p, i) => p.error
+      ? `<option value="" disabled>${esc(p.slug)} — ${esc(p.error.reason)}</option>`
+      : `<option value="${i}">${esc(p.slug)}</option>`).join("");
+  sel.value = "";
+  onLaunchProject();
+  if (fault) document.getElementById("f_resolved").textContent = fault;
+}
+function onLaunchProject() {
+  const idx = document.getElementById("f_project").value;
+  const area = document.getElementById("f_area");
+  const p = idx === "" ? null : launchProjects[+idx];
+  area.innerHTML = !p ? "" :
+    `<option value="">— work area —</option>` +
+    p.work_areas.map((w, j) =>
+      `<option value="${j}">${esc(w.record.name)} — ${esc(w.record.status)} v${w.record.version}</option>`
+    ).join("");
+  area.style.display = p ? "" : "none";
+  area.value = "";
+  onLaunchArea();
+}
+function onLaunchArea() {
+  const pi = document.getElementById("f_project").value;
+  const ai = document.getElementById("f_area").value;
+  const out = document.getElementById("f_resolved");
+  const bound = pi !== "";
+  // The path mode's fields are untouched in path mode; in bound mode the
+  // workspace derives from the work area's primary root, so its inputs
+  // disable rather than silently being ignored.
+  document.getElementById("f_ws").disabled = bound;
+  document.getElementById("f_ws_browse").disabled = bound;
+  if (!bound) { out.textContent = ""; return; }
+  const p = launchProjects[+pi];
+  const w = ai === "" ? null : p.work_areas[+ai];
+  out.textContent = !w
+    ? "select a work area — the run executes in its primary root"
+    : `will execute in ${w.record.primary.path} — project “${p.slug}” / work area “${w.record.name}” (${w.record.status})`;
+}
+function launchBinding() {
+  // null: path mode. undefined: incomplete binding (refuse client-side,
+  // a form-completeness check, not validation). {project, work_area}:
+  // the two path-free handles of a bound launch.
+  const pi = document.getElementById("f_project").value;
+  if (pi === "") return null;
+  const ai = document.getElementById("f_area").value;
+  if (ai === "") return undefined;
+  const p = launchProjects[+pi];
+  return {project: p.slug, work_area: p.work_areas[+ai].record.name};
+}
+
+/* ---- standing projects surface (slice 8): projects, work areas, and
+       the safeguard editor. Everything lives in dialogs OUTSIDE the 2s
+       polled containers (the acts-dialog precedent), and the surface
+       re-reads /api/projects after every mutation. The panel never
+       validates or reshapes sealed values — refusal tokens surface
+       verbatim; the sealed validator is the ONLY validator. One
+       carve-out, pinned in the slice note: waDotSegment below refuses
+       URL addressability, not value shape. ---- */
+let projState = {list: []};
+function projPath(slug) {
+  return "/api/projects/" + encodeURIComponent(slug);
+}
+function waPath(slug, name) {
+  return projPath(slug) + "/work-areas/" + encodeURIComponent(name);
+}
+function waDotSegment(name) {
+  // Amendment A2's transport rule, applied to work-area names: "." and
+  // ".." are sealed-valid names (the Slice 2 domain bans only "/",
+  // control characters, blank, oversize), but encodeURIComponent leaves
+  // dots bare and browsers normalize dot segments out of URL paths
+  // before any route sees them — a work-area DELETE on ".." would reach
+  // the PROJECT delete route. So the panel neither authors nor
+  // addresses such names; the sealed slice-07 API is unchanged and
+  // non-normalizing machine clients still round-trip them.
+  if (name !== "." && name !== "..") return false;
+  document.getElementById("projError").textContent =
+    `work-area name “${name}” cannot travel as a browser URL path ` +
+    "segment (dot segments normalize away); manage it with a " +
+    "non-normalizing HTTP client";
+  return true;
+}
+function postJSON(path, value) {
+  return api(path, {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify(value),
+  });
+}
+function openProjects() {
+  document.getElementById("projError").textContent = "";
+  document.getElementById("projects").showModal();
+  loadProjects();
+}
+async function loadProjects() {
+  const err = document.getElementById("projError");
+  try {
+    const data = await api("/api/projects");
+    projState.list = data.projects || [];
+  } catch (e) { err.textContent = e.message; return; }
+  renderProjects();
+}
+function snapshotEdits(root) {
+  // Re-renders of the projects dialog (after each operation's re-read)
+  // must not eat an in-progress edit elsewhere in the surface — the
+  // amendments-card preservation pattern, generalized.
+  const state = {values: {}, focus: null};
+  root.querySelectorAll("input,textarea").forEach(el => {
+    if (!el.id) return;
+    state.values[el.id] = el.value;
+    if (el === document.activeElement)
+      state.focus = {id: el.id, start: el.selectionStart, end: el.selectionEnd};
+  });
+  return state;
+}
+function restoreEdits(state) {
+  for (const [id, val] of Object.entries(state.values)) {
+    const el = document.getElementById(id);
+    if (el && val) el.value = val;
+  }
+  if (state.focus) {
+    const el = document.getElementById(state.focus.id);
+    if (el) {
+      el.focus();
+      try { el.setSelectionRange(state.focus.start, state.focus.end); }
+      catch (e) { /* non-text inputs */ }
+    }
+  }
+}
+async function projOp(fn) {
+  const err = document.getElementById("projError");
+  err.textContent = "";
+  try { await fn(); }
+  catch (e) { err.textContent = e.message; }  // refusal token, verbatim
+  await loadProjects();
+}
+function waKey(slug) { return encodeURIComponent(slug); }
+function statusChip(status) {
+  const cls = status === "ready" ? "closed"
+    : status === "unavailable" ? "failed" : "open";
+  return `<span class="chip ${cls}">${esc(status)}</span>`;
+}
+function workAreaRow(i, w, j) {
+  const r = w.record;
+  return `<div class="wa">
+    <span class="ops">
+      <button class="btn" onclick="editMeta(${i},${j})">Reuse sources…</button>
+      <button class="btn" onclick="relabelArea(${i},${j})">Rename…</button>
+      <button class="btn danger" onclick="deleteArea(${i},${j})">Delete</button>
+    </span>
+    <b>${esc(r.name)}</b>${r.display_name !== r.name
+      ? ` <span class="kv">“${esc(r.display_name)}”</span>` : ""}
+    ${statusChip(r.status)} <span class="kv">v${r.version}</span>
+    <div class="kv mono">primary: ${esc(r.primary.path)}</div>
+    ${r.additional.length ? `<div class="kv mono">additional: ${
+        r.additional.map(a => esc(a.path)).join(" · ")}</div>` : ""}
+    ${w.meta !== null ? `<div class="kv mono">meta: ${
+        esc(JSON.stringify(w.meta))}</div>` : ""}
+  </div>`;
+}
+function policyRow(i, pol, j) {
+  const preview = pol.prompt.length > 160
+    ? pol.prompt.slice(0, 157) + "…" : pol.prompt;
+  return `<div class="pol">
+    <span class="ops">
+      <button class="btn" onclick="togglePolicy(${i},${j})">${pol.enabled ? "Disable" : "Enable"}</button>
+      <button class="btn" onclick="editPolicy(${i},${j})">Edit…</button>
+      <button class="btn danger" onclick="deletePolicy(${i},${j})">Delete</button>
+    </span>
+    <b class="mono">${esc(pol.id)}</b>
+    <span class="kv">v${pol.version}</span>
+    <span class="chip ${pol.enabled ? "closed" : ""}">${pol.enabled ? "enabled" : "disabled"}</span>
+    <span class="kv">${esc(pol.scope.kinds.join(", "))} × ${esc(pol.scope.unit_kinds.join(", "))}</span>
+    <div class="kv">${esc(preview)}</div>
+  </div>`;
+}
+function projectCard(p, i) {
+  if (p.error) {
+    // Fail-closed per project: the broken store renders its reason
+    // token verbatim beside healthy projects, never repaired.
+    return `<div class="card">
+      <div class="proj-head"><h3>${esc(p.slug)}</h3>
+        <span class="spacer"></span>
+        <button class="btn danger" onclick="deleteProject(${i})">Delete</button>
+      </div>
+      <div class="failure">broken project store — ${esc(p.error.reason)}</div>
+    </div>`;
+  }
+  const key = waKey(p.slug);
+  return `<div class="card">
+    <div class="proj-head"><h3>${esc(p.slug)}</h3>
+      <span class="kv mono">defaults: ${esc(p.defaults !== undefined
+        ? JSON.stringify(p.defaults) : "—")}</span>
+      <span class="spacer"></span>
+      <button class="btn" onclick="editDefaults(${i})">Defaults…</button>
+      <button class="btn danger" onclick="deleteProject(${i})">Delete</button>
+    </div>
+    <div class="subhead">Work areas</div>
+    ${p.work_areas.map((w, j) => workAreaRow(i, w, j)).join("")
+      || '<div class="amend-hint">none declared</div>'}
+    <div class="wa-form" style="margin-top:8px">
+      <div class="pathrow">
+        <input id="wa_name_${key}" placeholder="name *">
+        <input id="wa_disp_${key}" placeholder="display name">
+      </div>
+      <div class="pathrow">
+        <input id="wa_primary_${key}" class="mono"
+          placeholder="primary root (the git repo the run executes in) *">
+        <button class="btn" onclick="declarePicker(${i})">Browse…</button>
+      </div>
+      <div class="pathrow">
+        <textarea id="wa_add_${key}" class="mono" rows="1"
+          placeholder="additional read-only roots — one absolute path per line"></textarea>
+        <button class="btn primary" onclick="declareArea(${i})">Declare</button>
+      </div>
+      <div class="hint">Declares pending v1; the first bound launch
+        validates the real roots and confirms ready v2.</div>
+    </div>
+    <div class="subhead">Safeguards (standing law)</div>
+    ${p.policy.map((pol, j) => policyRow(i, pol, j)).join("")
+      || '<div class="amend-hint">none — runs in this project carry no project safeguards</div>'}
+    <div class="formrow"><span></span>
+      <button class="btn" onclick="enableReuseAudit(${i})">Enable reuse-audit...</button>
+      <button class="btn" onclick="newPolicy(${i})">New safeguard…</button>
+    </div>
+  </div>`;
+}
+function renderProjects() {
+  const dlg = document.getElementById("projects");
+  const snap = snapshotEdits(dlg);
+  document.getElementById("projList").innerHTML =
+    projState.list.map((p, i) => projectCard(p, i)).join("")
+    || '<div class="amend-hint">no projects declared yet</div>';
+  restoreEdits(snap);
+}
+function createProject() {
+  const err = document.getElementById("projError");
+  const slug = document.getElementById("np_slug").value.trim();
+  const defText = document.getElementById("np_defaults").value.trim();
+  const payload = {slug};
+  if (defText) {
+    try { payload.defaults = JSON.parse(defText); }
+    catch (e) { err.textContent = "defaults is not valid JSON"; return; }
+  }
+  projOp(async () => {
+    await postJSON("/api/projects", payload);
+    document.getElementById("np_slug").value = "";
+    document.getElementById("np_defaults").value = "";
+  });
+}
+function deleteProject(i) {
+  const p = projState.list[i];
+  if (!confirm(`Delete project “${p.slug}” and its local store? The service refuses while work areas, safeguards, or bound runs still exist.`)) return;
+  projOp(() => api(projPath(p.slug), {method: "DELETE"}));
+}
+function editDefaults(i) {
+  const p = projState.list[i];
+  openSgEditor({
+    title: `Defaults — ${p.slug}`,
+    value: p.defaults !== undefined ? p.defaults : null,
+    hint: "A JSON object merged beneath every bound launch of this " +
+      "project (e.g. {\"git\": {\"enabled\": false}, \"docs_dir\": " +
+      "\"notes/{slug}\"}). null clears the defaults.",
+    onSave: parsed => postJSON(projPath(p.slug), {defaults: parsed}),
+  });
+}
+function declarePicker(i) {
+  openPicker("dir", "wa_primary_" + waKey(projState.list[i].slug));
+}
+function declareArea(i) {
+  const p = projState.list[i];
+  const key = waKey(p.slug);
+  const get = f => document.getElementById(`wa_${f}_${key}`);
+  const payload = {
+    name: get("name").value.trim(),
+    primary_path: get("primary").value.trim(),
+  };
+  if (waDotSegment(payload.name)) return;
+  const disp = get("disp").value.trim();
+  if (disp) payload.display_name = disp;
+  const additional = get("add").value.split("\n")
+    .map(s => s.trim()).filter(Boolean);
+  if (additional.length) payload.additional_paths = additional;
+  projOp(async () => {
+    await postJSON(projPath(p.slug) + "/work-areas", payload);
+    for (const f of ["name", "disp", "primary", "add"]) get(f).value = "";
+  });
+}
+function relabelArea(i, j) {
+  const p = projState.list[i];
+  const r = p.work_areas[j].record;
+  if (waDotSegment(r.name)) return;
+  const disp = prompt(`Display name for “${r.name}” (label-only edit — the version is preserved):`, r.display_name);
+  if (disp === null) return;
+  projOp(() => postJSON(waPath(p.slug, r.name), {display_name: disp}));
+}
+function deleteArea(i, j) {
+  const p = projState.list[i];
+  const r = p.work_areas[j].record;
+  if (waDotSegment(r.name)) return;
+  if (!confirm(`Delete work area “${r.name}”? The name leaves the project and is re-declarable fresh; repo files are untouched.`)) return;
+  projOp(() => api(waPath(p.slug, r.name), {method: "DELETE"}));
+}
+function editMeta(i, j) {
+  const p = projState.list[i];
+  const w = p.work_areas[j];
+  if (waDotSegment(w.record.name)) return;
+  openSgEditor({
+    title: `Reuse sources — ${w.record.name} (${p.slug})`,
+    value: w.meta !== null ? w.meta : {reuse_sources: []},
+    hint: "The sealed value {reuse_sources: [{root, inventory, " +
+      "registry, consumption}]} rides verbatim both ways; the service " +
+      "is the only validator. Roles render into every bound worker's " +
+      "PROJECT CONTEXT block.",
+    onSave: parsed => postJSON(waPath(p.slug, w.record.name) + "/meta",
+                               parsed),
+  });
+}
+// D's hint text: the two standing rules the operator needs at the point
+// of edit (sealed slice-06 semantics, surfaced — not re-implemented).
+const POLICY_HINT =
+  "version is operator intent and is stored verbatim (never " +
+  "auto-bumped): bump it on any substance change so every run " +
+  "re-records the safeguard — the ledger's project_safeguard_seen " +
+  "re-records per (id, version). On conflict, run-scoped operator " +
+  "amendments WIN over project safeguards.";
+const REUSE_AUDIT_PARAMS_HINT =
+  "Enable the built-in reuse-audit template. Fill source, inventory, " +
+  "registry, and optional positive integer version. Re-parameterizing " +
+  "without a version bump changes standing law without a new " +
+  "project_safeguard_seen record.";
+function policySeed() {
+  // The sealed shape's exact top-level keys for ordinary hand-authored
+  // safeguards; built-in reuse-audit content is instantiated server-side.
+  return {
+    id: "",
+    version: 1,
+    enabled: true,
+    scope: {kinds: [], unit_kinds: []},
+    prompt: "",
+    contract: {field: "", required: true, entry: {}, checks: []},
+  };
+}
+function reuseAuditParamsSeed() {
+  return {source: "", inventory: "", registry: "", version: 1};
+}
+function enableReuseAudit(i) {
+  const p = projState.list[i];
+  openSgEditor({
+    title: `Enable reuse-audit - ${p.slug}`,
+    value: reuseAuditParamsSeed(),
+    hint: REUSE_AUDIT_PARAMS_HINT,
+    onSave: parsed => postJSON(
+      projPath(p.slug) + "/policies/reuse-audit", parsed
+    ),
+  });
+}
+function newPolicy(i) {
+  const p = projState.list[i];
+  openSgEditor({
+    title: `New safeguard — ${p.slug}`,
+    value: policySeed(),
+    hint: POLICY_HINT,
+    onSave: parsed => postJSON(projPath(p.slug) + "/policies", parsed),
+  });
+}
+function editPolicy(i, j) {
+  const p = projState.list[i];
+  const pol = p.policy[j];
+  openSgEditor({
+    title: `Safeguard ${pol.id} — ${p.slug}`,
+    value: pol,
+    hint: POLICY_HINT,
+    onSave: parsed => postJSON(projPath(p.slug) + "/policies", parsed),
+  });
+}
+function togglePolicy(i, j) {
+  // One step: the stored object round-trips with ONLY `enabled`
+  // flipped — flipping visibility is not a substance change, so the
+  // version is untouched.
+  const p = projState.list[i];
+  const flipped = Object.assign({}, p.policy[j],
+                                {enabled: !p.policy[j].enabled});
+  projOp(() => postJSON(projPath(p.slug) + "/policies", flipped));
+}
+function deletePolicy(i, j) {
+  const p = projState.list[i];
+  const pol = p.policy[j];
+  if (!confirm(`Delete safeguard “${pol.id}”? It stops binding new worker calls; the ledger keeps its seen trail.`)) return;
+  // The id rides as an URL-encoded query parameter, never a path
+  // segment: the sealed grammar admits ids like "." and ".." that
+  // browsers normalize away inside URL paths (amendment A2).
+  projOp(() => api(projPath(p.slug) + "/policies?id=" +
+                   encodeURIComponent(pol.id), {method: "DELETE"}));
+}
+
+/* ---- shared JSON editor dialog (safeguards, reuse-source meta,
+       defaults): a SYNTAX-only parse client-side, then the operator's
+       JSON posts as-is — a client-side schema copy would be a parallel
+       validator, the duplication class this milestone exists to kill. */
+let sgEditor = null;
+function openSgEditor(cfg) {
+  sgEditor = cfg;
+  document.getElementById("sg_title").textContent = cfg.title;
+  document.getElementById("sg_hint").textContent = cfg.hint || "";
+  document.getElementById("sg_error").textContent = "";
+  document.getElementById("sg_json").value =
+    JSON.stringify(cfg.value, null, 1);
+  document.getElementById("sgeditor").showModal();
+}
+async function saveSgEditor() {
+  const err = document.getElementById("sg_error");
+  err.textContent = "";
+  let parsed;
+  try { parsed = JSON.parse(document.getElementById("sg_json").value); }
+  catch (e) { err.textContent = "not valid JSON: " + e.message; return; }
+  try {
+    await sgEditor.onSave(parsed);
+  } catch (e) { err.textContent = e.message; return; }  // token verbatim
+  document.getElementById("sgeditor").close();
+  await loadProjects();
+}
+
 refreshRuns();
 setInterval(refreshRuns, 2000);
 </script>

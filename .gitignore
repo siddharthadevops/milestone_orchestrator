@@ -5,3 +5,13 @@ review-work/
 __pycache__/
 *.pyc
 orchestrator/examples/calculator/work/
+
+.orchestrator/
+*.egg-info/
+.hypothesis/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+.tox/
+
+.run/

@@ -33,3 +33,9 @@ deterministic orchestrator superseded both of its concerns (worker timeouts
 were removed entirely, and fresh-context review is structural in the
 reviewer/fixer separation). Future canon changes launch as orchestrator
 milestones.
+
+<!-- impl_roadmap:milestones:start -->
+| Milestone | Status | Slices | Opened | Closed |
+|---|---|---|---|---|
+| [Canon - Project Concept (isolated)](canon-project-concept-isolated/) | open | 9 | 2026-07-06 | - |
+<!-- impl_roadmap:milestones:end -->

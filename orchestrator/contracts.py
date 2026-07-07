@@ -332,6 +332,36 @@ def validate_worker_output(obj, kind):
     return obj
 
 
+# Reserved top-level output keys: the base protocol's own output surface,
+# kept beside validate_worker_output as the single source. A project
+# contract extension may never name one of these as its `field` — the
+# extension would shadow a key the validator or driver already reads
+# (verifiers.py derives collisions from here; it never re-lists them).
+COMMON_OUTPUT_KEYS = frozenset({"status", "kind", "blocked_reason", "notes"})
+
+KIND_OUTPUT_KEYS = {
+    KIND_DRAFT_SKELETON: frozenset({"artifact", "slices"}),
+    KIND_DRAFT_SLICE_NOTE: frozenset({"artifact"}),
+    KIND_IMPLEMENT: frozenset({"files_changed", "suite_command"}),
+    KIND_REVIEW_ROUND: frozenset({"findings", "files_changed"}),
+    KIND_DELTA_REVIEW: frozenset({"findings", "files_changed"}),
+    KIND_SEAL_HALF: frozenset({"findings", "files_changed"}),
+    # fix_findings may also carry suite_command (the driver adopts it when
+    # correcting/arming the verification gate).
+    KIND_FIX_FINDINGS: frozenset(
+        {"findings", "files_changed", "slices", "suite_command"}
+    ),
+}
+
+
+def reserved_output_keys(kind):
+    """Top-level output keys the worker protocol itself uses for `kind`
+    (the common keys plus the kind's own)."""
+    if kind not in KINDS:
+        raise ContractError("unknown kind %r" % (kind,))
+    return COMMON_OUTPUT_KEYS | KIND_OUTPUT_KEYS[kind]
+
+
 def validate_fix_coverage(output, queued_findings):
     """Driver-side check with context: the fixer must triage EXACTLY the
     queued findings — every queued id appears once, no invented ids."""

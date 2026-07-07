@@ -33,6 +33,89 @@ run's live state) and a JSON API:
                                    ?purge=1 also removes the run's state file
                                    + lock so the workspace can launch fresh)
 
+Standing projects (the operator-declared ecosystem surface; every slug and
+work-area name rides as a URL-encoded path segment):
+
+    GET    /api/projects           every declared project: ProjectEntry
+                                   {slug, work_areas: [{record, meta}],
+                                   policy, defaults?} — or, fail-closed per
+                                   project, {slug, error: {reason}}
+    POST   /api/projects           declare: {slug, defaults?} -> 201
+    GET    /api/projects/<slug>    one assembled ProjectEntry
+    POST   /api/projects/<slug>    {"defaults": object|null} replace/clear
+    DELETE /api/projects/<slug>    guarded: refuses while live work areas,
+                                   live policies, or bound/unprovable run
+                                   states exist
+    POST   /api/projects/<slug>/work-areas
+                                   declare -> pending: {name, display_name?,
+                                   primary_path, additional_paths?}
+    GET    /api/projects/<slug>/work-areas/<name>        {record, meta}
+    POST   /api/projects/<slug>/work-areas/<name>        {"display_name"}
+    DELETE /api/projects/<slug>/work-areas/<name>        tombstone (+ meta)
+    GET    /api/projects/<slug>/work-areas/<name>/meta   null | value
+    POST   /api/projects/<slug>/work-areas/<name>/meta   raw sealed value
+                                   {reuse_sources: [{root, inventory,
+                                   registry, consumption}]}
+    POST   /api/projects/<slug>/policies
+                                   safeguard upsert: the body is the FULL
+                                   sealed policy object {id, version,
+                                   enabled, scope, prompt, contract}, raw;
+                                   create and overwrite are one operation
+                                   keyed by the body's own id, the object
+                                   replaces the stored one WHOLESALE, and
+                                   version rides verbatim (never
+                                   auto-bumped). The response carries the
+                                   stored domain object only — the
+                                   envelope's control revision stays
+                                   internal to the store.
+    DELETE /api/projects/<slug>/policies?id=<url-encoded id>
+                                   tombstone one LIVE policy. The id rides
+                                   as a query parameter, NEVER a path
+                                   segment: the sealed fragment grammar
+                                   admits ids like "." and ".." that
+                                   browsers normalize away inside URL
+                                   paths (amendment A2), and query
+                                   components are exempt, so every
+                                   sealed-valid id round-trips. A sealed
+                                   read gates the raw envelope delete:
+                                   unknown/tombstoned/never-written ids
+                                   refuse 404 unknown_policy and write
+                                   NOTHING (an ungated delete would mint a
+                                   junk tombstone key that every listing
+                                   carries forever).
+    POST   /api/projects/<slug>/policies/reuse-audit
+                                   enable the built-in reuse-audit template:
+                                   {source, inventory, registry, version?}
+                                   -> {"policies": [planning, review]}.
+                                   The trailing segment is a fixed affordance
+                                   name, never a policy id.
+
+Corrupt-policy recovery (amendment A2 narrows it): a malformed policy
+VALUE inside a VALID envelope refuses reads/deletes with malformed_policy
+and is recovered by a valid re-put, which replaces it wholesale — the
+sealed put validates only the NEW value and reads the prior envelope just
+for its revision. An entry whose stored ENVELOPE is itself invalid cannot
+ride that path: a gated envelope read before the put — the same sealed
+read that gates the delete, at envelope level — refuses 500
+malformed_store for EVERY invalid envelope, including corrupt envelopes
+whose revision is still readable (which the raw sealed put would silently
+overwrite); the delete refuses 500 malformed_policy. Both write nothing.
+The remedy there is store-level — descriptors are disposable by
+design: remove the project's store file, DELETE the (now storeless)
+project, and re-declare it fresh. That delete stays guarded: a lost store
+lifts only the standing-law half of the guard, and bound or unprovable
+run states still refuse 409 project_in_use until purge-deleted or read
+back unbound.
+
+A launch (POST /api/runs) may bind {project, work_area} instead of a bare
+workspace path: the stored descriptor's roots are validated against the
+real filesystem (the executor-reconcile role) and confirmed ready, the run
+executes in the work area's primary root, run status carries the two
+path-free handles, and the service pumps the change-driven
+run:<run_id>/status projection into the bound project's KV store
+(visibility only — a projection write failure never fails a launch, poll,
+or run).
+
 Process bookkeeping: drivers spawned by this service are kept as Popen
 handles and polled (reaped) on every API operation — an exited driver never
 lingers as a zombie that os.kill(pid, 0) would misreport as running — and
@@ -50,6 +133,7 @@ import argparse
 import json
 import os
 import re
+import shutil
 import signal
 import subprocess
 import sys
@@ -59,7 +143,10 @@ import urllib.parse
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from . import driver, errclass, gitops, registry, state as st
+from . import driver, errclass, gitops, kvstore, projects, registry
+from . import reuse_audit
+from . import state as st
+from . import workareas
 
 STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -78,6 +165,657 @@ class ApiError(Exception):
     def __init__(self, status, message):
         Exception.__init__(self, message)
         self.status = status
+
+
+# ---------------------------------------------------------------------------
+# Standing projects: declaration record, assembled reads, work-area CRUD.
+#
+# Sealed reason tokens ride VERBATIM as the error body of project-scoped
+# refusals (no string-matching for the panel); the service mints tokens
+# only for conditions no sealed seam owns.
+
+UNKNOWN_PROJECT = "unknown_project"
+PROJECT_EXISTS = "project_exists"
+MISSING_STORE = "missing_store"
+UNREADABLE_STORE = "unreadable_store"
+MALFORMED_STORE = "malformed_store"
+INVALID_META = "invalid_meta"
+PROJECT_IN_USE = "project_in_use"
+PROJECTION_TOMBSTONE_FAILED = "projection_tombstone_failed"
+PRIMARY_NOT_REPO_ROOT = "primary_not_repo_root"
+MISSING_ADDITIONAL_ROOT = "missing_additional_root"
+
+# Slice 2's reason -> HTTP class for the CRUD/read routes: validation
+# reasons 400, unknown 404, CAS exhaustion 409, store corruption 5xx.
+# (The launch seam maps its causes to 400-class separately, per the
+# sealed init contract.)
+_WORK_AREA_STATUS = {
+    workareas.UNKNOWN: 404,
+    workareas.MALFORMED: 500,
+    workareas.CONFLICT: 409,
+}
+
+# The device value and executor identity the service supplies on
+# declare/confirm. Provenance is non-authoritative (agent_99's design);
+# nothing interprets them locally — they only need to be non-blank and
+# stable across service restarts for the same home, so re-confirms stay
+# version-silent (an unstable identity would bump the domain version on
+# every relaunch).
+_DEVICE = "local"
+
+
+def _executor_id(home):
+    return "orchestrator-service:%s" % os.path.abspath(home)
+
+
+def _work_area_error(reason):
+    return ApiError(_WORK_AREA_STATUS.get(reason, 400), reason)
+
+
+def _raise_store_error(exc):
+    if isinstance(exc, OSError):
+        raise ApiError(500, UNREADABLE_STORE) from exc
+    raise ApiError(500, MALFORMED_STORE) from exc
+
+
+def _store_file(home, slug):
+    return os.path.join(
+        registry.projects_base(home), slug, kvstore.STORE_FILENAME
+    )
+
+
+def _require_declared(home, slug):
+    """Common gate of every project-bound route: syntactically invalid
+    slugs 400, valid-but-undeclared slugs 404. Returns (validated slug,
+    projects record)."""
+    try:
+        slug = workareas.validate_project_slug(slug)
+    except workareas.WorkAreaValidationError as exc:
+        raise ApiError(400, exc.reason)
+    rec = registry.load_projects_record(home)
+    if registry.get_project(rec, slug) is None:
+        raise ApiError(404, UNKNOWN_PROJECT)
+    return slug, rec
+
+
+def _require_store_file(home, slug):
+    """Fail closed before opening any store client: a declared project
+    whose KV file is gone must never be silently recreated as empty by a
+    read or (worse) resurrected by a write — a missing zero-entry file is
+    an error, not an empty project."""
+    if not os.path.isfile(_store_file(home, slug)):
+        raise ApiError(500, MISSING_STORE)
+
+
+def _work_area_store(home, slug):
+    return workareas.WorkAreaStore(registry.projects_base(home), slug)
+
+
+def _work_area_view(store, record):
+    """WorkAreaView: the untouched Slice 2 public record, with the meta
+    value BESIDE it (never inside — the goal's "rides BESIDE the agent_99
+    fields" doctrine)."""
+    try:
+        meta = store.read_meta(record["name"])
+    except (RuntimeError, OSError) as exc:
+        _raise_store_error(exc)
+    return {
+        "record": record,
+        "meta": meta["value"] if meta["exists?"] else None,
+    }
+
+
+def _project_entry(home, project):
+    """Assemble one ProjectEntry via slice-03's fail-closed read model, or
+    the per-project error marker {slug, error: {reason}} — never a partial
+    record, and never a repair (a broken store must not take the whole
+    listing hostage, and must stay visible as broken)."""
+    slug = project["slug"]
+    defaults = project.get("defaults")
+    base = registry.projects_base(home)
+    if not os.path.isfile(_store_file(home, slug)):
+        return {"slug": slug, "error": {"reason": MISSING_STORE}}
+    try:
+        read = projects.ProjectStore(base, slug).read(defaults=defaults)
+        if not read.ok:
+            return {"slug": slug, "error": {"reason": read.reason}}
+        store = _work_area_store(home, slug)
+        views = [
+            _work_area_view(store, record)
+            for record in read.value["work_areas"]
+        ]
+    except ApiError as exc:
+        return {"slug": slug, "error": {"reason": str(exc)}}
+    except RuntimeError:
+        return {"slug": slug, "error": {"reason": MALFORMED_STORE}}
+    except OSError:
+        return {"slug": slug, "error": {"reason": UNREADABLE_STORE}}
+    entry = {
+        "slug": slug,
+        "work_areas": views,
+        "policy": read.value["policy"],
+    }
+    if "defaults" in read.value:
+        entry["defaults"] = read.value["defaults"]
+    return entry
+
+
+def _project_entry_or_error(home, project):
+    """Single-project reads fail closed with the marker's reason instead
+    of returning an error entry."""
+    entry = _project_entry(home, project)
+    if "error" in entry:
+        raise ApiError(500, entry["error"]["reason"])
+    return entry
+
+
+def list_projects(home):
+    rec = registry.load_projects_record(home)
+    return [_project_entry(home, p) for p in rec["projects"]]
+
+
+def create_project(home, body):
+    slug = body.get("slug")
+    try:
+        slug = workareas.validate_project_slug(slug)
+    except workareas.WorkAreaValidationError as exc:
+        raise ApiError(400, exc.reason)
+    defaults = _validated_defaults(body.get("defaults"))
+    with registry.locked(home):
+        rec = registry.load_projects_record(home)
+        if registry.get_project(rec, slug) is not None:
+            # Defaults change through the update surface, never by a
+            # silent re-create.
+            raise ApiError(409, PROJECT_EXISTS)
+        # Declaration's evidence is a READABLE zero-entry store file (no
+        # key is written, no key family changes).
+        kvstore.initialize_empty_store(
+            os.path.join(registry.projects_base(home), slug)
+        )
+        project = {"slug": slug, "defaults": defaults}
+        rec["projects"].append(project)
+        registry.save_projects_record(home, rec)
+    return _project_entry_or_error(home, project)
+
+
+def read_project(home, slug):
+    slug, rec = _require_declared(home, slug)
+    return _project_entry_or_error(home, registry.get_project(rec, slug))
+
+
+def _validated_defaults(defaults):
+    """None or a serialization-stable JSON-plain object; anything else
+    refuses with the sealed defaults reason."""
+    if defaults is None:
+        return None
+    if not isinstance(defaults, dict):
+        raise ApiError(400, projects.INVALID_DEFAULTS)
+    try:
+        return kvstore.canonical_json_value(defaults)
+    except ValueError:
+        raise ApiError(400, projects.INVALID_DEFAULTS)
+
+
+def update_project(home, slug, body):
+    with registry.locked(home):
+        slug, rec = _require_declared(home, slug)
+        if "defaults" not in body:
+            raise ApiError(400, projects.INVALID_DEFAULTS)
+        defaults = _validated_defaults(body["defaults"])
+        project = registry.get_project(rec, slug)
+        project["defaults"] = defaults
+        registry.save_projects_record(home, rec)
+    return _project_entry_or_error(home, project)
+
+
+def delete_project(home, slug):
+    """Guarded delete: removing a project removes its store — standing
+    law — so it refuses as a conflict while any live work area or live
+    policy exists, while any registered run's state binds the project (or
+    is unreadable and thus cannot be proven unbound), and while any
+    plain-forgotten retained state recorded from a bound/unproven run still
+    binds it or is unreadable
+    (slice-06 turns missing law under a bound run into an unrepairable
+    recorded failure). Tombstone-only history never blocks: descriptors
+    are disposable by design."""
+    with registry.locked(home):
+        slug, rec = _require_declared(home, slug)
+        store_dir = os.path.join(registry.projects_base(home), slug)
+        if os.path.isfile(_store_file(home, slug)):
+            try:
+                live_areas = _work_area_store(home, slug).list_records()
+                live_policies = projects.PolicyStore(
+                    registry.projects_base(home), slug
+                ).list_policies()
+            except RuntimeError:
+                raise ApiError(500, MALFORMED_STORE)
+            except OSError:
+                raise ApiError(500, UNREADABLE_STORE)
+            if not live_areas.ok or not live_policies.ok:
+                # Cannot prove the store holds no standing law.
+                raise ApiError(500, MALFORMED_STORE)
+            if live_areas.value or live_policies.value:
+                raise ApiError(409, PROJECT_IN_USE)
+        # else: the store is already lost; there is no law left to
+        # protect — only run states can still block below.
+
+        for entry in registry.load(home)["runs"]:
+            if _entry_blocks_project_delete(entry, slug):
+                raise ApiError(409, PROJECT_IN_USE)
+        kept_claims = []
+        for state_path in rec["retained_states"]:
+            if not os.path.exists(state_path):
+                continue  # purged or externally removed: claim is moot
+            if _state_blocks_project_delete(state_path, slug):
+                raise ApiError(409, PROJECT_IN_USE)
+            if _state_project(state_path) is not None:
+                kept_claims.append(state_path)  # binds another project
+        if os.path.isdir(store_dir):
+            shutil.rmtree(store_dir)
+        rec["projects"] = [
+            p for p in rec["projects"] if p["slug"] != slug
+        ]
+        rec["retained_states"] = kept_claims
+        registry.save_projects_record(home, rec)
+    return {"deleted": slug}
+
+
+def _state_project(state_path):
+    """The project handle a run state binds, None when readable and
+    unbound. Raises on an unreadable state (the caller decides what
+    unprovable means)."""
+    summ = load_summary(state_path)
+    return summ.get("project")
+
+
+def _entry_blocks_project_delete(entry, slug):
+    """A registered run blocks while its state binds the project, or is
+    unreadable AND the registry's durable binding (the same fallback
+    delete_run consults) cannot prove it unbound — runs never rebind, so
+    the binding recorded at registration stays truthful."""
+    try:
+        return _state_project(entry["state_path"]) == slug
+    except Exception:
+        summ = _bound_summary_from_entry(entry)
+        if summ is None:
+            # Attached already-unreadable: no proof either way, fail closed.
+            return True
+        return summ.get("project") == slug
+
+
+def _state_blocks_project_delete(state_path, slug):
+    try:
+        return _state_project(state_path) == slug
+    except Exception:
+        # An unreadable retained state cannot be proven unbound, so fail
+        # closed (no registry entry survives a forget to prove anything).
+        # Callers pre-filter missing paths: a removed forgotten state is a
+        # moot claim.
+        return True
+
+
+def declare_work_area(home, slug, body):
+    """The Body-declare role: the operator supplies name + roots as
+    absolute canonical paths; the service supplies device and executor
+    identity. Every agent_99-readable mutation goes through Slice 2's
+    sealed store — never a parallel raw-record writer."""
+    with registry.locked(home):
+        slug, _rec = _require_declared(home, slug)
+        _require_store_file(home, slug)
+        additional_paths = body.get("additional_paths")
+        if additional_paths is None:
+            additional_paths = []
+        if not isinstance(additional_paths, list):
+            raise ApiError(400, workareas.INVALID_DESCRIPTOR)
+        store = _work_area_store(home, slug)
+        try:
+            # A fresh incarnation starts meta-clean: if the current record
+            # is not live (never declared, tombstoned, or malformed), any
+            # sibling meta is an orphan of a delete whose final meta write
+            # failed — tombstone it BEFORE declaring so stale reuse-source
+            # roles never resurrect onto the new record (contract B; the
+            # delete ordering in delete_work_area relies on this backstop).
+            current = store.read(body.get("name"))
+            if not current.ok and current.reason in (
+                workareas.UNKNOWN, workareas.MALFORMED
+            ):
+                if store.read_meta(body.get("name"))["exists?"]:
+                    store.envelopes.delete(
+                        store.keys.work_area_meta(body.get("name"))
+                    )
+            declared = store.declare(
+                body.get("name"),
+                {"path": body.get("primary_path"), "device": _DEVICE},
+                [
+                    {"path": path, "device": _DEVICE}
+                    for path in additional_paths
+                ],
+                _executor_id(home),
+                display_name=body.get("display_name"),
+            )
+        except (RuntimeError, OSError) as exc:
+            _raise_store_error(exc)
+        if not declared.ok:
+            raise _work_area_error(declared.reason)
+        return _work_area_view(store, declared.value)
+
+
+def read_work_area(home, slug, name):
+    slug, _rec = _require_declared(home, slug)
+    _require_store_file(home, slug)
+    store = _work_area_store(home, slug)
+    try:
+        record = store.read(name)
+    except (RuntimeError, OSError) as exc:
+        _raise_store_error(exc)
+    if not record.ok:
+        raise _work_area_error(record.reason)
+    return _work_area_view(store, record.value)
+
+
+def relabel_work_area(home, slug, name, body):
+    with registry.locked(home):
+        slug, _rec = _require_declared(home, slug)
+        _require_store_file(home, slug)
+        store = _work_area_store(home, slug)
+        try:
+            relabeled = store.relabel(name, body.get("display_name"))
+        except (RuntimeError, OSError) as exc:
+            _raise_store_error(exc)
+        if not relabeled.ok:
+            raise _work_area_error(relabeled.reason)
+        return _work_area_view(store, relabeled.value)
+
+
+def delete_work_area(home, slug, name):
+    """Sealed positive-version tombstone plus sibling meta cleanup in the
+    same locked API operation (contract B), through the sealed store's
+    public operations only. Ordering discipline: meta is READ first (an
+    unreadable meta envelope aborts with nothing written), the raw
+    tombstone is the first WRITE (a failed delete leaves the record live
+    WITH its standing reuse-source roles — never a live record whose meta
+    was silently erased), and the meta tombstone lands last. If that final
+    write fails, the orphaned meta is unreadable through every live-record
+    surface and declare_work_area clears it before any re-declare, so
+    stale roles never resurrect. The service lock serializes the writes."""
+    with registry.locked(home):
+        slug, _rec = _require_declared(home, slug)
+        _require_store_file(home, slug)
+        store = _work_area_store(home, slug)
+        try:
+            record = store.read(name)
+            if not record.ok:
+                raise _work_area_error(record.reason)
+            live_name = record.value["name"]
+            meta = store.read_meta(live_name)
+            deleted = store.delete(live_name)
+            if deleted.ok and meta["exists?"]:
+                store.envelopes.delete(store.keys.work_area_meta(live_name))
+        except RuntimeError:
+            raise ApiError(500, MALFORMED_STORE)
+        except OSError:
+            raise ApiError(500, UNREADABLE_STORE)
+        if not deleted.ok:
+            raise _work_area_error(deleted.reason)
+        return deleted.value
+
+
+def _live_work_area_store(home, slug, name):
+    """Meta get/put are valid only for a live work-area record."""
+    slug, _rec = _require_declared(home, slug)
+    _require_store_file(home, slug)
+    store = _work_area_store(home, slug)
+    try:
+        record = store.read(name)
+    except RuntimeError:
+        raise ApiError(500, MALFORMED_STORE)
+    except OSError:
+        raise ApiError(500, UNREADABLE_STORE)
+    if not record.ok:
+        raise _work_area_error(record.reason)
+    return store, record.value["name"]
+
+
+def read_work_area_meta(home, slug, name):
+    store, name = _live_work_area_store(home, slug, name)
+    return _read_work_area_meta_checked(store, name)
+
+
+def put_work_area_meta(home, slug, name, body):
+    with registry.locked(home):
+        store, name = _live_work_area_store(home, slug, name)
+        _read_work_area_meta_checked(store, name)
+        try:
+            return store.put_meta(name, body)["value"]
+        except ValueError:
+            raise ApiError(400, INVALID_META)
+        except (KeyError, RuntimeError, TypeError):
+            raise ApiError(500, MALFORMED_STORE)
+        except OSError:
+            raise ApiError(500, UNREADABLE_STORE)
+
+
+def _read_work_area_meta_checked(store, name):
+    try:
+        meta = store.read_meta(name)
+    except RuntimeError:
+        raise ApiError(500, MALFORMED_STORE)
+    except OSError:
+        raise ApiError(500, UNREADABLE_STORE)
+    return meta["value"] if meta["exists?"] else None
+
+
+# Slice 3's policy reasons -> HTTP class, mirroring _WORK_AREA_STATUS:
+# validation 400, unknown 404, store corruption 5xx.
+_POLICY_STATUS = {
+    projects.UNKNOWN: 404,
+    projects.MALFORMED: 500,
+}
+
+
+def _policy_error(reason):
+    return ApiError(_POLICY_STATUS.get(reason, 400), reason)
+
+
+def _policy_store(home, slug):
+    return projects.PolicyStore(registry.projects_base(home), slug)
+
+
+def put_policy(home, slug, body):
+    """Safeguard upsert: the body is the FULL sealed policy object,
+    validated ONLY by the sealed slice-03 validator (the service adds no
+    validation and never reshapes); create and overwrite are one operation
+    keyed by the body's own id, and version is operator intent stored
+    verbatim. The response carries the stored domain object alone — the
+    envelope's control revision is independent of the domain version and
+    exposing both invites exactly the confusion slice-03 separates. A
+    valid re-put replaces a malformed stored VALUE wholesale (the sealed
+    put reads the prior envelope only for its revision, never validating
+    the old value). An invalid stored ENVELOPE refuses instead: the gated
+    envelope read below owns that refusal, because the raw sealed put
+    only fails on its own for envelopes whose revision is unreadable —
+    a corrupt envelope that still carries a readable revision would be
+    silently overwritten, and amendment A2 reserves invalid envelopes
+    for the store-level remedy (see the module docstring)."""
+    with registry.locked(home):
+        slug, _rec = _require_declared(home, slug)
+        _require_store_file(home, slug)
+        store = _policy_store(home, slug)
+        try:
+            value = projects.validate_policy_value(body)
+        except projects.PolicyValidationError as exc:
+            raise ApiError(400, exc.reason)
+        try:
+            # Envelope gate (mirrors the delete's sealed-read gate): the
+            # sealed envelope read validates the stored envelope shape and
+            # raises RuntimeError on ANY invalid envelope — including ones
+            # the raw put would overwrite — while passing live, tombstoned,
+            # never-written, and malformed-VALUE entries through untouched.
+            store.envelopes.read(store.keys.policy(value["id"]))
+            stored = store.put(value)
+        except projects.PolicyValidationError as exc:
+            raise ApiError(400, exc.reason)
+        except (KeyError, RuntimeError, TypeError):
+            raise ApiError(500, MALFORMED_STORE)
+        except OSError:
+            raise ApiError(500, UNREADABLE_STORE)
+        return stored["value"]
+
+
+def enable_reuse_audit(home, slug, body):
+    """Instantiate the built-in pair and store it as ordinary policies.
+
+    The route has one extra guard beyond two calls to put_policy: both
+    pinned envelopes are read before the first write, so an invalid stored
+    envelope at either id cannot leave the project half-enabled.
+    """
+    with registry.locked(home):
+        slug, _rec = _require_declared(home, slug)
+        _require_store_file(home, slug)
+        try:
+            policies_to_store = [
+                projects.validate_policy_value(policy)
+                for policy in reuse_audit.instantiate(body)
+            ]
+        except reuse_audit.TemplateParamError as exc:
+            raise ApiError(400, exc.reason) from exc
+        except projects.PolicyValidationError as exc:
+            raise ApiError(400, exc.reason) from exc
+
+        store = _policy_store(home, slug)
+        try:
+            for policy in policies_to_store:
+                store.envelopes.read(store.keys.policy(policy["id"]))
+            stored = [store.put(policy)["value"] for policy in policies_to_store]
+        except projects.PolicyValidationError as exc:
+            raise ApiError(400, exc.reason) from exc
+        except (KeyError, RuntimeError, TypeError):
+            raise ApiError(500, MALFORMED_STORE)
+        except OSError:
+            raise ApiError(500, UNREADABLE_STORE)
+        return stored
+
+
+def delete_policy(home, slug, policy_id):
+    """Gated safeguard delete: one sealed read FIRST, because the raw
+    envelope delete happily tombstones never-written keys and listings
+    include tombstones by the frozen contract — an ungated delete of a
+    typo'd id would "succeed" and mint a junk key every listing carries
+    forever. Unknown/tombstoned ids refuse 404 writing nothing; a
+    malformed stored policy (value OR envelope — the sealed read owns
+    this read and answers with its own reason) refuses 5xx writing
+    nothing. The id arrives from the URL-encoded `id` query parameter,
+    never a path segment (amendment A2: the sealed grammar admits "." and
+    "..", which browsers normalize away inside URL paths)."""
+    with registry.locked(home):
+        slug, _rec = _require_declared(home, slug)
+        _require_store_file(home, slug)
+        store = _policy_store(home, slug)
+        try:
+            current = store.read(policy_id)
+            if not current.ok:
+                raise _policy_error(current.reason)
+            deleted = store.delete(current.value["id"])
+        except ApiError:
+            raise
+        except (KeyError, RuntimeError, TypeError):
+            raise ApiError(500, MALFORMED_STORE)
+        except OSError:
+            raise ApiError(500, UNREADABLE_STORE)
+        if not deleted.ok:
+            raise ApiError(500, MALFORMED_STORE)
+        return {"id": current.value["id"], "deleted": True}
+
+
+def project_route_segments(route):
+    """Decoded path segments after /api/projects. Slugs and work-area
+    names ride URL-encoded, so every Slice 2-valid value (spaces
+    included) round-trips."""
+    return [
+        urllib.parse.unquote(seg)
+        for seg in route.rstrip("/").split("/")[3:]
+        if seg != ""
+    ]
+
+
+def projects_api(home, method, segments, body, query=None):
+    """Dispatch one /api/projects request. Returns (status, payload).
+
+    `query` carries the decoded query parameters for the one route that
+    uses them: the policy delete's `id` (a query parameter by amendment
+    A2, so ids the sealed grammar allows but browsers would normalize
+    away as path segments still round-trip)."""
+    n = len(segments)
+    if n == 0:
+        if method == "GET":
+            return 200, {"ok": True, "projects": list_projects(home)}
+        if method == "POST":
+            return 201, {"ok": True, "project": create_project(home, body)}
+    elif n == 1:
+        slug = segments[0]
+        if method == "GET":
+            return 200, {"ok": True, "project": read_project(home, slug)}
+        if method == "POST":
+            return 200, {
+                "ok": True, "project": update_project(home, slug, body)
+            }
+        if method == "DELETE":
+            return 200, {"ok": True, **delete_project(home, slug)}
+    elif n == 2 and segments[1] == "work-areas":
+        if method == "POST":
+            return 200, {
+                "ok": True,
+                "work_area": declare_work_area(home, segments[0], body),
+            }
+    elif n == 2 and segments[1] == "policies":
+        if method == "POST":
+            return 200, {
+                "ok": True, "policy": put_policy(home, segments[0], body)
+            }
+        if method == "DELETE":
+            return 200, {
+                "ok": True,
+                "policy": delete_policy(
+                    home, segments[0], (query or {}).get("id", "")
+                ),
+            }
+    elif (
+        n == 3
+        and segments[1] == "policies"
+        and segments[2] == reuse_audit.PLANNING_POLICY_ID
+    ):
+        if method == "POST":
+            return 200, {
+                "ok": True,
+                "policies": enable_reuse_audit(home, segments[0], body),
+            }
+    elif n == 3 and segments[1] == "work-areas":
+        slug, name = segments[0], segments[2]
+        if method == "GET":
+            return 200, {
+                "ok": True, "work_area": read_work_area(home, slug, name)
+            }
+        if method == "POST":
+            return 200, {
+                "ok": True,
+                "work_area": relabel_work_area(home, slug, name, body),
+            }
+        if method == "DELETE":
+            return 200, {
+                "ok": True, "work_area": delete_work_area(home, slug, name)
+            }
+    elif n == 4 and segments[1] == "work-areas" and segments[3] == "meta":
+        slug, name = segments[0], segments[2]
+        if method == "GET":
+            return 200, {
+                "ok": True, "meta": read_work_area_meta(home, slug, name)
+            }
+        if method == "POST":
+            return 200, {
+                "ok": True,
+                "meta": put_work_area_meta(home, slug, name, body),
+            }
+    raise ApiError(404, "not found")
 
 
 # ---------------------------------------------------------------------------
@@ -170,6 +908,212 @@ def load_summary(state_path):
 def _evict_summary(state_path):
     with _SUMMARY_CACHE_LOCK:
         _SUMMARY_CACHE.pop(state_path, None)
+
+
+# ---------------------------------------------------------------------------
+# run:<run_id>/status projection
+#
+# The SERVICE is this family's only writer (local-authoritative); the
+# driver's run-critical path never writes it and nothing ever reads it
+# back to drive decisions — durable truth stays in state.json; the
+# projection is visibility for the future Brain/other-device mirror.
+# Writes ride the existing observation paths (the poll's summary refresh
+# and the guard's periodic scan) and are CHANGE-DRIVEN: an observation
+# whose projected value is unchanged writes nothing, so envelope
+# revisions move only when the run's projected status actually changes.
+
+_PROJECTION_LOCK = threading.Lock()
+
+# An absolute path substring: "/" + non-space run, at the start or after
+# whitespace. Spaced known paths are replaced exactly; ambiguous tails fail
+# closed to the caller's fallback.
+_ABS_PATH_RE = re.compile(r"(?<!\S)/\S+")
+_TERMINAL_PATH_PUNCTUATION = set(")]}>.,;:!?\"'")
+
+
+def _sanitize_projection_text(text, fallback, known_paths=()):
+    """Path-free Brain-boundary discipline for the two operator-authored
+    strings the projection mirrors (run name, failure reason): absolute
+    path substrings become <path>; if the result still carries any slash
+    the whole string falls back to a fixed token — fail closed, never
+    leak a local filesystem path. The raw strings remain in the registry
+    and the durable state summary."""
+    if not text:
+        return fallback
+    out = str(text)
+    paths = [
+        path for path in set(known_paths or ())
+        if isinstance(path, str) and os.path.isabs(path) and path != "/"
+    ]
+    for path in sorted(paths, key=len, reverse=True):
+        if _known_path_tail_is_ambiguous(out, path):
+            return fallback
+        out = out.replace(path, "<path>")
+    if _unknown_path_tail_is_ambiguous(out):
+        return fallback
+    out = _ABS_PATH_RE.sub("<path>", out).strip()
+    if not out or "/" in out:
+        return fallback
+    return out
+
+
+def _known_path_tail_is_ambiguous(text, path):
+    pos = 0
+    while True:
+        pos = text.find(path, pos)
+        if pos == -1:
+            return False
+        end = pos + len(path)
+        if end < len(text) and not _safe_path_tail(text[end:], path):
+            return True
+        pos = end
+
+
+def _unknown_path_tail_is_ambiguous(text):
+    for match in _ABS_PATH_RE.finditer(text):
+        if match.end() < len(text) and not _safe_unknown_path_tail(
+            text[match.end():]
+        ):
+            return True
+    return False
+
+
+def _safe_unknown_path_tail(tail):
+    if not tail:
+        return True
+    if not tail[0].isspace():
+        return all(char in _TERMINAL_PATH_PUNCTUATION for char in tail)
+    rest = tail.lstrip()
+    return not rest or all(
+        char in _TERMINAL_PATH_PUNCTUATION for char in rest
+    )
+
+
+def _safe_path_tail(tail, path=None):
+    if not tail:
+        return True
+    if not tail[0].isspace():
+        return all(char in _TERMINAL_PATH_PUNCTUATION for char in tail)
+    rest = tail.lstrip()
+    if not rest:
+        return True
+    if rest.startswith("("):
+        close = rest.find(")")
+        body = rest[1:close] if close != -1 else ""
+        if close != -1 and path is not None:
+            offset = len(tail) - len(rest)
+            if os.path.exists(path + tail[:offset + close + 1]):
+                return False
+        return (
+            close != -1
+            and (not body or any(char.isspace() for char in body))
+            and all(
+                char in _TERMINAL_PATH_PUNCTUATION
+                for char in rest[close + 1:]
+            )
+        )
+    return all(char in _TERMINAL_PATH_PUNCTUATION for char in rest)
+
+
+def _projection_value(entry, summ):
+    """Exactly {run_id, name, project, work_area, milestone_status,
+    current_unit, current_unit_status, failure_reason}, JSON-plain and
+    path-free; every field other than the sanitized name/failure_reason
+    mirrors the run's summary."""
+    failure = (summ.get("failure") or {}).get("reason")
+    known_paths = (entry.get("workspace"), summ.get("workspace"))
+    return {
+        "run_id": entry["id"],
+        "name": _sanitize_projection_text(
+            summ.get("name"), "run", known_paths=known_paths
+        ),
+        "project": summ["project"],
+        "work_area": summ["work_area"],
+        "milestone_status": summ.get("milestone_status"),
+        "current_unit": summ.get("current_unit"),
+        "current_unit_status": summ.get("current_unit_status"),
+        "failure_reason": (
+            None if failure is None
+            else _sanitize_projection_text(
+                failure, "failure_recorded", known_paths=known_paths
+            )
+        ),
+    }
+
+
+def _bound_project_envelopes(home, slug):
+    """The bound project's own DECLARED KV store — the only valid
+    projection authority. No global, workspace-root, or foreign store is
+    ever written, and a lost store is a fault to report, never a store to
+    silently recreate (re-declaring is the operator's repair)."""
+    slug = workareas.validate_project_slug(slug)
+    rec = registry.load_projects_record(home)
+    if registry.get_project(rec, slug) is None:
+        raise RuntimeError("project %r is not declared here" % slug)
+    store_file = _store_file(home, slug)
+    if not os.path.isfile(store_file):
+        raise RuntimeError("no store file at %s" % store_file)
+    return kvstore.RevisionEnvelopeStore(
+        kvstore.LocalKVClient(os.path.dirname(store_file))
+    )
+
+
+def _pump_projection(home, entry, summ):
+    """One change-driven projection observation. Contained: any fault
+    logs to the run's service log and returns — a projection write
+    failure fails no launch, poll, or run, and the pump self-heals on
+    the next observation once the store is writable again. Project-less
+    runs project nothing (zero KV access)."""
+    if summ is None or "project" not in summ:
+        return
+    run_id = entry["id"]
+    try:
+        value = _projection_value(entry, summ)
+        with _PROJECTION_LOCK:
+            envelopes = _bound_project_envelopes(home, summ["project"])
+            key = kvstore.KeyBuilder().run_status(run_id)
+            current = envelopes.read(key)
+            if current["exists?"] and current["value"] == value:
+                return
+            envelopes.put(key, value)
+    except Exception as exc:
+        append_log(home, run_id, "[projection] write failed: %s\n" % exc)
+
+
+def _tombstone_projection(home, run_id, summ, required=False):
+    """Purge-deleting a bound run tombstones its projection through the
+    sealed envelope delete (readback exists?: False) in the same
+    bound-project store; a plain forget leaves the last truthful snapshot.
+    Optional projection observations are contained like writes; purge
+    deletion requires the tombstone before it can remove the last observation
+    path."""
+    if summ is None or "project" not in summ:
+        return True
+    try:
+        with _PROJECTION_LOCK:
+            envelopes = _bound_project_envelopes(home, summ["project"])
+            envelopes.delete(kvstore.KeyBuilder().run_status(run_id))
+        return True
+    except Exception as exc:
+        append_log(home, run_id, "[projection] tombstone failed: %s\n" % exc)
+        if required:
+            raise ApiError(500, PROJECTION_TOMBSTONE_FAILED)
+        return False
+
+
+def _bound_summary_from_entry(entry):
+    """The registry's durable binding fallback for deletion paths where
+    the state document is unreadable. It distinguishes a state that was
+    registered after a readable-unbound summary from an attach of an already
+    unreadable state, where absence of handles proves nothing."""
+    if entry.get("project") is None:
+        if entry.get("project_proven_unbound"):
+            return {}
+        return None
+    return {
+        "project": entry.get("project"),
+        "work_area": entry.get("work_area"),
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -303,8 +1247,11 @@ def read_in_flight(entry, alive):
     }
 
 
-def run_status(entry):
-    """Derived, cheap status for the run list."""
+def run_status(entry, home=None):
+    """Derived, cheap status for the run list. A project-bound run also
+    carries its two path-free handles (null when unbound). When `home`
+    is given, the freshly observed summary drives the change-driven
+    projection pump — the poll is one of its two observation paths."""
     alive = driver_alive(entry)
     info = {
         "id": entry["id"],
@@ -312,6 +1259,8 @@ def run_status(entry):
         "workspace": entry["workspace"],
         "created_at": entry["created_at"],
         "goal_doc": entry.get("goal_doc"),
+        "project": entry.get("project"),
+        "work_area": entry.get("work_area"),
         "process": "running" if alive else "stopped",
         "pid": entry.get("pid") if alive else None,
         "in_flight": read_in_flight(entry, alive),
@@ -325,12 +1274,16 @@ def run_status(entry):
     }
     try:
         summ = load_summary(entry["state_path"])
+        info["project"] = summ.get("project")
+        info["work_area"] = summ.get("work_area")
         info["milestone_status"] = summ["milestone_status"]
         info["current_unit"] = summ["current_unit"]
         info["current_unit_status"] = summ["current_unit_status"]
         info["current_family"] = summ.get("current_family")
         info["failure_reason"] = (summ["failure"] or {}).get("reason")
         info["events_total"] = summ["events_total"]
+        if home is not None:
+            _pump_projection(home, entry, summ)
     except Exception as exc:
         info["state_error"] = str(exc)
     return info
@@ -339,24 +1292,182 @@ def run_status(entry):
 def list_runs(home):
     reap_exited_drivers(home)
     reg = registry.load(home)
-    return [run_status(e) for e in reg["runs"]]
+    return [run_status(e, home=home) for e in reg["runs"]]
+
+
+def _launch_goal(payload):
+    """Resolve the launch's goal text (inline goal or goal_doc file).
+    Returns (goal, goal_doc)."""
+    goal = payload.get("goal")
+    goal_doc = payload.get("goal_doc")
+    if goal_doc:
+        goal_doc = os.path.abspath(os.path.expanduser(goal_doc))
+        if not os.path.isfile(goal_doc):
+            raise ApiError(400, "goal_doc not found: %s" % goal_doc)
+        try:
+            with open(goal_doc, "r", encoding="utf-8") as fh:
+                goal = fh.read().strip()
+        except OSError as exc:
+            raise ApiError(400, "cannot read goal_doc: %s" % exc)
+    if not goal or not isinstance(goal, str) or not goal.strip():
+        raise ApiError(400, "goal text or goal_doc is required")
+    return goal.strip(), goal_doc
+
+
+def _registered_state_conflict(reg, state_path):
+    for existing in reg["runs"]:
+        if existing["state_path"] == state_path:
+            return (
+                "state %s is already registered as run %s"
+                % (state_path, existing["id"])
+            )
+    return None
+
+
+def _refuse_registered_state_path(home, state_path):
+    with registry.locked(home):
+        message = _registered_state_conflict(registry.load(home), state_path)
+    if message is not None:
+        raise ApiError(409, message)
+
+
+def _create_bound_run(home, payload, workspace):
+    """POST /api/runs {project, work_area}: launch against a declared
+    project instead of a bare path. Observable order: (1) addressing —
+    declared project, live stored record; (2) validation of the STORED
+    descriptor's roots against the real filesystem (the
+    executor-reconcile role — never roots taken from the request);
+    (3) the sealed pending->ready confirm; (4) Slice 5's project-bound
+    init. Refusal tokens ride verbatim; every refusal creates no state
+    file, no registry entry, and no projection entry (a refusal after
+    step 3 may truthfully leave the work area ready — readiness
+    describes the descriptor, not this launch).
+
+    Returns (primary_path, state_path, goal_doc)."""
+    try:
+        slug = workareas.validate_project_slug(payload.get("project"))
+        area = workareas.validate_name(payload.get("work_area"))
+    except workareas.WorkAreaValidationError as exc:
+        raise ApiError(400, exc.reason)
+
+    # Addressing. An undeclared project (or a declared one whose store is
+    # lost) is the sealed launch seam's no-store posture: unknown_work_area,
+    # 400-class, no store opened, nothing created. This launch-seam mapping
+    # is deliberately distinct from the CRUD routes' 404/5xx mapping.
+    rec = registry.load_projects_record(home)
+    project = registry.get_project(rec, slug)
+    if project is None or not os.path.isfile(_store_file(home, slug)):
+        raise ApiError(400, workareas.UNKNOWN)
+    store = _work_area_store(home, slug)
+    try:
+        record = store.read(area)
+    except (RuntimeError, OSError) as exc:
+        _raise_store_error(exc)
+    if not record.ok:
+        raise ApiError(400, record.reason)
+    primary = record.value["primary"]
+    additional = record.value["additional"]
+
+    goal, goal_doc = _launch_goal(payload)
+    user_cfg = payload.get("config")
+    if user_cfg is not None and not isinstance(user_cfg, dict):
+        raise ApiError(400, "config must be a JSON object")
+
+    # Launch-time standing defaults: the service's git-enabled convention
+    # (same rationale as the project-less path: panel runs get the full
+    # enforced flow by default) merged BENEATH the persisted project
+    # defaults — standing operator law beats a service convention, and the
+    # explicit launch config (config_override at the init seam) beats both.
+    binding_defaults = {"git": {"enabled": True}}
+    if project.get("defaults"):
+        driver.merge_config(binding_defaults, project["defaults"])
+
+    # Validation is the reconcile's real-filesystem half, under the
+    # launch's effective config (the same order init will apply). A
+    # failure refuses 400 with a machine-readable reason, leaves the
+    # record's status UNCHANGED, and creates nothing.
+    effective = driver.load_config(None)
+    driver.merge_config(effective, binding_defaults)
+    if user_cfg:
+        driver.merge_config(effective, user_cfg)
+    if not os.path.isdir(primary["path"]):
+        raise ApiError(400, driver.MISSING_PRIMARY_PATH)
+    if gitops.enabled(effective) and not gitops.is_repo_root(primary["path"]):
+        # Same predicate as the project-less gate below: the gate ledger
+        # must land in a repo the operator created on purpose.
+        raise ApiError(400, PRIMARY_NOT_REPO_ROOT)
+    for root in additional:
+        if not os.path.isdir(root["path"]):
+            raise ApiError(400, MISSING_ADDITIONAL_ROOT)
+
+    # Reconcile -> ready through the sealed transition: the first confirm
+    # takes pending v1 to ready v2 (the agent_99-pinned bump); re-confirms
+    # with the service's stable identity are version-silent.
+    try:
+        confirmed = store.confirm(area, primary, additional, _executor_id(home))
+    except (RuntimeError, OSError) as exc:
+        _raise_store_error(exc)
+    if not confirmed.ok:
+        raise _work_area_error(confirmed.reason)
+
+    resolved_workspace = primary["path"] if workspace is None else workspace
+    if resolved_workspace == primary["path"]:
+        _refuse_registered_state_path(
+            home, driver.default_state_path(resolved_workspace)
+        )
+
+    binding = {
+        "directory": registry.projects_base(home),
+        "project": slug,
+        "work_area": area,
+        "defaults": binding_defaults,
+    }
+    name_for_init = (
+        payload.get("name")
+        or os.path.basename(primary["path"].rstrip("/"))
+        or "run"
+    )
+    try:
+        state_path = driver.init_run(
+            goal, workspace, name=name_for_init,
+            project=binding, config_override=user_cfg,
+        )
+    except driver.ProjectResolutionError as exc:
+        # The sealed seam built cause for exactly this consumer: the
+        # token rides verbatim, no per-cause status remapping.
+        raise ApiError(400, exc.cause)
+    except FileExistsError as exc:
+        raise ApiError(409, str(exc) + ' (use "attach": true to adopt it)')
+    return primary["path"], state_path, goal_doc
 
 
 def create_run(home, payload):
-    workspace = payload.get("workspace")
-    if not workspace or not isinstance(workspace, str):
-        raise ApiError(400, "workspace (string) is required")
-    workspace = os.path.abspath(os.path.expanduser(workspace))
-
     attach = bool(payload.get("attach"))
-    goal_doc = None
+    bound = (
+        payload.get("project") is not None
+        or payload.get("work_area") is not None
+    )
+    workspace = payload.get("workspace")
+    if workspace is not None and not isinstance(workspace, str):
+        raise ApiError(400, "workspace (string) is required")
+    if workspace:
+        workspace = os.path.abspath(os.path.expanduser(workspace))
+    else:
+        # Only a project-bound launch may omit the workspace (it derives
+        # from the work area's primary root).
+        workspace = None
+        if not bound:
+            raise ApiError(400, "workspace (string) is required")
 
+    goal_doc = None
     if attach:
-        # Attach adopts an on-disk state exactly as it is; a supplied
-        # goal/goal_doc/config would be silently ignored — reject instead
-        # of pretending it was honored. Adopts the legacy workspace-root
-        # state, or an explicit `state_path` for a per-milestone run.
-        for key in ("goal", "goal_doc", "config"):
+        # Attach adopts the on-disk state exactly as it is; a supplied
+        # goal/goal_doc/config — or a project binding, which would
+        # re-resolve what the state already records — would be silently
+        # ignored: reject instead of pretending it was honored. Adopts the
+        # legacy workspace-root state, or an explicit `state_path` for a
+        # per-milestone run.
+        for key in ("goal", "goal_doc", "config", "project", "work_area"):
             if payload.get(key) is not None:
                 raise ApiError(
                     400,
@@ -372,31 +1483,30 @@ def create_run(home, payload):
             raise ApiError(400, "attach requested but no state at %s" % state_path)
         # The adopted state must belong to THIS workspace: otherwise the
         # driver would run against `workspace` while mutating another repo's
-        # ledger. (Guards an explicit cross-workspace state_path.)
+        # ledger. (Guards an explicit cross-workspace state_path.) An
+        # UNREADABLE state proves nothing either way and stays adoptable:
+        # the delete-guard machinery depends on re-attaching corrupt
+        # states to purge them (refusing here would strand them forever).
+        adopted_ws = None
         try:
             adopted_ws = st.load(state_path).get("workspace")
-        except Exception as exc:
-            raise ApiError(409, "state unreadable: %s" % exc)
-        if os.path.abspath(adopted_ws or "") != os.path.abspath(workspace):
+        except Exception:
+            pass
+        if adopted_ws is not None and (
+            os.path.abspath(adopted_ws or "") != os.path.abspath(workspace)
+        ):
             raise ApiError(
                 400,
                 "state at %s belongs to workspace %r, not %r"
                 % (state_path, adopted_ws, workspace),
             )
+    elif bound:
+        workspace, state_path, goal_doc = _create_bound_run(
+            home, payload, workspace
+        )
     else:
-        goal = payload.get("goal")
-        goal_doc = payload.get("goal_doc")
-        if goal_doc:
-            goal_doc = os.path.abspath(os.path.expanduser(goal_doc))
-            if not os.path.isfile(goal_doc):
-                raise ApiError(400, "goal_doc not found: %s" % goal_doc)
-            try:
-                with open(goal_doc, "r", encoding="utf-8") as fh:
-                    goal = fh.read().strip()
-            except OSError as exc:
-                raise ApiError(400, "cannot read goal_doc: %s" % exc)
-        if not goal or not isinstance(goal, str) or not goal.strip():
-            raise ApiError(400, "goal text or goal_doc is required")
+        goal, goal_doc = _launch_goal(payload)
+        state_path = driver.default_state_path(workspace)
         config = driver.load_config(None)
         # Panel runs get the FULL enforced flow: gate commits, the amend
         # discipline, delta reviews of every fix, and revertible tamper
@@ -457,11 +1567,38 @@ def create_run(home, payload):
 
     name = payload.get("name") or os.path.basename(workspace.rstrip("/")) or "run"
     run_id = registry.make_run_id()
-    entry = registry.new_entry(run_id, name, workspace, state_path, goal_doc=goal_doc)
+    entry_summ = None
+    entry_project = None
+    entry_work_area = None
+    try:
+        entry_summ = load_summary(state_path)
+        entry_project = entry_summ.get("project")
+        entry_work_area = entry_summ.get("work_area")
+    except Exception:
+        pass
+    entry = registry.new_entry(
+        run_id,
+        name,
+        workspace,
+        state_path,
+        goal_doc=goal_doc,
+        project=entry_project,
+        work_area=entry_work_area,
+    )
+    if entry_summ is not None and entry_project is None:
+        entry["project_proven_unbound"] = True
     try:
         registry.add(home, entry)
     except ValueError as exc:
         raise ApiError(409, str(exc))
+    if bound:
+        # The initial projection value (envelope revision 1). Contained —
+        # a failed initial write never fails the bound launch; the pump
+        # self-heals on a later observation.
+        try:
+            _pump_projection(home, entry, entry_summ)
+        except Exception as exc:
+            append_log(home, run_id, "[projection] write failed: %s\n" % exc)
     registry.remember_recent(home, "workspaces", workspace)
     if goal_doc:
         registry.remember_recent(home, "goal_docs", goal_doc)
@@ -578,9 +1715,9 @@ def resume_run(home, run_id):
 
 def delete_run(home, run_id, purge=False):
     reap_exited_drivers(home)
-    # Check-and-remove under ONE registry lock: the auto-resume guard (or
-    # an operator Resume) could otherwise spawn a driver between our
-    # aliveness check and the removal, purging state under a live driver.
+    # Check, optional purge, retained-state claim, and removal happen under
+    # ONE registry lock. Otherwise a concurrent project delete could observe
+    # neither the registered run nor the retained attachable state.
     with registry.locked(home):
         reg = registry.load(home)
         entry = registry.get(reg, run_id)
@@ -588,6 +1725,22 @@ def delete_run(home, run_id, purge=False):
             raise ApiError(404, "unknown run %r" % run_id)
         if driver_alive(entry):
             raise ApiError(409, "stop the run before deleting it")
+        summ = None
+        try:
+            # Read while the state is certainly still on disk: the purge
+            # tombstone and the retained-state decision below need to know
+            # whether (and where) the run was bound.
+            summ = load_summary(entry["state_path"])
+        except Exception:
+            summ = _bound_summary_from_entry(entry)
+        if purge:
+            _tombstone_projection(home, run_id, summ, required=True)
+            # Keep the registry entry visible until the purge either removes
+            # the state claim or leaves one that we record below.
+            purged, purge_errors = _purge_state_files(entry["state_path"])
+        else:
+            purged, purge_errors = [], []
+        _claim_retained_state_locked(home, entry["state_path"], summ)
         # Inline removal under the SAME lock (registry.remove takes its
         # own lock; flock on a second fd would deadlock this process).
         reg["runs"] = [e for e in reg["runs"] if e["id"] != run_id]
@@ -595,11 +1748,24 @@ def delete_run(home, run_id, purge=False):
     _evict_summary(entry["state_path"])
     if not purge:
         return {"deleted": run_id, "note": "workspace files untouched"}
-    purged, purge_errors = _purge_state_files(entry["state_path"])
     out = {"deleted": run_id, "purged": purged}
     if purge_errors:
         out["purge_errors"] = purge_errors
     return out
+
+
+def _claim_retained_state_locked(home, state_path, summ):
+    """Record a deregistered run's still-on-disk, project-bound state file
+    in the projects record's retained_states, so project deletion keeps
+    seeing its claim. Caller must already hold registry.locked(home)."""
+    if not os.path.exists(state_path):
+        return
+    if summ is not None and "project" not in summ:
+        return
+    rec = registry.load_projects_record(home)
+    if state_path not in rec["retained_states"]:
+        rec["retained_states"].append(state_path)
+        registry.save_projects_record(home, rec)
 
 
 def _purge_state_files(state_path):
@@ -1006,7 +2172,7 @@ def run_detail(home, run_id, log_tail=80):
     entry = registry.get(reg, run_id)
     if entry is None:
         raise ApiError(404, "unknown run %r" % run_id)
-    detail = {"entry": entry, "status": run_status(entry), "summary": None}
+    detail = {"entry": entry, "status": run_status(entry, home=home), "summary": None}
     try:
         detail["summary"] = load_summary(entry["state_path"])
     except Exception as exc:
@@ -1091,6 +2257,11 @@ def make_handler(home):
                         nearest=query.get("nearest") == "1",
                     )
                     self._json(200, {"ok": True, **listing})
+                elif route == "/api/projects" or route.startswith("/api/projects/"):
+                    status, payload = projects_api(
+                        home, "GET", project_route_segments(route), None
+                    )
+                    self._json(status, payload)
                 elif route.startswith("/api/runs/"):
                     parts = route.rstrip("/").split("/")
                     # /api/runs/<id>  or  /api/runs/<id>/log
@@ -1130,17 +2301,23 @@ def make_handler(home):
                 route, _query = self._route()
                 if route == "/api/runs":
                     entry = create_run(home, self._body())
-                    self._json(201, {"ok": True, "run": run_status(entry)})
+                    self._json(201, {"ok": True, "run": run_status(entry, home=home)})
+                elif route == "/api/projects" or route.startswith("/api/projects/"):
+                    status, payload = projects_api(
+                        home, "POST", project_route_segments(route),
+                        self._body(),
+                    )
+                    self._json(status, payload)
                 elif route.startswith("/api/runs/"):
                     parts = route.rstrip("/").split("/")
                     if len(parts) == 5 and parts[4] == "start":
                         entry = start_run(home, parts[3])
-                        self._json(200, {"ok": True, "run": run_status(entry)})
+                        self._json(200, {"ok": True, "run": run_status(entry, home=home)})
                     elif len(parts) == 5 and parts[4] == "stop":
                         self._json(200, {"ok": True, **stop_run(home, parts[3])})
                     elif len(parts) == 5 and parts[4] == "resume":
                         entry = resume_run(home, parts[3])
-                        self._json(200, {"ok": True, "run": run_status(entry)})
+                        self._json(200, {"ok": True, "run": run_status(entry, home=home)})
                     elif len(parts) == 5 and parts[4] == "amendments":
                         amendments = add_amendment(
                             home, parts[3], self._body()
@@ -1171,6 +2348,12 @@ def make_handler(home):
                 elif len(parts) == 4 and route.startswith("/api/runs/"):
                     self._json(200, {"ok": True, **delete_run(
                         home, parts[3], purge=query.get("purge") == "1")})
+                elif route == "/api/projects" or route.startswith("/api/projects/"):
+                    status, payload = projects_api(
+                        home, "DELETE", project_route_segments(route), None,
+                        query=query,
+                    )
+                    self._json(status, payload)
                 else:
                     self._json(404, {"ok": False, "error": "not found"})
             except ApiError as exc:
@@ -1257,6 +2440,11 @@ EMERGENCY_RESUME_S = EMERGENCY_RESUME_MIN * 60
 
 def append_log(home, run_id, text):
     try:
+        # The run's log may be written before any driver ever started
+        # (e.g. a projection fault on a never-started run): the log is
+        # such faults' only surface, so create the directory here rather
+        # than silently dropping the line.
+        os.makedirs(registry.logs_dir(home), exist_ok=True)
         with open(registry.log_path(home, run_id), "a",
                   encoding="utf-8") as fh:
             fh.write(text)
@@ -1289,6 +2477,10 @@ def guard_scan(home):
             summ = load_summary(entry["state_path"])
             if summ is None:
                 continue
+            # The guard's periodic scan is the projection's second
+            # observation path (change-driven, contained): terminal
+            # states reach the store even when no panel is polling.
+            _pump_projection(home, entry, summ)
             if driver_alive(entry):
                 baseline = entry.get("resume_baseline")
                 if (
