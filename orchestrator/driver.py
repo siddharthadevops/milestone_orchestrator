@@ -123,7 +123,9 @@ DEFAULT_CONFIG = {
     # deliberate resume grants a fresh budget (state.resume_run resets the
     # counter), so this is a soft ceiling, not a dead end.
     "max_fix_loops": 20,
-    # P3 debt deferral (off by default). When on, a review round (DOC phase
+    # P3 debt deferral (ON by default — operator order 2026-07-07: a lone
+    # cosmetic P3 must not cost a fix→delta→re-seal cycle; shipping this
+    # off silently no-opped that decision). A review round (DOC phase
     # only) or a seal (both phases) whose findings are ALL P3 gets an
     # opposite-family reclassification per finding; if every one is verified
     # safe to defer, the P3s are recorded as tracked debt and the unit
@@ -131,7 +133,7 @@ DEFAULT_CONFIG = {
     # delta review, and impl-phase rounds are unaffected (findings fixed
     # normally). A refused verdict or a failed reclassify call sends the
     # findings to the normal fix flow (safe default).
-    "p3_reclassify_debt": False,
+    "p3_reclassify_debt": True,
     # Infra-failure handling (errclass): short in-place retries for
     # network/busy before a typed failure, and the opposite-family LLM
     # classifier fallback for noisy failure output. The service guard
