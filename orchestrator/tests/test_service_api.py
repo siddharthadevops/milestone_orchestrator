@@ -744,10 +744,35 @@ class StoryApiTest(ServiceApiTest):
         self.assertIn("+hello", body["text"])
         self.assertFalse(body["truncated"])
 
+    def test_commit_falls_back_to_wip_commit(self):
+        # A unit still in flight has no gate commit; the viewer serves its
+        # current working commit instead.
+        ws = self.workspace("ws-commit-wip")
+        rid = self._seed(ws)
+        with open(os.path.join(ws, "w.txt"), "w", encoding="utf-8") as fh:
+            fh.write("in flight\n")
+        subprocess.run(["git", "-C", ws, "add", "."], check=True)
+        subprocess.run(
+            ["git", "-C", ws, "-c", "user.email=t@t", "-c", "user.name=t",
+             "commit", "-q", "-m", "wip: skeleton"], check=True)
+        sha = subprocess.run(
+            ["git", "-C", ws, "rev-parse", "--short", "HEAD"],
+            capture_output=True, text=True, check=True).stdout.strip()
+        entry = registry.get(registry.load(self.home), rid)
+        state = st.load(entry["state_path"])
+        st.append_event(state, "wip_commit", unit="skeleton", sha=sha)
+        st.save(entry["state_path"], state)
+        status, body = self.request_json(
+            "GET", "/api/runs/%s/commit?unit=skeleton" % rid)
+        self.assertEqual(status, 200)
+        self.assertEqual(body["sha"], sha)
+        self.assertEqual(body["kind"], "wip")
+        self.assertIn("+in flight", body["text"])
+
     def test_commit_errors(self):
         ws = self.workspace("ws-commit-bad")
         rid = self._seed(ws)
-        # seeded unit has no gate commit recorded
+        # seeded unit has neither a gate nor a wip commit recorded
         status, _ = self.request_json(
             "GET", "/api/runs/%s/commit?unit=skeleton" % rid)
         self.assertEqual(status, 404)

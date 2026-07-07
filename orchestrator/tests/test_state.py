@@ -1628,8 +1628,8 @@ class TestSummary(TempWorkspaceCase):
         skel_view, doc_view = summ["units"]
         self.assertEqual(
             set(skel_view.keys()),
-            {"unit", "status", "artifact", "gate_sha", "draft", "rounds",
-             "seals", "opened_epoch", "closed_epoch", "debt"},
+            {"unit", "status", "artifact", "gate_sha", "wip_sha", "draft",
+             "rounds", "seals", "opened_epoch", "closed_epoch", "debt"},
         )
         # The draft chip data: write-once record surfaced for the panel.
         self.assertEqual(
@@ -1700,6 +1700,22 @@ class TestSummary(TempWorkspaceCase):
         self.assertIsNone(summ["units"][0]["gate_sha"])
         state["units"][0]["gate_commit"] = "abc1234"
         summ = st.summary(state)
+        self.assertEqual(summ["units"][0]["gate_sha"], "abc1234")
+
+    def test_summary_carries_wip_sha_until_sealed(self):
+        # A unit in flight surfaces its LATEST working commit (amends
+        # replace it); the gate commit supersedes it once sealed.
+        state = make_state(self.workspace)
+        uk = st.unit_key(state["units"][0])
+        st.append_event(state, "wip_commit", unit=uk, sha="aaa1111")
+        summ = st.summary(state)
+        self.assertEqual(summ["units"][0]["wip_sha"], "aaa1111")
+        st.append_event(state, "amended", unit=uk, sha="bbb2222")
+        summ = st.summary(state)
+        self.assertEqual(summ["units"][0]["wip_sha"], "bbb2222")
+        state["units"][0]["gate_commit"] = "abc1234"
+        summ = st.summary(state)
+        self.assertIsNone(summ["units"][0]["wip_sha"])
         self.assertEqual(summ["units"][0]["gate_sha"], "abc1234")
 
     def test_summary_of_closed_milestone(self):

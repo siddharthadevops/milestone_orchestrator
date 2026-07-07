@@ -162,6 +162,7 @@
              monospace; }
   .gitlink:hover { color: var(--accent); border-color: #c3d4fb;
                    background: var(--accent-soft); }
+  .gitlink.wip { border-style: dashed; color: var(--warn); }
   .unit-right { display: flex; align-items: baseline; gap: 8px; }
 
   /* local commit viewer */
@@ -693,9 +694,10 @@ async function showCommit(unitKey) {
     d = await api(`/api/runs/${selected}/commit?unit=${encodeURIComponent(unitKey)}`);
   } catch (e) { alert(e.message); return; }
   document.getElementById("cv_title").textContent =
-    `${unitKey} — gate commit ${d.sha}`;
+    `${unitKey} — ${d.kind === "wip" ? "wip" : "gate"} commit ${d.sha}`;
   document.getElementById("cv_meta").textContent =
-    d.truncated ? "(truncated)" : "";
+    (d.kind === "wip" ? "working commit — amended as fixes land" : "") +
+    (d.truncated ? " (truncated)" : "");
   document.getElementById("cv_body").innerHTML = diffHtml(d.text);
   document.getElementById("cv_weblink").innerHTML = lastWebBase
     ? `<a class="morelink" href="${esc(lastWebBase)}/commit/${esc(d.sha)}"
@@ -807,9 +809,16 @@ async function refreshDetail() {
       lastWebBase = d.commit_web_base;
       // Opens the LOCAL commit viewer (git show in the workspace): unlike
       // a direct web link it never 404s on not-yet-pushed gate commits.
-      const gitLink = u => u.gate_sha
-        ? `<span class="gitlink" title="view gate commit"
-             onclick="showCommit('${esc(u.unit)}')">${esc(u.gate_sha)}</span>` : "";
+      // Sealed units link their gate commit; the unit in flight links its
+      // current wip commit (dashed — amended as fixes land).
+      const gitLink = u => {
+        const sha = u.gate_sha || u.wip_sha;
+        if (!sha) return "";
+        const wip = !u.gate_sha;
+        return `<span class="gitlink ${wip ? "wip" : ""}"
+          title="${wip ? "view wip commit (amended as fixes land)" : "view gate commit"}"
+          onclick="showCommit('${esc(u.unit)}')">${wip ? "wip " : ""}${esc(sha)}</span>`;
+      };
       const unitRow = u => {
         let time = "";
         if (u.opened_epoch && u.closed_epoch)

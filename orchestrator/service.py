@@ -946,11 +946,13 @@ COMMIT_MAX = 512 * 1024  # bytes of `git show` served per fetch
 
 
 def run_commit(home, run_id, unit_key):
-    """The unit's gate commit as `git show` text (message + stat + patch),
-    for the panel's local commit viewer. Like run_artifact, the client
-    names a UNIT; the sha comes from the run's own state, and the diff is
-    read from the run's workspace — it works whether or not the commit was
-    ever pushed to a web remote."""
+    """The unit's commit as `git show` text (message + stat + patch), for
+    the panel's local commit viewer. Like run_artifact, the client names a
+    UNIT; the sha comes from the run's own state, and the diff is read
+    from the run's workspace — it works whether or not the commit was ever
+    pushed to a web remote. A sealed unit serves its gate commit; a unit
+    still in flight serves its current working commit (the wip commit the
+    fix loop amends), so the operator can inspect work as it lands."""
     reg = registry.load(home)
     entry = registry.get(reg, run_id)
     if entry is None:
@@ -964,9 +966,15 @@ def run_commit(home, run_id, unit_key):
     )
     if unit is None:
         raise ApiError(404, "unknown unit %r" % unit_key)
-    sha = unit.get("gate_commit")
+    sha, kind = unit.get("gate_commit"), "gate"
     if not sha:
-        raise ApiError(404, "unit %r has no gate commit" % unit_key)
+        kind = "wip"
+        for e in state["events"]:
+            if (e.get("unit") == unit_key
+                    and e.get("type") in ("wip_commit", "amended")):
+                sha = e.get("sha")  # amends replace it; keep the latest
+    if not sha:
+        raise ApiError(404, "unit %r has no commit yet" % unit_key)
     workspace = state.get("workspace") or entry["workspace"]
     try:
         proc = subprocess.run(
@@ -984,6 +992,7 @@ def run_commit(home, run_id, unit_key):
     return {
         "unit": unit_key,
         "sha": sha,
+        "kind": kind,
         "truncated": len(text.encode("utf-8", "replace")) > COMMIT_MAX,
         "text": text[:COMMIT_MAX],
     }

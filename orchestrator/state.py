@@ -824,6 +824,7 @@ def summary(state):
     unit = current_unit(state)
     opened_at = {}
     closed_at = {}
+    wip_sha = {}
     for e in state["events"]:
         uk = e.get("unit")
         if not uk:
@@ -832,6 +833,10 @@ def summary(state):
             opened_at[uk] = _epoch(e.get("at"))
         if e.get("type") == "unit_transition" and e.get("to_status") == U_SEALED:
             closed_at[uk] = _epoch(e.get("at"))
+        if e.get("type") in ("wip_commit", "amended"):
+            # Latest sha of the unit's working commit (amends replace it);
+            # the panel links the CURRENT unit's work-so-far through it.
+            wip_sha[uk] = e.get("sha")
     units_view = []
     for u in state["units"]:
         units_view.append(
@@ -843,6 +848,12 @@ def summary(state):
                 # only sha that survives the amend discipline (wip/amended
                 # shas are rewritten away). Panel links it to git web.
                 "gate_sha": u.get("gate_commit"),
+                # ...and, for a unit still in flight, its current working
+                # commit (superseded once the gate commit lands).
+                "wip_sha": (
+                    None if u.get("gate_commit")
+                    else wip_sha.get(unit_key(u))
+                ),
                 "opened_epoch": (
                     opened_at.get(unit_key(u))
                     or _epoch((u.get("draft") or {}).get("at"))
