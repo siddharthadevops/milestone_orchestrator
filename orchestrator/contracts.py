@@ -411,7 +411,9 @@ REVIEW kinds (review_round / delta_review / seal_half) add:
   Rules: you REVIEW ONLY — no disposition field, and you must not create,
   edit, delete, or move ANY file (modifications are detected mechanically
   and invalidate your output). Finding ids must be unique within this
-  response. An empty findings list means the target is clean. Before filing any finding, check the ADJUDICATED REJECTIONS list
+  response. An empty findings list means the target is clean. EVERY
+  finding MUST include `plain` — a finding without its plain-language
+  sentence is incomplete. Before filing any finding, check the ADJUDICATED REJECTIONS list
   in this prompt: if your finding challenges one of them you MUST fill
   `contests` with its id and genuinely new evidence; re-raising an
   adjudicated finding without new evidence is a protocol violation.
