@@ -64,8 +64,9 @@ floating menu does not — and the process cannot tell them apart.
 
 ### 1. The review oracle moves to the next builder
 
-A document unit is reviewed until no finding **rates at or above the run's
-gate threshold** (see §2) — not until prose-clean. It then seals and the
+A document unit is reviewed until no finding **rates ABOVE the run's
+gate threshold** (see §2 — the canonical rule: at-or-below defers as
+debt, above fixes) — not until prose-clean. It then seals and the
 next stage consumes it: the slice-doc drafter consumes the skeleton, the
 implementer consumes the slice doc. The consumer works under a mandatory
 gap-report contract (§3). Gaps it reports are repaired upstream at full
@@ -100,9 +101,16 @@ In EVERY profile, identically:
   delegates to the builder the judgment of what the gap contaminates;
   that judgment is silent drift (the M164 backtracks were exactly
   problems discovered after building on top).
-- The report is a structured contract field (per gap: what is missing or
-  in conflict, where — file:line on the upstream doc — and what decision
-  it forces). The driver routes it as a repair queue on the upstream
+- The report is a concrete worker contract (second-review fix — pinned
+  so no driver invents it): draft/implement outputs gain a third status
+  value — `"status": "gap"` alongside `ok|blocked` — with a mandatory
+  `"gaps"` array; each entry: `{target: goal|skeleton|slice_doc-NN,
+  missing_or_conflict: <what>, where: <file:line on the upstream>,
+  forced_decision: <the choice it forces>, proposal: null | <marked
+  proposal, never self-service>, plain: <lay sentence>, example:
+  <smallest concrete scenario>}`. A gap response carries NO artifact
+  claim (nothing was finished); `ok` with a non-empty gaps array is a
+  contract violation. The driver routes it as a repair queue on the upstream
   unit: fix at P1 quality, delta review, reseal, then the downstream
   unit resumes with fresh budgets (the resume amnesty markers, already
   live). HONEST SCOPE (corrected by review): today a SEALED unit is
@@ -156,12 +164,21 @@ THE SEAL INVARIANT, stated precisely (corrected by review — "double
 seal never relaxed" contradicted live production, where
 `single_seal_first_attempt` already applies to every unit kind): what
 can never be relaxed is CROSS-FAMILY APPROVAL OF THE SEALED BYTES —
-every family has approved the exact bytes that seal, through its clean
-round or its seal half. The a1 single seal satisfies this (it drops
-only the last reviewer's half, byte-identical to what that family just
-approved in rounds); any change after a family's approval requires that
-family to look again (a2+ full double seal). Decision 2's single-family
-reseal applies to DOC units only, never implementations.
+every family has approved the exact bytes that seal, through a
+WHOLE-ARTIFACT look: an open-scope clean round or a seal half. Narrow
+parallel-block actions do NOT count as whole-artifact approval
+(second-review fix): the a1 single seal may drop a family's half ONLY
+when that family's last whole-artifact look approved these exact
+bytes; in a profile that omits final open-scope passes, the skipped
+family has no such look and BOTH halves run — single-seal is a
+consequence of the invariant, never an override of it. Approval
+composes with the live P3-debt path (second-review fix): a family's
+seal half that raised ONLY findings rated at-or-below the threshold by
+the opposite family counts as approval WITH RECORDED DEBT — the
+deferral events and debt entries are the approval's written remainder.
+Any change after a family's approval requires that family to look
+again (a2+ full double seal). Decision 2's single-family reseal
+applies to DOC units only, never implementations.
 
 Profiles decompose into config dials (several already exist:
 `p3_defer_max_risk`, `p3_reclassify_debt`); the panel's new-run form
@@ -197,7 +214,11 @@ Already live as a soft field (`plain` on every reviewer finding, commit
 `8a7b874`: one sentence a non-engineer understands, written BEFORE
 choosing severity; shown first in panel stories; fed to the drift-risk
 rater). This milestone hard-requires it in the finding contract and
-extends it to gap reports and adjudication records. Rationale, in the
+extends it to gap reports and adjudication records — INCLUDING carrying
+`plain`/`example` through the paths that today drop them
+(second-review fix): the fixer's queued-finding echo and the
+adjudicated-rejections registry preserve both fields verbatim, so the
+lay context survives triage and adjudication. Rationale, in the
 operator's words: the NASA-engineer register strips common sense from
 every reader; the plain sentence shows the real size of the problem
 before the severity is chosen.
@@ -259,7 +280,10 @@ gate (seal) is invariant and outside the composition.
     preserved as just another loop, so compatibility costs nothing.
   - **Fuser** — optional continuation certain loops use when they
     parallelize: dedupe, contrast-vs-code, re-rate. Candidates in,
-    vetted candidates out. Valid only after a `parallel` loop; discards
+    vetted candidates out. The fuser has a MANDATORY declared identity
+    in the profile — `{family, model, effort}` (second-review fix) —
+    because its discard/re-rating authority depends on whether it is
+    opposite-family to a finding's raiser. Valid only after a `parallel` loop; discards
     only with citing evidence; fully ledger-recorded. Re-rating bar
     (fixed by review): a fuser re-rating that would FLIP a finding
     across the gate threshold carries the same bar as a discard —
@@ -310,7 +334,9 @@ gate (seal) is invariant and outside the composition.
   cited upstream through its own gate, then re-enter impl; blocked:
   operator}` — repeated until done. The gap TARGET vocabulary is closed
   and covers the top of the chain (fixed by review): a slice
-  implementer targets its slice doc or the skeleton; the skeleton
+  implementer targets its slice doc or the skeleton; a slice-note
+  drafter targets the skeleton (or `goal` when the skeleton faithfully
+  mirrors a goal-level contradiction — second-review fix); the skeleton
   drafter — who has no upstream unit — targets `goal`, which routes to
   the OPERATOR as a blocked-with-report (chip + the report's forced
   decision), because the goal document is operator-authored and only
@@ -356,6 +382,13 @@ profile threshold decides continue/stall; the operator sees an alarm
 chip carrying all three layers of evidence. Alarms are first-class
 ledger events. In the algebra, this extends the evaluator's inputs from
 findings to process metrics.
+
+The meter's trigger parameters are PROFILE FIELDS, not folklore
+(second-review fix): the net-zero window (N amends), the near-empty
+epsilon (net lines), the churn-ratio bar, and the time-per-net-line
+slope are named numeric fields of the profile schema; observe mode
+ends by WRITING the chosen values into the cloned armed profile, so
+two implementations cannot read different alarms from the same run.
 
 Metrics are ANCHORED PER PROFILE — historical runs are NOT a calibration
 source (they were produced under a process that no longer exists:
@@ -455,13 +488,21 @@ REJECTED — adopt their concepts, not their engines:
    change the outcome. Rating a P0 adds cost and no information.
 2. Repair scope on a sealed upstream — **threshold-rated, DOC units
    only**: strict reseals full double, light reseals single-family for
-   gaps rated below high. Implementation reseals always satisfy the
-   cross-family approval invariant (see the seal invariant in §5).
+   repairs rated below high. WHO RATES (second-review fix — builders
+   never rate their own blockers): nobody rates the gap itself; the
+   REPAIR's delta review — run by the family opposite the repair fixer,
+   the existing delta pattern — rates the repair diff's drift risk, and
+   THAT rating picks the reseal depth. Implementation reseals always
+   satisfy the cross-family approval invariant (see the seal invariant
+   in §5).
 3. Battery per unit kind — **skeleton carries the full battery per
    need** (victim / machinery / consumers / cheaper-alternative /
    pricing); **slice docs inherit** and answer only what is
-   slice-specific: consumers touched, pinned facts, verification. No
-   re-answering the skeleton's battery at slice level.
+   slice-specific: consumers touched, pinned facts, verification, AND
+   the slice-scoped Reuse Posture (checked/adopted/new-with-why —
+   second-review fix: the two-register template must not drop the one
+   mandatory reuse section every note carries today). No re-answering
+   the skeleton's battery at slice level.
 4. Hard-table format — **one canonical schema** for every unit kind:
    `fact | value | authority (file:line) | touch/do-not-touch`.
    Variants would breed format nitpicking, the disease being treated.
