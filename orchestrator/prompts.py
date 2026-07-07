@@ -707,10 +707,19 @@ def build_reclassify(family, workspace, finding, artifact, unit_kind=None,
             "In plain words: %s\n" % finding["plain"]
             if finding.get("plain") else ""
         )
+        + (
+            "Smallest failure scenario: %s\n" % finding["example"]
+            if finding.get("example") else ""
+        )
         + "\n"
         + "Keep that plain-words framing in view while rating: it names\n"
         "what is actually being built and how big the problem really is,\n"
-        "stripped of the specification register.\n\n"
+        "stripped of the specification register. Weigh SELF-REVELATION:\n"
+        "a defect that the first minimal test or first real use would\n"
+        "immediately expose (an error in your face, cheap to fix on\n"
+        "contact) rates LOWER than one that passes silently and only\n"
+        "surfaces downstream — silence, not visibility, is what makes\n"
+        "deferral dangerous.\n\n"
         + "Read the actual %s to judge; do not take the summary on trust.\n\n"
         % (artifact,)
         + _access_block(edit_allowed=False)

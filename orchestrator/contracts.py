@@ -143,12 +143,19 @@ def validate_report_finding(finding, ctx):
     sev = _require(finding, "severity", str, ctx)
     if sev not in SEVERITIES:
         raise ContractError("%s: severity %r not in %s" % (ctx, sev, SEVERITIES))
-    # The lay-language mirror. Optional for now (workers spawned before
-    # the field existed must keep validating); the prompt requests it.
+    # The lay-language mirror and the minimal failure example. Optional
+    # for now (workers spawned before the fields existed must keep
+    # validating); the prompt demands both.
     plain = _optional(finding, "plain", str, ctx)
     if plain is not None and len(plain) > 500:
         raise ContractError(
             "%s: plain must stay one plain-language sentence "
+            "(<=500 chars)" % ctx
+        )
+    example = _optional(finding, "example", str, ctx)
+    if example is not None and len(example) > 500:
+        raise ContractError(
+            "%s: example must stay one minimal concrete scenario "
             "(<=500 chars)" % ctx
         )
     if finding.get("disposition") is not None:
@@ -404,6 +411,12 @@ REVIEW kinds (review_round / delta_review / seal_half) add:
       spec vocabulary. Write this sentence BEFORE choosing severity:
       the technical register makes everything sound grave; the plain
       sentence shows the real size of the problem>",
+     "example": "<the SMALLEST concrete scenario where this bites — one
+      actor, one action, the wrong outcome vs the expected one, in plain
+      words. E.g. 'a test deletes a message without saying who is in the
+      thread; the fake chat allows it; the real one rejects it with an
+      authorization error'. If you cannot write such a scenario, the
+      finding may not be real>",
      "contests": null | {"rejection_id": "<id from the ADJUDICATED
       REJECTIONS list>", "new_evidence": "<the new fact that contradicts
       the recorded rationale>"}}
@@ -412,8 +425,9 @@ REVIEW kinds (review_round / delta_review / seal_half) add:
   edit, delete, or move ANY file (modifications are detected mechanically
   and invalidate your output). Finding ids must be unique within this
   response. An empty findings list means the target is clean. EVERY
-  finding MUST include `plain` — a finding without its plain-language
-  sentence is incomplete. Before filing any finding, check the ADJUDICATED REJECTIONS list
+  finding MUST include `plain` AND `example` — a finding without its
+  plain-language sentence and its smallest concrete failure scenario is
+  incomplete. Before filing any finding, check the ADJUDICATED REJECTIONS list
   in this prompt: if your finding challenges one of them you MUST fill
   `contests` with its id and genuinely new evidence; re-raising an
   adjudicated finding without new evidence is a protocol violation.

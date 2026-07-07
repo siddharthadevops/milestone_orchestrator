@@ -207,6 +207,21 @@ class TestValidateWorkerOutputHappy(unittest.TestCase):
                 contracts.KIND_REVIEW_ROUND,
             )
 
+    def test_report_finding_accepts_the_minimal_example(self):
+        # `example` (the smallest concrete failure scenario) follows the
+        # same soft contract as `plain`: optional, bounded when present.
+        f = report_finding()
+        f["example"] = ("a test deletes a message without saying who is "
+                        "in the thread; the fake chat allows it")
+        obj = ok_output(contracts.KIND_REVIEW_ROUND, findings=[f])
+        contracts.validate_worker_output(obj, contracts.KIND_REVIEW_ROUND)
+        f["example"] = "x" * 501
+        with self.assertRaises(contracts.ContractError):
+            contracts.validate_worker_output(
+                ok_output(contracts.KIND_REVIEW_ROUND, findings=[f]),
+                contracts.KIND_REVIEW_ROUND,
+            )
+
     def test_report_finding_with_valid_contests(self):
         # Re-raising a settled finding is legal only with the registry id
         # and genuinely new evidence.
