@@ -243,7 +243,8 @@ class TestCalculatorE2E(unittest.TestCase):
             self.assertEqual(
                 set(u.keys()),
                 {"unit", "status", "artifact", "gate_sha", "wip_sha", "draft",
-                 "rounds", "seals", "opened_epoch", "closed_epoch", "debt"},
+                 "rounds", "seals", "opened_epoch", "closed_epoch", "debt",
+                 "reclassify_kept"},
             )
         # The CLI's JSON is exactly state.summary() over the on-disk state.
         self.assertEqual(summ, st.summary(self.disk_state()))
