@@ -416,4 +416,5 @@ fast paths.
 | slice_impl-04 (Verifier vocabulary + contract-extension merge) | sealed | 10 | a1:pass | c6e13e1 |
 | slice_doc-05 (Run-init project resolution + project_resolved) | sealed | 4 | a1:findings, a2:pass | 8546ee2 |
 | slice_impl-05 (Run-init project resolution + project_resolved) | sealed | 2 | a1:pass | 29db466 |
-| slice_doc-06 (PROJECT CONTEXT block + project_safeguard_seen) | sealed | 15 | a1:pass | - |
+| slice_doc-06 (PROJECT CONTEXT block + project_safeguard_seen) | sealed | 15 | a1:pass | c88947a |
+| slice_impl-06 (PROJECT CONTEXT block + project_safeguard_seen) | sealed | 11 | a1:findings, a2:findings, a3:findings, a4:pass | - |

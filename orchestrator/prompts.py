@@ -366,6 +366,113 @@ EXHAUSTIVE_SENTENCE = (
 AMENDMENT_TEXT_CLIP = 2000
 
 
+def _clip_operator_text(text):
+    """Operator-authored text is trusted and rendered verbatim,
+    length-clipped only to protect the context window — the amendments
+    posture, shared by the PROJECT CONTEXT block."""
+    text = str(text)
+    if len(text) > AMENDMENT_TEXT_CLIP:
+        return text[: AMENDMENT_TEXT_CLIP - 3] + "..."
+    return text
+
+
+def _project_context_block(project_context):
+    """Standing project law for a project-bound run, rendered with the
+    same operator authority as amendments (the goal's prompt-machinery
+    rule): the ecosystem map — project and work-area handles plus the
+    fixed root universe the run was bound to at init — the recorded
+    reuse-source roles, and each in-scope safeguard with the full
+    obligation the driver will mechanically enforce (field, entry
+    type-specs, checks: naming the slot is the prompt half of the
+    no-bare-boolean doctrine). Reuse-source roles are descriptors only:
+    they do not create duties without an in-scope safeguard. None renders
+    nothing, so a project-less run's prompts stay byte-identical.
+
+    Input shape (driver-built): {project, work_area, primary, additional,
+    reuse_sources, safeguards} — roots verbatim from the state project
+    block (never a live store read; the map must describe exactly the
+    universe containment enforces), reuse_sources from the live
+    work_area_meta value or None, safeguards the live-selected in-scope
+    Slice-3 policy values."""
+    if not project_context:
+        return ""
+    pc = project_context
+    safeguards = pc.get("safeguards") or []
+    sources = pc.get("reuse_sources") or []
+    primary = pc.get("primary") or {}
+    lines = [
+        "PROJECT CONTEXT (standing project law; binding)",
+        "This run is bound to project %r, work area %r."
+        % (pc.get("project"), pc.get("work_area")),
+        "Ecosystem map (the fixed roots this run was bound to at init):",
+        "- PRIMARY ROOT %s — the repo you execute in." % primary.get("path"),
+    ]
+    for root in pc.get("additional") or []:
+        lines.append(
+            "- ADDITIONAL ROOT %s — a READ-ONLY grant: you may read it "
+            "for evidence; never edit it." % root.get("path")
+        )
+    if sources:
+        lines.append(
+            "Reuse-source roles recorded for these roots:"
+        )
+        for src in sources:
+            lines.append(
+                "- %s: inventory: %s | registry: %s | consumption: %s"
+                % (
+                    str(src.get("root")),
+                    str(src.get("inventory")),
+                    str(src.get("registry")),
+                    str(src.get("consumption")),
+                )
+            )
+    for policy in safeguards:
+        contract = policy.get("contract") or {}
+        lines += [
+            "",
+            "SAFEGUARD %s v%s" % (policy.get("id"), policy.get("version")),
+            _clip_operator_text(policy.get("prompt")),
+            "REQUIRED OUTPUT FIELD %r: your JSON output must carry this"
+            % contract.get("field"),
+            "field as a list of entry objects, each with exactly these"
+            " fields:",
+        ]
+        entry = contract.get("entry") or {}
+        for name in sorted(entry):
+            spec = entry[name]
+            if "enum" in spec:
+                desc = "one of %s" % (spec["enum"],)
+            elif spec.get("type") == "citation":
+                desc = 'a "<path>:<line>" citation into the granted roots'
+            else:
+                desc = "a string"
+            lines.append("  - %s: %s" % (name, desc))
+        checks = contract.get("checks") or []
+        if checks:
+            lines.append(
+                "Mechanical checks the driver enforces on every ok output"
+            )
+            lines.append("(a failure costs your single repair retry):")
+            for check in checks:
+                params = ", ".join(
+                    "%s=%s" % (key, check[key])
+                    for key in sorted(check)
+                    if key != "kind"
+                )
+                lines.append("  - %s(%s)" % (check.get("kind"), params))
+    if safeguards:
+        lines += [
+            "",
+            "These safeguards render with operator authority. For authors",
+            "and fixers they bind like the TASK itself. For report-only",
+            "reviewers, a safeguard violation in the reviewed artifact is",
+            "a finding, exactly like an amendment violation. On conflict,",
+            "run-scoped OPERATOR AMENDMENTS WIN over project safeguards",
+            "(the more specific, later intent).",
+        ]
+    return "\n".join(lines) + "\n\n"
+
+
 def _amendments_block(amendments):
     """Operator-authored, run-scoped constraints added while the milestone
     runs (.orchestrator/amendments.json). They refine the GOAL without
@@ -483,12 +590,14 @@ def _fix_quality_block(unit_kind):
 
 
 def build_draft_skeleton(family, workspace, goal, amendments=None,
-                         artifact_path="docs/skeleton.md"):
+                         artifact_path="docs/skeleton.md",
+                         project_context=None):
     return (
         _header(contracts.KIND_DRAFT_SKELETON, family, workspace)
         + "\nTASK: draft the milestone skeleton for this goal.\n"
         + "GOAL: %s\n\n" % goal
         + _amendments_block(amendments)
+        + _project_context_block(project_context)
         + "Write a concise skeleton document at %s\n" % artifact_path
         + "inside the workspace: goal restatement, boundary/non-goals, and\n"
         "a short table of planned slices. Keep it thin: intent and\n"
@@ -506,7 +615,8 @@ def build_draft_skeleton(family, workspace, goal, amendments=None,
 
 
 def build_draft_slice_note(family, workspace, goal, slice_info, skeleton_path,
-                           amendments=None, note_path=None):
+                           amendments=None, note_path=None,
+                           project_context=None):
     return (
         _header(contracts.KIND_DRAFT_SLICE_NOTE, family, workspace)
         + "\nTASK: draft the slice note for slice %d (%s).\n"
@@ -514,6 +624,7 @@ def build_draft_slice_note(family, workspace, goal, slice_info, skeleton_path,
         + "GOAL: %s\n" % goal
         + "SKELETON: %s (sealed; stay inside its boundary)\n\n" % skeleton_path
         + _amendments_block(amendments)
+        + _project_context_block(project_context)
         + "Write %s: scope as observable contracts and the\n"
         % (note_path or ("docs/slice-%02d.md" % slice_info["id"]))
         + "tests that pin them, non-goals, expected files, dependencies,\n"
@@ -532,7 +643,7 @@ def build_draft_slice_note(family, workspace, goal, slice_info, skeleton_path,
 
 
 def build_implement(family, workspace, goal, slice_info, note_path, verification,
-                    amendments=None):
+                    amendments=None, project_context=None):
     ver = "\n".join("  %s" % c for c in verification) or (
         "  (none yet — your suite_command will arm the gates)"
     )
@@ -543,6 +654,7 @@ def build_implement(family, workspace, goal, slice_info, note_path, verification
         + "GOAL: %s\n" % goal
         + "SLICE NOTE: %s\n\n" % note_path
         + _amendments_block(amendments)
+        + _project_context_block(project_context)
         + "Implement the scope, including its tests. Run focused checks on\n"
         "what you touch while working, but do NOT run the repo's full\n"
         "test suite at the end — the driver runs it mechanically at the\n"
@@ -570,13 +682,14 @@ def build_implement(family, workspace, goal, slice_info, note_path, verification
 
 def build_review_round(family, workspace, goal, unit_desc, artifact, registry,
                        unit_kind=None, governing=None, amendments=None,
-                       verified_suite=None):
+                       verified_suite=None, project_context=None):
     return (
         _header(contracts.KIND_REVIEW_ROUND, family, workspace)
         + "\nTASK: full review round of %s. REPORT ONLY.\n" % unit_desc
         + "GOAL: %s\n" % goal
         + "TARGET: %s (plus any code/tests it governs)\n\n" % artifact
         + _amendments_block(amendments)
+        + _project_context_block(project_context)
         + _governing_line(governing)
         + EXHAUSTIVE_SENTENCE
         + "You fix nothing and triage nothing — a separate fixer call\n"
@@ -593,7 +706,8 @@ def build_review_round(family, workspace, goal, unit_desc, artifact, registry,
 
 
 def build_delta_review(family, workspace, goal, unit_desc, diff_text, registry,
-                       unit_kind=None, governing=None, amendments=None):
+                       unit_kind=None, governing=None, amendments=None,
+                       project_context=None):
     return (
         _header(contracts.KIND_DELTA_REVIEW, family, workspace)
         + "\nTASK: incremental review of the pending fix delta on %s.\n"
@@ -601,6 +715,7 @@ def build_delta_review(family, workspace, goal, unit_desc, diff_text, registry,
         + "REPORT ONLY.\n"
         + "GOAL: %s\n\n" % goal
         + _amendments_block(amendments)
+        + _project_context_block(project_context)
         + _delta_governing_line(governing)
         + "Below is the exact uncommitted diff a fixer just produced. Review\n"
         "ONLY this delta: correctness of the change, consistency with the\n"
@@ -626,7 +741,7 @@ def build_delta_review(family, workspace, goal, unit_desc, diff_text, registry,
 
 def build_seal_half(family, workspace, goal, unit_desc, artifact, registry,
                     unit_kind=None, governing=None, amendments=None,
-                    verified_suite=None):
+                    verified_suite=None, project_context=None):
     return (
         _header(contracts.KIND_SEAL_HALF, family, workspace)
         + "\nTASK: independent final seal review of %s. REPORT ONLY.\n"
@@ -634,6 +749,7 @@ def build_seal_half(family, workspace, goal, unit_desc, artifact, registry,
         + "GOAL: %s\n" % goal
         + "TARGET: %s (plus any code/tests it governs)\n\n" % artifact
         + _amendments_block(amendments)
+        + _project_context_block(project_context)
         + _governing_line(governing)
         + "You are one half of a double seal: a fresh, independent, final\n"
         "check on a target other agents already reviewed and fixed.\n"
@@ -667,6 +783,7 @@ def build_fix_findings(
     amendments=None,
     phantom_retry=False,
     killed_notice=False,
+    project_context=None,
 ):
     lines = []
     for f in findings:
@@ -721,6 +838,7 @@ def build_fix_findings(
         + killed_block
         + phantom_block
         + _amendments_block(amendments)
+        + _project_context_block(project_context)
         + "QUEUED FINDINGS (claims, not facts — verify each against the\n"
         "real code/doc before deciding):\n"
         + findings_text

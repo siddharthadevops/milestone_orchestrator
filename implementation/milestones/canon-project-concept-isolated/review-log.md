@@ -353,3 +353,44 @@
 
 - codex half: 0 finding(s); workspace_modified=False; raw `.orchestrator/raw/slice_doc-06-seal-a1-codex.txt`
 
+## slice_impl-06 (PROJECT CONTEXT block + project_safeguard_seen)
+
+- draft: kind `implement`, artifact `-` (raw: `.orchestrator/raw/slice_impl-06-draft.txt`)
+
+| Round | Kind | Family | Findings | Triage | Raw |
+|---|---|---|---|---|---|
+| slice_impl-06-codex-r1 | review_round | codex | 0 | clean | `.orchestrator/raw/slice_impl-06-codex-r1.txt` |
+| slice_impl-06-claude-r1 | review_round | claude | 1 | 1 reported | `.orchestrator/raw/slice_impl-06-claude-r1.txt` |
+| slice_impl-06-codex-r2 | fix_findings | codex | 1 | 1 fixed | `.orchestrator/raw/slice_impl-06-fix1.txt` |
+| slice_impl-06-codex-r3 | delta_review | codex | 0 | clean | `.orchestrator/raw/slice_impl-06-delta1.txt` |
+| slice_impl-06-claude-r2 | review_round | claude | 0 | clean | `.orchestrator/raw/slice_impl-06-claude-r2.txt` |
+| slice_impl-06-codex-r4 | fix_findings | codex | 1 | 1 fixed | `.orchestrator/raw/slice_impl-06-fix2.txt` |
+| slice_impl-06-codex-r5 | delta_review | codex | 0 | clean | `.orchestrator/raw/slice_impl-06-delta2.txt` |
+| slice_impl-06-codex-r6 | fix_findings | codex | 2 | 2 fixed | `.orchestrator/raw/slice_impl-06-fix3.txt` |
+| slice_impl-06-codex-r7 | delta_review | codex | 0 | clean | `.orchestrator/raw/slice_impl-06-delta3.txt` |
+| slice_impl-06-codex-r8 | fix_findings | codex | 1 | 1 fixed | `.orchestrator/raw/slice_impl-06-fix4.txt` |
+| slice_impl-06-codex-r9 | delta_review | codex | 0 | clean | `.orchestrator/raw/slice_impl-06-delta4.txt` |
+
+### Seal attempt a1 — findings
+
+- codex half: 1 finding(s); workspace_modified=False; raw `.orchestrator/raw/slice_impl-06-seal-a1-codex.txt`
+  - [P1] A project-bound run can silently skip standing law if the backing KV file is deleted after init but the project directory remains: selection sees an empty policy store, meta reads absent, and no fail-closed run failure is recorded.
+
+### Seal attempt a2 — findings
+
+- claude half: 0 finding(s); workspace_modified=False; raw `.orchestrator/raw/slice_impl-06-seal-a2-claude.txt`
+- codex half: 2 finding(s); workspace_modified=False; raw `.orchestrator/raw/slice_impl-06-seal-a2-codex.txt`
+  - [P1] No-policy PROJECT CONTEXT blocks with work_area_meta still tell workers to "enumerate and cite" reuse sources before inventing. That is reuse-audit safeguard prose outside any in-scope policy, with no contract field and no project_safeguard_seen event, violating the map-only/no built-in-safeguard scope.
+  - [P3] Reuse-source role values are clipped with the amendment text limit before rendering. Slice 6 says live meta descriptors render as recorded after shape validation, so long inventory/registry/consumption descriptors would be silently truncated in PROJECT CONTEXT.
+
+### Seal attempt a3 — findings
+
+- claude half: 0 finding(s); workspace_modified=False; raw `.orchestrator/raw/slice_impl-06-seal-a3-claude.txt`
+- codex half: 1 finding(s); workspace_modified=False; raw `.orchestrator/raw/slice_impl-06-seal-a3-codex.txt`
+  - [P1] Unreadable project KV I/O errors are not reliably converted into recorded standing-law failures: ordinary open/list failures such as PermissionError can propagate past the selection wrapper instead of setting run failure state, violating the fail-closed AC8 contract for an unreadable policy store.
+
+### Seal attempt a4 — PASSED
+
+- claude half: 0 finding(s); workspace_modified=False; raw `.orchestrator/raw/slice_impl-06-seal-a4-claude.txt`
+- codex half: 0 finding(s); workspace_modified=False; raw `.orchestrator/raw/slice_impl-06-seal-a4-codex.txt`
+
