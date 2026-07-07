@@ -78,6 +78,7 @@
     min-width: 480px; max-width: 640px; }
   .story-meta { color: #71717a; font-size: 11.5px; margin-bottom: 10px; }
   .story-finding { padding: 6px 0; border-top: 1px dashed var(--line); }
+  .story-finding .plain { color: var(--accent); font-style: italic; }
   .story-finding .sev { font-weight: 600; margin-right: 6px; }
   .story-finding .sev.P0, .story-finding .sev.P1 { color: #db2777; }
   .story-finding .sev.P2, .story-finding .sev.P3 { color: #c2610c; }
@@ -960,7 +961,7 @@ async function showStory(item) {
       bits.push(`CONTESTS ${esc(f.contests.rejection_id || "")}: ${esc(f.contests.new_evidence || "")}`);
     return `<div class="story-finding">
       <span class="sev ${esc(f.severity || "")}">${esc(f.severity || "")}</span>
-      <b>${esc(f.id || "")}</b> ${esc(f.summary || "")}
+      <b>${esc(f.id || "")}</b>${f.plain ? ` <i class="plain">${esc(f.plain)}</i><br>` : " "}${esc(f.summary || "")}
       ${bits.length ? `<div class="story-disp">${bits.join("<br>")}</div>` : ""}
     </div>`;
   };

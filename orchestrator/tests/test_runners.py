@@ -186,6 +186,27 @@ class TestValidateWorkerOutputHappy(unittest.TestCase):
         contracts.validate_worker_output(obj, contracts.KIND_REVIEW_ROUND)
         self.assertFalse(contracts.findings_clean(obj))
 
+    def test_report_finding_accepts_the_plain_language_mirror(self):
+        # `plain` (one lay-language sentence naming what is being built
+        # and what is wrong) is optional — workers spawned before the
+        # field existed must keep validating — but bounded when present.
+        f = report_finding()
+        f["plain"] = "we are specifying a floating menu; the doc and the README disagree"
+        obj = ok_output(contracts.KIND_REVIEW_ROUND, findings=[f])
+        contracts.validate_worker_output(obj, contracts.KIND_REVIEW_ROUND)
+        f["plain"] = "x" * 501
+        with self.assertRaises(contracts.ContractError):
+            contracts.validate_worker_output(
+                ok_output(contracts.KIND_REVIEW_ROUND, findings=[f]),
+                contracts.KIND_REVIEW_ROUND,
+            )
+        f["plain"] = 7
+        with self.assertRaises(contracts.ContractError):
+            contracts.validate_worker_output(
+                ok_output(contracts.KIND_REVIEW_ROUND, findings=[f]),
+                contracts.KIND_REVIEW_ROUND,
+            )
+
     def test_report_finding_with_valid_contests(self):
         # Re-raising a settled finding is legal only with the registry id
         # and genuinely new evidence.

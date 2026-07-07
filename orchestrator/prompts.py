@@ -700,9 +700,17 @@ def build_reclassify(family, workspace, finding, artifact, unit_kind=None,
         "or xhigh. Do not inflate the rating to be safe and do not deflate\n"
         "it to be agreeable — a wrong rating in either direction corrupts\n"
         "the decision this feeds.\n\n"
-        + "FINDING (severity %s, id %s):\n%s\n\n"
+        + "FINDING (severity %s, id %s):\n%s\n"
         % (finding.get("severity"), finding.get("id"),
            finding.get("summary", ""))
+        + (
+            "In plain words: %s\n" % finding["plain"]
+            if finding.get("plain") else ""
+        )
+        + "\n"
+        + "Keep that plain-words framing in view while rating: it names\n"
+        "what is actually being built and how big the problem really is,\n"
+        "stripped of the specification register.\n\n"
         + "Read the actual %s to judge; do not take the summary on trust.\n\n"
         % (artifact,)
         + _access_block(edit_allowed=False)

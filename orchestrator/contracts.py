@@ -143,6 +143,14 @@ def validate_report_finding(finding, ctx):
     sev = _require(finding, "severity", str, ctx)
     if sev not in SEVERITIES:
         raise ContractError("%s: severity %r not in %s" % (ctx, sev, SEVERITIES))
+    # The lay-language mirror. Optional for now (workers spawned before
+    # the field existed must keep validating); the prompt requests it.
+    plain = _optional(finding, "plain", str, ctx)
+    if plain is not None and len(plain) > 500:
+        raise ContractError(
+            "%s: plain must stay one plain-language sentence "
+            "(<=500 chars)" % ctx
+        )
     if finding.get("disposition") is not None:
         raise ContractError(
             "%s: reviewer findings carry no disposition (whoever detects "
@@ -389,6 +397,13 @@ driver adopts it.
 REVIEW kinds (review_round / delta_review / seal_half) add:
   "findings": [
     {"id": "F1", "severity": "P0"|"P1"|"P2"|"P3", "summary": "...",
+     "plain": "<ONE sentence a non-engineer understands: name what is
+      being built and what is actually wrong, in everyday words — e.g.
+      'we are specifying a floating menu; the doc and the package README
+      disagree about whether it ships JavaScript'. No file:line, no
+      spec vocabulary. Write this sentence BEFORE choosing severity:
+      the technical register makes everything sound grave; the plain
+      sentence shows the real size of the problem>",
      "contests": null | {"rejection_id": "<id from the ADJUDICATED
       REJECTIONS list>", "new_evidence": "<the new fact that contradicts
       the recorded rationale>"}}
