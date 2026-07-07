@@ -1279,6 +1279,7 @@ function projectCard(p, i) {
     ${p.policy.map((pol, j) => policyRow(i, pol, j)).join("")
       || '<div class="amend-hint">none — runs in this project carry no project safeguards</div>'}
     <div class="formrow"><span></span>
+      <button class="btn" onclick="enableReuseAudit(${i})">Enable reuse-audit...</button>
       <button class="btn" onclick="newPolicy(${i})">New safeguard…</button>
     </div>
   </div>`;
@@ -1382,9 +1383,14 @@ const POLICY_HINT =
   "re-records the safeguard — the ledger's project_safeguard_seen " +
   "re-records per (id, version). On conflict, run-scoped operator " +
   "amendments WIN over project safeguards.";
+const REUSE_AUDIT_PARAMS_HINT =
+  "Enable the built-in reuse-audit template. Fill source, inventory, " +
+  "registry, and optional positive integer version. Re-parameterizing " +
+  "without a version bump changes standing law without a new " +
+  "project_safeguard_seen record.";
 function policySeed() {
-  // The sealed shape's exact top-level keys, contents blank: no
-  // concrete safeguard content ships before the reuse-audit slice.
+  // The sealed shape's exact top-level keys for ordinary hand-authored
+  // safeguards; built-in reuse-audit content is instantiated server-side.
   return {
     id: "",
     version: 1,
@@ -1393,6 +1399,20 @@ function policySeed() {
     prompt: "",
     contract: {field: "", required: true, entry: {}, checks: []},
   };
+}
+function reuseAuditParamsSeed() {
+  return {source: "", inventory: "", registry: "", version: 1};
+}
+function enableReuseAudit(i) {
+  const p = projState.list[i];
+  openSgEditor({
+    title: `Enable reuse-audit - ${p.slug}`,
+    value: reuseAuditParamsSeed(),
+    hint: REUSE_AUDIT_PARAMS_HINT,
+    onSave: parsed => postJSON(
+      projPath(p.slug) + "/policies/reuse-audit", parsed
+    ),
+  });
 }
 function newPolicy(i) {
   const p = projState.list[i];

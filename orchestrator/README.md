@@ -125,6 +125,39 @@ signal an innocent process group.
 Trust model: binds 127.0.0.1, no auth. It spawns full-permission LLM CLIs,
 exactly like running the driver yourself; never expose the port.
 
+### Built-in reuse-audit safeguard
+
+Projects can enable one built-in safeguard pair with:
+
+    POST /api/projects/<slug>/policies/reuse-audit
+    {"source": "...", "inventory": "...", "registry": "...", "version": 1}
+
+The service writes two ordinary policies: `reuse-audit` for skeleton and
+slice-note drafting, and `reuse-audit-review` for review/delta/seal reports.
+They require one per-package audit row, with citations, checked against the
+immediate children of `inventory`. Required `source`, `inventory`, and
+`registry` values have no built-in defaults; blank or unknown parameters
+refuse with `invalid_template_params`. Omit `version` to use `1`.
+
+Illustration only, not a baked-in ecosystem:
+
+    {
+      "source": "life_product_components",
+      "inventory": "vendor/life_product_components/packages",
+      "registry": "vendor/life_product_components/REGISTRY.md",
+      "version": 1
+    }
+
+V1 supports one audited source per project through this template because the
+field names are fixed. Additional sources can be hand-authored as ordinary
+policies with distinct ids and fields. Bump `version` on any substantive
+parameter change so later runs record a new `project_safeguard_seen` event.
+
+If a work area also records `work_area_meta.reuse_sources`, keep its
+`root`, `inventory`, `registry`, and `consumption` descriptors consistent
+with the template parameters. The template does not read that descriptor; it
+is project-wide standing law supplied explicitly by the operator.
+
 ## The flow
 
 For the milestone: one `skeleton` unit, then per slice a `slice_doc` and a

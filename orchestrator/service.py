@@ -75,6 +75,12 @@ work-area name rides as a URL-encoded path segment):
                                    NOTHING (an ungated delete would mint a
                                    junk tombstone key that every listing
                                    carries forever).
+    POST   /api/projects/<slug>/policies/reuse-audit
+                                   enable the built-in reuse-audit template:
+                                   {source, inventory, registry, version?}
+                                   -> {"policies": [planning, review]}.
+                                   The trailing segment is a fixed affordance
+                                   name, never a policy id.
 
 Corrupt-policy recovery (amendment A2 narrows it): a malformed policy
 VALUE inside a VALID envelope refuses reads/deletes with malformed_policy
@@ -130,6 +136,7 @@ import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from . import driver, errclass, gitops, kvstore, projects, registry
+from . import reuse_audit
 from . import state as st
 from . import workareas
 
@@ -647,6 +654,40 @@ def put_policy(home, slug, body):
         return stored["value"]
 
 
+def enable_reuse_audit(home, slug, body):
+    """Instantiate the built-in pair and store it as ordinary policies.
+
+    The route has one extra guard beyond two calls to put_policy: both
+    pinned envelopes are read before the first write, so an invalid stored
+    envelope at either id cannot leave the project half-enabled.
+    """
+    with registry.locked(home):
+        slug, _rec = _require_declared(home, slug)
+        _require_store_file(home, slug)
+        try:
+            policies_to_store = [
+                projects.validate_policy_value(policy)
+                for policy in reuse_audit.instantiate(body)
+            ]
+        except reuse_audit.TemplateParamError as exc:
+            raise ApiError(400, exc.reason) from exc
+        except projects.PolicyValidationError as exc:
+            raise ApiError(400, exc.reason) from exc
+
+        store = _policy_store(home, slug)
+        try:
+            for policy in policies_to_store:
+                store.envelopes.read(store.keys.policy(policy["id"]))
+            stored = [store.put(policy)["value"] for policy in policies_to_store]
+        except projects.PolicyValidationError as exc:
+            raise ApiError(400, exc.reason) from exc
+        except (KeyError, RuntimeError, TypeError):
+            raise ApiError(500, MALFORMED_STORE)
+        except OSError:
+            raise ApiError(500, UNREADABLE_STORE)
+        return stored
+
+
 def delete_policy(home, slug, policy_id):
     """Gated safeguard delete: one sealed read FIRST, because the raw
     envelope delete happily tombstones never-written keys and listings
@@ -729,6 +770,16 @@ def projects_api(home, method, segments, body, query=None):
                 "policy": delete_policy(
                     home, segments[0], (query or {}).get("id", "")
                 ),
+            }
+    elif (
+        n == 3
+        and segments[1] == "policies"
+        and segments[2] == reuse_audit.PLANNING_POLICY_ID
+    ):
+        if method == "POST":
+            return 200, {
+                "ok": True,
+                "policies": enable_reuse_audit(home, segments[0], body),
             }
     elif n == 3 and segments[1] == "work-areas":
         slug, name = segments[0], segments[2]
