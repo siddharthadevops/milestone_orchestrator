@@ -518,3 +518,16 @@
 
 - codex half: 0 finding(s); workspace_modified=False; raw `.orchestrator/raw/slice_impl-07-seal-a1-codex.txt`
 
+## slice_doc-08 (Panel operator surface)
+
+- draft: kind `draft_slice_note`, artifact `implementation/milestones/canon-project-concept-isolated/slices/slice-08.md` (raw: `.orchestrator/raw/slice_doc-08-draft.txt`)
+
+| Round | Kind | Family | Findings | Triage | Raw |
+|---|---|---|---|---|---|
+| slice_doc-08-codex-r1 | review_round | codex | 0 | clean | `.orchestrator/raw/slice_doc-08-codex-r1.txt` |
+| slice_doc-08-claude-r1 | review_round | claude | 0 | clean | `.orchestrator/raw/slice_doc-08-claude-r1.txt` |
+
+### Seal attempt a1 — PASSED
+
+- codex half: 0 finding(s); workspace_modified=False; raw `.orchestrator/raw/slice_doc-08-seal-a1-codex.txt`
+
