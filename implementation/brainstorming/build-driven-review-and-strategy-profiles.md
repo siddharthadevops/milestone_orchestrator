@@ -345,6 +345,38 @@ profile config + panel selection, the two-register doc templates and
 their review rubrics, generalized threshold gating of doc rounds, and the
 hard requirement of `plain`.
 
+## Reuse posture (the battery, applied to this milestone itself)
+
+Existing workflow engines were checked as the loop-interpreter base and
+REJECTED — adopt their concepts, not their engines:
+
+- **Checked**: Temporal (durable execution, retries, visibility — costs
+  a server + SDK + its own event store); Airflow/Prefect/Dagster (DAG
+  scheduling + UI — heavy packages, own databases, batch-pipeline
+  semantics, not budgeted-and-judged loops); LangGraph/CrewAI/AutoGen
+  (LLM graph composition — a dependency ecosystem with opaque state).
+- **Rejected because**: (1) the hard parts of this model are NOT flow
+  control — tamper snapshots/restore, seal semantics, contract
+  validation with repair-retry, family rotation, gate-commit/amend
+  discipline, typed failure classification with auto-resume, amnesties,
+  the adjudication registry all exist and NO engine supplies them; the
+  algebra needs a ~200-400 line deterministic interpreter over profile
+  data, and importing an engine moves the easy 5% while fighting its
+  framework for the remaining 95%. (2) Every engine brings its own
+  state store, splitting or duplicating the append-only, inspectable
+  state.json ledger that IS the product — and "nothing vendored or
+  pinned" is sealed doctrine across all consumers. (3) The scale is one
+  operator, one machine, a handful of concurrent CLI subprocesses:
+  seal_concurrent already demonstrates the stdlib concurrency pattern,
+  at-least-once worker calls + ledger idempotence are the documented
+  execution semantics, and the panel is the visibility surface in the
+  system's own vocabulary.
+- **Adopted**: the VOCABULARY of those systems (parallel/until/join
+  pipeline semantics) for the interpreter's design; and a portability
+  safeguard — the profile JSON schema stays clean enough to retarget to
+  a real engine if the ecosystem ever needs multi-machine durability,
+  without rewriting profiles.
+
 ## Non-goals
 
 - No relaxation of implementation double seals in any profile.
