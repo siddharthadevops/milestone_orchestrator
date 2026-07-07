@@ -182,6 +182,50 @@ operator's words: the NASA-engineer register strips common sense from
 every reader; the plain sentence shows the real size of the problem
 before the severity is chosen.
 
+### 8. Parallel review blocks — the wall-clock leg
+
+The other half of the cost is TIME: reviewers surface findings in a
+dribble because an open-scope review satisfices ("found a couple of
+things, return") — and each pass is a full sequential worker call. The
+reform makes the doc-review phase a **composable pipeline of review
+blocks**, declared per profile, interchangeable like bricks; the final
+gate (seal) is invariant and outside the composition.
+
+- **Parallel battery pass (the new block).** One narrow-scoped review
+  per battery question / standing lens (consumers verified? machinery
+  priced? grounding citations real? contract self-consistent?), fanned
+  out CONCURRENTLY, both families, on fast tiers (codex at xhigh is
+  fast; claude on a fast/cheap model). A scoped reviewer has a
+  completion criterion — it drains its one dimension instead of
+  sampling everything shallowly. Empirical basis (2026-07-07): two
+  multi-agent parallel audits of live artifacts (6-lens skeleton audit;
+  16-agent compression audit, 6.5 min wall-clock, 10/10 findings
+  surviving adversarial verification) found in minutes what sequential
+  open rounds took days to reach.
+- **The fuser (max effort, single call).** Takes the raw candidate
+  batch: contrasts each against the actual code/doc, merges duplicates,
+  re-rates severity/drift-risk, and passes survivors to the normal
+  consideration path. Three shackles, because it is a single point of
+  judgment: it may DISCARD only with citing evidence (file:line that
+  refutes the candidate — "seems minor" is the threshold's job, not
+  the fuser's); every candidate/merge/discard/pass is recorded in the
+  ledger and surfaced as a panel chip (auditable calibration of the
+  cheap tier's noise rate); when unsure it passes the finding through —
+  the fuser never owns risk (the binary-reclassify lesson).
+- **Concurrency mechanics.** Reuses the seal_concurrent pattern: report-
+  only workers, one tamper snapshot around the whole batch (any
+  workspace change voids the batch). Partial-result tolerance is
+  mandatory: a fan-out hitting a quota window returns what it returns;
+  the fuser works with the arrived subset and the missing dimensions
+  requeue — a partial batch never fails the block.
+- **Block composition per profile.** The rounds phase becomes a declared
+  sequence, e.g. `["parallel_battery", "open_rounds"]` (parallel sweep,
+  then the classic loop over what remains), `["parallel_battery"] * N`
+  (sweep loops with the fuser as gate), or `["open_rounds"]` alone —
+  which IS the current process, preserved as just another block, so
+  compatibility costs nothing. decide() stays deterministic: blocks are
+  config data; acts-style per-block model/effort selection.
+
 ## Already-live pieces this composes with
 
 - Drift-risk rating + threshold decision (`b9d0a75`), A/B-validated.
@@ -232,3 +276,16 @@ hard requirement of `plain`.
    speeds repair, risks anchoring the fixer.
 7. Panel surface: where gap reports and upstream repairs appear (a
    dedicated chip class in the timeline, mirroring reclassify chips?).
+8. Fuser discard bar: is refuting evidence (file:line) enough, or does a
+   discard additionally require an opposite-family concur (costlier,
+   safer)? Proposal: evidence alone in light, evidence+concur in strict.
+9. Fan-out dimension list per unit kind: battery questions only, or
+   battery + standing lenses (grounding-citations-exist, contract
+   self-consistency, altitude)? Who maintains the list — config or the
+   profile definition?
+10. Is a final open-scope pass (single per family, normal effort)
+    mandatory after parallel blocks as a did-we-miss-anything catch, or
+    profile-optional with the double seal as the only catch-all?
+11. Fast-tier model choices per family (e.g. claude fan-out on a
+    fast/cheap model, fuser on max) — fixed in the profile or
+    per-run overridable through the acts mechanism?
