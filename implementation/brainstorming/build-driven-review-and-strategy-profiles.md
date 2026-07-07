@@ -162,34 +162,45 @@ cost-of-being-wrong):
 | Doc gate | every finding opens a fix cycle | only rated >= high opens; rest -> tracked debt |
 | Doc register | dense contract prose allowed | lay register + hard table (§6) |
 | Gap semantics | stop-report-repair-resume | stop-report-repair-resume (identical) |
-| Implementation seal | full cross-family approval, always (see precise invariant below) | full cross-family approval, always |
+| Implementation seal | seal predicate, full (see §5) | seal predicate, full (identical) |
 
-THE SEAL INVARIANT, stated precisely (corrected by review — "double
-seal never relaxed" contradicted live production, where
-`single_seal_first_attempt` already applies to every unit kind): what
-can never be relaxed is CROSS-FAMILY APPROVAL OF THE SEALED BYTES —
-every family has approved the exact bytes that seal, through a
-WHOLE-ARTIFACT look: an open-scope clean round or a seal half. Narrow
-parallel-block actions do NOT count as whole-artifact approval
-(second-review fix): the a1 single seal may drop a family's half ONLY
-when that family's last whole-artifact look approved these exact
-bytes; in a profile that omits final open-scope passes, the skipped
-family has no such look and BOTH halves run — single-seal is a
-consequence of the invariant, never an override of it. Approval
-composes with the live P3-debt path (second-review fix): a family's
-seal half that raised ONLY findings rated at-or-below the threshold by
-the opposite family counts as approval WITH RECORDED DEBT — the
-deferral events and debt entries are the approval's written remainder.
-Any change after a family's approval requires that family to look
-again (a2+ full double seal) — with ONE named, bounded relaxation
-(third-review fix, resolving the P1 conflict with Decision 2): for a
-DOC repair in a light profile rated below high, cross-family approval
-of the repaired bytes may COMPOSE as {diff-scoped delta review by the
-family opposite the repair fixer} + {whole-artifact seal half by the
-other family}. Both families look at the change; one look is
-diff-scoped — that weaker bar is exactly the light-profile tradeoff,
-purchased only under the rating. Strict requires whole-artifact looks
-from both, always. Implementations: never composed, never relaxed.
+THE SEAL, redefined (operator, 2026-07-07 — after LPC slice_impl-04
+sealed by paying a dedicated codex call to re-read bytes codex itself
+had approved clean 14 minutes earlier): **the seal is a PREDICATE over
+the ledger, not a ceremony with its own worker calls.** A unit is
+sealed when:
+
+1. EVERY family's most recent WHOLE-ARTIFACT review of the CURRENT
+   bytes is clean — or clean-with-recorded-debt, all its findings
+   rated at-or-below the threshold (the deferral events are the
+   approval's written remainder). "Current bytes" means the artifact
+   is byte-identical since that review, generated bookkeeping
+   excluded. Narrow parallel-block actions never count as
+   whole-artifact approval.
+2. The gate verification (suite) passes on those bytes — mechanical.
+3. The gate commit lands — mechanical. A `seal_satisfied` ledger event
+   cites the review ids that satisfied the predicate.
+
+Zero dedicated seal calls. When the predicate fails for a family (the
+bytes changed after its last clean whole-artifact look), THAT family —
+and only that family — owes a fresh whole-artifact review: the
+pipeline returns to rounds for exactly the stale families. This
+preserves the empirical protection the old a1 codex half provided (its
+historical P1 catch happened precisely when codex was stale after
+claude-finding fixes — the predicate forces that same fresh look)
+while deleting the redundant re-read (impl-04's a1: same bytes, same
+family, 0 findings, pure cost). The existing `single_seal_first_attempt`
+machinery was a partial step toward this and is subsumed: reform
+profiles have no seal-half calls at all; the `legacy` artifact keeps
+them for reproduction.
+
+Repair composition under the predicate (resolving the third review's
+P1 with the same vocabulary): after an upstream DOC repair in a light
+profile rated below high, cross-family approval may compose as
+{diff-scoped delta review by the family opposite the repair fixer} +
+{fresh whole-artifact review by the other family}; strict requires
+fresh whole-artifact looks from both. Implementations: never composed,
+never relaxed.
 
 Profiles decompose into config dials (several already exist:
 `p3_defer_max_risk`, `p3_reclassify_debt`); the panel's new-run form
@@ -504,9 +515,9 @@ REJECTED — adopt their concepts, not their engines:
 
 ## Non-goals
 
-- No relaxation of the cross-family approval invariant for
-  implementations, in any profile (stated precisely in §5; the a1
-  redundant-half drop is part of the invariant, not a relaxation).
+- No relaxation of the seal predicate for implementations, in any
+  profile (stated precisely in §5: every family's fresh whole-artifact
+  clean look on the exact sealed bytes, suite green, gate commit).
 - No automatic classification of review depth — the profile is an
   explicit operator choice at run creation.
 - No post-hoc compression of existing sealed docs.
@@ -522,14 +533,15 @@ REJECTED — adopt their concepts, not their engines:
    calls are spent only on P2/P3, where the threshold can actually
    change the outcome. Rating a P0 adds cost and no information.
 2. Repair scope on a sealed upstream — **threshold-rated, DOC units
-   only**: strict reseals full double, light reseals single-family for
-   repairs rated below high. WHO RATES (second-review fix — builders
-   never rate their own blockers): nobody rates the gap itself; the
-   REPAIR's delta review — run by the family opposite the repair fixer,
-   the existing delta pattern — rates the repair diff's drift risk, and
-   THAT rating picks the reseal depth. Implementation reseals always
-   satisfy the cross-family approval invariant (see the seal invariant
-   in §5).
+   only**: strict requires fresh whole-artifact reviews from BOTH
+   families after the repair; light, for repairs rated below high,
+   composes {diff-scoped delta by the family opposite the fixer} +
+   {fresh whole-artifact review by the other family}. WHO RATES
+   (second-review fix — builders never rate their own blockers): nobody
+   rates the gap itself; the REPAIR's delta review rates the repair
+   diff's drift risk, and THAT rating picks the depth. Implementations
+   always satisfy the full seal predicate (see §5). Re-sealing is then
+   the same predicate re-evaluated — never dedicated calls.
 3. Battery per unit kind — **skeleton carries the full battery per
    need** (victim / machinery / consumers / cheaper-alternative /
    pricing); **slice docs inherit** and answer only what is
