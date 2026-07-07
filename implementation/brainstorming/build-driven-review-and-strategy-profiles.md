@@ -245,10 +245,14 @@ gate (seal) is invariant and outside the composition.
     `loop(actions) -> [fuser] -> evaluator`, stored as JSON documents
     under the service home (`~/.impl_roadmap/profiles/`), selectable in
     the panel's new-run form, and SNAPSHOTTED into the run's config at
-    creation — editing a profile later never mutates a live or closed
-    run's semantics (the existing config-snapshot doctrine). Once the
-    project-concept milestone lands, a project's KV may carry its
-    default profile.
+    creation. A profile SEALS on first production use — immutable from
+    then on; editing means CLONING to a new identity (name@version or
+    content hash), which runs reference explicitly. Sealed profile +
+    orchestrator_rev fully attribute a run's behavior (the existing
+    provenance doctrine extended), and sealing is what makes per-profile
+    metrics comparable and model-assignment tuning an honest experiment
+    (one dial changed per clone). Once the project-concept milestone
+    lands, a project's KV may carry its default profile.
   Invariants live OUTSIDE the algebra and no profile can compose them
   away: the final double seal, the gap semantics (stop-report-repair-
   resume), battery presence, report-only + tamper snapshots on every
@@ -307,11 +311,17 @@ chip carrying all three layers of evidence. Alarms are first-class
 ledger events. In the algebra, this extends the evaluator's inputs from
 findings to process metrics.
 
-Because the amend shas are all in the ledger, the meter is computable
-RETROACTIVELY: thresholds get calibrated by backtesting against recorded
-runs (the 15-review LPC skeleton, the travel-var episode) so the shipped
-defaults are values that would have fired there and stayed silent on
-healthy runs — no speculation.
+Metrics are ANCHORED PER PROFILE — historical runs are NOT a calibration
+source (they were produced under a process that no longer exists:
+different prompts, binary reclassify, mid-run amendments changing
+everything; a metric only compares within a constant configuration).
+Every meter datum is recorded under the sealed profile identity that
+produced it. Within a profile: real trends. Across profiles: defined A/B
+experiments — clone the profile, change ONE dial (e.g. which model runs
+the fan-out), run, compare anchored signals. A freshly sealed profile
+starts its alarms in OBSERVE mode (signals and chips recorded, no
+actions) until it has accumulated its own N runs; thresholds are then
+set from its own data and the profile clones to an armed version.
 
 ## Already-live pieces this composes with
 
@@ -388,5 +398,14 @@ hard requirement of `plain`.
     stall) as the primary judge with the cap as backstop?
 14. Alarm action when the deterministic meter trips: chip + trigger the
     LLM progress evaluation only (proposal), or also pause the unit
-    until the evaluation returns? And the backtested default thresholds
-    per signal (time-per-net-line, net-zero window N, churn ratio).
+    until the evaluation returns? Observe-mode duration for a fresh
+    profile (N runs? N units?) before thresholds arm.
+15. Profile identity and sealing mechanics: name@version vs content
+    hash (or both — human name, hash-verified); where the seal bit
+    lives (profile file vs a registry of sealed profiles); whether a
+    run may reference an UNSEALED profile at all (proposal: yes, and
+    that first production reference is precisely what seals it).
+16. Metric store: where per-profile meter data accumulates across runs
+    — the service home (cross-project, keyed by profile identity) or
+    the project KV once project-concept lands (per-project slices of
+    the same data)?
