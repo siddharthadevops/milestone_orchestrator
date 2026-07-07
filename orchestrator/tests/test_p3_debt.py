@@ -31,9 +31,14 @@ def draft_step():
     return skeleton_script()[0]
 
 
-def reclassify(defer_ok, family, reason="verified"):
+def reclassify(defer_ok, family, reason="verified", risk=None):
+    # The worker only RATES drift risk; deferral is the driver comparing
+    # that rating to p3_defer_max_risk (default "low"). For test intent,
+    # defer_ok=True fakes a "low" rating and False a "high" one.
     return step("reclassify",
-                ok("reclassify", defer_ok=defer_ok, reason=reason),
+                ok("reclassify",
+                   drift_risk=risk or ("low" if defer_ok else "high"),
+                   reason=reason),
                 family=family)
 
 
@@ -98,6 +103,51 @@ class TestP3Debt(DriverTestCase):
             self.assertEqual(unit["debt"], [])
             # The P3 is queued for the fixer, not deferred.
             self.assertEqual([f["id"] for f in unit["fix_queue"]], ["F1"])
+
+    def test_threshold_decides_over_the_rating(self):
+        # A "medium" rating defers under threshold "medium" but is kept
+        # under the default "low" — the SAME rating, opposite outcomes:
+        # the decision lives in config, not in the worker.
+        for threshold, expect_defer in (("medium", True), ("low", False)):
+            with tempfile.TemporaryDirectory(prefix="orch-mock-") as ws:
+                cfg = make_config(p3_reclassify_debt=True)
+                cfg["p3_defer_max_risk"] = threshold
+                path = init_state(ws, cfg)
+                script = [
+                    draft_step(),
+                    step("review_round",
+                         report("review_round",
+                                [finding("F1", "slightly ambiguous phrase")]),
+                         family="codex"),
+                    reclassify(True, family="claude",
+                               reason="minor ambiguity", risk="medium"),
+                ]
+                mock = runners.MockRunner(script)
+                driver = drv.Driver(path, runner=mock)
+                want = st.U_FIXING
+                if expect_defer:
+                    # advances to the next family's rounds without fixing
+                    self.step_until(
+                        driver,
+                        lambda s: s["units"][0].get("debt"))
+                else:
+                    self.step_until(
+                        driver,
+                        lambda s: s["units"][0]["status"] == want)
+                state = st.load(path)
+                unit = state["units"][0]
+                ev = [e for e in state["events"]
+                      if e["type"] == "reclassify_recorded"][-1]
+                self.assertEqual(ev["drift_risk"], "medium")
+                self.assertEqual(ev["threshold"], threshold)
+                self.assertEqual(ev["defer_ok"], expect_defer)
+                if expect_defer:
+                    self.assertEqual(unit["debt"][0]["drift_risk"], "medium")
+                    self.assertEqual(unit["fix_queue"], [])
+                else:
+                    self.assertEqual(unit["debt"], [])
+                    self.assertEqual(
+                        [f["id"] for f in unit["fix_queue"]], ["F1"])
 
     def test_p2_alongside_p3_skips_reclassify_and_fixes_all(self):
         with tempfile.TemporaryDirectory(prefix="orch-mock-") as ws:

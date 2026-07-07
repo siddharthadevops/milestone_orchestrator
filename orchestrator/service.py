@@ -837,6 +837,8 @@ def run_story(home, run_id, item):
                 {
                     "finding_id": e.get("finding_id"),
                     "reclassifier": e.get("reclassifier"),
+                    "drift_risk": e.get("drift_risk"),
+                    "threshold": e.get("threshold"),
                     "defer_ok": e.get("defer_ok"),
                     "reason": e.get("reason"),
                     "at": e.get("at"),

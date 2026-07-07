@@ -658,36 +658,48 @@ Respond with EXACTLY ONE JSON object and nothing else — no prose outside it,
 no markdown fences:
 {"status": "ok",
  "kind": "reclassify",
- "defer_ok": true or false,
- "reason": "<one sentence: the concrete basis for your verdict>"}
+ "drift_risk": "low" | "medium" | "high" | "xhigh",
+ "reason": "<one sentence: the concrete basis for your rating>"}
 """
 
 
 def build_reclassify(family, workspace, finding, artifact, unit_kind=None,
                      amendments=None):
-    """Opposite-family judge on whether a lone P3 finding is safe to DEFER
-    as tracked debt. It answers ONE question and can only REFUSE deferral —
-    it never downgrades a real issue into debt."""
+    """Opposite-family RATER of a lone P3's implementation-drift risk.
+
+    Deliberately not a yes/no decision: asked "is it safe?", a worker
+    systematically answers no (conceding risk costs it nothing; ruling
+    risk out feels like signing). Asked for a graded rating with no
+    decision attached, it stays calibrated. The driver compares the
+    rating against the run's p3_defer_max_risk threshold."""
     return (
         _header(contracts.KIND_RECLASSIFY, family, workspace)
-        + "\nTASK: second opinion on a single P3 finding. REPORT ONLY — you\n"
-        "edit nothing and review nothing else.\n\n"
+        + "\nTASK: rate ONE P3 finding. REPORT ONLY — you edit nothing and\n"
+        "review nothing else.\n\n"
         + _amendments_block(amendments)
         + "Another reviewer (the opposite family) raised the P3 below on\n"
-        "%s. Before it is deferred as tracked debt instead of fixed now,\n"
-        "you give an independent verdict on ONE question:\n\n"
+        "%s. The orchestrator is deciding whether to fix it now or defer\n"
+        "it as TRACKED DEBT — recorded per unit, revisited later; deferred\n"
+        "never means silently dropped.\n\n"
         % (artifact,)
-        + "  Is it SAFE to defer this as debt — i.e., is it genuinely a P3\n"
-        "  (cosmetic / wording / accounting; NO effect on correctness,\n"
-        "  behaviour, test coverage, or a pinned contract) AND does it pose\n"
-        "  NO risk of implementation drift (it would not mislead a later\n"
-        "  implementer into wrong code)?\n\n"
-        + "Answer defer_ok=true ONLY if BOTH hold. Answer defer_ok=false if\n"
-        "the finding is actually more severe than P3, touches\n"
-        "correctness/behaviour/coverage/a pinned contract, or could cause\n"
-        "drift — it will then be fixed now, not deferred. This is a\n"
-        "one-way gate: your job is to CATCH a mis-deferral, never to excuse\n"
-        "a real problem. When unsure, answer defer_ok=false.\n\n"
+        + "You do NOT make that decision. Your job is a single calibrated\n"
+        "measurement: IF this finding were deferred, how much risk of\n"
+        "implementation drift does it pose for the capable reasoning agent\n"
+        "that will build the next units on top of this artifact?\n\n"
+        + "  low    cosmetic wording/accounting; no plausible reading of\n"
+        "         the artifact misleads the next agent's work\n"
+        "  medium a minor ambiguity a careful agent resolves correctly\n"
+        "         from context, though a hasty reading might not\n"
+        "  high   could plausibly steer the next agent into wrong code,\n"
+        "         wrong tests, or a wrong contract reading\n"
+        "  xhigh  misstates pinned contract/behaviour facts; building on\n"
+        "         it as written would likely produce wrong work\n\n"
+        + "Rate the finding AS RAISED against the artifact AS IT IS. If the\n"
+        "finding is actually more severe than P3 (it touches correctness,\n"
+        "behaviour, or test coverage), say so in the reason and rate high\n"
+        "or xhigh. Do not inflate the rating to be safe and do not deflate\n"
+        "it to be agreeable — a wrong rating in either direction corrupts\n"
+        "the decision this feeds.\n\n"
         + "FINDING (severity %s, id %s):\n%s\n\n"
         % (finding.get("severity"), finding.get("id"),
            finding.get("summary", ""))

@@ -46,9 +46,14 @@ KIND_SEAL_HALF = "seal_half"
 KIND_FIX_FINDINGS = "fix_findings"
 # Opposite-family second opinion on whether a lone P3 is safe to DEFER as
 # tracked debt (genuinely trivial, no correctness/behaviour/coverage impact
-# and no implementation-drift risk). A one-way gate: it can refuse deferral
-# but never launders a real issue into debt.
+# and no implementation-drift risk). The worker RATES drift risk on a fixed
+# scale; it never decides — the driver compares the rating against the
+# run's configured threshold (a binary "is it safe?" question biases an
+# LLM to the safe answer; a graded rating keeps it calibrated).
 KIND_RECLASSIFY = "reclassify"
+
+# Ordered drift-risk scale for reclassify ratings (least to most risk).
+DRIFT_RISK_LEVELS = ("low", "medium", "high", "xhigh")
 
 KINDS = (
     KIND_DRAFT_SKELETON,
@@ -300,9 +305,11 @@ def validate_worker_output(obj, kind):
                 )
             validate_slices(slices, "%s.slices" % ctx)
     elif kind == KIND_RECLASSIFY:
-        if not isinstance(obj.get("defer_ok"), bool):
+        risk = _require(obj, "drift_risk", str, ctx)
+        if risk not in DRIFT_RISK_LEVELS:
             raise ContractError(
-                "%s: defer_ok must be a JSON boolean" % ctx
+                "%s: drift_risk must be one of %s"
+                % (ctx, "|".join(DRIFT_RISK_LEVELS))
             )
         reason = _require(obj, "reason", str, ctx)
         if not reason.strip():

@@ -825,6 +825,7 @@ def summary(state):
     opened_at = {}
     closed_at = {}
     wip_sha = {}
+    reclassify_kept = {}
     for e in state["events"]:
         uk = e.get("unit")
         if not uk:
@@ -837,6 +838,8 @@ def summary(state):
             # Latest sha of the unit's working commit (amends replace it);
             # the panel links the CURRENT unit's work-so-far through it.
             wip_sha[uk] = e.get("sha")
+        if e.get("type") == "reclassify_recorded" and not e.get("defer_ok"):
+            reclassify_kept[uk] = reclassify_kept.get(uk, 0) + 1
     units_view = []
     for u in state["units"]:
         units_view.append(
@@ -922,10 +925,15 @@ def summary(state):
                         "summary": dd.get("summary"),
                         "raised_by": dd.get("raised_by"),
                         "cleared_by": dd.get("cleared_by"),
+                        "drift_risk": dd.get("drift_risk"),
                         "reason": dd.get("reason"),
                     }
                     for dd in u.get("debt", [])
                 ],
+                # Reclassify ratings that did NOT defer (risk above the
+                # threshold) — they went to the fixer, but the operator
+                # analyzes them through the same panel chip/story.
+                "reclassify_kept": reclassify_kept.get(unit_key(u), 0),
             }
         )
     families = state["config"].get("families_order", [])

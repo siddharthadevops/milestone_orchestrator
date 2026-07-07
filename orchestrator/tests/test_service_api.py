@@ -624,12 +624,13 @@ class StoryApiTest(ServiceApiTest):
         unit["debt"] = [{
             "id": "claude-F9", "severity": "P3", "summary": "stale word",
             "raised_by": "claude", "cleared_by": "codex",
-            "reason": "cosmetic; no drift",
+            "drift_risk": "low", "reason": "cosmetic; no drift",
         }]
         state["events"].append({
             "seq": 999, "at": "2026-07-05T10:20:00+0200",
             "type": "reclassify_recorded", "unit": "skeleton",
             "finding_id": "claude-F9", "reclassifier": "codex",
+            "drift_risk": "low", "threshold": "low",
             "defer_ok": True, "reason": "cosmetic; no drift",
         })
         st.save(entry["state_path"], state)
@@ -669,8 +670,11 @@ class StoryApiTest(ServiceApiTest):
         self.assertEqual(status, 200)
         self.assertEqual(body["story"], "debt")
         self.assertEqual(body["debt"][0]["id"], "claude-F9")
+        self.assertEqual(body["debt"][0]["drift_risk"], "low")
         self.assertEqual(body["reclassify"][0]["defer_ok"], True)
         self.assertEqual(body["reclassify"][0]["reclassifier"], "codex")
+        self.assertEqual(body["reclassify"][0]["drift_risk"], "low")
+        self.assertEqual(body["reclassify"][0]["threshold"], "low")
 
     def test_run_detail_carries_commit_web_base(self):
         ws = self.workspace("ws-webbase")

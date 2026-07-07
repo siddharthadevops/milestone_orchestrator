@@ -534,12 +534,16 @@ function sealChip(s, unitKey) {
   return `<span class="chip ${sevClass(s.severity)}${click}">seal a${s.attempt} findings${dur}</span>`;
 }
 function debtChip(u) {
-  // The opposite-family reclassification leaves no round, so its resolution
-  // (P3 deferred as tracked debt) would vanish with the in-flight chip.
-  // Persist it as a clickable chip.
-  const n = (u.debt || []).length;
-  if (!n) return "";
-  return `<span class="chip clean clicky" onclick="showStory('debt:${esc(u.unit)}')">${n} P3 deferred</span>`;
+  // The opposite-family reclassification leaves no round, so its outcome
+  // would vanish with the in-flight chip. Persist BOTH outcomes as a
+  // clickable chip: deferred (as tracked debt) and kept (risk rated above
+  // the threshold, sent to the fixer) — the story shows every rating.
+  const n = (u.debt || []).length, k = u.reclassify_kept || 0;
+  if (!n && !k) return "";
+  const bits = [];
+  if (n) bits.push(`${n} P3 deferred`);
+  if (k) bits.push(`${k} P3 kept`);
+  return `<span class="chip ${n ? "clean" : "sev23"} clicky" onclick="showStory('debt:${esc(u.unit)}')">${bits.join(" · ")}</span>`;
 }
 function docChip(u) {
   // Sealed doc units (skeleton, slice docs) record their markdown artifact;
@@ -1005,16 +1009,16 @@ async function showStory(item) {
       body += `<div class="story-note">slices:\n${esc(res.slices.map(x => x.id + ". " + x.title).join("\n"))}</div>`;
     if (res.notes) body += `<div class="story-note">${esc(res.notes)}</div>`;
   } else if (d.story === "debt") {
-    title = `${d.unit} — deferred P3 debt`;
+    title = `${d.unit} — P3 drift-risk reclassification`;
     const debt = d.debt || [];
     body += debt.length ? debt.map(x => `<div class="story-finding">
         <span class="sev P3">P3</span> <b>${esc(x.id || "")}</b> ${esc(x.summary || "")}
-        <div class="story-disp">raised by ${esc(x.raised_by || "?")} → deferred by ${esc(x.cleared_by || "?")}: ${esc(x.reason || "")}</div>
+        <div class="story-disp">raised by ${esc(x.raised_by || "?")} → rated ${esc(x.drift_risk || "n/a")} by ${esc(x.cleared_by || "?")}, deferred: ${esc(x.reason || "")}</div>
       </div>`).join("") : `<div class="story-finding">no deferred debt</div>`;
-    const refused = (d.reclassify || []).filter(e => !e.defer_ok);
-    if (refused.length)
-      body += `<div class="story-note">reclassify refusals (sent to the fixer instead):\n` +
-        esc(refused.map(e => `${e.finding_id} [${e.reclassifier}] — ${e.reason}`).join("\n")) + `</div>`;
+    const kept = (d.reclassify || []).filter(e => !e.defer_ok);
+    if (kept.length)
+      body += `<div class="story-note">kept for the fixer (rating above the run threshold, or no rating):\n` +
+        esc(kept.map(e => `${e.finding_id} [${e.reclassifier}] ${e.drift_risk || "unrated"}${e.threshold ? " > " + e.threshold : ""} — ${e.reason}`).join("\n")) + `</div>`;
   } else {
     title = "Story";
     body += `<div class="story-note">${esc(JSON.stringify(d, null, 1))}</div>`;

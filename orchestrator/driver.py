@@ -134,6 +134,13 @@ DEFAULT_CONFIG = {
     # normally). A refused verdict or a failed reclassify call sends the
     # findings to the normal fix flow (safe default).
     "p3_reclassify_debt": True,
+    # Deferral threshold over the reclassifier's drift-risk rating
+    # (low|medium|high|xhigh): a P3 defers when its rating is <= this.
+    # The worker only RATES; this config makes the decision — set per
+    # project by the operator's cost-of-being-wrong: storage/contract
+    # work (Life/Spanner) -> "low"; UI shell work (chat components) ->
+    # "medium". high/xhigh are never sensible thresholds.
+    "p3_defer_max_risk": "low",
     # Infra-failure handling (errclass): short in-place retries for
     # network/busy before a typed failure, and the opposite-family LLM
     # classifier fallback for noisy failure output. The service guard
@@ -1468,6 +1475,10 @@ class Driver(object):
         before = self._snapshot()
         debt = []
         all_ok = True
+        levels = contracts.DRIFT_RISK_LEVELS
+        threshold = str(self.config.get("p3_defer_max_risk") or "low")
+        if threshold not in levels:
+            threshold = "low"
         self._mark_busy(
             "%s-reclassify (%d P3)" % (st.unit_key(unit), len(items)),
             contracts.KIND_RECLASSIFY, None,
@@ -1476,6 +1487,7 @@ class Driver(object):
             for finding, raising_family in items:
                 opp = self._opposite(raising_family)
                 defer_ok, reason = False, "reclassification unavailable"
+                risk = None
                 if opp == raising_family:
                     # No independent opposite family (single-family config):
                     # cross-family verification is impossible, so a P3 is
@@ -1504,8 +1516,16 @@ class Driver(object):
                         )
                         self._save_raw(raw_name, result.text)
                         if output.get("status") == "ok":
-                            defer_ok = bool(output.get("defer_ok"))
+                            # The worker only RATES drift risk; the
+                            # deterministic decision is this comparison
+                            # against the run's configured threshold.
+                            risk = output.get("drift_risk")
                             reason = str(output.get("reason") or "")[:300]
+                            defer_ok = (
+                                risk in levels
+                                and levels.index(risk)
+                                <= levels.index(threshold)
+                            )
                         else:
                             reason = "reclassifier blocked"
                     except (runners.RunnerError,
@@ -1516,7 +1536,8 @@ class Driver(object):
                     self.state, "reclassify_recorded",
                     unit=st.unit_key(unit),
                     finding_id="%s-%s" % (raising_family, finding.get("id")),
-                    reclassifier=opp, defer_ok=defer_ok, reason=reason,
+                    reclassifier=opp, drift_risk=risk, threshold=threshold,
+                    defer_ok=defer_ok, reason=reason,
                 )
                 if defer_ok:
                     debt.append({
@@ -1525,6 +1546,7 @@ class Driver(object):
                         "summary": finding.get("summary", ""),
                         "raised_by": raising_family,
                         "cleared_by": opp,
+                        "drift_risk": risk,
                         "reason": reason,
                     })
                 else:
