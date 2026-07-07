@@ -387,61 +387,76 @@ REJECTED — adopt their concepts, not their engines:
   current doctrine finish under it; the reform applies to runs created
   after it lands.
 
-## Open decisions (the milestone must settle)
+## Decisions (taken 2026-07-07 under recorded operator doctrine — each
+## vetoable during live debugging; 5 and 8 RESERVED for the operator)
 
-1. Gate vocabulary: rate every doc finding through the opposite family
-   (cost: one rating call per finding) or only findings below a severity
-   floor, with P0/P1 always opening a fix cycle unrated?
-2. Repair scope: when a gap report reopens a SEALED upstream doc, does
-   the repair reseal single-family (the delta-style cheap path) or full
-   double seal? (Proposal: rated by the same threshold — light profile
-   reseals single-family for gaps rated below high.)
-3. Battery enumeration per unit kind: which questions are mandatory for
-   a skeleton vs a slice doc (skeleton: victim/machinery/consumers/
-   alternatives/pricing per need; slice doc: consumers + pinned facts +
-   verification only?).
-4. Hard-table format: one canonical table schema (name | value |
-   authority citation | touch/do-not-touch) or per-unit-kind variants.
-5. Profile set: exactly two (strict/light) or three (a `standard`
-   between them)? Names and default dial values per profile.
-6. Whether the gap-report path can also carry the builder's PROPOSED
-   resolution (as input to the upstream fixer, never as self-service) —
-   speeds repair, risks anchoring the fixer.
-7. Panel surface: where gap reports and upstream repairs appear (a
-   dedicated chip class in the timeline, mirroring reclassify chips?).
-8. Fuser discard bar: is refuting evidence (file:line) enough, or does a
-   discard additionally require an opposite-family concur (costlier,
-   safer)? Proposal: evidence alone in light, evidence+concur in strict.
-9. Fan-out dimension list per unit kind: battery questions only, or
-   battery + standing lenses (grounding-citations-exist, contract
-   self-consistency, altitude)? Who maintains the list — config or the
-   profile definition?
-10. Is a final open-scope pass (single per family, normal effort)
-    mandatory after parallel blocks as a did-we-miss-anything catch, or
-    profile-optional with the double seal as the only catch-all?
-11. Fast-tier model choices per family (e.g. claude fan-out on a
-    fast/cheap model, fuser on max) — fixed in the profile or
-    per-run overridable through the acts mechanism?
-12. Repair blast radius: when an impl gap repairs the SKELETON, which
-    sealed slice docs re-verify — only what the gap report cites
-    (directed re-verification), or everything downstream of the edited
-    sections? (Proposal: cited-only, with the repair fixer obligated to
-    list collateral sections it touched, each triggering its own
-    directed re-verification.)
-13. Back-edge budget: how many impl->doc->impl cycles before the
-    operator is surfaced — a fixed cap with amnesty-on-resume (the
-    existing pattern), or the convergence rubric (same gap bouncing =
-    stall) as the primary judge with the cap as backstop?
-14. Alarm action when the deterministic meter trips: chip + trigger the
-    LLM progress evaluation only (proposal), or also pause the unit
-    until the evaluation returns? Observe-mode duration for a fresh
-    profile (N runs? N units?) before thresholds arm.
-15. Profile identity and sealing mechanics: name@version vs content
-    hash (or both — human name, hash-verified); where the seal bit
-    lives (profile file vs a registry of sealed profiles); whether a
-    run may reference an UNSEALED profile at all (proposal: yes, and
-    that first production reference is precisely what seals it).
-16. Metric store: where per-profile meter data accumulates across runs
-    — the service home (cross-project, keyed by profile identity) or
-    the project KV once project-concept lands (per-project slices of
-    the same data)?
+1. Gate vocabulary — **P0/P1 always open a fix cycle unrated**; rating
+   calls are spent only on P2/P3, where the threshold can actually
+   change the outcome. Rating a P0 adds cost and no information.
+2. Repair scope on a sealed upstream — **threshold-rated**: strict
+   reseals full double, light reseals single-family for gaps rated
+   below high. Same dial as everything else.
+3. Battery per unit kind — **skeleton carries the full battery per
+   need** (victim / machinery / consumers / cheaper-alternative /
+   pricing); **slice docs inherit** and answer only what is
+   slice-specific: consumers touched, pinned facts, verification. No
+   re-answering the skeleton's battery at slice level.
+4. Hard-table format — **one canonical schema** for every unit kind:
+   `fact | value | authority (file:line) | touch/do-not-touch`.
+   Variants would breed format nitpicking, the disease being treated.
+   Unused columns stay empty.
+5. **RESERVED (operator): profile set and names.** Recommendation: two
+   (`strict`, `light`) to start — the thresholds inside a profile are
+   already the fine dial; a third preset can be cloned later the moment
+   a real run needs it.
+6. Gap reports MAY carry the builder's proposed resolution — **allowed,
+   explicitly marked `proposal, not decision`**; the upstream fixer must
+   verify independently against sources before adopting (contract
+   obligation, counters anchoring). Speed wins; the mark plus the
+   fixer's verification duty carries the risk.
+7. Panel surface — **a dedicated timeline chip class**, exactly the
+   reclassify-chip pattern: `gap → skeleton` (amber) placed
+   chronologically, clickable to the report story; the upstream repair
+   appears on the upstream unit's own row.
+8. **RESERVED (operator): the strict fuser discard bar.**
+   Recommendation: evidence alone in `light`; evidence + opposite-family
+   concur in `strict`. The concur costs one cheap call per discard and
+   only in strict, where wrongly discarded findings are most expensive.
+9. Fan-out dimensions — **battery + three standing lenses**
+   (grounding-citations-exist, contract self-consistency, altitude),
+   defined IN the profile and sealed with it: the dimension list is
+   part of what anchored metrics compare, so it must not drift
+   independently.
+10. Final open-scope pass after parallel blocks — **profile content**:
+    strict includes one per family; light omits it and relies on the
+    double seal as catch-all. Not a global rule.
+11. Model choices — **pinned in the sealed profile** (they are exactly
+    what A/B experiments tune; a hot override would corrupt the
+    anchor). The acts hot-edit mechanism SURVIVES for operator
+    sovereignty, but any act override on a profile run marks that run's
+    meter data `deviated: true`, excluding it from the profile's
+    anchored series. You keep the wheel; the data stays honest.
+12. Repair blast radius — **cited-only directed re-verification**, with
+    the repair fixer contractually obligated to list every collateral
+    section it touched, each listed section triggering its own directed
+    re-verification. Never a global downstream reopen.
+13. Back-edge budget — **the convergence rubric is the judge, the cap
+    is the backstop**: deterministic meter/alarm triggers the LLM
+    trajectory evaluation (same gap bouncing = stall → operator); a
+    fixed cap of 3 impl->doc->impl cycles per unit pair backstops it,
+    amnesty-on-resume as everywhere.
+14. Alarm action — **chip + trigger the LLM progress evaluation; never
+    an autonomous pause**. A pause only happens as the evaluation's
+    stall verdict (threshold-decided), so stopping is always a judged
+    outcome, not a tripwire reflex. Observe mode for a fresh profile:
+    **its first 3 runs**, then thresholds arm on its own data.
+15. Profile identity — **both**: human `name@version` as the label,
+    content hash as the truth (recorded in the run config snapshot;
+    verified on load — a mutated profile file fails loudly). The seal
+    bit lives in the profile file and is hash-verified. A run MAY
+    reference an unsealed profile; that first production reference is
+    what seals it.
+16. Metric store — **service home, keyed by profile identity**
+    (profiles are global objects and the home exists today);
+    per-project views arrive later through the project KV once
+    project-concept lands. No blocking dependency.
