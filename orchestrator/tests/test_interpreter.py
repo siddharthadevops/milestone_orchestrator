@@ -6,6 +6,7 @@ from orchestrator import contracts
 from orchestrator import driver
 from orchestrator import interpreter as it
 from orchestrator import profiles
+from orchestrator import prompts
 from orchestrator import state as st
 
 
@@ -151,6 +152,31 @@ class DocDeferScopeTest(unittest.TestCase):
         self.assertFalse(contracts.all_in_severity([], ("P2", "P3")))
         self.assertTrue(contracts.all_p3(p3))
         self.assertFalse(contracts.all_p3(p2p3))
+
+
+class DocRegisterTest(unittest.TestCase):
+    """The doc-authoring register (spec §6) and the plain-mirror hard-
+    require flag (spec §7), read from the governing profile."""
+
+    def test_doc_register_defaults_dense(self):
+        self.assertEqual(it.doc_register(_state({})), "dense")
+        legacy = _state({"profile": profiles.SEEDS["legacy"]["profile"]})
+        self.assertEqual(it.doc_register(legacy), "dense")
+        strict = _state({"profile": profiles.SEEDS["strict"]["profile"]})
+        self.assertEqual(it.doc_register(strict), "dense")
+
+    def test_light_asks_for_lay_hard_table(self):
+        light = _state({"profile": profiles.SEEDS["light"]["profile"]})
+        self.assertEqual(it.doc_register(light), "lay+hard-table")
+
+    def test_two_register_block_gated_in_the_drafter(self):
+        dense = prompts.build_draft_skeleton("codex", "/ws", "goal",
+                                             two_register=False)
+        two = prompts.build_draft_skeleton("codex", "/ws", "goal",
+                                           two_register=True)
+        self.assertNotIn("PINNED-FACTS TABLE", dense)
+        self.assertIn("PINNED-FACTS TABLE", two)
+        self.assertIn("do-not-touch", two)
 
 
 class DecideSeamTest(unittest.TestCase):

@@ -1015,13 +1015,17 @@ class Driver(object):
             unit, kind
         )
         # Reform profiles hand builders the gap exit (stop-report-repair-
-        # resume); legacy/profile-less builders never see it.
+        # resume); legacy/profile-less builders never see it. A profile
+        # asking for the lay+hard-table register gets the two-register
+        # document instruction (spec §6); others keep the dense register.
         gap_enabled = interpreter.gap_semantics(self.state)
+        two_register = interpreter.doc_register(self.state) == "lay+hard-table"
         if unit["kind"] == st.UNIT_SKELETON:
             prompt = prompts.build_draft_skeleton(
                 family, self.workspace, goal, amendments=amendments,
                 artifact_path=ledgers.skeleton_path(self.state),
                 project_context=project_context, gap_enabled=gap_enabled,
+                two_register=two_register,
             )
         elif unit["kind"] == st.UNIT_SLICE_DOC:
             sl = self._slice_info(unit["slice_id"])
@@ -1032,6 +1036,7 @@ class Driver(object):
                     self.state, unit["slice_id"]
                 ),
                 project_context=project_context, gap_enabled=gap_enabled,
+                two_register=two_register,
             )
         else:
             sl = self._slice_info(unit["slice_id"])

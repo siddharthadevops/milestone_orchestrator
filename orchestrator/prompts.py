@@ -606,6 +606,29 @@ GAP_TARGETS_IMPLEMENT = (
 )
 
 
+TWO_REGISTER_BLOCK = (
+    "TWO-REGISTER DOCUMENT (compress by FORM, not by cutting 600 lines of\n"
+    "uniform contract prose down afterwards). Write the document in TWO\n"
+    "clearly separated registers:\n"
+    "1. INTENT (lay language): what is being built, for whom, what it owns\n"
+    "   and what it does NOT — in words a non-engineer follows. Reviewed\n"
+    "   for substance, not prose perfection. E.g. 'This slice builds the\n"
+    "   floating action menu; the menu accepts configurable icons; colours\n"
+    "   belong to the product.'\n"
+    "2. PINNED-FACTS TABLE (hard register): the SMALL set of facts where ANY\n"
+    "   deviation is a bug — exact names, events, routes, error codes,\n"
+    "   enforcement mechanisms, and what must NOT be touched. ONE canonical\n"
+    "   schema, a markdown table:\n"
+    "     | fact | value | authority (file:line) | touch / do-not-touch |\n"
+    "   Every row cites a real authority (a file:line, or the goal/skeleton\n"
+    "   section that pins it). This table is where file:line precision\n"
+    "   lives — the intent register carries none. Keep it small and exact;\n"
+    "   do not inflate it with intent prose, and do not bury a pinned fact\n"
+    "   in the intent register (the review treats the table strictly and\n"
+    "   the intent register for substance).\n\n"
+)
+
+
 def _gap_block(targets_desc):
     """The stop-report-repair-resume instruction for a builder (draft/
     implement). Added ONLY when a reform profile governs the run — legacy
@@ -640,7 +663,8 @@ def _gap_block(targets_desc):
 
 def build_draft_skeleton(family, workspace, goal, amendments=None,
                          artifact_path="docs/skeleton.md",
-                         project_context=None, gap_enabled=False):
+                         project_context=None, gap_enabled=False,
+                         two_register=False):
     return (
         _header(contracts.KIND_DRAFT_SKELETON, family, workspace)
         + "\nTASK: draft the milestone skeleton for this goal.\n"
@@ -651,6 +675,7 @@ def build_draft_skeleton(family, workspace, goal, amendments=None,
         + "inside the workspace: goal restatement, boundary/non-goals, and\n"
         "a short table of planned slices. Keep it thin: intent and\n"
         "contracts, no implementation detail.\n\n"
+        + (TWO_REGISTER_BLOCK if two_register else "")
         + SKELETON_SCOPE_BLOCK
         + ALTITUDE_BLOCK
         + REUSE_GATE_BLOCK
@@ -666,7 +691,8 @@ def build_draft_skeleton(family, workspace, goal, amendments=None,
 
 def build_draft_slice_note(family, workspace, goal, slice_info, skeleton_path,
                            amendments=None, note_path=None,
-                           project_context=None, gap_enabled=False):
+                           project_context=None, gap_enabled=False,
+                           two_register=False):
     return (
         _header(contracts.KIND_DRAFT_SLICE_NOTE, family, workspace)
         + "\nTASK: draft the slice note for slice %d (%s).\n"
@@ -680,6 +706,7 @@ def build_draft_slice_note(family, workspace, goal, slice_info, skeleton_path,
         + "tests that pin them, non-goals, expected files, dependencies,\n"
         "acceptance criteria, risks, and reuse posture. State WHAT must be\n"
         "observably true, not HOW code will do it.\n\n"
+        + (TWO_REGISTER_BLOCK if two_register else "")
         + SLICE_SIZING_LINE
         + ALTITUDE_BLOCK
         + REUSE_GATE_BLOCK

@@ -80,6 +80,18 @@ def effective_config(state):
     return merged
 
 
+def doc_register(state):
+    """The doc-authoring register the run's profile asks for (spec §6):
+    'lay+hard-table' (a lay INTENT register plus a hard PINNED-FACTS table)
+    or 'dense' (uniform contract prose). Profile-less and legacy runs, and
+    any profile that does not set it, get 'dense' — the pre-reform register,
+    so their doc prompts are unchanged."""
+    profile = governing_profile(state)
+    if not profile:
+        return "dense"
+    return profile.get("doc_register") or "dense"
+
+
 def gap_semantics(state):
     """Whether the reform's gap semantics are ON for this run (spec §3): a
     draft/implement worker that meets a build-changing hole or contradiction
