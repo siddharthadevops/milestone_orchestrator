@@ -218,6 +218,81 @@ class RecentsTest(unittest.TestCase):
         self.assertIn("/from-registry", out["workspaces"])
 
 
+class UiStateTest(unittest.TestCase):
+    """Sidebar cosmetics (project order, collapsed groups): tolerant load,
+    atomic merge-patch save, same posture as Recents above."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.home = self.tmp.name
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_load_missing_and_corrupt(self):
+        self.assertEqual(
+            registry.load_ui_state(self.home),
+            {"project_order": [], "collapsed": []},
+        )
+        with open(registry.ui_state_path(self.home), "w") as fh:
+            fh.write("{broken")
+        self.assertEqual(
+            registry.load_ui_state(self.home),
+            {"project_order": [], "collapsed": []},
+        )
+
+    def test_non_dict_and_malformed_fields_degrade_to_defaults(self):
+        with open(registry.ui_state_path(self.home), "w") as fh:
+            json.dump([1, 2, 3], fh)
+        self.assertEqual(
+            registry.load_ui_state(self.home),
+            {"project_order": [], "collapsed": []},
+        )
+        with open(registry.ui_state_path(self.home), "w") as fh:
+            json.dump({"project_order": "not-a-list", "collapsed": [1, "b"]}, fh)
+        out = registry.load_ui_state(self.home)
+        self.assertEqual(out["project_order"], [])
+        self.assertEqual(out["collapsed"], ["b"])  # non-strings filtered
+
+    def test_save_merges_only_present_keys(self):
+        registry.save_ui_state(self.home, {"project_order": ["b", "a"]})
+        registry.save_ui_state(self.home, {"collapsed": ["b"]})
+        self.assertEqual(
+            registry.load_ui_state(self.home),
+            {"project_order": ["b", "a"], "collapsed": ["b"]},
+        )
+
+    def test_save_ignores_malformed_patch_values(self):
+        registry.save_ui_state(self.home, {"project_order": ["a"]})
+        # A malformed patch value for a key is ignored, not an error, and
+        # the prior state for that key survives untouched.
+        registry.save_ui_state(self.home, {"project_order": "nope", "collapsed": "nope"})
+        self.assertEqual(
+            registry.load_ui_state(self.home),
+            {"project_order": ["a"], "collapsed": []},
+        )
+        registry.save_ui_state(self.home, "not-a-dict-either")
+        self.assertEqual(
+            registry.load_ui_state(self.home),
+            {"project_order": ["a"], "collapsed": []},
+        )
+
+    def test_write_failure_is_swallowed(self):
+        if os.name == "nt":
+            self.skipTest("POSIX permission semantics required")
+        if hasattr(os, "geteuid") and os.geteuid() == 0:
+            self.skipTest("root bypasses directory permissions")
+        registry.save_ui_state(self.home, {"project_order": ["kept"]})
+        os.chmod(self.home, 0o500)
+        try:
+            registry.save_ui_state(self.home, {"project_order": ["lost"]})
+        finally:
+            os.chmod(self.home, 0o700)
+        self.assertEqual(
+            registry.load_ui_state(self.home)["project_order"], ["kept"]
+        )
+
+
 class FsHttpTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -287,6 +362,28 @@ class FsHttpTest(unittest.TestCase):
         status, data = _get(self.port, "/api/runs?refresh=1")
         self.assertEqual(status, 200)
         self.assertTrue(data["ok"])
+
+    def test_ui_state_flow_get_post_merge(self):
+        status, data = _get(self.port, "/api/ui-state")
+        self.assertEqual(status, 200)
+        self.assertEqual(data["project_order"], [])
+        self.assertEqual(data["collapsed"], [])
+        status, data = _post(
+            self.port, "/api/ui-state", {"project_order": ["proj-b", "proj-a"]}
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(data["project_order"], ["proj-b", "proj-a"])
+        self.assertEqual(data["collapsed"], [])
+        # A later POST touching only "collapsed" leaves project_order intact
+        # (merge-patch, not full overwrite).
+        status, data = _post(self.port, "/api/ui-state", {"collapsed": ["proj-b"]})
+        self.assertEqual(status, 200)
+        self.assertEqual(data["project_order"], ["proj-b", "proj-a"])
+        self.assertEqual(data["collapsed"], ["proj-b"])
+        status, data = _get(self.port, "/api/ui-state")
+        self.assertEqual(status, 200)
+        self.assertEqual(data["project_order"], ["proj-b", "proj-a"])
+        self.assertEqual(data["collapsed"], ["proj-b"])
 
     def test_recents_flow_via_create(self):
         status, data = _get(self.port, "/api/recents")

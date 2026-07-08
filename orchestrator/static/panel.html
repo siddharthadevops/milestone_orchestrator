@@ -40,6 +40,21 @@
   .dot { width: 8px; height: 8px; border-radius: 50%; background: #c6cad3;
          flex: none; }
   .dot.running { background: var(--ok); box-shadow: 0 0 0 3px #dcfce7; }
+  .proj-group-header { display: flex; align-items: center; gap: 6px;
+    padding: 6px 10px; font-size: 11px; font-weight: 600;
+    text-transform: uppercase; letter-spacing: .02em; color: var(--dim);
+    border-bottom: 1px solid var(--line); cursor: pointer; user-select: none; }
+  .proj-group-header:hover { background: #f1f3f7; }
+  .proj-group-header .chev { flex: none; font-size: 10px; }
+  .proj-group-header .proj-count { flex: none; color: var(--dim);
+    background: var(--panel); border: 1px solid var(--line);
+    border-radius: 8px; padding: 0 6px; font-weight: 400; }
+  .grpbtns { margin-left: auto; display: flex; gap: 2px; }
+  .grpbtn { flex: none; border: 1px solid var(--line); background: #fff;
+    border-radius: 4px; font-size: 8px; line-height: 1; padding: 3px 4px;
+    color: var(--dim); cursor: pointer; }
+  .grpbtn:hover:not(:disabled) { color: var(--accent); border-color: #c3d4fb; }
+  .grpbtn:disabled { opacity: .3; cursor: default; }
   .chip { font-size: 11px; padding: 1px 8px; border-radius: 9px;
           border: 1px solid var(--line); color: var(--dim); white-space: nowrap; }
   .chip.open { color: var(--accent); border-color: #c3d4fb; background: var(--accent-soft); }
@@ -515,6 +530,147 @@
 let selected = null;
 let goalOpen = false;
 function toggleGoal() { goalOpen = !goalOpen; refreshDetail(); }
+
+/* ---- Sidebar project tree: grouping is computed fresh from the same
+   flat /api/runs payload on every render (never a new data source); only
+   the operator's chosen project ORDER and which groups are COLLAPSED
+   persist, in one small backend file (ui_state.json, mirrors the
+   Recents precedent) fetched once at boot and mutated on click, never on
+   the 2s poll. ---- */
+let lastRuns = [];
+let uiState = {project_order: [], collapsed: []};
+// A slash can never appear in an operator-typed project slug
+// (kvstore._validate_segment rejects "/"), so this key can never
+// collide with a real project name -- and unlike a control-character
+// sentinel, plain "/" survives an innerHTML round-trip byte-for-byte
+// (a NUL character does not: browsers replace it with U+FFFD while
+// parsing HTML, so a NUL-based key could never compare equal to
+// itself again once rendered -- verified live; this replaces that bug).
+const OTHERS_KEY = "/others";
+// Interpolating a value into a single-quoted onclick="...('VALUE')"
+// argument needs its OWN escaping layer, independent of esc()'s
+// HTML-attribute escaping: esc() protects the outer double-quoted
+// attribute (&, <, >, ") but does nothing for the inner single-quoted
+// JS string boundary, so an operator-typed value containing an
+// apostrophe (a project slug may have one -- validate_project_slug
+// only rejects "/" and control characters) breaks out of the JS
+// string and can execute injected script. Escape backslash and
+// single-quote FIRST (the JS-string layer), then esc() the result
+// (the HTML-attribute layer) -- the two layers nest in that order
+// because the browser HTML-decodes the attribute before parsing it
+// as JS.
+function escJsSq(s) {
+  return String(s == null ? "" : s).replace(/\\/g, "\\\\").replace(/'/g, "\\'");
+}
+async function loadUiState() {
+  try {
+    const data = await api("/api/ui-state");
+    uiState.project_order = Array.isArray(data.project_order) ? data.project_order : [];
+    uiState.collapsed = Array.isArray(data.collapsed) ? data.collapsed : [];
+  } catch (e) { /* keep in-memory defaults */ }
+}
+function runRow(r) {
+  return `
+      <div class="run ${r.id === selected ? "sel" : ""}" onclick="select('${esc(r.id)}')">
+        <div class="name"><span class="dot ${r.process}"></span>
+          ${esc(r.name)}</div>
+        ${r.project ? `<div class="handles">${esc(r.project)} / ${esc(r.work_area)}</div>` : ""}
+        <div class="ws mono">${esc(r.workspace)}</div>
+      </div>`;
+}
+function groupRuns(runs) {
+  const byProject = new Map();
+  for (const r of runs) {
+    const key = r.project || null;
+    if (!byProject.has(key)) byProject.set(key, []);
+    byProject.get(key).push(r);
+  }
+  return byProject;
+}
+function orderedProjectKeys(byProject) {
+  const present = [...byProject.keys()].filter(k => k !== null);
+  const known = uiState.project_order.filter(k => present.includes(k));
+  const fresh = present.filter(k => !known.includes(k));
+  return known.concat(fresh);
+}
+function groupHeader(key, label, count, movable, atTop, atBottom) {
+  const collapsed = uiState.collapsed.includes(key);
+  const safeKey = esc(escJsSq(key));
+  const buttons = movable
+    ? `<span class="grpbtns">
+         <button class="grpbtn" ${atTop ? "disabled" : ""}
+           onclick="event.stopPropagation(); moveProjectGroup('${safeKey}', -1)">&#9650;</button>
+         <button class="grpbtn" ${atBottom ? "disabled" : ""}
+           onclick="event.stopPropagation(); moveProjectGroup('${safeKey}', 1)">&#9660;</button>
+       </span>`
+    : "";
+  return `<div class="proj-group-header" onclick="toggleGroupCollapse('${safeKey}')">
+      <span class="chev">${collapsed ? "▸" : "▾"}</span>
+      <span>${esc(label)}</span>
+      <span class="proj-count">${count}</span>
+      ${buttons}
+    </div>`;
+}
+function renderRunsTree(runs) {
+  const byProject = groupRuns(runs);
+  const realKeys = [...byProject.keys()].filter(k => k !== null);
+  if (realKeys.length === 0) {
+    // No run currently carries a project tag: render exactly as before
+    // adopting Projects — no headers, no "Others" label, zero visual
+    // change for anyone who hasn't touched the feature.
+    return runs.map(runRow).join("");
+  }
+  const ordered = orderedProjectKeys(byProject);
+  let html = ordered.map((key, i) => {
+    const runsInGroup = byProject.get(key) || [];
+    const header = groupHeader(
+      key, key, runsInGroup.length, true, i === 0, i === ordered.length - 1
+    );
+    if (uiState.collapsed.includes(key)) return header;
+    return header + runsInGroup.map(runRow).join("");
+  }).join("");
+  const others = byProject.get(null) || [];
+  if (others.length) {
+    const header = groupHeader(OTHERS_KEY, "Others", others.length, false);
+    html += uiState.collapsed.includes(OTHERS_KEY)
+      ? header
+      : header + others.map(runRow).join("");
+  }
+  return html;
+}
+// Each click posts the operator's FULL current arrangement, fire-
+// and-forget -- but two independent, un-awaited posts (a fast
+// double-click) can arrive at the server out of send order, and
+// whichever write lands LAST on disk wins even if it carries the
+// STALER state, silently reverting the operator's later click. A
+// single promise chain forces every ui-state write to complete
+// before the next one starts, so they land in click order.
+let uiStateWriteChain = Promise.resolve();
+function persistUiState(patch) {
+  uiStateWriteChain = uiStateWriteChain
+    .then(() => postJSON("/api/ui-state", patch))
+    .catch(() => {});
+}
+function toggleGroupCollapse(key) {
+  const i = uiState.collapsed.indexOf(key);
+  if (i === -1) uiState.collapsed.push(key); else uiState.collapsed.splice(i, 1);
+  renderRunsTree_paint();
+  persistUiState({collapsed: uiState.collapsed});
+}
+function moveProjectGroup(key, dir) {
+  const ordered = orderedProjectKeys(groupRuns(lastRuns));
+  const i = ordered.indexOf(key);
+  const j = i + dir;
+  if (i === -1 || j < 0 || j >= ordered.length) return;
+  [ordered[i], ordered[j]] = [ordered[j], ordered[i]];
+  uiState.project_order = ordered;
+  renderRunsTree_paint();
+  persistUiState({project_order: uiState.project_order});
+}
+function renderRunsTree_paint() {
+  document.getElementById("runs").innerHTML =
+    renderRunsTree(lastRuns) || '<div class="empty">No milestones yet.</div>';
+}
 function esc(s) {
   return String(s == null ? "" : s).replace(/[&<>"]/g,
     c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
@@ -585,16 +741,10 @@ async function refreshRuns() {
   try {
     const data = await api("/api/runs");
     const runs = data.runs || [];
+    lastRuns = runs;
     document.getElementById("counts").textContent =
       `${runs.filter(r => r.process === "running").length} running · ${runs.length} total`;
-    document.getElementById("runs").innerHTML = runs.map(r => `
-      <div class="run ${r.id === selected ? "sel" : ""}" onclick="select('${esc(r.id)}')">
-        <div class="name"><span class="dot ${r.process}"></span>
-          ${esc(r.name)}</div>
-        ${r.project ? `<div class="handles">${esc(r.project)} / ${esc(r.work_area)}</div>` : ""}
-        <div class="ws mono">${esc(r.workspace)}</div>
-      </div>`).join("") ||
-      '<div class="empty">No milestones yet.</div>';
+    renderRunsTree_paint();
     if (selected) refreshDetail();
   } catch (e) { /* keep last render */ }
 }
@@ -1964,7 +2114,7 @@ async function saveSgEditor() {
   await loadProjects();
 }
 
-refreshRuns();
+loadUiState().then(refreshRuns);
 setInterval(refreshRuns, 2000);
 </script>
 </body>

@@ -2413,6 +2413,8 @@ def make_handler(home):
                     self._json(200, {"ok": True, "runs": list_runs(home)})
                 elif route == "/api/recents":
                     self._json(200, {"ok": True, **recent_paths(home)})
+                elif route == "/api/ui-state":
+                    self._json(200, {"ok": True, **registry.load_ui_state(home)})
                 elif route == "/api/profiles":
                     self._json(200, {"ok": True, "profiles": profiles_list(home)})
                 elif route == "/api/fs":
@@ -2479,6 +2481,11 @@ def make_handler(home):
                 if route == "/api/runs":
                     entry = create_run(home, self._body())
                     self._json(201, {"ok": True, "run": run_status(entry, home=home)})
+                elif route == "/api/ui-state":
+                    self._json(
+                        200,
+                        {"ok": True, **registry.save_ui_state(home, self._body())},
+                    )
                 elif route == "/api/profiles":
                     saved = save_profile(home, self._body())
                     self._json(200, {"ok": True, "profile": saved})

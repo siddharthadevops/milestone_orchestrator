@@ -241,6 +241,72 @@ def remember_recent(home, kind, value):
 
 
 # ---------------------------------------------------------------------------
+# UI state (panel sidebar cosmetics: the operator's chosen project-group
+# order and which groups are collapsed). Same tolerant-load / atomic-write
+# posture as Recents above — this is arrangement memory, not run data, so a
+# missing or corrupt file is just "nothing arranged yet," never an error.
+
+UI_STATE_KEYS = ("project_order", "collapsed")
+
+
+def ui_state_path(home):
+    return os.path.join(home, "ui_state.json")
+
+
+def load_ui_state(home):
+    """The panel's persisted sidebar arrangement: which project groups are
+    collapsed, and the operator's chosen project order. Tolerant like
+    load_recents: any read/parse problem or malformed field just yields
+    empty arrangement, never an error."""
+    empty = {key: [] for key in UI_STATE_KEYS}
+    try:
+        with open(ui_state_path(home), "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+    except (OSError, ValueError):
+        return empty
+    if not isinstance(data, dict):
+        return empty
+    out = {}
+    for key in UI_STATE_KEYS:
+        values = data.get(key, [])
+        out[key] = [v for v in values if isinstance(v, str)] \
+            if isinstance(values, list) else []
+    return out
+
+
+def save_ui_state(home, patch):
+    """Merge-patch UI state: only keys present in `patch` (and shaped as a
+    list of strings) are updated; anything else in `patch` is ignored, not
+    an error — a malformed POST body degrades to a no-op, never corrupts
+    the file. Returns the merged state. Best-effort like remember_recent:
+    sidebar cosmetics must never fail the request that triggered them."""
+    try:
+        with locked(home):
+            state = load_ui_state(home)
+            if isinstance(patch, dict):
+                for key in UI_STATE_KEYS:
+                    values = patch.get(key)
+                    if isinstance(values, list) and all(
+                        isinstance(v, str) for v in values
+                    ):
+                        state[key] = values
+            fd, tmp = tempfile.mkstemp(
+                prefix=".ui_state-", suffix=".json", dir=home
+            )
+            try:
+                with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                    json.dump(state, fh, indent=2, ensure_ascii=False)
+                    fh.write("\n")
+                os.replace(tmp, ui_state_path(home))
+            finally:
+                if os.path.exists(tmp):
+                    os.unlink(tmp)
+            return state
+    except (OSError, ValueError):
+        return load_ui_state(home)
+
+
+# ---------------------------------------------------------------------------
 # Projects record (service-owned standing projects: declared slugs + their
 # persisted defaults, plus retained-state claims from plain-forgotten runs).
 # Same atomic-write posture as the registry; mutations happen under
