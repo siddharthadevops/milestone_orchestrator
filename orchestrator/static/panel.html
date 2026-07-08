@@ -55,6 +55,20 @@
     color: var(--dim); cursor: pointer; }
   .grpbtn:hover:not(:disabled) { color: var(--accent); border-color: #c3d4fb; }
   .grpbtn:disabled { opacity: .3; cursor: default; }
+  .grp-empty { padding: 8px 14px; font-size: 11px; color: var(--dim);
+    font-style: italic; border-bottom: 1px solid var(--line); }
+  /* Field notes live behind a discreet (i) beside the dialog title —
+     the fields themselves stay clean of standing hint prose. */
+  .dlgtitle { display: flex; align-items: center; gap: 8px; }
+  .infobtn { flex: none; width: 18px; height: 18px; border-radius: 50%;
+    border: 1px solid var(--line); background: transparent; color: var(--dim);
+    font: italic 600 11px/1 Georgia, serif; cursor: pointer; padding: 0; }
+  .infobtn:hover { color: var(--accent); border-color: #c3d4fb; }
+  .dlg-info { display: none; font-size: 11.5px; color: var(--dim);
+    border: 1px solid var(--line); border-radius: 8px; background: var(--panel);
+    padding: 8px 12px; margin-bottom: 12px; }
+  .dlg-info.open { display: block; }
+  .dlg-info p { margin: 4px 0; }
   .chip { font-size: 11px; padding: 1px 8px; border-radius: 9px;
           border: 1px solid var(--line); color: var(--dim); white-space: nowrap; }
   .chip.open { color: var(--accent); border-color: #c3d4fb; background: var(--accent-soft); }
@@ -242,7 +256,7 @@
 
   /* standing projects surface (slice 8) */
   #projects { width: 820px; }
-  #projList { max-height: 58vh; overflow-y: auto; }
+  #peBody { max-height: 58vh; overflow-y: auto; }
   .proj-head { display: flex; align-items: baseline; gap: 10px;
                margin-bottom: 4px; flex-wrap: wrap; }
   .proj-head h3 { margin-bottom: 0; }
@@ -279,7 +293,7 @@
   <aside>
     <div class="actions">
       <button class="btn primary" onclick="openForm()">+ New milestone</button>
-      <button class="btn" onclick="openProjects()">Projects</button>
+      <button class="btn" onclick="openProjectCreate()" title="Declare a project">+ Project</button>
     </div>
     <div id="runs"></div>
   </aside>
@@ -288,14 +302,38 @@
 </main>
 
 <dialog id="form">
-  <h2>Launch milestone</h2>
+  <h2 class="dlgtitle">Launch milestone
+    <button class="infobtn" type="button" onclick="toggleDlgInfo('form')"
+      title="Field notes">i</button></h2>
+  <div class="dlg-info" id="form_info">
+    <p><b>Workspace</b> — must be the ROOT of an existing git repository
+      (<span class="mono">git init</span> it deliberately first): the run's
+      gate commits land there and state lives in
+      <span class="mono">&lt;workspace&gt;/.orchestrator/</span>. Previously
+      used paths appear in the dropdown.</p>
+    <p><b>Project</b> — a bound launch derives the workspace from the
+      project's work area (primary root) and carries the project's standing
+      safeguards; when a project declares several work areas a selector
+      appears.</p>
+    <p><b>Goal doc</b> — when a description doc path is set, the file's
+      content becomes the goal, snapshotted at launch.</p>
+    <p><b>Strategy profile</b> — governs the run's review depth.
+      <b>legacy</b> reproduces the pre-reform flow exactly; <b>strict</b> /
+      <b>light</b> set the doc-review threshold (what a finding must exceed
+      to open a fix cycle vs record as tracked debt). No seed is
+      pre-selected on purpose — the choice is explicit.</p>
+    <p><b>Acts</b> — empty = family default (claude: opus-4.8/max, codex:
+      gpt-5.5/xhigh); model options adapt to the agent; editable mid-run
+      from the run view. Reviews stay family-rotated regardless.</p>
+    <p><b>Verification</b> — left empty, the implementer reports the repo's
+      official suite and the driver arms the gates with it.</p>
+  </div>
   <div class="field"><label>Name</label>
     <input id="f_name" placeholder="my-feature"></div>
-  <div class="field"><label>Project binding (optional — launch against a
-      declared work area instead of a bare path)</label>
+  <div class="field"><label>Project (optional)</label>
     <div class="pathrow">
       <select id="f_project" onchange="onLaunchProject()"></select>
-      <select id="f_area" onchange="onLaunchArea()"></select>
+      <select id="f_area" onchange="onLaunchArea()" style="display:none"></select>
     </div>
     <div class="hint" id="f_resolved"></div></div>
   <div class="field"><label>Workspace directory *</label>
@@ -303,11 +341,7 @@
       <input id="f_ws" class="mono" list="dl_ws" placeholder="/path/to/project/work">
       <button class="btn" type="button" id="f_ws_browse" onclick="openPicker('dir','f_ws')">Browse…</button>
     </div>
-    <datalist id="dl_ws"></datalist>
-    <div class="hint">Must be the ROOT of an existing git repository
-      (<span class="mono">git init</span> it deliberately first) — the run's
-      gate commits live there. Previous workspaces appear in the dropdown.
-      State lives in <span class="mono">&lt;workspace&gt;/.orchestrator/</span>.</div></div>
+    <datalist id="dl_ws"></datalist></div>
   <div class="field"><label>Work description (goal) *</label>
     <textarea id="f_goal" placeholder="What should be built…"></textarea></div>
   <div class="field"><label>…or description doc path (.md)</label>
@@ -315,17 +349,11 @@
       <input id="f_doc" class="mono" list="dl_doc" placeholder="/path/to/DESCRIPTION.md">
       <button class="btn" type="button" onclick="openPicker('file','f_doc')">Browse…</button>
     </div>
-    <datalist id="dl_doc"></datalist>
-    <div class="hint">If set, the file's content becomes the goal.</div></div>
-  <div class="field"><label>Strategy profile * (how thoroughly this run is
-      reviewed — pick one, no default)</label>
+    <datalist id="dl_doc"></datalist></div>
+  <div class="field"><label>Strategy profile *</label>
     <select id="f_profile" onchange="onProfileChange()">
       <option value="" disabled selected>— choose: strict / light / legacy —</option></select>
-    <div class="hint" id="f_profile_hint">A profile now governs the run's
-      review depth. <b>legacy</b> reproduces the pre-reform flow exactly;
-      <b>strict</b> / <b>light</b> set the doc-review threshold (what a
-      finding must exceed to open a fix cycle vs record as tracked debt).
-      The choice is explicit on purpose — no seed is pre-selected.</div></div>
+    <div class="hint" id="f_profile_hint"></div></div>
   <div class="field"><label>Who leads each act (reviews stay family-rotated)</label>
     <div class="actgrid">
       <span></span><span class="acthead">agent</span>
@@ -359,18 +387,12 @@
     </div>
     <datalist id="dl_a_drafter"></datalist>
     <datalist id="dl_a_implementer"></datalist>
-    <datalist id="dl_a_fixer"></datalist>
-    <div class="hint">Options adapt to the agent: claude ids
-      (fable-5 / opus-4.8 / sonnet-5, efforts low→max) or the codex
-      catalog (gpt-5.5 …, efforts low→xhigh). Empty = family default
-      (claude: opus-4.8/max, codex: gpt-5.5/xhigh). Editable mid-run
-      from the run view.</div></div>
+    <datalist id="dl_a_fixer"></datalist></div>
   <div class="field">
     <button class="btn" type="button" id="f_more_btn"
       onclick="toggleMore()">More options ▾</button></div>
   <div id="f_more" style="display:none">
-  <div class="field"><label>Verification command (optional — the implementer
-      auto-discovers the suite when empty)</label>
+  <div class="field"><label>Verification command (optional)</label>
     <input id="f_verify" class="mono" placeholder="python3 -m unittest discover"></div>
   <div class="field"><label>Advanced config JSON (optional, merged over defaults)</label>
     <textarea id="f_cfg" class="mono" placeholder='{"max_fix_loops": 8}'></textarea></div>
@@ -487,29 +509,42 @@
   </div>
 </dialog>
 
-<dialog id="projects">
-  <h2>Projects — standing configuration</h2>
-  <div class="hint" style="margin-bottom:10px">Operator-owned ecosystems:
-    work areas (the roots runs execute against) and safeguards (standing
-    law shown to every bound worker). Configuration outlives runs; edits
-    bind the next launch or worker call.</div>
-  <div id="projError" style="color:var(--bad);font-size:12px;margin-bottom:8px"></div>
-  <div id="projList"></div>
-  <div class="card">
-    <h3>New project</h3>
-    <div class="wa-form">
-      <div class="pathrow">
-        <input id="np_slug" placeholder="slug * (e.g. life-prod)">
-        <input id="np_defaults" class="mono"
-          placeholder='defaults JSON object (optional)'>
-        <button class="btn primary" onclick="createProject()">Create</button>
-      </div>
-    </div>
-    <div class="hint">Declaring materializes the project's empty local KV
-      store; work areas and safeguards are added on its card above.</div>
+<dialog id="projedit">
+  <h2 class="dlgtitle"><span id="pe_title">Project</span>
+    <button class="infobtn" type="button" onclick="toggleDlgInfo('projedit')"
+      title="Field notes">i</button></h2>
+  <div class="dlg-info" id="projedit_info">
+    <p><b>Work areas</b> — the roots runs execute against: a primary root
+      (the git repo) plus optional read-only additional roots. Declaring
+      records pending v1; the first bound launch validates the real roots
+      and confirms ready v2.</p>
+    <p><b>Safeguards</b> — standing law rendered into every bound worker's
+      prompt. Version is operator intent: bump it on substance changes so
+      runs re-record the safeguard. Run-scoped amendments win on
+      conflict.</p>
+    <p><b>Defaults</b> — a JSON object merged beneath every bound launch of
+      this project. Configuration outlives runs; edits bind the next launch
+      or worker call.</p>
   </div>
+  <div id="projError" style="color:var(--bad);font-size:12px;margin-bottom:8px"></div>
+  <div id="peBody"></div>
   <div class="formrow"><span></span>
-    <button class="btn" onclick="document.getElementById('projects').close()">Close</button>
+    <button class="btn" onclick="document.getElementById('projedit').close()">Close</button>
+  </div>
+</dialog>
+
+<dialog id="projcreate">
+  <h2>New project</h2>
+  <div class="field"><label>Slug *</label>
+    <input id="pc_slug" placeholder="life-prod"></div>
+  <div class="field"><label>Defaults JSON (optional — merged beneath every
+      bound launch)</label>
+    <textarea id="pc_defaults" class="mono"
+      placeholder='{"docs_dir": "implementation/milestones/{slug}"}'></textarea></div>
+  <div class="formrow">
+    <span id="pc_error" style="color:var(--bad);font-size:12px;margin-right:auto"></span>
+    <button class="btn" onclick="document.getElementById('projcreate').close()">Cancel</button>
+    <button class="btn primary" onclick="createProject()">Create</button>
   </div>
 </dialog>
 
@@ -587,8 +622,17 @@ function groupRuns(runs) {
   }
   return byProject;
 }
-function orderedProjectKeys(byProject) {
-  const present = [...byProject.keys()].filter(k => k !== null);
+function presentProjectKeys() {
+  // Every project the sidebar must show: all DECLARED projects (even
+  // with zero runs — configuration is a first-class sidebar citizen)
+  // plus any project tag still carried by a run whose project was
+  // since deleted (its runs must not vanish into thin air).
+  const keys = projState.list.map(p => p.slug).filter(Boolean);
+  for (const k of groupRuns(lastRuns).keys())
+    if (k !== null && !keys.includes(k)) keys.push(k);
+  return keys;
+}
+function orderedProjectKeys(present) {
   const known = uiState.project_order.filter(k => present.includes(k));
   const fresh = present.filter(k => !known.includes(k));
   return known.concat(fresh);
@@ -598,6 +642,8 @@ function groupHeader(key, label, count, movable, atTop, atBottom) {
   const safeKey = esc(escJsSq(key));
   const buttons = movable
     ? `<span class="grpbtns">
+         <button class="grpbtn" title="Edit project"
+           onclick="event.stopPropagation(); openProjectEditor('${safeKey}')">&#9998;</button>
          <button class="grpbtn" ${atTop ? "disabled" : ""}
            onclick="event.stopPropagation(); moveProjectGroup('${safeKey}', -1)">&#9650;</button>
          <button class="grpbtn" ${atBottom ? "disabled" : ""}
@@ -613,21 +659,22 @@ function groupHeader(key, label, count, movable, atTop, atBottom) {
 }
 function renderRunsTree(runs) {
   const byProject = groupRuns(runs);
-  const realKeys = [...byProject.keys()].filter(k => k !== null);
+  const realKeys = presentProjectKeys();
   if (realKeys.length === 0) {
-    // No run currently carries a project tag: render exactly as before
-    // adopting Projects — no headers, no "Others" label, zero visual
-    // change for anyone who hasn't touched the feature.
+    // No declared project and no run carrying a project tag: render
+    // exactly as before adopting Projects — no headers, no "Others"
+    // label, zero visual change for anyone not using the feature.
     return runs.map(runRow).join("");
   }
-  const ordered = orderedProjectKeys(byProject);
+  const ordered = orderedProjectKeys(realKeys);
   let html = ordered.map((key, i) => {
     const runsInGroup = byProject.get(key) || [];
     const header = groupHeader(
       key, key, runsInGroup.length, true, i === 0, i === ordered.length - 1
     );
     if (uiState.collapsed.includes(key)) return header;
-    return header + runsInGroup.map(runRow).join("");
+    return header + (runsInGroup.map(runRow).join("")
+      || '<div class="grp-empty">no runs yet</div>');
   }).join("");
   const others = byProject.get(null) || [];
   if (others.length) {
@@ -658,7 +705,7 @@ function toggleGroupCollapse(key) {
   persistUiState({collapsed: uiState.collapsed});
 }
 function moveProjectGroup(key, dir) {
-  const ordered = orderedProjectKeys(groupRuns(lastRuns));
+  const ordered = orderedProjectKeys(presentProjectKeys());
   const i = ordered.indexOf(key);
   const j = i + dir;
   if (i === -1 || j < 0 || j >= ordered.length) return;
@@ -1406,21 +1453,17 @@ async function loadProfiles() {
   onProfileChange();
 }
 function onProfileChange() {
+  // Empty until a profile is picked (the standing explanation lives
+  // behind the dialog's (i)); a picked profile shows its decomposition
+  // — live feedback, not standing prose.
   const hint = document.getElementById("f_profile_hint");
   const p = launchProfiles.find(x => x.name ===
     document.getElementById("f_profile").value);
-  if (!p) {
-    hint.innerHTML = "A profile now governs the run's review depth." +
-      " <b>legacy</b> reproduces the pre-reform flow exactly; <b>strict</b>" +
-      " / <b>light</b> set the doc-review threshold. The choice is explicit" +
-      " on purpose — no seed is pre-selected.";
-    return;
-  }
+  if (!p) { hint.innerHTML = ""; return; }
   const dials = profileDials(p);
   hint.innerHTML =
     `<span class="mono">${esc(p.hash)}</span>${dials ? " · " + esc(dials) : ""}` +
-    (p.description ? `<br>${esc(p.description)}` : "") +
-    `<br><em>Recorded on the run; the interpreter that honors it lands in a later phase.</em>`;
+    (p.description ? `<br>${esc(p.description)}` : "");
 }
 /* The profile's dials, as one lay line — shared by the new-run selector
    and the runtime repoint dialog. */
@@ -1630,8 +1673,9 @@ async function submitForm() {
   };
   const binding = launchBinding();
   if (binding === undefined) {
-    err.textContent =
-      "select a work area for the project binding (or set it back to none)";
+    err.textContent = "complete the project binding: the project needs a "
+      + "declared work area (pick one when it offers several), or set the "
+      + "project back to none";
     return;
   }
   if (binding) {
@@ -1700,21 +1744,34 @@ async function loadLaunchProjects() {
   if (fault) document.getElementById("f_resolved").textContent = fault;
 }
 function onLaunchProject() {
+  // The work-area handle is DERIVED, not asked: a project with one
+  // declared area auto-binds to it; the selector only appears when the
+  // project genuinely offers a choice (several areas).
   const idx = document.getElementById("f_project").value;
   const area = document.getElementById("f_area");
   const p = idx === "" ? null : launchProjects[+idx];
-  area.innerHTML = !p ? "" :
+  const several = p && p.work_areas.length > 1;
+  area.innerHTML = !several ? "" :
     `<option value="">— work area —</option>` +
     p.work_areas.map((w, j) =>
       `<option value="${j}">${esc(w.record.name)} — ${esc(w.record.status)} v${w.record.version}</option>`
     ).join("");
-  area.style.display = p ? "" : "none";
+  area.style.display = several ? "" : "none";
   area.value = "";
   onLaunchArea();
 }
+function boundArea() {
+  // The work area the current selection resolves to, or null while the
+  // binding cannot resolve (no area declared / choice still pending).
+  const pi = document.getElementById("f_project").value;
+  if (pi === "") return null;
+  const p = launchProjects[+pi];
+  if (p.work_areas.length === 1) return p.work_areas[0];
+  const ai = document.getElementById("f_area").value;
+  return ai === "" ? null : p.work_areas[+ai];
+}
 function onLaunchArea() {
   const pi = document.getElementById("f_project").value;
-  const ai = document.getElementById("f_area").value;
   const out = document.getElementById("f_resolved");
   const bound = pi !== "";
   // The path mode's fields are untouched in path mode; in bound mode the
@@ -1724,21 +1781,26 @@ function onLaunchArea() {
   document.getElementById("f_ws_browse").disabled = bound;
   if (!bound) { out.textContent = ""; return; }
   const p = launchProjects[+pi];
-  const w = ai === "" ? null : p.work_areas[+ai];
+  if (!p.work_areas.length) {
+    out.textContent = `project “${p.slug}” has no work area yet — add one `
+      + "from its ✎ editor in the sidebar";
+    return;
+  }
+  const w = boundArea();
   out.textContent = !w
-    ? "select a work area — the run executes in its primary root"
+    ? "this project declares several work areas — pick the one to execute in"
     : `will execute in ${w.record.primary.path} — project “${p.slug}” / work area “${w.record.name}” (${w.record.status})`;
 }
 function launchBinding() {
   // null: path mode. undefined: incomplete binding (refuse client-side,
   // a form-completeness check, not validation). {project, work_area}:
-  // the two path-free handles of a bound launch.
+  // the two path-free handles of a bound launch — the area handle is
+  // derived (single area) or picked (several).
   const pi = document.getElementById("f_project").value;
   if (pi === "") return null;
-  const ai = document.getElementById("f_area").value;
-  if (ai === "") return undefined;
-  const p = launchProjects[+pi];
-  return {project: p.slug, work_area: p.work_areas[+ai].record.name};
+  const w = boundArea();
+  if (!w) return undefined;
+  return {project: launchProjects[+pi].slug, work_area: w.record.name};
 }
 
 /* ---- standing projects surface (slice 8): projects, work areas, and
@@ -1779,17 +1841,35 @@ function postJSON(path, value) {
     body: JSON.stringify(value),
   });
 }
-function openProjects() {
+let projEditSlug = null;
+function toggleDlgInfo(id) {
+  document.getElementById(id + "_info").classList.toggle("open");
+}
+function openProjectEditor(slug) {
+  projEditSlug = slug;
   document.getElementById("projError").textContent = "";
-  document.getElementById("projects").showModal();
+  document.getElementById("projedit").showModal();
   loadProjects();
 }
+function openProjectCreate() {
+  document.getElementById("pc_error").textContent = "";
+  document.getElementById("pc_slug").value = "";
+  document.getElementById("pc_defaults").value = "";
+  document.getElementById("projcreate").showModal();
+}
 async function loadProjects() {
+  // One loader feeds BOTH project surfaces: the sidebar tree (declared
+  // projects render even with zero runs) and the per-project editor.
   const err = document.getElementById("projError");
   try {
     const data = await api("/api/projects");
     projState.list = data.projects || [];
-  } catch (e) { err.textContent = e.message; return; }
+  } catch (e) {
+    if (err) err.textContent = e.message;
+    renderRunsTree_paint();
+    return;
+  }
+  renderRunsTree_paint();
   renderProjects();
 }
 function snapshotEdits(root) {
@@ -1869,9 +1949,9 @@ function policyRow(i, pol, j) {
 function projectCard(p, i) {
   if (p.error) {
     // Fail-closed per project: the broken store renders its reason
-    // token verbatim beside healthy projects, never repaired.
+    // token verbatim, never repaired.
     return `<div class="card">
-      <div class="proj-head"><h3>${esc(p.slug)}</h3>
+      <div class="proj-head">
         <span class="spacer"></span>
         <button class="btn danger" onclick="deleteProject(${i})">Delete</button>
       </div>
@@ -1880,7 +1960,7 @@ function projectCard(p, i) {
   }
   const key = waKey(p.slug);
   return `<div class="card">
-    <div class="proj-head"><h3>${esc(p.slug)}</h3>
+    <div class="proj-head">
       <span class="kv mono">defaults: ${esc(p.defaults !== undefined
         ? JSON.stringify(p.defaults) : "—")}</span>
       <span class="spacer"></span>
@@ -1919,27 +1999,36 @@ function projectCard(p, i) {
   </div>`;
 }
 function renderProjects() {
-  const dlg = document.getElementById("projects");
+  // Renders the ONE project the editor dialog is open on; a project
+  // deleted underneath (or a stale slug) closes the dialog instead of
+  // rendering a ghost.
+  const dlg = document.getElementById("projedit");
+  if (!dlg.open || projEditSlug === null) return;
+  const i = projState.list.findIndex(p => p.slug === projEditSlug);
+  if (i === -1) { dlg.close(); return; }
   const snap = snapshotEdits(dlg);
-  document.getElementById("projList").innerHTML =
-    projState.list.map((p, i) => projectCard(p, i)).join("")
-    || '<div class="amend-hint">no projects declared yet</div>';
+  document.getElementById("pe_title").textContent =
+    "Project — " + projEditSlug;
+  document.getElementById("peBody").innerHTML =
+    projectCard(projState.list[i], i);
   restoreEdits(snap);
 }
-function createProject() {
-  const err = document.getElementById("projError");
-  const slug = document.getElementById("np_slug").value.trim();
-  const defText = document.getElementById("np_defaults").value.trim();
+async function createProject() {
+  const err = document.getElementById("pc_error");
+  err.textContent = "";
+  const slug = document.getElementById("pc_slug").value.trim();
+  if (!slug) { err.textContent = "slug is required"; return; }
+  const defText = document.getElementById("pc_defaults").value.trim();
   const payload = {slug};
   if (defText) {
     try { payload.defaults = JSON.parse(defText); }
     catch (e) { err.textContent = "defaults is not valid JSON"; return; }
   }
-  projOp(async () => {
-    await postJSON("/api/projects", payload);
-    document.getElementById("np_slug").value = "";
-    document.getElementById("np_defaults").value = "";
-  });
+  try { await postJSON("/api/projects", payload); }
+  catch (e) { err.textContent = e.message; return; }  // token verbatim
+  document.getElementById("projcreate").close();
+  await loadProjects();
+  openProjectEditor(slug);  // straight into work areas / safeguards
 }
 function deleteProject(i) {
   const p = projState.list[i];
@@ -2115,6 +2204,7 @@ async function saveSgEditor() {
 }
 
 loadUiState().then(refreshRuns);
+loadProjects();  // the sidebar shows declared projects even with no runs
 setInterval(refreshRuns, 2000);
 </script>
 </body>

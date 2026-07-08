@@ -2045,10 +2045,15 @@ class TestPolicyAuthoring(ProjectsServiceTestCase):
         # Pre-existing markers stay intact (test_root_serves_panel).
         self.assertIn("impl roadmap", text)
         self.assertIn('id="runs"', text)
-        # The standing projects surface and its opener.
-        self.assertIn('id="projects"', text)
-        self.assertIn('id="projList"', text)
-        self.assertIn("openProjects()", text)
+        # The standing projects surface: the per-project editor (opened
+        # from the sidebar tree), the create dialog behind "+ Project",
+        # and the sidebar loader that shows run-less projects.
+        self.assertIn('id="projedit"', text)
+        self.assertIn('id="peBody"', text)
+        self.assertIn('id="projcreate"', text)
+        self.assertIn("openProjectEditor(", text)
+        self.assertIn("openProjectCreate()", text)
+        self.assertIn("presentProjectKeys", text)
         # The safeguard editor dialog.
         self.assertIn('id="sgeditor"', text)
         self.assertIn('id="sg_json"', text)
