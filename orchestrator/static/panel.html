@@ -1168,12 +1168,26 @@ async function refreshDetail() {
           <div class="unit-head"><span class="unit-name">${esc(u.unit)}</span>
             <span class="unit-right">${gitLink(u)}<span class="st ${esc(u.status)}">${esc(u.status)}${time}</span></span></div>
           <div class="chips">${draftChip(u.draft, u.unit)}${docChip(u)}${
-            [].concat(
-              (u.rounds || []).map(r => ({at: r.at || "", html: roundChip(r)})),
-              (u.seals || []).map(x => ({at: x.at || "", html: sealChip(x, u.unit)})),
-              (u.reclassify || []).map(e => ({at: e.at || "", html: reclassifyChip(e, u.unit)}))
-            ).sort((a, b) => a.at < b.at ? -1 : a.at > b.at ? 1 : 0)
-             .map(c => c.html).join("")}
+            (() => {
+              const evs = [].concat(
+                (u.rounds || []).map(r => ({at: r.at || "", html: roundChip(r)})),
+                (u.seals || []).map(x => ({at: x.at || "", html: sealChip(x, u.unit)}))
+              );
+              // A reclassify RUNS before the round/seal that raised its
+              // findings is RECORDED, so its raw timestamp sorts the debt
+              // chip in front of its own origin. Anchor it to the first
+              // round/seal recorded at-or-after it and sort it right
+              // BEHIND that chip ("~" outranks any timestamp character).
+              const marks = evs.map(e => e.at).sort();
+              const reclass = (u.reclassify || []).map(e => {
+                const anchor = marks.find(at => at >= (e.at || ""));
+                return {at: (anchor || e.at || "") + "~",
+                        html: reclassifyChip(e, u.unit)};
+              });
+              return evs.concat(reclass)
+                .sort((a, b) => a.at < b.at ? -1 : a.at > b.at ? 1 : 0)
+                .map(c => c.html).join("");
+            })()}
             ${u.unit === sum.current_unit && running ? workingChip(s) : ""}</div>
         </div>`;
       };
