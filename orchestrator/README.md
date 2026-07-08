@@ -172,6 +172,23 @@ For the milestone: one `skeleton` unit, then per slice a `slice_doc` and a
          commit; findings -> FIX LOOP -> verify -> full new attempt;
          both clean -> the wip commit is finalized as the GATE COMMIT.
 
+Under a reform strategy profile (any governing profile that is not the
+`legacy` compat artifact), doc-unit drafts additionally pass the question
+battery gate: the skeleton and each slice note must answer a fixed set of
+engineering questions (victim, machinery, consumers, cheaper alternative,
+cost; slice notes inherit those and answer the slice-scoped remainder) as
+structure with evidence citations — written into the document and
+mirrored in the contract JSON, where presence is machine-checked
+(`contracts.validate_battery`; a violation costs the worker's single
+repair retry). Reviews check presence AND substance (a hollow entry or
+evidence that does not support its answer is a finding) but never
+re-litigate the wording of an answered, evidenced entry. Reform reviewer
+findings also hard-require the `plain`/`example` lay mirror. Legacy and
+profile-less runs see none of this — their prompts and worker validation
+stay byte-identical to the pre-reform driver (the one global change is
+that `battery` is now a reserved output key on doc-draft kinds, so a
+project contract extension may no longer claim it).
+
 ### Review/fix separation (whoever detects never fixes)
 
 Every review — codex round, claude round, seal half, delta review — is

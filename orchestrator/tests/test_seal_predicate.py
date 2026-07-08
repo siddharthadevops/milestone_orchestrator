@@ -7,13 +7,14 @@ import os
 import tempfile
 import unittest
 
+from orchestrator import contracts
 from orchestrator import driver as drv
 from orchestrator import profiles
 from orchestrator import runners
 from orchestrator import state as st
 
 from orchestrator.tests.test_driver_mock import (
-    make_config, init_state, step, ok, report, finding,
+    make_config, init_state, step, ok, report, finding, battery_entries,
 )
 
 
@@ -106,21 +107,27 @@ class SealPredicateDriverTest(unittest.TestCase):
                 break
         return st.load(path), driver
 
-    def _skeleton_clean_no_seal_halves(self):
+    def _skeleton_clean_no_seal_halves(self, battery=None):
         # draft + a clean review per family; NO seal_half steps (a reform
-        # unit seals by predicate).
+        # unit seals by predicate). A reform draft carries the answered
+        # question battery; a legacy draft (battery=None) carries none —
+        # faithful to pre-reform workers.
+        draft = ok("draft_skeleton", artifact="docs/skeleton.md",
+                   slices=[{"id": 1, "title": "Core"}])
+        if battery:
+            draft["battery"] = battery
         return [
-            step("draft_skeleton",
-                 ok("draft_skeleton", artifact="docs/skeleton.md",
-                    slices=[{"id": 1, "title": "Core"}]),
-                 family="codex"),
+            step("draft_skeleton", draft, family="codex"),
             step("review_round", report("review_round"), family="codex"),
             step("review_round", report("review_round"), family="claude"),
         ]
 
     def test_reform_skeleton_seals_by_predicate(self):
-        state, _ = self._drive(self._config("strict"),
-                               self._skeleton_clean_no_seal_halves())
+        state, _ = self._drive(
+            self._config("strict"),
+            self._skeleton_clean_no_seal_halves(
+                battery=battery_entries(
+                    contracts.BATTERY_QUESTIONS_SKELETON)))
         sk = state["units"][0]
         self.assertEqual(sk["status"], st.U_SEALED)
         # Sealed with NO seal-half findings recorded, and a seal_satisfied

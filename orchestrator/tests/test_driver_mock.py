@@ -115,11 +115,22 @@ def report(kind, findings=()):
     return ok(kind, findings=list(findings))
 
 
-def finding(fid, summary, severity="P3", contests=None):
-    f = {"id": fid, "severity": severity, "summary": summary}
+def finding(fid, summary, severity="P3", contests=None, plain=None,
+            example=None):
+    # Every test finding carries the lay mirror by default: optional in
+    # the base contract, hard-required under a reform profile.
+    f = {"id": fid, "severity": severity, "summary": summary,
+         "plain": plain or ("plain: %s" % summary),
+         "example": example or ("example: %s" % summary)}
     if contests is not None:
         f["contests"] = contests
     return f
+
+
+def battery_entries(ids):
+    """A valid battery payload for reform-profile doc drafts."""
+    return [{"question": q, "answer": "answered: %s" % q,
+             "evidence": ["docs/x.md:1"]} for q in ids]
 
 
 def triaged(fid, disposition, summary="triaged finding", severity="P3",

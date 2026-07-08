@@ -11,6 +11,7 @@ unaffected. A refused verdict routes to the normal fix flow.
 import tempfile
 import unittest
 
+from orchestrator import contracts
 from orchestrator import driver as drv
 from orchestrator import profiles
 from orchestrator import runners
@@ -18,6 +19,7 @@ from orchestrator import state as st
 
 from orchestrator.tests.test_driver_mock import (
     DriverTestCase,
+    battery_entries,
     finding,
     init_state,
     make_config,
@@ -30,6 +32,15 @@ from orchestrator.tests.test_driver_mock import (
 
 def draft_step():
     return skeleton_script()[0]
+
+
+def reform_draft_step():
+    """draft_step() plus the answered question battery a reform profile
+    hard-requires on doc drafts (legacy/profile-less drafts stay bare)."""
+    s = draft_step()
+    s["response"]["battery"] = battery_entries(
+        contracts.BATTERY_QUESTIONS_SKELETON)
+    return s
 
 
 def reclassify(defer_ok, family, reason="verified", risk=None):
@@ -114,7 +125,7 @@ class TestP3Debt(DriverTestCase):
             path = init_state(
                 ws, make_config(p3_reclassify_debt=True, profile=strict))
             mock = runners.MockRunner([
-                draft_step(),
+                reform_draft_step(),
                 step("review_round",
                      report("review_round",
                             [finding("F1", "minor phrasing", severity="P2")]),

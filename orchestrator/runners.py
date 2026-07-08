@@ -378,7 +378,8 @@ REPAIR_SUFFIX = (
 
 
 def call_worker(runner, family, prompt, kind, workspace,
-                model=None, effort=None, extensions=None, roots=None):
+                model=None, effort=None, extensions=None, roots=None,
+                validate_opts=None):
     """Run the CLI and return (validated_output, RunnerResult).
 
     Exactly one repair retry on contract violation; then
@@ -393,17 +394,24 @@ def call_worker(runner, family, prompt, kind, workspace,
     extension layer's policy-config and operational faults are NOT part of
     the repairable exception family and propagate without a retry (they
     are never the worker's fault).
+
+    validate_opts (optional): extra validation kwargs threaded into both
+    validation paths (require_plain, battery_questions — the reform's
+    plain/example hard-require and question battery). A battery/plain
+    violation is worker-repairable and costs the single repair retry,
+    exactly like a malformed base contract.
     """
+    opts = dict(validate_opts or {})
     if extensions:
         from . import verifiers
 
         def _validate(obj):
             return verifiers.validate_merged_output(
-                obj, kind, extensions, roots
+                obj, kind, extensions, roots, **opts
             )
     else:
         def _validate(obj):
-            return contracts.validate_worker_output(obj, kind)
+            return contracts.validate_worker_output(obj, kind, **opts)
 
     result = runner.call(family, prompt, workspace, model=model, effort=effort)
     try:

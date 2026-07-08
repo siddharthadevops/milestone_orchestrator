@@ -1,22 +1,30 @@
 # Build-driven review and per-run strategy profiles
 
 Status: AS-BUILT (core landed on main, overnight build 2026-07-08;
-1143-test suite green; profile-less runs bit-identical, gate-proven).
+phase 7 completed 2026-07-08 on the battery-gate branch; 1195-test
+suite green; profile-less runs bit-identical, gate-proven).
 Landed: phases 1 (profile store + wiring + panel arm), 2 (interpreter +
 equivalence gate), 3a/3b (dials differentiate; doc gate widened to
 P2/P3 under reform profiles), 4 (gap contract + prompts +
-reopen_for_repair + routing, e2e-proven), 5 (seal predicate), 7-partial
-(two-register templates). REALIZATION CHOICES adopted into this spec
-(operator-vetoable, design concurrence recorded): the predicate's stale
-fallback is the proven double-seal halves (a half IS a whole-artifact
-look — semantically equivalent to the pure rounds-return); profile
-dials win over explicit config values (clone-to-vary; anchored metrics
-never lie); the mandatory profile choice binds the PANEL, the machine
-API stays permissive (harness needs profile-less runs); repair reseals
-are always full double (the light composition stays a future dial).
+reopen_for_repair + routing, e2e-proven), 5 (seal predicate), 7
+(two-register templates; the structured QUESTION BATTERY as a doc-draft
+contract gate — skeleton answers the full battery, slice notes answer
+the slice-scoped remainder, presence/shape machine-checked with the
+worker's single repair retry, substance is review work, answered
+questions' wording is settled in review/seal prompts; plain/example
+hard-required on every reform finding). REALIZATION CHOICES adopted
+into this spec (operator-vetoable, design concurrence recorded): the
+predicate's stale fallback is the proven double-seal halves (a half IS
+a whole-artifact look — semantically equivalent to the pure
+rounds-return); profile dials win over explicit config values
+(clone-to-vary; anchored metrics never lie); the mandatory profile
+choice binds the PANEL, the machine API stays permissive (harness needs
+profile-less runs); repair reseals are always full double (the light
+composition stays a future dial); the battery is NOT a dial — every
+reform profile carries it, and it rides the contract JSON (mirroring
+the doc's Question Battery section), never prose parsing.
 PARKED (independent, unblocked): phase 6 meter, phase 3c
-parallel/fuser/battery fan-out, phase 7 rest (plain/example
-hard-require + structured battery).
+parallel/fuser/battery fan-out.
 
 Original status: non-canonical brainstorming — operator-driven need
 (2026-07-07).

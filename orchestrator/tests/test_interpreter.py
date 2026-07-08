@@ -154,6 +154,58 @@ class DocDeferScopeTest(unittest.TestCase):
         self.assertFalse(contracts.all_p3(p2p3))
 
 
+class ReformActiveTest(unittest.TestCase):
+    """The single reform predicate: ON for every reform profile, OFF for
+    the `legacy` compatibility artifact and for profile-less runs."""
+
+    def test_reform_profiles_are_active(self):
+        for name in ("strict", "light"):
+            state = _state({"profile": profiles.SEEDS[name]["profile"]})
+            self.assertTrue(it.reform_active(state))
+
+    def test_legacy_and_profileless_are_inactive(self):
+        self.assertFalse(it.reform_active(_state({})))
+        legacy = _state({"profile": profiles.SEEDS["legacy"]["profile"]})
+        self.assertFalse(it.reform_active(legacy))
+
+    def test_gap_and_seal_predicates_delegate(self):
+        # gap_semantics and seal_predicate are reform_active by other
+        # names; the three must never diverge.
+        for cfg in ({},
+                    {"profile": profiles.SEEDS["legacy"]["profile"]},
+                    {"profile": profiles.SEEDS["strict"]["profile"]},
+                    {"profile": profiles.SEEDS["light"]["profile"]}):
+            state = _state(cfg)
+            self.assertEqual(it.gap_semantics(state),
+                             it.reform_active(state))
+            self.assertEqual(it.seal_predicate(state),
+                             it.reform_active(state))
+
+
+class BatteryQuestionsTest(unittest.TestCase):
+    """The question battery (spec §4) is a DOC gate every reform profile
+    carries — not a dial: strict and light ask the same questions;
+    implementation units and non-reform runs carry none."""
+
+    def test_reform_doc_units_carry_the_battery(self):
+        for name in ("strict", "light"):
+            state = _state({"profile": profiles.SEEDS[name]["profile"]})
+            self.assertEqual(it.battery_questions(state, "skeleton"),
+                             contracts.BATTERY_QUESTIONS_SKELETON)
+            self.assertEqual(it.battery_questions(state, "slice_doc"),
+                             contracts.BATTERY_QUESTIONS_SLICE_NOTE)
+
+    def test_impl_units_have_no_battery(self):
+        strict = _state({"profile": profiles.SEEDS["strict"]["profile"]})
+        self.assertIsNone(it.battery_questions(strict, "slice_impl"))
+
+    def test_legacy_and_profileless_have_none(self):
+        legacy = _state({"profile": profiles.SEEDS["legacy"]["profile"]})
+        for kind in ("skeleton", "slice_doc", "slice_impl"):
+            self.assertIsNone(it.battery_questions(_state({}), kind))
+            self.assertIsNone(it.battery_questions(legacy, kind))
+
+
 class DocRegisterTest(unittest.TestCase):
     """The doc-authoring register (spec §6) and the plain-mirror hard-
     require flag (spec §7), read from the governing profile."""

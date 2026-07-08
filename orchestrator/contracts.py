@@ -131,11 +131,14 @@ def validate_slices(slices, ctx):
     return slices
 
 
-def validate_report_finding(finding, ctx):
+def validate_report_finding(finding, ctx, require_plain=False):
     """A reviewer finding: id/severity/summary, NO disposition (reviewers
     do not triage), optional `contests` referencing an adjudicated
     rejection — then new_evidence is mandatory. The referenced id's
-    existence is validated by the driver against the milestone registry."""
+    existence is validated by the driver against the milestone registry.
+    require_plain: reform runs hard-require the plain/example lay mirror
+    on every finding (spec §7); legacy/profile-less runs keep the fields
+    optional (workers spawned before they existed must keep validating)."""
     if not isinstance(finding, dict):
         raise ContractError("%s: finding must be an object" % ctx)
     _require(finding, "id", str, ctx)
@@ -158,6 +161,17 @@ def validate_report_finding(finding, ctx):
             "%s: example must stay one minimal concrete scenario "
             "(<=500 chars)" % ctx
         )
+    if require_plain:
+        if not (plain and plain.strip()):
+            raise ContractError(
+                "%s: missing or empty 'plain' — this run REQUIRES both "
+                "'plain' and 'example' on every finding" % ctx
+            )
+        if not (example and example.strip()):
+            raise ContractError(
+                "%s: missing or empty 'example' — this run REQUIRES both "
+                "'plain' and 'example' on every finding" % ctx
+            )
     if finding.get("disposition") is not None:
         raise ContractError(
             "%s: reviewer findings carry no disposition (whoever detects "
@@ -285,8 +299,97 @@ GAP_ELIGIBLE_KINDS = (
 )
 
 
-def validate_worker_output(obj, kind):
+# The engineering question battery (build-driven review reform §4): under
+# a reform profile every DOC draft answers a fixed set of engineering
+# questions as STRUCTURE — one entry per question with its answer and
+# evidence citations — mirrored in the contract JSON. The skeleton
+# carries the milestone-level battery; a slice note inherits it and
+# answers only the slice-scoped remainder.
+BATTERY_QUESTIONS_SKELETON = (
+    "victim", "machinery", "consumers", "cheaper_alternative", "cost",
+)
+BATTERY_QUESTIONS_SLICE_NOTE = (
+    "consumers_touched", "pinned_facts", "verification", "reuse_posture",
+)
+BATTERY_ANSWER_CLIP = 2000
+BATTERY_EVIDENCE_CLIP = 300
+
+
+def validate_battery(battery, required_questions, ctx):
+    """Validate a doc draft's structured question battery (reform §4).
+
+    Presence and SHAPE are machine-checked here: every required question
+    answered exactly once (order free), each with a non-empty answer and
+    at least one non-empty evidence citation. SUBSTANCE — does the cited
+    evidence exist and say what the answer claims — is review work, never
+    the validator's; the project-concept reuse-audit contract (enumerated
+    entries with file:line evidence, machine-checked for presence) is the
+    prototype this form generalizes."""
+    if not isinstance(battery, list):
+        raise ContractError(
+            "%s.battery: must be a list of entry objects" % ctx
+        )
+    seen = set()
+    for i, entry in enumerate(battery):
+        ectx = "%s.battery[%d]" % (ctx, i)
+        if not isinstance(entry, dict):
+            raise ContractError("%s: entry must be an object" % ectx)
+        question = _require(entry, "question", str, ectx)
+        if question not in required_questions:
+            raise ContractError(
+                "%s: question %r is not one of the required questions %s"
+                % (ectx, question, list(required_questions))
+            )
+        if question in seen:
+            raise ContractError(
+                "%s: duplicate entry for question %r (answer each "
+                "question exactly once)" % (ectx, question)
+            )
+        seen.add(question)
+        answer = _require(entry, "answer", str, ectx)
+        if not answer.strip():
+            raise ContractError(
+                "%s: answer must be a non-empty string" % ectx
+            )
+        if len(answer) > BATTERY_ANSWER_CLIP:
+            raise ContractError(
+                "%s: answer exceeds %d chars — answer as structure, not "
+                "prose" % (ectx, BATTERY_ANSWER_CLIP)
+            )
+        evidence = _require(entry, "evidence", list, ectx)
+        if not evidence:
+            raise ContractError(
+                "%s: evidence must be a non-empty list of citations" % ectx
+            )
+        for j, cite in enumerate(evidence):
+            if not isinstance(cite, str) or not cite.strip():
+                raise ContractError(
+                    "%s.evidence[%d]: each citation must be a non-empty "
+                    "string" % (ectx, j)
+                )
+            if len(cite) > BATTERY_EVIDENCE_CLIP:
+                raise ContractError(
+                    "%s.evidence[%d]: citation exceeds %d chars"
+                    % (ectx, j, BATTERY_EVIDENCE_CLIP)
+                )
+    missing = [q for q in required_questions if q not in seen]
+    if missing:
+        raise ContractError(
+            "%s.battery: missing required question(s) %s (every required "
+            "question must be answered)" % (ctx, missing)
+        )
+    return battery
+
+
+def validate_worker_output(obj, kind, require_plain=False,
+                           battery_questions=None):
     """Validate the full worker JSON output for a call of `kind`.
+
+    require_plain: reform runs hard-require the plain/example lay mirror
+    on every reviewer finding. battery_questions: when non-None, a doc
+    draft (skeleton/slice note) must carry a `battery` answering exactly
+    these question ids (reform §4). Both checks run only on `ok` outputs
+    — blocked and gap outputs are exempt (a gap finishes nothing).
 
     Returns the object unchanged on success; raises ContractError otherwise.
     """
@@ -336,7 +439,7 @@ def validate_worker_output(obj, kind):
         for i, g in enumerate(gaps):
             validate_gap(g, "%s.gaps[%d]" % (ctx, i))
         # A gap carries NO artifact claim — nothing was finished.
-        for claim in ("artifact", "files_changed", "slices"):
+        for claim in ("artifact", "files_changed", "slices", "battery"):
             if obj.get(claim):
                 raise ContractError(
                     "%s: a gap response must not also claim %r "
@@ -350,8 +453,14 @@ def validate_worker_output(obj, kind):
         if not slices:
             raise ContractError("%s: skeleton must propose at least one slice" % ctx)
         validate_slices(slices, "%s.slices" % ctx)
+        if battery_questions is not None:
+            _require(obj, "battery", list, ctx)
+            validate_battery(obj["battery"], battery_questions, ctx)
     elif kind == KIND_DRAFT_SLICE_NOTE:
         _require(obj, "artifact", str, ctx)
+        if battery_questions is not None:
+            _require(obj, "battery", list, ctx)
+            validate_battery(obj["battery"], battery_questions, ctx)
     elif kind == KIND_IMPLEMENT:
         _require(obj, "files_changed", list, ctx)
         if obj.get("suite_command") is not None:
@@ -374,7 +483,9 @@ def validate_worker_output(obj, kind):
     elif kind in REPORT_KINDS:
         findings = _require(obj, "findings", list, ctx)
         for i, f in enumerate(findings):
-            validate_report_finding(f, "%s.findings[%d]" % (ctx, i))
+            validate_report_finding(
+                f, "%s.findings[%d]" % (ctx, i), require_plain=require_plain
+            )
         _assert_unique_finding_ids(findings, ctx)
         if obj.get("files_changed"):
             raise ContractError(
@@ -417,8 +528,11 @@ COMMON_OUTPUT_KEYS = frozenset(
     {"status", "kind", "blocked_reason", "notes", "gaps"})
 
 KIND_OUTPUT_KEYS = {
-    KIND_DRAFT_SKELETON: frozenset({"artifact", "slices"}),
-    KIND_DRAFT_SLICE_NOTE: frozenset({"artifact"}),
+    # Doc drafts reserve "battery" even though only reform runs require
+    # it: a project contract extension must never collide with the
+    # question battery's output field.
+    KIND_DRAFT_SKELETON: frozenset({"artifact", "slices", "battery"}),
+    KIND_DRAFT_SLICE_NOTE: frozenset({"artifact", "battery"}),
     KIND_IMPLEMENT: frozenset({"files_changed", "suite_command"}),
     KIND_REVIEW_ROUND: frozenset({"findings", "files_changed"}),
     KIND_DELTA_REVIEW: frozenset({"findings", "files_changed"}),

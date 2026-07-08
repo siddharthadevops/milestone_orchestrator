@@ -629,6 +629,106 @@ TWO_REGISTER_BLOCK = (
 )
 
 
+# One-line description per question-battery id (reform §4). Rendered
+# into the drafter's battery block; the ids themselves come from
+# contracts.BATTERY_QUESTIONS_* (the interpreter picks the set per unit
+# kind).
+BATTERY_QUESTION_DESCRIPTIONS = {
+    "victim": "who is the victim without this — the concrete person or "
+              "system that suffers if it is not built",
+    "machinery": "what new machinery this introduces and why it must "
+                 "exist",
+    "consumers": "who consumes it — VERIFIED against real code "
+                 "(file:line), never assumed",
+    "cheaper_alternative": "what cheaper alternative — reuse, extension, "
+                           "documentation, or doing nothing — was "
+                           "rejected and why",
+    "cost": "what it costs: build, migration, and maintenance",
+    "consumers_touched": "which consumers this slice touches — VERIFIED "
+                         "against real code (file:line), never assumed",
+    "pinned_facts": "the facts where ANY deviation is a bug — cite where "
+                    "each fact is pinned",
+    "verification": "how this slice's claims are verified — the tests or "
+                    "checks that pin them",
+    "reuse_posture": "what was checked, what is adopted, and why "
+                     "anything new is new (checked / adopted / "
+                     "new-with-why)",
+}
+
+
+def _battery_block(ids, unit_kind):
+    """Drafter instruction for the structured question battery (reform
+    §4). Added ONLY under a reform profile — legacy and profile-less
+    drafters never see it, so their prompts stay byte-identical."""
+    lines = [
+        "QUESTION BATTERY (structured gate; mandatory in this run)",
+        "Answer the engineering questions below as STRUCTURE, not prose:",
+        "one entry per question, each with at least one evidence citation",
+        "(a file:line, or the goal/skeleton section that pins it).",
+        "Evidence is VERIFIED, never assumed: read what you cite; the",
+        "citation must actually say what you claim.",
+    ]
+    for qid in ids:
+        lines.append(
+            "  - %s: %s" % (qid, BATTERY_QUESTION_DESCRIPTIONS[qid])
+        )
+    if unit_kind == "skeleton":
+        lines += [
+            "Write the answers into the skeleton document as a",
+            "\"Question Battery\" section (one row per question with its",
+            "evidence).",
+        ]
+    else:
+        lines += [
+            "Write the answers into the slice note as a \"Question",
+            "Battery\" section (one row per question with its evidence),",
+            "and state there that the skeleton's battery is INHERITED —",
+            "do NOT re-answer it; these questions are the slice-scoped",
+            "remainder.",
+        ]
+    lines += [
+        "An unanswered or unevidenced question is a review finding; the",
+        "WORDING of an answered, evidenced entry is settled — reviews",
+        "check presence and substance, not prose.",
+    ]
+    return "\n".join(lines) + "\n\n"
+
+
+def _battery_contract_block(ids):
+    """The battery's JSON mirror, rendered immediately before the output
+    contract so the required shape reads as part of it."""
+    return (
+        "BATTERY OUTPUT (mandatory in this run):\n"
+        "Your JSON output must ALSO carry:\n"
+        '  "battery": [\n'
+        '    {"question": "<id>", "answer": "<the answer>",\n'
+        '     "evidence": ["<file:line or pinned-section citation>",\n'
+        "                  ...]},\n"
+        "    ...\n"
+        "  ]\n"
+        "with EXACTLY these question ids (each once, non-empty answer, at\n"
+        "least one evidence entry): %s.\n\n" % ", ".join(ids)
+    )
+
+
+def _battery_review_block(ids):
+    """Reviewer half of the battery gate (reform §4): presence and
+    substance are findings; the prose of an answered question is
+    settled."""
+    return (
+        "QUESTION BATTERY (structured gate)\n"
+        "The artifact must carry an answered Question Battery section\n"
+        "covering: %s.\n" % ", ".join(ids)
+        + "Check PRESENCE and SUBSTANCE: a missing, unanswered, or hollow\n"
+        "entry is a finding; evidence that does not exist or does not\n"
+        "support its answer is a finding. An answered, evidenced entry\n"
+        "is SETTLED as to its wording — do not file findings that merely\n"
+        "re-phrase or polish the prose of an answered question;\n"
+        "re-litigating answered questions is exactly the churn this gate\n"
+        "removes. Substance failures keep their real severity.\n\n"
+    )
+
+
 def _gap_block(targets_desc):
     """The stop-report-repair-resume instruction for a builder (draft/
     implement). Added ONLY when a reform profile governs the run — legacy
@@ -664,7 +764,7 @@ def _gap_block(targets_desc):
 def build_draft_skeleton(family, workspace, goal, amendments=None,
                          artifact_path="docs/skeleton.md",
                          project_context=None, gap_enabled=False,
-                         two_register=False):
+                         two_register=False, battery=None):
     return (
         _header(contracts.KIND_DRAFT_SKELETON, family, workspace)
         + "\nTASK: draft the milestone skeleton for this goal.\n"
@@ -676,6 +776,7 @@ def build_draft_skeleton(family, workspace, goal, amendments=None,
         "a short table of planned slices. Keep it thin: intent and\n"
         "contracts, no implementation detail.\n\n"
         + (TWO_REGISTER_BLOCK if two_register else "")
+        + (_battery_block(battery, "skeleton") if battery else "")
         + SKELETON_SCOPE_BLOCK
         + ALTITUDE_BLOCK
         + REUSE_GATE_BLOCK
@@ -685,6 +786,7 @@ def build_draft_skeleton(family, workspace, goal, amendments=None,
         + _access_block(edit_allowed=True)
         + "\n"
         + (_gap_block(GAP_TARGETS_SKELETON) if gap_enabled else "")
+        + (_battery_contract_block(battery) if battery else "")
         + contracts.CONTRACT_TEXT
     )
 
@@ -692,7 +794,7 @@ def build_draft_skeleton(family, workspace, goal, amendments=None,
 def build_draft_slice_note(family, workspace, goal, slice_info, skeleton_path,
                            amendments=None, note_path=None,
                            project_context=None, gap_enabled=False,
-                           two_register=False):
+                           two_register=False, battery=None):
     return (
         _header(contracts.KIND_DRAFT_SLICE_NOTE, family, workspace)
         + "\nTASK: draft the slice note for slice %d (%s).\n"
@@ -707,6 +809,7 @@ def build_draft_slice_note(family, workspace, goal, slice_info, skeleton_path,
         "acceptance criteria, risks, and reuse posture. State WHAT must be\n"
         "observably true, not HOW code will do it.\n\n"
         + (TWO_REGISTER_BLOCK if two_register else "")
+        + (_battery_block(battery, "slice_doc") if battery else "")
         + SLICE_SIZING_LINE
         + ALTITUDE_BLOCK
         + REUSE_GATE_BLOCK
@@ -716,6 +819,7 @@ def build_draft_slice_note(family, workspace, goal, slice_info, skeleton_path,
         + _access_block(edit_allowed=True)
         + "\n"
         + (_gap_block(GAP_TARGETS_SLICE_NOTE) if gap_enabled else "")
+        + (_battery_contract_block(battery) if battery else "")
         + contracts.CONTRACT_TEXT
     )
 
@@ -761,7 +865,8 @@ def build_implement(family, workspace, goal, slice_info, note_path, verification
 
 def build_review_round(family, workspace, goal, unit_desc, artifact, registry,
                        unit_kind=None, governing=None, amendments=None,
-                       verified_suite=None, project_context=None):
+                       verified_suite=None, project_context=None,
+                       battery=None):
     return (
         _header(contracts.KIND_REVIEW_ROUND, family, workspace)
         + "\nTASK: full review round of %s. REPORT ONLY.\n" % unit_desc
@@ -776,6 +881,7 @@ def build_review_round(family, workspace, goal, unit_desc, artifact, registry,
         "dissent.\n\n"
         + _verified_suite_block(verified_suite, unit_kind)
         + _review_quality_block(unit_kind)
+        + (_battery_review_block(battery) if battery else "")
         + _registry_block(registry)
         + "\n"
         + _access_block(edit_allowed=False)
@@ -820,7 +926,8 @@ def build_delta_review(family, workspace, goal, unit_desc, diff_text, registry,
 
 def build_seal_half(family, workspace, goal, unit_desc, artifact, registry,
                     unit_kind=None, governing=None, amendments=None,
-                    verified_suite=None, project_context=None):
+                    verified_suite=None, project_context=None,
+                    battery=None):
     return (
         _header(contracts.KIND_SEAL_HALF, family, workspace)
         + "\nTASK: independent final seal review of %s. REPORT ONLY.\n"
@@ -836,6 +943,7 @@ def build_seal_half(family, workspace, goal, unit_desc, artifact, registry,
         + "You fix nothing and triage nothing.\n\n"
         + _verified_suite_block(verified_suite, unit_kind)
         + _review_quality_block(unit_kind)
+        + (_battery_review_block(battery) if battery else "")
         + _registry_block(registry)
         + "\n"
         + _access_block(edit_allowed=False)

@@ -479,7 +479,8 @@ def _run_check(check, entries, ext, roots, ctx):
         _run_dir_listing_matches(check, entries, ext, roots, fctx)
 
 
-def validate_merged_output(obj, kind, extensions, roots):
+def validate_merged_output(obj, kind, extensions, roots,
+                           require_plain=False, battery_questions=None):
     """Validate a worker output against the base kind contract PLUS the
     in-scope compiled extensions.
 
@@ -488,7 +489,10 @@ def validate_merged_output(obj, kind, extensions, roots):
     so call_worker's single repair retry applies unchanged. A validly
     blocked output is exempt from extension enforcement (it produced no
     artifact to audit); with no extensions the validation is exactly the
-    base one.
+    base one. require_plain/battery_questions (the reform's plain/example
+    hard-require and question battery) ride through to every base
+    validation call — including the blocked early path, harmless there,
+    keeping one shape.
     """
     extensions = list(extensions or [])
     # Output-independent config sanity first: a broken merge is the
@@ -502,11 +506,17 @@ def validate_merged_output(obj, kind, extensions, roots):
             )
     _require_distinct_fields(extensions)
     if isinstance(obj, dict) and obj.get("status") == "blocked":
-        contracts.validate_worker_output(obj, kind)
+        contracts.validate_worker_output(
+            obj, kind, require_plain=require_plain,
+            battery_questions=battery_questions,
+        )
         return obj
     if extensions:
         _preflight_operator_roots(extensions, roots)
-    contracts.validate_worker_output(obj, kind)
+    contracts.validate_worker_output(
+        obj, kind, require_plain=require_plain,
+        battery_questions=battery_questions,
+    )
     if not extensions:
         return obj
     ctx = "worker[%s]" % kind

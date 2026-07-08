@@ -801,13 +801,15 @@ class Driver(object):
             pass
 
     def _call(self, family, prompt, kind, raw_name, model=None, effort=None,
-              extensions=None, roots=None):
+              extensions=None, roots=None, validate_opts=None):
         """Validated worker call; on protocol/runner failure, fail the run
         with the explanation recorded, then re-raise as StopStep.
 
         extensions/roots: the in-scope compiled project contract
         extensions and the run's grant universe (_project_prompt_inputs).
-        Absent, validation is exactly the base kind contract."""
+        Absent, validation is exactly the base kind contract.
+        validate_opts: extra validation kwargs (require_plain,
+        battery_questions) threaded into runners.call_worker."""
         dm, de = self._family_defaults(family)
         model = model or dm
         effort = effort or de
@@ -822,6 +824,7 @@ class Driver(object):
                     self.runner, family, prompt, kind, self.workspace,
                     model=model, effort=effort,
                     extensions=extensions, roots=roots,
+                    validate_opts=validate_opts,
                 )
             except verifiers.VerifierError as exc:
                 # Slice 4's non-repairable family (the operator's policy or
@@ -1018,14 +1021,18 @@ class Driver(object):
         # resume); legacy/profile-less builders never see it. A profile
         # asking for the lay+hard-table register gets the two-register
         # document instruction (spec §6); others keep the dense register.
+        # Doc drafts under a reform profile additionally answer the
+        # structured question battery (spec §4) — prompted, mirrored in
+        # the contract JSON, and machine-checked for presence.
         gap_enabled = interpreter.gap_semantics(self.state)
         two_register = interpreter.doc_register(self.state) == "lay+hard-table"
+        battery = interpreter.battery_questions(self.state, unit["kind"])
         if unit["kind"] == st.UNIT_SKELETON:
             prompt = prompts.build_draft_skeleton(
                 family, self.workspace, goal, amendments=amendments,
                 artifact_path=ledgers.skeleton_path(self.state),
                 project_context=project_context, gap_enabled=gap_enabled,
-                two_register=two_register,
+                two_register=two_register, battery=battery,
             )
         elif unit["kind"] == st.UNIT_SLICE_DOC:
             sl = self._slice_info(unit["slice_id"])
@@ -1036,7 +1043,7 @@ class Driver(object):
                     self.state, unit["slice_id"]
                 ),
                 project_context=project_context, gap_enabled=gap_enabled,
-                two_register=two_register,
+                two_register=two_register, battery=battery,
             )
         else:
             sl = self._slice_info(unit["slice_id"])
@@ -1053,6 +1060,9 @@ class Driver(object):
         output, result, raw_path = self._call(
             family, prompt, kind, "%s-draft" % st.unit_key(unit),
             model=model, effort=effort, extensions=extensions, roots=roots,
+            validate_opts=(
+                {"battery_questions": battery} if battery else None
+            ),
         )
         if output.get("status") == "gap":
             # The builder met a build-changing hole/conflict and stopped
@@ -1391,7 +1401,7 @@ class Driver(object):
                 raise StopStep("contested finding killed by pointer")
 
     def _report_call(self, unit, family, prompt, kind, raw_name,
-                     extensions=None, roots=None):
+                     extensions=None, roots=None, validate_opts=None):
         """Run a report-only call with mechanical no-edit enforcement.
 
         Returns (output, result, raw_path, changed): when the reviewer
@@ -1400,7 +1410,7 @@ class Driver(object):
         before = self._snapshot()
         output, result, raw_path = self._call(
             family, prompt, kind, raw_name, extensions=extensions,
-            roots=roots,
+            roots=roots, validate_opts=validate_opts,
         )
         changed = self._snapshot_diff(before, self._snapshot())
         return output, result, raw_path, changed
@@ -1688,6 +1698,12 @@ class Driver(object):
             "%s-delta%d" % (st.unit_key(unit), n_delta),
             extensions=extensions,
             roots=roots,
+            # Reform runs hard-require plain/example on every finding;
+            # the delta prompt itself is NOT battery-aware (diff-scoped).
+            validate_opts=(
+                {"require_plain": True}
+                if interpreter.reform_active(self.state) else None
+            ),
         )
         if changed:
             # The pending fix delta and the tampering are now entangled;
@@ -1997,6 +2013,10 @@ class Driver(object):
         project_context, extensions, roots = self._project_prompt_inputs(
             unit, contracts.KIND_REVIEW_ROUND
         )
+        # Reform runs: reviewers of doc units check the question battery
+        # (presence and substance, never prose — spec §4) and every
+        # finding hard-requires its plain/example lay mirror.
+        reform = interpreter.reform_active(self.state)
         prompt = prompts.build_review_round(
             family,
             self.workspace,
@@ -2009,6 +2029,7 @@ class Driver(object):
             amendments=self._amendments(),
             verified_suite=self._verified_suite(unit),
             project_context=project_context,
+            battery=interpreter.battery_questions(self.state, unit["kind"]),
         )
         # Raw/label numbering counts ALL history (like fix/delta and the
         # ledger round ids): the amnesty-relative `done` must never make a
@@ -2028,6 +2049,7 @@ class Driver(object):
             "%s-%s-r%d" % (st.unit_key(unit), family, label_no),
             extensions=extensions,
             roots=roots,
+            validate_opts={"require_plain": True} if reform else None,
         )
         if changed:
             # Rounds run on a clean worktree (everything is amended), so a
@@ -2197,6 +2219,17 @@ class Driver(object):
         project_context, project_extensions, project_roots = (
             self._project_prompt_inputs(unit, contracts.KIND_SEAL_HALF)
         )
+        # Reform gates for the halves, computed once on the main thread
+        # (same once-before-half-threads pattern as amendments): doc-unit
+        # sealers check the question battery, and every finding
+        # hard-requires its plain/example lay mirror.
+        seal_battery = interpreter.battery_questions(
+            self.state, unit["kind"]
+        )
+        seal_validate_opts = (
+            {"require_plain": True}
+            if interpreter.reform_active(self.state) else None
+        )
 
         def run_half_pure(family):
             """One seal half, mutating NO shared state (thread-safe): any
@@ -2206,7 +2239,7 @@ class Driver(object):
                 family, self.workspace, goal, desc, artifact, registry,
                 unit_kind=unit["kind"], governing=self._governing(unit),
                 amendments=amendments, verified_suite=verified_suite,
-                project_context=project_context,
+                project_context=project_context, battery=seal_battery,
             )
             raw_name = "%s-seal-a%d-%s" % (st.unit_key(unit), attempt_no, family)
             try:
@@ -2221,6 +2254,7 @@ class Driver(object):
                     effort=de,
                     extensions=project_extensions,
                     roots=project_roots,
+                    validate_opts=seal_validate_opts,
                 )
             except verifiers.VerifierError as exc:
                 # Slice 4's non-repairable family (operator/environment,

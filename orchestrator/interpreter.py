@@ -17,6 +17,8 @@ read from the run config, so nothing about a run's behavior yet depends on
 which profile it carries.
 """
 
+from . import contracts
+
 FAMILY_UNTIL_CLEAN = "family_until_clean"
 
 # Profile fields that decompose into run-config DIALS (spec §5: "profiles
@@ -92,6 +94,17 @@ def doc_register(state):
     return profile.get("doc_register") or "dense"
 
 
+def reform_active(state):
+    """Whether the reform's semantics govern this run — the single
+    predicate behind gap semantics, the seal predicate, the widened doc
+    gate, the question battery, and the plain/example hard-require. ON
+    for every reform profile; OFF for the `legacy` compatibility artifact
+    (which declares `compat`) and for profile-less runs, which reproduce
+    the pre-reform driver bit-identically."""
+    profile = governing_profile(state)
+    return bool(profile) and not profile.get("compat")
+
+
 def gap_semantics(state):
     """Whether the reform's gap semantics are ON for this run (spec §3): a
     draft/implement worker that meets a build-changing hole or contradiction
@@ -100,8 +113,7 @@ def gap_semantics(state):
     compatibility artifact and for profile-less runs, which reproduce the
     pre-reform builders exactly (their prompts never advertise the gap
     exit, so they never return one — bit-identical)."""
-    profile = governing_profile(state)
-    return bool(profile) and not profile.get("compat")
+    return reform_active(state)
 
 
 def seal_predicate(state):
@@ -109,8 +121,23 @@ def seal_predicate(state):
     by dedicated seal-half worker calls. ON for every reform profile; OFF
     for the `legacy` compatibility artifact and profile-less runs, which
     keep the pre-reform double-seal halves (so they stay bit-identical)."""
-    profile = governing_profile(state)
-    return bool(profile) and not profile.get("compat")
+    return reform_active(state)
+
+
+def battery_questions(state, unit_kind):
+    """The required question-battery ids for a unit of `unit_kind`, or
+    None (no battery). The battery is NOT a dial — every reform profile
+    carries it, `strict` and `light` alike (spec §4); implementation
+    units have no battery (it is a DOC gate). Legacy and profile-less
+    runs get None everywhere, keeping their prompts and validation
+    byte-identical to the pre-reform driver."""
+    if not reform_active(state):
+        return None
+    if unit_kind == "skeleton":
+        return contracts.BATTERY_QUESTIONS_SKELETON
+    if unit_kind == "slice_doc":
+        return contracts.BATTERY_QUESTIONS_SLICE_NOTE
+    return None
 
 
 def doc_defer_scope(state):
