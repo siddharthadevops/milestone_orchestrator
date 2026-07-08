@@ -2075,13 +2075,14 @@ class TestPolicyAuthoring(ProjectsServiceTestCase):
         # unchanged; non-normalizing machine clients still round-trip
         # them). No JS harness exists, so the guard is pinned at the
         # served-page level (the AC6 posture): the guard function plus
-        # its four call sites — declare, relabel, delete, meta.
+        # its five call sites — redeclare (work dir / read-root edits),
+        # named declare, relabel, delete, meta.
         req = urllib.request.Request(self.base + "/")
         with urllib.request.urlopen(req, timeout=10) as resp:
             self.assertEqual(resp.status, 200)
             text = resp.read().decode("utf-8")
         self.assertIn("function waDotSegment", text)
-        self.assertEqual(text.count("waDotSegment("), 5)
+        self.assertEqual(text.count("waDotSegment("), 6)
 
 
 if __name__ == "__main__":

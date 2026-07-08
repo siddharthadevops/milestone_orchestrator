@@ -57,6 +57,13 @@
   .grpbtn:disabled { opacity: .3; cursor: default; }
   .grp-empty { padding: 8px 14px; font-size: 11px; color: var(--dim);
     font-style: italic; border-bottom: 1px solid var(--line); }
+  .btn.sm { padding: 3px 8px; font-size: 11px; }
+  .rootrow { display: flex; align-items: center; gap: 6px;
+    font-size: 12px; padding: 2px 0; }
+  .rootrow .rootpath { flex: 1; overflow: hidden; text-overflow: ellipsis;
+    white-space: nowrap; }
+  .wa-ops { display: flex; gap: 6px; justify-content: flex-end;
+    margin-top: 8px; }
   /* Field notes live behind a discreet (i) beside the dialog title —
      the fields themselves stay clean of standing hint prose. */
   .dlgtitle { display: flex; align-items: center; gap: 8px; }
@@ -514,10 +521,13 @@
     <button class="infobtn" type="button" onclick="toggleDlgInfo('projedit')"
       title="Field notes">i</button></h2>
   <div class="dlg-info" id="projedit_info">
-    <p><b>Work areas</b> — the roots runs execute against: a primary root
-      (the git repo) plus optional read-only additional roots. Declaring
-      records pending v1; the first bound launch validates the real roots
-      and confirms ready v2.</p>
+    <p><b>Work directory</b> — the git repo runs of this project execute
+      in. Changing it (or the read-only roots) re-declares the area: the
+      version bumps, the status returns to <i>pending</i>, and the next
+      bound launch validates the real roots and confirms <i>ready</i>.</p>
+    <p><b>Read-only roots</b> — sibling repos workers may READ for
+      evidence (dependencies, consumers); they are never editable by
+      workers.</p>
     <p><b>Safeguards</b> — standing law rendered into every bound worker's
       prompt. Version is operator intent: bump it on substance changes so
       runs re-record the safeguard. Run-scoped amendments win on
@@ -1912,23 +1922,138 @@ function statusChip(status) {
     : status === "unavailable" ? "failed" : "open";
   return `<span class="chip ${cls}">${esc(status)}</span>`;
 }
-function workAreaRow(i, w, j) {
-  const r = w.record;
-  return `<div class="wa">
-    <span class="ops">
-      <button class="btn" onclick="editMeta(${i},${j})">Reuse sources…</button>
-      <button class="btn" onclick="relabelArea(${i},${j})">Rename…</button>
-      <button class="btn danger" onclick="deleteArea(${i},${j})">Delete</button>
-    </span>
-    <b>${esc(r.name)}</b>${r.display_name !== r.name
-      ? ` <span class="kv">“${esc(r.display_name)}”</span>` : ""}
-    ${statusChip(r.status)} <span class="kv">v${r.version}</span>
-    <div class="kv mono">primary: ${esc(r.primary.path)}</div>
-    ${r.additional.length ? `<div class="kv mono">additional: ${
-        r.additional.map(a => esc(a.path)).join(" · ")}</div>` : ""}
-    ${w.meta !== null ? `<div class="kv mono">meta: ${
-        esc(JSON.stringify(w.meta))}</div>` : ""}
+/* The work-area surface is two plain ideas — ONE work directory
+   (changeable) and a LIST of read-only roots (addable/removable). Every
+   edit re-declares the same area name through the sealed store: the
+   version bumps and the next bound launch revalidates the real roots
+   (declare-over-live is the API's in-place update). */
+function areaFieldId(i, j, prefix) {
+  return `${prefix}_${waKey(projState.list[i].slug)}_${j}`;
+}
+function projFieldId(i, prefix) {
+  return `${prefix}_${waKey(projState.list[i].slug)}`;
+}
+function rootRow(i, j, a, k) {
+  return `<div class="rootrow mono">
+    <span class="rootpath" title="${esc(a.path)}">${esc(a.path)}</span>
+    <button class="btn danger sm" title="Remove this read root"
+      onclick="removeRoot(${i},${j},${k})">×</button>
   </div>`;
+}
+function areaBlock(i, w, j, sole) {
+  const r = w.record;
+  const head = sole ? "" : `<div class="subhead" style="margin-top:10px">
+      ${esc(r.name)}${r.display_name !== r.name
+        ? ` — “${esc(r.display_name)}”` : ""}</div>`;
+  return `<div class="wa">
+    ${head}
+    <div class="field"><label>Work directory (the git repo runs execute
+        in) ${statusChip(r.status)} <span class="kv">v${r.version}</span></label>
+      <div class="pathrow">
+        <input id="${areaFieldId(i, j, "wd")}" class="mono"
+          value="${esc(r.primary.path)}">
+        <button class="btn"
+          onclick="openPicker('dir', areaFieldId(${i},${j},'wd'))">Browse…</button>
+        <button class="btn primary"
+          onclick="changeWorkDir(${i},${j})">Save</button>
+      </div></div>
+    <div class="field"><label>Read-only roots (other repos workers may
+        read for evidence — never edit)</label>
+      ${r.additional.map((a, k) => rootRow(i, j, a, k)).join("")
+        || '<div class="amend-hint">none</div>'}
+      <div class="pathrow" style="margin-top:4px">
+        <input id="${areaFieldId(i, j, "ar")}" class="mono"
+          placeholder="/absolute/path/to/repo">
+        <button class="btn"
+          onclick="openPicker('dir', areaFieldId(${i},${j},'ar'))">Browse…</button>
+        <button class="btn" onclick="addRoot(${i},${j})">Add</button>
+      </div></div>
+    <div class="wa-ops">
+      <button class="btn sm" onclick="editMeta(${i},${j})">Reuse sources…</button>
+      <button class="btn sm" onclick="relabelArea(${i},${j})">Rename…</button>
+      <button class="btn sm danger" onclick="deleteArea(${i},${j})">Delete area</button>
+    </div>
+  </div>`;
+}
+function setupBlock(i) {
+  return `<div class="field"><label>Work directory * (the git repo runs
+      execute in)</label>
+    <div class="pathrow">
+      <input id="${projFieldId(i, "wa_setup")}" class="mono"
+        placeholder="/path/to/repo">
+      <button class="btn"
+        onclick="openPicker('dir', projFieldId(${i},'wa_setup'))">Browse…</button>
+      <button class="btn primary" onclick="setupArea(${i})">Save</button>
+    </div>
+    <div class="hint">Saving declares the project's work area; read-only
+      roots can be added right after.</div></div>`;
+}
+function addAreaBlock(i) {
+  const moreId = projFieldId(i, "wa_more");
+  return `<div id="${moreId}" style="display:none;margin-top:6px">
+    <div class="pathrow">
+      <input id="${projFieldId(i, "wa_nm")}" placeholder="name *">
+      <input id="${projFieldId(i, "wa_np")}" class="mono"
+        placeholder="/path/to/repo *">
+      <button class="btn"
+        onclick="openPicker('dir', projFieldId(${i},'wa_np'))">Browse…</button>
+      <button class="btn primary" onclick="declareNamedArea(${i})">Declare</button>
+    </div></div>
+  <div class="wa-ops" style="justify-content:flex-start">
+    <button class="btn sm" onclick="toggleEl('${esc(escJsSq(moreId))}')">Add
+      work area…</button></div>`;
+}
+function toggleEl(id) {
+  const el = document.getElementById(id);
+  el.style.display = el.style.display === "none" ? "" : "none";
+}
+function redeclareArea(i, j, primary, additional) {
+  const p = projState.list[i];
+  const r = p.work_areas[j].record;
+  if (waDotSegment(r.name)) return;
+  // Declare-over-live: same name, new roots — the sealed store bumps
+  // the version, resets to pending, and KEEPS the display name.
+  projOp(() => postJSON(projPath(p.slug) + "/work-areas", {
+    name: r.name,
+    primary_path: primary,
+    additional_paths: additional,
+  }));
+}
+function changeWorkDir(i, j) {
+  const v = document.getElementById(areaFieldId(i, j, "wd")).value.trim();
+  if (!v) return;
+  const r = projState.list[i].work_areas[j].record;
+  redeclareArea(i, j, v, r.additional.map(a => a.path));
+}
+function addRoot(i, j) {
+  const el = document.getElementById(areaFieldId(i, j, "ar"));
+  const v = el.value.trim();
+  if (!v) return;
+  el.value = "";
+  const r = projState.list[i].work_areas[j].record;
+  redeclareArea(i, j, r.primary.path,
+                r.additional.map(a => a.path).concat([v]));
+}
+function removeRoot(i, j, k) {
+  const r = projState.list[i].work_areas[j].record;
+  redeclareArea(i, j, r.primary.path,
+                r.additional.map(a => a.path).filter((_, x) => x !== k));
+}
+function setupArea(i) {
+  const v = document.getElementById(projFieldId(i, "wa_setup")).value.trim();
+  if (!v) return;
+  const p = projState.list[i];
+  projOp(() => postJSON(projPath(p.slug) + "/work-areas",
+                        {name: "main", primary_path: v}));
+}
+function declareNamedArea(i) {
+  const name = document.getElementById(projFieldId(i, "wa_nm")).value.trim();
+  const primary = document.getElementById(projFieldId(i, "wa_np")).value.trim();
+  if (!name || !primary) return;
+  if (waDotSegment(name)) return;
+  const p = projState.list[i];
+  projOp(() => postJSON(projPath(p.slug) + "/work-areas",
+                        {name, primary_path: primary}));
 }
 function policyRow(i, pol, j) {
   const preview = pol.prompt.length > 160
@@ -1958,7 +2083,6 @@ function projectCard(p, i) {
       <div class="failure">broken project store — ${esc(p.error.reason)}</div>
     </div>`;
   }
-  const key = waKey(p.slug);
   return `<div class="card">
     <div class="proj-head">
       <span class="kv mono">defaults: ${esc(p.defaults !== undefined
@@ -1967,34 +2091,17 @@ function projectCard(p, i) {
       <button class="btn" onclick="editDefaults(${i})">Defaults…</button>
       <button class="btn danger" onclick="deleteProject(${i})">Delete</button>
     </div>
-    <div class="subhead">Work areas</div>
-    ${p.work_areas.map((w, j) => workAreaRow(i, w, j)).join("")
-      || '<div class="amend-hint">none declared</div>'}
-    <div class="wa-form" style="margin-top:8px">
-      <div class="pathrow">
-        <input id="wa_name_${key}" placeholder="name *">
-        <input id="wa_disp_${key}" placeholder="display name">
-      </div>
-      <div class="pathrow">
-        <input id="wa_primary_${key}" class="mono"
-          placeholder="primary root (the git repo the run executes in) *">
-        <button class="btn" onclick="declarePicker(${i})">Browse…</button>
-      </div>
-      <div class="pathrow">
-        <textarea id="wa_add_${key}" class="mono" rows="1"
-          placeholder="additional read-only roots — one absolute path per line"></textarea>
-        <button class="btn" onclick="openPicker('dir', 'wa_add_' + waKey(projState.list[${i}].slug), true)">Add…</button>
-        <button class="btn primary" onclick="declareArea(${i})">Declare</button>
-      </div>
-      <div class="hint">Declares pending v1; the first bound launch
-        validates the real roots and confirms ready v2.</div>
-    </div>
-    <div class="subhead">Safeguards (standing law)</div>
+    ${p.work_areas.length
+      ? p.work_areas.map((w, j) =>
+          areaBlock(i, w, j, p.work_areas.length === 1)).join("")
+        + addAreaBlock(i)
+      : setupBlock(i)}
+    <div class="subhead" style="margin-top:12px">Safeguards (standing law)</div>
     ${p.policy.map((pol, j) => policyRow(i, pol, j)).join("")
       || '<div class="amend-hint">none — runs in this project carry no project safeguards</div>'}
-    <div class="formrow"><span></span>
-      <button class="btn" onclick="enableReuseAudit(${i})">Enable reuse-audit...</button>
-      <button class="btn" onclick="newPolicy(${i})">New safeguard…</button>
+    <div class="wa-ops">
+      <button class="btn sm" onclick="enableReuseAudit(${i})">Enable reuse-audit…</button>
+      <button class="btn sm" onclick="newPolicy(${i})">New safeguard…</button>
     </div>
   </div>`;
 }
@@ -2044,28 +2151,6 @@ function editDefaults(i) {
       "project (e.g. {\"git\": {\"enabled\": false}, \"docs_dir\": " +
       "\"notes/{slug}\"}). null clears the defaults.",
     onSave: parsed => postJSON(projPath(p.slug), {defaults: parsed}),
-  });
-}
-function declarePicker(i) {
-  openPicker("dir", "wa_primary_" + waKey(projState.list[i].slug));
-}
-function declareArea(i) {
-  const p = projState.list[i];
-  const key = waKey(p.slug);
-  const get = f => document.getElementById(`wa_${f}_${key}`);
-  const payload = {
-    name: get("name").value.trim(),
-    primary_path: get("primary").value.trim(),
-  };
-  if (waDotSegment(payload.name)) return;
-  const disp = get("disp").value.trim();
-  if (disp) payload.display_name = disp;
-  const additional = get("add").value.split("\n")
-    .map(s => s.trim()).filter(Boolean);
-  if (additional.length) payload.additional_paths = additional;
-  projOp(async () => {
-    await postJSON(projPath(p.slug) + "/work-areas", payload);
-    for (const f of ["name", "disp", "primary", "add"]) get(f).value = "";
   });
 }
 function relabelArea(i, j) {
