@@ -1025,13 +1025,40 @@ class Driver(object):
             steps += 1
         return 3
 
+    def _goal_for(self, unit):
+        """The GOAL block a unit's prompts carry. The skeleton consumes
+        the operator's goal verbatim — restating it as the milestone
+        boundary is its job. Under a reform profile, every LATER unit
+        consumes the SEALED SKELETON instead (spec §2's chain of
+        consumption: the slice-doc drafter consumes the skeleton, the
+        implementer consumes the slice doc): hundreds of lines of
+        operator planning prose stop riding every downstream call, and
+        downstream workers judge scope against the sealed boundary
+        rather than a raw brainstorm's non-binding sketches. The full
+        goal text stays one read away in the generated milestone record
+        ("## Goal"), regenerated at every gate — the skeleton's gate has
+        always landed before any slice unit drafts. Legacy and
+        profile-less runs keep the full goal everywhere (bit-identical)."""
+        if (unit["kind"] == st.UNIT_SKELETON
+                or not interpreter.reform_active(self.state)):
+            return self.state["goal"]
+        return (
+            "the sealed skeleton at %s is the operative restatement of "
+            "the goal — the milestone boundary; judge scope against IT. "
+            "The operator's full original goal text is preserved under "
+            '"## Goal" in %s (generated ledger); read it only to trace '
+            "intent the skeleton does not settle."
+            % (ledgers.skeleton_path(self.state),
+               ledgers.record_path(self.state))
+        )
+
     def _do_draft(self):
         unit = st.current_unit(self.state)
         act = (
             "implementer" if unit["kind"] == st.UNIT_SLICE_IMPL else "drafter"
         )
         family, model, effort = self._act_profile(act)
-        goal = self.state["goal"]
+        goal = self._goal_for(unit)
         amendments = self._amendments()
         kind = {
             st.UNIT_SKELETON: contracts.KIND_DRAFT_SKELETON,
@@ -1491,7 +1518,7 @@ class Driver(object):
         prompt = prompts.build_fix_findings(
             family,
             self.workspace,
-            self.state["goal"],
+            self._goal_for(unit),
             self._unit_desc(unit),
             unit.get("fix_queue") or [],
             self._registry(),
@@ -1702,7 +1729,7 @@ class Driver(object):
         prompt = prompts.build_delta_review(
             family,
             self.workspace,
-            self.state["goal"],
+            self._goal_for(unit),
             self._unit_desc(unit),
             delta,
             self._registry(),
@@ -2047,7 +2074,7 @@ class Driver(object):
         prompt = prompts.build_review_round(
             family,
             self.workspace,
-            self.state["goal"],
+            self._goal_for(unit),
             self._unit_desc(unit),
             self._artifact(unit),
             self._registry(),
@@ -2228,7 +2255,7 @@ class Driver(object):
                 ran=list(families),
                 skipped=[f for f in all_families if f not in families],
             )
-        goal = self.state["goal"]
+        goal = self._goal_for(unit)
         desc = self._unit_desc(unit)
         artifact = self._artifact(unit)
         registry = self._registry()
