@@ -1970,21 +1970,56 @@ def set_acts(home, run_id, body):
     return acts
 
 
+def _profile_overlay_path(entry):
+    # Beside the state file (the run's runtime dir), matching acts.json and
+    # amendments.json.
+    return os.path.join(os.path.dirname(entry["state_path"]),
+                        "profile_swap.json")
+
+
+def read_profile_overlay(entry):
+    """The operator's current runtime repoint for this run, or None. An
+    operator-owned, lock-free file beside the state (the amendments/acts
+    pattern): the operator writes it, and the driver will re-read it at
+    stage boundaries and record the profile_changed ledger event when the
+    repoint actually takes effect — that driver-side pickup lands with the
+    stage interpreter. Tolerant of a mid-write race (returns None)."""
+    try:
+        with open(_profile_overlay_path(entry), "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+    except (OSError, ValueError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    ref = data.get("ref")
+    if not isinstance(ref, dict) or "name" not in ref:
+        return None
+    return {"ref": ref, "at": data.get("at")}
+
+
 def read_profile(entry):
     """The run's governing strategy profile for the panel, or None for a
-    profile-less run. Read straight from state (like read_acts) and
-    tolerant of a transiently unreadable state. `base` is the snapshot
-    stored in the run config at creation; `governing` is the profile that
-    actually rules the run right now (== base until a runtime swap
-    repoints it — the swap overlay lands in a later commit)."""
+    profile-less, never-swapped run. Read straight from state (like
+    read_acts) and tolerant of a transiently unreadable state. `base` is
+    the snapshot stored in the run config at creation; `swap` is the
+    operator's runtime repoint (present only after a swap); `governing` is
+    the profile that rules the run right now — the swap when present, else
+    the base. The swap takes effect on run BEHAVIOR only once the driver
+    honors it at a stage boundary (the stage interpreter, a later phase);
+    the displayed governing profile reflects the operator's intent now."""
     try:
         state = st.load(entry["state_path"])
         base = (state.get("config") or {}).get("profile_ref")
     except Exception:
+        base = None
+    overlay = read_profile_overlay(entry)
+    if not base and not overlay:
         return None
-    if not base:
-        return None
-    return {"base": base, "governing": base}
+    swap = overlay["ref"] if overlay else None
+    out = {"base": base, "governing": swap or base}
+    if overlay:
+        out["swap"] = overlay
+    return out
 
 
 def _profile_view(doc):
@@ -2023,6 +2058,40 @@ def save_profile(home, body):
     except profiles.ProfileError as exc:
         raise ApiError(400, str(exc))
     return _profile_view(saved)
+
+
+def set_profile_swap(home, run_id, body):
+    """Repoint a run at another strategy profile at RUNTIME. Swap != edit:
+    the profile is never mutated in place; the run points elsewhere. Seals
+    the target (a referenced profile is in production) and writes the
+    operator-owned overlay (profile_swap.json) beside the state — the same
+    lock-free pattern as acts/amendments, so a hot repoint never collides
+    with the driver's lock. The repoint takes effect on run behavior at the
+    next stage boundary, where the driver records the profile_changed
+    ledger event and marks the run profile_mixed; that driver-side pickup
+    lands with the stage interpreter. Here we record the operator's intent
+    and the panel reflects the new governing profile immediately."""
+    reg = registry.load(home)
+    entry = registry.get(reg, run_id)
+    if entry is None:
+        raise ApiError(404, "unknown run %r" % run_id)
+    if not isinstance(body, dict):
+        raise ApiError(400, "profile swap body must be an object")
+    name = body.get("profile")
+    if not isinstance(name, str) or not name.strip():
+        raise ApiError(400, "profile (name) is required")
+    try:
+        ref = profiles.reference(home, name.strip())
+    except profiles.ProfileError as exc:
+        raise ApiError(400, str(exc))
+    overlay = {"ref": ref, "at": registry.now_iso()}
+    path = _profile_overlay_path(entry)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as fh:
+        json.dump(overlay, fh, indent=1)
+    os.replace(tmp, path)
+    return overlay
 
 
 def run_story(home, run_id, item):
@@ -2433,6 +2502,9 @@ def make_handler(home):
                     elif len(parts) == 5 and parts[4] == "acts":
                         acts = set_acts(home, parts[3], self._body())
                         self._json(200, {"ok": True, "acts": acts})
+                    elif len(parts) == 5 and parts[4] == "profile":
+                        swap = set_profile_swap(home, parts[3], self._body())
+                        self._json(200, {"ok": True, "profile_swap": swap})
                     else:
                         self._json(404, {"ok": False, "error": "not found"})
                 else:

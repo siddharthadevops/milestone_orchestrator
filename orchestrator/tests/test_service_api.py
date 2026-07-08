@@ -981,6 +981,57 @@ class ProfilesApiTest(ServiceApiTest):
             self.assertEqual(status, 400)
             self.assertFalse(body["ok"])
 
+    def test_profile_swap_writes_overlay_and_regoverns(self):
+        ws = self.workspace("ws-swap")
+        status, body = self.create_run(ws, profile="light")
+        self.assertEqual(status, 201)
+        rid = body["run"]["id"]
+        # Repoint the run at strict.
+        status, sw = self.request_json(
+            "POST", "/api/runs/%s/profile" % rid, {"profile": "strict"})
+        self.assertEqual(status, 200)
+        strict = profiles.load(self.home, "strict")
+        self.assertEqual(sw["profile_swap"]["ref"]["name"], "strict")
+        self.assertTrue(strict["sealed"])  # referencing strict sealed it
+        # The overlay file sits beside the state, operator-owned.
+        entry = registry.get(registry.load(self.home), rid)
+        overlay = os.path.join(
+            os.path.dirname(entry["state_path"]), "profile_swap.json")
+        self.assertTrue(os.path.isfile(overlay))
+        # run_detail now governs by the swap; base is preserved.
+        status, detail = self.request_json("GET", "/api/runs/%s" % rid)
+        self.assertEqual(detail["profile"]["base"]["name"], "light")
+        self.assertEqual(detail["profile"]["governing"]["name"], "strict")
+        self.assertEqual(
+            detail["profile"]["swap"]["ref"]["hash"],
+            profiles.semantic_hash(strict["profile"]))
+        # Base config.profile_ref is untouched — swap != edit of the run.
+        cfg = st.load(entry["state_path"])["config"]
+        self.assertEqual(cfg["profile_ref"]["name"], "light")
+
+    def test_profile_swap_unknown_profile_400(self):
+        ws = self.workspace("ws-swap-bad")
+        _, body = self.create_run(ws, profile="light")
+        rid = body["run"]["id"]
+        status, out = self.request_json(
+            "POST", "/api/runs/%s/profile" % rid, {"profile": "ghost"})
+        self.assertEqual(status, 400)
+        self.assertIn("ghost", out["error"])
+
+    def test_profile_swap_unknown_run_404(self):
+        status, out = self.request_json(
+            "POST", "/api/runs/nope/profile", {"profile": "light"})
+        self.assertEqual(status, 404)
+
+    def test_profile_swap_missing_name_400(self):
+        ws = self.workspace("ws-swap-noname")
+        _, body = self.create_run(ws, profile="light")
+        rid = body["run"]["id"]
+        status, out = self.request_json(
+            "POST", "/api/runs/%s/profile" % rid, {})
+        self.assertEqual(status, 400)
+        self.assertIn("profile", out["error"])
+
     def test_post_preserves_seal_and_refuses_content_change(self):
         doc = {"name": "frozen", "version": 1, "sealed": False,
                "description": "d", "profile": {"a": 1}}

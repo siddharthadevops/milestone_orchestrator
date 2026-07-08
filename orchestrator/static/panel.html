@@ -437,6 +437,24 @@
   </div>
 </dialog>
 
+<dialog id="profileswapdlg">
+  <h2>Repoint strategy profile</h2>
+  <div class="field"><label>Profile</label>
+    <select id="ps_sel" onchange="onPsChange()"></select>
+    <div class="hint" id="ps_hint"></div></div>
+  <div class="hint" style="margin-top:8px">Swap ≠ edit: the run points at
+    another profile; the profile itself is never mutated. The repoint takes
+    effect at the next stage boundary — the interpreter that honors it lands
+    in a later phase; for now it re-labels the run's governing profile and
+    records the operator's intent.</div>
+  <div class="formrow">
+    <span id="ps_err" style="color:var(--bad,#c33);font-size:12px"></span>
+    <button class="btn"
+      onclick="document.getElementById('profileswapdlg').close()">Cancel</button>
+    <button class="btn primary" onclick="applyProfileSwap()">Repoint</button>
+  </div>
+</dialog>
+
 <dialog id="picker">
   <h2 id="pk_title">Select directory</h2>
   <div class="pk-bar">
@@ -888,6 +906,20 @@ async function refreshDetail() {
         <span class="amend-hint mono" style="flex:1">${esc(actsSum)}</span>
         <button class="btn" onclick="openActs()">Edit…</button>
       </div></div>`;
+    lastProfile = d.profile || null;
+    if (d.profile) {
+      const g = d.profile.governing, b = d.profile.base;
+      const swapped = !!d.profile.swap;
+      const baseLabel = b ? `${b.name}@${b.version}` : "none";
+      html += `<div class="card"><h3>Strategy profile</h3>
+        <div class="amendform">
+          <span class="amend-hint mono" style="flex:1">governing: ${esc(g.name)}@${esc(String(g.version))} · ${esc(g.hash)}${
+            swapped ? ` · swapped (base ${esc(baseLabel)})` : ""}</span>
+          <button class="btn" onclick="openProfileSwap()">Change…</button>
+        </div>
+        <div class="amend-hint">Repoint takes effect at the next stage
+          boundary; the interpreter that honors it lands in a later phase.</div></div>`;
+    }
     if (sum) {
       const sliceTitle = id => {
         const sl = (sum.slices || []).find(x => x.id === id);
@@ -1123,6 +1155,7 @@ async function delAmend(aid) {
   refreshDetail();
 }
 let lastActs = {};
+let lastProfile = null;   // the run's profile block from the last detail poll
 function openActs() {
   // The dialog lives OUTSIDE the polled container: the 2s re-render can
   // never reset an edit in progress. Values are seeded once, on open.
@@ -1225,16 +1258,65 @@ function onProfileChange() {
       " behaves.";
     return;
   }
-  const c = p.profile || {}, bits = [];
+  const dials = profileDials(p);
+  hint.innerHTML =
+    `<span class="mono">${esc(p.hash)}</span>${dials ? " · " + esc(dials) : ""}` +
+    (p.description ? `<br>${esc(p.description)}` : "") +
+    `<br><em>Recorded on the run; the interpreter that honors it lands in a later phase.</em>`;
+}
+/* The profile's dials, as one lay line — shared by the new-run selector
+   and the runtime repoint dialog. */
+function profileDials(p) {
+  const c = (p && p.profile) || {}, bits = [];
   if (c.doc_register) bits.push("register: " + c.doc_register);
   if (c.p3_defer_max_risk) bits.push("defer ≤ " + c.p3_defer_max_risk);
   if (c.fuser_discard) bits.push("fuser discard: " + c.fuser_discard);
   if ("final_open_pass" in c)
     bits.push("final open pass: " + (c.final_open_pass ? "yes" : "no"));
-  hint.innerHTML =
-    `<span class="mono">${esc(p.hash)}</span>${bits.length ? " · " + esc(bits.join(" · ")) : ""}` +
-    (p.description ? `<br>${esc(p.description)}` : "") +
-    `<br><em>Recorded on the run; the interpreter that honors it lands in a later phase.</em>`;
+  return bits.join(" · ");
+}
+/* ---- runtime profile swap: repoint a live run at another profile. The
+        dialog lives outside the polled container, seeded once on open. ---- */
+let psProfiles = [];
+async function openProfileSwap() {
+  document.getElementById("ps_err").textContent = "";
+  psProfiles = [];
+  try {
+    const data = await api("/api/profiles");
+    psProfiles = data.profiles || [];
+  } catch (e) { document.getElementById("ps_err").textContent = e.message; }
+  const sel = document.getElementById("ps_sel");
+  sel.innerHTML = psProfiles.map(p =>
+    `<option value="${esc(p.name)}">${esc(p.name)}@${esc(String(p.version))}${p.sealed ? " · sealed" : ""}</option>`
+  ).join("");
+  const cur = lastProfile && lastProfile.governing;
+  if (cur && psProfiles.some(p => p.name === cur.name)) sel.value = cur.name;
+  onPsChange();
+  document.getElementById("profileswapdlg").showModal();
+}
+function onPsChange() {
+  const p = psProfiles.find(x => x.name ===
+    document.getElementById("ps_sel").value);
+  const dials = profileDials(p);
+  document.getElementById("ps_hint").innerHTML = p
+    ? `<span class="mono">${esc(p.hash)}</span>${dials ? " · " + esc(dials) : ""}`
+    : "";
+}
+async function applyProfileSwap() {
+  const name = document.getElementById("ps_sel").value;
+  if (!name) return;
+  try {
+    await api(`/api/runs/${selected}/profile`, {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({profile: name}),
+    });
+    document.getElementById("profileswapdlg").close();
+  } catch (e) {
+    document.getElementById("ps_err").textContent = e.message;
+    return;
+  }
+  refreshDetail();
 }
 async function loadRecents() {
   try {
