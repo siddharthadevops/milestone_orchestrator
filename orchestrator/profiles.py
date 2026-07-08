@@ -251,6 +251,33 @@ SEEDS = {
             ],
         },
     },
+    # The compatibility artifact (spec §8, "FENCED"): reproduces the
+    # pre-reform flow EXACTLY. It carries NO dials of its own, so the
+    # interpreter falls back to the run's config for everything — which is
+    # precisely what a profile-less run does, making a `legacy` run
+    # bit-equivalent to no profile (the phase-2 equivalence gate). It is a
+    # grandfathered artifact only: valid for bit-equivalence testing and
+    # reproducing pre-reform behavior, excluded from the reform
+    # constitution, not composable into new profiles (the panel labels it).
+    "legacy": {
+        "name": "legacy",
+        "version": 1,
+        "sealed": False,
+        "description": (
+            "Compatibility artifact — reproduces the pre-reform flow "
+            "exactly (family_until_clean rounds, today's seal, config "
+            "dials). For bit-equivalence testing and reproducing "
+            "pre-reform behavior only; excluded from the reform "
+            "constitution and never composable into new profiles."
+        ),
+        "profile": {
+            "compat": True,
+            "stages": [
+                {"loop": "family_until_clean",
+                 "actions": [{"scope": "open"}]},
+            ],
+        },
+    },
 }
 
 

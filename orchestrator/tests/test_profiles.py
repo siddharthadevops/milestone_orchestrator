@@ -140,7 +140,7 @@ class TestValidationAndSeeds(ProfilesCase):
 
     def test_seeds_written_once_and_never_overwritten(self):
         created = pr.ensure_seeds(self.home)
-        self.assertEqual(sorted(created), ["light", "strict"])
+        self.assertEqual(sorted(created), ["legacy", "light", "strict"])
         # Operator edits a seed; re-ensuring must not clobber it.
         light = pr.load(self.home, "light")
         light["profile"]["p3_defer_max_risk"] = "low"

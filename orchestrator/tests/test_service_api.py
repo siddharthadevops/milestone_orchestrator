@@ -890,7 +890,7 @@ class ProfilesApiTest(ServiceApiTest):
         status, body = self.request_json("GET", "/api/profiles")
         self.assertEqual(status, 200)
         names = {p["name"]: p for p in body["profiles"]}
-        self.assertEqual(sorted(names), ["light", "strict"])
+        self.assertEqual(sorted(names), ["legacy", "light", "strict"])
         strict = names["strict"]
         self.assertEqual(
             strict["hash"], profiles.semantic_hash(strict["profile"]))
