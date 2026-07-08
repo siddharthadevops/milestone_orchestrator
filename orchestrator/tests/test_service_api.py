@@ -19,7 +19,7 @@ import unittest
 import urllib.error
 import urllib.request
 
-from orchestrator import driver, registry, service, state as st
+from orchestrator import driver, profiles, registry, service, state as st
 
 
 class ServiceApiTest(unittest.TestCase):
@@ -879,6 +879,79 @@ class TestPerMilestoneLayout(ServiceApiTest):
             os.path.join(runtime, "amendments.json")))
         self.assertFalse(os.path.exists(
             os.path.join(ws, ".orchestrator", "amendments.json")))
+
+
+class ProfilesApiTest(ServiceApiTest):
+    """Per-run strategy profiles (build-driven review reform, phase 1b):
+    the seeds are listable, a run snapshots+seals its chosen profile, and
+    profile-less runs stay untouched."""
+
+    def test_seeds_listed_with_hash_and_content(self):
+        status, body = self.request_json("GET", "/api/profiles")
+        self.assertEqual(status, 200)
+        names = {p["name"]: p for p in body["profiles"]}
+        self.assertEqual(sorted(names), ["light", "strict"])
+        strict = names["strict"]
+        self.assertEqual(
+            strict["hash"], profiles.semantic_hash(strict["profile"]))
+        # The decomposition travels so the new-run form can show it.
+        self.assertEqual(strict["profile"]["fuser_discard"], "evidence+concur")
+
+    def test_create_with_profile_snapshots_and_seals(self):
+        ws = self.workspace("ws-profiled")
+        status, body = self.create_run(ws, profile="light")
+        self.assertEqual(status, 201)
+        rid = body["run"]["id"]
+        # The run config carries the {name, version, hash} snapshot.
+        cfg = st.load(driver.default_state_path(ws))["config"]
+        ref = cfg["profile_ref"]
+        light = profiles.load(self.home, "light")
+        self.assertEqual(
+            ref,
+            {"name": "light", "version": light["version"],
+             "hash": profiles.semantic_hash(light["profile"])},
+        )
+        # First production reference sealed the profile on disk.
+        self.assertTrue(light["sealed"])
+        # run_detail surfaces the governing profile for the panel.
+        status, detail = self.request_json("GET", "/api/runs/%s" % rid)
+        self.assertEqual(status, 200)
+        self.assertEqual(detail["profile"]["governing"], ref)
+
+    def test_create_unknown_profile_400_and_no_state(self):
+        ws = self.workspace("ws-badprofile")
+        status, body = self.create_run(ws, profile="ghost")
+        self.assertEqual(status, 400)
+        self.assertIn("ghost", body["error"])
+        # Fail-fast: no orphan state was written for the rejected launch.
+        self.assertFalse(os.path.exists(driver.default_state_path(ws)))
+
+    def test_create_blank_profile_400(self):
+        ws = self.workspace("ws-blankprofile")
+        status, body = self.create_run(ws, profile="   ")
+        self.assertEqual(status, 400)
+        self.assertIn("profile", body["error"])
+
+    def test_attach_with_profile_400(self):
+        ws = self.workspace("ws-attach-profile")
+        driver.init_run("adopted", ws,
+                        state_path=driver.default_state_path(ws))
+        status, body = self.request_json(
+            "POST", "/api/runs",
+            {"workspace": ws, "attach": True, "autostart": False,
+             "profile": "light"})
+        self.assertEqual(status, 400)
+        self.assertIn("profile", body["error"])
+
+    def test_profileless_run_has_no_ref(self):
+        ws = self.workspace("ws-profileless")
+        status, body = self.create_run(ws)
+        self.assertEqual(status, 201)
+        cfg = st.load(driver.default_state_path(ws))["config"]
+        self.assertNotIn("profile_ref", cfg)
+        status, detail = self.request_json(
+            "GET", "/api/runs/%s" % body["run"]["id"])
+        self.assertIsNone(detail["profile"])
 
 
 class CommitWebBaseTest(unittest.TestCase):

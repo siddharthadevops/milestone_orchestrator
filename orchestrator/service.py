@@ -143,7 +143,7 @@ import urllib.parse
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from . import driver, errclass, gitops, kvstore, projects, registry
+from . import driver, errclass, gitops, kvstore, profiles, projects, registry
 from . import reuse_audit
 from . import state as st
 from . import workareas
@@ -1441,6 +1441,20 @@ def _create_bound_run(home, payload, workspace):
     return primary["path"], state_path, goal_doc
 
 
+def _snapshot_profile_ref(state_path, ref):
+    """Write the run's profile snapshot into its config. Append-only-safe:
+    only a config key is added — events and units are untouched — so
+    st.save's history guard passes. The state exists but the driver has
+    not started yet, so no driver lock is contended."""
+    state = st.load(state_path)
+    cfg = state.get("config")
+    if not isinstance(cfg, dict):
+        cfg = {}
+        state["config"] = cfg
+    cfg["profile_ref"] = ref
+    st.save(state_path, state)
+
+
 def create_run(home, payload):
     attach = bool(payload.get("attach"))
     bound = (
@@ -1459,6 +1473,26 @@ def create_run(home, payload):
         if not bound:
             raise ApiError(400, "workspace (string) is required")
 
+    # Per-run strategy profile (build-driven review reform, phase 1b). When
+    # supplied, the run stores a {name, version, hash} snapshot of the
+    # chosen profile in its config and the profile SEALS (first production
+    # use). It is OPTIONAL during the reform build-out: a run with no
+    # profile is profile-less and behaves exactly as today — the driver
+    # does not read profiles yet (that lands with the stage interpreter),
+    # so a profiled run is likewise bit-identical for now; only the stored
+    # snapshot differs. Validated for existence here so a typo fails fast
+    # before any state is created; sealed and snapshotted only once the
+    # state exists (below).
+    profile_name = payload.get("profile")
+    if profile_name is not None:
+        if not isinstance(profile_name, str) or not profile_name.strip():
+            raise ApiError(400, "profile must be a non-empty profile name")
+        profile_name = profile_name.strip()
+        try:
+            profiles.load(home, profile_name)  # existence/validity, no seal
+        except profiles.ProfileError as exc:
+            raise ApiError(400, str(exc))
+
     goal_doc = None
     if attach:
         # Attach adopts the on-disk state exactly as it is; a supplied
@@ -1467,7 +1501,8 @@ def create_run(home, payload):
         # ignored: reject instead of pretending it was honored. Adopts the
         # legacy workspace-root state, or an explicit `state_path` for a
         # per-milestone run.
-        for key in ("goal", "goal_doc", "config", "project", "work_area"):
+        for key in ("goal", "goal_doc", "config", "project", "work_area",
+                    "profile"):
             if payload.get(key) is not None:
                 raise ApiError(
                     400,
@@ -1564,6 +1599,15 @@ def create_run(home, payload):
             )
         except FileExistsError as exc:
             raise ApiError(409, str(exc) + ' (use "attach": true to adopt it)')
+
+    if profile_name is not None:
+        # The state exists now: seal the profile (first production
+        # reference) and snapshot its identity into the run config.
+        try:
+            profile_ref = profiles.reference(home, profile_name)
+        except profiles.ProfileError as exc:
+            raise ApiError(400, str(exc))
+        _snapshot_profile_ref(state_path, profile_ref)
 
     name = payload.get("name") or os.path.basename(workspace.rstrip("/")) or "run"
     run_id = registry.make_run_id()
@@ -1926,6 +1970,40 @@ def set_acts(home, run_id, body):
     return acts
 
 
+def read_profile(entry):
+    """The run's governing strategy profile for the panel, or None for a
+    profile-less run. Read straight from state (like read_acts) and
+    tolerant of a transiently unreadable state. `base` is the snapshot
+    stored in the run config at creation; `governing` is the profile that
+    actually rules the run right now (== base until a runtime swap
+    repoints it — the swap overlay lands in a later commit)."""
+    try:
+        state = st.load(entry["state_path"])
+        base = (state.get("config") or {}).get("profile_ref")
+    except Exception:
+        return None
+    if not base:
+        return None
+    return {"base": base, "governing": base}
+
+
+def profiles_list(home):
+    """All strategy profiles for the panel selector, each carrying its
+    identity hash and its semantic content (the new-run form shows
+    name@version and the decomposition, spec §5)."""
+    out = []
+    for doc in profiles.list_profiles(home):
+        out.append({
+            "name": doc["name"],
+            "version": doc["version"],
+            "sealed": doc["sealed"],
+            "description": doc.get("description", ""),
+            "hash": profiles.semantic_hash(doc["profile"]),
+            "profile": doc["profile"],
+        })
+    return out
+
+
 def run_story(home, run_id, item):
     """The full record behind one pipeline chip — fetched on click, so
     the 2s-poll summary stays lean. item forms: round:<round_id>,
@@ -2180,6 +2258,7 @@ def run_detail(home, run_id, log_tail=80):
     detail["log"] = read_log_tail(home, run_id, log_tail)
     detail["amendments"] = read_amendments(entry)
     detail["acts"] = read_acts(entry)
+    detail["profile"] = read_profile(entry)
     detail["commit_web_base"] = commit_web_base(entry["workspace"])
     return detail
 
@@ -2238,6 +2317,8 @@ def make_handler(home):
                     self._json(200, {"ok": True, "runs": list_runs(home)})
                 elif route == "/api/recents":
                     self._json(200, {"ok": True, **recent_paths(home)})
+                elif route == "/api/profiles":
+                    self._json(200, {"ok": True, "profiles": profiles_list(home)})
                 elif route == "/api/fs":
                     exts = None
                     if "ext" in query:
@@ -2584,6 +2665,14 @@ def start_guard(home, interval=GUARD_INTERVAL_S):
 
 
 def make_server(home, port):
+    # Seed the two starter strategy profiles (strict, light) when missing,
+    # so the panel's new-run selector always has something to offer.
+    # Idempotent and best-effort: a seed-write fault must never stop the
+    # service from serving.
+    try:
+        profiles.ensure_seeds(home)
+    except Exception:
+        pass
     return ThreadingHTTPServer(("127.0.0.1", port), make_handler(home))
 
 
