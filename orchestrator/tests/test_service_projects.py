@@ -2043,7 +2043,7 @@ class TestPolicyAuthoring(ProjectsServiceTestCase):
             self.assertEqual(resp.status, 200)
             text = resp.read().decode("utf-8")
         # Pre-existing markers stay intact (test_root_serves_panel).
-        self.assertIn("impl roadmap", text)
+        self.assertIn("Milestone Orchestrator", text)
         self.assertIn('id="runs"', text)
         # The standing projects surface: the per-project editor (opened
         # from the sidebar tree), the create dialog behind "+ Project",

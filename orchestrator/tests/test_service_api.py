@@ -123,7 +123,7 @@ class ServiceApiTest(unittest.TestCase):
         status, body = self.request("GET", "/")
         self.assertEqual(status, 200)
         text = body.decode("utf-8")
-        self.assertIn("impl roadmap", text)
+        self.assertIn("Milestone Orchestrator", text)
         self.assertIn('id="runs"', text)
 
     def test_unknown_path_is_404_json(self):
