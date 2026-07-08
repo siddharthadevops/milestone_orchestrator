@@ -232,6 +232,20 @@ born at the compressed size with the hard table intact, instead of
 
 ### 7. The plain-language mirror becomes mandatory
 
+The `example` field's FORMAT follows the finding's class (operator
+insight, 2026-07-08, distilled from reading live findings):
+- CONTRADICTION -> two colliding facts, no narrative ("Slice 5 closes
+  the dropdown at four options — no more, ever. The plan requires
+  slice 7 to add a fifth: 'remove a member'."). Keep the load-bearing
+  word: what makes it a contradiction (closed/sealed/never), not a
+  mere TODO.
+- SILENT DIVERGENCE -> the smallest two-actor scenario (one writes
+  `id`, the other reads `thread_id`; both followed the note; the UI
+  reads nothing).
+- OMISSION -> "X promises Y; Y appears nowhere".
+The plain sentence names the CONCRETE thing, never its category ("the
+result of creating a chat", not "shared chat workflow data").
+
 Already live as a soft field (`plain` on every reviewer finding, commit
 `8a7b874`: one sentence a non-engineer understands, written BEFORE
 choosing severity; shown first in panel stories; fed to the drift-risk
