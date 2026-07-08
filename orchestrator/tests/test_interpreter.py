@@ -2,6 +2,7 @@
 
 import unittest
 
+from orchestrator import contracts
 from orchestrator import driver
 from orchestrator import interpreter as it
 from orchestrator import profiles
@@ -120,6 +121,36 @@ class VerifyEmbeddedTest(unittest.TestCase):
         # No recorded hash to check against (a bare content embed) — not an
         # inconsistency, just nothing to verify.
         it.verify_embedded(_state({"profile": {"stages": []}}))
+
+
+class DocDeferScopeTest(unittest.TestCase):
+    """The DOC-gate deferral scope (spec §2): legacy/profile-less defer only
+    lone P3s; a reform profile widens to P2/P3 (P0/P1 always fix)."""
+
+    def test_profileless_and_legacy_are_p3_only(self):
+        self.assertEqual(it.doc_defer_scope(_state({})), ("P3",))
+        legacy = _state({"profile": profiles.SEEDS["legacy"]["profile"]})
+        self.assertEqual(it.doc_defer_scope(legacy), ("P3",))
+
+    def test_reform_profiles_widen_to_p2_p3(self):
+        for name in ("strict", "light"):
+            st = _state({"profile": profiles.SEEDS[name]["profile"]})
+            self.assertEqual(set(it.doc_defer_scope(st)), {"P2", "P3"})
+
+    def test_all_in_severity_matches_scope(self):
+        p3 = [{"severity": "P3"}]
+        p2p3 = [{"severity": "P2"}, {"severity": "P3"}]
+        with_p1 = [{"severity": "P1"}, {"severity": "P3"}]
+        # legacy scope: only all-P3 rounds are eligible.
+        self.assertTrue(contracts.all_in_severity(p3, ("P3",)))
+        self.assertFalse(contracts.all_in_severity(p2p3, ("P3",)))
+        # reform scope: P2/P3 eligible, a P0/P1 present blocks deferral.
+        self.assertTrue(contracts.all_in_severity(p2p3, ("P2", "P3")))
+        self.assertFalse(contracts.all_in_severity(with_p1, ("P2", "P3")))
+        # empty is never eligible; all_p3 stays a P3-only alias.
+        self.assertFalse(contracts.all_in_severity([], ("P2", "P3")))
+        self.assertTrue(contracts.all_p3(p3))
+        self.assertFalse(contracts.all_p3(p2p3))
 
 
 class DecideSeamTest(unittest.TestCase):

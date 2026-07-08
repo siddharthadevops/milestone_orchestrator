@@ -385,9 +385,21 @@ def all_p3(findings):
     """True when there is at least one finding and EVERY finding is P3 —
     the 'lone trivial nit(s)' case eligible for the reclassify/debt path.
     Any P0/P1/P2 present means a fix round fires anyway (P3s ride along)."""
+    return all_in_severity(findings, ("P3",))
+
+
+def all_in_severity(findings, scope):
+    """True when there is at least one finding and EVERY finding's severity
+    is in `scope` — the round is eligible for the reclassify/debt path.
+    Any finding whose severity is OUTSIDE scope (e.g. a P0/P1 when scope is
+    the reform's {P2,P3}) means a fix round fires anyway. Generalizes
+    all_p3 from the pre-reform P3-only gate to a profile-chosen scope; the
+    canonical rule that P0/P1 ALWAYS fix (spec decision 1) is the invariant
+    that P0/P1 are never in any deferral scope."""
     findings = list(findings or [])
+    scope = set(scope)
     return bool(findings) and all(
-        f.get("severity") == "P3" for f in findings
+        f.get("severity") in scope for f in findings
     )
 
 

@@ -781,21 +781,24 @@ no markdown fences:
 
 def build_reclassify(family, workspace, finding, artifact, unit_kind=None,
                      amendments=None, project_context=None):
-    """Opposite-family RATER of a lone P3's implementation-drift risk.
+    """Opposite-family RATER of one finding's implementation-drift risk.
 
     Deliberately not a yes/no decision: asked "is it safe?", a worker
     systematically answers no (conceding risk costs it nothing; ruling
     risk out feels like signing). Asked for a graded rating with no
     decision attached, it stays calibrated. The driver compares the
-    rating against the run's p3_defer_max_risk threshold."""
+    rating against the run's p3_defer_max_risk threshold. Used for lone
+    P3s (the pre-reform gate) and, under a reform profile, for the P2/P3
+    findings the profile's doc-gate threshold decides between fix and
+    debt — the rating question is the same at any severity."""
     return (
         _header(contracts.KIND_RECLASSIFY, family, workspace)
-        + "\nTASK: rate ONE P3 finding. REPORT ONLY — you edit nothing and\n"
-        "review nothing else.\n\n"
+        + "\nTASK: rate ONE finding's drift risk. REPORT ONLY — you edit\n"
+        "nothing and review nothing else.\n\n"
         + _amendments_block(amendments)
         + _project_context_block(project_context)
-        + "Another reviewer (the opposite family) raised the P3 below on\n"
-        "%s. The orchestrator is deciding whether to fix it now or defer\n"
+        + "Another reviewer (the opposite family) raised the finding below\n"
+        "on %s. The orchestrator is deciding whether to fix it now or defer\n"
         "it as TRACKED DEBT — recorded per unit, revisited later; deferred\n"
         "never means silently dropped.\n\n"
         % (artifact,)
@@ -811,10 +814,10 @@ def build_reclassify(family, workspace, finding, artifact, unit_kind=None,
         "         wrong tests, or a wrong contract reading\n"
         "  xhigh  misstates pinned contract/behaviour facts; building on\n"
         "         it as written would likely produce wrong work\n\n"
-        + "Rate the finding AS RAISED against the artifact AS IT IS. If the\n"
-        "finding is actually more severe than P3 (it touches correctness,\n"
-        "behaviour, or test coverage), say so in the reason and rate high\n"
-        "or xhigh. Do not inflate the rating to be safe and do not deflate\n"
+        + "Rate the finding AS RAISED against the artifact AS IT IS. If it\n"
+        "touches correctness, behaviour, or test coverage (more than its\n"
+        "severity label suggests), say so in the reason and rate high or\n"
+        "xhigh. Do not inflate the rating to be safe and do not deflate\n"
         "it to be agreeable — a wrong rating in either direction corrupts\n"
         "the decision this feeds.\n\n"
         + "FINDING (severity %s, id %s):\n%s\n"

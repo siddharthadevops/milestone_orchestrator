@@ -1760,7 +1760,7 @@ class Driver(object):
                 if defer_ok:
                     debt.append({
                         "id": "%s-%s" % (raising_family, finding["id"]),
-                        "severity": "P3",
+                        "severity": finding.get("severity", "P3"),
                         "summary": finding.get("summary", ""),
                         "raised_by": raising_family,
                         "cleared_by": opp,
@@ -1868,15 +1868,22 @@ class Driver(object):
         self._check_worker_blocked(unit, output, contracts.KIND_REVIEW_ROUND)
         self._validate_contests(unit, output, contracts.KIND_REVIEW_ROUND)
         findings = output.get("findings", [])
-        # P3-debt deferral: DOC phase only, and only a round that is ALL P3
-        # (any P0-P2 fires a normal fix and the P3s ride along). Each P3
-        # gets an opposite-family reclassification; only if every one is
-        # verified safe do we defer them as debt and advance.
+        # Debt deferral: DOC phase only. The profile chooses the deferrable
+        # severity scope (interpreter.doc_defer_scope): the pre-reform gate
+        # and legacy/profile-less runs defer only lone P3s; a reform profile
+        # widens it to the full §2 gate (P0/P1 always fix — never in scope;
+        # P2/P3 rated, threshold decides). A round is eligible only when
+        # EVERY finding is in scope (any out-of-scope finding, e.g. a P0/P1,
+        # fires a normal fix and the in-scope findings ride along). Each
+        # eligible finding gets an opposite-family drift-risk rating; only
+        # if every one rates at-or-below the threshold do we defer them as
+        # debt and advance.
+        defer_scope = interpreter.doc_defer_scope(self.state)
         deferred = None
         if (findings
                 and self.config.get("p3_reclassify_debt")
                 and unit["kind"] in (st.UNIT_SKELETON, st.UNIT_SLICE_DOC)
-                and contracts.all_p3(findings)):
+                and contracts.all_in_severity(findings, defer_scope)):
             all_ok, debt = self._reclassify_p3_batch(
                 unit, [(f, family) for f in findings])
             if all_ok:

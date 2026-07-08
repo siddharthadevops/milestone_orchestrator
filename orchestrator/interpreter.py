@@ -80,6 +80,23 @@ def effective_config(state):
     return merged
 
 
+def doc_defer_scope(state):
+    """The severities a DOC-phase review round may defer as tracked debt
+    (subject to the drift-risk threshold). The pre-reform gate — and the
+    `legacy` compat profile and every profile-less run — defer only lone
+    P3s ({"P3"}). A reform profile widens this to the full §2 doc gate:
+    P0/P1 ALWAYS fix (never in scope), P2/P3 are rated and the threshold
+    decides fix-vs-debt ({"P2","P3"}). Returned as a tuple so callers pass
+    it straight to contracts.all_in_severity.
+
+    A reform profile is any governing profile that is not the `legacy`
+    compatibility artifact (which declares `compat`)."""
+    profile = governing_profile(state)
+    if profile and not profile.get("compat"):
+        return ("P2", "P3")
+    return ("P3",)
+
+
 def verify_embedded(state):
     """Fail loudly if an embedded profile snapshot is internally
     inconsistent — its content hash must match the recorded profile_ref

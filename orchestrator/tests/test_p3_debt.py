@@ -12,6 +12,7 @@ import tempfile
 import unittest
 
 from orchestrator import driver as drv
+from orchestrator import profiles
 from orchestrator import runners
 from orchestrator import state as st
 
@@ -103,6 +104,63 @@ class TestP3Debt(DriverTestCase):
             self.assertEqual(unit["debt"], [])
             # The P3 is queued for the fixer, not deferred.
             self.assertEqual([f["id"] for f in unit["fix_queue"]], ["F1"])
+
+    def test_reform_profile_defers_a_lone_p2_as_debt(self):
+        # 3b: a reform profile widens the DOC gate to P2/P3. A lone P2 rated
+        # at-or-below the profile threshold defers as tracked debt, and the
+        # debt records the finding's REAL severity (P2), not a hardcoded P3.
+        strict = profiles.SEEDS["strict"]["profile"]  # threshold "low"
+        with tempfile.TemporaryDirectory(prefix="orch-mock-") as ws:
+            path = init_state(
+                ws, make_config(p3_reclassify_debt=True, profile=strict))
+            mock = runners.MockRunner([
+                draft_step(),
+                step("review_round",
+                     report("review_round",
+                            [finding("F1", "minor phrasing", severity="P2")]),
+                     family="codex"),
+                reclassify(True, family="claude", reason="cosmetic",
+                           risk="low"),
+                step("review_round",
+                     report("review_round",
+                            [finding("F1", "minor phrasing", severity="P2")]),
+                     family="claude"),
+                reclassify(True, family="codex", reason="cosmetic",
+                           risk="low"),
+                step("seal_half", report("seal_half"), family="codex"),
+                step("seal_half", report("seal_half"), family="claude"),
+            ])
+            driver = drv.Driver(path, runner=mock)
+            self.step_until(driver,
+                            lambda s: s["units"][0]["status"] == st.U_SEALED)
+            unit = st.load(path)["units"][0]
+            self.assertEqual(unit["status"], st.U_SEALED)
+            self.assertEqual(
+                [r for r in unit["rounds"] if r["kind"] == "fix_findings"], [])
+            self.assertEqual(len(unit["debt"]), 2)
+            self.assertEqual(unit["debt"][0]["severity"], "P2")
+
+    def test_legacy_profile_still_fixes_a_lone_p2(self):
+        # The SAME P2 under the legacy compat profile keeps the pre-reform
+        # P3-only scope: not deferrable, so a fix cycle fires (no reclassify
+        # call is even made — the round is not all-in-scope).
+        legacy = profiles.SEEDS["legacy"]["profile"]
+        with tempfile.TemporaryDirectory(prefix="orch-mock-") as ws:
+            path = init_state(
+                ws, make_config(p3_reclassify_debt=True, profile=legacy))
+            mock = runners.MockRunner([
+                draft_step(),
+                step("review_round",
+                     report("review_round",
+                            [finding("F1", "minor phrasing", severity="P2")]),
+                     family="codex"),
+            ])
+            driver = drv.Driver(path, runner=mock)
+            self.step_until(
+                driver, lambda s: s["units"][0]["status"] == st.U_FIXING)
+            unit = st.load(path)["units"][0]
+            self.assertEqual(unit["status"], st.U_FIXING)
+            self.assertEqual(unit["debt"], [])
 
     def test_threshold_decides_over_the_rating(self):
         # A "medium" rating defers under threshold "medium" but is kept
