@@ -547,12 +547,14 @@ class Driver(object):
 
     def _record_fatal_malformed(self, raw_name, kind, family, exc,
                                 raw_paths):
-        """The RED chip: BOTH attempts of a call violated the contract.
-        Only recorded for WorkerProtocolError (a runner/infra failure is
-        not the worker's prose); the event carries both raw paths so the
-        panel viewer shows exactly what each attempt returned."""
-        if not isinstance(exc, runners.WorkerProtocolError):
-            return
+        """The RED chip: ANY failed LLM call — a double contract
+        violation, a crashed/timed-out/non-zero CLI, quota — lands in
+        the incident trail (operator decision 2026-07-09). The event
+        carries whatever raw texts were captured (both attempts for a
+        protocol failure; often none for a spawn failure — the error
+        text still tells). A worker that honestly returns `blocked` is
+        NOT an LLM failure and records nothing here."""
+        raw_paths = list(raw_paths or [])
         st.append_event(
             self.state,
             "worker_malformed",
@@ -570,9 +572,9 @@ class Driver(object):
         """Main-thread emission of a seal half's fatal double violation
         (the half thread saved the raws and stashed their paths on the
         exception; events never leave half threads)."""
-        paths = getattr(exc, "protocol_raw_paths", None)
-        if not paths:
-            return
+        if not getattr(exc, "protocol_label", None):
+            return  # a blocked worker / standing-law fault: not an LLM failure
+        paths = getattr(exc, "protocol_raw_paths", None) or []
         st.append_event(
             self.state,
             "worker_malformed",
@@ -582,7 +584,7 @@ class Driver(object):
             fatal=True,
             error=str(exc)[:300],
             duration_s=None,
-            raw_path=paths[0],
+            raw_path=paths[0] if paths else None,
             raw_path2=paths[1] if len(paths) > 1 else None,
         )
 
@@ -902,9 +904,6 @@ class Driver(object):
             except (runners.RunnerError, runners.WorkerProtocolError) as exc:
                 self._clear_busy()
                 proto_paths = self._save_protocol_raws(raw_name, exc)
-                self._record_fatal_malformed(
-                    raw_name, kind, family, exc, proto_paths
-                )
                 etype, resume_at, evidence = self._classify_failure(
                     family, exc, raw_name=raw_name
                 )
@@ -920,6 +919,12 @@ class Driver(object):
                     time.sleep(retries[attempt])
                     attempt += 1
                     continue
+                # The call is now definitively FAILING the run: the red
+                # incident chip (an in-place-absorbed infra blip above
+                # records only its infra_retry event, no chip).
+                self._record_fatal_malformed(
+                    raw_name, kind, family, exc, proto_paths
+                )
                 resume_at = errclass.normalize_resume_at(resume_at)
                 if etype in errclass.AUTO_RESUMABLE and not resume_at:
                     fallback_min = (
@@ -2431,11 +2436,7 @@ class Driver(object):
                     raw_texts=list(getattr(exc, "raw_texts", []) or [])
                     + [str(exc)],
                     family=family,
-                    protocol_raw_paths=(
-                        proto_paths
-                        if isinstance(exc, runners.WorkerProtocolError)
-                        else None
-                    ),
+                    protocol_raw_paths=proto_paths,
                     protocol_label=raw_name,
                 )
             raw_path = self._save_raw(raw_name, result.text)

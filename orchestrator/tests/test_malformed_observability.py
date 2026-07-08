@@ -171,6 +171,40 @@ class MalformedObservabilityTest(unittest.TestCase):
         self.assertEqual(events[0]["family"], "codex")
         self.assertTrue(events[0]["raw_path2"])
 
+    def test_runner_failure_records_a_fatal_incident(self):
+        # ANY definitively failed LLM call is a red incident — here the
+        # CLI itself dies (RunnerError), no output captured at all.
+        class DyingRunner(runners.MockRunner):
+            def call(self, family, prompt, workspace, model=None,
+                     effort=None):
+                if runners.prompt_kind(prompt) == "review_round":
+                    raise runners.RunnerError(
+                        "family %s exited 1 with no output" % family
+                    )
+                return super().call(family, prompt, workspace,
+                                    model=model, effort=effort)
+
+        path = init_state(
+            self.ws,
+            make_config(git={"enabled": False}, infra_retry_backoff_s=[]),
+        )
+        driver = drv.Driver(path, runner=DyingRunner([draft()]))
+        for _ in range(10):
+            action, _n = driver.step()
+            if action.type in (drv.A_DONE, drv.A_FAILED):
+                break
+            if st.load(path).get("failure"):
+                break
+        state = st.load(path)
+        self.assertIsNotNone(state["failure"])
+        events = self._malformed_events(state)
+        self.assertEqual(len(events), 1)
+        e = events[0]
+        self.assertTrue(e["fatal"])
+        self.assertEqual(e["kind"], "review_round")
+        self.assertIn("exited 1", e["error"])
+        self.assertIsNone(e["raw_path"])  # the CLI died: nothing captured
+
     def test_clean_run_records_nothing(self):
         state = self._drive(
             [

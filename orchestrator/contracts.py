@@ -34,6 +34,13 @@ the run with the explanation recorded.
 """
 
 SEVERITIES = ("P0", "P1", "P2", "P3")
+
+# The finding lay-mirror bound: the PROMPT asks for ~500 chars, the
+# VALIDATOR accepts double. An LLM cannot count characters reliably, so
+# a hard gate at the asked length turns honest near-misses into burned
+# repair retries (seen live: an opus `example` slightly past 500 cost a
+# 13-minute strike). The doubled bound still stops runaway prose.
+FINDING_TEXT_MAX = 1000
 DISPOSITIONS = ("fixed", "rejected", "rejected_adjudicated", "blocked")
 
 # Worker call kinds. Every prompt carries a `KIND:` header with one of these.
@@ -150,16 +157,16 @@ def validate_report_finding(finding, ctx, require_plain=False):
     # for now (workers spawned before the fields existed must keep
     # validating); the prompt demands both.
     plain = _optional(finding, "plain", str, ctx)
-    if plain is not None and len(plain) > 500:
+    if plain is not None and len(plain) > FINDING_TEXT_MAX:
         raise ContractError(
             "%s: plain must stay one plain-language sentence "
-            "(<=500 chars)" % ctx
+            "(<=%d chars)" % (ctx, FINDING_TEXT_MAX)
         )
     example = _optional(finding, "example", str, ctx)
-    if example is not None and len(example) > 500:
+    if example is not None and len(example) > FINDING_TEXT_MAX:
         raise ContractError(
             "%s: example must stay one minimal concrete scenario "
-            "(<=500 chars)" % ctx
+            "(<=%d chars)" % (ctx, FINDING_TEXT_MAX)
         )
     if require_plain:
         if not (plain and plain.strip()):

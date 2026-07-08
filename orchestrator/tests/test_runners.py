@@ -194,7 +194,14 @@ class TestValidateWorkerOutputHappy(unittest.TestCase):
         f["plain"] = "we are specifying a floating menu; the doc and the README disagree"
         obj = ok_output(contracts.KIND_REVIEW_ROUND, findings=[f])
         contracts.validate_worker_output(obj, contracts.KIND_REVIEW_ROUND)
+        # the prompt asks ~500 but the validator tolerates DOUBLE
+        # (an LLM cannot count chars); past that it refuses.
         f["plain"] = "x" * 501
+        contracts.validate_worker_output(
+            ok_output(contracts.KIND_REVIEW_ROUND, findings=[f]),
+            contracts.KIND_REVIEW_ROUND,
+        )
+        f["plain"] = "x" * (contracts.FINDING_TEXT_MAX + 1)
         with self.assertRaises(contracts.ContractError):
             contracts.validate_worker_output(
                 ok_output(contracts.KIND_REVIEW_ROUND, findings=[f]),
@@ -216,6 +223,11 @@ class TestValidateWorkerOutputHappy(unittest.TestCase):
         obj = ok_output(contracts.KIND_REVIEW_ROUND, findings=[f])
         contracts.validate_worker_output(obj, contracts.KIND_REVIEW_ROUND)
         f["example"] = "x" * 501
+        contracts.validate_worker_output(
+            ok_output(contracts.KIND_REVIEW_ROUND, findings=[f]),
+            contracts.KIND_REVIEW_ROUND,
+        )
+        f["example"] = "x" * (contracts.FINDING_TEXT_MAX + 1)
         with self.assertRaises(contracts.ContractError):
             contracts.validate_worker_output(
                 ok_output(contracts.KIND_REVIEW_ROUND, findings=[f]),
