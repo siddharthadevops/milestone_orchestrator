@@ -1171,6 +1171,19 @@ async function refreshDetail() {
       });
       (sum.units || []).forEach(u => { if (!seen[u.unit]) rows += unitRow(u); });
       html += `<div class="card"><h3>Pipeline</h3>` + rows + `</div>`;
+      if ((sum.malformed || []).length) {
+        // Repaired first strikes: the worker's first output violated the
+        // contract and the repair retry then validated. Click → the exact
+        // text it returned (prompt/contract tuning evidence).
+        html += `<div class="card"><h3>Malformed outputs (repaired)</h3>` +
+          sum.malformed.slice().reverse().map(e =>
+            `<div class="evt">
+               <span class="chip sev23 clicky"
+                 onclick="showStory('malformed:${e.seq}')">${esc(e.family || "?")} · ${esc(e.kind || "?")}</span>
+               <span class="t">${esc((e.at || "").slice(5, 16).replace("T", " "))}</span>
+               ${esc(e.label || "")}${e.duration_s != null ? ` · ${fmtDHMS(e.duration_s)} wasted` : ""}
+             </div>`).join("") + `</div>`;
+      }
       html += `<div class="card"><h3>Events</h3>` +
         (sum.last_events || []).slice().reverse().map(e => {
           const extra = Object.entries(e)
@@ -1310,6 +1323,13 @@ async function showStory(item) {
     if (res.slices && res.slices.length)
       body += `<div class="story-note">slices:\n${esc(res.slices.map(x => x.id + ". " + x.title).join("\n"))}</div>`;
     if (res.notes) body += `<div class="story-note">${esc(res.notes)}</div>`;
+  } else if (d.story === "malformed") {
+    title = `Malformed output — ${d.label || "?"}`;
+    body += `<div class="story-note">contract error: ${esc(d.error || "?")}
+      \nThe worker's first output violated the contract; the single repair
+      retry then validated. This is the text it returned:</div>`;
+    body += `<pre class="log mono" style="max-height:40vh;overflow:auto">${
+      esc(d.raw_text != null ? d.raw_text : "(raw file no longer on disk)")}</pre>`;
   } else if (d.story === "debt") {
     title = `${d.unit} — P3 drift-risk reclassification`;
     const debt = d.debt || [];

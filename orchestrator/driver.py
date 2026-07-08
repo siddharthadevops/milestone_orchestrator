@@ -880,7 +880,31 @@ class Driver(object):
             break
         self._clear_busy()
         raw_path = self._save_raw(raw_name, result.text)
+        self._record_repair(raw_name, kind, family, result)
         return output, result, raw_path
+
+    def _record_repair(self, raw_name, kind, family, result):
+        """Permanent trace of a repaired first strike: a worker whose first
+        output violated the contract and whose single repair retry then
+        validated used to be invisible (no event, no raw, its duration
+        unrecorded — the panel's '7 min' call that took 20). The malformed
+        text lands in raw/ and a worker_malformed event carries the error,
+        the wasted duration, and the raw path — the panel surfaces it as a
+        chip; prompt/contract tuning needs these strikes visible."""
+        rep = getattr(result, "repair", None)
+        if not rep:
+            return
+        raw_path = self._save_raw("%s-malformed" % raw_name, rep["raw_text"])
+        st.append_event(
+            self.state,
+            "worker_malformed",
+            label=raw_name,
+            kind=kind,
+            family=family,
+            error=str(rep["error"])[:300],
+            duration_s=rep["duration_s"],
+            raw_path=raw_path,
+        )
 
     def _classify_failure(self, family, exc, raw_name=None):
         """Type a failed worker call: deterministic patterns over the raw
@@ -1935,6 +1959,9 @@ class Driver(object):
                             self.workspace, model=dm, effort=de,
                         )
                         self._save_raw(raw_name, result.text)
+                        self._record_repair(
+                            raw_name, contracts.KIND_RECLASSIFY, opp, result
+                        )
                         if output.get("status") == "ok":
                             # The worker only RATES drift risk; the
                             # deterministic decision is this comparison
@@ -2279,12 +2306,28 @@ class Driver(object):
                     "%s worker blocked: %s"
                     % (contracts.KIND_SEAL_HALF, output.get("blocked_reason"))
                 )
-            return {
+            half = {
                 "result": output,
                 "raw_path": raw_path,
                 "duration_s": result.duration_s,
                 "workspace_modified": False,
             }
+            rep = getattr(result, "repair", None)
+            if rep:
+                # Thread-safe part only: write the per-family raw file
+                # (distinct names, no race) and stash the strike; the
+                # main thread emits the worker_malformed event after the
+                # halves join (events must never be appended from half
+                # threads).
+                half["repair"] = {
+                    "label": raw_name,
+                    "error": str(rep["error"])[:300],
+                    "duration_s": rep["duration_s"],
+                    "raw_path": self._save_raw(
+                        "%s-malformed" % raw_name, rep["raw_text"]
+                    ),
+                }
+            return half
 
         def fail_attempt(reason, raw_texts=None, failed_family=None):
             # Runs on the main thread (sequential path directly; concurrent
@@ -2410,6 +2453,18 @@ class Driver(object):
                 "seal attempt %d lost half(s) for: %s"
                 % (attempt_no, ", ".join(sorted(set(families) - set(halves))))
             )
+        for fam in families:
+            # Main-thread emission of any half's repaired first strike
+            # (stashed thread-safely in run_half_pure); popped so the
+            # seal record itself stays exactly its historical shape.
+            rep = halves[fam].pop("repair", None)
+            if rep:
+                st.append_event(
+                    self.state, "worker_malformed",
+                    label=rep["label"], kind=contracts.KIND_SEAL_HALF,
+                    family=fam, error=rep["error"],
+                    duration_s=rep["duration_s"], raw_path=rep["raw_path"],
+                )
         clean = all(
             contracts.findings_clean(halves[fam]["result"]) for fam in families
         )

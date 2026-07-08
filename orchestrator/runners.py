@@ -423,7 +423,16 @@ def call_worker(runner, family, prompt, kind, workspace,
     result2 = runner.call(family, repair_prompt, workspace, model=model, effort=effort)
     try:
         obj = extract_json(result2.text)
-        return _validate(obj), result2
+        validated = _validate(obj)
+        # A repaired first strike must not stay invisible: hand the caller
+        # what the worker actually returned (prompt/contract tuning needs
+        # the malformed text and its cost, not just the happy ending).
+        result2.repair = {
+            "error": first_error,
+            "raw_text": result.text,
+            "duration_s": result.duration_s,
+        }
+        return validated, result2
     except (ValueError, contracts.ContractError) as exc:
         raise WorkerProtocolError(
             "family %s produced contract-violating output twice for kind %s: "

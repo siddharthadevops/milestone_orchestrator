@@ -1616,6 +1616,7 @@ class TestSummary(TempWorkspaceCase):
                 "units",
                 "events_total",
                 "last_events",
+                "malformed",
             },
         )
         self.assertEqual(summ["goal"], "Build X")

@@ -2100,10 +2100,13 @@ def set_profile_swap(home, run_id, body):
     return overlay
 
 
+MALFORMED_RAW_CLIP = 20000
+
+
 def run_story(home, run_id, item):
     """The full record behind one pipeline chip — fetched on click, so
     the 2s-poll summary stays lean. item forms: round:<round_id>,
-    seal:<unit>:<attempt>, draft:<unit>."""
+    seal:<unit>:<attempt>, draft:<unit>, malformed:<event seq>."""
     reg = registry.load(home)
     entry = registry.get(reg, run_id)
     if entry is None:
@@ -2113,6 +2116,38 @@ def run_story(home, run_id, item):
     except Exception as exc:
         raise ApiError(409, "state unreadable: %s" % exc)
     kind, _, ref = (item or "").partition(":")
+    if kind == "malformed":
+        # The repaired-first-strike viewer: the raw path comes from the
+        # run's OWN ledger event (never from the request), so this reads
+        # only files the driver itself recorded.
+        for e in state["events"]:
+            if e.get("type") != "worker_malformed" or str(e.get("seq")) != ref:
+                continue
+            raw_text = None
+            raw_path = e.get("raw_path")
+            if raw_path and not os.path.isabs(raw_path):
+                # _save_raw records workspace-relative paths.
+                raw_path = os.path.join(state["workspace"], raw_path)
+            try:
+                with open(raw_path, "r", encoding="utf-8",
+                          errors="replace") as fh:
+                    raw_text = fh.read(MALFORMED_RAW_CLIP + 1)
+                if len(raw_text) > MALFORMED_RAW_CLIP:
+                    raw_text = raw_text[:MALFORMED_RAW_CLIP] + "\n… (clipped)"
+            except (OSError, TypeError):
+                pass  # the raw file may be gone; the event still tells
+            return {
+                "story": "malformed",
+                "label": e.get("label"),
+                "kind": e.get("kind"),
+                "family": e.get("family"),
+                "at": e.get("at"),
+                "duration_s": e.get("duration_s"),
+                "error": e.get("error"),
+                "raw_path": e.get("raw_path"),
+                "raw_text": raw_text,
+            }
+        raise ApiError(404, "unknown malformed event %r" % ref)
     if kind == "round":
         for unit in state["units"]:
             for r in unit["rounds"]:

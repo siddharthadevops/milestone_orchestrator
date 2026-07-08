@@ -633,8 +633,47 @@ class StoryApiTest(ServiceApiTest):
             "drift_risk": "low", "threshold": "low",
             "defer_ok": True, "reason": "cosmetic; no drift",
         })
+        # A repaired first strike, with its malformed raw on disk (the
+        # story viewer reads the path recorded by the run's own ledger).
+        raw_path = os.path.join(ws, "malformed-r1.txt")
+        with open(raw_path, "w", encoding="utf-8") as fh:
+            fh.write("I'll review this thoroughly next turn!")
+        state["events"].append({
+            "seq": 1000, "at": "2026-07-05T10:30:00+0200",
+            "type": "worker_malformed", "label": "skeleton-claude-r1",
+            "kind": "review_round", "family": "claude",
+            "error": "worker[review_round]: missing required key 'status'",
+            "duration_s": 440.0, "raw_path": raw_path,
+        })
         st.save(entry["state_path"], state)
         return rid
+
+    def test_malformed_story_and_summary_trail(self):
+        ws = self.workspace("ws-malformed")
+        rid = self._seed(ws)
+        # summary carries the whole-run trail for the panel's chip card
+        _, detail = self.request_json("GET", "/api/runs/%s" % rid)
+        trail = detail["summary"]["malformed"]
+        self.assertEqual(len(trail), 1)
+        self.assertEqual(trail[0]["family"], "claude")
+        # the story returns the malformed text itself
+        status, body = self.request_json(
+            "GET", "/api/runs/%s/story?item=malformed:1000" % rid)
+        self.assertEqual(status, 200)
+        self.assertEqual(body["story"], "malformed")
+        self.assertEqual(body["label"], "skeleton-claude-r1")
+        self.assertIn("missing required key", body["error"])
+        self.assertEqual(body["raw_text"],
+                         "I'll review this thoroughly next turn!")
+        # unknown seq refuses; a vanished raw file degrades to null text
+        status, _ = self.request_json(
+            "GET", "/api/runs/%s/story?item=malformed:1234" % rid)
+        self.assertEqual(status, 404)
+        os.unlink(os.path.join(ws, "malformed-r1.txt"))
+        status, body = self.request_json(
+            "GET", "/api/runs/%s/story?item=malformed:1000" % rid)
+        self.assertEqual(status, 200)
+        self.assertIsNone(body["raw_text"])
 
     def test_round_seal_and_draft_stories(self):
         ws = self.workspace("ws-story")

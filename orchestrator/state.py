@@ -1064,6 +1064,12 @@ def summary(state):
         "units": units_view,
         "events_total": len(state["events"]),
         "last_events": state["events"][-30:],
+        # Every repaired first strike of the whole run (not just the event
+        # tail): the panel renders these as chips — prompt/contract tuning
+        # needs the full trail. Bounded; the ledger keeps the rest.
+        "malformed": [
+            e for e in state["events"] if e.get("type") == "worker_malformed"
+        ][-50:],
     }
     block = state.get("project")
     if block is not None:
