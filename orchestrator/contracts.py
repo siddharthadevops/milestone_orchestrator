@@ -445,8 +445,14 @@ REVIEW kinds (review_round / delta_review / seal_half) add:
       actor, one action, the wrong outcome vs the expected one, in plain
       words. E.g. 'a test deletes a message without saying who is in the
       thread; the fake chat allows it; the real one rejects it with an
-      authorization error'. If you cannot write such a scenario, the
-      finding may not be real>",
+      authorization error'. For a CONTRADICTION, two colliding facts
+      beat a scenario: 'the doc closes the list at four types — no
+      more, ever. The plan requires a fifth.' If you cannot write such
+      a scenario, the finding may not be real. THE BAR for plain AND
+      example: a reader who has NEVER seen this codebase must
+      understand what is wrong, judge how big it is, and know where to
+      act — WITHOUT opening a single file. If understanding requires
+      reading code, your expression failed: rewrite it>",
      "contests": null | {"rejection_id": "<id from the ADJUDICATED
       REJECTIONS list>", "new_evidence": "<the new fact that contradicts
       the recorded rationale>"}}

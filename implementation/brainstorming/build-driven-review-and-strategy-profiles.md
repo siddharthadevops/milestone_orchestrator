@@ -246,6 +246,16 @@ insight, 2026-07-08, distilled from reading live findings):
 The plain sentence names the CONCRETE thing, never its category ("the
 result of creating a chat", not "shared chat workflow data").
 
+THE ACCEPTANCE BAR (operator, 2026-07-08 — binding): plain + example
+must be understandable by someone who has NEVER seen this codebase —
+zero code exposure. If understanding the finding requires opening a
+single file, the expression FAILED and must be rewritten. The test is
+threefold: the reader (1) understands what is wrong, (2) judges its
+severity instantly, (3) knows where to act ("I go to the slice 5 doc
+and change it") — all from the two lay layers alone. Rationale: the
+system's operators are its real audience, and they do not read code;
+findings illegible without code are findings addressed to nobody.
+
 Already live as a soft field (`plain` on every reviewer finding, commit
 `8a7b874`: one sentence a non-engineer understands, written BEFORE
 choosing severity; shown first in panel stories; fed to the drift-risk
