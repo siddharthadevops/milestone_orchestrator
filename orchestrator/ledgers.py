@@ -44,6 +44,23 @@ def adjudications_path(state):
     return os.path.join(docs_dir(state), "adjudications.md")
 
 
+def goal_path(state):
+    return os.path.join(docs_dir(state), "goal.md")
+
+
+def render_goal(state):
+    """The operator's goal text, frozen at launch, as its own generated
+    ledger — the re-readable ground truth a LARGE goal's prompts point at
+    instead of inlining it (a worker can re-read a file after its own
+    context compacts; inline prose it cannot). Reform runs only."""
+    return (
+        _GENERATED
+        + "# Goal (operator's mandate, snapshotted at launch)\n\n"
+        + state["goal"]
+        + ("\n" if not state["goal"].endswith("\n") else "")
+    )
+
+
 def closures_dir(state):
     return os.path.join(docs_dir(state), "closures")
 
@@ -400,14 +417,21 @@ def render_index_update(state, existing_text):
 
 def generate(state, workspace):
     """Write all ledger views. Returns the list of workspace-relative paths."""
+    from . import interpreter
+
     written = []
     docs = os.path.join(workspace, docs_dir(state))
     os.makedirs(docs, exist_ok=True)
-    for rel, content in (
+    views = [
         (record_path(state), render_milestone(state)),
         (review_log_path(state), render_review_log(state)),
         (adjudications_path(state), render_adjudications(state)),
-    ):
+    ]
+    if interpreter.reform_active(state):
+        # The goal snapshot ledger (reform runs only — a new generated
+        # file inside legacy gate commits would break bit-identity).
+        views.append((goal_path(state), render_goal(state)))
+    for rel, content in views:
         path = os.path.join(workspace, rel)
         with open(path, "w", encoding="utf-8") as fh:
             fh.write(content)

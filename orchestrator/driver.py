@@ -148,6 +148,13 @@ DEFAULT_CONFIG = {
     # work (Life/Spanner) -> "low"; UI shell work (chat components) ->
     # "medium". high/xhigh are never sensible thresholds.
     "p3_defer_max_risk": "low",
+    # Reform runs: a goal LONGER than this (chars) is not inlined into
+    # the skeleton-phase prompts — it rides as the generated goal.md
+    # ledger and the prompt orders a full read. Short goals (the common
+    # panel-typed case) stay inline: zero indirection. Instructions must
+    # dominate a prompt, and a FILE survives the worker's own context
+    # compaction where inline prose does not.
+    "goal_inline_max": 8000,
     # Infra-failure handling (errclass): short in-place retries for
     # network/busy before a typed failure, and the opposite-family LLM
     # classifier fallback for noisy failure output. The service guard
@@ -1026,31 +1033,71 @@ class Driver(object):
         return 3
 
     def _goal_for(self, unit):
-        """The GOAL block a unit's prompts carry. The skeleton consumes
-        the operator's goal verbatim — restating it as the milestone
-        boundary is its job. Under a reform profile, every LATER unit
-        consumes the SEALED SKELETON instead (spec §2's chain of
-        consumption: the slice-doc drafter consumes the skeleton, the
-        implementer consumes the slice doc): hundreds of lines of
-        operator planning prose stop riding every downstream call, and
-        downstream workers judge scope against the sealed boundary
-        rather than a raw brainstorm's non-binding sketches. The full
-        goal text stays one read away in the generated milestone record
-        ("## Goal"), regenerated at every gate — the skeleton's gate has
-        always landed before any slice unit drafts. Legacy and
-        profile-less runs keep the full goal everywhere (bit-identical)."""
-        if (unit["kind"] == st.UNIT_SKELETON
-                or not interpreter.reform_active(self.state)):
+        """The GOAL block a unit's prompts carry.
+
+        Reform runs, skeleton phase: the skeleton consumes the operator's
+        goal — but a LARGE goal (config goal_inline_max) rides as the
+        generated goal.md ledger with an ordered full read instead of
+        inline text: instructions must dominate a prompt (a 60K goal
+        drowns the altitude rules and the output contract), and a file
+        survives the worker's own context compaction where inline prose
+        does not — the worker can re-read ground truth at any point.
+
+        Reform runs, later units: they consume the SEALED SKELETON
+        (spec §2's chain of consumption) — operator planning prose stops
+        riding every downstream call, and downstream workers judge scope
+        against the sealed boundary rather than a raw brainstorm's
+        non-binding sketches; goal.md stays one read away.
+
+        Legacy and profile-less runs keep the full goal inline
+        everywhere (bit-identical)."""
+        if not interpreter.reform_active(self.state):
             return self.state["goal"]
+        if unit["kind"] == st.UNIT_SKELETON:
+            limit = self.config.get("goal_inline_max")
+            if not isinstance(limit, int) or limit <= 0:
+                limit = 8000
+            if len(self.state["goal"]) <= limit:
+                return self.state["goal"]
+            self._ensure_goal_ledger()
+            return (
+                "the operator's goal document is preserved VERBATIM at "
+                "%s (generated snapshot, frozen at launch — the live "
+                "original may drift; this file is the mandate). Read it "
+                "IN FULL before working: every requirement in it binds "
+                "exactly as if it were printed here."
+                % ledgers.goal_path(self.state)
+            )
+        self._ensure_goal_ledger()
         return (
             "the sealed skeleton at %s is the operative restatement of "
             "the goal — the milestone boundary; judge scope against IT. "
-            "The operator's full original goal text is preserved under "
-            '"## Goal" in %s (generated ledger); read it only to trace '
-            "intent the skeleton does not settle."
+            "The operator's full original goal text is preserved at %s "
+            "(generated snapshot); read it only to trace intent the "
+            "skeleton does not settle."
             % (ledgers.skeleton_path(self.state),
-               ledgers.record_path(self.state))
+               ledgers.goal_path(self.state))
         )
+
+    def _ensure_goal_ledger(self):
+        """Idempotent write of the goal.md snapshot ledger, for prompts
+        that reference it before the first gate regeneration lands it
+        (the skeleton draft of a large goal precedes every gate). Always
+        called on the main thread during prompt assembly — before any
+        report-call tamper snapshot, so the write is never attributed to
+        a reviewer."""
+        rel = ledgers.goal_path(self.state)
+        path = os.path.join(self.workspace, rel)
+        content = ledgers.render_goal(self.state)
+        try:
+            with open(path, "r", encoding="utf-8") as fh:
+                if fh.read() == content:
+                    return
+        except OSError:
+            pass
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write(content)
 
     def _do_draft(self):
         unit = st.current_unit(self.state)
