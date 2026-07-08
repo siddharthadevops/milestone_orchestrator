@@ -283,10 +283,16 @@ class _SealHalfFailure(RuntimeError):
     Carries the raw output texts so the MAIN thread can classify the
     failure type (the classifier must never run inside half threads)."""
 
-    def __init__(self, message, raw_texts=None, family=None):
+    def __init__(self, message, raw_texts=None, family=None,
+                 protocol_raw_paths=None, protocol_label=None):
         RuntimeError.__init__(self, message)
         self.raw_texts = list(raw_texts or [])
         self.family = family
+        # Set only for a protocol (double contract violation) failure:
+        # the saved raw paths + label the MAIN thread turns into the
+        # fatal worker_malformed event (never appended from half threads).
+        self.protocol_raw_paths = list(protocol_raw_paths or [])
+        self.protocol_label = protocol_label
 
 
 class _StandingLawError(RuntimeError):
@@ -530,9 +536,55 @@ class Driver(object):
     def _save_protocol_raws(self, raw_name, exc):
         """Persist the raw texts of a protocol-violating call (original and
         repair retry) so the operator can inspect what the model actually
-        said; state.failure keeps only the truncated error strings."""
+        said; state.failure keeps only the truncated error strings.
+        Returns the saved workspace-relative paths."""
+        paths = []
         for i, text in enumerate(getattr(exc, "raw_texts", []) or [], 1):
-            self._save_raw("%s-protoerr%d" % (raw_name, i), text)
+            paths.append(
+                self._save_raw("%s-protoerr%d" % (raw_name, i), text)
+            )
+        return paths
+
+    def _record_fatal_malformed(self, raw_name, kind, family, exc,
+                                raw_paths):
+        """The RED chip: BOTH attempts of a call violated the contract.
+        Only recorded for WorkerProtocolError (a runner/infra failure is
+        not the worker's prose); the event carries both raw paths so the
+        panel viewer shows exactly what each attempt returned."""
+        if not isinstance(exc, runners.WorkerProtocolError):
+            return
+        st.append_event(
+            self.state,
+            "worker_malformed",
+            label=raw_name,
+            kind=kind,
+            family=family,
+            fatal=True,
+            error=str(exc)[:300],
+            duration_s=None,
+            raw_path=(raw_paths or [None])[0],
+            raw_path2=(raw_paths[1] if len(raw_paths or []) > 1 else None),
+        )
+
+    def _emit_seal_protocol_event(self, exc):
+        """Main-thread emission of a seal half's fatal double violation
+        (the half thread saved the raws and stashed their paths on the
+        exception; events never leave half threads)."""
+        paths = getattr(exc, "protocol_raw_paths", None)
+        if not paths:
+            return
+        st.append_event(
+            self.state,
+            "worker_malformed",
+            label=exc.protocol_label,
+            kind=contracts.KIND_SEAL_HALF,
+            family=exc.family,
+            fatal=True,
+            error=str(exc)[:300],
+            duration_s=None,
+            raw_path=paths[0],
+            raw_path2=paths[1] if len(paths) > 1 else None,
+        )
 
     def _consume_stale_marker(self):
         """A driver that died mid-call (Stop, crash, SIGKILL) leaves its
@@ -849,7 +901,10 @@ class Driver(object):
                 raise StopStep(str(exc))
             except (runners.RunnerError, runners.WorkerProtocolError) as exc:
                 self._clear_busy()
-                self._save_protocol_raws(raw_name, exc)
+                proto_paths = self._save_protocol_raws(raw_name, exc)
+                self._record_fatal_malformed(
+                    raw_name, kind, family, exc, proto_paths
+                )
                 etype, resume_at, evidence = self._classify_failure(
                     family, exc, raw_name=raw_name
                 )
@@ -2051,7 +2106,10 @@ class Driver(object):
                             reason = "reclassifier blocked"
                     except (runners.RunnerError,
                             runners.WorkerProtocolError) as exc:
-                        self._save_protocol_raws(raw_name, exc)
+                        self._record_fatal_malformed(
+                            raw_name, contracts.KIND_RECLASSIFY, opp, exc,
+                            self._save_protocol_raws(raw_name, exc),
+                        )
                         reason = ("reclassify call failed: %s" % exc)[:300]
                 st.append_event(
                     self.state, "reclassify_recorded",
@@ -2367,12 +2425,18 @@ class Driver(object):
                     family=family,
                 )
             except (runners.RunnerError, runners.WorkerProtocolError) as exc:
-                self._save_protocol_raws(raw_name, exc)
+                proto_paths = self._save_protocol_raws(raw_name, exc)
                 raise _SealHalfFailure(
                     "%s call failed: %s" % (contracts.KIND_SEAL_HALF, exc),
                     raw_texts=list(getattr(exc, "raw_texts", []) or [])
                     + [str(exc)],
                     family=family,
+                    protocol_raw_paths=(
+                        proto_paths
+                        if isinstance(exc, runners.WorkerProtocolError)
+                        else None
+                    ),
+                    protocol_label=raw_name,
                 )
             raw_path = self._save_raw(raw_name, result.text)
             if output["status"] == "blocked":
@@ -2441,6 +2505,7 @@ class Driver(object):
             # a1 half has nothing to parallelize and takes the direct path.
             before = self._snapshot()
             errors = {}
+            error_excs = []
             error_raws = []
 
             def worker(fam):
@@ -2454,6 +2519,7 @@ class Driver(object):
                     halves[fam] = run_half_pure(fam)
                 except _SealHalfFailure as exc:
                     errors[fam] = str(exc)
+                    error_excs.append(exc)
                     error_raws.extend(exc.raw_texts)
                 except Exception as exc:  # a dead thread must fail the run
                     errors[fam] = "seal half crashed: %r" % (exc,)
@@ -2475,6 +2541,8 @@ class Driver(object):
             finally:
                 self._clear_busy()
             if errors:
+                for e in error_excs:
+                    self._emit_seal_protocol_event(e)
                 fail_attempt(
                     "concurrent seal attempt failed: "
                     + "; ".join(
@@ -2503,6 +2571,7 @@ class Driver(object):
                 try:
                     halves[fam] = run_half_pure(fam)
                 except _SealHalfFailure as exc:
+                    self._emit_seal_protocol_event(exc)
                     fail_attempt(str(exc), raw_texts=exc.raw_texts,
                                  failed_family=exc.family)
                 finally:

@@ -645,17 +645,41 @@ class StoryApiTest(ServiceApiTest):
             "error": "worker[review_round]: missing required key 'status'",
             "duration_s": 440.0, "raw_path": raw_path,
         })
+        # A FATAL strike (both attempts violated): two raw files.
+        raw2 = os.path.join(ws, "malformed-r2-attempt2.txt")
+        with open(raw2, "w", encoding="utf-8") as fh:
+            fh.write("second attempt, still prose")
+        state["events"].append({
+            "seq": 1001, "at": "2026-07-05T10:40:00+0200",
+            "type": "worker_malformed", "label": "skeleton-claude-r2",
+            "kind": "review_round", "family": "claude", "fatal": True,
+            "error": "contract-violating output twice",
+            "duration_s": None, "raw_path": raw_path, "raw_path2": raw2,
+        })
         st.save(entry["state_path"], state)
         return rid
+
+    def test_fatal_malformed_story_carries_both_attempts(self):
+        ws = self.workspace("ws-fatal")
+        rid = self._seed(ws)
+        status, body = self.request_json(
+            "GET", "/api/runs/%s/story?item=malformed:1001" % rid)
+        self.assertEqual(status, 200)
+        self.assertTrue(body["fatal"])
+        self.assertEqual(body["raw_text"],
+                         "I'll review this thoroughly next turn!")
+        self.assertEqual(body["raw_text2"], "second attempt, still prose")
 
     def test_malformed_story_and_summary_trail(self):
         ws = self.workspace("ws-malformed")
         rid = self._seed(ws)
         # summary carries the whole-run trail for the panel's chip card
+        # (the repaired strike plus the seeded fatal one)
         _, detail = self.request_json("GET", "/api/runs/%s" % rid)
         trail = detail["summary"]["malformed"]
-        self.assertEqual(len(trail), 1)
+        self.assertEqual(len(trail), 2)
         self.assertEqual(trail[0]["family"], "claude")
+        self.assertTrue(trail[1]["fatal"])
         # the story returns the malformed text itself
         status, body = self.request_json(
             "GET", "/api/runs/%s/story?item=malformed:1000" % rid)

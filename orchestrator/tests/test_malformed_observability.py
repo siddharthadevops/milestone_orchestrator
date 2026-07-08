@@ -126,6 +126,51 @@ class MalformedObservabilityTest(unittest.TestCase):
         self.assertEqual(summ["malformed"][0]["kind"], "review_round")
         self.assertIn("seq", summ["malformed"][0])
 
+    def test_double_violation_records_a_fatal_event(self):
+        # BOTH attempts malformed: the run fails AND the strike is a
+        # FATAL event carrying both attempts' raw paths (the red chip).
+        state = self._drive(
+            [
+                draft(),
+                step("review_round", MALFORMED_REVIEW, family="codex"),
+                step("review_round", MALFORMED_REVIEW, family="codex"),
+            ],
+            stop=lambda s: s.get("failure"),
+        )
+        self.assertIsNotNone(state["failure"])
+        events = self._malformed_events(state)
+        self.assertEqual(len(events), 1)
+        e = events[0]
+        self.assertTrue(e["fatal"])
+        self.assertEqual(e["kind"], "review_round")
+        self.assertIn("contract-violating output twice", e["error"])
+        for rel in (e["raw_path"], e["raw_path2"]):
+            self.assertTrue(rel, "fatal event must carry both raw paths")
+            with open(os.path.join(state["workspace"], rel),
+                      "r", encoding="utf-8") as fh:
+                self.assertIn('"kind": "review_round"', fh.read())
+        # The summary trail carries it for the panel's red chip.
+        self.assertTrue(st.summary(state)["malformed"][0]["fatal"])
+
+    def test_seal_half_double_violation_records_fatal(self):
+        state = self._drive(
+            [
+                draft(),
+                step("review_round", report("review_round"), family="codex"),
+                step("review_round", report("review_round"), family="claude"),
+                step("seal_half", MALFORMED_SEAL, family="codex"),
+                step("seal_half", MALFORMED_SEAL, family="codex"),
+            ],
+            stop=lambda s: s.get("failure"),
+        )
+        self.assertIsNotNone(state["failure"])
+        events = self._malformed_events(state)
+        self.assertEqual(len(events), 1)
+        self.assertTrue(events[0]["fatal"])
+        self.assertEqual(events[0]["kind"], "seal_half")
+        self.assertEqual(events[0]["family"], "codex")
+        self.assertTrue(events[0]["raw_path2"])
+
     def test_clean_run_records_nothing(self):
         state = self._drive(
             [

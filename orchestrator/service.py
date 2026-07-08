@@ -2120,22 +2120,26 @@ def run_story(home, run_id, item):
         # The repaired-first-strike viewer: the raw path comes from the
         # run's OWN ledger event (never from the request), so this reads
         # only files the driver itself recorded.
+        def _read_raw(rel):
+            if not rel:
+                return None
+            path = rel
+            if not os.path.isabs(path):
+                # _save_raw records workspace-relative paths.
+                path = os.path.join(state["workspace"], path)
+            try:
+                with open(path, "r", encoding="utf-8",
+                          errors="replace") as fh:
+                    text = fh.read(MALFORMED_RAW_CLIP + 1)
+                if len(text) > MALFORMED_RAW_CLIP:
+                    text = text[:MALFORMED_RAW_CLIP] + "\n… (clipped)"
+                return text
+            except (OSError, TypeError):
+                return None  # the raw may be gone; the event still tells
+
         for e in state["events"]:
             if e.get("type") != "worker_malformed" or str(e.get("seq")) != ref:
                 continue
-            raw_text = None
-            raw_path = e.get("raw_path")
-            if raw_path and not os.path.isabs(raw_path):
-                # _save_raw records workspace-relative paths.
-                raw_path = os.path.join(state["workspace"], raw_path)
-            try:
-                with open(raw_path, "r", encoding="utf-8",
-                          errors="replace") as fh:
-                    raw_text = fh.read(MALFORMED_RAW_CLIP + 1)
-                if len(raw_text) > MALFORMED_RAW_CLIP:
-                    raw_text = raw_text[:MALFORMED_RAW_CLIP] + "\n… (clipped)"
-            except (OSError, TypeError):
-                pass  # the raw file may be gone; the event still tells
             return {
                 "story": "malformed",
                 "label": e.get("label"),
@@ -2144,8 +2148,11 @@ def run_story(home, run_id, item):
                 "at": e.get("at"),
                 "duration_s": e.get("duration_s"),
                 "error": e.get("error"),
+                "fatal": bool(e.get("fatal")),
                 "raw_path": e.get("raw_path"),
-                "raw_text": raw_text,
+                "raw_text": _read_raw(e.get("raw_path")),
+                # A FATAL strike has a second attempt: the repair's text.
+                "raw_text2": _read_raw(e.get("raw_path2")),
             }
         raise ApiError(404, "unknown malformed event %r" % ref)
     if kind == "round":
