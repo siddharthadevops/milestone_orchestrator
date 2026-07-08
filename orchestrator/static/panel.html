@@ -2,6 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Milestone Orchestrator</title>
 <style>
   :root {
@@ -285,10 +286,31 @@
   .field .pathrow select { flex: 1; border: 1px solid var(--line);
     border-radius: 8px; padding: 7px 10px; font: inherit; background: #fff;
     min-width: 0; }
+
+  /* Mobile: the panel is two full-screen pages — the run list, and (on
+     tap) the selected run's detail with a header back button. Desktop
+     keeps the two-pane layout; body.m-detail is inert there. */
+  #backbtn { display: none; border: 1px solid var(--line); background: #fff;
+    border-radius: 8px; font-size: 16px; line-height: 1; padding: 4px 10px;
+    cursor: pointer; }
+  @media (max-width: 760px) {
+    header { flex-wrap: wrap; row-gap: 4px; padding: 10px 14px; }
+    aside { width: 100%; min-width: 0; border-right: none; }
+    section#detail { display: none; }
+    body.m-detail aside { display: none; }
+    body.m-detail section#detail { display: block; padding: 14px; }
+    body.m-detail #backbtn { display: inline-block; }
+    dialog { width: calc(100vw - 20px); max-width: calc(100vw - 20px);
+             padding: 14px; }
+    .storybody { min-width: 0; max-width: none; }
+    .actgrid { grid-template-columns: 70px 1fr 1fr 1fr; }
+    .pathrow { flex-wrap: wrap; }
+  }
 </style>
 </head>
 <body>
 <header>
+  <button id="backbtn" onclick="mobileBack()" title="Back to milestones">&#8592;</button>
   <h1>Milestone Orchestrator</h1>
   <span class="dim">local programming service</span>
   <span class="dim mono" id="counts"></span>
@@ -779,7 +801,18 @@ async function refreshRuns() {
     if (selected) refreshDetail();
   } catch (e) { /* keep last render */ }
 }
-function select(id) { selected = id; goalOpen = false; refreshRuns(); refreshDetail(); }
+function select(id) {
+  selected = id; goalOpen = false;
+  document.body.classList.add("m-detail");  // mobile: swap to the detail page
+  refreshRuns(); refreshDetail();
+}
+function mobileBack() {
+  document.body.classList.remove("m-detail");
+  selected = null;
+  document.getElementById("detail").innerHTML =
+    '<div class="empty">No milestone selected.</div>';
+  refreshRuns();
+}
 const KIND_SHORT = {
   review_round: "r", delta_review: "delta_r", fix_findings: "fix",
   seal_half: "seal", verification: "verify",
