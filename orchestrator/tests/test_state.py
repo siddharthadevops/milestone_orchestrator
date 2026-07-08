@@ -336,6 +336,7 @@ class TestNewState(TempWorkspaceCase):
                 st.U_PRE_SEAL_VERIFY,
                 st.U_SEALING,
                 st.U_SEALED,
+                st.U_REPAIRING,
                 st.U_FAILED,
             ),
         )
@@ -519,7 +520,10 @@ EXPECTED_ALLOWED = {
     # U_SEALING stays U_SEALING on an invalidated attempt (workspace
     # restored, attempt retried): no self-loop transition is needed.
     st.U_SEALING: {st.U_SEALED, st.U_FIXING, st.U_FAILED},
-    st.U_SEALED: set(),
+    # Sealed is terminal EXCEPT reopen_for_repair (reform §3): sealed ->
+    # repairing -> fixing (the repair) -> ... -> resealed.
+    st.U_SEALED: {st.U_REPAIRING},
+    st.U_REPAIRING: {st.U_FIXING, st.U_FAILED},
     st.U_FAILED: set(),
 }
 
@@ -797,6 +801,7 @@ class TestEnterFixEpisode(TempWorkspaceCase):
         st.U_DELTA_REVIEW,
         st.U_PRE_SEAL_VERIFY,
         st.U_SEALING,
+        st.U_REPAIRING,   # reopen_for_repair queues the repair as a fix
     }
 
     def test_queue_source_counter_and_transition(self):
@@ -1826,6 +1831,71 @@ class TestTypedResume(TempWorkspaceCase):
                          "2026-07-06T00:37:00+0200")
         ev = [e for e in state["events"] if e["type"] == "run_failed"][-1]
         self.assertEqual(ev["failure_type"], "quota")
+
+
+class TestReopenForRepair(TempWorkspaceCase):
+    """Reopening a SEALED unit for an upstream repair (reform §3): the one
+    deliberate exit from the otherwise-terminal sealed state."""
+
+    def _sealed(self):
+        state = make_state(self.workspace)
+        seal_current_unit(state, skeleton_draft(1))
+        return state, state["units"][0]
+
+    def test_reopen_transitions_and_grants_fresh_budgets(self):
+        state, unit = self._sealed()
+        self.assertEqual(unit["status"], st.U_SEALED)
+        n_rounds, n_seals = len(unit["rounds"]), len(unit["seals"])
+        gap = {"target": "goal", "forced_decision": "carry the field",
+               "plain": "the plan uses a field the pipes drop"}
+        st.reopen_for_repair(state, unit, gap, "downstream gap",
+                             reported_by="slice_doc-01")
+        self.assertEqual(unit["status"], st.U_REPAIRING)
+        self.assertEqual(unit["rounds_amnesty"], n_rounds)
+        self.assertEqual(unit["seals_amnesty"], n_seals)
+        self.assertEqual(unit["fix_loop_rounds"], 0)
+        ev = [e for e in state["events"] if e["type"] == "reopened_for_repair"]
+        self.assertEqual(len(ev), 1)
+        self.assertEqual(ev[0]["reported_by"], "slice_doc-01")
+        self.assertEqual(ev[0]["target"], "goal")
+
+    def test_reopen_requires_a_sealed_unit(self):
+        state = make_state(self.workspace)
+        with self.assertRaises(st.IllegalTransition):
+            st.reopen_for_repair(state, st.current_unit(state),
+                                 {"target": "goal"}, "x")
+
+    def test_repair_enters_a_fix_episode_and_reseals(self):
+        state, unit = self._sealed()
+        st.reopen_for_repair(state, unit, {"target": "goal"}, "gap")
+        st.enter_fix_episode(
+            state, unit,
+            [{"id": "G1", "severity": "P1", "summary": "resolve the gap"}],
+            "repair", None, "skeleton-gap", st.U_PRE_SEAL_VERIFY)
+        self.assertEqual(unit["status"], st.U_FIXING)  # repairing -> fixing
+        st.transition_unit(state, unit, st.U_DELTA_REVIEW)
+        st.transition_unit(state, unit, unit["fix_source"]["return_to"])
+        self.assertEqual(unit["status"], st.U_PRE_SEAL_VERIFY)
+        st.transition_unit(state, unit, st.U_SEALING)
+        st.record_seal_attempt(state, unit, make_halves(), True)
+        st.transition_unit(state, unit, st.U_SEALED)  # resealed
+        self.assertEqual(unit["status"], st.U_SEALED)
+
+    def test_append_only_permits_the_reopen(self):
+        state, unit = self._sealed()
+        path = os.path.join(self.workspace, "reopen.json")
+        st.save_new(path, state)
+        st.reopen_for_repair(state, unit, {"target": "goal"}, "gap")
+        st.save(path, state)  # must NOT raise HistoryRewriteError
+        self.assertEqual(st.load(path)["units"][0]["status"], st.U_REPAIRING)
+
+    def test_append_only_still_freezes_a_unit_that_stays_sealed(self):
+        state, unit = self._sealed()
+        path = os.path.join(self.workspace, "frozen.json")
+        st.save_new(path, state)
+        unit["artifact"] = "tampered.md"  # modified while STAYING sealed
+        with self.assertRaises(st.HistoryRewriteError):
+            st.save(path, state)
 
 
 if __name__ == "__main__":

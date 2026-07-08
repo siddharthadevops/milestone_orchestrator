@@ -47,6 +47,12 @@ U_PRE_SEAL_VERIFY = "pre_seal_verify"
 U_SEALING = "sealing"
 U_SEALED = "sealed"
 U_FAILED = "failed"
+# A SEALED unit reopened for an upstream repair (build-driven review reform
+# §3): a downstream builder reported a gap this unit must resolve. Transient
+# — the driver immediately queues the repair as a fix episode, so a persisted
+# unit is never left in bare U_REPAIRING at a step boundary. Sealed units are
+# otherwise terminal; this is the one reopen path.
+U_REPAIRING = "repairing"
 
 UNIT_STATUSES = (
     U_PENDING,
@@ -57,6 +63,7 @@ UNIT_STATUSES = (
     U_PRE_SEAL_VERIFY,
     U_SEALING,
     U_SEALED,
+    U_REPAIRING,
     U_FAILED,
 )
 
@@ -236,11 +243,15 @@ def assert_append_only(old_state, new_state_):
             raise HistoryRewriteError("%s: identity changed" % uctx)
         _assert_list_prefix(old_unit.get("rounds", []), nu.get("rounds", []), uctx + ".rounds")
         _assert_list_prefix(old_unit.get("seals", []), nu.get("seals", []), uctx + ".seals")
-        # A SEALED unit is frozen except for post-seal bookkeeping. Failed
-        # units are deliberately NOT frozen: resume_run (an explicit
-        # operator action, recorded as a `resumed` event) restores them;
-        # their rounds/seals history stays append-only like everyone's.
-        if old_unit.get("status") == U_SEALED:
+        # A unit that is sealed in BOTH the old and new state is frozen
+        # except for post-seal bookkeeping. Failed units are deliberately
+        # NOT frozen (resume_run restores them). Nor is a sealed unit that
+        # is being reopened for repair (sealed -> repairing): that
+        # transition is validated by transition_unit's adjacency table and
+        # is the one deliberate exit from sealed; once reopened the unit is
+        # no longer sealed, so its rounds/seals grow append-only like
+        # everyone's (the prefix checks above still hold).
+        if old_unit.get("status") == U_SEALED and nu.get("status") == U_SEALED:
             # closed_record and gate_commit are post-seal bookkeeping
             # written by the driver itself right after the terminal
             # transition; everything else in a terminal unit is frozen.
@@ -364,7 +375,12 @@ def transition_unit(state, unit, new_status, reason=None):
         # U_SEALING stays on an invalidated attempt (the workspace is
         # restored to the sealed candidate commit and the attempt retries).
         U_SEALING: (U_SEALED, U_FIXING, U_FAILED),
-        U_SEALED: (),
+        # A sealed unit is terminal EXCEPT for reopen_for_repair, which
+        # reopens it to resolve a downstream builder's gap (reform §3). The
+        # repair immediately enters a fix episode (U_REPAIRING -> U_FIXING)
+        # and reseals through the normal seal path.
+        U_SEALED: (U_REPAIRING,),
+        U_REPAIRING: (U_FIXING, U_FAILED),
         U_FAILED: (),
     }
     old = unit["status"]
@@ -618,8 +634,12 @@ def resume_run(state):
         if unit["status"] != U_FAILED:
             continue
         target = unit.get("failed_from")
-        if target not in UNIT_STATUSES or target in (U_FAILED, U_SEALED):
-            # Pre-failed_from states: infer the least-surprising spot.
+        if target not in UNIT_STATUSES or target in (
+            U_FAILED, U_SEALED, U_REPAIRING
+        ):
+            # Pre-failed_from states, or the transient U_REPAIRING (which
+            # never persists alone — reopen queues the repair fix in the
+            # same step — but guard it anyway): infer the safe re-entry.
             if unit.get("fix_queue"):
                 target = U_FIXING
             elif unit["rounds"]:
@@ -649,6 +669,9 @@ def resume_run(state):
         # emergency resume) can lift, not a dead end.
         unit["fix_loop_rounds"] = 0
         unit["verify_fix_attempts"] = {"pre_review": 0, "pre_seal": 0}
+        # The gap-repair back-edge counter is a convergence cap too: a
+        # deliberate resume grants it a fresh budget.
+        unit["gap_repairs"] = 0
         # The review-round cap (max_rounds_per_family) and the seal-attempt
         # cap (max_seal_attempts) count immutable history, so they would
         # re-fire instantly on resume; move the amnesty markers so the caps
@@ -763,6 +786,36 @@ def adjudicated_rejections(state):
 
 def registry_ids(state):
     return {e["id"] for e in adjudicated_rejections(state)}
+
+
+def reopen_for_repair(state, unit, gap, reason, reported_by=None):
+    """Reopen a SEALED unit to resolve a downstream builder's gap (reform
+    §3, stop-report-repair-resume). Transitions sealed -> repairing and
+    grants FRESH fix/seal budgets — the repair and its reseal must not
+    inherit the exhausted counters of the original build (same amnesty as
+    resume_run). The caller immediately queues the repair as a fix episode
+    (U_REPAIRING -> U_FIXING), so a persisted unit is never left in bare
+    U_REPAIRING. New machinery: sealed units are otherwise terminal."""
+    if unit["status"] != U_SEALED:
+        raise IllegalTransition(
+            "reopen_for_repair requires a sealed unit (%s is %s)"
+            % (unit_key(unit), unit["status"])
+        )
+    transition_unit(state, unit, U_REPAIRING, reason=reason)
+    unit["fix_loop_rounds"] = 0
+    unit["verify_fix_attempts"] = {"pre_review": 0, "pre_seal": 0}
+    unit["rounds_amnesty"] = len(unit["rounds"])
+    unit["seals_amnesty"] = len(unit["seals"])
+    append_event(
+        state,
+        "reopened_for_repair",
+        unit=unit_key(unit),
+        reported_by=reported_by,
+        target=gap.get("target"),
+        forced_decision=str(gap.get("forced_decision", ""))[:300],
+        plain=str(gap.get("plain", ""))[:300],
+    )
+    return unit
 
 
 def enter_fix_episode(state, unit, findings, source_type, source_family,

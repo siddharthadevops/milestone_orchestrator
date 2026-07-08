@@ -20,6 +20,7 @@ import contextlib
 import copy
 import json
 import os
+import re
 import signal
 import subprocess
 import sys
@@ -124,6 +125,11 @@ DEFAULT_CONFIG = {
     # deliberate resume grants a fresh budget (state.resume_run resets the
     # counter), so this is a soft ceiling, not a dead end.
     "max_fix_loops": 20,
+    # Back-edge budget (reform decision 13): how many times a downstream
+    # builder may reopen an upstream unit for repair before the driver
+    # stops for the operator (the same gap bouncing = a real stall, not
+    # convergence). Amnesty on resume, like the other convergence caps.
+    "max_gap_repairs": 3,
     # P3 debt deferral (ON by default — operator order 2026-07-07: a lone
     # cosmetic P3 must not cost a fix→delta→re-seal cycle; shipping this
     # off silently no-opped that decision). A review round (DOC phase
@@ -283,6 +289,12 @@ class _StandingLawError(RuntimeError):
     proceeding without its standing safeguards is the incident this
     machinery exists to prevent), never a worker repair (the fault is the
     operator's store, not the worker's output)."""
+
+
+class _GapRouteError(RuntimeError):
+    """A gap report named a target that is not routable from the reporting
+    unit's position (the §8 target vocabulary is closed). Surfaces as an
+    operator-gated run failure — the worker misused the gap contract."""
 
 
 class Driver(object):
@@ -1037,6 +1049,12 @@ class Driver(object):
             family, prompt, kind, "%s-draft" % st.unit_key(unit),
             model=model, effort=effort, extensions=extensions, roots=roots,
         )
+        if output.get("status") == "gap":
+            # The builder met a build-changing hole/conflict and stopped
+            # (reform §3). Route it upstream (repair) or to the operator
+            # (goal). The unit finished NOTHING and stays pending; it
+            # re-drafts after the repair reseals.
+            return self._handle_gap(unit, output)
         self._check_worker_blocked(unit, output, kind)
         st.record_draft(self.state, unit, kind, output, raw_path,
                         family=family, duration=result.duration_s,
@@ -1061,6 +1079,166 @@ class Driver(object):
             self.state, unit, st.U_PRE_REVIEW_VERIFY, reason="drafted"
         )
         return "drafted %s" % (unit["artifact"] or "(implementation)")
+
+    # -- gap routing (reform §3: stop-report-repair-resume) -----------------
+
+    def _find_unit(self, kind, slice_id):
+        for u in self.state["units"]:
+            if u["kind"] == kind and u["slice_id"] == slice_id:
+                return u
+        return None
+
+    _SLICE_DOC_RE = re.compile(r"^slice_doc-0*(\d+)$")
+
+    def _route_gap_target(self, unit, target):
+        """Resolve a gap's `target` to ('operator', None) for the goal, or
+        ('unit', <sealed upstream unit>) for an upstream doc. Raises
+        _GapRouteError on a target that is not routable from `unit`."""
+        if target == "goal":
+            if unit["kind"] == st.UNIT_SLICE_IMPL:
+                raise _GapRouteError(
+                    "an implement gap must target its slice_doc or the "
+                    "skeleton, not the goal"
+                )
+            return ("operator", None)
+        up = None
+        if target == "skeleton":
+            up = self._find_unit(st.UNIT_SKELETON, None)
+        else:
+            m = self._SLICE_DOC_RE.match(target or "")
+            if m:
+                up = self._find_unit(st.UNIT_SLICE_DOC, int(m.group(1)))
+        if up is None:
+            raise _GapRouteError(
+                "gap target %r does not name a known upstream unit" % target
+            )
+        if up is unit or up["status"] != st.U_SEALED:
+            raise _GapRouteError(
+                "gap target %r is not a SEALED upstream unit (is %s)"
+                % (target, up["status"])
+            )
+        return ("unit", up)
+
+    def _gap_targets_unit(self, gap, upstream):
+        target = gap.get("target")
+        if target == "skeleton":
+            return upstream["kind"] == st.UNIT_SKELETON
+        m = self._SLICE_DOC_RE.match(target or "")
+        return bool(
+            m and upstream["kind"] == st.UNIT_SLICE_DOC
+            and int(m.group(1)) == upstream["slice_id"]
+        )
+
+    def _gap_to_finding(self, gap, i):
+        """A gap becomes a P1 repair finding for the upstream fixer. Its
+        proposal, when present, is carried as CONTEXT and marked as a
+        proposal — the fixer verifies it against the sources, never adopts
+        it on trust (reform decision 6)."""
+        summary = "REPAIR (downstream gap): %s. Forced decision: %s." % (
+            gap.get("missing_or_conflict", ""), gap.get("forced_decision", "")
+        )
+        if gap.get("proposal"):
+            summary += (
+                " Proposal (a PROPOSAL — verify independently against the "
+                "sources, do not adopt on trust): %s" % gap["proposal"]
+            )
+        finding = {"id": "GAP%d" % (i + 1), "severity": "P1",
+                   "summary": summary}
+        if gap.get("plain"):
+            finding["plain"] = gap["plain"]
+        if gap.get("example"):
+            finding["example"] = gap["example"]
+        return finding
+
+    def _handle_gap(self, unit, output):
+        gaps = output.get("gaps", [])
+        st.append_event(
+            self.state, "gap_reported", unit=st.unit_key(unit),
+            count=len(gaps),
+            gaps=[{k: g.get(k) for k in ("target", "forced_decision", "plain")}
+                  for g in gaps],
+        )
+        # Route the MOST UPSTREAM implicated target first (goal < skeleton <
+        # slice_doc); repairing it and re-drafting re-surfaces anything
+        # still open, so convergence needs no cross-target bookkeeping.
+        def _rank(t):
+            return {"goal": 0, "skeleton": 1}.get(t, 2)
+        try:
+            routed = sorted(
+                (
+                    (_rank(g.get("target")), g,
+                     self._route_gap_target(unit, g.get("target")))
+                    for g in gaps
+                ),
+                key=lambda r: r[0],
+            )
+        except _GapRouteError as exc:
+            st.fail_run(self.state, "gap routing failed: %s" % exc, unit=unit,
+                        type_="gap_route")
+            self._save()
+            raise StopStep(str(exc))
+        _, primary, (route_kind, target_unit) = routed[0]
+        if route_kind == "operator":
+            return self._route_goal_gap(unit, primary)
+        return self._reopen_and_repair(unit, target_unit, gaps, primary)
+
+    def _route_goal_gap(self, unit, primary):
+        """A gap targeting the goal routes to the OPERATOR — the goal is
+        operator-authored and only its author repairs it. The operator
+        resolves by amending the goal (the existing amendment mechanism
+        binds from the next call) and resuming; the fresh draft then sees
+        the amendment. Operator-gated failure: not auto- or emergency-
+        resumed (re-drafting would just re-report the same gap)."""
+        st.append_event(
+            self.state, "goal_gap_reported", unit=st.unit_key(unit),
+            forced_decision=str(primary.get("forced_decision", ""))[:400],
+            plain=str(primary.get("plain", ""))[:400],
+            example=str(primary.get("example", ""))[:400],
+        )
+        st.fail_run(
+            self.state,
+            "goal gap: %s — resolve by amending the goal, then resume "
+            "(the goal is operator-authored; only its author repairs it)"
+            % primary.get("forced_decision", ""),
+            unit=unit, type_="goal_gap",
+        )
+        self._save()
+        raise StopStep("goal gap reported to the operator")
+
+    def _reopen_and_repair(self, unit, target_unit, gaps, primary):
+        cap = int(self.config.get("max_gap_repairs", 3))
+        n = int(unit.get("gap_repairs", 0)) + 1
+        unit["gap_repairs"] = n
+        if n > cap:
+            st.fail_run(
+                self.state,
+                "gap-repair cap (%d) exceeded on %s: the same gap keeps "
+                "reopening upstream — a stall, not convergence; operator "
+                "review needed" % (cap, st.unit_key(unit)),
+                unit=unit, type_="gap_stall",
+            )
+            self._save()
+            raise StopStep("gap-repair cap exceeded")
+        target_key = st.unit_key(target_unit)
+        repair_findings = [
+            self._gap_to_finding(g, i)
+            for i, g in enumerate(gaps) if self._gap_targets_unit(g, target_unit)
+        ]
+        st.reopen_for_repair(
+            self.state, target_unit, primary,
+            reason="downstream %s reported a gap" % st.unit_key(unit),
+            reported_by=st.unit_key(unit),
+        )
+        st.enter_fix_episode(
+            self.state, target_unit, repair_findings, "repair", None,
+            "%s-gap-repair" % target_key, st.U_PRE_SEAL_VERIFY,
+        )
+        return (
+            "gap on %s -> reopened %s for repair (%d repair finding(s)); it "
+            "reseals, then %s re-drafts"
+            % (st.unit_key(unit), target_key, len(repair_findings),
+               st.unit_key(unit))
+        )
 
     def _slice_info(self, slice_id):
         for sl in self.state["milestone"]["slices"]:
