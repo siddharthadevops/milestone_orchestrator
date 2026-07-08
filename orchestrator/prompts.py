@@ -589,9 +589,58 @@ def _fix_quality_block(unit_kind):
 # Draft kinds
 
 
+# Per-builder gap TARGET vocabulary (spec §8, recursive; the vocabulary is
+# closed and covers the top of the chain). The driver validates the target
+# a worker actually returns against the unit's real position.
+GAP_TARGETS_SKELETON = (
+    '"goal" — the operator-authored goal document. A skeleton gap has no '
+    "upstream UNIT; it routes to the OPERATOR (who alone repairs the goal)."
+)
+GAP_TARGETS_SLICE_NOTE = (
+    '"skeleton" — the sealed skeleton; or "goal" ONLY when the skeleton '
+    "faithfully mirrors a goal-level contradiction."
+)
+GAP_TARGETS_IMPLEMENT = (
+    '"slice_doc-NN" — this slice\'s sealed note (NN = this slice number); '
+    'or "skeleton".'
+)
+
+
+def _gap_block(targets_desc):
+    """The stop-report-repair-resume instruction for a builder (draft/
+    implement). Added ONLY when a reform profile governs the run — legacy
+    and profile-less builders never see it, so they never return a gap."""
+    return (
+        "GAP EXIT (this run runs stop-report-repair-resume):\n"
+        "If you meet a hole or a contradiction that would CHANGE WHAT YOU\n"
+        "BUILD — a choice between readings, a missing fact, a conflict with\n"
+        "a sealed upstream — STOP. Do NOT resolve it yourself and do NOT\n"
+        "build around it: continuing silently delegates to you the judgment\n"
+        "of what the gap contaminates, which is drift through the back door.\n"
+        "Instead return status \"gap\", finishing NOTHING (no artifact, no\n"
+        "file changes), with a non-empty \"gaps\" array. Each entry:\n"
+        "  target: %s\n" % targets_desc
+        + "  missing_or_conflict: what is missing, or the two facts that\n"
+        "     collide\n"
+        "  where: file:line on the upstream (or, for an inline goal\n"
+        "     contradiction, a VERBATIM QUOTE of the conflicting text)\n"
+        "  forced_decision: the exact choice the gap forces\n"
+        "  proposal: null, OR a resolution CLEARLY MARKED as a proposal —\n"
+        "     never self-service; the upstream fixer verifies it against\n"
+        "     the sources before adopting\n"
+        "  plain: one lay sentence a non-engineer follows\n"
+        "  example: the smallest concrete scenario the gap breaks\n"
+        "Do NOT rate your own blocker — any build-changing gap halts; there\n"
+        "is no safe-to-continue gray zone.\n"
+        "BRIGHT LINE — NOT a gap: an observation that does not change what\n"
+        "you build (a typo, a shifted line citation, stale cosmetic wording)\n"
+        "goes in `notes`, and you finish the work normally.\n\n"
+    )
+
+
 def build_draft_skeleton(family, workspace, goal, amendments=None,
                          artifact_path="docs/skeleton.md",
-                         project_context=None):
+                         project_context=None, gap_enabled=False):
     return (
         _header(contracts.KIND_DRAFT_SKELETON, family, workspace)
         + "\nTASK: draft the milestone skeleton for this goal.\n"
@@ -610,13 +659,14 @@ def build_draft_skeleton(family, workspace, goal, amendments=None,
         + "\n"
         + _access_block(edit_allowed=True)
         + "\n"
+        + (_gap_block(GAP_TARGETS_SKELETON) if gap_enabled else "")
         + contracts.CONTRACT_TEXT
     )
 
 
 def build_draft_slice_note(family, workspace, goal, slice_info, skeleton_path,
                            amendments=None, note_path=None,
-                           project_context=None):
+                           project_context=None, gap_enabled=False):
     return (
         _header(contracts.KIND_DRAFT_SLICE_NOTE, family, workspace)
         + "\nTASK: draft the slice note for slice %d (%s).\n"
@@ -638,12 +688,13 @@ def build_draft_slice_note(family, workspace, goal, slice_info, skeleton_path,
         + "\n"
         + _access_block(edit_allowed=True)
         + "\n"
+        + (_gap_block(GAP_TARGETS_SLICE_NOTE) if gap_enabled else "")
         + contracts.CONTRACT_TEXT
     )
 
 
 def build_implement(family, workspace, goal, slice_info, note_path, verification,
-                    amendments=None, project_context=None):
+                    amendments=None, project_context=None, gap_enabled=False):
     ver = "\n".join("  %s" % c for c in verification) or (
         "  (none yet — your suite_command will arm the gates)"
     )
@@ -672,6 +723,7 @@ def build_implement(family, workspace, goal, slice_info, note_path, verification
         + "\n"
         + _access_block(edit_allowed=True)
         + "\n"
+        + (_gap_block(GAP_TARGETS_IMPLEMENT) if gap_enabled else "")
         + contracts.CONTRACT_TEXT
     )
 

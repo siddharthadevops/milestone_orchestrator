@@ -80,6 +80,18 @@ def effective_config(state):
     return merged
 
 
+def gap_semantics(state):
+    """Whether the reform's gap semantics are ON for this run (spec §3): a
+    draft/implement worker that meets a build-changing hole or contradiction
+    STOPS and reports a structured gap, which the driver routes as an
+    upstream repair. ON for every reform profile; OFF for the `legacy`
+    compatibility artifact and for profile-less runs, which reproduce the
+    pre-reform builders exactly (their prompts never advertise the gap
+    exit, so they never return one — bit-identical)."""
+    profile = governing_profile(state)
+    return bool(profile) and not profile.get("compat")
+
+
 def doc_defer_scope(state):
     """The severities a DOC-phase review round may defer as tracked debt
     (subject to the drift-risk threshold). The pre-reform gate — and the

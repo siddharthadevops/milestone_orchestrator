@@ -279,8 +279,8 @@ class TestFieldCollisions(unittest.TestCase):
     def test_reserved_output_keys_content(self):
         self.assertEqual(
             contracts.reserved_output_keys("implement"),
-            {"status", "kind", "blocked_reason", "notes", "files_changed",
-             "suite_command"},
+            {"status", "kind", "blocked_reason", "notes", "gaps",
+             "files_changed", "suite_command"},
         )
         self.assertIn("artifact", contracts.reserved_output_keys("draft_skeleton"))
         self.assertIn("findings", contracts.reserved_output_keys("seal_half"))

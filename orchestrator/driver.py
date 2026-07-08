@@ -1002,11 +1002,14 @@ class Driver(object):
         project_context, extensions, roots = self._project_prompt_inputs(
             unit, kind
         )
+        # Reform profiles hand builders the gap exit (stop-report-repair-
+        # resume); legacy/profile-less builders never see it.
+        gap_enabled = interpreter.gap_semantics(self.state)
         if unit["kind"] == st.UNIT_SKELETON:
             prompt = prompts.build_draft_skeleton(
                 family, self.workspace, goal, amendments=amendments,
                 artifact_path=ledgers.skeleton_path(self.state),
-                project_context=project_context,
+                project_context=project_context, gap_enabled=gap_enabled,
             )
         elif unit["kind"] == st.UNIT_SLICE_DOC:
             sl = self._slice_info(unit["slice_id"])
@@ -1016,7 +1019,7 @@ class Driver(object):
                 note_path=ledgers.slice_note_path(
                     self.state, unit["slice_id"]
                 ),
-                project_context=project_context,
+                project_context=project_context, gap_enabled=gap_enabled,
             )
         else:
             sl = self._slice_info(unit["slice_id"])
@@ -1028,7 +1031,7 @@ class Driver(object):
                 self._slice_note_artifact(unit["slice_id"]),
                 self._verification_commands(unit),
                 amendments=amendments,
-                project_context=project_context,
+                project_context=project_context, gap_enabled=gap_enabled,
             )
         output, result, raw_path = self._call(
             family, prompt, kind, "%s-draft" % st.unit_key(unit),

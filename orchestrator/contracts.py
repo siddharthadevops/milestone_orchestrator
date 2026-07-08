@@ -240,6 +240,51 @@ def _assert_unique_finding_ids(findings, ctx):
         seen.add(fid)
 
 
+# A structured gap report (build-driven review reform §3): a draft/implement
+# worker that meets a hole or a contradiction which would change what it
+# builds STOPS and reports, instead of resolving it or building around it.
+# Every entry pins the same fields so a driver can route it without invention.
+GAP_REQUIRED_FIELDS = (
+    "target",            # goal | skeleton | slice_doc-NN — what to repair
+    "missing_or_conflict",  # what is missing / contradicts
+    "where",             # file:line on the upstream (or a verbatim quote for
+                         # an inline-typed goal)
+    "forced_decision",   # the choice the gap forces
+    "plain",             # one lay sentence a non-engineer follows
+    "example",           # the smallest concrete failing scenario
+)
+
+
+def validate_gap(gap, ctx):
+    """One entry of a gap report. `proposal` is optional and may be null
+    (a MARKED proposal, never self-service — the upstream fixer verifies it
+    independently); every other field is a required non-empty string."""
+    if not isinstance(gap, dict):
+        raise ContractError("%s: gap must be an object" % ctx)
+    for field in GAP_REQUIRED_FIELDS:
+        val = gap.get(field)
+        if not isinstance(val, str) or not val.strip():
+            raise ContractError(
+                "%s: gap.%s must be a non-empty string" % (ctx, field)
+            )
+    proposal = gap.get("proposal")
+    if proposal is not None and (
+        not isinstance(proposal, str) or not proposal.strip()
+    ):
+        raise ContractError(
+            "%s: gap.proposal, when present, must be a non-empty string "
+            "or null" % ctx
+        )
+    return gap
+
+
+# Kinds whose worker may report a gap: the BUILDERS (draft/implement). A
+# reviewer never reports a gap — it files findings.
+GAP_ELIGIBLE_KINDS = (
+    KIND_DRAFT_SKELETON, KIND_DRAFT_SLICE_NOTE, KIND_IMPLEMENT,
+)
+
+
 def validate_worker_output(obj, kind):
     """Validate the full worker JSON output for a call of `kind`.
 
@@ -252,13 +297,23 @@ def validate_worker_output(obj, kind):
         raise ContractError("%s: output must be a JSON object" % ctx)
 
     status = _require(obj, "status", str, ctx)
-    if status not in ("ok", "blocked"):
-        raise ContractError("%s: status %r not in ('ok','blocked')" % (ctx, status))
+    if status not in ("ok", "blocked", "gap"):
+        raise ContractError(
+            "%s: status %r not in ('ok','blocked','gap')" % (ctx, status)
+        )
     echoed = _require(obj, "kind", str, ctx)
     if echoed != kind:
         raise ContractError(
             "%s: echoed kind %r does not match requested kind %r"
             % (ctx, echoed, kind)
+        )
+    # gaps ride ONLY with a gap status — an `ok` carrying a non-empty gaps
+    # array is a contract violation (nothing was finished, or nothing was
+    # reported; the two cannot both be true). §3.
+    if status != "gap" and obj.get("gaps"):
+        raise ContractError(
+            "%s: a non-empty `gaps` array is only allowed with status "
+            "'gap' (got %r)" % (ctx, status)
         )
     if status == "blocked":
         reason = _optional(obj, "blocked_reason", str, ctx)
@@ -266,6 +321,27 @@ def validate_worker_output(obj, kind):
             raise ContractError(
                 "%s: blocked status requires a non-empty blocked_reason" % ctx
             )
+        return obj
+    if status == "gap":
+        if kind not in GAP_ELIGIBLE_KINDS:
+            raise ContractError(
+                "%s: only draft/implement kinds may report a gap; %r may "
+                "not" % (ctx, kind)
+            )
+        gaps = _require(obj, "gaps", list, ctx)
+        if not gaps:
+            raise ContractError(
+                "%s: gap status requires a non-empty `gaps` array" % ctx
+            )
+        for i, g in enumerate(gaps):
+            validate_gap(g, "%s.gaps[%d]" % (ctx, i))
+        # A gap carries NO artifact claim — nothing was finished.
+        for claim in ("artifact", "files_changed", "slices"):
+            if obj.get(claim):
+                raise ContractError(
+                    "%s: a gap response must not also claim %r "
+                    "(nothing was finished)" % (ctx, claim)
+                )
         return obj
 
     if kind == KIND_DRAFT_SKELETON:
@@ -337,7 +413,8 @@ def validate_worker_output(obj, kind):
 # contract extension may never name one of these as its `field` — the
 # extension would shadow a key the validator or driver already reads
 # (verifiers.py derives collisions from here; it never re-lists them).
-COMMON_OUTPUT_KEYS = frozenset({"status", "kind", "blocked_reason", "notes"})
+COMMON_OUTPUT_KEYS = frozenset(
+    {"status", "kind", "blocked_reason", "notes", "gaps"})
 
 KIND_OUTPUT_KEYS = {
     KIND_DRAFT_SKELETON: frozenset({"artifact", "slices"}),
