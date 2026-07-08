@@ -302,6 +302,14 @@
     </div>
     <datalist id="dl_doc"></datalist>
     <div class="hint">If set, the file's content becomes the goal.</div></div>
+  <div class="field"><label>Strategy profile (optional — how thoroughly this
+      run is reviewed)</label>
+    <select id="f_profile" onchange="onProfileChange()">
+      <option value="">— none (profile-less, today's flow) —</option></select>
+    <div class="hint" id="f_profile_hint">Recorded on the run and seals the
+      profile on first use. The review interpreter that honors it lands in a
+      later phase — for now a profile is stored but does not yet change how a
+      run behaves.</div></div>
   <div class="field"><label>Who leads each act (reviews stay family-rotated)</label>
     <div class="actgrid">
       <span></span><span class="acthead">agent</span>
@@ -825,7 +833,9 @@ async function refreshDetail() {
         s.project
           ? ` · ${esc(s.project)} / ${esc(s.work_area)}` : ""}${
         sum && sum.suite_command
-          ? ` · suite: ${esc(sum.suite_command)}` : ""}</div>`;
+          ? ` · suite: ${esc(sum.suite_command)}` : ""}${
+        d.profile
+          ? ` · profile: ${esc(d.profile.governing.name)}@${esc(String(d.profile.governing.version))}` : ""}</div>`;
     if (sum) {
       const long = (sum.goal || "").split("\n").length > 3 || (sum.goal || "").length > 320;
       html += `<div class="goalline ${goalOpen ? "full" : "clamp"}" id="goalText">${esc(sum.goal)}</div>` +
@@ -1181,7 +1191,50 @@ function openForm() {
   document.getElementById("formError").textContent = "";
   loadRecents();
   loadLaunchProjects();
+  loadProfiles();
   document.getElementById("form").showModal();
+}
+/* ---- strategy profile selector: the run's review strategy, chosen at
+        creation. The list loads when the form opens; picking one shows its
+        decomposition (dials) so the operator sees what it means. ---- */
+let launchProfiles = [];
+async function loadProfiles() {
+  launchProfiles = [];
+  try {
+    const data = await api("/api/profiles");
+    launchProfiles = data.profiles || [];
+  } catch (e) { /* the selector stays at "none" — never blocks a launch */ }
+  const sel = document.getElementById("f_profile");
+  const keep = sel.value;
+  sel.innerHTML =
+    `<option value="">— none (profile-less, today's flow) —</option>` +
+    launchProfiles.map(p =>
+      `<option value="${esc(p.name)}">${esc(p.name)}@${esc(String(p.version))}${p.sealed ? " · sealed" : ""}</option>`
+    ).join("");
+  sel.value = launchProfiles.some(p => p.name === keep) ? keep : "";
+  onProfileChange();
+}
+function onProfileChange() {
+  const hint = document.getElementById("f_profile_hint");
+  const p = launchProfiles.find(x => x.name ===
+    document.getElementById("f_profile").value);
+  if (!p) {
+    hint.textContent = "Recorded on the run and seals the profile on first" +
+      " use. The review interpreter that honors it lands in a later phase" +
+      " — for now a profile is stored but does not yet change how a run" +
+      " behaves.";
+    return;
+  }
+  const c = p.profile || {}, bits = [];
+  if (c.doc_register) bits.push("register: " + c.doc_register);
+  if (c.p3_defer_max_risk) bits.push("defer ≤ " + c.p3_defer_max_risk);
+  if (c.fuser_discard) bits.push("fuser discard: " + c.fuser_discard);
+  if ("final_open_pass" in c)
+    bits.push("final open pass: " + (c.final_open_pass ? "yes" : "no"));
+  hint.innerHTML =
+    `<span class="mono">${esc(p.hash)}</span>${bits.length ? " · " + esc(bits.join(" · ")) : ""}` +
+    (p.description ? `<br>${esc(p.description)}` : "") +
+    `<br><em>Recorded on the run; the interpreter that honors it lands in a later phase.</em>`;
 }
 async function loadRecents() {
   try {
@@ -1362,6 +1415,8 @@ async function submitForm() {
     config.acts = Object.assign({}, config.acts || {}, acts);
   }
   if (Object.keys(config).length) payload.config = config;
+  const profile = document.getElementById("f_profile").value;
+  if (profile) payload.profile = profile;
   try {
     const data = await api("/api/runs", {
       method: "POST",
