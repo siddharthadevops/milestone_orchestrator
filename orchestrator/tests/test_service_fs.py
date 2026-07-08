@@ -416,8 +416,11 @@ class FsHttpTest(unittest.TestCase):
             "http://127.0.0.1:%d/" % self.port, timeout=10
         ) as resp:
             body = resp.read().decode("utf-8")
-        for marker in ('id="picker"', 'id="dl_ws"', 'id="dl_doc"', "openPicker"):
+        # dl_ws died with the workspace field: the panel launches by
+        # project binding only (the machine API keeps path launches).
+        for marker in ('id="picker"', 'id="dl_doc"', "openPicker"):
             self.assertIn(marker, body)
+        self.assertNotIn('id="dl_ws"', body)
 
 
 if __name__ == "__main__":

@@ -313,15 +313,13 @@
     <button class="infobtn" type="button" onclick="toggleDlgInfo('form')"
       title="Field notes">i</button></h2>
   <div class="dlg-info" id="form_info">
-    <p><b>Workspace</b> — must be the ROOT of an existing git repository
-      (<span class="mono">git init</span> it deliberately first): the run's
-      gate commits land there and state lives in
-      <span class="mono">&lt;workspace&gt;/.orchestrator/</span>. Previously
-      used paths appear in the dropdown.</p>
-    <p><b>Project</b> — a bound launch derives the workspace from the
-      project's work area (primary root) and carries the project's standing
-      safeguards; when a project declares several work areas a selector
-      appears.</p>
+    <p><b>Project</b> — every launch binds to a project: the run executes
+      in the project's work directory (which must be the root of an
+      existing git repository — gate commits land there, state lives in
+      <span class="mono">&lt;workdir&gt;/.orchestrator/</span>) and carries
+      the project's standing safeguards and defaults. When a project
+      declares several work areas a selector appears. Declare projects
+      with “+ Project” in the sidebar.</p>
     <p><b>Goal doc</b> — when a description doc path is set, the file's
       content becomes the goal, snapshotted at launch.</p>
     <p><b>Strategy profile</b> — governs the run's review depth.
@@ -337,18 +335,12 @@
   </div>
   <div class="field"><label>Name</label>
     <input id="f_name" placeholder="my-feature"></div>
-  <div class="field"><label>Project (optional)</label>
+  <div class="field"><label>Project *</label>
     <div class="pathrow">
       <select id="f_project" onchange="onLaunchProject()"></select>
       <select id="f_area" onchange="onLaunchArea()" style="display:none"></select>
     </div>
     <div class="hint" id="f_resolved"></div></div>
-  <div class="field"><label>Workspace directory *</label>
-    <div class="pathrow">
-      <input id="f_ws" class="mono" list="dl_ws" placeholder="/path/to/project/work">
-      <button class="btn" type="button" id="f_ws_browse" onclick="openPicker('dir','f_ws')">Browse…</button>
-    </div>
-    <datalist id="dl_ws"></datalist></div>
   <div class="field"><label>Work description (goal) *</label>
     <textarea id="f_goal" placeholder="What should be built…"></textarea></div>
   <div class="field"><label>…or description doc path (.md)</label>
@@ -1532,8 +1524,6 @@ async function applyProfileSwap() {
 async function loadRecents() {
   try {
     const data = await api("/api/recents");
-    document.getElementById("dl_ws").innerHTML =
-      (data.workspaces || []).map(w => `<option value="${esc(w)}">`).join("");
     document.getElementById("dl_doc").innerHTML =
       (data.goal_docs || []).map(d => `<option value="${esc(d)}">`).join("");
   } catch (e) { /* memory is convenience only */ }
@@ -1682,20 +1672,21 @@ async function submitForm() {
     autostart: document.getElementById("f_auto").checked,
   };
   const binding = launchBinding();
-  if (binding === undefined) {
-    err.textContent = "complete the project binding: the project needs a "
-      + "declared work area (pick one when it offers several), or set the "
-      + "project back to none";
+  if (binding === null) {
+    err.textContent = "choose a project — every launch executes in a "
+      + "project's work directory (declare one with “+ Project”)";
     return;
   }
-  if (binding) {
-    // A bound launch posts the two path-free handles WITHOUT a
-    // workspace path — it derives from the work area's primary root.
-    payload.project = binding.project;
-    payload.work_area = binding.work_area;
-  } else {
-    payload.workspace = document.getElementById("f_ws").value.trim();
+  if (binding === undefined) {
+    err.textContent = "the project's binding is incomplete: it needs a "
+      + "declared work directory (pick a work area when it offers several)";
+    return;
   }
+  // The launch posts the two path-free handles — the workspace derives
+  // from the work area's primary root (the panel never posts a path;
+  // the machine API stays permissive for path launches).
+  payload.project = binding.project;
+  payload.work_area = binding.work_area;
   const verify = document.getElementById("f_verify").value.trim();
   const cfgText = document.getElementById("f_cfg").value.trim();
   let config = {};
@@ -1744,8 +1735,11 @@ async function loadLaunchProjects() {
     fault = "projects unavailable: " + e.message;
   }
   const sel = document.getElementById("f_project");
+  const usable = launchProjects.some(p => !p.error);
   sel.innerHTML =
-    `<option value="">— none (launch by workspace path) —</option>` +
+    `<option value="" disabled selected>${usable
+      ? "— choose project —"
+      : "— no projects declared — use “+ Project” first —"}</option>` +
     launchProjects.map((p, i) => p.error
       ? `<option value="" disabled>${esc(p.slug)} — ${esc(p.error.reason)}</option>`
       : `<option value="${i}">${esc(p.slug)}</option>`).join("");
@@ -1783,13 +1777,7 @@ function boundArea() {
 function onLaunchArea() {
   const pi = document.getElementById("f_project").value;
   const out = document.getElementById("f_resolved");
-  const bound = pi !== "";
-  // The path mode's fields are untouched in path mode; in bound mode the
-  // workspace derives from the work area's primary root, so its inputs
-  // disable rather than silently being ignored.
-  document.getElementById("f_ws").disabled = bound;
-  document.getElementById("f_ws_browse").disabled = bound;
-  if (!bound) { out.textContent = ""; return; }
+  if (pi === "") { out.textContent = ""; return; }
   const p = launchProjects[+pi];
   if (!p.work_areas.length) {
     out.textContent = `project “${p.slug}” has no work area yet — add one `
