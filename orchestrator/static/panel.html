@@ -49,12 +49,9 @@
   .proj-group-header .proj-count { flex: none; color: var(--dim);
     background: var(--panel); border: 1px solid var(--line);
     border-radius: 8px; padding: 0 6px; font-weight: 400; }
-  .grpbtns { margin-left: auto; display: flex; gap: 2px; }
-  .grpbtn { flex: none; border: 1px solid var(--line); background: #fff;
-    border-radius: 4px; font-size: 8px; line-height: 1; padding: 3px 4px;
-    color: var(--dim); cursor: pointer; }
-  .grpbtn:hover:not(:disabled) { color: var(--accent); border-color: #c3d4fb; }
-  .grpbtn:disabled { opacity: .3; cursor: default; }
+  .grpgear { margin-left: auto; flex: none; font-size: 18px;
+    line-height: 1; color: var(--dim); cursor: pointer; }
+  .grpgear:hover { color: var(--accent); }
   .grp-empty { padding: 8px 14px; font-size: 11px; color: var(--dim);
     font-style: italic; border-bottom: 1px solid var(--line); }
   .btn.sm { padding: 3px 8px; font-size: 11px; }
@@ -639,24 +636,21 @@ function orderedProjectKeys(present) {
   const fresh = present.filter(k => !known.includes(k));
   return known.concat(fresh);
 }
-function groupHeader(key, label, count, movable, atTop, atBottom) {
+function groupHeader(key, label, count, editable) {
+  // The whole row toggles collapse; the chevron is pure state (▸
+  // collapsed, ▾ expanded). The only control is a bare gear — no
+  // container button shrinking it into invisibility.
   const collapsed = uiState.collapsed.includes(key);
   const safeKey = esc(escJsSq(key));
-  const buttons = movable
-    ? `<span class="grpbtns">
-         <button class="grpbtn" title="Edit project"
-           onclick="event.stopPropagation(); openProjectEditor('${safeKey}')">&#9998;</button>
-         <button class="grpbtn" ${atTop ? "disabled" : ""}
-           onclick="event.stopPropagation(); moveProjectGroup('${safeKey}', -1)">&#9650;</button>
-         <button class="grpbtn" ${atBottom ? "disabled" : ""}
-           onclick="event.stopPropagation(); moveProjectGroup('${safeKey}', 1)">&#9660;</button>
-       </span>`
+  const gear = editable
+    ? `<span class="grpgear" title="Edit project"
+         onclick="event.stopPropagation(); openProjectEditor('${safeKey}')">&#9881;</span>`
     : "";
   return `<div class="proj-group-header" onclick="toggleGroupCollapse('${safeKey}')">
       <span class="chev">${collapsed ? "▸" : "▾"}</span>
       <span>${esc(label)}</span>
       <span class="proj-count">${count}</span>
-      ${buttons}
+      ${gear}
     </div>`;
 }
 function renderRunsTree(runs) {
@@ -669,11 +663,9 @@ function renderRunsTree(runs) {
     return runs.map(runRow).join("");
   }
   const ordered = orderedProjectKeys(realKeys);
-  let html = ordered.map((key, i) => {
+  let html = ordered.map((key) => {
     const runsInGroup = byProject.get(key) || [];
-    const header = groupHeader(
-      key, key, runsInGroup.length, true, i === 0, i === ordered.length - 1
-    );
+    const header = groupHeader(key, key, runsInGroup.length, true);
     if (uiState.collapsed.includes(key)) return header;
     return header + (runsInGroup.map(runRow).join("")
       || '<div class="grp-empty">no runs yet</div>');
@@ -705,16 +697,6 @@ function toggleGroupCollapse(key) {
   if (i === -1) uiState.collapsed.push(key); else uiState.collapsed.splice(i, 1);
   renderRunsTree_paint();
   persistUiState({collapsed: uiState.collapsed});
-}
-function moveProjectGroup(key, dir) {
-  const ordered = orderedProjectKeys(presentProjectKeys());
-  const i = ordered.indexOf(key);
-  const j = i + dir;
-  if (i === -1 || j < 0 || j >= ordered.length) return;
-  [ordered[i], ordered[j]] = [ordered[j], ordered[i]];
-  uiState.project_order = ordered;
-  renderRunsTree_paint();
-  persistUiState({project_order: uiState.project_order});
 }
 function renderRunsTree_paint() {
   document.getElementById("runs").innerHTML =
