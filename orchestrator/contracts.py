@@ -690,6 +690,13 @@ Kind fix_findings adds:
      "adjudication_ref": null | "<registry id of the prior rejection>"}
   ]
   "files_changed": ["...paths you edited...", ...]
+  "slices": [ {"id": 1, "title": "..."}, ... ]   (REQUIRED whenever your
+   fix changed the milestone skeleton's slice TABLE — split, added,
+   removed, or renumbered slices: return the FULL updated plan exactly
+   as the table now reads. The orchestrator builds units from THIS
+   field, never by parsing the document; omitting it after a table
+   change leaves the added slices unbuilt. Omit it when the table is
+   untouched.)
   Rules: triage EXACTLY the queued findings (same ids, nothing else).
   Verify each against the real code/doc before deciding. "rejected"
   REQUIRES the consultation; when the target was correct but misreadable,

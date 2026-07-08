@@ -1101,10 +1101,21 @@ def build_fix_findings(
             "with its consultation, or 'blocked'). A second empty-delta\n"
             "claim fails the run.\n\n"
         )
+    slice_table_block = ""
+    if unit_kind == "skeleton":
+        slice_table_block = (
+            "SKELETON SLICE TABLE\n"
+            "- If any fix changes the skeleton's slice table (splitting,\n"
+            "  adding, removing, or renumbering slices), your JSON output\n"
+            "  MUST carry the FULL updated `slices` array mirroring the\n"
+            "  table exactly — the orchestrator builds the milestone's\n"
+            "  units from that field, never by parsing the document.\n\n"
+        )
     return (
         _header(contracts.KIND_FIX_FINDINGS, family, workspace)
         + "\nTASK: triage and fix the queued findings on %s.\n" % unit_desc
         + "GOAL: %s\n\n" % goal
+        + slice_table_block
         + killed_block
         + phantom_block
         + _amendments_block(amendments)
