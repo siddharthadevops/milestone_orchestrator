@@ -302,14 +302,15 @@
     </div>
     <datalist id="dl_doc"></datalist>
     <div class="hint">If set, the file's content becomes the goal.</div></div>
-  <div class="field"><label>Strategy profile (optional — how thoroughly this
-      run is reviewed)</label>
+  <div class="field"><label>Strategy profile * (how thoroughly this run is
+      reviewed — pick one, no default)</label>
     <select id="f_profile" onchange="onProfileChange()">
-      <option value="">— none (profile-less, today's flow) —</option></select>
-    <div class="hint" id="f_profile_hint">Recorded on the run and seals the
-      profile on first use. The review interpreter that honors it lands in a
-      later phase — for now a profile is stored but does not yet change how a
-      run behaves.</div></div>
+      <option value="" disabled selected>— choose: strict / light / legacy —</option></select>
+    <div class="hint" id="f_profile_hint">A profile now governs the run's
+      review depth. <b>legacy</b> reproduces the pre-reform flow exactly;
+      <b>strict</b> / <b>light</b> set the doc-review threshold (what a
+      finding must exceed to open a fix cycle vs record as tracked debt).
+      The choice is explicit on purpose — no seed is pre-selected.</div></div>
   <div class="field"><label>Who leads each act (reviews stay family-rotated)</label>
     <div class="actgrid">
       <span></span><span class="acthead">agent</span>
@@ -1240,10 +1241,13 @@ async function loadProfiles() {
   const sel = document.getElementById("f_profile");
   const keep = sel.value;
   sel.innerHTML =
-    `<option value="">— none (profile-less, today's flow) —</option>` +
+    `<option value="" disabled${keep ? "" : " selected"}>— choose: strict / light / legacy —</option>` +
     launchProfiles.map(p =>
       `<option value="${esc(p.name)}">${esc(p.name)}@${esc(String(p.version))}${p.sealed ? " · sealed" : ""}</option>`
     ).join("");
+  // No seed is pre-selected: an explicit choice is required (R1-ARM — a
+  // silent default would no-op the operator's intent now that profiles
+  // change behavior). A prior in-progress choice is preserved on reload.
   sel.value = launchProfiles.some(p => p.name === keep) ? keep : "";
   onProfileChange();
 }
@@ -1252,10 +1256,10 @@ function onProfileChange() {
   const p = launchProfiles.find(x => x.name ===
     document.getElementById("f_profile").value);
   if (!p) {
-    hint.textContent = "Recorded on the run and seals the profile on first" +
-      " use. The review interpreter that honors it lands in a later phase" +
-      " — for now a profile is stored but does not yet change how a run" +
-      " behaves.";
+    hint.innerHTML = "A profile now governs the run's review depth." +
+      " <b>legacy</b> reproduces the pre-reform flow exactly; <b>strict</b>" +
+      " / <b>light</b> set the doc-review threshold. The choice is explicit" +
+      " on purpose — no seed is pre-selected.";
     return;
   }
   const dials = profileDials(p);
@@ -1498,7 +1502,12 @@ async function submitForm() {
   }
   if (Object.keys(config).length) payload.config = config;
   const profile = document.getElementById("f_profile").value;
-  if (profile) payload.profile = profile;
+  if (!profile) {
+    err.textContent =
+      "choose a strategy profile (legacy reproduces the pre-reform flow)";
+    return;
+  }
+  payload.profile = profile;
   try {
     const data = await api("/api/runs", {
       method: "POST",

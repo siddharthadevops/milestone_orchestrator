@@ -911,6 +911,11 @@ class ProfilesApiTest(ServiceApiTest):
             {"name": "light", "version": light["version"],
              "hash": profiles.semantic_hash(light["profile"])},
         )
+        # The sealed semantic content is embedded too, so the driver can
+        # interpret the run self-containedly and its hash matches the ref.
+        self.assertEqual(cfg["profile"], light["profile"])
+        self.assertEqual(
+            profiles.semantic_hash(cfg["profile"]), ref["hash"])
         # First production reference sealed the profile on disk.
         self.assertTrue(light["sealed"])
         # run_detail surfaces the governing profile for the panel.

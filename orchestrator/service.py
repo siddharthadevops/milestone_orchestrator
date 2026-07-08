@@ -1441,17 +1441,22 @@ def _create_bound_run(home, payload, workspace):
     return primary["path"], state_path, goal_doc
 
 
-def _snapshot_profile_ref(state_path, ref):
-    """Write the run's profile snapshot into its config. Append-only-safe:
-    only a config key is added — events and units are untouched — so
-    st.save's history guard passes. The state exists but the driver has
-    not started yet, so no driver lock is contended."""
+def _snapshot_profile(state_path, ref, content):
+    """Write the run's profile snapshot into its config: the identity
+    (`profile_ref` = {name, version, hash}) AND the sealed semantic content
+    (`profile`), so the driver can interpret the run's stages and dials
+    self-containedly — no service home needed at run time, and the run
+    carries its exact governing profile for provenance. Append-only-safe:
+    only config keys are added — events and units are untouched — so
+    st.save's history guard passes. The state exists but the driver has not
+    started yet, so no driver lock is contended."""
     state = st.load(state_path)
     cfg = state.get("config")
     if not isinstance(cfg, dict):
         cfg = {}
         state["config"] = cfg
     cfg["profile_ref"] = ref
+    cfg["profile"] = content
     st.save(state_path, state)
 
 
@@ -1602,12 +1607,13 @@ def create_run(home, payload):
 
     if profile_name is not None:
         # The state exists now: seal the profile (first production
-        # reference) and snapshot its identity into the run config.
+        # reference) and snapshot its identity AND content into the config.
         try:
             profile_ref = profiles.reference(home, profile_name)
+            profile_doc = profiles.load(home, profile_name)
         except profiles.ProfileError as exc:
             raise ApiError(400, str(exc))
-        _snapshot_profile_ref(state_path, profile_ref)
+        _snapshot_profile(state_path, profile_ref, profile_doc["profile"])
 
     name = payload.get("name") or os.path.basename(workspace.rstrip("/")) or "run"
     run_id = registry.make_run_id()

@@ -289,7 +289,12 @@ class Driver(object):
     def __init__(self, state_path, runner=None):
         self.state_path = state_path
         self.state = st.load(state_path)
-        self.config = self.state["config"]
+        # The governing profile's dials merge over the run config here
+        # (spec §5). Profile-less runs and the dial-less `legacy` profile
+        # get the raw config unchanged, so they stay bit-identical; a
+        # `strict`/`light` run reads its own thresholds through the same
+        # self.config every existing read-site already uses.
+        self.config = interpreter.effective_config(self.state)
         # Fail loudly at startup if an embedded profile snapshot is
         # inconsistent (content hash vs recorded profile_ref hash). No-op
         # for profile-less runs and ref-only labels.

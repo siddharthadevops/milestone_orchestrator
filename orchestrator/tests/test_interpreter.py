@@ -62,6 +62,41 @@ class RoundsLoopTest(unittest.TestCase):
         self.assertEqual(it.rounds_loop(st), "parallel")
 
 
+class EffectiveConfigTest(unittest.TestCase):
+    """The profile's dials merge over the run config (spec §5); profile-less
+    and dial-less (legacy) runs get the raw config UNCHANGED."""
+
+    def test_profileless_returns_config_unchanged(self):
+        cfg = {"p3_defer_max_risk": "low", "x": 1}
+        self.assertIs(it.effective_config(_state(cfg)), cfg)
+
+    def test_legacy_has_no_dials_returns_config_unchanged(self):
+        cfg = {"p3_defer_max_risk": "low"}
+        st = _state(dict(cfg))
+        st["config"]["profile"] = profiles.SEEDS["legacy"]["profile"]
+        # legacy declares no dial keys → identical object back.
+        self.assertIs(it.effective_config(st), st["config"])
+
+    def test_strict_and_light_thresholds_win(self):
+        base = {"p3_defer_max_risk": "high", "other": 7}
+        for name, expected in (("strict", "low"), ("light", "medium")):
+            st = _state(dict(base))
+            st["config"]["profile"] = profiles.SEEDS[name]["profile"]
+            eff = it.effective_config(st)
+            self.assertEqual(eff["p3_defer_max_risk"], expected)
+            self.assertEqual(eff["other"], 7)          # untouched keys ride
+            self.assertEqual(st["config"]["p3_defer_max_risk"], "high")  # no mutation
+
+    def test_only_known_dials_merge_not_structural_keys(self):
+        st = _state({"a": 1})
+        st["config"]["profile"] = {"p3_defer_max_risk": "medium",
+                                   "stages": [{"loop": "x"}], "compat": True}
+        eff = it.effective_config(st)
+        self.assertEqual(eff["p3_defer_max_risk"], "medium")
+        self.assertNotIn("stages", eff)
+        self.assertNotIn("compat", eff)
+
+
 class VerifyEmbeddedTest(unittest.TestCase):
     def test_profileless_and_ref_only_are_noops(self):
         it.verify_embedded(_state({}))

@@ -19,6 +19,13 @@ which profile it carries.
 
 FAMILY_UNTIL_CLEAN = "family_until_clean"
 
+# Profile fields that decompose into run-config DIALS (spec §5: "profiles
+# decompose into config dials"). Only keys the driver actually consumes as
+# config are listed; more join as later phases read them. Structural
+# profile keys (stages, compat, fuser_*, doc_register, final_open_pass) are
+# NOT dials and never merge into the config namespace.
+PROFILE_DIALS = ("p3_defer_max_risk", "p3_reclassify_debt")
+
 
 def governing_profile(state):
     """The semantic content of the run's governing strategy profile, or
@@ -45,6 +52,32 @@ def rounds_loop(state):
         return FAMILY_UNTIL_CLEAN
     # Phase 2: a single review stage. Multi-stage progression is phase 3.
     return stages[0].get("loop") or FAMILY_UNTIL_CLEAN
+
+
+def effective_config(state):
+    """The run config with the governing profile's recognized dials merged
+    OVER it (spec §5: profiles decompose into config dials). This is how a
+    profile changes a run's behavior — a `strict` run and a `light` run
+    read different `p3_defer_max_risk` thresholds without any read-site in
+    the driver changing.
+
+    Profile-less runs, and profiles that declare no dials (the `legacy`
+    compatibility artifact carries none), get the raw config object back
+    UNCHANGED — so those runs stay byte-for-byte identical to the
+    pre-reform driver. An explicit operator config value is overridden by
+    the profile dial (the operator picked the profile precisely for its
+    dials); an act/config hot-override that wants to win is a separate,
+    later concern (it marks the run's meter data `deviated`)."""
+    config = state.get("config") or {}
+    profile = governing_profile(state)
+    if not profile:
+        return config
+    overrides = {k: profile[k] for k in PROFILE_DIALS if k in profile}
+    if not overrides:
+        return config
+    merged = dict(config)
+    merged.update(overrides)
+    return merged
 
 
 def verify_embedded(state):
