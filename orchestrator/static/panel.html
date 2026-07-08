@@ -1079,10 +1079,14 @@ async function refreshDetail() {
           ? ` · suite: ${esc(sum.suite_command)}` : ""}${
         d.profile
           ? ` · profile: ${esc(profileLabel(d.profile.governing))}` : ""}</div>`;
-    if (runView !== "edit" && sum) {
+    if (runView === "edit" && sum) {
+      // The goal text lives here, not in the run header: it is consulted
+      // rarely (operator decision — "it only clutters the header").
       const long = (sum.goal || "").split("\n").length > 3 || (sum.goal || "").length > 320;
-      html += `<div class="goalline ${goalOpen ? "full" : "clamp"}" id="goalText">${esc(sum.goal)}</div>` +
-        (long ? `<div class="morelink" onclick="toggleGoal()">${goalOpen ? "less \u25b4" : "more \u25be"}</div>` : "");
+      html += `<div class="card"><h3>Goal</h3>
+        <div class="goalline ${goalOpen ? "full" : "clamp"}" id="goalText">${esc(sum.goal)}</div>` +
+        (long ? `<div class="morelink" onclick="toggleGoal()">${goalOpen ? "less \u25b4" : "more \u25be"}</div>` : "") +
+        `</div>`;
     }
     if (runView !== "edit" && s.failure_reason) {
       const f = (sum && sum.failure) || {};
