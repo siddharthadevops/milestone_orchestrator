@@ -2138,6 +2138,34 @@ class Driver(object):
             raise StopStep("seal cap")
         attempt_no = len(unit["seals"]) + 1
         all_families = self.config["families_order"]
+        # Reform seal PREDICATE (spec §5): the review rounds already carry
+        # every family's whole-artifact judgment. If each family's most
+        # recent review is clean on the CURRENT bytes (no fix changed them
+        # after it), the dedicated seal-half re-reads would re-read bytes
+        # the family already blessed — redundant. Seal directly and cite
+        # the satisfying reviews; zero seal calls. When a family's look is
+        # stale (a later fix changed the bytes) the predicate returns None
+        # and we fall through to the proven double-seal halves, which give
+        # exactly that family its fresh look. Legacy and profile-less runs
+        # never take this path (bit-identical).
+        if interpreter.seal_predicate(self.state):
+            cite = st.seal_predicate_reviews(unit, all_families)
+            if cite is not None:
+                st.record_seal_attempt(self.state, unit, {}, True)
+                st.append_event(
+                    self.state, "seal_satisfied", unit=st.unit_key(unit),
+                    attempt=attempt_no, reviews=cite,
+                )
+                st.transition_unit(
+                    self.state, unit, st.U_SEALED,
+                    reason="seal predicate satisfied (%s)" % ", ".join(cite),
+                )
+                self._after_seal(unit)
+                return (
+                    "%s sealed by predicate — every family's review is "
+                    "clean on the current bytes (%s); no seal calls"
+                    % (st.unit_key(unit), ", ".join(cite))
+                )
         families = self._seal_families(unit, attempt_no)
         if families != all_families:
             st.append_event(

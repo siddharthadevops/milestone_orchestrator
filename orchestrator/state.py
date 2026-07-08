@@ -556,6 +556,42 @@ def can_open_seal(state, unit):
     return True
 
 
+def seal_predicate_reviews(unit, families):
+    """The reform seal PREDICATE over the ledger (spec §5). Returns the list
+    of review-round ids that SATISFY it — every family's most recent
+    whole-artifact review is clean (or clean-with-deferred-debt) AND on the
+    CURRENT bytes — or None when it is not satisfied (a family never
+    reviewed, its last look is dirty, or a later fix changed the artifact
+    after it, making the look stale).
+
+    Git-agnostic: a fix_findings round is the only thing that changes the
+    artifact bytes, so a family's clean review is on the current bytes iff
+    no fix round follows it. When the predicate holds, the dedicated
+    seal-half re-reads would re-read bytes each family already blessed —
+    exactly the redundant call this replaces; when it does not, that
+    family owes a fresh look (the caller falls back to the seal halves,
+    which give it)."""
+    rounds = unit["rounds"]
+    last_fix = max(
+        (i for i, r in enumerate(rounds) if r["kind"] == "fix_findings"),
+        default=-1,
+    )
+    cite = []
+    for fam in families:
+        revs = [
+            (i, r) for i, r in enumerate(rounds)
+            if r["family"] == fam and r["kind"] == "review_round"
+            and not r.get("invalidated")
+        ]
+        if not revs:
+            return None
+        idx, last = revs[-1]           # most recent whole-artifact review
+        if not _round_effectively_clean(last) or idx < last_fix:
+            return None                 # dirty, or stale after a later fix
+        cite.append(last["id"])
+    return cite
+
+
 def record_seal_attempt(state, unit, halves, passed, invalidated=None):
     """Append an immutable seal attempt record.
 

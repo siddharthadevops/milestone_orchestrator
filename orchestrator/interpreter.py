@@ -92,6 +92,15 @@ def gap_semantics(state):
     return bool(profile) and not profile.get("compat")
 
 
+def seal_predicate(state):
+    """Whether this run seals by the reform PREDICATE (spec §5) rather than
+    by dedicated seal-half worker calls. ON for every reform profile; OFF
+    for the `legacy` compatibility artifact and profile-less runs, which
+    keep the pre-reform double-seal halves (so they stay bit-identical)."""
+    profile = governing_profile(state)
+    return bool(profile) and not profile.get("compat")
+
+
 def doc_defer_scope(state):
     """The severities a DOC-phase review round may defer as tracked debt
     (subject to the drift-risk threshold). The pre-reform gate — and the
