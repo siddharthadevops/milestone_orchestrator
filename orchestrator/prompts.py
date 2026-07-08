@@ -967,7 +967,8 @@ no markdown fences:
 
 
 def build_reclassify(family, workspace, finding, artifact, unit_kind=None,
-                     amendments=None, project_context=None):
+                     amendments=None, project_context=None,
+                     builder_desc=None, gap_backstop=False):
     """Opposite-family RATER of one finding's implementation-drift risk.
 
     Deliberately not a yes/no decision: asked "is it safe?", a worker
@@ -977,7 +978,16 @@ def build_reclassify(family, workspace, finding, artifact, unit_kind=None,
     rating against the run's p3_defer_max_risk threshold. Used for lone
     P3s (the pre-reform gate) and, under a reform profile, for the P2/P3
     findings the profile's doc-gate threshold decides between fix and
-    debt — the rating question is the same at any severity."""
+    debt — the rating question is the same at any severity.
+
+    Reform-only calibration (the reform's central bargain, encoded in
+    the judge — operator, 2026-07-09): builder_desc names WHO actually
+    builds on the artifact (the run's real acts, not a generic agent),
+    and gap_backstop tells the rater the builders have the mandatory
+    stop-report-repair exit — so under-specification is self-revealing
+    (the builder hits it and returns the doc for repair) while a fact
+    stated WRONG is silently trusted and built on. Legacy and
+    profile-less runs pass neither: their prompts stay byte-identical."""
     return (
         _header(contracts.KIND_RECLASSIFY, family, workspace)
         + "\nTASK: rate ONE finding's drift risk. REPORT ONLY — you edit\n"
@@ -1001,6 +1011,23 @@ def build_reclassify(family, workspace, finding, artifact, unit_kind=None,
         "         wrong tests, or a wrong contract reading\n"
         "  xhigh  misstates pinned contract/behaviour facts; building on\n"
         "         it as written would likely produce wrong work\n\n"
+        + (
+            "WHO BUILDS ON IT: %s — not a hypothetical junior; weigh the\n"
+            "reading a capable agent at that strength actually makes.\n\n"
+            % builder_desc
+            if builder_desc else ""
+        )
+        + (
+            "THE BUILDER'S RETURN PATH (weigh it): this run gives every\n"
+            "builder a MANDATORY stop-report-repair exit — a hole,\n"
+            "ambiguity, or open decision that would change what it builds\n"
+            "makes it STOP and send this document back for repair; it\n"
+            "cannot be silently steered by what is missing. So rate\n"
+            "under-specification LOWER (self-revealing by construction)\n"
+            "and reserve high/xhigh for facts stated WRONG — the builder\n"
+            "trusts those and builds on them without ever stopping.\n\n"
+            if gap_backstop else ""
+        )
         + "Rate the finding AS RAISED against the artifact AS IT IS. If it\n"
         "touches correctness, behaviour, or test coverage (more than its\n"
         "severity label suggests), say so in the reason and rate high or\n"

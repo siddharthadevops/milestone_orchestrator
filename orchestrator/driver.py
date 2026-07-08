@@ -1011,6 +1011,21 @@ class Driver(object):
 
         return _save
 
+    def _builders_desc(self):
+        """One line naming the run's REAL downstream builders (resolved
+        acts, family defaults filled in) for the drift-risk rater: 'who
+        builds on this artifact' is a fact of the run, not a hypothetical
+        junior — a fable-5-at-max implementer reads an ambiguity very
+        differently than the rater's imagined worst case."""
+        parts = []
+        for act, label in (("drafter", "slice docs drafted by"),
+                           ("implementer", "implementation built by")):
+            fam, model, effort = self._act_profile(act)
+            dm, de = self._family_defaults(fam)
+            parts.append("%s %s (%s, %s effort)"
+                         % (label, fam, model or dm, effort or de))
+        return "; ".join(parts)
+
     def _maybe_update_slices(self, unit, output):
         """A fix call on the skeleton unit may report an updated slice plan
         (it has edit permissions on the skeleton document); keep the
@@ -2078,10 +2093,20 @@ class Driver(object):
                     pc, _rx, _rr = self._project_prompt_inputs(
                         unit, contracts.KIND_RECLASSIFY
                     )
+                    # Reform runs: the rater judges for the run's REAL
+                    # builders and knows their stop-report-repair exit —
+                    # the reform's bargain (tolerate more in docs BECAUSE
+                    # the builder can come back), encoded in the judge.
+                    # Legacy/profile-less prompts stay byte-identical.
+                    builder_desc = None
+                    gap_backstop = interpreter.gap_semantics(self.state)
+                    if gap_backstop:
+                        builder_desc = self._builders_desc()
                     prompt = prompts.build_reclassify(
                         opp, self.workspace, finding, self._artifact(unit),
                         unit_kind=unit["kind"], amendments=self._amendments(),
                         project_context=pc,
+                        builder_desc=builder_desc, gap_backstop=gap_backstop,
                     )
                     raw_name = "%s-reclassify-%s-%s" % (
                         st.unit_key(unit), raising_family, safe_id)
