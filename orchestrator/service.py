@@ -1987,21 +1987,42 @@ def read_profile(entry):
     return {"base": base, "governing": base}
 
 
+def _profile_view(doc):
+    """The panel-facing shape of one profile document (identity hash
+    exposed, semantic content included for the decomposition view)."""
+    return {
+        "name": doc["name"],
+        "version": doc["version"],
+        "sealed": doc["sealed"],
+        "description": doc.get("description", ""),
+        "hash": profiles.semantic_hash(doc["profile"]),
+        "profile": doc["profile"],
+    }
+
+
 def profiles_list(home):
     """All strategy profiles for the panel selector, each carrying its
     identity hash and its semantic content (the new-run form shows
     name@version and the decomposition, spec §5)."""
-    out = []
-    for doc in profiles.list_profiles(home):
-        out.append({
-            "name": doc["name"],
-            "version": doc["version"],
-            "sealed": doc["sealed"],
-            "description": doc.get("description", ""),
-            "hash": profiles.semantic_hash(doc["profile"]),
-            "profile": doc["profile"],
-        })
-    return out
+    return [_profile_view(doc) for doc in profiles.list_profiles(home)]
+
+
+def save_profile(home, body):
+    """Create or update a strategy profile from the panel. The save API
+    NEVER seals — a profile seals only on its first production reference by
+    a run (profiles.reference), so an operator can keep refining an unused
+    profile in place. An already-sealed profile's seal and its immutable
+    semantic content are preserved by profiles.save (a metadata-only edit,
+    e.g. the description, still lands; a content change is refused)."""
+    if not isinstance(body, dict):
+        raise ApiError(400, "profile document must be an object")
+    doc = dict(body)
+    doc["sealed"] = False
+    try:
+        saved = profiles.save(home, doc)
+    except profiles.ProfileError as exc:
+        raise ApiError(400, str(exc))
+    return _profile_view(saved)
 
 
 def run_story(home, run_id, item):
@@ -2383,6 +2404,9 @@ def make_handler(home):
                 if route == "/api/runs":
                     entry = create_run(home, self._body())
                     self._json(201, {"ok": True, "run": run_status(entry, home=home)})
+                elif route == "/api/profiles":
+                    saved = save_profile(home, self._body())
+                    self._json(200, {"ok": True, "profile": saved})
                 elif route == "/api/projects" or route.startswith("/api/projects/"):
                     status, payload = projects_api(
                         home, "POST", project_route_segments(route),

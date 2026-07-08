@@ -953,6 +953,51 @@ class ProfilesApiTest(ServiceApiTest):
             "GET", "/api/runs/%s" % body["run"]["id"])
         self.assertIsNone(detail["profile"])
 
+    def test_post_creates_profile_unsealed(self):
+        doc = {"name": "custom", "version": 1, "sealed": False,
+               "description": "d", "profile": {"p3_defer_max_risk": "high"}}
+        status, body = self.request_json("POST", "/api/profiles", doc)
+        self.assertEqual(status, 200)
+        self.assertFalse(body["profile"]["sealed"])
+        self.assertEqual(
+            body["profile"]["hash"], profiles.semantic_hash(doc["profile"]))
+        # It now shows up in the listing.
+        _, listed = self.request_json("GET", "/api/profiles")
+        self.assertIn("custom", {p["name"] for p in listed["profiles"]})
+
+    def test_post_never_seals_even_if_body_asks(self):
+        # The save API must not seal — only a run's first reference does.
+        doc = {"name": "wannaseal", "version": 1, "sealed": True,
+               "description": "d", "profile": {"a": 1}}
+        status, body = self.request_json("POST", "/api/profiles", doc)
+        self.assertEqual(status, 200)
+        self.assertFalse(body["profile"]["sealed"])
+        self.assertFalse(profiles.load(self.home, "wannaseal")["sealed"])
+
+    def test_post_rejects_bad_document(self):
+        for bad in ({}, {"name": "x y", "version": 1, "profile": {"a": 1}},
+                    ["not", "a", "dict"]):
+            status, body = self.request_json("POST", "/api/profiles", bad)
+            self.assertEqual(status, 400)
+            self.assertFalse(body["ok"])
+
+    def test_post_preserves_seal_and_refuses_content_change(self):
+        doc = {"name": "frozen", "version": 1, "sealed": False,
+               "description": "d", "profile": {"a": 1}}
+        self.request_json("POST", "/api/profiles", doc)
+        profiles.reference(self.home, "frozen")  # first production use seals it
+        # A metadata-only edit still lands.
+        meta = dict(doc, description="clearer words")
+        status, body = self.request_json("POST", "/api/profiles", meta)
+        self.assertEqual(status, 200)
+        self.assertTrue(body["profile"]["sealed"])
+        self.assertEqual(body["profile"]["description"], "clearer words")
+        # A semantic-content change on the sealed profile is refused.
+        changed = dict(doc, profile={"a": 2})
+        status, body = self.request_json("POST", "/api/profiles", changed)
+        self.assertEqual(status, 400)
+        self.assertIn("sealed", body["error"])
+
 
 class CommitWebBaseTest(unittest.TestCase):
     """commit_web_base derives an https web URL from a workspace's origin
