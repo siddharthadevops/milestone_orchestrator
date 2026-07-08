@@ -31,8 +31,8 @@ try:
 except ImportError:  # pragma: no cover - non-POSIX: flock degrades to the
     fcntl = None     # staleness check in step(); documented in the README
 
-from . import contracts, errclass, gitops, kvstore, ledgers, projects
-from . import prompts, runners, verifiers, workareas
+from . import contracts, errclass, gitops, interpreter, kvstore, ledgers
+from . import projects, prompts, runners, verifiers, workareas
 from . import state as st
 
 DEFAULT_CONFIG = {
@@ -231,6 +231,17 @@ def decide(state):
     if status in (st.U_PRE_REVIEW_VERIFY, st.U_PRE_SEAL_VERIFY):
         return Action(A_VERIFY, unit=st.unit_key(unit), stage=status)
     if status == st.U_ROUNDS:
+        # The stage interpreter chooses the review-rounds loop from the
+        # run's governing profile. Phase 2 interprets only
+        # family_until_clean — the canonical flow, and the answer for every
+        # profile-less run — so this branch is byte-identical to the
+        # pre-reform driver for those runs; other loop kinds are rejected
+        # loudly until their phase lands.
+        loop = interpreter.rounds_loop(state)
+        if loop != interpreter.FAMILY_UNTIL_CLEAN:
+            raise st.IllegalTransition(
+                "rounds loop %r is not interpreted yet (later phase)" % loop
+            )
         family = st.current_family(state, unit)
         return Action(A_REVIEW_ROUND, unit=st.unit_key(unit), family=family)
     if status == st.U_FIXING:
@@ -279,6 +290,10 @@ class Driver(object):
         self.state_path = state_path
         self.state = st.load(state_path)
         self.config = self.state["config"]
+        # Fail loudly at startup if an embedded profile snapshot is
+        # inconsistent (content hash vs recorded profile_ref hash). No-op
+        # for profile-less runs and ref-only labels.
+        interpreter.verify_embedded(self.state)
         self.workspace = self.state["workspace"]
         self.runner = runner or runners.SubprocessRunner(
             self.config["commands"], self.config.get("timeouts", {})
