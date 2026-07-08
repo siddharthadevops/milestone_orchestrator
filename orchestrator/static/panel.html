@@ -854,7 +854,7 @@ async function refreshDetail() {
         sum && sum.suite_command
           ? ` · suite: ${esc(sum.suite_command)}` : ""}${
         d.profile
-          ? ` · profile: ${esc(d.profile.governing.name)}@${esc(String(d.profile.governing.version))}` : ""}</div>`;
+          ? ` · profile: ${esc(profileLabel(d.profile.governing))}` : ""}</div>`;
     if (sum) {
       const long = (sum.goal || "").split("\n").length > 3 || (sum.goal || "").length > 320;
       html += `<div class="goalline ${goalOpen ? "full" : "clamp"}" id="goalText">${esc(sum.goal)}</div>` +
@@ -1231,6 +1231,12 @@ function openForm() {
 /* ---- strategy profile selector: the run's review strategy, chosen at
         creation. The list loads when the form opens; picking one shows its
         decomposition (dials) so the operator sees what it means. ---- */
+// version is noise for the common case (every seed starts at v1); show
+// it only once a profile has actually been cloned/versioned past v1.
+function profileLabel(p) {
+  const v = p.version > 1 ? `@${p.version}` : "";
+  return `${p.name}${v}${p.sealed ? " · sealed" : ""}`;
+}
 let launchProfiles = [];
 async function loadProfiles() {
   launchProfiles = [];
@@ -1242,9 +1248,7 @@ async function loadProfiles() {
   const keep = sel.value;
   sel.innerHTML =
     `<option value="" disabled${keep ? "" : " selected"}>— choose: strict / light / legacy —</option>` +
-    launchProfiles.map(p =>
-      `<option value="${esc(p.name)}">${esc(p.name)}@${esc(String(p.version))}${p.sealed ? " · sealed" : ""}</option>`
-    ).join("");
+    launchProfiles.map(p => `<option value="${esc(p.name)}">${esc(profileLabel(p))}</option>`).join("");
   // No seed is pre-selected: an explicit choice is required (R1-ARM — a
   // silent default would no-op the operator's intent now that profiles
   // change behavior). A prior in-progress choice is preserved on reload.
@@ -1291,7 +1295,7 @@ async function openProfileSwap() {
   } catch (e) { document.getElementById("ps_err").textContent = e.message; }
   const sel = document.getElementById("ps_sel");
   sel.innerHTML = psProfiles.map(p =>
-    `<option value="${esc(p.name)}">${esc(p.name)}@${esc(String(p.version))}${p.sealed ? " · sealed" : ""}</option>`
+    `<option value="${esc(p.name)}">${esc(profileLabel(p))}</option>`
   ).join("");
   const cur = lastProfile && lastProfile.governing;
   if (cur && psProfiles.some(p => p.name === cur.name)) sel.value = cur.name;
