@@ -584,6 +584,7 @@
 
 <script>
 let selected = null;
+let runView = "main";  // "main" | "edit" — the run's settings page
 let goalOpen = false;
 function toggleGoal() { goalOpen = !goalOpen; refreshDetail(); }
 
@@ -802,11 +803,14 @@ async function refreshRuns() {
   } catch (e) { /* keep last render */ }
 }
 function select(id) {
-  selected = id; goalOpen = false;
+  selected = id; goalOpen = false; runView = "main";
   document.body.classList.add("m-detail");  // mobile: swap to the detail page
   refreshRuns(); refreshDetail();
 }
+function openRunEdit() { runView = "edit"; refreshDetail(); }
+function closeRunEdit() { runView = "main"; refreshDetail(); }
 function mobileBack() {
+  runView = "main";
   document.body.classList.remove("m-detail");
   selected = null;
   document.getElementById("detail").innerHTML =
@@ -1059,7 +1063,13 @@ async function refreshDetail() {
     if (seq !== detailSeq || runId !== selected) return;
     const s = d.status, sum = d.summary;
     const running = s.process === "running";
-    let html = `<h2>${esc(s.name)} ${msChip(s.milestone_status)}
+    let html = "";
+    if (runView === "edit") {
+      // The run's settings page: everything editable, behind Edit.
+      html += `<div class="toolbar">
+        <button class="btn" onclick="closeRunEdit()">&#8592; back</button>
+        <h2 style="margin:0">${esc(s.name)} <span class="st">· run settings</span></h2></div>`;
+    } else html += `<h2>${esc(s.name)} ${msChip(s.milestone_status)}
         ${workingChip(s)}
         <span class="st">${running ? "· driver running (pid " + s.pid + ")" : "· driver stopped"}${runTime(sum, s)}</span></h2>
       <div class="goalline mono">${esc(s.workspace)}${
@@ -1069,12 +1079,12 @@ async function refreshDetail() {
           ? ` · suite: ${esc(sum.suite_command)}` : ""}${
         d.profile
           ? ` · profile: ${esc(profileLabel(d.profile.governing))}` : ""}</div>`;
-    if (sum) {
+    if (runView !== "edit" && sum) {
       const long = (sum.goal || "").split("\n").length > 3 || (sum.goal || "").length > 320;
       html += `<div class="goalline ${goalOpen ? "full" : "clamp"}" id="goalText">${esc(sum.goal)}</div>` +
         (long ? `<div class="morelink" onclick="toggleGoal()">${goalOpen ? "less \u25b4" : "more \u25be"}</div>` : "");
     }
-    if (s.failure_reason) {
+    if (runView !== "edit" && s.failure_reason) {
       const f = (sum && sum.failure) || {};
       const ftype = f.type || "unknown";
       const auto = ["quota", "network", "busy", "timeout"].includes(ftype);
@@ -1088,16 +1098,23 @@ async function refreshDetail() {
         ? `\nclassified via: ${f.classify_evidence}` : "";
       html += `<div class="failure"><span class="chip ${auto ? "sev23" : "fail"}">${esc(ftype)}</span>${esc(when)}\nRUN FAILED\n${esc(s.failure_reason)}${esc(cev)}</div>`;
     }
-    html += `<div class="toolbar">
+    if (runView !== "edit")
+      html += `<div class="toolbar">
       ${s.failure_reason && !running
         ? `<button class="btn primary" onclick="act('resume')">Resume</button>` : ""}
       <button class="btn ${s.failure_reason ? "" : "primary"}" ${running || s.milestone_status === "closed" || s.failure_reason ? "disabled" : ""}
         onclick="act('start')">Start</button>
       <button class="btn" ${running ? "" : "disabled"} onclick="act('stop')">Stop</button>
       <button class="btn danger" ${running ? "disabled" : ""} onclick="del()">Forget</button>
+      <button class="btn" style="margin-left:auto"
+        onclick="openRunEdit()">Edit&#8230;</button>
     </div>`;
     // Amendments and acts come straight from their own files — never gate
     // them on the state summary, which can be transiently unreadable.
+    // They live on the SETTINGS page (Edit), off the monitoring screen.
+    lastActs = d.acts || {};
+    lastProfile = d.profile || null;
+    if (runView === "edit") {
     html += `<div class="card"><h3>Operator amendments</h3>` +
       ((d.amendments || []).map(a =>
         `<div class="amend"><span class="t">${esc(a.id)} · ${esc((a.at || "").slice(0, 16).replace("T", " "))}</span>${esc(a.text)}<button class="amend-x" title="Remove — stops binding from the next worker call" onclick="delAmend('${esc(a.id)}')">×</button></div>`
@@ -1107,8 +1124,7 @@ async function refreshDetail() {
          <button class="btn" onclick="addAmend()">Add</button>
        </div>
        <div class="amend-hint">Applies from the next worker call. Drivers started before this feature exists need one Stop → Start to begin reading amendments.</div></div>`;
-    const curActs = d.acts || {};
-    lastActs = curActs;
+    const curActs = lastActs;
     const actLabel = {drafter: "draft", implementer: "impl", fixer: "fix"};
     const actsSum = ["drafter", "implementer", "fixer"].map(a => {
       const v = curActs[a];
@@ -1121,7 +1137,6 @@ async function refreshDetail() {
         <span class="amend-hint mono" style="flex:1">${esc(actsSum)}</span>
         <button class="btn" onclick="openActs()">Edit…</button>
       </div></div>`;
-    lastProfile = d.profile || null;
     if (d.profile) {
       const g = d.profile.governing, b = d.profile.base;
       const swapped = !!d.profile.swap;
@@ -1135,7 +1150,8 @@ async function refreshDetail() {
         <div class="amend-hint">Repoint takes effect at the next stage
           boundary; the interpreter that honors it lands in a later phase.</div></div>`;
     }
-    if (sum) {
+    }  // end of the settings page's cards
+    if (runView !== "edit" && sum) {
       const sliceTitle = id => {
         const sl = (sum.slices || []).find(x => x.id === id);
         return sl ? `<span class="unit-title">${esc(sl.title)}</span>` : "";
@@ -1243,10 +1259,11 @@ async function refreshDetail() {
           return `<div class="evt"><span class="t">#${e.seq}</span>` +
                  `<span class="ty">${esc(e.type)}</span>${bad}${esc(extra)}</div>`;
         }).join("") + `</div>`;
-    } else if (d.summary_error) {
+    } else if (runView !== "edit" && d.summary_error) {
       html += `<div class="failure">state unreadable: ${esc(d.summary_error)}</div>`;
     }
-    html += `<div class="card"><h3>Driver log</h3>
+    if (runView !== "edit")
+      html += `<div class="card"><h3>Driver log</h3>
       <pre class="log mono">${esc((d.log || []).join(""))}</pre></div>`;
     const actDraft = {};
     for (const act of ["drafter", "implementer", "fixer"]) {
