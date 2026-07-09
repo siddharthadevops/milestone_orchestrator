@@ -120,7 +120,13 @@ DEFAULT_CONFIG = {
     # mid-run via <workspace>/.orchestrator/acts.json (driver re-reads it
     # before every act resolution; reviews/seals stay family-rotated).
     "acts": {"fixer": "codex", "delta_review": "codex",
-             "consultation": "opposite"},
+             "consultation": "opposite",
+             # Who RATES findings for debt deferral: "opposite" (the
+             # pre-reform doctrine) or a fixed family (operator
+             # 2026-07-09: an 8-minute opposite-family rating of a
+             # 4-minute review's findings is upside down; a fixed fast
+             # rater is still a fresh stateless look).
+             "reclassifier": "opposite"},
     # Fixer+delta iterations allowed per fix episode before failing. A
     # deliberate resume grants a fresh budget (state.resume_run resets the
     # counter), so this is a soft ceiling, not a dead end.
@@ -2073,15 +2079,30 @@ class Driver(object):
             contracts.KIND_RECLASSIFY, None,
         )
         try:
+            acts_merged = dict(self.config.get("acts") or {})
+            for k, v in self._acts_overlay().items():
+                if v:
+                    acts_merged[k] = v
+            raw_policy = acts_merged.get("reclassifier")
+            if isinstance(raw_policy, dict):
+                raw_policy = (raw_policy.get("agent")
+                              or raw_policy.get("family") or "").strip()
+            explicit = bool(raw_policy) and raw_policy not in ("opposite",)
             for finding, raising_family in items:
-                opp = self._opposite(raising_family)
+                opp, rater_model, rater_effort = self._act_profile(
+                    "reclassifier", origin_family=raising_family,
+                    default_family=self._opposite(raising_family),
+                )
                 defer_ok, reason = False, "reclassification unavailable"
                 risk = None
                 damage = None
-                if opp == raising_family:
+                if opp == raising_family and not explicit:
                     # No independent opposite family (single-family config):
                     # cross-family verification is impossible, so a P3 is
-                    # never deferred — it takes the normal fix path.
+                    # never deferred — it takes the normal fix path. An
+                    # EXPLICIT fixed/self policy is the operator choosing a
+                    # same-family rater on purpose — allowed (a fresh
+                    # stateless call is still a second look).
                     reason = "no independent reclassifier (single family)"
                 else:
                     # Finding ids are arbitrary reviewer strings; sanitize
@@ -2117,7 +2138,9 @@ class Driver(object):
                         output, result = runners.call_worker(
                             self.runner, opp, prompt,
                             contracts.KIND_RECLASSIFY,
-                            self.workspace, model=dm, effort=de,
+                            self.workspace,
+                            model=rater_model or dm,
+                            effort=rater_effort or de,
                             validate_opts=(
                                 {"require_drift_damage": True}
                                 if gap_backstop else None

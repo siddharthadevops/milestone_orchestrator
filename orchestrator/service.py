@@ -1918,7 +1918,7 @@ def _write_amendments(entry, amendments):
 
 
 ACT_KEYS = ("drafter", "implementer", "fixer", "delta_review",
-            "consultation")
+            "consultation", "reclassifier")
 
 
 def _acts_path(entry):

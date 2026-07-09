@@ -156,6 +156,31 @@ class TestP3Debt(DriverTestCase):
             self.assertEqual(len(unit["debt"]), 2)
             self.assertEqual(unit["debt"][0]["severity"], "P2")
 
+    def test_fixed_reclassifier_rates_even_its_own_family(self):
+        # acts.reclassifier = "codex" (operator 2026-07-09: a fixed fast
+        # rater beats an 8-minute opposite-family rating of a 4-minute
+        # review's findings). The codex-raised P3 is rated BY CODEX —
+        # the MockRunner's expect_family proves who was asked — and the
+        # explicit policy overrides the same-family degeneracy guard.
+        with tempfile.TemporaryDirectory(prefix="orch-mock-") as ws:
+            cfg = make_config(p3_reclassify_debt=True)
+            cfg["acts"] = dict(cfg["acts"], reclassifier="codex")
+            path = init_state(ws, cfg)
+            mock = runners.MockRunner([
+                draft_step(),
+                step("review_round",
+                     report("review_round", [finding("F1", "stale word")]),
+                     family="codex"),
+                reclassify(True, family="codex", reason="cosmetic"),
+            ])
+            driver = drv.Driver(path, runner=mock)
+            self.step_until(driver, lambda s: s["units"][0].get("debt"))
+            state = st.load(path)
+            ev = [e for e in state["events"]
+                  if e["type"] == "reclassify_recorded"][-1]
+            self.assertEqual(ev["reclassifier"], "codex")
+            self.assertTrue(ev["defer_ok"])
+
     def test_reform_gates_on_damage_not_probability(self):
         # The two-axis decision (operator 2026-07-09): a certain-but-cheap
         # drift defers; an unlikely-but-destructive one is fixed.

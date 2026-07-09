@@ -402,10 +402,21 @@
       <select id="a_fixer_effort"><option value="">default</option>
         <option>low</option><option>medium</option><option>high</option>
         <option>xhigh</option><option>max</option></select>
+      <label>Reclassify</label>
+      <select id="a_reclassifier_agent"
+        onchange="onAgentChange('a_','reclassifier')">
+        <option value="">default (opposite)</option>
+        <option>codex</option><option>claude</option></select>
+      <input id="a_reclassifier_model" list="dl_a_reclassifier"
+        placeholder="default">
+      <select id="a_reclassifier_effort"><option value="">default</option>
+        <option>low</option><option>medium</option><option>high</option>
+        <option>xhigh</option><option>max</option></select>
     </div>
     <datalist id="dl_a_drafter"></datalist>
     <datalist id="dl_a_implementer"></datalist>
-    <datalist id="dl_a_fixer"></datalist></div>
+    <datalist id="dl_a_fixer"></datalist>
+    <datalist id="dl_a_reclassifier"></datalist></div>
   <div class="field">
     <button class="btn" type="button" id="f_more_btn"
       onclick="toggleMore()">More options ▾</button></div>
@@ -478,10 +489,19 @@
       <option>codex</option><option>claude</option></select>
     <input id="ra_fixer_model" list="dl_ra_fixer" placeholder="default">
     <select id="ra_fixer_effort"><option value="">default</option></select>
+    <label>Reclassify</label>
+    <select id="ra_reclassifier_agent"
+      onchange="onAgentChange('ra_','reclassifier')">
+      <option value="">default (opposite)</option>
+      <option>codex</option><option>claude</option></select>
+    <input id="ra_reclassifier_model" list="dl_ra_reclassifier"
+      placeholder="default">
+    <select id="ra_reclassifier_effort"><option value="">default</option></select>
   </div>
   <datalist id="dl_ra_drafter"></datalist>
   <datalist id="dl_ra_implementer"></datalist>
   <datalist id="dl_ra_fixer"></datalist>
+  <datalist id="dl_ra_reclassifier"></datalist>
   <div class="hint" style="margin-top:8px">Empty = launch config / defaults.
     Binds from the NEXT act resolution (drivers started before this feature
     need one Stop → Start).</div>
@@ -1133,8 +1153,9 @@ async function refreshDetail() {
        </div>
        <div class="amend-hint">Applies from the next worker call. Drivers started before this feature exists need one Stop → Start to begin reading amendments.</div></div>`;
     const curActs = lastActs;
-    const actLabel = {drafter: "draft", implementer: "impl", fixer: "fix"};
-    const actsSum = ["drafter", "implementer", "fixer"].map(a => {
+    const actLabel = {drafter: "draft", implementer: "impl",
+                      fixer: "fix", reclassifier: "reclass"};
+    const actsSum = ["drafter", "implementer", "fixer", "reclassifier"].map(a => {
       const v = curActs[a];
       const e = typeof v === "string" ? {agent: v} : (v || {});
       const bits = [e.agent, e.model, e.effort].filter(Boolean).join(" · ");
@@ -1277,7 +1298,7 @@ async function refreshDetail() {
       html += `<div class="card"><h3>Driver log</h3>
       <pre class="log mono">${esc((d.log || []).join(""))}</pre></div>`;
     const actDraft = {};
-    for (const act of ["drafter", "implementer", "fixer"]) {
+    for (const act of ["drafter", "implementer", "fixer", "reclassifier"]) {
       for (const f of ["agent", "model", "effort"]) {
         const el = document.getElementById(`ra_${act}_${f}`);
         if (el && document.activeElement &&
@@ -1452,7 +1473,7 @@ let lastProfile = null;   // the run's profile block from the last detail poll
 function openActs() {
   // The dialog lives OUTSIDE the polled container: the 2s re-render can
   // never reset an edit in progress. Values are seeded once, on open.
-  for (const act of ["drafter", "implementer", "fixer"]) {
+  for (const act of ["drafter", "implementer", "fixer", "reclassifier"]) {
     const v = lastActs[act];
     const entry = typeof v === "string" ? {agent: v} : (v || {});
     document.getElementById(`ra_${act}_agent`).value = entry.agent || "";
@@ -1466,7 +1487,7 @@ function openActs() {
 }
 async function saveActs() {
   const acts = {};
-  for (const act of ["drafter", "implementer", "fixer"]) {
+  for (const act of ["drafter", "implementer", "fixer", "reclassifier"]) {
     const agent = document.getElementById(`ra_${act}_agent`).value;
     const model = document.getElementById(`ra_${act}_model`).value.trim();
     const effort = document.getElementById(`ra_${act}_effort`).value;
@@ -1743,7 +1764,7 @@ function toggleMore() {
 }
 function collectActs(prefix) {
   const acts = {};
-  for (const act of ["drafter", "implementer", "fixer"]) {
+  for (const act of ["drafter", "implementer", "fixer", "reclassifier"]) {
     const agent = document.getElementById(`${prefix}${act}_agent`).value;
     const model = document.getElementById(`${prefix}${act}_model`).value.trim();
     const effort = document.getElementById(`${prefix}${act}_effort`).value;
