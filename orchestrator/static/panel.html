@@ -31,23 +31,29 @@
   .btn.danger { color: var(--bad); border-color: #f3c1c1; }
   .btn:disabled { opacity: .45; cursor: default; }
   #runs { overflow-y: auto; flex: 1; }
-  .run { padding: 9px 14px; cursor: pointer; display: flex;
+  .run { padding: 8px 14px 8px 26px; cursor: pointer; display: flex;
          align-items: center; gap: 8px; }
   .run:hover .name { color: var(--accent); }
-  .run.sel { border-left: 3px solid var(--accent); padding-left: 11px; }
+  .run.sel { border-left: 3px solid var(--accent); padding-left: 23px; }
   .run.sel .name { color: var(--accent); }
   .run .name { font-weight: 500; font-size: 13px; color: #71717a;
     flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .dot { width: 7px; height: 7px; border-radius: 50%; background: #d4d4d8;
+  /* Run status dot: grey = stopped/idle, red = error; hidden when the
+     milestone is closed. A running run shows the .rchip instead. */
+  .dot { width: 7px; height: 7px; border-radius: 50%; background: #cbccd1;
          flex: none; }
-  .dot.running { background: var(--ok); }
+  .dot.err { background: var(--bad); }
+  .rchip { flex: none; font-size: 10px; font-weight: 600; padding: 1px 8px;
+    border-radius: 9px; background: #dcfce7; color: #15803d;
+    display: inline-flex; align-items: center; gap: 5px; }
+  .rchip::before { content: ""; width: 5px; height: 5px; border-radius: 50%;
+    background: #16a34a; animation: pulse 1.5s ease-in-out infinite; }
+  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: .25; } }
   .proj-group-header { display: flex; align-items: center; gap: 8px;
     padding: 6px 12px; margin-top: 20px; font-size: 13px; font-weight: 700;
     color: var(--text); cursor: pointer; user-select: none; }
   #runs > .proj-group-header:first-child { margin-top: 6px; }
   .proj-group-header:hover { color: var(--accent); }
-  .proj-group-header .proj-count { flex: none; color: var(--dim);
-    font-weight: 400; }
   .grpgear { flex: none; font-size: 15px;
     line-height: 1; color: var(--dim); cursor: pointer; }
   .grpgear:hover { color: var(--accent); }
@@ -650,8 +656,18 @@ function runRow(r) {
   return `
       <div class="run ${r.id === selected ? "sel" : ""}" onclick="select('${esc(r.id)}')">
         <span class="name">${esc(r.name)}</span>
-        <span class="dot ${r.process}"></span>
+        ${runStatusIndicator(r)}
       </div>`;
+}
+function runStatusIndicator(r) {
+  // A running run shows the animated running chip. Otherwise a dot:
+  // hidden when the milestone is closed (done), red on error, grey when
+  // merely stopped/idle. The chip sits before where the dot would be.
+  if (r.process === "running") return `<span class="rchip">running</span>`;
+  if (r.milestone_status === "closed") return "";
+  if (r.failure_reason || r.milestone_status === "failed")
+    return `<span class="dot err" title="error"></span>`;
+  return `<span class="dot" title="stopped"></span>`;
 }
 function groupRuns(runs) {
   const byProject = new Map();
@@ -690,7 +706,6 @@ function groupHeader(key, label, count, editable) {
   return `<div class="proj-group-header" onclick="toggleGroupCollapse('${safeKey}')">
       ${gear}
       <span>${esc(label)}</span>
-      <span class="proj-count">${count}</span>
     </div>`;
 }
 function renderRunsTree(runs) {
