@@ -1083,6 +1083,20 @@ class TestConfigPrecedence(ProjectsServiceTestCase):
         state = st.load(_ws_state(primary))
         self.assertFalse(state["config"]["git"]["enabled"])
 
+    def test_bound_launch_forces_the_full_seal_trio(self):
+        # Found live 2026-07-09: the first project-bound run sealed
+        # SEQUENTIALLY because binding_defaults carried only git — the
+        # bound path must force the same trio the project-less path does
+        # (project defaults and launch config still win).
+        self.create_project()
+        primary = self.repo("seal-trio-root")
+        self.declare(primary)
+        self.launch()
+        state = st.load(_ws_state(primary))
+        self.assertTrue(state["config"]["git"]["enabled"])
+        self.assertTrue(state["config"]["seal_concurrent"])
+        self.assertTrue(state["config"]["single_seal_first_attempt"])
+
     def test_docs_dir_default_applies_and_launch_wins(self):
         self.create_project(defaults={"docs_dir": "notes/{slug}"})
         first = self.repo("docs-repo-a")

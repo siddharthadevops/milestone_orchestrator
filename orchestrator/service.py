@@ -1373,12 +1373,16 @@ def _create_bound_run(home, payload, workspace):
     if user_cfg is not None and not isinstance(user_cfg, dict):
         raise ApiError(400, "config must be a JSON object")
 
-    # Launch-time standing defaults: the service's git-enabled convention
-    # (same rationale as the project-less path: panel runs get the full
-    # enforced flow by default) merged BENEATH the persisted project
-    # defaults — standing operator law beats a service convention, and the
-    # explicit launch config (config_override at the init seam) beats both.
-    binding_defaults = {"git": {"enabled": True}}
+    # Launch-time standing defaults: the SAME trio the project-less path
+    # forces (found live 2026-07-09: the first project-bound run sealed
+    # sequentially because this dict only carried git) merged BENEATH the
+    # persisted project defaults — standing operator law beats a service
+    # convention, and the explicit launch config beats both.
+    binding_defaults = {
+        "git": {"enabled": True},
+        "seal_concurrent": True,
+        "single_seal_first_attempt": True,
+    }
     if project.get("defaults"):
         driver.merge_config(binding_defaults, project["defaults"])
 
