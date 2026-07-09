@@ -1010,14 +1010,14 @@ class TestLaunchRefusals(ProjectsServiceTestCase):
     def test_stale_registry_claim_refuses_before_bound_state_create(self):
         primary = self.repo("repo-stale-claim")
         self.declare(primary)
-        # The stale claim is fabricated about the LEGACY workspace-root
-        # path — exactly the path the bound-launch guard checks.
+        # The stale claim is at the LEGACY workspace-root path, which a
+        # LEGACY-layout launch actually resolves to — so the guard fires.
         state_path = drv.default_state_path(primary)
         stale = registry.new_entry("old-run", "old", primary, state_path)
         registry.add(self.home, stale)
         self.assertFalse(os.path.exists(state_path))
 
-        status, body = self.launch(expect=None)
+        status, body = self.launch(config={"docs_dir": "docs"}, expect=None)
         self.assertEqual(status, 409, body)
         self.assertIn("already registered", body["error"])
         self.assertFalse(os.path.exists(state_path))
@@ -1025,6 +1025,25 @@ class TestLaunchRefusals(ProjectsServiceTestCase):
         self.assertEqual([entry["id"] for entry in reg["runs"]],
                          ["old-run"])
         self.assertEqual(self.run_entries(), [])
+
+    def test_per_milestone_launch_ignores_a_legacy_path_claim(self):
+        # Regression (LPC N30, 2026-07-09): a CLOSED legacy-layout run
+        # registered at the workspace-root path must NOT block a new
+        # per-milestone milestone — which resolves to its own uniquified
+        # dir and can never collide with the flat root state.
+        primary = self.repo("repo-legacy-coexist")
+        self.declare(primary)
+        legacy = drv.default_state_path(primary)
+        stale = registry.new_entry("old-legacy", "old", primary, legacy)
+        registry.add(self.home, stale)
+
+        status, body = self.launch()  # default per-milestone layout
+        self.assertEqual(status, 201, body)
+        reg = registry.load(self.home)
+        self.assertIn("old-legacy", [e["id"] for e in reg["runs"]])  # untouched
+        new = [e for e in reg["runs"] if e["id"] != "old-legacy"][0]
+        self.assertNotEqual(new["state_path"], legacy)
+        self.assertIn("implementation/milestones", new["state_path"])
 
     def test_confirm_failures_map_by_the_sealed_vocabulary(self):
         primary = self.repo("repo-confirm")

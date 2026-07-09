@@ -1415,7 +1415,18 @@ def _create_bound_run(home, payload, workspace):
         raise _work_area_error(confirmed.reason)
 
     resolved_workspace = primary["path"] if workspace is None else workspace
-    if resolved_workspace == primary["path"]:
+    # The legacy-root state-path guard applies ONLY to a flat/legacy
+    # layout, where every run in a workspace shares `.orchestrator/
+    # state.json`. A per-milestone layout ({slug} template — the default)
+    # resolves to a fresh, uniquified dir per run (init_run), so a new
+    # milestone can never collide with a prior run's state; guarding the
+    # legacy root there would falsely block EVERY new milestone whenever a
+    # closed legacy run stays registered in the same workspace (seen live
+    # 2026-07-09: LPC's closed N30 at the legacy path blocked all new
+    # per-milestone launches). init_run + registry.add still catch a real
+    # collision on the actual resolved path.
+    layout_is_legacy = "{slug}" not in ((effective.get("docs_dir") or "docs"))
+    if resolved_workspace == primary["path"] and layout_is_legacy:
         _refuse_registered_state_path(
             home, driver.default_state_path(resolved_workspace)
         )
