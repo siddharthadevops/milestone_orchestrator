@@ -1098,6 +1098,11 @@ def summary(state):
         "units": units_view,
         "events_total": len(state["events"]),
         "last_events": state["events"][-30:],
+        # The launch config's act assignments: the panel shows EFFECTIVE
+        # acts (this merged under the hot overlay) — showing the overlay
+        # alone reads "default" for a run launched with acts in its
+        # config (found live 2026-07-09).
+        "acts_config": (state["config"].get("acts") or {}),
         # Every repaired first strike of the whole run (not just the event
         # tail): the panel renders these as chips — prompt/contract tuning
         # needs the full trail. Bounded; the ledger keeps the rest.

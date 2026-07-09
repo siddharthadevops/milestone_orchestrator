@@ -1141,6 +1141,17 @@ async function refreshDetail() {
     // them on the state summary, which can be transiently unreadable.
     // They live on the SETTINGS page (Edit), off the monitoring screen.
     lastActs = d.acts || {};
+    // EFFECTIVE acts: hot overlay wins per key over the launch config —
+    // exactly the driver's own merge. The card and the edit dialog work
+    // on these; saves still write the overlay only.
+    lastEffActs = {};
+    {
+      const cfgActs = (sum && sum.acts_config) || {};
+      for (const a of ["drafter", "implementer", "fixer", "reclassifier"]) {
+        lastEffActs[a] = lastActs[a] || cfgActs[a] || null;
+        if (lastActs[a]) lastEffActs[a + "_hot"] = true;
+      }
+    }
     lastProfile = d.profile || null;
     if (runView === "edit") {
     html += `<div class="card"><h3>Operator amendments</h3>` +
@@ -1152,14 +1163,13 @@ async function refreshDetail() {
          <button class="btn" onclick="addAmend()">Add</button>
        </div>
        <div class="amend-hint">Applies from the next worker call. Drivers started before this feature exists need one Stop → Start to begin reading amendments.</div></div>`;
-    const curActs = lastActs;
     const actLabel = {drafter: "draft", implementer: "impl",
                       fixer: "fix", reclassifier: "reclass"};
     const actsSum = ["drafter", "implementer", "fixer", "reclassifier"].map(a => {
-      const v = curActs[a];
+      const v = lastEffActs[a];
       const e = typeof v === "string" ? {agent: v} : (v || {});
       const bits = [e.agent, e.model, e.effort].filter(Boolean).join(" · ");
-      return `${actLabel[a]}: ${bits || "default"}`;
+      return `${actLabel[a]}: ${bits || "default"}${lastEffActs[a + "_hot"] ? " (hot)" : ""}`;
     }).join("   —   ");
     html += `<div class="card"><h3>Acts (who leads what)</h3>
       <div class="amendform">
@@ -1469,12 +1479,13 @@ async function delAmend(aid) {
   refreshDetail();
 }
 let lastActs = {};
+let lastEffActs = {};
 let lastProfile = null;   // the run's profile block from the last detail poll
 function openActs() {
   // The dialog lives OUTSIDE the polled container: the 2s re-render can
   // never reset an edit in progress. Values are seeded once, on open.
   for (const act of ["drafter", "implementer", "fixer", "reclassifier"]) {
-    const v = lastActs[act];
+    const v = lastEffActs[act];
     const entry = typeof v === "string" ? {agent: v} : (v || {});
     document.getElementById(`ra_${act}_agent`).value = entry.agent || "";
     onAgentChange("ra_", act);

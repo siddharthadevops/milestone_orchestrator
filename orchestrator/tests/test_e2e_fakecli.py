@@ -232,6 +232,7 @@ class TestCalculatorE2E(unittest.TestCase):
                 "events_total",
                 "last_events",
                 "malformed",
+                "acts_config",
             },
         )
         self.assertEqual(summ["goal"], GOAL)
