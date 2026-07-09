@@ -31,24 +31,22 @@
   .btn.danger { color: var(--bad); border-color: #f3c1c1; }
   .btn:disabled { opacity: .45; cursor: default; }
   #runs { overflow-y: auto; flex: 1; }
-  .run { padding: 9px 14px; cursor: pointer; }
+  .run { padding: 9px 14px; cursor: pointer; display: flex;
+         align-items: center; gap: 8px; }
   .run:hover .name { color: var(--accent); }
   .run.sel { border-left: 3px solid var(--accent); padding-left: 11px; }
   .run.sel .name { color: var(--accent); }
   .run .name { font-weight: 500; font-size: 13px; color: #3f3f46;
-    display: flex; align-items: center; gap: 8px; }
-  .run .ws { color: var(--dim); font-size: 12px; overflow: hidden;
-             text-overflow: ellipsis; white-space: nowrap; }
-  .dot { width: 8px; height: 8px; border-radius: 50%; background: #c6cad3;
+    flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .dot { width: 7px; height: 7px; border-radius: 50%; background: #d4d4d8;
          flex: none; }
-  .dot.running { background: var(--ok); box-shadow: 0 0 0 3px #dcfce7; }
+  .dot.running { background: var(--ok); }
   .proj-group-header { display: flex; align-items: center; gap: 7px;
     padding: 6px 12px; margin-top: 20px; font-size: 12px; font-weight: 700;
     text-transform: uppercase; letter-spacing: .04em; color: var(--text);
     cursor: pointer; user-select: none; }
   #runs > .proj-group-header:first-child { margin-top: 6px; }
   .proj-group-header:hover { color: var(--accent); }
-  .proj-group-header .chev { flex: none; font-size: 11px; color: var(--dim); }
   .proj-group-header .proj-count { flex: none; color: var(--dim);
     font-weight: 400; }
   .grpgear { margin-left: auto; flex: none; font-size: 18px;
@@ -282,8 +280,6 @@
   .jsonarea { width: 100%; min-height: 240px; font-family: "SF Mono",
     ui-monospace, Menlo, monospace; font-size: 12px; border: 1px solid
     var(--line); border-radius: 8px; padding: 8px; resize: vertical; }
-  .run .handles { color: var(--accent); font-size: 12px; overflow: hidden;
-                  text-overflow: ellipsis; white-space: nowrap; }
   .field .pathrow select { flex: 1; border: 1px solid var(--line);
     border-radius: 8px; padding: 7px 10px; font: inherit; background: #fff;
     min-width: 0; }
@@ -648,12 +644,14 @@ async function loadUiState() {
   } catch (e) { /* keep in-memory defaults */ }
 }
 function runRow(r) {
+  // Just the name and a discreet right-aligned status dot. The binding
+  // (project / work area / workspace) is redundant here — the project
+  // is the group header, and the full binding lives on the run's edit
+  // page.
   return `
       <div class="run ${r.id === selected ? "sel" : ""}" onclick="select('${esc(r.id)}')">
-        <div class="name"><span class="dot ${r.process}"></span>
-          ${esc(r.name)}</div>
-        ${r.project ? `<div class="handles">${esc(r.project)} / ${esc(r.work_area)}</div>` : ""}
-        <div class="ws mono">${esc(r.workspace)}</div>
+        <span class="name">${esc(r.name)}</span>
+        <span class="dot ${r.process}"></span>
       </div>`;
 }
 function groupRuns(runs) {
@@ -691,7 +689,6 @@ function groupHeader(key, label, count, editable) {
          onclick="event.stopPropagation(); openProjectEditor('${safeKey}')">&#9881;</span>`
     : "";
   return `<div class="proj-group-header" onclick="toggleGroupCollapse('${safeKey}')">
-      <span class="chev">${collapsed ? "⌃" : "⌄"}</span>
       <span>${esc(label)}</span>
       <span class="proj-count">${count}</span>
       ${gear}
@@ -1094,6 +1091,11 @@ async function refreshDetail() {
       html += `<div class="toolbar">
         <button class="btn" onclick="closeRunEdit()">&#8592; back</button>
         <h2 style="margin:0">${esc(s.name)} <span class="st">· run settings</span></h2></div>`;
+      // The binding lives here (removed from the sidebar row): the repo
+      // and workspace the run executes against.
+      html += `<div class="card"><h3>Binding</h3>` +
+        (s.project ? `<div class="amend-hint mono">project: ${esc(s.project)} / ${esc(s.work_area)}</div>` : "") +
+        `<div class="amend-hint mono">workspace: ${esc(s.workspace)}</div></div>`;
     } else html += `<h2>${esc(s.name)} ${msChip(s.milestone_status)}
         ${workingChip(s)}
         <span class="st">${running ? "· driver running (pid " + s.pid + ")" : "· driver stopped"}${runTime(sum, s)}</span></h2>
