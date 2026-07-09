@@ -657,14 +657,14 @@ driver adopts it.
 REVIEW kinds (review_round / delta_review / seal_half) add:
   "findings": [
     {"id": "F1", "severity": "P0"|"P1"|"P2"|"P3", "summary": "...",
-     "plain": "<ONE sentence a non-engineer understands: name what is
+     "plain": "<ONE sentence, <500 chars, a non-engineer understands: name what is
       being built and what is actually wrong, in everyday words — e.g.
       'we are specifying a floating menu; the doc and the package README
       disagree about whether it ships JavaScript'. No file:line, no
       spec vocabulary. Write this sentence BEFORE choosing severity:
       the technical register makes everything sound grave; the plain
       sentence shows the real size of the problem>",
-     "example": "<the SMALLEST concrete scenario where this bites — one
+     "example": "<the SMALLEST (<500 chars) concrete scenario where this bites — one
       actor, one action, the wrong outcome vs the expected one, in plain
       words. E.g. 'a test deletes a message without saying who is in the
       thread; the fake chat allows it; the real one rejects it with an
@@ -685,8 +685,8 @@ REVIEW kinds (review_round / delta_review / seal_half) add:
   and invalidate your output). Finding ids must be unique within this
   response. An empty findings list means the target is clean. EVERY
   finding MUST include `plain` AND `example` — a finding without its
-  plain-language sentence and its smallest concrete failure scenario is
-  incomplete. Before filing any finding, check the ADJUDICATED REJECTIONS list
+  plain-language sentence and its smallest (<500 chars) concrete failure
+  scenario is incomplete. Before filing any finding, check the ADJUDICATED REJECTIONS list
   in this prompt: if your finding challenges one of them you MUST fill
   `contests` with its id and genuinely new evidence; re-raising an
   adjudicated finding without new evidence is a protocol violation.
