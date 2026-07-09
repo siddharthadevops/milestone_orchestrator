@@ -859,10 +859,14 @@ function sealChip(s, unitKey) {
 function reclassifyChip(ev, unitKey) {
   // One chip per reclassify outcome, placed chronologically among the
   // unit's round/seal chips (and left there): deferred -> tracked debt,
-  // kept -> rated above the run threshold, sent to the fixer.
+  // kept -> rated above the run threshold, sent to the fixer. Reform
+  // ratings carry TWO axes; the decision gates on DAMAGE, so the chip
+  // leads with it (risk stays in the tooltip and the story).
   const risk = ev.drift_risk || "unrated";
-  const label = ev.defer_ok ? `P3 debt · ${risk}` : `P3 kept · ${risk}`;
-  const title = `${ev.finding_id || ""}${ev.threshold ? ` (threshold ${ev.threshold})` : ""}`;
+  const two = ev.drift_damage != null;
+  const scale = two ? `dmg ${ev.drift_damage}` : risk;
+  const label = ev.defer_ok ? `debt · ${scale}` : `kept · ${scale}`;
+  const title = `${ev.finding_id || ""}${two ? ` · risk ${risk}` : ""}${ev.threshold ? ` (threshold ${ev.threshold})` : ""}`;
   return `<span class="chip ${ev.defer_ok ? "clean" : "sev23"} clicky" title="${esc(title)}" onclick="showStory('debt:${esc(unitKey)}')">${esc(label)}</span>`;
 }
 function docChip(u) {
@@ -1422,12 +1426,12 @@ async function showStory(item) {
     const debt = d.debt || [];
     body += debt.length ? debt.map(x => `<div class="story-finding">
         <span class="sev P3">P3</span> <b>${esc(x.id || "")}</b> ${esc(x.summary || "")}
-        <div class="story-disp">raised by ${esc(x.raised_by || "?")} → rated ${esc(x.drift_risk || "n/a")} by ${esc(x.cleared_by || "?")}, deferred: ${esc(x.reason || "")}</div>
+        <div class="story-disp">raised by ${esc(x.raised_by || "?")} → rated ${esc(x.drift_risk || "n/a")}${x.drift_damage ? " risk / " + esc(x.drift_damage) + " damage" : ""} by ${esc(x.cleared_by || "?")}, deferred: ${esc(x.reason || "")}</div>
       </div>`).join("") : `<div class="story-finding">no deferred debt</div>`;
     const kept = (d.reclassify || []).filter(e => !e.defer_ok);
     if (kept.length)
       body += `<div class="story-note">kept for the fixer (rating above the run threshold, or no rating):\n` +
-        esc(kept.map(e => `${e.finding_id} [${e.reclassifier}] ${e.drift_risk || "unrated"}${e.threshold ? " > " + e.threshold : ""} — ${e.reason}`).join("\n")) + `</div>`;
+        esc(kept.map(e => `${e.finding_id} [${e.reclassifier}] ${e.drift_damage ? (e.drift_damage + " damage (" + (e.drift_risk || "?") + " risk)") : (e.drift_risk || "unrated")}${e.threshold ? " > " + e.threshold : ""} — ${e.reason}`).join("\n")) + `</div>`;
   } else {
     title = "Story";
     body += `<div class="story-note">${esc(JSON.stringify(d, null, 1))}</div>`;

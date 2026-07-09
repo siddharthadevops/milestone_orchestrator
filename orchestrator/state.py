@@ -941,6 +941,7 @@ def summary(state):
                     "at": e.get("at"),
                     "finding_id": e.get("finding_id"),
                     "drift_risk": e.get("drift_risk"),
+                    "drift_damage": e.get("drift_damage"),
                     "threshold": e.get("threshold"),
                     "defer_ok": e.get("defer_ok"),
                 }

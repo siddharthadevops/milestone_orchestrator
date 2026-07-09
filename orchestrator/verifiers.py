@@ -480,7 +480,8 @@ def _run_check(check, entries, ext, roots, ctx):
 
 
 def validate_merged_output(obj, kind, extensions, roots,
-                           require_plain=False, battery_questions=None):
+                           require_plain=False, battery_questions=None,
+                           require_drift_damage=False):
     """Validate a worker output against the base kind contract PLUS the
     in-scope compiled extensions.
 
@@ -509,6 +510,7 @@ def validate_merged_output(obj, kind, extensions, roots,
         contracts.validate_worker_output(
             obj, kind, require_plain=require_plain,
             battery_questions=battery_questions,
+            require_drift_damage=require_drift_damage,
         )
         return obj
     if extensions:
@@ -516,6 +518,7 @@ def validate_merged_output(obj, kind, extensions, roots,
     contracts.validate_worker_output(
         obj, kind, require_plain=require_plain,
         battery_questions=battery_questions,
+        require_drift_damage=require_drift_damage,
     )
     if not extensions:
         return obj

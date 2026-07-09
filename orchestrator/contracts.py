@@ -389,7 +389,8 @@ def validate_battery(battery, required_questions, ctx):
 
 
 def validate_worker_output(obj, kind, require_plain=False,
-                           battery_questions=None):
+                           battery_questions=None,
+                           require_drift_damage=False):
     """Validate the full worker JSON output for a call of `kind`.
 
     require_plain: reform runs hard-require the plain/example lay mirror
@@ -518,6 +519,18 @@ def validate_worker_output(obj, kind, require_plain=False,
         if risk not in DRIFT_RISK_LEVELS:
             raise ContractError(
                 "%s: drift_risk must be one of %s"
+                % (ctx, "|".join(DRIFT_RISK_LEVELS))
+            )
+        # The reform's two-axis rating (probability x damage): reform
+        # runs REQUIRE the damage axis — the deferral decision gates on
+        # it; legacy raters never see or send it (bit-identical).
+        if require_drift_damage:
+            damage = _require(obj, "drift_damage", str, ctx)
+        else:
+            damage = _optional(obj, "drift_damage", str, ctx)
+        if damage is not None and damage not in DRIFT_RISK_LEVELS:
+            raise ContractError(
+                "%s: drift_damage must be one of %s"
                 % (ctx, "|".join(DRIFT_RISK_LEVELS))
             )
         reason = _require(obj, "reason", str, ctx)

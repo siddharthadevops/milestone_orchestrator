@@ -43,13 +43,18 @@ def reform_draft_step():
     return s
 
 
-def reclassify(defer_ok, family, reason="verified", risk=None):
-    # The worker only RATES drift risk; deferral is the driver comparing
-    # that rating to p3_defer_max_risk (default "low"). For test intent,
-    # defer_ok=True fakes a "low" rating and False a "high" one.
+def reclassify(defer_ok, family, reason="verified", risk=None,
+               damage=None):
+    # The worker only RATES; deferral is the driver comparing the gated
+    # axis to p3_defer_max_risk (risk for legacy, DAMAGE for reform).
+    # For test intent, defer_ok=True fakes a "low" rating and False a
+    # "high" one; drift_damage rides along (harmless extra key for
+    # legacy validation, required under reform).
+    lvl = "low" if defer_ok else "high"
     return step("reclassify",
                 ok("reclassify",
-                   drift_risk=risk or ("low" if defer_ok else "high"),
+                   drift_risk=risk or lvl,
+                   drift_damage=damage or lvl,
                    reason=reason),
                 family=family)
 
@@ -150,6 +155,46 @@ class TestP3Debt(DriverTestCase):
                 [r for r in unit["rounds"] if r["kind"] == "fix_findings"], [])
             self.assertEqual(len(unit["debt"]), 2)
             self.assertEqual(unit["debt"][0]["severity"], "P2")
+
+    def test_reform_gates_on_damage_not_probability(self):
+        # The two-axis decision (operator 2026-07-09): a certain-but-cheap
+        # drift defers; an unlikely-but-destructive one is fixed.
+        strict = profiles.SEEDS["strict"]["profile"]
+        for risk, damage, expect_defer in (
+            ("xhigh", "low", True),   # builder WILL trip it; costs pennies
+            ("low", "xhigh", False),  # unlikely; catastrophic if it lands
+        ):
+            with tempfile.TemporaryDirectory(prefix="orch-mock-") as ws:
+                path = init_state(
+                    ws, make_config(p3_reclassify_debt=True, profile=strict))
+                mock = runners.MockRunner([
+                    reform_draft_step(),
+                    step("review_round",
+                         report("review_round",
+                                [finding("F1", "two-axis case")]),
+                         family="codex"),
+                    reclassify(True, family="claude", risk=risk,
+                               damage=damage, reason="two-axis"),
+                ])
+                driver = drv.Driver(path, runner=mock)
+                if expect_defer:
+                    self.step_until(
+                        driver, lambda s: s["units"][0].get("debt"))
+                else:
+                    self.step_until(
+                        driver,
+                        lambda s: s["units"][0]["status"] == st.U_FIXING)
+                state = st.load(path)
+                unit = state["units"][0]
+                ev = [e for e in state["events"]
+                      if e["type"] == "reclassify_recorded"][-1]
+                self.assertEqual(ev["drift_risk"], risk)
+                self.assertEqual(ev["drift_damage"], damage)
+                self.assertEqual(ev["defer_ok"], expect_defer)
+                if expect_defer:
+                    self.assertEqual(unit["debt"][0]["drift_damage"], damage)
+                else:
+                    self.assertEqual(unit["debt"], [])
 
     def test_legacy_profile_still_fixes_a_lone_p2(self):
         # The SAME P2 under the legacy compat profile keeps the pre-reform

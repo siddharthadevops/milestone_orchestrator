@@ -965,10 +965,43 @@ no markdown fences:
  "reason": "<one sentence: the concrete basis for your rating>"}
 """
 
+# The reform's two-axis variant: probability AND damage, both measured,
+# neither decided (the driver's threshold gates on DAMAGE).
+RECLASSIFY_CONTRACT_TWO_AXIS = """OUTPUT CONTRACT (mandatory)
+Respond with EXACTLY ONE JSON object and nothing else — no prose outside it,
+no markdown fences:
+{"status": "ok",
+ "kind": "reclassify",
+ "drift_risk": "low" | "medium" | "high" | "xhigh",
+ "drift_damage": "low" | "medium" | "high" | "xhigh",
+ "reason": "<one sentence: the concrete basis for BOTH ratings>"}
+"""
+
+TWO_AXIS_BLOCK = (
+    "You rate TWO INDEPENDENT AXES (operator decision: probability and\n"
+    "damage were one conflated number; they decide differently):\n"
+    "DRIFT RISK — the PROBABILITY the builder is silently misled at all.\n"
+    "Weigh the builder named above and its mandatory stop-report exit:\n"
+    "a hole the builder must hit head-on is LOW probability of SILENT\n"
+    "drift no matter how grave it sounds.\n"
+    "DRIFT DAMAGE — IF the drift happens, what detecting and undoing it\n"
+    "costs:\n"
+    "  low    the first compile/test/use exposes it; a small local fix\n"
+    "  medium caught within this unit's own review or seal; bounded rework\n"
+    "  high   crosses the unit: a wrong contract propagates into other\n"
+    "         slices or consumers; repair reopens sealed work\n"
+    "  xhigh  destructive or ecosystem-visible: deleting preserved code,\n"
+    "         breaking a published contract, losing data\n"
+    "Self-revelation discounts DAMAGE (cheap on contact), never the\n"
+    "probability. The deferral decision gates on DAMAGE; both ratings\n"
+    "are recorded in the ledger.\n\n"
+)
+
 
 def build_reclassify(family, workspace, finding, artifact, unit_kind=None,
                      amendments=None, project_context=None,
-                     builder_desc=None, gap_backstop=False):
+                     builder_desc=None, gap_backstop=False,
+                     two_axis=False):
     """Opposite-family RATER of one finding's implementation-drift risk.
 
     Deliberately not a yes/no decision: asked "is it safe?", a worker
@@ -1028,6 +1061,7 @@ def build_reclassify(family, workspace, finding, artifact, unit_kind=None,
             "trusts those and builds on them without ever stopping.\n\n"
             if gap_backstop else ""
         )
+        + (TWO_AXIS_BLOCK if two_axis else "")
         + "Rate the finding AS RAISED against the artifact AS IT IS. If it\n"
         "touches correctness, behaviour, or test coverage (more than its\n"
         "severity label suggests), say so in the reason and rate high or\n"
@@ -1058,7 +1092,7 @@ def build_reclassify(family, workspace, finding, artifact, unit_kind=None,
         % (artifact,)
         + _access_block(edit_allowed=False)
         + "\n"
-        + RECLASSIFY_CONTRACT
+        + (RECLASSIFY_CONTRACT_TWO_AXIS if two_axis else RECLASSIFY_CONTRACT)
     )
 
 

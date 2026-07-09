@@ -2077,6 +2077,7 @@ class Driver(object):
                 opp = self._opposite(raising_family)
                 defer_ok, reason = False, "reclassification unavailable"
                 risk = None
+                damage = None
                 if opp == raising_family:
                     # No independent opposite family (single-family config):
                     # cross-family verification is impossible, so a P3 is
@@ -2107,6 +2108,7 @@ class Driver(object):
                         unit_kind=unit["kind"], amendments=self._amendments(),
                         project_context=pc,
                         builder_desc=builder_desc, gap_backstop=gap_backstop,
+                        two_axis=gap_backstop,
                     )
                     raw_name = "%s-reclassify-%s-%s" % (
                         st.unit_key(unit), raising_family, safe_id)
@@ -2116,20 +2118,32 @@ class Driver(object):
                             self.runner, opp, prompt,
                             contracts.KIND_RECLASSIFY,
                             self.workspace, model=dm, effort=de,
+                            validate_opts=(
+                                {"require_drift_damage": True}
+                                if gap_backstop else None
+                            ),
                         )
                         self._save_raw(raw_name, result.text)
                         self._record_repair(
                             raw_name, contracts.KIND_RECLASSIFY, opp, result
                         )
                         if output.get("status") == "ok":
-                            # The worker only RATES drift risk; the
-                            # deterministic decision is this comparison
-                            # against the run's configured threshold.
+                            # The worker only RATES; the deterministic
+                            # decision is this comparison against the
+                            # run's threshold. Reform runs rate TWO axes
+                            # and the decision gates on DAMAGE (operator,
+                            # 2026-07-09: probability and damage decide
+                            # differently — a self-revealing cheap defect
+                            # defers even at high probability; a
+                            # destructive one is fixed however unlikely).
+                            # Legacy keeps the single-axis risk gate.
                             risk = output.get("drift_risk")
+                            damage = output.get("drift_damage")
                             reason = str(output.get("reason") or "")[:300]
+                            gate = damage if gap_backstop else risk
                             defer_ok = (
-                                risk in levels
-                                and levels.index(risk)
+                                gate in levels
+                                and levels.index(gate)
                                 <= levels.index(threshold)
                             )
                         else:
@@ -2145,7 +2159,8 @@ class Driver(object):
                     self.state, "reclassify_recorded",
                     unit=st.unit_key(unit),
                     finding_id="%s-%s" % (raising_family, finding.get("id")),
-                    reclassifier=opp, drift_risk=risk, threshold=threshold,
+                    reclassifier=opp, drift_risk=risk,
+                    drift_damage=damage, threshold=threshold,
                     defer_ok=defer_ok, reason=reason,
                 )
                 if defer_ok:
@@ -2156,6 +2171,7 @@ class Driver(object):
                         "raised_by": raising_family,
                         "cleared_by": opp,
                         "drift_risk": risk,
+                        "drift_damage": damage,
                         "reason": reason,
                     })
                 else:
