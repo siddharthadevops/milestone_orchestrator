@@ -160,6 +160,10 @@ is project-wide standing law supplied explicitly by the operator.
 
 ## The flow
 
+(What a milestone *is* — one bounded increment, not a whole project; sized
+into ~500-line slices — is defined in [WORKSPACE.md](../WORKSPACE.md#what-is-a-milestone).
+This section is the per-unit machinery.)
+
 For the milestone: one `skeleton` unit, then per slice a `slice_doc` and a
 `slice_impl` unit. Every unit runs:
 

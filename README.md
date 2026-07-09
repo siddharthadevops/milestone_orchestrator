@@ -11,9 +11,10 @@ the LLM workers.
 - **[orchestrator/README.md](orchestrator/README.md)** — how the system
   works and how to run it (panel: `orchestrator/panel.sh` →
   http://127.0.0.1:8700).
-- **[WORKSPACE.md](WORKSPACE.md)** — the workspace contract: how any
-  repository becomes a milestone workspace, the per-milestone layout,
-  and the no-vendoring doctrine.
+- **[WORKSPACE.md](WORKSPACE.md)** — the workspace contract: **what a
+  milestone is** (one bounded increment, skeleton → ~500-line slices — the
+  definition importers copy), how any repository becomes a milestone
+  workspace, the per-milestone layout, and the no-vendoring doctrine.
 - **implementation/** — this repository's own milestone bookkeeping.
 
 ## History
