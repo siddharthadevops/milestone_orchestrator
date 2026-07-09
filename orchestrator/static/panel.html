@@ -36,20 +36,19 @@
   .run:hover .name { color: var(--accent); }
   .run.sel { border-left: 3px solid var(--accent); padding-left: 11px; }
   .run.sel .name { color: var(--accent); }
-  .run .name { font-weight: 500; font-size: 13px; color: #3f3f46;
+  .run .name { font-weight: 500; font-size: 13px; color: #71717a;
     flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .dot { width: 7px; height: 7px; border-radius: 50%; background: #d4d4d8;
          flex: none; }
   .dot.running { background: var(--ok); }
-  .proj-group-header { display: flex; align-items: center; gap: 7px;
-    padding: 6px 12px; margin-top: 20px; font-size: 12px; font-weight: 700;
-    text-transform: uppercase; letter-spacing: .04em; color: var(--text);
-    cursor: pointer; user-select: none; }
+  .proj-group-header { display: flex; align-items: center; gap: 8px;
+    padding: 6px 12px; margin-top: 20px; font-size: 13px; font-weight: 700;
+    color: var(--text); cursor: pointer; user-select: none; }
   #runs > .proj-group-header:first-child { margin-top: 6px; }
   .proj-group-header:hover { color: var(--accent); }
   .proj-group-header .proj-count { flex: none; color: var(--dim);
     font-weight: 400; }
-  .grpgear { margin-left: auto; flex: none; font-size: 18px;
+  .grpgear { flex: none; font-size: 15px;
     line-height: 1; color: var(--dim); cursor: pointer; }
   .grpgear:hover { color: var(--accent); }
   .grp-empty { padding: 4px 14px 6px; font-size: 11px; color: var(--dim);
@@ -689,9 +688,9 @@ function groupHeader(key, label, count, editable) {
          onclick="event.stopPropagation(); openProjectEditor('${safeKey}')">&#9881;</span>`
     : "";
   return `<div class="proj-group-header" onclick="toggleGroupCollapse('${safeKey}')">
+      ${gear}
       <span>${esc(label)}</span>
       <span class="proj-count">${count}</span>
-      ${gear}
     </div>`;
 }
 function renderRunsTree(runs) {
