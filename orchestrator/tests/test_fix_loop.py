@@ -624,32 +624,40 @@ class TestActsResolution(DriverTestCase):
         self.assertEqual(mock.script, [])
         return mock
 
-    def test_opposite_fixer_and_delta_resolve_against_origin(self):
-        acts = {"fixer": "opposite", "delta_review": "opposite",
-                "consultation": "self"}
+    def test_delta_uses_fixer_family_and_its_review_profile(self):
+        acts = {
+            "fixer": "opposite",
+            # A legacy frozen value must not decouple delta from the fixer.
+            "delta_review": "opposite",
+            "review_codex": {"model": "gpt-5.6-sol", "effort": "high"},
+            "review_claude": {
+                "model": "claude-fable-5", "effort": "medium",
+            },
+            "consultation": "self",
+        }
         with tempfile.TemporaryDirectory(prefix="orch-mock-") as ws:
             mock = self._run_skeleton(ws, acts, [
                 step("review_round",
                      report("review_round", [finding("F1", "codex-found")]),
                      family="codex"),
-                # origin codex -> fixer claude; fixer claude -> delta codex
+                # origin codex -> fixer claude -> Claude Review profile
                 step("fix_findings",
                      fix_ok([triaged("F1", "fixed", "codex-found")],
                             files_changed=["docs/skeleton.md"]),
                      family="claude",
                      side_effect=append_file("docs/skeleton.md", "\nfix1\n")),
-                step("delta_review", report("delta_review"), family="codex"),
+                step("delta_review", report("delta_review"), family="claude"),
                 step("review_round", report("review_round"), family="codex"),
                 step("review_round",
                      report("review_round", [finding("F2", "claude-found")]),
                      family="claude"),
-                # origin claude -> fixer codex; fixer codex -> delta claude
+                # origin claude -> fixer codex -> Codex Review profile
                 step("fix_findings",
                      fix_ok([triaged("F2", "fixed", "claude-found")],
                             files_changed=["docs/skeleton.md"]),
                      family="codex",
                      side_effect=append_file("docs/skeleton.md", "\nfix2\n")),
-                step("delta_review", report("delta_review"), family="claude"),
+                step("delta_review", report("delta_review"), family="codex"),
                 step("review_round", report("review_round"), family="claude"),
                 step("seal_half", report("seal_half"), family="codex"),
                 step("seal_half", report("seal_half"), family="claude"),
@@ -658,8 +666,17 @@ class TestActsResolution(DriverTestCase):
                                if c[1] in ("fix_findings", "delta_review")]
             self.assertEqual(
                 fix_delta_calls,
-                [("fix_findings", "claude"), ("delta_review", "codex"),
-                 ("fix_findings", "codex"), ("delta_review", "claude")],
+                [("fix_findings", "claude"), ("delta_review", "claude"),
+                 ("fix_findings", "codex"), ("delta_review", "codex")],
+            )
+            delta_meta = [
+                meta for call, meta in zip(mock.calls, mock.call_meta)
+                if call[1] == "delta_review"
+            ]
+            self.assertEqual(
+                [(m["model"], m["effort"]) for m in delta_meta],
+                [("claude-fable-5", "medium"),
+                 ("gpt-5.6-sol", "high")],
             )
             # consultation "self" resolves to the fixer's own family.
             fix_prompts = [c[2] for c in mock.calls
@@ -667,7 +684,7 @@ class TestActsResolution(DriverTestCase):
             self.assertIn("with the claude family", fix_prompts[0])
             self.assertIn("with the codex family", fix_prompts[1])
 
-    def test_literal_fixer_and_self_delta(self):
+    def test_literal_fixer_selects_same_family_delta(self):
         acts = {"fixer": "claude", "delta_review": "self",
                 "consultation": "opposite"}
         with tempfile.TemporaryDirectory(prefix="orch-mock-") as ws:

@@ -21,7 +21,7 @@ cat > "$CFG" <<EOF
   "max_rounds_per_family": 6,
   "max_seal_attempts": 4,
   "git": {"enabled": true},
-  "acts": {"fixer": "codex", "delta_review": "codex", "consultation": "opposite"},
+  "acts": {"fixer": "codex", "consultation": "opposite"},
   "max_fix_loops": 4,
   "docs_dir": "docs"
 }

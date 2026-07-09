@@ -567,7 +567,8 @@ class TestDefaultsPrecedence(RunInitTestCase):
         base = drv.DEFAULT_CONFIG["acts"]
         self.assertEqual(acts["drafter"], "claude")    # default applies
         self.assertEqual(acts["fixer"], "codex-mini")  # launch wins
-        self.assertEqual(acts["delta_review"], base["delta_review"])
+        self.assertNotIn("delta_review", acts)
+        self.assertNotIn("delta_review", base)
         self.assertEqual(acts["consultation"], base["consultation"])
 
     def test_absent_defaults_effective_config_is_exactly_todays(self):

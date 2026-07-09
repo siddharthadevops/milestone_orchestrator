@@ -2095,6 +2095,16 @@ class TestPolicyAuthoring(ProjectsServiceTestCase):
             'codex: ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"]',
             text,
         )
+        for model_id, visible in (
+            ("gpt-5.6-sol", "sol"),
+            ("gpt-5.6-terra", "terra"),
+            ("gpt-5.6-luna", "luna"),
+            ("gpt-5.5", "5.5"),
+            ("fable-5", "fable"),
+            ("opus-4-8", "opus"),
+            ("sonnet-5", "sonnet"),
+        ):
+            self.assertIn('"%s": "%s"' % (model_id, visible), text)
         # The safeguard editor dialog.
         self.assertIn('id="sgeditor"', text)
         self.assertIn('id="sg_json"', text)

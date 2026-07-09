@@ -381,8 +381,8 @@
       pre-selected on purpose — the choice is explicit.</p>
     <p><b>Acts</b> — empty = family default (claude: opus-4.8/max, codex:
       gpt-5.6-sol/xhigh); model options adapt to the agent; editable mid-run
-      from the run view. The two review rows tune each fixed family for both
-      review rounds and seals; family rotation never changes.</p>
+      from the run view. The two review rows tune each fixed family for review
+      rounds, delta reviews and seals; family rotation never changes.</p>
     <p><b>Verification</b> — left empty, the implementer reports the repo's
       official suite and the driver arms the gates with it.</p>
   </div>
@@ -728,7 +728,7 @@ function runRow(r) {
 }
 function runStatusIndicator(r) {
   // A running run shows the SAME live activity chip as the detail view
-  // (spinner + e.g. "codex fix · 2m"); the green fallback covers the
+  // (spinner + e.g. "gpt-5.6-sol fix · 2m"); the green fallback covers the
   // brief running-but-between-calls gap. Otherwise a dot: hidden when
   // the milestone is closed (done), red on error, grey when stopped.
   if (r.process === "running")
@@ -892,10 +892,23 @@ const SPIN_MS = 1600; // keep in sync with the .spin animation duration
 function spinEl() {
   return `<span class="spin" style="animation-delay:-${Date.now() % SPIN_MS}ms"></span>`;
 }
+const MODEL_LABELS = Object.freeze({
+  "gpt-5.6-sol": "sol",
+  "gpt-5.6-terra": "terra",
+  "gpt-5.6-luna": "luna",
+  "gpt-5.5": "5.5",
+  "fable-5": "fable",
+  "opus-4-8": "opus",
+  "sonnet-5": "sonnet",
+});
+function shortModel(model) {
+  const id = String(model || "").replace(/^claude-/, "");
+  return MODEL_LABELS[id] || id;
+}
 function inFlightChip(r) {
   const f = r.in_flight;
   if (!f || !f.kind) return "";
-  const who = f.family ? `${f.family} ` : "";
+  const who = f.model ? `${shortModel(f.model)} ` : "";
   return `<span class="chip working" title="${esc(f.label || "")}">` +
          `${spinEl()}${esc(who)}${esc(shortKind(f.kind))} · ${elapsed(f.started_at)}</span>`;
 }
@@ -903,8 +916,8 @@ function workingChip(r) {
   if (r.process !== "running" || !r.current_unit_status) return "";
   const live = inFlightChip(r);
   if (live) return live;
-  const who = r.current_unit_status === "rounds" && r.current_family
-    ? r.current_family + " " : "";
+  const who = r.current_unit_status === "rounds" && r.current_model
+    ? shortModel(r.current_model) + " " : "";
   const label = ACTIVITY[r.current_unit_status] || r.current_unit_status;
   return `<span class="chip working">${spinEl()}` +
          `${esc(who)}${esc(label)}</span>`;
@@ -949,7 +962,7 @@ const DRAFT_SHORT = {draft_skeleton: "draft", draft_slice_note: "draft",
 function draftChip(d, unitKey) {
   if (!d) return "";
   const kind = DRAFT_SHORT[d.kind] || d.kind;
-  const who = d.family ? `${esc(d.family)} ` : "";
+  const who = d.model ? `${esc(shortModel(d.model))} ` : "";
   return `<span class="chip work clicky" onclick="showStory('draft:${esc(unitKey)}')">${who}${esc(kind)}${fmtDur(d.duration_s)}</span>`;
 }
 const WORK_KINDS = {fix_findings: 1, verification: 1};
@@ -958,12 +971,14 @@ function sevClass(sev) {
 }
 function roundChip(r) {
   const kind = shortKind(r.kind);
+  const who = r.model ? shortModel(r.model) : "";
+  const actor = who ? `${esc(who)} ` : "";
   const click = ` clicky" onclick="showStory('round:${esc(r.id)}')`;
   if (r.invalidated)
-    return `<span class="chip fail${click}" title="${esc(r.invalidated)}">${esc(r.family)} ${esc(kind)} · INVALID</span>`;
+    return `<span class="chip fail${click}" title="${esc(r.invalidated)}">${actor}${esc(kind)} · INVALID</span>`;
   const cls = WORK_KINDS[r.kind] ? "work"
     : r.findings === 0 ? "clean" : sevClass(r.severity);
-  return `<span class="chip ${cls}${click}">${esc(r.family)} ${esc(kind)} · ${r.findings}f${fmtDur(r.duration_s)}</span>`;
+  return `<span class="chip ${cls}${click}">${actor}${esc(kind)} · ${r.findings}f${fmtDur(r.duration_s)}</span>`;
 }
 function sealChip(s, unitKey) {
   const dur = fmtDur(s.duration_s);

@@ -819,7 +819,12 @@ class TestSealInFlightMarker(DriverTestCase):
     def test_sequential_seal_halves_write_and_clear_marker(self):
         import json as _json
         with tempfile.TemporaryDirectory(prefix="orch-mock-") as ws:
-            path = init_state(ws, make_config())
+            cfg = make_config()
+            cfg["model_defaults"] = {
+                "codex": {"model": "gpt-5.6-sol", "effort": "high"},
+                "claude": {"model": "claude-fable-5", "effort": "medium"},
+            }
+            path = init_state(ws, cfg)
             seen = []
 
             def probe(workspace):
@@ -852,6 +857,10 @@ class TestSealInFlightMarker(DriverTestCase):
                 self.assertIn("started_at", rec)
             self.assertEqual([r["family"] for r in seen],
                              ["codex", "claude"])
+            self.assertEqual([r["model"] for r in seen],
+                             ["gpt-5.6-sol", "claude-fable-5"])
+            self.assertEqual([r["effort"] for r in seen],
+                             ["high", "medium"])
             # Cleared once the attempt is over.
             self.assertFalse(os.path.exists(
                 os.path.join(ws, ".orchestrator", "current.json")))
@@ -891,6 +900,7 @@ class TestSealInFlightMarker(DriverTestCase):
                 # Attempt-level marker: one record for both halves, no
                 # per-family attribution (threads must not race on it).
                 self.assertIsNone(rec["family"])
+                self.assertIsNone(rec["model"])
             self.assertFalse(os.path.exists(
                 os.path.join(ws, ".orchestrator", "current.json")))
 
@@ -1258,6 +1268,47 @@ class TestActProfiles(DriverTestCase):
             halves = unit["seals"][0]["halves"]
             self.assertEqual(halves["codex"]["model"], "gpt-5.6-terra")
             self.assertEqual(halves["claude"]["effort"], "medium")
+
+    def test_hot_review_model_rebinds_the_next_delta_review(self):
+        import json as _json
+        with tempfile.TemporaryDirectory(prefix="orch-mock-") as ws:
+            cfg = make_config()
+            cfg["model_defaults"] = {
+                "codex": {"model": "gpt-5.5", "effort": "xhigh"},
+                "claude": {"model": "claude-opus-4-8", "effort": "max"},
+            }
+            path = init_state(ws, cfg)
+            mock = runners.MockRunner(skeleton_script()[:4])
+            driver = drv.Driver(path, runner=mock)
+            self.step_until(
+                driver,
+                lambda state: st.current_unit(state)["status"]
+                == st.U_DELTA_REVIEW,
+            )
+
+            # The operator changes the Codex review model while the run is
+            # alive. The immediately following delta review must pick it up;
+            # no driver restart and no mutation of the frozen config.
+            with open(os.path.join(os.path.dirname(path), "acts.json"),
+                      "w", encoding="utf-8") as fh:
+                _json.dump({
+                    "review_codex": {
+                        "model": "gpt-5.6-luna", "effort": "low",
+                    },
+                }, fh)
+            driver.step()
+
+            self.assertEqual(mock.calls[-1][1], contracts.KIND_DELTA_REVIEW)
+            self.assertEqual(
+                (mock.call_meta[-1]["model"], mock.call_meta[-1]["effort"]),
+                ("gpt-5.6-luna", "low"),
+            )
+            delta = st.load(path)["units"][0]["rounds"][-1]
+            self.assertEqual(delta["kind"], contracts.KIND_DELTA_REVIEW)
+            self.assertEqual(
+                (delta["model"], delta["effort"]),
+                ("gpt-5.6-luna", "low"),
+            )
 
     def test_hot_overlay_rebinds_fixer_mid_run(self):
         import json as _json

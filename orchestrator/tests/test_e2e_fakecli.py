@@ -222,6 +222,7 @@ class TestCalculatorE2E(unittest.TestCase):
                 "current_unit",
                 "current_unit_status",
                 "current_family",
+                "current_model",
                 "created_epoch",
                 "last_event_epoch",
                 "suite_command",
@@ -233,6 +234,7 @@ class TestCalculatorE2E(unittest.TestCase):
                 "last_events",
                 "malformed",
                 "acts_config",
+                "model_defaults",
             },
         )
         self.assertEqual(summ["goal"], GOAL)

@@ -214,11 +214,11 @@ findings for the FIX LOOP:
          where the dirty review left off (next round of the same family,
          re-verify, or a fresh seal attempt)
 
-Per-act family policy (config "acts"): each act — fixer, delta_review,
-consultation — is a fixed family name, "self", or "opposite" (relative to
-the act's origin). This release pins fixer and delta_review to codex for
-speed; review rounds and seal halves keep their family identity by
-definition.
+Per-act family policy (config "acts"): fixer and consultation are a fixed
+family name, "self", or "opposite" (relative to the act's origin). Delta
+review has no independent policy: it always uses the fixer's family and the
+selected Review profile for that family. Review rounds and seal halves keep
+their family identity by definition.
 
 ### Adjudicated rejections (no infinite finding loops)
 

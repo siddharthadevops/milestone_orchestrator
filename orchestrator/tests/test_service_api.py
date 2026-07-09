@@ -377,6 +377,43 @@ class ServiceApiTest(unittest.TestCase):
         self.assertEqual(status, 404)
         self.assertFalse(body["ok"])
 
+    def test_run_status_surfaces_model_for_legacy_in_flight_marker(self):
+        ws = self.workspace("ws-model-chip")
+        _, body = self.create_run(
+            ws,
+            config={
+                "model_defaults": {
+                    "codex": {"model": "gpt-5.6-sol", "effort": "high"},
+                    "claude": {
+                        "model": "claude-fable-5", "effort": "medium",
+                    },
+                },
+            },
+        )
+        run_id = body["run"]["id"]
+        entry = registry.get(registry.load(self.home), run_id)
+        marker = os.path.join(os.path.dirname(entry["state_path"]), "current.json")
+        with open(marker, "w", encoding="utf-8") as fh:
+            json.dump(
+                {
+                    "label": "skeleton-claude-r1",
+                    "kind": "review_round",
+                    "family": "claude",
+                    "started_at": 1,
+                },
+                fh,
+            )
+        fake = self.spawn_fake_driver()
+        registry.update(self.home, run_id, pid=fake.pid)
+        try:
+            status, payload = self.request_json("GET", "/api/runs")
+            self.assertEqual(status, 200)
+            run = next(r for r in payload["runs"] if r["id"] == run_id)
+            self.assertEqual(run["in_flight"]["model"], "claude-fable-5")
+            self.assertEqual(run["current_model"], "gpt-5.6-sol")
+        finally:
+            registry.update(self.home, run_id, pid=None)
+
     def test_run_log_empty(self):
         ws = self.workspace("ws-log")
         _, body = self.create_run(ws)
@@ -591,6 +628,10 @@ class ActsApiTest(ServiceApiTest):
         rid = body["run"]["id"]
         status, _ = self.request_json(
             "POST", "/api/runs/%s/acts" % rid, {"reviewer": "claude"})
+        self.assertEqual(status, 400)
+        status, _ = self.request_json(
+            "POST", "/api/runs/%s/acts" % rid,
+            {"delta_review": {"agent": "claude", "model": "x"}})
         self.assertEqual(status, 400)
         status, _ = self.request_json(
             "POST", "/api/runs/%s/acts" % rid, {"fixer": {"model": "x" * 200}})

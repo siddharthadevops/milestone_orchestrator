@@ -1243,6 +1243,8 @@ def read_in_flight(entry, alive):
         "label": data.get("label"),
         "kind": data.get("kind"),
         "family": data.get("family"),
+        "model": data.get("model"),
+        "effort": data.get("effort"),
         "started_at": data.get("started_at"),
     }
 
@@ -1268,6 +1270,7 @@ def run_status(entry, home=None):
         "current_unit": None,
         "current_unit_status": None,
         "current_family": None,
+        "current_model": None,
         "failure_reason": None,
         "events_total": 0,
         "state_error": None,
@@ -1280,6 +1283,14 @@ def run_status(entry, home=None):
         info["current_unit"] = summ["current_unit"]
         info["current_unit_status"] = summ["current_unit_status"]
         info["current_family"] = summ.get("current_family")
+        info["current_model"] = summ.get("current_model")
+        in_flight = info.get("in_flight")
+        if (in_flight and not in_flight.get("model")
+                and in_flight.get("family")):
+            defaults = summ.get("model_defaults") or {}
+            in_flight["model"] = (
+                defaults.get(in_flight["family"]) or {}
+            ).get("model")
         info["failure_reason"] = (summ["failure"] or {}).get("reason")
         info["events_total"] = summ["events_total"]
         if home is not None:
@@ -1929,7 +1940,7 @@ def _write_amendments(entry, amendments):
 
 
 ACT_KEYS = ("drafter", "implementer", "review_codex", "review_claude",
-            "fixer", "delta_review", "consultation", "reclassifier")
+            "fixer", "consultation", "reclassifier")
 FIXED_REVIEW_ACTS = {"review_codex": "codex", "review_claude": "claude"}
 
 

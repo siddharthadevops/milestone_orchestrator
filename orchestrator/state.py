@@ -955,6 +955,13 @@ def _worst_severity(findings):
 
 def summary(state):
     unit = current_unit(state)
+    model_defaults = state["config"].get("model_defaults") or {}
+
+    def effective_setting(family, explicit, field):
+        if explicit:
+            return explicit
+        return (model_defaults.get(family) or {}).get(field)
+
     opened_at = {}
     closed_at = {}
     wip_sha = {}
@@ -1008,6 +1015,14 @@ def summary(state):
                     {
                         "kind": u["draft"]["kind"],
                         "family": u["draft"].get("family"),
+                        "model": effective_setting(
+                            u["draft"].get("family"),
+                            u["draft"].get("model"), "model"
+                        ),
+                        "effort": effective_setting(
+                            u["draft"].get("family"),
+                            u["draft"].get("effort"), "effort"
+                        ),
                         "duration_s": u["draft"].get("duration_s"),
                         "at": u["draft"]["at"],
                     }
@@ -1018,6 +1033,12 @@ def summary(state):
                     {
                         "id": r["id"],
                         "family": r["family"],
+                        "model": effective_setting(
+                            r["family"], r.get("model"), "model"
+                        ),
+                        "effort": effective_setting(
+                            r["family"], r.get("effort"), "effort"
+                        ),
                         "kind": r["kind"],
                         "findings": len(r["result"].get("findings", [])),
                         "severity": _worst_severity(
@@ -1082,6 +1103,13 @@ def summary(state):
     current_fam = None
     if unit is not None and unit.get("family_index", 0) < len(families):
         current_fam = families[unit["family_index"]]
+    current_model = effective_setting(current_fam, None, "model")
+    if current_fam and unit is not None and unit.get("status") == U_ROUNDS:
+        review_act = (state["config"].get("acts") or {}).get(
+            "review_%s" % current_fam
+        )
+        if isinstance(review_act, dict) and review_act.get("model"):
+            current_model = review_act["model"]
     out = {
         "goal": state["goal"],
         "workspace": state["workspace"],
@@ -1090,6 +1118,7 @@ def summary(state):
         "current_unit": unit_key(unit) if unit else None,
         "current_unit_status": unit["status"] if unit else None,
         "current_family": current_fam,
+        "current_model": current_model,
         "suite_command": state.get("suite_command"),
         "name": state.get("name"),
         "docs_dir": state.get("docs_dir") or "docs",
@@ -1106,6 +1135,7 @@ def summary(state):
         # alone reads "default" for a run launched with acts in its
         # config (found live 2026-07-09).
         "acts_config": (state["config"].get("acts") or {}),
+        "model_defaults": model_defaults,
         # Every repaired first strike of the whole run (not just the event
         # tail): the panel renders these as chips — prompt/contract tuning
         # needs the full trail. Bounded; the ledger keeps the rest.

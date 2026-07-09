@@ -1607,6 +1607,7 @@ class TestSummary(TempWorkspaceCase):
                 "current_unit",
                 "current_unit_status",
                 "current_family",
+                "current_model",
                 "created_epoch",
                 "last_event_epoch",
                 "suite_command",
@@ -1618,6 +1619,7 @@ class TestSummary(TempWorkspaceCase):
                 "last_events",
                 "malformed",
                 "acts_config",
+                "model_defaults",
             },
         )
         self.assertEqual(summ["goal"], "Build X")
@@ -1642,7 +1644,7 @@ class TestSummary(TempWorkspaceCase):
         # The draft chip data: write-once record surfaced for the panel.
         self.assertEqual(
             set(skel_view["draft"].keys()),
-            {"kind", "family", "duration_s", "at"},
+            {"kind", "family", "model", "effort", "duration_s", "at"},
         )
         self.assertEqual(skel_view["unit"], "skeleton")
         self.assertEqual(skel_view["status"], st.U_SEALED)
@@ -1651,10 +1653,10 @@ class TestSummary(TempWorkspaceCase):
         self.assertEqual(len(skel_view["rounds"]), 2)
         for r in skel_view["rounds"]:
             self.assertEqual(
-            set(r.keys()),
-            {"id", "family", "kind", "findings", "severity", "invalidated",
-             "duration_s", "at"},
-        )
+                set(r.keys()),
+                {"id", "family", "kind", "findings", "severity",
+                 "invalidated", "model", "effort", "duration_s", "at"},
+            )
             self.assertEqual(r["findings"], 0)
         # seals view: one passed attempt with per-family finding counts
         self.assertEqual(len(skel_view["seals"]), 1)
@@ -1671,6 +1673,35 @@ class TestSummary(TempWorkspaceCase):
         # doc view carries the dirty round's finding count
         self.assertEqual(doc_view["rounds"][0]["findings"], 2)
         self.assertEqual(doc_view["seals"], [])
+
+    def test_summary_surfaces_effective_models_for_chips(self):
+        state = make_state(self.workspace)
+        state["config"]["model_defaults"] = {
+            "codex": {"model": "gpt-5.6-sol", "effort": "high"},
+            "claude": {"model": "claude-fable-5", "effort": "medium"},
+        }
+        state["config"]["acts"] = {
+            "review_codex": {"model": "gpt-5.6-terra"},
+        }
+        unit = state["units"][0]
+        st.record_draft(
+            state, unit, contracts.KIND_DRAFT_SKELETON,
+            skeleton_draft(1), family="claude",
+        )
+        st.transition_unit(state, unit, st.U_PRE_REVIEW_VERIFY)
+        st.transition_unit(state, unit, st.U_ROUNDS)
+        st.record_round(
+            state, unit, "codex", contracts.KIND_REVIEW_ROUND,
+            clean_review(), meta={"model": "gpt-exact"},
+        )
+
+        summ = st.summary(state)
+        view = summ["units"][0]
+        self.assertEqual(view["draft"]["model"], "claude-fable-5")
+        self.assertEqual(view["draft"]["effort"], "medium")
+        self.assertEqual(view["rounds"][0]["model"], "gpt-exact")
+        self.assertEqual(view["rounds"][0]["effort"], "high")
+        self.assertEqual(summ["current_model"], "gpt-5.6-terra")
 
     def test_summary_includes_fix_and_delta_rounds(self):
         state = make_state(self.workspace)

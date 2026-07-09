@@ -109,20 +109,19 @@ DEFAULT_CONFIG = {
     # explicitly disables it) enable it.
     "git": {"enabled": False},
     # Per-act family policy: a family name ("codex"/"claude"), "self"
-    # (same family as the act's origin: the reviewer whose findings are
-    # being fixed, or the fixer whose delta is being reviewed), or
-    # "opposite". This release pins the cheap acts to codex for speed.
+    # (same family as the act's origin), or "opposite". Delta review is not
+    # independently configurable: it always uses the fixer's family and that
+    # family's Review profile.
     # Acts may also be objects: {"agent": "claude", "model": "sonnet",
     # "effort": "high"} — who leads drafting ("drafter": skeleton + slice
     # notes), implementation ("implementer") and fixes ("fixer"), and with
     # which model/effort. `review_codex` / `review_claude` tune each fixed
     # review family independently without changing family rotation; they
-    # apply to whole-artifact rounds and seal halves. Absent drafter /
+    # apply to whole-artifact rounds, delta reviews, and seal halves. Absent drafter /
     # implementer fall back to fix_family (legacy behavior). The operator
     # can hot-edit all of this mid-run via acts.json; the driver re-reads it
     # before every act resolution.
-    "acts": {"fixer": "codex", "delta_review": "codex",
-             "consultation": "opposite",
+    "acts": {"fixer": "codex", "consultation": "opposite",
              # Who RATES findings for debt deferral: "opposite" (the
              # pre-reform doctrine) or a fixed family (operator
              # 2026-07-09: an 8-minute opposite-family rating of a
@@ -841,7 +840,7 @@ class Driver(object):
     def _busy_path(self):
         return os.path.join(self._runtime_dir(), "current.json")
 
-    def _mark_busy(self, label, kind, family):
+    def _mark_busy(self, label, kind, family, model=None, effort=None):
         """Cosmetic in-flight marker for the panel (NOT part of the state
         ledger): what call is executing right now and since when. Written
         atomically; concurrent seal halves may interleave markers
@@ -852,6 +851,7 @@ class Driver(object):
             with open(tmp, "w", encoding="utf-8") as fh:
                 json.dump(
                     {"label": label, "kind": kind, "family": family,
+                     "model": model, "effort": effort,
                      "started_at": time.time()},
                     fh,
                 )
@@ -883,7 +883,9 @@ class Driver(object):
             retries = [10, 30]
         attempt = 0
         while True:
-            self._mark_busy(raw_name, kind, family)
+            self._mark_busy(
+                raw_name, kind, family, model=model, effort=effort
+            )
             try:
                 output, result = runners.call_worker(
                     self.runner, family, prompt, kind, self.workspace,
@@ -1523,6 +1525,17 @@ class Driver(object):
         default_model, default_effort = self._family_defaults(family)
         return model or default_model, effort or default_effort
 
+    def _delta_review_profile(self, fixer_family):
+        """Use the fixer's family and that family's Review profile.
+
+        Older frozen configs may still contain a `delta_review` act. It is
+        deliberately ignored: the delta judge has no independent family or
+        model dial, so it cannot drift away from the fixer it is checking.
+        """
+        family = fixer_family or self._fix_family()
+        model, effort = self._review_profile(family)
+        return family, model, effort
+
     def _resolve_act(self, act, origin_family):
         """Family-only view of _act_profile (legacy call sites/tests)."""
         fam, _m, _e = self._act_profile(
@@ -1869,7 +1882,9 @@ class Driver(object):
             if r["kind"] == contracts.KIND_FIX_FINDINGS:
                 fixer_family = r["family"]
                 break
-        family = self._resolve_act("delta_review", fixer_family)
+        family, delta_model, delta_effort = self._delta_review_profile(
+            fixer_family
+        )
         project_context, extensions, roots = self._project_prompt_inputs(
             unit, contracts.KIND_DELTA_REVIEW
         )
@@ -1903,6 +1918,8 @@ class Driver(object):
                 {"require_plain": True}
                 if interpreter.reform_active(self.state) else None
             ),
+            model=delta_model,
+            effort=delta_effort,
         )
         if changed:
             # The pending fix delta and the tampering are now entangled;
@@ -1927,6 +1944,7 @@ class Driver(object):
             output,
             raw_path=raw_path,
             duration=result.duration_s,
+            meta={"model": delta_model, "effort": delta_effort},
         )
         if contracts.findings_clean(output):
             try:
@@ -2692,6 +2710,8 @@ class Driver(object):
                     "%s-seal-a%d-%s" % (st.unit_key(unit), attempt_no, fam),
                     contracts.KIND_SEAL_HALF,
                     fam,
+                    model=review_profiles[fam][0],
+                    effort=review_profiles[fam][1],
                 )
                 try:
                     halves[fam] = run_half_pure(fam)
