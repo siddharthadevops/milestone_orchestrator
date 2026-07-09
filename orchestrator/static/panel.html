@@ -660,10 +660,12 @@ function runRow(r) {
       </div>`;
 }
 function runStatusIndicator(r) {
-  // A running run shows the animated running chip. Otherwise a dot:
-  // hidden when the milestone is closed (done), red on error, grey when
-  // merely stopped/idle. The chip sits before where the dot would be.
-  if (r.process === "running") return `<span class="rchip">running</span>`;
+  // A running run shows the SAME live activity chip as the detail view
+  // (spinner + e.g. "codex fix · 2m"); the green fallback covers the
+  // brief running-but-between-calls gap. Otherwise a dot: hidden when
+  // the milestone is closed (done), red on error, grey when stopped.
+  if (r.process === "running")
+    return workingChip(r) || `<span class="rchip">running</span>`;
   if (r.milestone_status === "closed") return "";
   if (r.failure_reason || r.milestone_status === "failed")
     return `<span class="dot err" title="error"></span>`;
