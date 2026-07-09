@@ -115,10 +115,12 @@ DEFAULT_CONFIG = {
     # Acts may also be objects: {"agent": "claude", "model": "sonnet",
     # "effort": "high"} — who leads drafting ("drafter": skeleton + slice
     # notes), implementation ("implementer") and fixes ("fixer"), and with
-    # which model/effort. Absent drafter/implementer fall back to
-    # fix_family (legacy behavior). The operator can hot-edit all of this
-    # mid-run via <workspace>/.orchestrator/acts.json (driver re-reads it
-    # before every act resolution; reviews/seals stay family-rotated).
+    # which model/effort. `review_codex` / `review_claude` tune each fixed
+    # review family independently without changing family rotation; they
+    # apply to whole-artifact rounds and seal halves. Absent drafter /
+    # implementer fall back to fix_family (legacy behavior). The operator
+    # can hot-edit all of this mid-run via acts.json; the driver re-reads it
+    # before every act resolution.
     "acts": {"fixer": "codex", "delta_review": "codex",
              "consultation": "opposite",
              # Who RATES findings for debt deferral: "opposite" (the
@@ -1506,6 +1508,21 @@ class Driver(object):
         d = (self.config.get("model_defaults") or {}).get(family) or {}
         return d.get("model"), d.get("effort")
 
+    def _review_profile(self, family):
+        """Effective model/effort for a fixed review family.
+
+        Review leadership remains family-rotated: an accidental/manual
+        `agent` field on the act cannot turn the Codex half into Claude or
+        vice versa. Only model and effort are operator-tunable.
+        """
+        _ignored_family, model, effort = self._act_profile(
+            "review_%s" % family,
+            origin_family=family,
+            default_family=family,
+        )
+        default_model, default_effort = self._family_defaults(family)
+        return model or default_model, effort or default_effort
+
     def _resolve_act(self, act, origin_family):
         """Family-only view of _act_profile (legacy call sites/tests)."""
         fam, _m, _e = self._act_profile(
@@ -1580,7 +1597,8 @@ class Driver(object):
                 raise StopStep("contested finding killed by pointer")
 
     def _report_call(self, unit, family, prompt, kind, raw_name,
-                     extensions=None, roots=None, validate_opts=None):
+                     extensions=None, roots=None, validate_opts=None,
+                     model=None, effort=None):
         """Run a report-only call with mechanical no-edit enforcement.
 
         Returns (output, result, raw_path, changed): when the reviewer
@@ -1588,8 +1606,8 @@ class Driver(object):
         that differ and the output must be discarded by the caller."""
         before = self._snapshot()
         output, result, raw_path = self._call(
-            family, prompt, kind, raw_name, extensions=extensions,
-            roots=roots, validate_opts=validate_opts,
+            family, prompt, kind, raw_name, model=model, effort=effort,
+            extensions=extensions, roots=roots, validate_opts=validate_opts,
         )
         changed = self._snapshot_diff(before, self._snapshot())
         return output, result, raw_path, changed
@@ -2247,6 +2265,7 @@ class Driver(object):
         # (presence and substance, never prose — spec §4) and every
         # finding hard-requires its plain/example lay mirror.
         reform = interpreter.reform_active(self.state)
+        review_model, review_effort = self._review_profile(family)
         prompt = prompts.build_review_round(
             family,
             self.workspace,
@@ -2281,6 +2300,8 @@ class Driver(object):
             extensions=extensions,
             roots=roots,
             validate_opts={"require_plain": True} if reform else None,
+            model=review_model,
+            effort=review_effort,
         )
         if changed:
             # Rounds run on a clean worktree (everything is amended), so a
@@ -2299,9 +2320,13 @@ class Driver(object):
                  "findings": []},
                 raw_path=raw_path,
                 duration=result.duration_s,
-                meta={"invalidated": "reviewer modified the workspace "
-                      "(%s); output discarded, workspace restored"
-                      % runners.format_changes(changed)},
+                meta={
+                    "invalidated": "reviewer modified the workspace "
+                    "(%s); output discarded, workspace restored"
+                    % runners.format_changes(changed),
+                    "model": review_model,
+                    "effort": review_effort,
+                },
             )
             return "%s round INVALID (reviewer edited); restored and retrying" % family
         self._check_worker_blocked(unit, output, contracts.KIND_REVIEW_ROUND)
@@ -2331,13 +2356,13 @@ class Driver(object):
                     if (f.get("severity") not in defer_scope
                         or f.get("id") in retained_ids)
                 ]
+        round_meta = {"model": review_model, "effort": review_effort}
+        if deferred and not fix_findings:
+            round_meta["deferred_clean"] = True
         rec = st.record_round(
             self.state, unit, family, contracts.KIND_REVIEW_ROUND, output,
             raw_path=raw_path, duration=result.duration_s,
-            meta=(
-                {"deferred_clean": True}
-                if deferred and not fix_findings else None
-            ),
+            meta=round_meta,
         )
         if deferred:
             st.record_debt(self.state, unit, deferred, "round", rec["id"])
@@ -2462,6 +2487,9 @@ class Driver(object):
         artifact = self._artifact(unit)
         registry = self._registry()
         debt = self._debt(unit)
+        review_profiles = {
+            family: self._review_profile(family) for family in families
+        }
         halves = {}
         invalidated = None
         tamper_family = None  # sequential mode can attribute the tampering
@@ -2501,15 +2529,15 @@ class Driver(object):
             )
             raw_name = "%s-seal-a%d-%s" % (st.unit_key(unit), attempt_no, family)
             try:
-                dm, de = self._family_defaults(family)
+                review_model, review_effort = review_profiles[family]
                 output, result = runners.call_worker(
                     self.runner,
                     family,
                     prompt,
                     contracts.KIND_SEAL_HALF,
                     self.workspace,
-                    model=dm,
-                    effort=de,
+                    model=review_model,
+                    effort=review_effort,
                     extensions=project_extensions,
                     roots=project_roots,
                     validate_opts=seal_validate_opts,
@@ -2544,6 +2572,8 @@ class Driver(object):
                 "raw_path": raw_path,
                 "duration_s": result.duration_s,
                 "workspace_modified": False,
+                "model": review_profiles[family][0],
+                "effort": review_profiles[family][1],
             }
             rep = getattr(result, "repair", None)
             if rep:

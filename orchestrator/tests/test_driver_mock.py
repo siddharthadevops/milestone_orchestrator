@@ -560,7 +560,7 @@ class TestHappyLifecycle(DriverTestCase):
                         self.assertEqual(
                             set(half.keys()),
                             {"result", "raw_path", "duration_s",
-                             "workspace_modified"},
+                             "workspace_modified", "model", "effort"},
                         )
                         self.assertEqual(half["result"]["kind"], "seal_half")
                         self.assertFalse(half["workspace_modified"])
@@ -1201,6 +1201,63 @@ class TestActProfiles(DriverTestCase):
             meta = mock.call_meta[0]
             self.assertEqual((meta["model"], meta["effort"]),
                              ("opus", "max"))
+
+    def test_each_review_family_has_its_own_model_for_rounds_and_seals(self):
+        with tempfile.TemporaryDirectory(prefix="orch-mock-") as ws:
+            cfg = make_config()
+            cfg["acts"] = dict(cfg["acts"])
+            cfg["acts"].update({
+                # Deliberately wrong agent fields prove family rotation is
+                # fixed: these acts tune model/effort only.
+                "review_codex": {
+                    "agent": "claude", "model": "gpt-5.6-terra",
+                    "effort": "high",
+                },
+                "review_claude": {
+                    "agent": "codex", "model": "claude-sonnet-5",
+                    "effort": "medium",
+                },
+            })
+            path = init_state(ws, cfg)
+            mock = runners.MockRunner([
+                skeleton_script()[0],
+                step("review_round", report("review_round"), family="codex"),
+                step("review_round", report("review_round"), family="claude"),
+                step("seal_half", report("seal_half"), family="codex"),
+                step("seal_half", report("seal_half"), family="claude"),
+            ])
+            driver = drv.Driver(path, runner=mock)
+            self.step_until(driver,
+                            lambda s: s["units"][0]["status"] == st.U_SEALED)
+
+            by_call = {
+                (family, kind): meta
+                for (family, kind, _prompt), meta
+                in zip(mock.calls, mock.call_meta)
+            }
+            for kind in ("review_round", "seal_half"):
+                self.assertEqual(
+                    (by_call[("codex", kind)]["model"],
+                     by_call[("codex", kind)]["effort"]),
+                    ("gpt-5.6-terra", "high"),
+                )
+                self.assertEqual(
+                    (by_call[("claude", kind)]["model"],
+                     by_call[("claude", kind)]["effort"]),
+                    ("claude-sonnet-5", "medium"),
+                )
+
+            unit = st.load(path)["units"][0]
+            reviews = [r for r in unit["rounds"]
+                       if r["kind"] == contracts.KIND_REVIEW_ROUND]
+            self.assertEqual(
+                [(r["family"], r["model"], r["effort"]) for r in reviews],
+                [("codex", "gpt-5.6-terra", "high"),
+                 ("claude", "claude-sonnet-5", "medium")],
+            )
+            halves = unit["seals"][0]["halves"]
+            self.assertEqual(halves["codex"]["model"], "gpt-5.6-terra")
+            self.assertEqual(halves["claude"]["effort"], "medium")
 
     def test_hot_overlay_rebinds_fixer_mid_run(self):
         import json as _json

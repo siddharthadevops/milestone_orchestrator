@@ -1928,8 +1928,9 @@ def _write_amendments(entry, amendments):
     os.replace(tmp, path)
 
 
-ACT_KEYS = ("drafter", "implementer", "fixer", "delta_review",
-            "consultation", "reclassifier")
+ACT_KEYS = ("drafter", "implementer", "review_codex", "review_claude",
+            "fixer", "delta_review", "consultation", "reclassifier")
+FIXED_REVIEW_ACTS = {"review_codex": "codex", "review_claude": "claude"}
 
 
 def _acts_path(entry):
@@ -1947,8 +1948,9 @@ def read_acts(entry):
 
 
 def set_acts(home, run_id, body):
-    """Write the operator's hot act assignments (who drafts / implements /
-    fixes, with which model/effort). Same lock-free pattern as
+    """Write hot act assignments (draft/impl/review/fix model profiles).
+
+    Same lock-free pattern as
     amendments: this file is operator-owned; the driver re-reads it
     before every act resolution, so a change binds the next call (for
     drivers new enough to read it)."""
@@ -1966,6 +1968,10 @@ def set_acts(home, run_id, body):
         if val in (None, "", {}):
             continue  # cleared -> fall back to config/defaults
         if isinstance(val, str):
+            if key in FIXED_REVIEW_ACTS:
+                raise ApiError(
+                    400, "act %r has a fixed family; set model/effort only"
+                    % key)
             acts[key] = val.strip()
             continue
         if not isinstance(val, dict):
@@ -1980,6 +1986,12 @@ def set_acts(home, run_id, body):
                         400, "act %r field %r must be a short string"
                         % (key, f))
                 entry_out[f] = v
+        if key in FIXED_REVIEW_ACTS and entry_out.get("agent"):
+            fixed = FIXED_REVIEW_ACTS[key]
+            if entry_out["agent"] != fixed:
+                raise ApiError(
+                    400, "act %r family is fixed to %s" % (key, fixed))
+            entry_out.pop("agent", None)
         if entry_out:
             acts[key] = entry_out
     path = _acts_path(entry)

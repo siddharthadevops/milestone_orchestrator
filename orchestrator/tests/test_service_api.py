@@ -565,11 +565,20 @@ class ActsApiTest(ServiceApiTest):
             "POST", "/api/runs/%s/acts" % rid,
             {"implementer": {"agent": "claude", "model": "sonnet",
                              "effort": "high"},
+             "review_codex": {"model": "gpt-5.6-terra",
+                              "effort": "high"},
+             "review_claude": {"agent": "claude",
+                               "model": "claude-sonnet-5",
+                               "effort": "medium"},
              "fixer": "codex",
              "drafter": None})
         self.assertEqual(status, 200)
         self.assertEqual(body["acts"]["implementer"]["model"], "sonnet")
         self.assertNotIn("drafter", body["acts"])
+        self.assertEqual(body["acts"]["review_codex"]["effort"], "high")
+        self.assertEqual(body["acts"]["review_claude"]["model"],
+                         "claude-sonnet-5")
+        self.assertNotIn("agent", body["acts"]["review_claude"])
         status, body = self.request_json("GET", "/api/runs/%s" % rid)
         self.assertEqual(body["acts"]["fixer"], "codex")
         with open(os.path.join(ws, ".orchestrator", "acts.json"),
@@ -585,6 +594,14 @@ class ActsApiTest(ServiceApiTest):
         self.assertEqual(status, 400)
         status, _ = self.request_json(
             "POST", "/api/runs/%s/acts" % rid, {"fixer": {"model": "x" * 200}})
+        self.assertEqual(status, 400)
+        status, _ = self.request_json(
+            "POST", "/api/runs/%s/acts" % rid,
+            {"review_codex": {"agent": "claude", "model": "x"}})
+        self.assertEqual(status, 400)
+        status, _ = self.request_json(
+            "POST", "/api/runs/%s/acts" % rid,
+            {"review_claude": "claude"})
         self.assertEqual(status, 400)
 
 

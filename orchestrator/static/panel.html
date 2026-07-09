@@ -156,6 +156,7 @@
     gap: 6px; align-items: center; }
   .actgrid label { font-size: 12px; color: #3f3f46; }
   .acthead { font-size: 10px; text-transform: uppercase; color: #a1a1aa; }
+  .actfamily { font-size: 12px; color: #52525b; padding: 4px 6px; }
   .actgrid select, .actgrid input { font: inherit; font-size: 12px;
     padding: 4px 6px; border: 1px solid var(--line); border-radius: 6px; }
   .unit-title { color: #71717a; font-size: 11px; margin-left: 6px; }
@@ -380,7 +381,8 @@
       pre-selected on purpose — the choice is explicit.</p>
     <p><b>Acts</b> — empty = family default (claude: opus-4.8/max, codex:
       gpt-5.6-sol/xhigh); model options adapt to the agent; editable mid-run
-      from the run view. Reviews stay family-rotated regardless.</p>
+      from the run view. The two review rows tune each fixed family for both
+      review rounds and seals; family rotation never changes.</p>
     <p><b>Verification</b> — left empty, the implementer reports the repo's
       official suite and the driver arms the gates with it.</p>
   </div>
@@ -404,7 +406,7 @@
     <select id="f_profile" onchange="onProfileChange()">
       <option value="" disabled selected>— choose: strict / light / legacy —</option></select>
     <div class="hint" id="f_profile_hint"></div></div>
-  <div class="field"><label>Who leads each act (reviews stay family-rotated)</label>
+  <div class="field"><label>Agents, models and effort</label>
     <div class="actgrid">
       <span></span><span class="acthead">agent</span>
       <span class="acthead">model</span><span class="acthead">effort</span>
@@ -424,6 +426,20 @@
       <input id="a_implementer_model" list="dl_a_implementer"
         placeholder="default">
       <select id="a_implementer_effort"><option value="">default</option>
+        <option>low</option><option>medium</option><option>high</option>
+        <option>xhigh</option><option>max</option></select>
+      <label>Review · Codex</label>
+      <span class="actfamily mono">codex</span>
+      <input id="a_review_codex_model" list="dl_a_review_codex"
+        placeholder="default">
+      <select id="a_review_codex_effort"><option value="">default</option>
+        <option>low</option><option>medium</option><option>high</option>
+        <option>xhigh</option><option>max</option></select>
+      <label>Review · Claude</label>
+      <span class="actfamily mono">claude</span>
+      <input id="a_review_claude_model" list="dl_a_review_claude"
+        placeholder="default">
+      <select id="a_review_claude_effort"><option value="">default</option>
         <option>low</option><option>medium</option><option>high</option>
         <option>xhigh</option><option>max</option></select>
       <label>Fix findings</label>
@@ -447,6 +463,8 @@
     </div>
     <datalist id="dl_a_drafter"></datalist>
     <datalist id="dl_a_implementer"></datalist>
+    <datalist id="dl_a_review_codex"></datalist>
+    <datalist id="dl_a_review_claude"></datalist>
     <datalist id="dl_a_fixer"></datalist>
     <datalist id="dl_a_reclassifier"></datalist></div>
   <div class="field">
@@ -497,7 +515,7 @@
 </dialog>
 
 <dialog id="actsdlg">
-  <h2>Acts (who leads what)</h2>
+  <h2>Acts (models and roles)</h2>
   <div class="actgrid">
     <span></span><span class="acthead">agent</span>
     <span class="acthead">model</span><span class="acthead">effort</span>
@@ -515,6 +533,16 @@
     <input id="ra_implementer_model" list="dl_ra_implementer"
       placeholder="default">
     <select id="ra_implementer_effort"><option value="">default</option></select>
+    <label>Review · Codex</label>
+    <span class="actfamily mono">codex</span>
+    <input id="ra_review_codex_model" list="dl_ra_review_codex"
+      placeholder="default">
+    <select id="ra_review_codex_effort"><option value="">default</option></select>
+    <label>Review · Claude</label>
+    <span class="actfamily mono">claude</span>
+    <input id="ra_review_claude_model" list="dl_ra_review_claude"
+      placeholder="default">
+    <select id="ra_review_claude_effort"><option value="">default</option></select>
     <label>Fix findings</label>
     <select id="ra_fixer_agent" onchange="onAgentChange('ra_','fixer')">
       <option value="">default</option>
@@ -532,6 +560,8 @@
   </div>
   <datalist id="dl_ra_drafter"></datalist>
   <datalist id="dl_ra_implementer"></datalist>
+  <datalist id="dl_ra_review_codex"></datalist>
+  <datalist id="dl_ra_review_claude"></datalist>
   <datalist id="dl_ra_fixer"></datalist>
   <datalist id="dl_ra_reclassifier"></datalist>
   <div class="hint" style="margin-top:8px">Empty = launch config / defaults.
@@ -1222,7 +1252,7 @@ async function refreshDetail() {
     lastEffActs = {};
     {
       const cfgActs = (sum && sum.acts_config) || {};
-      for (const a of ["drafter", "implementer", "fixer", "reclassifier"]) {
+      for (const a of ACT_NAMES) {
         lastEffActs[a] = lastActs[a] || cfgActs[a] || null;
         if (lastActs[a]) lastEffActs[a + "_hot"] = true;
       }
@@ -1239,14 +1269,16 @@ async function refreshDetail() {
        </div>
        <div class="amend-hint">Applies from the next worker call. Drivers started before this feature exists need one Stop → Start to begin reading amendments.</div></div>`;
     const actLabel = {drafter: "draft", implementer: "impl",
+                      review_codex: "review codex",
+                      review_claude: "review claude",
                       fixer: "fix", reclassifier: "reclass"};
-    const actsSum = ["drafter", "implementer", "fixer", "reclassifier"].map(a => {
+    const actsSum = ACT_NAMES.map(a => {
       const v = lastEffActs[a];
       const e = typeof v === "string" ? {agent: v} : (v || {});
       const bits = [e.agent, e.model, e.effort].filter(Boolean).join(" · ");
       return `${actLabel[a]}: ${bits || "default"}${lastEffActs[a + "_hot"] ? " (hot)" : ""}`;
     }).join("   —   ");
-    html += `<div class="card"><h3>Acts (who leads what)</h3>
+    html += `<div class="card"><h3>Acts (models and roles)</h3>
       <div class="amendform">
         <span class="amend-hint mono" style="flex:1">${esc(actsSum)}</span>
         <button class="btn" onclick="openActs()">Edit…</button>
@@ -1383,7 +1415,7 @@ async function refreshDetail() {
       html += `<div class="card"><h3>Driver log</h3>
       <pre class="log mono">${esc((d.log || []).join(""))}</pre></div>`;
     const actDraft = {};
-    for (const act of ["drafter", "implementer", "fixer", "reclassifier"]) {
+    for (const act of ACT_NAMES) {
       for (const f of ["agent", "model", "effort"]) {
         const el = document.getElementById(`ra_${act}_${f}`);
         if (el && document.activeElement &&
@@ -1559,10 +1591,11 @@ let lastProfile = null;   // the run's profile block from the last detail poll
 function openActs() {
   // The dialog lives OUTSIDE the polled container: the 2s re-render can
   // never reset an edit in progress. Values are seeded once, on open.
-  for (const act of ["drafter", "implementer", "fixer", "reclassifier"]) {
+  for (const act of ACT_NAMES) {
     const v = lastEffActs[act];
     const entry = typeof v === "string" ? {agent: v} : (v || {});
-    document.getElementById(`ra_${act}_agent`).value = entry.agent || "";
+    const agentEl = document.getElementById(`ra_${act}_agent`);
+    if (agentEl) agentEl.value = entry.agent || "";
     onAgentChange("ra_", act);
     document.getElementById(`ra_${act}_model`).value = entry.model || "";
     const eff = document.getElementById(`ra_${act}_effort`);
@@ -1573,12 +1606,14 @@ function openActs() {
 }
 async function saveActs() {
   const acts = {};
-  for (const act of ["drafter", "implementer", "fixer", "reclassifier"]) {
-    const agent = document.getElementById(`ra_${act}_agent`).value;
+  for (const act of ACT_NAMES) {
+    const fixed = FIXED_ACT_AGENTS[act];
+    const agentEl = document.getElementById(`ra_${act}_agent`);
+    const agent = agentEl ? agentEl.value : "";
     const model = document.getElementById(`ra_${act}_model`).value.trim();
     const effort = document.getElementById(`ra_${act}_effort`).value;
     const entry = {};
-    if (agent) entry.agent = agent;
+    if (!fixed && agent) entry.agent = agent;
     if (model) entry.model = model;
     if (effort) entry.effort = effort;
     acts[act] = Object.keys(entry).length ? entry : null;
@@ -1625,6 +1660,7 @@ function openForm() {
   loadRecents();
   loadLaunchProjects();
   loadProfiles();
+  for (const act of ACT_NAMES) onAgentChange("a_", act);
   document.getElementById("form").showModal();
 }
 /* ---- strategy profile selector: the run's review strategy, chosen at
@@ -1812,6 +1848,12 @@ document.getElementById("pk_list").addEventListener("click", (ev) => {
     document.getElementById("picker").close();
   }
 });
+const ACT_NAMES = ["drafter", "implementer", "review_codex",
+                   "review_claude", "fixer", "reclassifier"];
+const FIXED_ACT_AGENTS = {
+  review_codex: "codex",
+  review_claude: "claude",
+};
 const MODEL_OPTS = {
   claude: ["claude-fable-5", "claude-opus-4-8", "claude-sonnet-5"],
   codex: ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"],
@@ -1827,7 +1869,8 @@ function agentEfforts(agent) {
   return EFFORT_OPTS[agent] || ["low", "medium", "high", "xhigh", "max"];
 }
 function onAgentChange(prefix, act) {
-  const agent = document.getElementById(`${prefix}${act}_agent`).value;
+  const agentEl = document.getElementById(`${prefix}${act}_agent`);
+  const agent = FIXED_ACT_AGENTS[act] || (agentEl ? agentEl.value : "");
   const dl = document.getElementById(`dl_${prefix}${act}`);
   if (dl)
     dl.innerHTML = agentModels(agent)
@@ -1850,12 +1893,14 @@ function toggleMore() {
 }
 function collectActs(prefix) {
   const acts = {};
-  for (const act of ["drafter", "implementer", "fixer", "reclassifier"]) {
-    const agent = document.getElementById(`${prefix}${act}_agent`).value;
+  for (const act of ACT_NAMES) {
+    const fixed = FIXED_ACT_AGENTS[act];
+    const agentEl = document.getElementById(`${prefix}${act}_agent`);
+    const agent = agentEl ? agentEl.value : "";
     const model = document.getElementById(`${prefix}${act}_model`).value.trim();
     const effort = document.getElementById(`${prefix}${act}_effort`).value;
     const entry = {};
-    if (agent) entry.agent = agent;
+    if (!fixed && agent) entry.agent = agent;
     if (model) entry.model = model;
     if (effort) entry.effort = effort;
     if (Object.keys(entry).length) acts[act] = entry;
