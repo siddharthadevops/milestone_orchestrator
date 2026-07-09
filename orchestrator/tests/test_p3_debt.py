@@ -1,11 +1,10 @@
-"""P3 debt deferral with opposite-family reclassification.
+"""Finding-debt deferral with opposite-family reclassification.
 
-When `p3_reclassify_debt` is on, a review round (DOC phase only) or a seal
-(both phases) whose findings are ALL P3 gets an opposite-family
-reclassification per finding. If every P3 is verified safe to defer, the
-findings become tracked debt and the unit advances/seals instead of firing
-a fix cycle. Any P0-P2 present, any delta, and impl-phase rounds are
-unaffected. A refused verdict routes to the normal fix flow.
+When `p3_reclassify_debt` is on, eligible review/seal findings receive an
+opposite-family reclassification one by one. Ratings below the configured
+threshold become tracked debt; only the remaining findings reach the fixer.
+One blocking finding never drags accepted debt into its fix cycle. Delta
+reviews and implementation-phase review rounds remain unaffected.
 """
 
 import tempfile
@@ -21,12 +20,14 @@ from orchestrator.tests.test_driver_mock import (
     DriverTestCase,
     battery_entries,
     finding,
+    fix_ok,
     init_state,
     make_config,
     ok,
     report,
     skeleton_script,
     step,
+    triaged,
 )
 
 
@@ -67,7 +68,9 @@ class TestP3Debt(DriverTestCase):
                 draft_step(),
                 # codex round: one lone P3 -> claude reclassifies -> defer
                 step("review_round",
-                     report("review_round", [finding("F1", "stale word")]),
+                     report("review_round", [finding(
+                         "F1", "stale word", plain="PLAIN_DEBT_SENTINEL",
+                         example="EXAMPLE_DEBT_SENTINEL")]),
                      family="codex"),
                 reclassify(True, family="claude", reason="cosmetic, no drift"),
                 # codex family advanced; claude round: also a lone P3
@@ -97,6 +100,24 @@ class TestP3Debt(DriverTestCase):
             debt_events = [e for e in state["events"]
                            if e["type"] == "debt_recorded"]
             self.assertEqual(len(debt_events), 2)
+            # Once rated, later reviewers/sealers receive only the compact
+            # technical fingerprint — never the lay framing used by the
+            # reclassifier to calibrate gravity.
+            claude_review = [
+                prompt for fam, kind, prompt in mock.calls
+                if fam == "claude" and kind == "review_round"
+            ][0]
+            self.assertIn("codex-F1", claude_review)
+            self.assertNotIn("PLAIN_DEBT_SENTINEL", claude_review)
+            self.assertNotIn("EXAMPLE_DEBT_SENTINEL", claude_review)
+            seal_prompts = [
+                prompt for _fam, kind, prompt in mock.calls
+                if kind == "seal_half"
+            ]
+            self.assertEqual(len(seal_prompts), 2)
+            for prompt in seal_prompts:
+                self.assertIn("codex-F1", prompt)
+                self.assertIn("claude-F1", prompt)
 
     def test_reclassifier_refusal_routes_to_the_fixer(self):
         with tempfile.TemporaryDirectory(prefix="orch-mock-") as ws:
@@ -288,7 +309,7 @@ class TestP3Debt(DriverTestCase):
                     self.assertEqual(
                         [f["id"] for f in unit["fix_queue"]], ["F1"])
 
-    def test_p2_alongside_p3_skips_reclassify_and_fixes_all(self):
+    def test_mixed_round_keeps_debt_out_of_the_fix_queue(self):
         with tempfile.TemporaryDirectory(prefix="orch-mock-") as ws:
             path = init_state(ws, make_config(p3_reclassify_debt=True))
             mock = runners.MockRunner([
@@ -298,19 +319,39 @@ class TestP3Debt(DriverTestCase):
                             [finding("F1", "real gap", severity="P2"),
                              finding("F2", "stale word")]),
                      family="codex"),
+                reclassify(True, family="claude", reason="wording only"),
             ])
             driver = drv.Driver(path, runner=mock)
             self.step_until(
                 driver, lambda s: s["units"][0]["status"] == st.U_FIXING)
             state = st.load(path)
             unit = state["units"][0]
-            # No reclassify call was made (a P2 was present).
-            self.assertNotIn(
-                "reclassify", [c[1] for c in mock.calls])
-            self.assertEqual(unit["debt"], [])
-            # Both findings (P2 and its ride-along P3) went to the fixer.
+            self.assertIn("reclassify", [c[1] for c in mock.calls])
+            self.assertEqual([d["id"] for d in unit["debt"]], ["codex-F2"])
+            # The real P2 is fixed; the independently accepted P3 no longer
+            # rides along merely because another finding blocked the round.
             self.assertEqual(
-                sorted(f["id"] for f in unit["fix_queue"]), ["F1", "F2"])
+                [f["id"] for f in unit["fix_queue"]], ["F1"])
+
+    def test_mixed_ratings_do_not_discard_accepted_debt(self):
+        with tempfile.TemporaryDirectory(prefix="orch-mock-") as ws:
+            path = init_state(ws, make_config(p3_reclassify_debt=True))
+            mock = runners.MockRunner([
+                draft_step(),
+                step("review_round",
+                     report("review_round",
+                            [finding("F1", "cheap wording"),
+                             finding("F2", "serious drift")]),
+                     family="codex"),
+                reclassify(True, family="claude", reason="local correction"),
+                reclassify(False, family="claude", reason="cross-slice drift"),
+            ])
+            driver = drv.Driver(path, runner=mock)
+            self.step_until(
+                driver, lambda s: s["units"][0]["status"] == st.U_FIXING)
+            unit = st.load(path)["units"][0]
+            self.assertEqual([d["id"] for d in unit["debt"]], ["codex-F1"])
+            self.assertEqual([f["id"] for f in unit["fix_queue"]], ["F2"])
 
     def test_feature_off_by_default_p3_still_fixes(self):
         with tempfile.TemporaryDirectory(prefix="orch-mock-") as ws:
@@ -377,6 +418,70 @@ class TestP3Debt(DriverTestCase):
             self.assertTrue(unit["seals"][0]["passed"])
             self.assertEqual(len(unit["debt"]), 1)
             self.assertEqual(unit["debt"][0]["id"], "codex-F1")
+
+    def test_mixed_seal_keeps_debt_out_of_the_fix_queue(self):
+        with tempfile.TemporaryDirectory(prefix="orch-mock-") as ws:
+            path = init_state(ws, make_config(p3_reclassify_debt=True))
+            mock = runners.MockRunner([
+                draft_step(),
+                step("review_round", report("review_round"), family="codex"),
+                step("review_round", report("review_round"), family="claude"),
+                step("seal_half",
+                     report("seal_half",
+                            [finding("F1", "real break", severity="P1"),
+                             finding("F2", "minor wording")]),
+                     family="codex"),
+                step("seal_half", report("seal_half"), family="claude"),
+                reclassify(True, family="claude", reason="local correction"),
+            ])
+            driver = drv.Driver(path, runner=mock)
+            self.step_until(
+                driver, lambda s: s["units"][0]["status"] == st.U_FIXING)
+            unit = st.load(path)["units"][0]
+            self.assertEqual([d["id"] for d in unit["debt"]], ["codex-F2"])
+            self.assertEqual(
+                [f["id"] for f in unit["fix_queue"]], ["codex-F1"])
+            self.assertFalse(unit["seals"][0]["passed"])
+
+    def test_reform_doc_seal_uses_the_same_p2_scope_as_review(self):
+        strict = profiles.SEEDS["strict"]["profile"]
+        with tempfile.TemporaryDirectory(prefix="orch-mock-") as ws:
+            config = make_config(p3_reclassify_debt=True, profile=strict)
+            config["git"] = {"enabled": False}
+            path = init_state(
+                ws, config)
+            mock = runners.MockRunner([
+                reform_draft_step(),
+                step("review_round", report("review_round"), family="codex"),
+                step("review_round",
+                     report("review_round", [
+                         finding("F0", "forces a real edit", severity="P1")
+                     ]),
+                     family="claude"),
+                step("fix_findings",
+                     fix_ok([triaged("F0", "fixed", "forces a real edit",
+                                             severity="P1")]),
+                     family="codex"),
+                step("review_round", report("review_round"), family="claude"),
+                # Codex's earlier clean review is stale after the fix, so the
+                # reform predicate requests exactly this one fresh half.
+                step("seal_half",
+                     report("seal_half", [
+                         finding("F1", "bounded doc correction", severity="P2")
+                     ]),
+                     family="codex"),
+                reclassify(True, family="claude", risk="high",
+                           damage="low", reason="local doc correction"),
+            ])
+            driver = drv.Driver(path, runner=mock)
+            self.step_until(driver,
+                            lambda s: s["units"][0]["status"] == st.U_SEALED)
+            unit = st.load(path)["units"][0]
+            self.assertEqual(unit["debt"][0]["severity"], "P2")
+            self.assertEqual(
+                len([r for r in unit["rounds"]
+                     if r["kind"] == contracts.KIND_FIX_FINDINGS]),
+                1, "the deferred seal P2 must not open another fix episode")
 
 
 if __name__ == "__main__":

@@ -66,11 +66,11 @@ DEFAULT_CONFIG = {
     # {model}/{effort} placeholders in the command template are filled per
     # call; templates without placeholders (codex: its model lives in its
     # own CLI config) ignore overrides.
-    # Verified against the installed CLIs (2026-07-05): claude accepts
+    # Verified against the installed CLIs (2026-07-09): claude accepts
     # explicit ids (claude-fable-5 / claude-opus-4-8 / claude-sonnet-5)
     # and efforts low|medium|high|xhigh|max; codex models come from its
-    # live catalog (gpt-5.5 / gpt-5.4 / gpt-5.3-codex-spark /
-    # gpt-5.4-mini) with reasoning efforts low|medium|high|xhigh set via
+    # live catalog (gpt-5.6-sol / gpt-5.6-terra / gpt-5.6-luna) with
+    # reasoning efforts low|medium|high|xhigh|max set via
     # `-c model_reasoning_effort=...` (bare value: failed TOML parse
     # falls back to the literal string, per codex --help).
     # claude workers run with background workflows force-disabled
@@ -78,7 +78,7 @@ DEFAULT_CONFIG = {
     # incompatible with the one-shot call contract.
     "model_defaults": {
         "claude": {"model": "claude-opus-4-8", "effort": "max"},
-        "codex": {"model": "gpt-5.5", "effort": "xhigh"},
+        "codex": {"model": "gpt-5.6-sol", "effort": "xhigh"},
     },
     # No timeouts by default: worker calls run as long as the work needs
     # (an implement call may legitimately run hours of test suites). A
@@ -136,19 +136,15 @@ DEFAULT_CONFIG = {
     # stops for the operator (the same gap bouncing = a real stall, not
     # convergence). Amnesty on resume, like the other convergence caps.
     "max_gap_repairs": 3,
-    # P3 debt deferral (ON by default — operator order 2026-07-07: a lone
-    # cosmetic P3 must not cost a fix→delta→re-seal cycle; shipping this
-    # off silently no-opped that decision). A review round (DOC phase
-    # only) or a seal (both phases) whose findings are ALL P3 gets an
-    # opposite-family reclassification per finding; if every one is verified
-    # safe to defer, the P3s are recorded as tracked debt and the unit
-    # advances/seals instead of firing a fix cycle. Any P0-P2 present, any
-    # delta review, and impl-phase rounds are unaffected (findings fixed
-    # normally). A refused verdict or a failed reclassify call sends the
-    # findings to the normal fix flow (safe default).
+    # Rated debt deferral. Eligible doc findings (P3 in legacy, P2/P3 in a
+    # reform profile) and seal findings are rated independently. Findings
+    # below the threshold become tracked debt; only the retained findings
+    # enter a fix cycle, so one blocker never drags accepted debt with it.
+    # Delta reviews and impl-phase review rounds are unaffected. A refused
+    # verdict or failed rating retains that finding for the fixer.
     "p3_reclassify_debt": True,
     # Deferral threshold over the reclassifier's drift-risk rating
-    # (low|medium|high|xhigh): a P3 defers when its rating is <= this.
+    # (low|medium|high|xhigh): an eligible finding defers at/below this.
     # The worker only RATES; this config makes the decision — set per
     # project by the operator's cost-of-being-wrong: storage/contract
     # work (Life/Spanner) -> "low"; UI shell work (chat components) ->
@@ -1460,6 +1456,10 @@ class Driver(object):
     def _registry(self):
         return st.adjudicated_rejections(self.state)
 
+    @staticmethod
+    def _debt(unit):
+        return list(unit.get("debt") or [])
+
     def _acts_overlay(self):
         """Operator-editable mid-run act assignments (acts.json beside the
         state file) — same lock-free pattern as amendments: the panel
@@ -1662,6 +1662,7 @@ class Driver(object):
             phantom_retry=bool(unit.get("phantom_retried")),
             killed_notice=bool(unit.pop("killed_fix_notice", None)),
             project_context=project_context,
+            debt=self._debt(unit),
         )
         n_fix = 1 + len(
             [r for r in unit["rounds"] if r["kind"] == contracts.KIND_FIX_FINDINGS]
@@ -1865,6 +1866,7 @@ class Driver(object):
             governing=self._governing(unit),
             amendments=self._amendments(),
             project_context=project_context,
+            debt=self._debt(unit),
         )
         n_delta = 1 + len(
             [r for r in unit["rounds"] if r["kind"] == contracts.KIND_DELTA_REVIEW]
@@ -2058,24 +2060,24 @@ class Driver(object):
         )
         return "verification failed; findings queued for the fixer"
 
-    def _reclassify_p3_batch(self, unit, items):
-        """Opposite-family second opinion on deferring lone P3s as debt.
+    def _partition_defer_candidates(self, unit, items):
+        """Rate candidates independently and split debt from fix work.
 
         `items` is a list of (finding, raising_family). Returns
-        (all_deferrable, debt_entries). Safe by construction: a refused
-        verdict, a blocked/failed reclassify call, or a reclassifier that
-        edits the workspace all make the batch non-deferrable (and a
-        tampering reclassifier is reverted), so the caller takes the normal
-        fix path."""
+        (debt_entries, retained_items). A refused/failed rating retains only
+        that finding for the fixer; one serious finding can never drag other,
+        independently deferred findings into the fix queue. A tampering
+        reclassifier voids every rating and retains the whole input.
+        """
         before = self._snapshot()
         debt = []
-        all_ok = True
+        retained = []
         levels = contracts.DRIFT_RISK_LEVELS
         threshold = str(self.config.get("p3_defer_max_risk") or "low")
         if threshold not in levels:
             threshold = "low"
         self._mark_busy(
-            "%s-reclassify (%d P3)" % (st.unit_key(unit), len(items)),
+            "%s-reclassify (%d finding(s))" % (st.unit_key(unit), len(items)),
             contracts.KIND_RECLASSIFY, None,
         )
         try:
@@ -2098,8 +2100,8 @@ class Driver(object):
                 damage = None
                 if opp == raising_family and not explicit:
                     # No independent opposite family (single-family config):
-                    # cross-family verification is impossible, so a P3 is
-                    # never deferred — it takes the normal fix path. An
+                    # cross-family verification is impossible, so the finding
+                    # is never deferred — it takes the normal fix path. An
                     # EXPLICIT fixed/self policy is the operator choosing a
                     # same-family rater on purpose — allowed (a fresh
                     # stateless call is still a second look).
@@ -2198,7 +2200,7 @@ class Driver(object):
                         "reason": reason,
                     })
                 else:
-                    all_ok = False
+                    retained.append((finding, raising_family))
         finally:
             self._clear_busy()
         if self._snapshot_diff(before, self._snapshot()):
@@ -2210,8 +2212,8 @@ class Driver(object):
             )
             self._restore_or_fail(
                 unit, "reclassifier modified the workspace")
-            return False, []
-        return all_ok, debt
+            return [], list(items)
+        return debt, retained
 
     def _do_review_round(self):
         unit = st.current_unit(self.state)
@@ -2258,6 +2260,7 @@ class Driver(object):
             verified_suite=self._verified_suite(unit),
             project_context=project_context,
             battery=interpreter.battery_questions(self.state, unit["kind"]),
+            debt=self._debt(unit),
         )
         # Raw/label numbering counts ALL history (like fix/delta and the
         # ledger round ids): the amnesty-relative `done` must never make a
@@ -2305,37 +2308,45 @@ class Driver(object):
         self._validate_contests(unit, output, contracts.KIND_REVIEW_ROUND)
         findings = output.get("findings", [])
         # Debt deferral: DOC phase only. The profile chooses the deferrable
-        # severity scope (interpreter.doc_defer_scope): the pre-reform gate
-        # and legacy/profile-less runs defer only lone P3s; a reform profile
-        # widens it to the full §2 gate (P0/P1 always fix — never in scope;
-        # P2/P3 rated, threshold decides). A round is eligible only when
-        # EVERY finding is in scope (any out-of-scope finding, e.g. a P0/P1,
-        # fires a normal fix and the in-scope findings ride along). Each
-        # eligible finding gets an opposite-family drift-risk rating; only
-        # if every one rates at-or-below the threshold do we defer them as
-        # debt and advance.
+        # severity scope (interpreter.doc_defer_scope): legacy/profile-less
+        # runs rate P3; reform runs rate P2/P3. P0/P1 always fix. Candidates
+        # are rated independently: one serious finding must not drag cheap,
+        # accepted debt into the fix queue with it.
         defer_scope = interpreter.doc_defer_scope(self.state)
-        deferred = None
+        deferred = []
+        fix_findings = list(findings)
         if (findings
                 and self.config.get("p3_reclassify_debt")
-                and unit["kind"] in (st.UNIT_SKELETON, st.UNIT_SLICE_DOC)
-                and contracts.all_in_severity(findings, defer_scope)):
-            all_ok, debt = self._reclassify_p3_batch(
-                unit, [(f, family) for f in findings])
-            if all_ok:
-                deferred = debt
+                and unit["kind"] in (st.UNIT_SKELETON, st.UNIT_SLICE_DOC)):
+            candidates = [
+                (f, family) for f in findings
+                if f.get("severity") in defer_scope
+            ]
+            if candidates:
+                deferred, retained = self._partition_defer_candidates(
+                    unit, candidates)
+                retained_ids = {f.get("id") for f, _family in retained}
+                fix_findings = [
+                    f for f in findings
+                    if (f.get("severity") not in defer_scope
+                        or f.get("id") in retained_ids)
+                ]
         rec = st.record_round(
             self.state, unit, family, contracts.KIND_REVIEW_ROUND, output,
             raw_path=raw_path, duration=result.duration_s,
-            meta={"deferred_clean": True} if deferred else None,
+            meta=(
+                {"deferred_clean": True}
+                if deferred and not fix_findings else None
+            ),
         )
+        if deferred:
+            st.record_debt(self.state, unit, deferred, "round", rec["id"])
         if not findings:
             st.advance_family_if_clean(self.state, unit, output)
             return "%s round: clean" % family
-        if deferred is not None:
-            st.record_debt(self.state, unit, deferred, "round", rec["id"])
+        if not fix_findings:
             st.advance_family_deferred(self.state, unit)
-            return ("%s round: %d P3 deferred as debt (verified by %s)"
+            return ("%s round: %d finding(s) deferred as debt (verified by %s)"
                     % (family, len(deferred), self._opposite(family)))
         st.enter_fix_episode(
             self.state,
@@ -2347,15 +2358,15 @@ class Driver(object):
                     "summary": f["summary"],
                     "contests": f.get("contests"),
                 }
-                for f in findings
+                for f in fix_findings
             ],
             "round",
             family,
             rec["id"],
             st.U_ROUNDS,
         )
-        return "%s round: %d finding(s); queued for the fixer" % (
-            family, len(findings))
+        return ("%s round: %d finding(s) queued for the fixer; %d deferred"
+                % (family, len(fix_findings), len(deferred)))
 
     def _seal_families(self, unit, attempt_no):
         """Families that run a seal half this attempt.
@@ -2450,6 +2461,7 @@ class Driver(object):
         desc = self._unit_desc(unit)
         artifact = self._artifact(unit)
         registry = self._registry()
+        debt = self._debt(unit)
         halves = {}
         invalidated = None
         tamper_family = None  # sequential mode can attribute the tampering
@@ -2485,6 +2497,7 @@ class Driver(object):
                 unit_kind=unit["kind"], governing=self._governing(unit),
                 amendments=amendments, verified_suite=verified_suite,
                 project_context=project_context, battery=seal_battery,
+                debt=debt,
             )
             raw_name = "%s-seal-a%d-%s" % (st.unit_key(unit), attempt_no, family)
             try:
@@ -2693,41 +2706,57 @@ class Driver(object):
         clean = all(
             contracts.findings_clean(halves[fam]["result"]) for fam in families
         )
-        # P3-debt deferral at the seal (both phases): if the seal is not
-        # clean but its findings are ALL P3, each gets an opposite-family
-        # reclassification; if every one is verified safe the P3s become
-        # tracked debt and the seal PASSES rather than reopening the unit
-        # (double-seal re-runs are the most expensive churn).
-        deferred = None
+        # Debt at seal is partitioned finding by finding. Doc units use the
+        # same profile scope as their review rounds (P3 for legacy, P2/P3
+        # for reform); implementation units keep the P3-only gate. A serious
+        # finding may reopen the unit, but accepted debt never rides along.
+        seal_findings = [
+            (f, fam)
+            for fam in families
+            for f in halves[fam]["result"].get("findings", [])
+        ]
+        defer_scope = (
+            interpreter.doc_defer_scope(self.state)
+            if unit["kind"] in (st.UNIT_SKELETON, st.UNIT_SLICE_DOC)
+            else ("P3",)
+        )
+        deferred = []
+        fix_seal_findings = list(seal_findings)
         if (not clean and invalidated is None
                 and self.config.get("p3_reclassify_debt")):
-            seal_findings = [
-                (f, fam)
-                for fam in families
-                for f in halves[fam]["result"].get("findings", [])
+            candidates = [
+                (f, fam) for f, fam in seal_findings
+                if f.get("severity") in defer_scope
             ]
-            if contracts.all_p3([f for f, _ in seal_findings]):
-                all_ok, debt = self._reclassify_p3_batch(unit, seal_findings)
-                if all_ok:
-                    deferred = debt
-        passed = (clean or deferred is not None) and invalidated is None
+            if candidates:
+                deferred, retained = self._partition_defer_candidates(
+                    unit, candidates)
+                retained_ids = {
+                    (fam, f.get("id")) for f, fam in retained
+                }
+                fix_seal_findings = [
+                    (f, fam) for f, fam in seal_findings
+                    if (f.get("severity") not in defer_scope
+                        or (fam, f.get("id")) in retained_ids)
+                ]
+        passed = (clean or not fix_seal_findings) and invalidated is None
         st.record_seal_attempt(self.state, unit, halves, passed, invalidated)
+        if deferred:
+            st.record_debt(
+                self.state, unit, deferred, "seal",
+                "%s-seal-a%d" % (st.unit_key(unit), attempt_no))
         if passed:
-            if deferred:
-                st.record_debt(
-                    self.state, unit, deferred, "seal",
-                    "%s-seal-a%d" % (st.unit_key(unit), attempt_no))
             seal_kind = "single seal" if len(families) == 1 else "double seal"
             st.transition_unit(
                 self.state, unit, st.U_SEALED,
                 reason=("%s clean" % seal_kind if not deferred
-                        else "%s: %d P3 deferred as debt"
+                        else "%s: %d finding(s) deferred as debt"
                         % (seal_kind, len(deferred))))
             self._after_seal(unit)
             return "seal attempt %d PASSED (%s); %s sealed" % (
                 attempt_no,
                 "clean" if not deferred
-                else "%d P3 deferred as debt" % len(deferred),
+                else "%d finding(s) deferred as debt" % len(deferred),
                 st.unit_key(unit))
         if invalidated is not None:
             # Seals run on a clean worktree (everything amended), so a
@@ -2742,17 +2771,15 @@ class Driver(object):
             self._validate_contests(
                 unit, halves[fam]["result"], contracts.KIND_SEAL_HALF
             )
-        merged = []
-        for fam in families:
-            for f in halves[fam]["result"].get("findings", []):
-                merged.append(
-                    {
-                        "id": "%s-%s" % (fam, f["id"]),
-                        "severity": f["severity"],
-                        "summary": "[%s seal half] %s" % (fam, f["summary"]),
-                        "contests": f.get("contests"),
-                    }
-                )
+        merged = [
+            {
+                "id": "%s-%s" % (fam, f["id"]),
+                "severity": f["severity"],
+                "summary": "[%s seal half] %s" % (fam, f["summary"]),
+                "contests": f.get("contests"),
+            }
+            for f, fam in fix_seal_findings
+        ]
         st.enter_fix_episode(
             self.state,
             unit,
@@ -2762,10 +2789,8 @@ class Driver(object):
             "%s-seal-a%d" % (st.unit_key(unit), attempt_no),
             st.U_PRE_SEAL_VERIFY,
         )
-        return "seal attempt %d: %d finding(s); queued for the fixer" % (
-            attempt_no,
-            len(merged),
-        )
+        return ("seal attempt %d: %d finding(s) queued for the fixer; "
+                "%d deferred" % (attempt_no, len(merged), len(deferred)))
 
     def _after_seal(self, unit):
         if unit["kind"] == st.UNIT_SLICE_IMPL:

@@ -2091,6 +2091,10 @@ class TestPolicyAuthoring(ProjectsServiceTestCase):
         self.assertIn('role="menuitem"', text)
         self.assertIn("configureProject(", text)
         self.assertNotIn("OTHERS_KEY", text)
+        self.assertIn(
+            'codex: ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"]',
+            text,
+        )
         # The safeguard editor dialog.
         self.assertIn('id="sgeditor"', text)
         self.assertIn('id="sg_json"', text)

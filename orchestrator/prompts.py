@@ -23,6 +23,7 @@ from . import contracts
 # id — a run-failing protocol violation). Everything worker-authored is
 # flattened to one line and clipped before rendering.
 REGISTRY_MAX_ENTRIES = 100
+DEBT_MAX_ENTRIES = 100
 ID_CLIP = 200
 SUMMARY_CLIP = 300
 RATIONALE_CLIP = 600
@@ -156,6 +157,40 @@ def _registry_block(registry):
                 _oneline(e.get("rationale"), RATIONALE_CLIP)
                 or "(no rationale recorded)",
                 prevention,
+            )
+        )
+    return "\n".join(lines) + "\n"
+
+
+def _debt_block(debt):
+    """Render settled debt without its lay summary, example, or rationale."""
+    if not debt:
+        return ""
+    lines = [
+        "DEFERRED DEBT (settled for this unit; do NOT re-report or fix)",
+        "These are real findings deliberately deferred after an independent",
+        "risk rating. They remain deferred even when this call reports other",
+        "findings. Do not re-raise, fix, expand, or use them to fail the unit",
+        "unless concrete NEW evidence shows that correction now exceeds the",
+        "recorded rating. Then cite the debt id and report only that new delta.",
+    ]
+    shown = debt
+    if len(debt) > DEBT_MAX_ENTRIES:
+        omitted = len(debt) - DEBT_MAX_ENTRIES
+        shown = debt[-DEBT_MAX_ENTRIES:]
+        lines.append(
+            "(%d older debt entries omitted; the durable ledger remains "
+            "authoritative)" % omitted
+        )
+    for entry in shown:
+        rating = entry.get("drift_damage") or entry.get("drift_risk") or "?"
+        lines.append(
+            "- [%s] (%s; correction=%s) %s"
+            % (
+                _oneline(entry.get("id"), ID_CLIP),
+                _oneline(entry.get("severity"), ID_CLIP),
+                _oneline(rating, ID_CLIP),
+                _oneline(entry.get("summary"), SUMMARY_CLIP),
             )
         )
     return "\n".join(lines) + "\n"
@@ -867,7 +902,7 @@ def build_implement(family, workspace, goal, slice_info, note_path, verification
 def build_review_round(family, workspace, goal, unit_desc, artifact, registry,
                        unit_kind=None, governing=None, amendments=None,
                        verified_suite=None, project_context=None,
-                       battery=None):
+                       battery=None, debt=None):
     return (
         _header(contracts.KIND_REVIEW_ROUND, family, workspace)
         + "\nTASK: full review round of %s. REPORT ONLY.\n" % unit_desc
@@ -883,6 +918,7 @@ def build_review_round(family, workspace, goal, unit_desc, artifact, registry,
         + _verified_suite_block(verified_suite, unit_kind)
         + _review_quality_block(unit_kind)
         + (_battery_review_block(battery) if battery else "")
+        + _debt_block(debt)
         + _registry_block(registry)
         + "\n"
         + _access_block(edit_allowed=False)
@@ -893,7 +929,7 @@ def build_review_round(family, workspace, goal, unit_desc, artifact, registry,
 
 def build_delta_review(family, workspace, goal, unit_desc, diff_text, registry,
                        unit_kind=None, governing=None, amendments=None,
-                       project_context=None):
+                       project_context=None, debt=None):
     return (
         _header(contracts.KIND_DELTA_REVIEW, family, workspace)
         + "\nTASK: incremental review of the pending fix delta on %s.\n"
@@ -917,6 +953,7 @@ def build_delta_review(family, workspace, goal, unit_desc, diff_text, registry,
         + (diff_text or "(empty diff)")
         + "\n------------\n\n"
         + _delta_quality_block(unit_kind)
+        + _debt_block(debt)
         + _registry_block(registry)
         + "\n"
         + _access_block(edit_allowed=False)
@@ -928,7 +965,7 @@ def build_delta_review(family, workspace, goal, unit_desc, diff_text, registry,
 def build_seal_half(family, workspace, goal, unit_desc, artifact, registry,
                     unit_kind=None, governing=None, amendments=None,
                     verified_suite=None, project_context=None,
-                    battery=None):
+                    battery=None, debt=None):
     return (
         _header(contracts.KIND_SEAL_HALF, family, workspace)
         + "\nTASK: independent final seal review of %s. REPORT ONLY.\n"
@@ -945,6 +982,7 @@ def build_seal_half(family, workspace, goal, unit_desc, artifact, registry,
         + _verified_suite_block(verified_suite, unit_kind)
         + _review_quality_block(unit_kind)
         + (_battery_review_block(battery) if battery else "")
+        + _debt_block(debt)
         + _registry_block(registry)
         + "\n"
         + _access_block(edit_allowed=False)
@@ -954,7 +992,7 @@ def build_seal_half(family, workspace, goal, unit_desc, artifact, registry,
 
 
 # ---------------------------------------------------------------------------
-# Reclassify kind (opposite-family second opinion for P3 debt deferral)
+# Reclassify kind (opposite-family second opinion for debt deferral)
 
 
 RECLASSIFY_CONTRACT = """OUTPUT CONTRACT (mandatory)
@@ -1124,6 +1162,7 @@ def build_fix_findings(
     phantom_retry=False,
     killed_notice=False,
     project_context=None,
+    debt=None,
 ):
     lines = []
     for f in findings:
@@ -1211,6 +1250,7 @@ def build_fix_findings(
         "  consultation).\n"
         "- impossible either way -> 'blocked' (the run stops).\n\n"
         + _fix_quality_block(unit_kind)
+        + _debt_block(debt)
         + _registry_block(registry)
         + "\n"
         + _access_block(edit_allowed=True)

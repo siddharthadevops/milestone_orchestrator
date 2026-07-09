@@ -51,9 +51,8 @@ KIND_REVIEW_ROUND = "review_round"
 KIND_DELTA_REVIEW = "delta_review"
 KIND_SEAL_HALF = "seal_half"
 KIND_FIX_FINDINGS = "fix_findings"
-# Opposite-family second opinion on whether a lone P3 is safe to DEFER as
-# tracked debt (genuinely trivial, no correctness/behaviour/coverage impact
-# and no implementation-drift risk). The worker RATES drift risk on a fixed
+# Opposite-family second opinion on whether an eligible finding is safe to
+# DEFER as tracked debt. The worker RATES drift risk on a fixed
 # scale; it never decides — the driver compares the rating against the
 # run's configured threshold (a binary "is it safe?" question biases an
 # LLM to the safe answer; a graded rating keeps it calibrated).

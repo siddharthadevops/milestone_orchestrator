@@ -24,7 +24,8 @@
   /* left: launched milestones */
   aside { width: 320px; min-width: 260px; border-right: 1px solid #e5e5e5;
           background: #f7f7f7; display: flex; flex-direction: column; }
-  aside .actions { padding: 12px; border-bottom: 1px solid #e5e5e5; }
+  aside .actions { display: flex; gap: 8px; padding: 12px;
+    border-bottom: 1px solid #e5e5e5; }
   .btn { display: inline-block; border: 1px solid var(--line); background: #fff;
          border-radius: 8px; padding: 6px 12px; font-size: 13px; cursor: pointer; }
   .btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
@@ -378,7 +379,7 @@
       to open a fix cycle vs record as tracked debt). No seed is
       pre-selected on purpose — the choice is explicit.</p>
     <p><b>Acts</b> — empty = family default (claude: opus-4.8/max, codex:
-      gpt-5.5/xhigh); model options adapt to the agent; editable mid-run
+      gpt-5.6-sol/xhigh); model options adapt to the agent; editable mid-run
       from the run view. Reviews stay family-rotated regardless.</p>
     <p><b>Verification</b> — left empty, the implementer reports the repo's
       official suite and the driver arms the gates with it.</p>
@@ -1813,11 +1814,11 @@ document.getElementById("pk_list").addEventListener("click", (ev) => {
 });
 const MODEL_OPTS = {
   claude: ["claude-fable-5", "claude-opus-4-8", "claude-sonnet-5"],
-  codex: ["gpt-5.5", "gpt-5.4", "gpt-5.3-codex-spark", "gpt-5.4-mini"],
+  codex: ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"],
 };
 const EFFORT_OPTS = {
   claude: ["low", "medium", "high", "xhigh", "max"],
-  codex: ["low", "medium", "high", "xhigh"],
+  codex: ["low", "medium", "high", "xhigh", "max"],
 };
 function agentModels(agent) {
   return MODEL_OPTS[agent] || [...MODEL_OPTS.claude, ...MODEL_OPTS.codex];

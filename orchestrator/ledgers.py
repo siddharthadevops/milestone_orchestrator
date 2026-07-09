@@ -253,7 +253,7 @@ def render_review_log(state):
         if debt:
             lines += [
                 "",
-                "**Deferred debt (P3, opposite-family verified):**",
+                "**Deferred debt (opposite-family verified):**",
             ]
             for d in debt:
                 lines.append(

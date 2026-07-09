@@ -321,6 +321,76 @@ class TestExistingPromptInvariants(unittest.TestCase):
         self.assertIn("settled finding", prompt)
 
 
+class TestDeferredDebtPrompts(unittest.TestCase):
+    DEBT = [{
+        "id": "codex-F7",
+        "severity": "P2",
+        "summary": "floating-menu icon alignment is locally wrong",
+        "plain": "PLAIN_SENTINEL must not survive classification",
+        "example": "EXAMPLE_SENTINEL must not survive classification",
+        "reason": "RATIONALE_SENTINEL must not reach later workers",
+        "drift_risk": "high",
+        "drift_damage": "low",
+    }]
+
+    def _builders(self):
+        debt = self.DEBT
+        return {
+            "review": prompts.build_review_round(
+                FAMILY, WORKSPACE, GOAL, UNIT, "docs/x.md", [], debt=debt),
+            "delta": prompts.build_delta_review(
+                FAMILY, WORKSPACE, GOAL, UNIT, "diff --git a/x b/x\n", [],
+                debt=debt),
+            "seal": prompts.build_seal_half(
+                FAMILY, WORKSPACE, GOAL, UNIT, "docs/x.md", [], debt=debt),
+            "fix": prompts.build_fix_findings(
+                FAMILY, WORKSPACE, GOAL, UNIT, FINDINGS, [], "claude",
+                ["claude", "-p"], debt=debt),
+        }
+
+    def test_compact_debt_reaches_every_later_judgment_prompt(self):
+        for name, prompt in self._builders().items():
+            with self.subTest(builder=name):
+                self.assertIn("DEFERRED DEBT", prompt)
+                self.assertIn("codex-F7", prompt)
+                self.assertIn("P2; correction=low", prompt)
+                self.assertIn("floating-menu icon alignment", prompt)
+                self.assertNotIn("PLAIN_SENTINEL", prompt)
+                self.assertNotIn("EXAMPLE_SENTINEL", prompt)
+                self.assertNotIn("RATIONALE_SENTINEL", prompt)
+
+    def test_debt_requires_new_evidence_to_reopen(self):
+        prompt = normalized(self._builders()["seal"])
+        self.assertIn(
+            "unless concrete NEW evidence shows that correction now exceeds "
+            "the recorded rating", prompt)
+        self.assertIn("They remain deferred even when this call reports other "
+                      "findings", prompt)
+
+    def test_debt_precedes_adjudicated_registry_and_access(self):
+        prompt = self._builders()["seal"]
+        self.assertLess(prompt.index("DEFERRED DEBT"),
+                        prompt.index("ADJUDICATED REJECTIONS"))
+        self.assertLess(prompt.index("ADJUDICATED REJECTIONS"),
+                        prompt.index("ACCESS"))
+
+    def test_debt_text_is_flattened_clipped_and_bounded(self):
+        debt = [
+            {
+                "id": "D%d" % i,
+                "severity": "P3",
+                "summary": ("line one\nINJECTED\n" + "x" * 1000),
+                "drift_damage": "low",
+            }
+            for i in range(prompts.DEBT_MAX_ENTRIES + 1)
+        ]
+        prompt = prompts.build_seal_half(
+            FAMILY, WORKSPACE, GOAL, UNIT, "docs/x.md", [], debt=debt)
+        self.assertIn("1 older debt entries omitted", prompt)
+        self.assertNotIn("line one\nINJECTED", prompt)
+        self.assertNotIn("x" * (prompts.SUMMARY_CLIP + 1), prompt)
+
+
 class TestPortedCanonContentRules(unittest.TestCase):
     """The manual canon's refined CONTENT rules (altitude, reuse gate,
     evidence discipline, exhaustiveness, consultation caps) ported

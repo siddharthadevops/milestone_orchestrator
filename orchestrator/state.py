@@ -200,7 +200,7 @@ def _new_unit(kind, slice_id):
                                     #  "source_round_id": ...,
                                     #  "return_to": status after green+amend}
         "fix_loop_rounds": 0,       # fixer+delta iterations on this episode
-        "debt": [],                 # P3s deferred as tracked debt (append-only)
+        "debt": [],                 # rated findings deferred as debt (append-only)
     }
 
 
@@ -514,7 +514,7 @@ def advance_family_if_clean(state, unit, last_result):
 
 def _round_effectively_clean(round_rec):
     """A round is 'clean enough' to advance/seal when it reported no
-    findings OR when its only findings were P3s all deferred as tracked
+    findings OR when all of its findings were independently deferred as tracked
     debt (meta.deferred_clean, set by the reclassify path)."""
     from . import contracts
 
@@ -525,14 +525,15 @@ def _round_effectively_clean(round_rec):
 
 
 def advance_family_deferred(state, unit):
-    """Advance the family after a review round whose only findings were P3s
-    all deferred as debt — equivalent to a clean round for family ordering.
+    """Advance after a review round whose findings were all deferred as debt.
+
+    This is equivalent to a clean round for family ordering.
     (The clean case goes through advance_family_if_clean.)"""
     families = state["config"]["families_order"]
     unit["family_index"] += 1
     if unit["family_index"] >= len(families):
         transition_unit(state, unit, U_PRE_SEAL_VERIFY,
-                        reason="all families clean (P3 deferred as debt)")
+                        reason="all families clean (findings deferred as debt)")
     else:
         append_event(
             state, "family_clean", unit=unit_key(unit),
@@ -904,10 +905,12 @@ def enter_fix_episode(state, unit, findings, source_type, source_family,
 
 
 def record_debt(state, unit, entries, source, source_round_id):
-    """Record P3 findings deferred as tracked debt (opposite-family verified
-    safe). `entries` is a list of {id, summary, raised_by, cleared_by,
-    reason}. Appended to the unit's debt list and the ledger for operator
-    visibility; the unit is NOT sent to the fixer for these."""
+    """Record independently rated findings as tracked debt.
+
+    Entries retain the technical summary and rating metadata, not the lay
+    `plain`/`example` calibration text. They are appended to the unit and
+    ledger for operator visibility and are never sent to the fixer.
+    """
     unit.setdefault("debt", [])
     for e in entries:
         unit["debt"].append(dict(e))
@@ -1054,7 +1057,7 @@ def summary(state):
                     }
                     for s in u["seals"]
                 ],
-                # Deferred P3 debt (opposite-family reclassification). The
+                # Deferred debt (opposite-family reclassification). The
                 # reclassify calls leave no round, so without this the panel
                 # loses the resolution once the in-flight chip clears.
                 "debt": [
