@@ -2087,6 +2087,10 @@ class TestPolicyAuthoring(ProjectsServiceTestCase):
         self.assertIn("openProjectEditor(", text)
         self.assertIn("openProjectCreate()", text)
         self.assertIn("presentProjectKeys", text)
+        self.assertIn('aria-haspopup="menu"', text)
+        self.assertIn('role="menuitem"', text)
+        self.assertIn("configureProject(", text)
+        self.assertNotIn("OTHERS_KEY", text)
         # The safeguard editor dialog.
         self.assertIn('id="sgeditor"', text)
         self.assertIn('id="sg_json"', text)

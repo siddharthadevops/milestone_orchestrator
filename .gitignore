@@ -1,4 +1,6 @@
 .DS_Store
+.claude/
+erl_crash.dump
 implementation/review-work/
 review-work/
 

@@ -22,21 +22,19 @@
   .mono { font-family: "SF Mono", ui-monospace, Menlo, monospace; }
 
   /* left: launched milestones */
-  aside { width: 320px; min-width: 260px; border-right: 1px solid var(--line);
-          background: var(--panel); display: flex; flex-direction: column; }
-  aside .actions { padding: 12px; border-bottom: 1px solid var(--line); }
+  aside { width: 320px; min-width: 260px; border-right: 1px solid #e5e5e5;
+          background: #f7f7f7; display: flex; flex-direction: column; }
+  aside .actions { padding: 12px; border-bottom: 1px solid #e5e5e5; }
   .btn { display: inline-block; border: 1px solid var(--line); background: #fff;
          border-radius: 8px; padding: 6px 12px; font-size: 13px; cursor: pointer; }
   .btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
   .btn.danger { color: var(--bad); border-color: #f3c1c1; }
   .btn:disabled { opacity: .45; cursor: default; }
   #runs { overflow-y: auto; flex: 1; }
-  .run { padding: 8px 14px 8px 26px; cursor: pointer; display: flex;
+  .run { padding: 8px 14px 8px 33px; cursor: pointer; display: flex;
          align-items: center; gap: 8px; }
-  .run:hover .name { color: var(--accent); }
-  .run.sel { border-left: 3px solid var(--accent); padding-left: 23px; }
-  .run.sel .name { color: var(--accent); }
-  .run .name { font-weight: 500; font-size: 13px; color: #71717a;
+  .run.sel { border-left: 3px solid var(--accent); padding-left: 30px; }
+  .run .name { font-weight: 400; font-size: 13px; color: var(--text);
     flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   /* Run status dot: grey = stopped/idle, red = error; hidden when the
      milestone is closed. A running run shows the .rchip instead. */
@@ -49,14 +47,42 @@
   .rchip::before { content: ""; width: 5px; height: 5px; border-radius: 50%;
     background: #16a34a; animation: pulse 1.5s ease-in-out infinite; }
   @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: .25; } }
-  .proj-group-header { display: flex; align-items: center; gap: 8px;
+  .proj-group-header { position: relative; display: flex; align-items: center; gap: 7px;
     padding: 6px 12px; margin-top: 20px; font-size: 13px; font-weight: 700;
-    color: var(--text); cursor: pointer; user-select: none; }
+    color: #3f3f46; cursor: pointer; user-select: none; }
   #runs > .proj-group-header:first-child { margin-top: 6px; }
   .proj-group-header:hover { color: var(--accent); }
-  .grpgear { flex: none; font-size: 15px;
-    line-height: 1; color: var(--dim); cursor: pointer; }
-  .grpgear:hover { color: var(--accent); }
+  .ui-icon { display: block; width: 16px; height: 16px; fill: none;
+    stroke: currentColor; stroke-width: 1.75; stroke-linecap: round;
+    stroke-linejoin: round; }
+  .grpfolder { flex: none; color: #52525b; }
+  .grpfolder .ui-icon { width: 14px; height: 14px; }
+  .grpname { min-width: 0; overflow: hidden; text-overflow: ellipsis;
+    white-space: nowrap; }
+  .grpchev { flex: none; color: var(--dim); opacity: 0;
+    transition: opacity .12s ease; }
+  .proj-group-header:hover .grpchev { opacity: 1; }
+  .grpchev .ui-icon { width: 14px; height: 14px; }
+  .grpmenu { position: relative; display: flex; margin-left: auto; }
+  .grpmenu-btn { width: 24px; height: 24px; display: grid; place-items: center;
+    border: 0; border-radius: 5px; padding: 0; background: transparent;
+    color: var(--dim); cursor: pointer; opacity: 0;
+    transition: opacity .12s ease, background .12s ease; }
+  .grpmenu-btn .ui-icon { width: 17px; height: 17px; }
+  .proj-group-header:hover .grpmenu-btn,
+  .proj-group-header:focus-within .grpmenu-btn,
+  .grpmenu.open .grpmenu-btn { opacity: 1; }
+  .grpmenu-btn:hover, .grpmenu.open .grpmenu-btn {
+    background: #eceef2; color: var(--text); }
+  .grpmenu-popover { position: absolute; z-index: 10; top: calc(100% + 4px);
+    right: 0; min-width: 150px; padding: 4px; border: 1px solid var(--line);
+    border-radius: 8px; background: #fff; box-shadow: 0 8px 24px rgba(20,24,33,.12); }
+  .grpmenu-item { width: 100%; display: flex; align-items: center; gap: 8px;
+    border: 0; border-radius: 5px; padding: 6px 8px; background: transparent;
+    color: var(--text); font: inherit; font-size: 12px; font-weight: 500;
+    text-align: left; cursor: pointer; }
+  .grpmenu-item:hover { background: var(--accent-soft); color: var(--accent); }
+  .grpmenu-item .ui-icon { width: 15px; height: 15px; }
   .grp-empty { padding: 4px 14px 6px; font-size: 11px; color: var(--dim);
     font-style: italic; }
   .btn.sm { padding: 3px 8px; font-size: 11px; }
@@ -628,7 +654,14 @@ let uiState = {project_order: [], collapsed: []};
 // (a NUL character does not: browsers replace it with U+FFFD while
 // parsing HTML, so a NUL-based key could never compare equal to
 // itself again once rendered -- verified live; this replaces that bug).
-const OTHERS_KEY = "/others";
+let projectMenuOpen = null;
+const ICONS = {
+  folder: `<svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/></svg>`,
+  chevronRight: `<svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m9 18 6-6-6-6"/></svg>`,
+  chevronDown: `<svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>`,
+  ellipsis: `<svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/></svg>`,
+  settings: `<svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.09a2 2 0 0 1 1 1.74v.5a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.38a2 2 0 0 0-.73-2.73l-.15-.09a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2Z"/><circle cx="12" cy="12" r="3"/></svg>`,
+};
 // Interpolating a value into a single-quoted onclick="...('VALUE')"
 // argument needs its OWN escaping layer, independent of esc()'s
 // HTML-attribute escaping: esc() protects the outer double-quoted
@@ -699,45 +732,42 @@ function orderedProjectKeys(present) {
   return known.concat(fresh);
 }
 function groupHeader(key, label, count, editable) {
-  // The whole row toggles collapse; the chevron is pure state (▸
-  // collapsed, ▾ expanded). The only control is a bare gear — no
-  // container button shrinking it into invisibility.
+  // The whole row toggles collapse. The folder identifies the project;
+  // the chevron follows its name, and the overflow menu stays at the
+  // far edge. Its open key survives the sidebar's two-second repaint.
   const collapsed = uiState.collapsed.includes(key);
   const safeKey = esc(escJsSq(key));
-  const gear = editable
-    ? `<span class="grpgear" title="Edit project"
-         onclick="event.stopPropagation(); openProjectEditor('${safeKey}')">&#9881;</span>`
+  const menuOpen = projectMenuOpen === key;
+  const menu = editable
+    ? `<div class="grpmenu ${menuOpen ? "open" : ""}">
+         <button class="grpmenu-btn" type="button" title="Project menu"
+           aria-label="Project menu" aria-haspopup="menu" aria-expanded="${menuOpen}"
+           onclick="toggleProjectMenu(event, '${safeKey}')">${ICONS.ellipsis}</button>
+         ${menuOpen ? `<div class="grpmenu-popover" role="menu" onclick="event.stopPropagation()">
+           <button class="grpmenu-item" type="button" role="menuitem"
+             onclick="configureProject(event, '${safeKey}')">${ICONS.settings}<span>Configure</span></button>
+         </div>` : ""}
+       </div>`
     : "";
   return `<div class="proj-group-header" onclick="toggleGroupCollapse('${safeKey}')">
-      ${gear}
-      <span>${esc(label)}</span>
+      <span class="grpfolder">${ICONS.folder}</span>
+      <span class="grpname">${esc(label)}</span>
+      <span class="grpchev">${collapsed ? ICONS.chevronRight : ICONS.chevronDown}</span>
+      ${menu}
     </div>`;
 }
 function renderRunsTree(runs) {
   const byProject = groupRuns(runs);
   const realKeys = presentProjectKeys();
-  if (realKeys.length === 0) {
-    // No declared project and no run carrying a project tag: render
-    // exactly as before adopting Projects — no headers, no "Others"
-    // label, zero visual change for anyone not using the feature.
-    return runs.map(runRow).join("");
-  }
+  if (realKeys.length === 0) return "";
   const ordered = orderedProjectKeys(realKeys);
-  let html = ordered.map((key) => {
+  return ordered.map((key) => {
     const runsInGroup = byProject.get(key) || [];
     const header = groupHeader(key, key, runsInGroup.length, true);
     if (uiState.collapsed.includes(key)) return header;
     return header + (runsInGroup.map(runRow).join("")
       || '<div class="grp-empty">no runs yet</div>');
   }).join("");
-  const others = byProject.get(null) || [];
-  if (others.length) {
-    const header = groupHeader(OTHERS_KEY, "Others", others.length, false);
-    html += uiState.collapsed.includes(OTHERS_KEY)
-      ? header
-      : header + others.map(runRow).join("");
-  }
-  return html;
 }
 // Each click posts the operator's FULL current arrangement, fire-
 // and-forget -- but two independent, un-awaited posts (a fast
@@ -753,11 +783,31 @@ function persistUiState(patch) {
     .catch(() => {});
 }
 function toggleGroupCollapse(key) {
+  projectMenuOpen = null;
   const i = uiState.collapsed.indexOf(key);
   if (i === -1) uiState.collapsed.push(key); else uiState.collapsed.splice(i, 1);
   renderRunsTree_paint();
   persistUiState({collapsed: uiState.collapsed});
 }
+function toggleProjectMenu(event, key) {
+  event.stopPropagation();
+  projectMenuOpen = projectMenuOpen === key ? null : key;
+  renderRunsTree_paint();
+}
+function closeProjectMenu() {
+  if (projectMenuOpen === null) return;
+  projectMenuOpen = null;
+  renderRunsTree_paint();
+}
+function configureProject(event, key) {
+  event.stopPropagation();
+  closeProjectMenu();
+  openProjectEditor(key);
+}
+document.addEventListener("click", closeProjectMenu);
+document.addEventListener("keydown", event => {
+  if (event.key === "Escape") closeProjectMenu();
+});
 function renderRunsTree_paint() {
   document.getElementById("runs").innerHTML =
     renderRunsTree(lastRuns) || '<div class="empty">No milestones yet.</div>';
