@@ -2380,6 +2380,7 @@ class Driver(object):
         # and we fall through to the proven double-seal halves, which give
         # exactly that family its fresh look. Legacy and profile-less runs
         # never take this path (bit-identical).
+        stale_only = None
         if interpreter.seal_predicate(self.state):
             cite = st.seal_predicate_reviews(unit, all_families)
             if cite is not None:
@@ -2398,14 +2399,30 @@ class Driver(object):
                     "clean on the current bytes (%s); no seal calls"
                     % (st.unit_key(unit), ", ".join(cite))
                 )
-        families = self._seal_families(unit, attempt_no)
-        if families != all_families:
-            st.append_event(
-                self.state, "seal_single_first_attempt",
-                unit=st.unit_key(unit), attempt=attempt_no,
-                ran=list(families),
-                skipped=[f for f in all_families if f not in families],
-            )
+            # Predicate not satisfied: only the STALE families owe a
+            # fresh look (spec §5 — refined fallback, 2026-07-09); a
+            # family clean on the current bytes stands on its cited
+            # review instead of re-reading bytes it just blessed. After
+            # a fix+amend every family is stale, so a post-fix reseal
+            # degrades to the full double automatically.
+            stale_only = st.stale_seal_families(unit, all_families)
+        if stale_only is not None:
+            families, fresh_cites = stale_only
+            if fresh_cites:
+                st.append_event(
+                    self.state, "seal_stale_only",
+                    unit=st.unit_key(unit), attempt=attempt_no,
+                    ran=list(families), standing=fresh_cites,
+                )
+        else:
+            families = self._seal_families(unit, attempt_no)
+            if families != all_families:
+                st.append_event(
+                    self.state, "seal_single_first_attempt",
+                    unit=st.unit_key(unit), attempt=attempt_no,
+                    ran=list(families),
+                    skipped=[f for f in all_families if f not in families],
+                )
         goal = self._goal_for(unit)
         desc = self._unit_desc(unit)
         artifact = self._artifact(unit)

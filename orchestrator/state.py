@@ -592,6 +592,39 @@ def seal_predicate_reviews(unit, families):
     return cite
 
 
+def stale_seal_families(unit, families):
+    """The reform predicate's REFINED fallback (spec §5, realized
+    2026-07-09 after the conservative full-double fallback showed its
+    cost live — a claude a1 half re-reading bytes claude had blessed 15
+    minutes earlier): when the predicate does not hold, only the
+    families whose most recent whole-artifact look is missing, dirty,
+    or stale owe a fresh seal half; a family clean on the CURRENT bytes
+    stands on its cited review. Returns (stale_families, fresh_cites)
+    where fresh_cites maps each fresh family to the standing review id.
+    When the predicate returned None, stale_families is never empty."""
+    rounds = unit["rounds"]
+    last_fix = max(
+        (i for i, r in enumerate(rounds) if r["kind"] == "fix_findings"),
+        default=-1,
+    )
+    stale, fresh = [], {}
+    for fam in families:
+        revs = [
+            (i, r) for i, r in enumerate(rounds)
+            if r["family"] == fam and r["kind"] == "review_round"
+            and not r.get("invalidated")
+        ]
+        if not revs:
+            stale.append(fam)
+            continue
+        idx, last = revs[-1]
+        if not _round_effectively_clean(last) or idx < last_fix:
+            stale.append(fam)
+        else:
+            fresh[fam] = last["id"]
+    return stale, fresh
+
+
 def record_seal_attempt(state, unit, halves, passed, invalidated=None):
     """Append an immutable seal attempt record.
 

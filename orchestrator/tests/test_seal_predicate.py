@@ -138,6 +138,47 @@ class SealPredicateDriverTest(unittest.TestCase):
         self.assertEqual(len(satisfied[0]["reviews"]), 2)
         self.assertEqual(sk["seals"][0]["halves"], {})
 
+    def test_stale_fallback_runs_only_the_stale_family(self):
+        # Refined fallback (spec §5, realized 2026-07-09): codex reviews
+        # clean, claude finds -> fix (bytes change; codex's look goes
+        # stale) -> claude re-reviews clean on the current bytes. The
+        # seal runs ONE half — codex, the stale family; claude stands on
+        # its cited review. The script offers no claude seal half: the
+        # unit sealing with the script fully consumed proves none was
+        # asked for.
+        from orchestrator.tests.test_driver_mock import fix_ok, triaged
+        script = [
+            step("draft_skeleton",
+                 ok("draft_skeleton", artifact="docs/skeleton.md",
+                    slices=[{"id": 1, "title": "Core"}],
+                    battery=battery_entries(
+                        contracts.BATTERY_QUESTIONS_SKELETON)),
+                 family="codex"),
+            step("review_round", report("review_round"), family="codex"),
+            step("review_round",
+                 report("review_round", [finding("F1", "real gap",
+                                                 severity="P1")]),
+                 family="claude"),
+            step("fix_findings",
+                 fix_ok([triaged("F1", "fixed", "real gap",
+                                 severity="P1")],
+                        files_changed=["docs/skeleton.md"]),
+                 family="codex"),
+            step("review_round", report("review_round"), family="claude"),
+            step("seal_half", report("seal_half"), family="codex"),
+        ]
+        state, driver = self._drive(self._config("strict"), script)
+        sk = state["units"][0]
+        self.assertEqual(sk["status"], st.U_SEALED)
+        self.assertEqual(driver.runner.script, [], "script fully consumed")
+        # The one recorded attempt ran exactly the codex half; the event
+        # names claude's standing review.
+        self.assertEqual(list(sk["seals"][0]["halves"].keys()), ["codex"])
+        ev = [e for e in state["events"] if e["type"] == "seal_stale_only"]
+        self.assertEqual(len(ev), 1)
+        self.assertEqual(ev[0]["ran"], ["codex"])
+        self.assertIn("claude", ev[0]["standing"])
+
     def test_legacy_still_runs_seal_halves(self):
         # The legacy profile keeps the double-seal halves — the script MUST
         # provide them or the run would stall asking for a seal_half.
