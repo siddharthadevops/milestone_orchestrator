@@ -35,17 +35,20 @@
   .run:hover { background: #f1f3f7; }
   .run.sel { background: var(--accent-soft); border-left: 3px solid var(--accent);
              padding-left: 11px; }
-  .run .name { font-weight: 600; display: flex; align-items: center; gap: 8px; }
+  .run .name { font-weight: 500; font-size: 13px; color: #3f3f46;
+    display: flex; align-items: center; gap: 8px; }
   .run .ws { color: var(--dim); font-size: 12px; overflow: hidden;
              text-overflow: ellipsis; white-space: nowrap; }
   .dot { width: 8px; height: 8px; border-radius: 50%; background: #c6cad3;
          flex: none; }
   .dot.running { background: var(--ok); box-shadow: 0 0 0 3px #dcfce7; }
   .proj-group-header { display: flex; align-items: center; gap: 6px;
-    padding: 6px 10px; font-size: 11px; font-weight: 600;
-    text-transform: uppercase; letter-spacing: .02em; color: var(--dim);
-    border-bottom: 1px solid var(--line); cursor: pointer; user-select: none; }
-  .proj-group-header:hover { background: #f1f3f7; }
+    padding: 8px 12px; margin-top: 18px; font-size: 12px; font-weight: 700;
+    text-transform: uppercase; letter-spacing: .04em; color: var(--text);
+    border-top: 1px solid var(--line); border-bottom: 1px solid var(--line);
+    background: #eef0f4; cursor: pointer; user-select: none; }
+  #runs > .proj-group-header:first-child { margin-top: 0; border-top: none; }
+  .proj-group-header:hover { background: #e6e9ef; }
   .proj-group-header .chev { flex: none; font-size: 10px; }
   .proj-group-header .proj-count { flex: none; color: var(--dim);
     background: var(--panel); border: 1px solid var(--line);
