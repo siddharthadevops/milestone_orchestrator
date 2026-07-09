@@ -148,7 +148,10 @@
 
   /* right: state */
   section { flex: 1; overflow-y: auto; padding: 20px 26px; }
-  section h2 { font-size: 15px; font-weight: 650; margin-bottom: 2px; }
+  .proj-title { font-size: 18px; font-weight: 700; color: var(--text);
+    margin-bottom: 1px; }
+  section h2 { font-size: 14px; font-weight: 600; margin-bottom: 2px;
+    color: #3f3f46; }
   .goalline { color: var(--dim); font-size: 13px; margin-bottom: 12px;
               max-width: 900px; }
   .failure { background: #fef2f2; border: 1px solid #f3c1c1; color: var(--bad);
@@ -1111,17 +1114,19 @@ async function refreshDetail() {
       // and workspace the run executes against.
       html += `<div class="card"><h3>Binding</h3>` +
         (s.project ? `<div class="amend-hint mono">project: ${esc(s.project)} / ${esc(s.work_area)}</div>` : "") +
-        `<div class="amend-hint mono">workspace: ${esc(s.workspace)}</div></div>`;
-    } else html += `<h2>${esc(s.name)} ${msChip(s.milestone_status)}
+        `<div class="amend-hint mono">workspace: ${esc(s.workspace)}</div>` +
+        (sum && sum.suite_command ? `<div class="amend-hint mono">suite: ${esc(sum.suite_command)}</div>` : "") +
+        `</div>`;
+    } else {
+      // The PROJECT name is the page title (so run names can drop their
+      // project prefix); the run name is the subtitle below it. The old
+      // info line (workspace / binding / suite / profile) now lives only
+      // on the edit page.
+      if (s.project) html += `<div class="proj-title">${esc(s.project)}</div>`;
+      html += `<h2>${esc(s.name)} ${msChip(s.milestone_status)}
         ${workingChip(s)}
-        <span class="st">${running ? "· driver running (pid " + s.pid + ")" : "· driver stopped"}${runTime(sum, s)}</span></h2>
-      <div class="goalline mono">${esc(s.workspace)}${
-        s.project
-          ? ` · ${esc(s.project)} / ${esc(s.work_area)}` : ""}${
-        sum && sum.suite_command
-          ? ` · suite: ${esc(sum.suite_command)}` : ""}${
-        d.profile
-          ? ` · profile: ${esc(profileLabel(d.profile.governing))}` : ""}</div>`;
+        <span class="st">${running ? "· driver running (pid " + s.pid + ")" : "· driver stopped"}${runTime(sum, s)}</span></h2>`;
+    }
     if (runView === "edit" && sum) {
       // The goal text lives here, not in the run header: it is consulted
       // rarely (operator decision — "it only clutters the header").
