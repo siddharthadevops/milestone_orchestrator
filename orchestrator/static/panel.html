@@ -139,7 +139,10 @@
   .pipe-cat:first-of-type { margin-top: 4px; padding-top: 0; border-top: 0; }
   .pipe-cat .unit-title { text-transform: none; letter-spacing: 0;
     font-weight: 500; }
+  .pipe-cat.slice-cat { font-size: 19.5px; }
   .unit + .unit { margin-top: 10px; }
+  .unit.phase .unit-name { color: #18181b; font-size: 13px;
+    font-weight: 700; letter-spacing: .07em; text-transform: uppercase; }
   .amend { font-size: 12px; padding: 4px 0; border-bottom: 1px dashed var(--line); }
   .amend .t { color: #71717a; margin-right: 6px; font-size: 11px; }
   .amend-x { float: right; border: none; background: none; color: #a1a1aa;
@@ -953,9 +956,17 @@ const MODEL_LABELS = Object.freeze({
   "opus-4-8": "opus",
   "sonnet-5": "sonnet",
 });
+const EFFORT_LABELS = Object.freeze({
+  low: "L", medium: "M", high: "H", xhigh: "X", max: "U",
+});
 function shortModel(model) {
   const id = String(model || "").replace(/^claude-/, "");
-  return MODEL_LABELS[id] || id;
+  return (MODEL_LABELS[id] || id).toUpperCase();
+}
+function modelEffort(model, effort) {
+  const name = shortModel(model);
+  if (!name || !effort) return name;
+  return `${name}-${EFFORT_LABELS[effort] || String(effort).toUpperCase()}`;
 }
 function currentWorkplace(r) {
   const unit = String(r.current_unit || "");
@@ -973,7 +984,7 @@ function workingContext(r, placement) {
   const f = r.in_flight;
   let task = "running", title = "";
   if (f && f.kind) {
-    const who = f.model ? `${shortModel(f.model)} ` : "";
+    const who = f.model ? `${modelEffort(f.model, f.effort)} ` : "";
     task = `${who}${shortKind(f.kind)} · ${elapsed(f.started_at)}`;
     title = f.label || "";
   } else if (r.current_unit_status) {
@@ -989,7 +1000,7 @@ function workingContext(r, placement) {
 function inFlightChip(r) {
   const f = r.in_flight;
   if (!f || !f.kind) return "";
-  const who = f.model ? `${shortModel(f.model)} ` : "";
+  const who = f.model ? `${modelEffort(f.model, f.effort)} ` : "";
   return `<span class="chip working" title="${esc(f.label || "")}">` +
          `${spinEl()}${esc(who)}${esc(shortKind(f.kind))} · ${elapsed(f.started_at)}</span>`;
 }
@@ -1030,7 +1041,7 @@ function mobileBack() {
   refreshRuns();
 }
 const KIND_SHORT = {
-  review_round: "r", delta_review: "delta_r", fix_findings: "fix",
+  review_round: "review", delta_review: "d-review", fix_findings: "fix",
   seal_half: "seal", verification: "verify",
 };
 function shortKind(k) { return KIND_SHORT[k] || k; }
@@ -1043,7 +1054,7 @@ const DRAFT_SHORT = {draft_skeleton: "draft", draft_slice_note: "draft",
 function draftChip(d, unitKey) {
   if (!d) return "";
   const kind = DRAFT_SHORT[d.kind] || d.kind;
-  const who = d.model ? `${esc(shortModel(d.model))} ` : "";
+  const who = d.model ? `${esc(modelEffort(d.model, d.effort))} ` : "";
   return `<span class="chip work clicky" onclick="showStory('draft:${esc(unitKey)}')">${who}${esc(kind)}${fmtDur(d.duration_s)}</span>`;
 }
 const WORK_KINDS = {fix_findings: 1, verification: 1};
@@ -1052,23 +1063,25 @@ function sevClass(sev) {
 }
 function roundChip(r) {
   const kind = shortKind(r.kind);
-  const who = r.model ? shortModel(r.model) : "";
+  const who = r.model ? modelEffort(r.model, r.effort) : "";
   const actor = who ? `${esc(who)} ` : "";
   const click = ` clicky" onclick="showStory('round:${esc(r.id)}')`;
   if (r.invalidated)
     return `<span class="chip fail${click}" title="${esc(r.invalidated)}">${actor}${esc(kind)} · INVALID</span>`;
   const cls = WORK_KINDS[r.kind] ? "work"
     : r.findings === 0 ? "clean" : sevClass(r.severity);
-  return `<span class="chip ${cls}${click}">${actor}${esc(kind)} · ${r.findings}f${fmtDur(r.duration_s)}</span>`;
+  return `<span class="chip ${cls}${click}">${actor}${esc(kind)} · F${r.findings}${fmtDur(r.duration_s)}</span>`;
 }
 function sealChip(s, unitKey) {
   const dur = fmtDur(s.duration_s);
   const click = ` clicky" onclick="showStory('seal:${esc(unitKey)}:${s.attempt}')`;
   if (s.passed)
-    return `<span class="chip pass${click}">seal a${s.attempt} pass${dur}</span>`;
+    return `<span class="chip pass${click}">Seal A${s.attempt} &#10003;${dur}</span>`;
   if (s.invalidated)
     return `<span class="chip fail${click}" title="${esc(s.invalidated)}">seal a${s.attempt} invalid${dur}</span>`;
-  return `<span class="chip ${sevClass(s.severity)}${click}">seal a${s.attempt} findings${dur}</span>`;
+  const findings = Object.values(s.findings || {})
+    .reduce((total, count) => total + (Number(count) || 0), 0);
+  return `<span class="chip ${sevClass(s.severity)}${click}">Seal A${s.attempt} - F${findings}${dur}</span>`;
 }
 function reclassifyChip(ev, unitKey) {
   // One chip per reclassify outcome, placed chronologically among the
@@ -1079,7 +1092,9 @@ function reclassifyChip(ev, unitKey) {
   const risk = ev.drift_risk || "unrated";
   const two = ev.drift_damage != null;
   const scale = two ? `dmg ${ev.drift_damage}` : risk;
-  const label = ev.defer_ok ? `debt · ${scale}` : `kept · ${scale}`;
+  const label = ev.defer_ok
+    ? `DEBT · ${two ? ev.drift_damage : risk}`
+    : `kept · ${scale}`;
   const title = `${ev.finding_id || ""}${two ? ` · risk ${risk}` : ""}${ev.threshold ? ` (threshold ${ev.threshold})` : ""}`;
   return `<span class="chip ${ev.defer_ok ? "clean" : "sev23"} clicky" title="${esc(title)}" onclick="showStory('debt:${esc(unitKey)}')">${esc(label)}${fmtDur(ev.duration_s)}</span>`;
 }
@@ -1161,12 +1176,16 @@ function unitHistory(u, activity, running) {
       addLine("Seal", `Attempt ${group.number}`, group.chips);
     }
   }
-  return `<div class="unit-history">${sections.map(section =>
-    `<div class="history-section"><div class="history-title">${esc(section.title)}</div>${
+  return `<div class="unit-history">${sections.map(section => {
+    const phaseTitle = u.unit.startsWith("slice_impl-")
+      && section.title === "Implementation";
+    return `<div class="history-section">${phaseTitle ? "" :
+      `<div class="history-title">${esc(section.title)}</div>`}${
       section.lines.map(line => `<div class="history-line${line.label ? " indented" : ""}">${
         line.label ? `<span class="history-label">${esc(line.label)}</span>` : ""
       }<div class="history-chips">${line.chips.join("")}</div></div>`).join("")
-    }</div>`).join("")}</div>`;
+    }</div>`;
+  }).join("")}</div>`;
 }
 function docChip(u) {
   // Sealed doc units (skeleton, slice docs) record their markdown artifact;
@@ -1488,8 +1507,8 @@ async function refreshDetail() {
         const sl = (sum.slices || []).find(x => x.id === id);
         return sl ? `<span class="unit-title">${esc(sl.title)}</span>` : "";
       };
-      const catRow = (label, title, stat, duration) =>
-        `<div class="pipe-cat"><span>${esc(label)}${title}</span>` +
+      const catRow = (label, title, stat, duration, cls = "") =>
+        `<div class="pipe-cat ${esc(cls)}"><span>${esc(label)}${title}</span>` +
         (stat ? `<span class="st ${esc(stat)}">${esc(stat)}${
           duration != null ? ` · ${fmtDHMS(duration)}` : ""}</span>` : "") +
         `</div>`;
@@ -1509,25 +1528,38 @@ async function refreshDetail() {
       const unitRow = u => {
         const time = u.work_duration_s != null
           ? ` · ${fmtDHMS(u.work_duration_s)}` : "";
+        const slicePhase = u.unit.match(/^slice_(doc|impl)-\d+$/);
+        const phase = u.unit === "skeleton" || slicePhase;
+        const label = u.unit === "skeleton"
+          ? "Milestone architecture"
+          : slicePhase
+            ? (slicePhase[1] === "doc" ? "Documentation" : "Implementation")
+            : u.unit;
         return `
-        <div class="unit">
-          <div class="unit-head"><span class="unit-name">${esc(u.unit)}</span>
+        <div class="unit${phase ? " phase" : ""}">
+          <div class="unit-head"><span class="unit-name">${esc(label)}</span>
             <span class="unit-right">${gitLink(u)}<span class="st ${esc(u.status)}">${esc(u.status)}${time}</span></span></div>
           ${unitHistory(u, s, running)}
         </div>`;
       };
-      const ghostRow = key => `
-        <div class="unit ghost">
-          <div class="unit-head"><span class="unit-name">${esc(key)}</span>
+      const ghostRow = key => {
+        const phase = key.match(/^slice_(doc|impl)-\d+$/);
+        const label = phase
+          ? (phase[1] === "doc" ? "Documentation" : "Implementation")
+          : key;
+        return `
+        <div class="unit ghost${phase ? " phase" : ""}">
+          <div class="unit-head"><span class="unit-name">${esc(label)}</span>
             <span class="st">pending</span></div>
         </div>`;
+      };
       const byKey = {};
       (sum.units || []).forEach(u => { byKey[u.unit] = u; });
       const seen = {};
       let rows = "";
       if (byKey.skeleton) {
         rows += catRow("Skeleton", "", byKey.skeleton.status,
-                       byKey.skeleton.work_duration_s)
+                       byKey.skeleton.work_duration_s, "slice-cat")
               + unitRow(byKey.skeleton);
         seen.skeleton = 1;
       }
@@ -1541,7 +1573,7 @@ async function refreshDetail() {
           ? present.reduce((total, u) => total + (u.work_duration_s || 0), 0)
           : null;
         rows += catRow(`Slice ${pad}`, sliceTitle(sl.id), slStat,
-                       sliceDuration);
+                       sliceDuration, "slice-cat");
         [`slice_doc-${pad}`, `slice_impl-${pad}`].forEach(k => {
           if (byKey[k]) { rows += unitRow(byKey[k]); seen[k] = 1; }
           else rows += ghostRow(k);
