@@ -134,6 +134,11 @@ class ServiceApiTest(unittest.TestCase):
         self.assertIn("function currentWorkplace", text)
         self.assertIn("function runStateRank", text)
         self.assertIn("function projectStateRank", text)
+        self.assertIn(".unit-history { margin-top: 7px", text)
+        self.assertIn("function unitHistory", text)
+        self.assertIn("const sameFamilyReview = base.find", text)
+        self.assertIn('addLine(`${family} review`', text)
+        self.assertIn('addLine("Seal", `Attempt ${group.number}`', text)
 
     def test_unknown_path_is_404_json(self):
         status, body = self.request_json("GET", "/definitely/not/here")

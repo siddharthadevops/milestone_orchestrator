@@ -120,8 +120,18 @@
   .chip.work { color: #18181b; border-color: #d4d4d8; }
   .chip.sev23 { color: #c2610c; border-color: #fcd9a8; background: #fff7ed; }
   .chip.sev01 { color: #db2777; border-color: #f9c7dd; background: #fdf2f8; }
+  .unit-history { margin-top: 7px; }
+  .history-section + .history-section { margin-top: 12px; }
+  .history-title { margin-bottom: 6px; color: #52525b; font-size: 10px;
+    font-weight: 600; letter-spacing: .04em; text-transform: uppercase; }
+  .history-line { display: flex; align-items: flex-start; gap: 7px;
+    min-height: 19px; margin-top: 3px; }
+  .history-line.indented { padding-left: 10px; }
+  .history-label { width: 52px; flex: none; color: #a1a1aa;
+    font-size: 10px; line-height: 18px; }
+  .history-chips { display: flex; flex-wrap: wrap; gap: 4px; min-width: 0; }
   .unit.ghost { opacity: .45; }
-  .pipe-cat { margin: 16px 0 6px; padding-top: 10px; font-size: 11px;
+  .pipe-cat { margin: 16px 0 6px; padding-top: 10px; font-size: 13px;
     font-weight: 700; letter-spacing: .07em; text-transform: uppercase;
     color: #18181b; border-top: 1px solid #e4e4e7;
     display: flex; justify-content: space-between; align-items: baseline; }
@@ -207,7 +217,6 @@
   .st { font-size: 12px; color: var(--dim); }
   .st.sealed { color: var(--ok); } .st.failed { color: var(--bad); }
   .st.rounds, .st.sealing, .st.seal_fix, .st.verify_fix { color: var(--warn); }
-  .chips { margin-top: 5px; display: flex; flex-wrap: wrap; gap: 4px; }
   .evt { padding: 3px 0; border-bottom: 1px dashed var(--line); font-size: 12px; }
   .evt .t { color: var(--dim); margin-right: 8px; }
   .evt .ty { color: var(--accent); margin-right: 8px; }
@@ -902,7 +911,7 @@ function elapsed(t0) {
 function runTime(sum, s) {
   if (!sum || !sum.created_epoch) return "";
   if (s.process === "running")
-    return `elapsed ${elapsed(sum.created_epoch)}`;
+    return elapsed(sum.created_epoch);
   if (sum.last_event_epoch && sum.last_event_epoch > sum.created_epoch) {
     const label = sum.milestone_status === "closed" ? "took" : "active for";
     return `${label} ${fmtDHMS(sum.last_event_epoch - sum.created_epoch)}`;
@@ -1054,6 +1063,91 @@ function reclassifyChip(ev, unitKey) {
   const label = ev.defer_ok ? `debt · ${scale}` : `kept · ${scale}`;
   const title = `${ev.finding_id || ""}${two ? ` · risk ${risk}` : ""}${ev.threshold ? ` (threshold ${ev.threshold})` : ""}`;
   return `<span class="chip ${ev.defer_ok ? "clean" : "sev23"} clicky" title="${esc(title)}" onclick="showStory('debt:${esc(unitKey)}')">${esc(label)}</span>`;
+}
+function unitHistory(u, activity, running) {
+  const lead = [draftChip(u.draft, u.unit), docChip(u)].filter(Boolean);
+  const base = [].concat(
+    (u.rounds || []).map(r => ({at: r.at || "", type: "round", item: r})),
+    (u.seals || []).map(s => ({at: s.at || "", type: "seal", item: s}))
+  ).sort((a, b) => a.at < b.at ? -1 : a.at > b.at ? 1 : 0);
+  // Reclassification is recorded immediately before its origin round/seal.
+  // Prefer the same-family review at the same timestamp so a review and a
+  // seal recorded in the same second cannot steal each other's debt chips.
+  const anchored = new Map(base.map(event => [event, []]));
+  const loose = [];
+  for (const item of (u.reclassify || [])) {
+    const family = String(item.finding_id || "").split("-", 1)[0];
+    const sameFamilyReview = base.find(event =>
+      event.at === (item.at || "") && event.type === "round" &&
+      event.item.kind === "review_round" && event.item.family === family);
+    const anchor = sameFamilyReview || base.find(event => event.at >= (item.at || ""));
+    const event = {at: item.at || "", type: "reclass", item};
+    if (anchor) anchored.get(anchor).push(event);
+    else loose.push(event);
+  }
+  const events = [];
+  for (const event of base) {
+    events.push(event);
+    events.push(...anchored.get(event).sort((a, b) =>
+      a.at < b.at ? -1 : a.at > b.at ? 1 : 0));
+  }
+  events.push(...loose.sort((a, b) =>
+    a.at < b.at ? -1 : a.at > b.at ? 1 : 0));
+  const groups = [];
+  const reviewCounts = {};
+  let current = null;
+  for (const event of events) {
+    if (event.type === "round" && event.item.kind === "review_round") {
+      const family = event.item.family || "review";
+      reviewCounts[family] = (reviewCounts[family] || 0) + 1;
+      current = {type: "review", family, number: reviewCounts[family],
+                 chips: [roundChip(event.item)]};
+      groups.push(current);
+    } else if (event.type === "seal") {
+      current = {type: "seal", number: event.item.attempt,
+                 chips: [sealChip(event.item, u.unit)]};
+      groups.push(current);
+    } else {
+      const chip = event.type === "round"
+        ? roundChip(event.item) : reclassifyChip(event.item, u.unit);
+      if (current) current.chips.push(chip);
+      else lead.push(chip);
+    }
+  }
+  if (u.unit === activity.current_unit && running) {
+    const chip = workingChip(activity);
+    if (current) current.chips.push(chip);
+    else lead.push(chip);
+  }
+  const sections = [];
+  const addLine = (title, label, chips) => {
+    let section = sections[sections.length - 1];
+    if (!section || section.title !== title) {
+      section = {title, lines: []};
+      sections.push(section);
+    }
+    section.lines.push({label, chips});
+  };
+  if (lead.length) {
+    const title = u.draft && u.draft.kind === "implement"
+      ? "Implementation" : "Draft";
+    addLine(title, "", lead);
+  }
+  for (const group of groups) {
+    if (group.type === "review") {
+      const family = group.family === "codex" ? "Codex"
+        : group.family === "claude" ? "Claude" : group.family;
+      addLine(`${family} review`, `Round ${group.number}`, group.chips);
+    } else {
+      addLine("Seal", `Attempt ${group.number}`, group.chips);
+    }
+  }
+  return `<div class="unit-history">${sections.map(section =>
+    `<div class="history-section"><div class="history-title">${esc(section.title)}</div>${
+      section.lines.map(line => `<div class="history-line${line.label ? " indented" : ""}">${
+        line.label ? `<span class="history-label">${esc(line.label)}</span>` : ""
+      }<div class="history-chips">${line.chips.join("")}</div></div>`).join("")
+    }</div>`).join("")}</div>`;
 }
 function docChip(u) {
   // Sealed doc units (skeleton, slice docs) record their markdown artifact;
@@ -1401,28 +1495,7 @@ async function refreshDetail() {
         <div class="unit">
           <div class="unit-head"><span class="unit-name">${esc(u.unit)}</span>
             <span class="unit-right">${gitLink(u)}<span class="st ${esc(u.status)}">${esc(u.status)}${time}</span></span></div>
-          <div class="chips">${draftChip(u.draft, u.unit)}${docChip(u)}${
-            (() => {
-              const evs = [].concat(
-                (u.rounds || []).map(r => ({at: r.at || "", html: roundChip(r)})),
-                (u.seals || []).map(x => ({at: x.at || "", html: sealChip(x, u.unit)}))
-              );
-              // A reclassify RUNS before the round/seal that raised its
-              // findings is RECORDED, so its raw timestamp sorts the debt
-              // chip in front of its own origin. Anchor it to the first
-              // round/seal recorded at-or-after it and sort it right
-              // BEHIND that chip ("~" outranks any timestamp character).
-              const marks = evs.map(e => e.at).sort();
-              const reclass = (u.reclassify || []).map(e => {
-                const anchor = marks.find(at => at >= (e.at || ""));
-                return {at: (anchor || e.at || "") + "~",
-                        html: reclassifyChip(e, u.unit)};
-              });
-              return evs.concat(reclass)
-                .sort((a, b) => a.at < b.at ? -1 : a.at > b.at ? 1 : 0)
-                .map(c => c.html).join("");
-            })()}
-            ${u.unit === sum.current_unit && running ? workingChip(s) : ""}</div>
+          ${unitHistory(u, s, running)}
         </div>`;
       };
       const ghostRow = key => `
