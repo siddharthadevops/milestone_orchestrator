@@ -15,7 +15,7 @@
          display: flex; flex-direction: column;
          font: 14px/1.5 -apple-system, "Segoe UI", Helvetica, Arial, sans-serif; }
   header { padding: 14px 22px; border-bottom: 1px solid var(--line);
-           display: flex; align-items: baseline; gap: 14px; }
+           display: flex; align-items: center; gap: 14px; }
   header h1 { font-size: 16px; font-weight: 650; }
   header .dim { color: var(--dim); font-size: 13px; }
   main { flex: 1; display: flex; min-height: 0; }
@@ -157,6 +157,12 @@
   .chip.clicky:hover { filter: brightness(0.92); }
   .storybody { max-height: 60vh; overflow-y: auto; font-size: 12.5px;
     min-width: 480px; max-width: 640px; }
+  #eventsdialog { width: min(900px, 92vw); }
+  #eventsBody { min-width: 0; max-width: none; max-height: 70vh; }
+  #driverlogdialog { width: min(900px, 92vw); }
+  #driverLogBody { max-height: 70vh; }
+  .bottom-tools { display: flex; justify-content: flex-end; gap: 8px;
+    margin: 14px 0; }
   .story-meta { color: #71717a; font-size: 11.5px; margin-bottom: 10px; }
   .story-finding { padding: 6px 0; border-top: 1px dashed var(--line); }
   .story-finding .plain { color: var(--accent); font-style: italic; }
@@ -197,10 +203,25 @@
     background: #fff; border-bottom: 1px solid var(--line); }
   .proj-title { font-size: 18px; font-weight: 700; color: var(--text);
     margin-bottom: 1px; }
-  .run-title-row { display: flex; align-items: baseline; gap: 12px; }
+  .run-title-row { display: flex; align-items: center; gap: 10px; }
   .run-title-row h2 { min-width: 0; margin-bottom: 0; }
-  .run-clock { margin-left: auto; color: var(--dim); font-size: 11px;
+  .run-title-actions { margin-left: auto; display: flex; align-items: center;
+    gap: 9px; flex: none; }
+  .run-clock { color: var(--dim); font-size: 11px;
     white-space: nowrap; font-variant-numeric: tabular-nums; }
+  .jump-bottom { margin-left: auto; flex: none;
+    width: 38px; height: 38px; border: 1px solid var(--accent);
+    border-radius: 50%; padding: 0; display: inline-flex; align-items: center;
+    justify-content: center; color: var(--accent); background: #fff;
+    box-shadow: 0 3px 10px rgba(0,0,0,.18); cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+    transition: opacity .16s ease, transform .16s ease; }
+  @media (hover: hover) { .jump-bottom:hover { filter: brightness(.94); } }
+  .jump-bottom:active { background: #fff; filter: none; }
+  .jump-bottom:focus:not(:focus-visible) { outline: none; }
+  .jump-bottom .ui-icon { width: 18px; height: 18px; }
+  .jump-bottom.gone { opacity: 0; visibility: hidden; pointer-events: none;
+    transform: translateY(4px); }
   section h2 { font-size: 14px; font-weight: 600; margin-bottom: 2px;
     color: #3f3f46; }
   .goalline { color: var(--dim); font-size: 13px; margin-bottom: 12px;
@@ -353,7 +374,11 @@
     border-radius: 8px; font-size: 16px; line-height: 1; padding: 4px 10px;
     cursor: pointer; }
   @media (max-width: 760px) {
-    header { flex-wrap: wrap; row-gap: 4px; padding: 10px 14px; }
+    header { display: grid; grid-template-columns: auto minmax(0, 1fr) auto;
+      column-gap: 10px; row-gap: 4px; padding: 10px 14px; }
+    header h1 { grid-column: 2; grid-row: 1; }
+    .jump-bottom { grid-column: 3; grid-row: 1; margin-left: 0; }
+    #backbtn { grid-column: 1; grid-row: 1; }
     aside { width: 100%; min-width: 0; border-right: none; }
     section#detail { display: none; }
     body.m-detail aside { display: none; }
@@ -373,8 +398,13 @@
 <header>
   <button id="backbtn" onclick="mobileBack()" title="Back to milestones">&#8592;</button>
   <h1>Milestone Orchestrator</h1>
-  <span class="dim">local programming service</span>
-  <span class="dim mono" id="counts"></span>
+  <button id="jumpBottom" class="jump-bottom gone" type="button"
+    title="Go to Events and Driver log" aria-label="Go to bottom of page"
+    onclick="jumpToBottom()"><svg class="ui-icon" viewBox="0 0 24 24"
+      fill="none" stroke="currentColor" stroke-width="1.8"
+      stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+      <path d="M12 5v14"></path><path d="m19 12-7 7-7-7"></path>
+    </svg></button>
 </header>
 <main>
   <aside>
@@ -533,6 +563,22 @@
   <div id="storyBody" class="storybody"></div>
   <div class="formrow"><span></span>
     <button class="btn" onclick="document.getElementById('story').close()">Close</button>
+  </div>
+</dialog>
+
+<dialog id="eventsdialog">
+  <h2>Events</h2>
+  <div id="eventsBody" class="storybody"></div>
+  <div class="formrow"><span></span>
+    <button class="btn" onclick="document.getElementById('eventsdialog').close()">Close</button>
+  </div>
+</dialog>
+
+<dialog id="driverlogdialog">
+  <h2>Driver log</h2>
+  <pre id="driverLogBody" class="log mono"></pre>
+  <div class="formrow"><span></span>
+    <button class="btn" onclick="document.getElementById('driverlogdialog').close()">Close</button>
   </div>
 </dialog>
 
@@ -734,6 +780,8 @@ let selected = null;
 let runView = "main";  // "main" | "edit" — the run's settings page
 let goalOpen = false;
 let appAccess = {user: null, admin: false, local: false, users: []};
+let lastEvents = [];
+let lastDriverLog = [];
 function toggleGoal() { goalOpen = !goalOpen; refreshDetail(); }
 
 /* ---- Sidebar project tree: grouping is computed fresh from the same
@@ -1089,8 +1137,6 @@ async function refreshRuns() {
     const data = await api("/api/runs");
     const runs = data.runs || [];
     lastRuns = runs;
-    document.getElementById("counts").textContent =
-      `${runs.filter(r => r.process === "running").length} running · ${runs.length} total`;
     renderRunsTree_paint();
     if (selected) refreshDetail();
   } catch (e) { /* keep last render */ }
@@ -1102,12 +1148,52 @@ function select(id) {
 }
 function openRunEdit() { runView = "edit"; refreshDetail(); }
 function closeRunEdit() { runView = "main"; refreshDetail(); }
+function eventsHtml(events) {
+  return events.map(e => {
+    const extra = Object.entries(e)
+      .filter(([k, v]) => !["seq","at","type"].includes(k)
+              && v !== null && v !== undefined)
+      .map(([k, v]) => `${k}=${typeof v === "object" ? JSON.stringify(v) : v}`).join(" ");
+    const bad = e.invalidated
+      ? '<span class="chip fail" style="margin-right:6px">INVALID</span>'
+      : "";
+    return `<div class="evt"><span class="t">#${e.seq}</span>` +
+      `<span class="ty">${esc(e.type)}</span>${bad}${esc(extra)}</div>`;
+  }).join("") || '<div class="empty">No events yet.</div>';
+}
+function renderEventsDialog() {
+  document.getElementById("eventsBody").innerHTML = eventsHtml(lastEvents);
+}
+function openEvents() {
+  renderEventsDialog();
+  document.getElementById("eventsdialog").showModal();
+}
+function renderDriverLogDialog() {
+  document.getElementById("driverLogBody").textContent =
+    lastDriverLog.join("") || "No driver output yet.";
+}
+function openDriverLog() {
+  renderDriverLogDialog();
+  document.getElementById("driverlogdialog").showModal();
+}
+function updateBottomJump() {
+  const detail = document.getElementById("detail");
+  const button = document.getElementById("jumpBottom");
+  if (!button) return;
+  const remaining = detail.scrollHeight - detail.scrollTop - detail.clientHeight;
+  button.classList.toggle("gone", !selected || runView === "edit" || remaining < 48);
+}
+function jumpToBottom() {
+  const detail = document.getElementById("detail");
+  detail.scrollTo({top: detail.scrollHeight, behavior: "smooth"});
+}
 function mobileBack() {
   runView = "main";
   document.body.classList.remove("m-detail");
   selected = null;
   document.getElementById("detail").innerHTML =
     '<div class="empty">No milestone selected.</div>';
+  updateBottomJump();
   refreshRuns();
 }
 const KIND_SHORT = {
@@ -1455,6 +1541,11 @@ async function refreshDetail() {
     if (seq !== detailSeq || runId !== selected) return;
     const s = d.status, sum = d.summary;
     const running = s.process === "running";
+    lastEvents = sum ? (sum.last_events || []).slice().reverse() : [];
+    lastDriverLog = d.log || [];
+    if (document.getElementById("eventsdialog").open) renderEventsDialog();
+    if (document.getElementById("driverlogdialog").open)
+      renderDriverLogDialog();
     let html = "";
     if (runView === "edit") {
       // The run's settings page: everything editable, behind Edit.
@@ -1477,8 +1568,9 @@ async function refreshDetail() {
       if (s.project) html += `<div class="proj-title">${esc(s.project)}</div>`;
       const totalTime = runTime(sum);
       html += `<div class="run-title-row"><h2>${esc(s.name)} ${msChip(s.milestone_status)}</h2>` +
+        `<div class="run-title-actions">` +
         (totalTime ? `<span class="run-clock" title="completed LLM work">${esc(totalTime)}</span>` : "") +
-        `</div>`;
+        `</div></div>`;
       html += workingContext(s, "detail");
       html += `</div>`;
     }
@@ -1667,24 +1759,14 @@ async function refreshDetail() {
                ${esc(e.label || "")}${e.duration_s != null ? ` · ${fmtDHMS(e.duration_s)} wasted` : ""}
              </div>`).join("") + `</div>`;
       }
-      html += `<div class="card"><h3>Events</h3>` +
-        (sum.last_events || []).slice().reverse().map(e => {
-          const extra = Object.entries(e)
-            .filter(([k, v]) => !["seq","at","type"].includes(k)
-                    && v !== null && v !== undefined)
-            .map(([k, v]) => `${k}=${typeof v === "object" ? JSON.stringify(v) : v}`).join(" ");
-          const bad = e.invalidated
-            ? '<span class="chip fail" style="margin-right:6px">INVALID</span>'
-            : "";
-          return `<div class="evt"><span class="t">#${e.seq}</span>` +
-                 `<span class="ty">${esc(e.type)}</span>${bad}${esc(extra)}</div>`;
-        }).join("") + `</div>`;
     } else if (runView !== "edit" && d.summary_error) {
       html += `<div class="failure">state unreadable: ${esc(d.summary_error)}</div>`;
     }
     if (runView !== "edit")
-      html += `<div class="card"><h3>Driver log</h3>
-      <pre class="log mono">${esc((d.log || []).join(""))}</pre></div>`;
+      html += `<div class="bottom-tools">
+        <button class="btn" onclick="openEvents()">Events</button>
+        <button class="btn" onclick="openDriverLog()">Driver log</button>
+      </div>`;
     const actDraft = {};
     for (const act of ACT_NAMES) {
       for (const f of ["agent", "model", "effort"]) {
@@ -1720,6 +1802,7 @@ async function refreshDetail() {
       const el = document.getElementById(id);
       if (el) el.value = val;
     }
+    requestAnimationFrame(updateBottomJump);
   } catch (e) {
     if (seq !== detailSeq || runId !== selected) return;
     // Keep the last good render on a transient fetch error; just flag it.
@@ -2795,6 +2878,9 @@ async function saveSgEditor() {
 
 loadAccess().then(() => Promise.all([loadUiState(), loadProjects()]))
   .then(refreshRuns);
+document.getElementById("detail").addEventListener(
+  "scroll", updateBottomJump, {passive: true}
+);
 setInterval(refreshRuns, 2000);
 </script>
 </body>

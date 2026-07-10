@@ -364,6 +364,37 @@ class ProjectAccessApiTest(ProjectsServiceTestCase):
         )
         self.assertEqual((status, body["error"]), (403, service.FORBIDDEN))
 
+    def test_run_visibility_uses_durable_binding_before_reading_state(self):
+        for slug in (PROJECT, "other"):
+            self.create_project(slug)
+            self.declare(self.repo("repo-" + slug.replace(" ", "-")), slug=slug)
+        self.expect(
+            200, "POST", self.project_path(PROJECT, "users"),
+            {"users": [access.USER_EMAILS[1]]},
+        )
+        member = self.remote_headers(access.USER_EMAILS[1])
+        _, allowed = self.launch(PROJECT, name="allowed")
+        _, hidden = self.launch("other", name="hidden")
+        hidden_id = hidden["run"]["id"]
+        hidden_path = registry.get(
+            registry.load(self.home), hidden_id
+        )["state_path"]
+        real_load = service.load_summary
+
+        def forged_summary(path):
+            summary = real_load(path)
+            if path == hidden_path:
+                summary = dict(summary)
+                summary["project"] = PROJECT
+            return summary
+
+        with mock.patch.object(service, "load_summary", side_effect=forged_summary):
+            status, body = self.request_json("GET", "/api/runs", headers=member)
+        self.assertEqual(status, 200, body)
+        self.assertEqual(
+            [run["id"] for run in body["runs"]], [allowed["run"]["id"]]
+        )
+
     def test_remote_requests_fail_closed_without_valid_injected_identity(self):
         for headers in (
             {"Host": "example.ngrok-free.dev"},

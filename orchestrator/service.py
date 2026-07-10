@@ -2551,18 +2551,26 @@ def require_project_access(home, who, slug):
     return project
 
 
+def _run_project(entry):
+    """Return the run's durable project binding."""
+    slug = entry.get("project")
+    if slug is not None:
+        return slug
+    # Compatibility for runs created before project handles were recorded in
+    # the registry.  Newer registry bindings remain authoritative.
+    try:
+        return (load_summary(entry["state_path"]) or {}).get("project")
+    except Exception:
+        return None
+
+
 def require_run_access(home, who, run_id):
     entry = registry.get(registry.load(home), run_id)
     if entry is None:
         raise ApiError(404, "unknown run %r" % run_id)
     if who.get("admin"):
         return entry
-    slug = entry.get("project")
-    if slug is None:
-        try:
-            slug = (load_summary(entry["state_path"]) or {}).get("project")
-        except Exception:
-            slug = None
+    slug = _run_project(entry)
     if slug is None:
         raise ApiError(403, FORBIDDEN)
     require_project_access(home, who, slug)
@@ -2570,15 +2578,20 @@ def require_run_access(home, who, run_id):
 
 
 def visible_runs(home, who):
-    runs = list_runs(home)
+    reap_exited_drivers(home)
+    entries = registry.load(home)["runs"]
     if who.get("admin"):
-        return runs
-    rec = registry.load_projects_record(home)
-    allowed = {
-        project["slug"] for project in rec["projects"]
-        if panel_access.can_access_project(who, project)
-    }
-    return [run for run in runs if run.get("project") in allowed]
+        visible = entries
+    else:
+        rec = registry.load_projects_record(home)
+        allowed = {
+            project["slug"] for project in rec["projects"]
+            if panel_access.can_access_project(who, project)
+        }
+        # Authorize before run_status reads or projects any state.  The API
+        # and its running/total counters never process a foreign run.
+        visible = [entry for entry in entries if _run_project(entry) in allowed]
+    return [run_status(entry, home=home) for entry in visible]
 
 
 # ---------------------------------------------------------------------------
