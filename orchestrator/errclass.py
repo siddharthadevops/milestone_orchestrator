@@ -104,9 +104,16 @@ _PATTERNS = (
 MAX_CLASSIFIABLE_CHARS = 600
 
 # Reset-time extraction for quota messages: "resets at 00:37",
-# "try again at 3:15 PM", "resets 4pm", "available again at 16:00".
+# "try again at 3:15 PM", "resets 4pm", "available again at 16:00",
+# and codex's dated form "try again at Jul 11th, 2026 12:26 AM" — the
+# optional date phrase (month, day, year) between the anchor and the
+# clock must be consumed whole, or the year's digits would be read as
+# the hour (found live 2026-07-10: the announced 00:26 window fell back
+# to the +30min default). The date itself is ignored; parse_resume_at's
+# next-occurrence rollover covers it.
 _TIME_RE = re.compile(
     r"(?:reset?s?|try again|available again|resumes?)\s*(?:at\s*)?"
+    r"(?:[A-Za-z]{3,9}\.?\s+\d{1,2}(?:st|nd|rd|th)?,?\s+(?:\d{4}\s+)?)?"
     r"(\d{1,2})(?::(\d{2}))?\s*([ap]m)?",
     re.IGNORECASE,
 )

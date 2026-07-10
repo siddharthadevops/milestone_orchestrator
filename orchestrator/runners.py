@@ -279,9 +279,21 @@ class SubprocessRunner(object):
             finally:
                 _unlink_quiet(output_file)
         if proc.returncode != 0 and not (text or "").strip():
+            # Lead with the provider's own ERROR lines: codex buries
+            # them under plugin WARN noise, which misled the operator
+            # ("doesn't look like quota") and starved parse_resume_at
+            # of a front-position window time (found live 2026-07-10).
+            # The raw tail stays for forensics and pattern matching.
+            stderr_text = stderr or ""
+            errors = []
+            for line in stderr_text.splitlines():
+                line = line.strip()
+                if line.upper().startswith("ERROR") and line not in errors:
+                    errors.append(line)
+            lead = ("; ".join(errors)[:400] + " | ") if errors else ""
             raise RunnerError(
-                "family %s exited %d with no output; stderr tail: %s"
-                % (family, proc.returncode, (stderr or "")[-500:])
+                "family %s exited %d with no output; %sstderr tail: %s"
+                % (family, proc.returncode, lead, stderr_text[-500:])
             )
         return RunnerResult(text, proc.returncode, duration)
 

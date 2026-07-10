@@ -813,6 +813,31 @@ class TestSubprocessRunner(unittest.TestCase):
         self.assertIn("exited 3", msg)
         self.assertIn("boom diagnostics", msg)
 
+    def test_error_lines_lead_the_failure_message(self):
+        # codex buries its real ERROR under plugin WARN noise (found
+        # live 2026-07-10: the quota banner read as a plugin failure and
+        # the resume-window time never sat near the front). ERROR lines
+        # must lead the message, deduplicated; the raw tail stays.
+        script = self.write_script(
+            "fail_noisy.py",
+            """\
+            import sys
+            sys.stderr.write(
+                "2026-07-10T21:38:18Z WARN loader: ignoring icon\\n"
+                "ERROR: usage limit hit, try again at 12:26 AM.\\n"
+                "ERROR: usage limit hit, try again at 12:26 AM.\\n")
+            sys.exit(1)
+            """,
+        )
+        runner = self.runner_for([sys.executable, script])
+        with self.assertRaises(RunnerError) as cm:
+            runner.call("fam", "p", self.workspace)
+        msg = str(cm.exception)
+        lead = msg.split("stderr tail:")[0]
+        self.assertIn("ERROR: usage limit hit", lead)
+        self.assertEqual(lead.count("ERROR: usage limit hit"), 1)  # deduped
+        self.assertIn("WARN loader", msg)  # forensic tail preserved
+
     def test_nonzero_exit_with_output_is_tolerated(self):
         script = self.write_script(
             "fail_loud.py",

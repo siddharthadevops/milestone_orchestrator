@@ -94,6 +94,27 @@ class TestParseResumeAt(unittest.TestCase):
         self.assertIsNone(errclass.parse_resume_at("no time here"))
         self.assertIsNone(errclass.parse_resume_at(None))
 
+    def test_codex_dated_banner(self):
+        # The live 2026-07-10 banner: a date phrase sits between "try
+        # again at" and the clock. The date must be consumed whole —
+        # a partial match would read the year's digits as the hour —
+        # and the announced window (00:26) must win over the +30min
+        # default the run actually fell back to that night.
+        now = datetime(2026, 7, 10, 23, 38, tzinfo=timezone.utc)
+        out = errclass.parse_resume_at(
+            "ERROR: You've hit your usage limit. Visit "
+            "https://chatgpt.com/codex/settings/usage to purchase more "
+            "credits or try again at Jul 11th, 2026 12:26 AM.",
+            now=now,
+        )
+        self.assertTrue(out.startswith("2026-07-11T00:26"), out)
+
+    def test_dated_banner_without_year(self):
+        now = datetime(2026, 7, 10, 9, 0, tzinfo=timezone.utc)
+        out = errclass.parse_resume_at(
+            "try again at July 10, 4:15 PM", now=now)
+        self.assertTrue(out.startswith("2026-07-10T16:15"), out)
+
 
 class _FakeRunner(object):
     def __init__(self, text=None, raise_exc=None):
