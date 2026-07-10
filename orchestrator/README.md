@@ -230,6 +230,16 @@ findings for the FIX LOOP:
          where the dirty review left off (next round of the same family,
          re-verify, or a fresh seal attempt)
 
+For findings raised by a full review round, the pending diff is checkpointed
+after the fifth fix instead of launching another delta review. No synthetic
+clean round is recorded: the WIP commit is amended, the checkpoint is logged,
+and the same active Codex or Claude family resumes a whole-commit review. The
+limit is derived from the episode history, so Stop/Start or Resume cannot reset
+it. Verification and seal repair episodes keep their real delta reviews because
+there is no active full-review family waiting immediately behind them. The
+threshold is configurable with `delta_full_review_after_fixes` (zero disables
+it).
+
 Per-act family policy (config "acts"): fixer and consultation are a fixed
 family name, "self", or "opposite" (relative to the act's origin). After 10
 dirty delta reviews in the same fix episode, `convergence_fixer` replaces the

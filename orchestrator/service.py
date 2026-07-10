@@ -29,6 +29,7 @@ run's live state) and a JSON API:
     POST   /api/runs/<id>/stop     SIGTERM the driver's process group (the
                                    driver forwards the stop to in-flight
                                    worker CLI process groups)
+    POST   /api/runs/<id>/name     rename the display label only: {name}
     GET    /api/runs/<id>/log      {"lines": [...]} tail of driver output
     DELETE /api/runs/<id>          forget the run (workspace files untouched;
                                    ?purge=1 also removes the run's state file
@@ -1068,7 +1069,8 @@ def _projection_value(entry, summ):
     return {
         "run_id": entry["id"],
         "name": _sanitize_projection_text(
-            summ.get("name"), "run", known_paths=known_paths
+            entry.get("name") or summ.get("name"),
+            "run", known_paths=known_paths
         ),
         "project": summ["project"],
         "work_area": summ["work_area"],
@@ -1317,6 +1319,7 @@ def run_status(entry, home=None):
         "current_model": None,
         "failure_reason": None,
         "events_total": 0,
+        "work_duration_s": None,
         "state_error": None,
     }
     try:
@@ -1338,11 +1341,36 @@ def run_status(entry, home=None):
             ).get("model")
         info["failure_reason"] = (summ["failure"] or {}).get("reason")
         info["events_total"] = summ["events_total"]
+        info["work_duration_s"] = summ.get("work_duration_s")
         if home is not None:
             _pump_projection(home, entry, summ)
     except Exception as exc:
         info["state_error"] = str(exc)
     return info
+
+
+def rename_run(home, run_id, body):
+    """Rename only the service-owned display label.
+
+    The driver's durable state, milestone directory and commits keep their
+    original identity, so this is safe while a worker is running and cannot
+    be overwritten by the driver's next state save.
+    """
+    name = body.get("name") if isinstance(body, dict) else None
+    if not isinstance(name, str):
+        raise ApiError(400, "name must be a string")
+    name = name.strip()
+    if not name:
+        raise ApiError(400, "name must not be blank")
+    if len(name) > 160:
+        raise ApiError(400, "name is too long (max 160 characters)")
+    if any(ord(char) < 32 or ord(char) == 127 for char in name):
+        raise ApiError(400, "name contains control characters")
+    try:
+        entry = registry.update(home, run_id, name=name)
+    except KeyError:
+        raise ApiError(404, "unknown run %r" % run_id)
+    return run_status(entry, home=home)
 
 
 def list_runs(home):
@@ -2768,6 +2796,9 @@ def make_handler(home):
                         self._json(200, {"ok": True, "run": run_status(entry, home=home)})
                     elif len(parts) == 5 and parts[4] == "stop":
                         self._json(200, {"ok": True, **stop_run(home, parts[3])})
+                    elif len(parts) == 5 and parts[4] == "name":
+                        entry = rename_run(home, parts[3], self._body())
+                        self._json(200, {"ok": True, "run": entry})
                     elif len(parts) == 5 and parts[4] == "resume":
                         entry = resume_run(home, parts[3])
                         self._json(200, {"ok": True, "run": run_status(entry, home=home)})

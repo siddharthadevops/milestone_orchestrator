@@ -12,7 +12,7 @@ import sys
 ADMIN_EMAIL = "femistokli@gmail.com"
 USER_EMAILS = (
     "isabelmariaandresruiz@gmail.com",
-    "jd.cortesfornieles@gmail.com",
+    "jdcf1710@gmail.com",
 )
 ALL_EMAILS = (ADMIN_EMAIL,) + USER_EMAILS
 

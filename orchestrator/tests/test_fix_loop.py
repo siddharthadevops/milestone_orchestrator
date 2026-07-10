@@ -160,6 +160,148 @@ class TestFixLoopSameEpisode(DriverTestCase):
 
 
 # ---------------------------------------------------------------------------
+# Review delta budget: checkpoint after N fixes, same family reviews whole WIP
+
+
+class TestDeltaFullReviewCheckpoint(DriverTestCase):
+    def test_second_fix_skips_delta_and_same_claude_reviewer_continues(self):
+        self.assertEqual(drv.DEFAULT_CONFIG["delta_full_review_after_fixes"], 5)
+        with tempfile.TemporaryDirectory(prefix="orch-mock-") as ws:
+            path = init_state(
+                ws, make_config(delta_full_review_after_fixes=2)
+            )
+            mock = runners.MockRunner([
+                draft_step(),
+                # Codex is already clean; Claude is the active reviewer whose
+                # dirty round opens the fix episode.
+                step("review_round", report("review_round"), family="codex"),
+                step(
+                    "review_round",
+                    report("review_round", [finding("F1", "first defect")]),
+                    family="claude",
+                ),
+                step(
+                    "fix_findings",
+                    fix_ok(
+                        [triaged("F1", "fixed", "first defect")],
+                        files_changed=["docs/skeleton.md"],
+                    ),
+                    family="codex",
+                    side_effect=append_file("docs/skeleton.md", "\nfix1\n"),
+                ),
+                step(
+                    "delta_review",
+                    report("delta_review", [finding("D1", "delta defect")]),
+                    family="codex",
+                ),
+                step(
+                    "fix_findings",
+                    fix_ok(
+                        [triaged("D1", "fixed", "delta defect")],
+                        files_changed=["docs/skeleton.md"],
+                    ),
+                    family="codex",
+                    side_effect=append_file("docs/skeleton.md", "\nfix2\n"),
+                ),
+                # No second delta call: fix #2 is amended and Claude performs
+                # the whole-commit review that would normally follow F0.
+                step("review_round", report("review_round"), family="claude"),
+                step("seal_half", report("seal_half"), family="codex"),
+                step("seal_half", report("seal_half"), family="claude"),
+            ])
+            driver = drv.Driver(path, runner=mock)
+            self.step_until(
+                driver,
+                lambda state: (
+                    state["units"][0]["status"] == st.U_FIXING
+                    and any(
+                        round_["kind"] == "delta_review"
+                        for round_ in state["units"][0]["rounds"]
+                    )
+                ),
+            )
+            # Resume deliberately resets this soft loop budget. The review
+            # checkpoint must still see fix #2 from append-only history.
+            driver.state["units"][0]["fix_loop_rounds"] = 0
+            st.save(path, driver.state)
+            self.step_until(
+                driver,
+                lambda state: state["units"][0]["status"] == st.U_SEALED,
+            )
+            self.assertEqual(mock.script, [])
+
+            state = st.load(path)
+            unit = state["units"][0]
+            self.assertEqual(
+                [call[1] for call in mock.calls],
+                [
+                    "draft_skeleton", "review_round", "review_round",
+                    "fix_findings", "delta_review", "fix_findings",
+                    "review_round", "seal_half", "seal_half",
+                ],
+            )
+            self.assertEqual(
+                [call[0] for call in mock.calls if call[1] == "review_round"],
+                ["codex", "claude", "claude"],
+            )
+            deltas = [
+                round_ for round_ in unit["rounds"]
+                if round_["kind"] == "delta_review"
+            ]
+            self.assertEqual(len(deltas), 1)
+            self.assertEqual(len(deltas[0]["result"]["findings"]), 1)
+            checkpoint = [
+                event for event in state["events"]
+                if event["type"] == "delta_checkpoint"
+            ]
+            self.assertEqual(len(checkpoint), 1)
+            self.assertEqual(checkpoint[0]["fixes"], 2)
+            self.assertEqual(checkpoint[0]["dirty_deltas"], 1)
+            self.assertEqual(checkpoint[0]["return_to"], st.U_ROUNDS)
+            self.assertEqual(checkpoint[0]["review_family"], "claude")
+            self.assertEqual(
+                len([e for e in state["events"] if e["type"] == "amended"]),
+                1,
+            )
+
+    def test_verification_episode_keeps_real_delta_review(self):
+        # The bypass is safe only when an active whole-commit reviewer will
+        # immediately take over. Verification/seal episodes keep real deltas.
+        with tempfile.TemporaryDirectory(prefix="orch-mock-") as ws:
+            path = init_state(
+                ws,
+                make_config(
+                    verification=["test -f marker.txt"],
+                    delta_full_review_after_fixes=1,
+                ),
+            )
+            mock = runners.MockRunner([
+                draft_step(),
+                step(
+                    "fix_findings",
+                    fix_ok(
+                        [triaged("V1", "fixed", "verification failed")],
+                        files_changed=["marker.txt"],
+                    ),
+                    family="codex",
+                    side_effect=write_file("marker.txt", "fixed\n"),
+                ),
+                step("delta_review", report("delta_review"), family="codex"),
+            ])
+            driver = drv.Driver(path, runner=mock)
+            driver.step()  # draft
+            driver.step()  # verification fails
+            driver.step()  # fix #1
+            driver.step()  # real delta review, despite threshold=1
+            self.assertEqual(mock.calls[-1][1], "delta_review")
+            state = st.load(path)
+            self.assertFalse(any(
+                event["type"] == "delta_checkpoint"
+                for event in state["events"]
+            ))
+
+
+# ---------------------------------------------------------------------------
 # (c) fix-loop cap
 
 

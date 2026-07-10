@@ -1355,6 +1355,22 @@ class TestProjection(ProjectsServiceTestCase):
         self.expect(200, "GET", "/api/runs")
         self.assertEqual(self.read_projection(run_id)["revision"], 2)
 
+    def test_display_rename_updates_projection_not_driver_state(self):
+        _, body = self.launch(name="Typo name")
+        run_id = body["run"]["id"]
+        renamed = self.expect(
+            200, "POST", "/api/runs/%s/name" % run_id,
+            {"name": "Better name"},
+        )
+        self.assertEqual(renamed["run"]["name"], "Better name")
+        record = self.read_projection(run_id)
+        self.assertEqual(record["revision"], 2)
+        self.assertEqual(record["value"]["name"], "Better name")
+        summary = self.expect(
+            200, "GET", "/api/runs/%s" % run_id
+        )["summary"]
+        self.assertEqual(summary["name"], "Typo name")
+
     def test_projection_reconciles_against_durable_envelope(self):
         status, body = self.launch()
         run_id = body["run"]["id"]

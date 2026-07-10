@@ -144,6 +144,12 @@ DEFAULT_CONFIG = {
     # chain uses convergence_fixer. The count is derived from append-only
     # history, so stopping/resuming a run cannot reset the escalation.
     "convergence_fixer_after_deltas": 10,
+    # A delta stops being meaningfully incremental after enough cumulative
+    # fixes.  After this many fixes in one episode, amend the pending diff
+    # without fabricating a clean delta result and return exactly where a
+    # real clean delta would return.  In review rounds this preserves the
+    # active family, which then reviews the whole amended commit again.
+    "delta_full_review_after_fixes": 5,
     # Fixer+delta iterations allowed per fix episode before failing. A
     # deliberate resume grants a fresh budget (state.resume_run resets the
     # counter), so this is a soft ceiling, not a dead end.
@@ -1957,6 +1963,66 @@ class Driver(object):
                 self.state, unit, return_to, reason="no delta (fix episode green)"
             )
             return "no pending delta; episode closed"
+        try:
+            checkpoint_after = int(self.config.get(
+                "delta_full_review_after_fixes",
+                DEFAULT_CONFIG["delta_full_review_after_fixes"],
+            ))
+        except (TypeError, ValueError):
+            checkpoint_after = DEFAULT_CONFIG[
+                "delta_full_review_after_fixes"
+            ]
+        checkpoint_after = max(0, checkpoint_after)
+        dirty_deltas = st.active_fix_dirty_deltas(self.state, unit)
+        # One fix is currently pending plus one already-applied fix for every
+        # accepted dirty delta in this episode.  Deriving this from immutable
+        # history makes Stop/Start and Resume unable to restart the budget;
+        # phantom attempts do not count because they produced no dirty delta.
+        fix_number = 1 + dirty_deltas
+        if (return_to == st.U_ROUNDS
+                and checkpoint_after
+                and fix_number >= checkpoint_after):
+            # The fifth fix has already incorporated the previous delta's
+            # known findings.  At this point another diff-only review would
+            # inspect a large cumulative patch with less context than the
+            # active full reviewer.  Checkpoint the WIP and follow the exact
+            # clean-delta return edge; family_index is deliberately untouched.
+            try:
+                sha = gitops.amend(self.workspace)
+            except gitops.GitError as exc:
+                st.fail_run(
+                    self.state, "delta checkpoint amend failed: %s" % exc,
+                    unit=unit,
+                )
+                self._save()
+                raise StopStep(str(exc))
+            st.append_event(
+                self.state, "amended", unit=st.unit_key(unit), sha=sha
+            )
+            st.append_event(
+                self.state,
+                "delta_checkpoint",
+                unit=st.unit_key(unit),
+                sha=sha,
+                fixes=fix_number,
+                dirty_deltas=dirty_deltas,
+                return_to=return_to,
+                review_family=st.current_family(self.state, unit),
+            )
+            unit["fix_queue"] = []
+            unit["fix_source"] = None
+            unit.pop("phantom_retried", None)
+            st.transition_unit(
+                self.state,
+                unit,
+                return_to,
+                reason="delta checkpoint after %d fixes; full review resumes"
+                % fix_number,
+            )
+            return (
+                "delta checkpoint after %d fixes; amended (%s); continuing"
+                % (fix_number, sha)
+            )
         fixer_family = None
         for r in reversed(unit["rounds"]):
             if r["kind"] == contracts.KIND_FIX_FINDINGS:
