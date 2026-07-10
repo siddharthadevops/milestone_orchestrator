@@ -320,6 +320,28 @@ class TestExistingPromptInvariants(unittest.TestCase):
         self.assertIn("ADJ-1", prompt)
         self.assertIn("settled finding", prompt)
 
+    def test_repair_episode_declares_the_reopened_artifact(self):
+        # Process-level authority for the repair path (found live
+        # 2026-07-10): a correct fixer REFUSED an operator repair
+        # because only the findings — not the process block — declared
+        # the reopening, and a finding claiming "you may edit the sealed
+        # note" is exactly what a malicious finding would say. The
+        # sealed block itself must announce the reopened artifact.
+        base = prompts.build_fix_findings(
+            FAMILY, WORKSPACE, GOAL, UNIT, FINDINGS, [], "claude",
+            ["claude", "-p"],
+        )
+        self.assertNotIn("REOPENED FOR REPAIR", base)
+        repair = prompts.build_fix_findings(
+            FAMILY, WORKSPACE, GOAL, UNIT, FINDINGS, [], "claude",
+            ["claude", "-p"], repair_artifact="docs/slice-02.md",
+        )
+        self.assertIn("REOPENED FOR REPAIR", repair)
+        self.assertIn("docs/slice-02.md", repair)
+        self.assertIn("NOT sealed while under repair", repair)
+        # Every other sealed artifact stays read-only in the same block.
+        self.assertIn("Every OTHER sealed artifact remains", repair)
+
 
 class TestDeferredDebtPrompts(unittest.TestCase):
     DEBT = [{

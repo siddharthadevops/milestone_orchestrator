@@ -398,6 +398,37 @@ def restore_clean(workspace):
     _run(workspace, "clean", "-fdq")
 
 
+def newest_commit(workspace, shas):
+    """The descendant-most commit among `shas` (short sha), or None when
+    none can be resolved. The driver's history is linear (single branch,
+    amend discipline), so rev-list order is containment order: the first
+    commit listed from the given tips is the one every other given sha
+    is an ancestor of. Used by the sealed-artifact guard to pick the
+    run's LAST gate commit as its canonical baseline."""
+    shas = [s for s in shas if s]
+    if not shas:
+        return None
+    _assert_workspace_root(workspace)
+    try:
+        proc = subprocess.run(
+            # --topo-order: children strictly before parents. Plain
+            # rev-list sorts by commit timestamp, and gates created
+            # within the same second would tie-break arbitrarily.
+            ("git", "rev-list", "--max-count=1", "--topo-order",
+             "--abbrev-commit") + tuple(shas),
+            cwd=workspace,
+            capture_output=True,
+            timeout=GIT_TIMEOUT,
+            env=_scrubbed_env(),
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if proc.returncode != 0:
+        return None
+    out = proc.stdout.decode("ascii", "replace").strip()
+    return out or None
+
+
 def show_file(workspace, rev, relpath):
     """The file's BYTES at `rev` (e.g. a unit's gate commit), or None
     when the rev or path cannot be read. Byte-exact on purpose: the

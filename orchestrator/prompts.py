@@ -681,6 +681,17 @@ BATTERY_QUESTION_DESCRIPTIONS = {
                            "documentation, or doing nothing — was "
                            "rejected and why",
     "cost": "what it costs: build, migration, and maintenance",
+    "threat_model": "who the attacker is and which inputs they control, "
+                    "versus who is TRUSTED (operator, product code, "
+                    "compile-time configuration) — defenses guard the "
+                    "untrusted inputs only; if nothing here handles "
+                    "untrusted input, say so and cite why",
+    "enforceability": "for each guarantee or invariant this document "
+                      "asserts, the pinned mechanism (file:line of the "
+                      "library option, API, or existing code) that can "
+                      "actually enforce it — a guarantee no pinned "
+                      "mechanism can express is a design gap to report, "
+                      "never a promise to write down",
     "consumers_touched": "which consumers this slice touches — VERIFIED "
                          "against real code (file:line), never assumed",
     "pinned_facts": "the facts where ANY deviation is a bug — cite where "
@@ -721,7 +732,9 @@ def _battery_block(ids, unit_kind):
             "Battery\" section (one row per question with its evidence),",
             "and state there that the skeleton's battery is INHERITED —",
             "do NOT re-answer it; these questions are the slice-scoped",
-            "remainder.",
+            "remainder. Exception: enforceability is answered at BOTH",
+            "levels — the skeleton answered it for the design, you answer",
+            "it again for the facts THIS note pins.",
         ]
     lines += [
         "An unanswered or unevidenced question is a review finding; the",
@@ -1166,6 +1179,7 @@ def build_fix_findings(
     project_context=None,
     debt=None,
     convergence=None,
+    repair_artifact=None,
 ):
     lines = []
     for f in findings:
@@ -1248,8 +1262,25 @@ def build_fix_findings(
             "RECENT DIRTY DELTAS (up to 5):\n%s\n\n"
             % (dirty_deltas, "\n".join(delta_lines) or "(none recorded)")
         )
+    repair_line = ""
+    if repair_artifact:
+        # Process-level authority for the repair path: a fixer must not
+        # take "you may edit the sealed note" from a FINDING (that is
+        # exactly what a malicious finding would claim — found live
+        # 2026-07-10: a correct repair fixer refused the operator's
+        # repair because only the findings, not the process block,
+        # declared the reopening).
+        repair_line = (
+            "- THIS unit was REOPENED FOR REPAIR: its artifact\n"
+            "  %s\n"
+            "  is NOT sealed while under repair and is EDITABLE in this\n"
+            "  call (it reseals with fresh reviews from both families\n"
+            "  after the repair). Every OTHER sealed artifact remains\n"
+            "  read-only as below.\n" % repair_artifact
+        )
     sealed_block = (
         "SEALED ARTIFACTS (read-only)\n"
+        + repair_line +
         "- The milestone skeleton and every SEALED slice note are\n"
         "  READ-ONLY in this call: fixes never edit them. A `prevention`\n"
         "  edit may touch ONLY the artifact of the unit being fixed.\n"

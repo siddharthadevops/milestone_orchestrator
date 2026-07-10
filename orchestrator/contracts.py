@@ -311,11 +311,25 @@ GAP_ELIGIBLE_KINDS = (
 # evidence citations — mirrored in the contract JSON. The skeleton
 # carries the milestone-level battery; a slice note inherits it and
 # answers only the slice-scoped remainder.
+#
+# threat_model and enforceability were added after a live failure
+# (2026-07-10, LPC rich-content impl-02): a sealed note asserted a
+# security universal no pinned mechanism could enforce and never named
+# the attacker, so implementation burned 100+ rounds discovering at the
+# CODE phase what these questions surface at the DOC phase — reviewers
+# treated trusted product configuration as hostile, and the impossible
+# guarantee could only be met by forbidden custom machinery or by
+# rewriting the sealed note. enforceability is asked at BOTH doc levels
+# (the same id in both tuples): the skeleton answers it for the design's
+# guarantees, each note re-answers it for the slice-scoped facts it pins
+# — it is exempt from the note's inherit-don't-re-answer rule.
 BATTERY_QUESTIONS_SKELETON = (
     "victim", "machinery", "consumers", "cheaper_alternative", "cost",
+    "threat_model", "enforceability",
 )
 BATTERY_QUESTIONS_SLICE_NOTE = (
     "consumers_touched", "pinned_facts", "verification", "reuse_posture",
+    "enforceability",
 )
 BATTERY_ANSWER_CLIP = 2000
 BATTERY_EVIDENCE_CLIP = 300

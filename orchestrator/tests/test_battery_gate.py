@@ -537,5 +537,44 @@ class BatteryPromptGatingTest(unittest.TestCase):
         self.assertNotIn("battery", text)
 
 
+class ThreatModelAndEnforceabilityTest(unittest.TestCase):
+    """The two questions added after the LPC rich-content failure
+    (2026-07-10): a sealed note asserted a security guarantee no pinned
+    mechanism could enforce and never named the attacker, so the design
+    gap surfaced at the CODE phase (100+ rounds) instead of the DOC
+    phase (one battery answer). These tests pin the lesson."""
+
+    def test_threat_model_is_skeleton_level(self):
+        self.assertIn("threat_model", c.BATTERY_QUESTIONS_SKELETON)
+        # Inherited by notes like the rest of the skeleton battery —
+        # never re-answered per slice.
+        self.assertNotIn("threat_model", c.BATTERY_QUESTIONS_SLICE_NOTE)
+
+    def test_enforceability_is_asked_at_both_doc_levels(self):
+        # The skeleton answers it for the design's guarantees; every
+        # note re-answers it for the facts IT pins — the one exemption
+        # from the inherit-don't-re-answer rule.
+        self.assertIn("enforceability", c.BATTERY_QUESTIONS_SKELETON)
+        self.assertIn("enforceability", c.BATTERY_QUESTIONS_SLICE_NOTE)
+
+    def test_descriptions_carry_the_load_bearing_clauses(self):
+        threat = prompts.BATTERY_QUESTION_DESCRIPTIONS["threat_model"]
+        self.assertIn("attacker", threat)
+        self.assertIn("TRUSTED", threat)
+        enf = prompts.BATTERY_QUESTION_DESCRIPTIONS["enforceability"]
+        self.assertIn("mechanism", enf)
+        # The clause that would have caught slice-02 line 31: an
+        # unenforceable guarantee is reported as a gap, not written down.
+        self.assertIn("design gap to report", enf)
+        self.assertIn("never a promise", enf)
+
+    def test_note_drafter_sees_the_double_level_exception(self):
+        text = prompts.build_draft_slice_note(
+            "codex", "/ws", "goal", SLICE, "docs/skeleton.md",
+            battery=c.BATTERY_QUESTIONS_SLICE_NOTE)
+        norm = " ".join(text.split())
+        self.assertIn("Exception: enforceability is answered at BOTH", norm)
+
+
 if __name__ == "__main__":
     unittest.main()

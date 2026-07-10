@@ -1068,17 +1068,27 @@ class Driver(object):
         sealed slice-02 note to legalize behaviors the sealed version
         forbade, then self-declared the note in its expected files — 50
         rounds of review judged a moving target). After every edit-kind
-        call, each sealed unit's artifact must byte-match its own GATE
-        COMMIT (not HEAD: the amend discipline folds tampering into the
-        wip commit, so HEAD can already be tainted). A mismatch is
-        restored from the gate, the illegal bytes land in raw/ for
-        forensics, and a sealed_artifact_restored event records the
-        violation. Runs without git have no canonical source and skip
-        (their sealed docs are protected by the prompt rule only). A
-        unit under legitimate repair is not SEALED while it is being
+        call, each sealed unit's artifact must byte-match the run's
+        NEWEST gate commit (not HEAD: the amend discipline folds
+        tampering into the wip commit, so HEAD can already be tainted;
+        and not each unit's OWN gate: sealed docs carry legal post-seal
+        drift — pre-guard-era `prevention` edits reviewed and folded
+        into later gates, and repair reseals — so the last gate, a
+        double-sealed checkpoint of the WHOLE tree, is the one canonical
+        baseline; baselining on the own gate fired three false restores
+        on 2026-07-10, each regressing a legally amended note). A
+        mismatch is restored from that gate, the illegal bytes land in
+        raw/ for forensics, and a sealed_artifact_restored event records
+        the violation. Runs without git have no canonical source and
+        skip (their sealed docs are protected by the prompt rule only).
+        A unit under legitimate repair is not SEALED while it is being
         repaired, so its own repair episode is naturally exempt."""
         if not gitops.enabled(self.config):
             return []
+        last_gate = gitops.newest_commit(
+            self.workspace,
+            [u.get("gate_commit") for u in self.state["units"]],
+        )
         restored = []
         for u in self.state["units"]:
             if u["status"] != st.U_SEALED:
@@ -1086,7 +1096,13 @@ class Driver(object):
             gate, art = u.get("gate_commit"), u.get("artifact")
             if not gate or not art:
                 continue
-            canonical = gitops.show_file(self.workspace, gate, art)
+            canonical = gitops.show_file(
+                self.workspace, last_gate or gate, art
+            )
+            if canonical is None:
+                # The artifact is unreadable at the newest gate (e.g. a
+                # foreign-history edge): fall back to the unit's own gate.
+                canonical = gitops.show_file(self.workspace, gate, art)
             if canonical is None:
                 continue  # unreadable gate/path: nothing to enforce against
             path = os.path.join(self.workspace, art)
@@ -1131,11 +1147,18 @@ class Driver(object):
             )
 
     def _check_worker_blocked(self, unit, output, kind):
+        # type_="worker_blocked": a blocked worker is an OPERATOR-gated
+        # stop (like goal_gap/gap_stall), not an unclassified transient —
+        # left untyped it defaults to "unknown" and the service guard
+        # emergency-resumes it every 15 minutes forever, re-running the
+        # worker against the very decision it stopped to ask for. Found
+        # live (2026-07-10, LPC rich-content): blocked findings that
+        # needed a sealed-note repair were auto-resumed 16 minutes later.
         if output["status"] == "blocked":
             st.fail_run(
                 self.state,
                 "%s worker blocked: %s" % (kind, output.get("blocked_reason")),
-                unit=unit,
+                unit=unit, type_="worker_blocked",
             )
             self._save()
             raise StopStep(output.get("blocked_reason"))
@@ -1145,7 +1168,7 @@ class Driver(object):
                 self.state,
                 "%s reported blocked findings needing the operator: %s"
                 % (kind, "; ".join(f["summary"] for f in blocked)),
-                unit=unit,
+                unit=unit, type_="worker_blocked",
             )
             self._save()
             raise StopStep("blocked findings")
@@ -1820,6 +1843,10 @@ class Driver(object):
             killed_notice=bool(unit.pop("killed_fix_notice", None)),
             project_context=project_context,
             debt=self._debt(unit),
+            repair_artifact=(
+                unit.get("artifact")
+                if source.get("type") == "repair" else None
+            ),
             convergence=(
                 {
                     "dirty_deltas": dirty_deltas,

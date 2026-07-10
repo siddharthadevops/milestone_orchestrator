@@ -209,6 +209,23 @@ class TestAutoResumeGuard(ServiceFixesTestCase):
         self.assertIn((entry["id"], "emergency-spaced"), actions)
         self.assertEqual(calls, [])
 
+    def test_worker_blocked_failure_is_never_auto_resumed(self):
+        # An operator-gated stop (a worker blocked on a decision only the
+        # operator can make) must NOT be emergency-probed: found live
+        # (2026-07-10, LPC rich-content), blocked findings that needed a
+        # sealed-note repair defaulted to type "unknown" and the guard
+        # re-ran the fixer against the very contradiction it stopped to
+        # report. Typed outside AUTO_RESUMABLE, the guard never touches it.
+        entry = self._failed_run("ws-guard-blocked", "worker_blocked")
+        self._backdate_failure(entry)  # interval elapsed — still no touch
+        registry.update(self.home, entry["id"],
+                        last_emergency_resume_at=0)
+        calls = self._patched_resume()
+        actions = service.guard_scan(self.home)
+        self.assertEqual(calls, [])
+        self.assertNotIn((entry["id"], "emergency-resume"), actions)
+        self.assertNotIn((entry["id"], "resumed:worker_blocked"), actions)
+
     def test_emergency_resume_has_no_cap(self):
         # Unlike typed resumes, an unknown never exhausts a budget: even with
         # a large simulated history it resumes again once the interval passes.

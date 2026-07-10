@@ -164,7 +164,16 @@ In EVERY profile, identically:
 The engineering battery is untouchable in ALL profiles: who is the victim
 without this, what new machinery and why, who consumes it (verified, not
 assumed), what cheaper alternative was rejected and why, what does it
-cost. But it becomes a **structured gate**, not a prose genre: each
+cost, who the attacker is and which inputs they control versus who is
+trusted (threat_model), and — for every guarantee the document asserts —
+which pinned mechanism can actually enforce it (enforceability; asked
+again per slice note for the facts it pins, since a guarantee no
+mechanism can express is a design gap, not a promise). The last two were
+added after a live failure (2026-07-10, LPC rich-content): a sealed note
+promised an unenforceable security universal and never named the
+attacker, and implementation burned 100+ rounds discovering at the code
+phase what these questions surface at the doc phase. But it becomes a
+**structured gate**, not a prose genre: each
 question is a contract entry with its answer and file:line evidence, and
 review checks **presence and substance** (is it answered? does the
 evidence exist and say that?). A finding against an ANSWERED question's
@@ -595,9 +604,10 @@ REJECTED — adopt their concepts, not their engines:
    the same predicate re-evaluated — never dedicated calls.
 3. Battery per unit kind — **skeleton carries the full battery per
    need** (victim / machinery / consumers / cheaper-alternative /
-   pricing); **slice docs inherit** and answer only what is
-   slice-specific: consumers touched, pinned facts, verification, AND
-   the slice-scoped Reuse Posture (checked/adopted/new-with-why —
+   pricing / threat-model / enforceability); **slice docs inherit** and
+   answer only what is slice-specific: consumers touched, pinned facts,
+   verification, the slice-scoped Reuse Posture, AND enforceability
+   re-answered for the facts this note pins (checked/adopted/new-with-why —
    second-review fix: the two-register template must not drop the one
    mandatory reuse section every note carries today). No re-answering
    the skeleton's battery at slice level.

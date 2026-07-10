@@ -158,6 +158,104 @@ class SealedGuardTest(unittest.TestCase):
             [e for e in state["events"]
              if e.get("type") == "sealed_artifact_restored"], [])
 
+    def _git(self, *args):
+        return subprocess.run(
+            ("git",) + args, cwd=self.ws, capture_output=True,
+            text=True, check=True,
+        ).stdout.strip()
+
+    def _drift_history(self):
+        """Legal post-seal drift (found live 2026-07-10, second
+        incident): sealed docs carry edits that were REVIEWED and folded
+        into LATER gate commits (pre-guard-era `prevention` edits, and
+        repair reseals). The current driver can no longer produce that
+        history — the guard itself prevents it — so the pre-guard era is
+        fabricated directly: seal skeleton + doc-01 normally, then amend
+        the sealed skeleton in a NEW gate commit and point doc-01's gate
+        at it, exactly the shape LPC rich-content reached. Returns the
+        state path. Baselining each unit on its OWN gate false-fires on
+        this shape forever, regressing the legally amended doc."""
+        path = init_state(self.ws, make_config())  # git ENABLED
+        script = self._skeleton_sealed_script() + [
+            step("draft_slice_note",
+                 ok("draft_slice_note", artifact="docs/slice-01.md"),
+                 family="codex",
+                 side_effect=write_file("docs/slice-01.md", "# Slice 01\n")),
+            step("review_round", report("review_round"), family="codex"),
+            step("review_round", report("review_round"), family="claude"),
+            step("seal_half", report("seal_half"), family="codex"),
+            step("seal_half", report("seal_half"), family="claude"),
+        ]
+        driver = drv.Driver(path, runner=runners.MockRunner(script))
+        for _ in range(40):
+            state = st.load(path)
+            doc = next((u for u in state["units"]
+                        if u["kind"] == st.UNIT_SLICE_DOC), None)
+            if doc is not None and doc["status"] == st.U_SEALED:
+                break
+            action, _n = driver.step()
+            if action.type in (drv.A_DONE, drv.A_FAILED):
+                break
+        state = st.load(path)
+        doc = next(u for u in state["units"]
+                   if u["kind"] == st.UNIT_SLICE_DOC)
+        assert doc["status"] == st.U_SEALED, doc["status"]
+        # Pre-guard era: the sealed skeleton drifts inside a newer gate.
+        tamper_skeleton("# Skeleton\n\nLEGALLY AMENDED\n")(self.ws)
+        self._git("add", "-A")
+        self._git("commit", "-q", "-m", "Seal slice 01 note")
+        doc["gate_commit"] = self._git("rev-parse", "--short", "HEAD")
+        st.save(path, state)
+        return path
+
+    def _drive_impl_draft(self, path, impl_effect):
+        script = [
+            step("implement",
+                 ok("implement", files_changed=["calc.py"]),
+                 family="codex",
+                 side_effect=impl_effect),
+        ]
+        driver = drv.Driver(path, runner=runners.MockRunner(script))
+        for _ in range(10):
+            action, _n = driver.step()
+            state = st.load(path)
+            if any(u["kind"] == st.UNIT_SLICE_IMPL and u.get("draft")
+                   for u in state["units"]):
+                break
+            if action.type in (drv.A_DONE, drv.A_FAILED):
+                break
+        return st.load(path)
+
+    def test_legal_drift_sealed_into_a_later_gate_is_canonical(self):
+        path = self._drift_history()
+        state = self._drive_impl_draft(
+            path, write_file("calc.py", "x = 1\n"))
+        self.assertEqual(
+            [e for e in state["events"]
+             if e.get("type") == "sealed_artifact_restored"], [])
+        # The drifted skeleton SURVIVES: the newest gate is the baseline.
+        with open(os.path.join(self.ws, "docs", "skeleton.md"),
+                  encoding="utf-8") as fh:
+            self.assertEqual(fh.read(), "# Skeleton\n\nLEGALLY AMENDED\n")
+
+    def test_tamper_after_legal_drift_restores_the_newest_gate(self):
+        path = self._drift_history()
+        state = self._drive_impl_draft(
+            path,
+            lambda ws: (
+                write_file("calc.py", "x = 1\n")(ws),
+                tamper_skeleton("# Skeleton\n\nEVIL REWRITE\n")(ws),
+            ))
+        evs = [e for e in state["events"]
+               if e.get("type") == "sealed_artifact_restored"]
+        self.assertEqual(len(evs), 1)
+        self.assertEqual(evs[0]["unit"], "skeleton")
+        # Restored to the LEGALLY AMENDED version (the newest gate), not
+        # the skeleton's own original gate content.
+        with open(os.path.join(self.ws, "docs", "skeleton.md"),
+                  encoding="utf-8") as fh:
+            self.assertEqual(fh.read(), "# Skeleton\n\nLEGALLY AMENDED\n")
+
 
 if __name__ == "__main__":
     unittest.main()

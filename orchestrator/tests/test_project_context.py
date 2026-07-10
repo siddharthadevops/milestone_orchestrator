@@ -653,6 +653,10 @@ class TestEnforcementBinding(ProjectRunTestCase):
         self.assertIsNotNone(failure)
         self.assertIn("worker blocked: cannot proceed", failure["reason"])
         self.assertNotIn("contract-violating", failure["reason"])
+        # Operator-gated type: the guard must never emergency-probe a
+        # worker that stopped to ask the operator (would default to
+        # "unknown" and be resumed every 15 min forever).
+        self.assertEqual(failure["type"], "worker_blocked")
         self.assertEqual(len(driver.runner.calls), 1)  # no repair burned
 
     def test_descriptor_replacement_mid_run_changes_nothing(self):
