@@ -797,6 +797,43 @@ class StoryApiTest(ServiceApiTest):
         self.assertEqual(body["reclassify"][0]["drift_risk"], "low")
         self.assertEqual(body["reclassify"][0]["threshold"], "low")
 
+    def test_requeued_impl_debt_is_hidden_from_summary_and_story(self):
+        ws = self.workspace("ws-requeued-debt")
+        rid = self._seed(ws)
+        reg = registry.load(self.home)
+        entry = registry.get(reg, rid)
+        state = st.load(entry["state_path"])
+        state["milestone"]["slices"] = [{"id": 1, "title": "core"}]
+        state["units"][0]["status"] = st.U_SEALED
+        doc = st.ensure_next_unit(state)
+        doc["status"] = st.U_SEALED
+        impl = st.ensure_next_unit(state)
+        impl["status"] = st.U_SEALING
+        st.record_debt(state, impl, [{
+            "id": "claude-F1", "severity": "P3", "summary": "code bug",
+            "raised_by": "claude", "cleared_by": "codex",
+        }], "seal", "slice_impl-01-seal-a1")
+        st.append_event(
+            state, "reclassify_recorded", unit="slice_impl-01",
+            finding_id="claude-F1", reclassifier="codex",
+            drift_risk="low", threshold="low", defer_ok=True,
+        )
+        st.requeue_implementation_debt(state)
+        st.save(entry["state_path"], state)
+
+        _, detail = self.request_json("GET", "/api/runs/%s" % rid)
+        impl_view = next(
+            unit for unit in detail["summary"]["units"]
+            if unit["unit"] == "slice_impl-01"
+        )
+        self.assertEqual(impl_view["debt"], [])
+        self.assertEqual(impl_view["reclassify"], [])
+        status, body = self.request_json(
+            "GET", "/api/runs/%s/story?item=debt:slice_impl-01" % rid)
+        self.assertEqual(status, 200)
+        self.assertEqual(body["debt"], [])
+        self.assertEqual(body["reclassify"], [])
+
     def test_run_detail_carries_commit_web_base(self):
         ws = self.workspace("ws-webbase")
         subprocess.run(

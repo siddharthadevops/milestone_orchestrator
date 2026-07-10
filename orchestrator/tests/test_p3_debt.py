@@ -1,10 +1,10 @@
 """Finding-debt deferral with opposite-family reclassification.
 
-When `p3_reclassify_debt` is on, eligible review/seal findings receive an
-opposite-family reclassification one by one. Ratings below the configured
-threshold become tracked debt; only the remaining findings reach the fixer.
-One blocking finding never drags accepted debt into its fix cycle. Delta
-reviews and implementation-phase review rounds remain unaffected.
+When `p3_reclassify_debt` is on, eligible documentation review/seal findings
+receive a reclassification one by one. Ratings below the configured threshold
+become tracked debt; only the remaining findings reach the fixer. One blocking
+finding never drags accepted debt into its fix cycle. Implementation and delta
+findings always take the normal fix/reject path.
 """
 
 import tempfile
@@ -442,6 +442,37 @@ class TestP3Debt(DriverTestCase):
             self.assertEqual(
                 [f["id"] for f in unit["fix_queue"]], ["codex-F1"])
             self.assertFalse(unit["seals"][0]["passed"])
+
+    def test_implementation_seal_p3_is_never_deferred(self):
+        with tempfile.TemporaryDirectory(prefix="orch-mock-") as ws:
+            path = init_state(ws, make_config(p3_reclassify_debt=True))
+            state = st.load(path)
+            state["milestone"]["slices"] = [{"id": 1, "title": "impl"}]
+            state["units"][0]["status"] = st.U_SEALED
+            doc = st.ensure_next_unit(state)
+            doc["status"] = st.U_SEALED
+            unit = st.ensure_next_unit(state)
+            unit["status"] = st.U_SEALING
+            unit["artifact"] = "docs/slices/slice-01.md"
+            st.save(path, state)
+            mock = runners.MockRunner([
+                step("seal_half",
+                     report("seal_half", [finding("F1", "small code bug")]),
+                     family="codex"),
+                step("seal_half", report("seal_half"), family="claude"),
+            ])
+            driver = drv.Driver(path, runner=mock)
+            driver.step()
+
+            self.assertEqual(mock.script, [])
+            self.assertNotIn("reclassify", [call[1] for call in mock.calls])
+            unit = st.load(path)["units"][-1]
+            self.assertEqual(unit["status"], st.U_FIXING)
+            self.assertEqual(unit["debt"], [])
+            self.assertEqual(
+                [finding_["id"] for finding_ in unit["fix_queue"]],
+                ["codex-F1"],
+            )
 
     def test_reform_doc_seal_uses_the_same_p2_scope_as_review(self):
         strict = profiles.SEEDS["strict"]["profile"]

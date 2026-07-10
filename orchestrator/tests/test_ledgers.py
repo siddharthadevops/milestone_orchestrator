@@ -419,6 +419,27 @@ class TestRenderReviewLog(unittest.TestCase):
         )
         self.assertIn("  - [P3] workspace lacks a README", self.text)
 
+    def test_requeued_implementation_debt_is_not_republished(self):
+        state = make_state()
+        state["events"] = []
+        impl = state["units"][2]
+        impl["status"] = st.U_SEALING
+        impl["debt"] = [{
+            "id": "claude-F9",
+            "severity": "P3",
+            "summary": "historical implementation defect",
+            "raised_by": "claude",
+            "cleared_by": "codex",
+            "reason": "previously deferred",
+        }]
+
+        st.requeue_implementation_debt(state)
+        text = ledgers.render_review_log(state)
+
+        self.assertEqual(len(impl["debt"]), 1)
+        self.assertNotIn("historical implementation defect", text)
+        self.assertNotIn("Deferred debt", text)
+
 
 class TestRenderAdjudications(unittest.TestCase):
     def setUp(self):

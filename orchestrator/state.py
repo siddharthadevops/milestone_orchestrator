@@ -243,6 +243,7 @@ def assert_append_only(old_state, new_state_):
             raise HistoryRewriteError("%s: identity changed" % uctx)
         _assert_list_prefix(old_unit.get("rounds", []), nu.get("rounds", []), uctx + ".rounds")
         _assert_list_prefix(old_unit.get("seals", []), nu.get("seals", []), uctx + ".seals")
+        _assert_list_prefix(old_unit.get("debt", []), nu.get("debt", []), uctx + ".debt")
         # A unit that is sealed in BOTH the old and new state is frozen
         # except for post-seal bookkeeping. Failed units are deliberately
         # NOT frozen (resume_run restores them). Nor is a sealed unit that
@@ -924,6 +925,106 @@ def record_debt(state, unit, entries, source, source_round_id):
     )
 
 
+def requeued_debt_refs(state):
+    """Immutable debt records moved back into an implementation fix queue.
+
+    Debt history stays append-only. A requeue event makes the referenced
+    entries inactive for prompts and projections without rewriting sealed
+    units or erasing the original classification evidence.
+    """
+    refs = set()
+    for event in state.get("events", []):
+        if event.get("type") != "implementation_debt_requeued":
+            continue
+        for ref in event.get("debts", []):
+            unit = ref.get("unit")
+            index = ref.get("index")
+            if isinstance(unit, str) and isinstance(index, int) and index >= 0:
+                refs.add((unit, index))
+    return refs
+
+
+def active_debt(state, unit):
+    """Debt entries still deferred, excluding implementation requeues."""
+    hidden = requeued_debt_refs(state)
+    key = unit_key(unit)
+    return [
+        debt for index, debt in enumerate(unit.get("debt", []))
+        if (key, index) not in hidden
+    ]
+
+
+def requeued_debt_ids(state):
+    """Finding ids retired by implementation-debt requeue, per unit."""
+    hidden = requeued_debt_refs(state)
+    ids = {}
+    for unit in state.get("units", []):
+        key = unit_key(unit)
+        for index, debt in enumerate(unit.get("debt", [])):
+            if (key, index) in hidden:
+                ids.setdefault(key, set()).add(debt.get("id"))
+    return ids
+
+
+def requeue_implementation_debt(state, target_unit=None):
+    """Move every active implementation debt entry into the current fixer.
+
+    Historical debt arrays remain immutable; the append-only requeue event
+    retires them from active debt views. Repairs land in the current
+    implementation unit so already-sealed slices are not rewound underneath
+    later work.
+    """
+    target = target_unit or current_unit(state)
+    if target is None or target.get("kind") != UNIT_SLICE_IMPL:
+        raise IllegalTransition(
+            "implementation debt requires a current slice_impl target"
+        )
+    if target.get("status") not in (U_ROUNDS, U_PRE_SEAL_VERIFY, U_SEALING):
+        raise IllegalTransition(
+            "cannot requeue implementation debt from status %s"
+            % target.get("status")
+        )
+    if target.get("fix_queue"):
+        raise IllegalTransition("target already has an active fix queue")
+
+    refs = []
+    findings = []
+    hidden = requeued_debt_refs(state)
+    for unit in state["units"]:
+        if unit.get("kind") != UNIT_SLICE_IMPL:
+            continue
+        key = unit_key(unit)
+        for index, debt in enumerate(unit.get("debt", [])):
+            if (key, index) in hidden:
+                continue
+            original_id = str(debt.get("id") or "unknown")
+            refs.append({"unit": key, "index": index, "id": original_id})
+            findings.append({
+                "id": "IMPL-DEBT-%02d-%02d"
+                      % (int(unit.get("slice_id") or 0), index + 1),
+                "severity": debt.get("severity") or "P3",
+                "summary": (
+                    "[reopened from %s/%s] %s"
+                    % (key, original_id, debt.get("summary") or "")
+                ),
+            })
+    if not findings:
+        raise ValueError("run has no active implementation debt")
+
+    return_to = (
+        U_ROUNDS if target.get("status") == U_ROUNDS else U_PRE_SEAL_VERIFY
+    )
+    append_event(
+        state, "implementation_debt_requeued",
+        target=unit_key(target), debts=refs, count=len(refs),
+    )
+    enter_fix_episode(
+        state, target, findings, "implementation_debt", None,
+        "operator-implementation-debt-requeue", return_to,
+    )
+    return findings
+
+
 # ---------------------------------------------------------------------------
 # Derived summary (consumed by `status --json` and the web app)
 
@@ -956,6 +1057,8 @@ def _worst_severity(findings):
 def summary(state):
     unit = current_unit(state)
     model_defaults = state["config"].get("model_defaults") or {}
+    debt_requeues = requeued_debt_refs(state)
+    requeued_ids = requeued_debt_ids(state)
 
     def effective_setting(family, explicit, field):
         if explicit:
@@ -979,6 +1082,9 @@ def summary(state):
             # the panel links the CURRENT unit's work-so-far through it.
             wip_sha[uk] = e.get("sha")
         if e.get("type") == "reclassify_recorded":
+            if (e.get("defer_ok")
+                    and e.get("finding_id") in requeued_ids.get(uk, set())):
+                continue
             reclassify_by_unit.setdefault(uk, []).append(
                 {
                     "at": e.get("at"),
@@ -1091,7 +1197,8 @@ def summary(state):
                         "drift_risk": dd.get("drift_risk"),
                         "reason": dd.get("reason"),
                     }
-                    for dd in u.get("debt", [])
+                    for index, dd in enumerate(u.get("debt", []))
+                    if (unit_key(u), index) not in debt_requeues
                 ],
                 # Every reclassify outcome (deferred AND kept), timestamped
                 # so the panel can place each episode chronologically among

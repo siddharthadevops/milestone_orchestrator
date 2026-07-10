@@ -2250,6 +2250,7 @@ def run_story(home, run_id, item):
                 }
         raise ApiError(404, "unknown draft %r" % ref)
     if kind == "debt":
+        requeued_ids = st.requeued_debt_ids(state)
         for unit in state["units"]:
             if st.unit_key(unit) != ref:
                 continue
@@ -2266,11 +2267,15 @@ def run_story(home, run_id, item):
                 for e in state["events"]
                 if e.get("type") == "reclassify_recorded"
                 and e.get("unit") == ref
+                and not (
+                    e.get("defer_ok")
+                    and e.get("finding_id") in requeued_ids.get(ref, set())
+                )
             ]
             return {
                 "story": "debt",
                 "unit": ref,
-                "debt": unit.get("debt", []),
+                "debt": st.active_debt(state, unit),
                 "reclassify": reclassify,
             }
         raise ApiError(404, "unknown unit %r" % ref)

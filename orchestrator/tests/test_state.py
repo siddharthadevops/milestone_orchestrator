@@ -1321,6 +1321,22 @@ class TestAppendOnly(TempWorkspaceCase):
         bad["units"][0]["seals"][0]["passed"] = False
         self._assert_rejected_and_disk_unchanged(bad)
 
+    def test_mutating_debt_record_rejected(self):
+        state = st.load(self.path)
+        st.record_debt(state, state["units"][1], [{
+            "id": "codex-F9", "severity": "P3", "summary": "recorded debt",
+        }], "round", "slice_doc-01-codex-r1")
+        st.save(self.path, state)
+        with open(self.path, "r", encoding="utf-8") as fh:
+            disk_before = fh.read()
+
+        bad = copy.deepcopy(state)
+        bad["units"][1]["debt"][0]["summary"] = "rewritten debt"
+        with self.assertRaises(st.HistoryRewriteError):
+            st.save(self.path, bad)
+        with open(self.path, "r", encoding="utf-8") as fh:
+            self.assertEqual(fh.read(), disk_before)
+
     def test_shrinking_events_rejected(self):
         bad = copy.deepcopy(self.state)
         bad["events"].pop()
@@ -1583,6 +1599,80 @@ class TestSaveAtomicity(TempWorkspaceCase):
 
 # ---------------------------------------------------------------------------
 # summary()
+
+
+class TestImplementationDebtRequeue(TempWorkspaceCase):
+    def test_requeues_prior_and_current_impl_debt_without_rewriting_history(self):
+        state = make_state(
+            self.workspace,
+            slices=[{"id": 1, "title": "one"}, {"id": 2, "title": "two"}],
+        )
+        state["units"][0]["status"] = st.U_SEALED
+        doc1 = st.ensure_next_unit(state)
+        doc1["status"] = st.U_SEALED
+        impl1 = st.ensure_next_unit(state)
+        st.record_debt(state, impl1, [{
+            "id": "codex-F1", "severity": "P3", "summary": "old code bug",
+            "raised_by": "codex", "cleared_by": "claude",
+            "drift_risk": "low", "drift_damage": "low", "reason": "small",
+        }], "seal", "slice_impl-01-seal-a1")
+        impl1["status"] = st.U_SEALED
+        doc2 = st.ensure_next_unit(state)
+        doc2["status"] = st.U_SEALED
+        impl2 = st.ensure_next_unit(state)
+        st.record_debt(state, impl2, [{
+            "id": "claude-F2", "severity": "P3", "summary": "current bug",
+            "raised_by": "claude", "cleared_by": "codex",
+            "drift_risk": "high", "drift_damage": "low", "reason": "local",
+        }], "seal", "slice_impl-02-seal-a1")
+        impl2["status"] = st.U_SEALING
+        st.append_event(
+            state, "reclassify_recorded", unit="slice_impl-01",
+            finding_id="codex-F1", defer_ok=True, drift_risk="low",
+        )
+        st.append_event(
+            state, "reclassify_recorded", unit="slice_impl-02",
+            finding_id="claude-F2", defer_ok=True, drift_risk="high",
+        )
+
+        findings = st.requeue_implementation_debt(state)
+
+        self.assertEqual(len(findings), 2)
+        self.assertEqual(impl2["status"], st.U_FIXING)
+        self.assertEqual(impl2["fix_source"]["return_to"],
+                         st.U_PRE_SEAL_VERIFY)
+        self.assertIn("old code bug", findings[0]["summary"])
+        self.assertIn("current bug", findings[1]["summary"])
+        # Raw debt evidence is immutable, but no longer active or projected.
+        self.assertEqual(len(impl1["debt"]), 1)
+        self.assertEqual(len(impl2["debt"]), 1)
+        self.assertEqual(st.active_debt(state, impl1), [])
+        self.assertEqual(st.active_debt(state, impl2), [])
+        views = {
+            unit["unit"]: unit for unit in st.summary(state)["units"]
+        }
+        self.assertEqual(views["slice_impl-01"]["debt"], [])
+        self.assertEqual(views["slice_impl-02"]["debt"], [])
+        self.assertEqual(views["slice_impl-01"]["reclassify"], [])
+        self.assertEqual(views["slice_impl-02"]["reclassify"], [])
+
+    def test_rounds_requeue_returns_to_rounds_after_delta(self):
+        state = make_state(
+            self.workspace, slices=[{"id": 1, "title": "one"}],
+        )
+        state["units"][0]["status"] = st.U_SEALED
+        doc = st.ensure_next_unit(state)
+        doc["status"] = st.U_SEALED
+        impl = st.ensure_next_unit(state)
+        impl["status"] = st.U_ROUNDS
+        st.record_debt(state, impl, [{
+            "id": "codex-F1", "severity": "P3", "summary": "old bug",
+        }], "seal", "slice_impl-01-seal-a1")
+
+        st.requeue_implementation_debt(state)
+
+        self.assertEqual(impl["status"], st.U_FIXING)
+        self.assertEqual(impl["fix_source"]["return_to"], st.U_ROUNDS)
 
 
 class TestSummary(TempWorkspaceCase):

@@ -249,7 +249,7 @@ def render_review_log(state):
                     lines.append(
                         "  - [%s] %s" % (f.get("severity"), f.get("summary"))
                     )
-        debt = unit.get("debt") or []
+        debt = st.active_debt(state, unit)
         if debt:
             lines += [
                 "",

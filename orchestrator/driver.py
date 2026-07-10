@@ -137,12 +137,12 @@ DEFAULT_CONFIG = {
     # stops for the operator (the same gap bouncing = a real stall, not
     # convergence). Amnesty on resume, like the other convergence caps.
     "max_gap_repairs": 3,
-    # Rated debt deferral. Eligible doc findings (P3 in legacy, P2/P3 in a
-    # reform profile) and seal findings are rated independently. Findings
-    # below the threshold become tracked debt; only the retained findings
-    # enter a fix cycle, so one blocker never drags accepted debt with it.
-    # Delta reviews and impl-phase review rounds are unaffected. A refused
-    # verdict or failed rating retains that finding for the fixer.
+    # Rated DOC-debt deferral. Eligible doc findings (P3 in legacy, P2/P3 in
+    # a reform profile), whether raised in rounds or seals, are rated
+    # independently. Findings below the threshold become tracked debt; only
+    # retained findings enter a fix cycle. Implementation and delta findings
+    # always enter the normal fix/reject flow. A refused verdict or failed
+    # rating retains that finding for the fixer.
     "p3_reclassify_debt": True,
     # Deferral threshold over the reclassifier's drift-risk rating
     # (low|medium|high|xhigh): an eligible finding defers at/below this.
@@ -1460,9 +1460,8 @@ class Driver(object):
     def _registry(self):
         return st.adjudicated_rejections(self.state)
 
-    @staticmethod
-    def _debt(unit):
-        return list(unit.get("debt") or [])
+    def _debt(self, unit):
+        return list(st.active_debt(self.state, unit))
 
     def _acts_overlay(self):
         """Operator-editable mid-run act assignments (acts.json beside the
@@ -2756,10 +2755,10 @@ class Driver(object):
         clean = all(
             contracts.findings_clean(halves[fam]["result"]) for fam in families
         )
-        # Debt at seal is partitioned finding by finding. Doc units use the
-        # same profile scope as their review rounds (P3 for legacy, P2/P3
-        # for reform); implementation units keep the P3-only gate. A serious
-        # finding may reopen the unit, but accepted debt never rides along.
+        # Debt at seal is DOC-only, exactly like review-round debt. An
+        # implementation finding always reopens the normal fixer flow: code
+        # is either repaired or the finding is explicitly rejected, never
+        # parked as debt at the final gate.
         seal_findings = [
             (f, fam)
             for fam in families
@@ -2768,11 +2767,11 @@ class Driver(object):
         defer_scope = (
             interpreter.doc_defer_scope(self.state)
             if unit["kind"] in (st.UNIT_SKELETON, st.UNIT_SLICE_DOC)
-            else ("P3",)
+            else ()
         )
         deferred = []
         fix_seal_findings = list(seal_findings)
-        if (not clean and invalidated is None
+        if (defer_scope and not clean and invalidated is None
                 and self.config.get("p3_reclassify_debt")):
             candidates = [
                 (f, fam) for f, fam in seal_findings
