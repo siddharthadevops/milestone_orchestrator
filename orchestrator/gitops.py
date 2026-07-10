@@ -398,6 +398,28 @@ def restore_clean(workspace):
     _run(workspace, "clean", "-fdq")
 
 
+def show_file(workspace, rev, relpath):
+    """The file's BYTES at `rev` (e.g. a unit's gate commit), or None
+    when the rev or path cannot be read. Byte-exact on purpose: the
+    sealed-artifact guard compares a sealed unit's artifact against its
+    own gate commit, and a text/encoding round-trip could mask (or
+    invent) a violation."""
+    _assert_workspace_root(workspace)
+    try:
+        proc = subprocess.run(
+            ("git", "show", "%s:%s" % (rev, relpath)),
+            cwd=workspace,
+            capture_output=True,
+            timeout=GIT_TIMEOUT,
+            env=_scrubbed_env(),
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if proc.returncode != 0:
+        return None
+    return proc.stdout
+
+
 def head_sha(workspace):
     if not _has_head(workspace):
         return None

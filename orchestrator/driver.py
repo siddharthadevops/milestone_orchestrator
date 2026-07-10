@@ -1062,6 +1062,58 @@ class Driver(object):
                          % (label, fam, model or dm, effort or de))
         return "; ".join(parts)
 
+    def _enforce_sealed_artifacts(self, raw_name):
+        """SEALED units' doc artifacts are read-only for every edit-kind
+        call (found live 2026-07-10: a fixer materially REWROTE the
+        sealed slice-02 note to legalize behaviors the sealed version
+        forbade, then self-declared the note in its expected files — 50
+        rounds of review judged a moving target). After every edit-kind
+        call, each sealed unit's artifact must byte-match its own GATE
+        COMMIT (not HEAD: the amend discipline folds tampering into the
+        wip commit, so HEAD can already be tainted). A mismatch is
+        restored from the gate, the illegal bytes land in raw/ for
+        forensics, and a sealed_artifact_restored event records the
+        violation. Runs without git have no canonical source and skip
+        (their sealed docs are protected by the prompt rule only). A
+        unit under legitimate repair is not SEALED while it is being
+        repaired, so its own repair episode is naturally exempt."""
+        if not gitops.enabled(self.config):
+            return []
+        restored = []
+        for u in self.state["units"]:
+            if u["status"] != st.U_SEALED:
+                continue
+            gate, art = u.get("gate_commit"), u.get("artifact")
+            if not gate or not art:
+                continue
+            canonical = gitops.show_file(self.workspace, gate, art)
+            if canonical is None:
+                continue  # unreadable gate/path: nothing to enforce against
+            path = os.path.join(self.workspace, art)
+            try:
+                with open(path, "rb") as fh:
+                    current = fh.read()
+            except OSError:
+                current = None  # deleted: also a violation
+            if current == canonical:
+                continue
+            safe = st.unit_key(u).replace("/", "_")
+            raw = self._save_raw(
+                "%s-sealed-violation-%s" % (raw_name, safe),
+                (current if current is not None else b"(file deleted)")
+                .decode("utf-8", "replace"),
+            )
+            os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+            with open(path, "wb") as fh:
+                fh.write(canonical)
+            st.append_event(
+                self.state, "sealed_artifact_restored",
+                unit=st.unit_key(u), artifact=art, during=raw_name,
+                raw_path=raw,
+            )
+            restored.append(art)
+        return restored
+
     def _maybe_update_slices(self, unit, output):
         """A fix call on the skeleton unit may report an updated slice plan
         (it has edit permissions on the skeleton document); keep the
@@ -1279,6 +1331,7 @@ class Driver(object):
             # (goal). The unit finished NOTHING and stays pending; it
             # re-drafts after the repair reseals.
             return self._handle_gap(unit, output, result.duration_s)
+        self._enforce_sealed_artifacts("%s-draft" % st.unit_key(unit))
         self._check_worker_blocked(unit, output, kind)
         st.record_draft(self.state, unit, kind, output, raw_path,
                         family=family, duration=result.duration_s,
@@ -1789,6 +1842,7 @@ class Driver(object):
             extensions=extensions,
             roots=roots,
         )
+        self._enforce_sealed_artifacts("%s-fix%d" % (st.unit_key(unit), n_fix))
         self._check_worker_blocked(unit, output, contracts.KIND_FIX_FINDINGS)
         try:
             contracts.validate_fix_coverage(output, unit.get("fix_queue") or [])
