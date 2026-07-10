@@ -1404,9 +1404,27 @@ function unitHistory(u, activity, running) {
                  chips: [sealChip(event.item, u.unit)]};
       groups.push(current);
     } else if (event.type === "repair") {
+      // The episode is compact but not opaque: its own fix/delta/review
+      // rounds, seal attempts, and reclassifications render as chips in
+      // chronological order after the trigger, so an in-flight repair
+      // (a reopened skeleton mid-reseal) shows its work live.
       repairCount += 1;
+      const repair = event.item;
+      const roundIds = new Set(repair.round_ids || []);
+      const sealAttempts = new Set(repair.seal_attempts || []);
+      const inEpisode = at => at && at >= (repair.at || "") &&
+        (!repair.completed_at || at <= repair.completed_at);
+      const work = [].concat(
+        (u.rounds || []).filter(r => roundIds.has(r.id))
+          .map(r => ({at: r.at || "", chip: roundChip(r)})),
+        (u.seals || []).filter(s => sealAttempts.has(s.attempt))
+          .map(s => ({at: s.at || "", chip: sealChip(s, u.unit)})),
+        (u.reclassify || []).filter(item => inEpisode(item.at || ""))
+          .map(item => ({at: item.at || "", chip: reclassifyChip(item, u.unit)}))
+      ).sort((a, b) => a.at < b.at ? -1 : a.at > b.at ? 1 : 0);
       current = {type: "repair", number: repairCount,
-                 chips: [repairChip(event.item, u.unit)]};
+                 chips: [repairChip(repair, u.unit)]
+                   .concat(work.map(w => w.chip))};
       groups.push(current);
     } else {
       const chip = event.type === "round"
