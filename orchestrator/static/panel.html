@@ -338,6 +338,10 @@
   .jsonarea { width: 100%; min-height: 240px; font-family: "SF Mono",
     ui-monospace, Menlo, monospace; font-size: 12px; border: 1px solid
     var(--line); border-radius: 8px; padding: 8px; resize: vertical; }
+  .access-user { display: flex; align-items: center; gap: 8px;
+    padding: 8px 0; border-bottom: 1px solid var(--line); font-size: 13px; }
+  .access-user:last-child { border-bottom: 0; }
+  .access-user input { width: 15px; height: 15px; }
   .field .pathrow select { flex: 1; border: 1px solid var(--line);
     border-radius: 8px; padding: 7px 10px; font: inherit; background: #fff;
     min-width: 0; }
@@ -376,7 +380,8 @@
   <aside>
     <div class="actions">
       <button class="btn primary" onclick="openForm()">+ New milestone</button>
-      <button class="btn" onclick="openProjectCreate()" title="Declare a project">+ Project</button>
+      <button class="btn" id="newProjectBtn" style="display:none"
+        onclick="openProjectCreate()" title="Declare a project">+ Project</button>
     </div>
     <div id="runs"></div>
   </aside>
@@ -700,6 +705,17 @@
   </div>
 </dialog>
 
+<dialog id="useraccess">
+  <h2>Admin users — <span id="au_project"></span></h2>
+  <div class="hint" id="au_admin"></div>
+  <div id="au_list" style="margin-top:10px"></div>
+  <div class="formrow">
+    <span id="au_error" style="color:var(--bad);font-size:12px;margin-right:auto"></span>
+    <button class="btn" onclick="document.getElementById('useraccess').close()">Cancel</button>
+    <button class="btn primary" onclick="saveAdminUsers()">Save</button>
+  </div>
+</dialog>
+
 <dialog id="sgeditor">
   <h2 id="sg_title">Edit</h2>
   <div class="field">
@@ -717,6 +733,7 @@
 let selected = null;
 let runView = "main";  // "main" | "edit" — the run's settings page
 let goalOpen = false;
+let appAccess = {user: null, admin: false, local: false, users: []};
 function toggleGoal() { goalOpen = !goalOpen; refreshDetail(); }
 
 /* ---- Sidebar project tree: grouping is computed fresh from the same
@@ -741,6 +758,7 @@ const ICONS = {
   chevronDown: `<svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>`,
   ellipsis: `<svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/></svg>`,
   settings: `<svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.09a2 2 0 0 1 1 1.74v.5a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.38a2 2 0 0 0-.73-2.73l-.15-.09a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2Z"/><circle cx="12" cy="12" r="3"/></svg>`,
+  users: `<svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>`,
 };
 // Interpolating a value into a single-quoted onclick="...('VALUE')"
 // argument needs its OWN escaping layer, independent of esc()'s
@@ -763,6 +781,17 @@ async function loadUiState() {
     uiState.project_order = Array.isArray(data.project_order) ? data.project_order : [];
     uiState.collapsed = Array.isArray(data.collapsed) ? data.collapsed : [];
   } catch (e) { /* keep in-memory defaults */ }
+}
+async function loadAccess() {
+  const data = await api("/api/access");
+  appAccess = {
+    user: data.user || null,
+    admin: !!data.admin,
+    local: !!data.local,
+    users: Array.isArray(data.users) ? data.users : [],
+  };
+  document.getElementById("newProjectBtn").style.display =
+    appAccess.admin ? "" : "none";
 }
 function runRow(r) {
   // Running work sits on a second, quieter line; stopped/error state stays
@@ -836,6 +865,8 @@ function groupHeader(key, label, count, editable) {
          ${menuOpen ? `<div class="grpmenu-popover" role="menu" onclick="event.stopPropagation()">
            <button class="grpmenu-item" type="button" role="menuitem"
              onclick="configureProject(event, '${safeKey}')">${ICONS.settings}<span>Configure</span></button>
+           ${appAccess.admin ? `<button class="grpmenu-item" type="button" role="menuitem"
+             onclick="openAdminUsers(event, '${safeKey}')">${ICONS.users}<span>Admin users</span></button>` : ""}
          </div>` : ""}
        </div>`
     : "";
@@ -855,7 +886,7 @@ function renderRunsTree(runs) {
     const runsInGroup = [...(byProject.get(key) || [])].sort(
       (a, b) => runStateRank(a) - runStateRank(b)
     );
-    const header = groupHeader(key, key, runsInGroup.length, true);
+    const header = groupHeader(key, key, runsInGroup.length, appAccess.admin);
     if (uiState.collapsed.includes(key)) return header;
     return header + (runsInGroup.map(runRow).join("")
       || '<div class="grp-empty">no runs yet</div>');
@@ -895,6 +926,45 @@ function configureProject(event, key) {
   event.stopPropagation();
   closeProjectMenu();
   openProjectEditor(key);
+}
+let adminUsersProject = null;
+async function openAdminUsers(event, key) {
+  event.stopPropagation();
+  closeProjectMenu();
+  adminUsersProject = key;
+  const dlg = document.getElementById("useraccess");
+  document.getElementById("au_project").textContent = key;
+  document.getElementById("au_error").textContent = "";
+  document.getElementById("au_list").innerHTML = "Loading…";
+  dlg.showModal();
+  try {
+    const data = await api("/api/projects/" + encodeURIComponent(key) + "/users");
+    document.getElementById("au_admin").textContent =
+      `${data.admin} is administrator and always has access.`;
+    const selectedUsers = new Set(data.users || []);
+    document.getElementById("au_list").innerHTML =
+      (data.available_users || []).map((email, i) =>
+        `<label class="access-user"><input type="checkbox" data-access-user="${esc(email)}"${
+          selectedUsers.has(email) ? " checked" : ""}><span>${esc(email)}</span></label>`
+      ).join("") || '<div class="hint">No assignable users configured.</div>';
+  } catch (e) {
+    document.getElementById("au_error").textContent = e.message;
+    document.getElementById("au_list").innerHTML = "";
+  }
+}
+async function saveAdminUsers() {
+  if (!adminUsersProject) return;
+  const users = Array.from(document.querySelectorAll("[data-access-user]:checked"))
+    .map(el => el.dataset.accessUser);
+  const err = document.getElementById("au_error");
+  err.textContent = "";
+  try {
+    await postJSON("/api/projects/" + encodeURIComponent(adminUsersProject) +
+                   "/users", {users});
+  } catch (e) { err.textContent = e.message; return; }
+  document.getElementById("useraccess").close();
+  await loadProjects();
+  refreshRuns();
 }
 document.addEventListener("click", closeProjectMenu);
 document.addEventListener("keydown", event => {
@@ -2513,7 +2583,7 @@ function projectCard(p, i) {
     return `<div class="card">
       <div class="proj-head">
         <span class="spacer"></span>
-        <button class="btn danger" onclick="deleteProject(${i})">Delete</button>
+        ${appAccess.admin ? `<button class="btn danger" onclick="deleteProject(${i})">Delete</button>` : ""}
       </div>
       <div class="failure">broken project store — ${esc(p.error.reason)}</div>
     </div>`;
@@ -2524,7 +2594,7 @@ function projectCard(p, i) {
         ? JSON.stringify(p.defaults) : "—")}</span>
       <span class="spacer"></span>
       <button class="btn" onclick="editDefaults(${i})">Defaults…</button>
-      <button class="btn danger" onclick="deleteProject(${i})">Delete</button>
+      ${appAccess.admin ? `<button class="btn danger" onclick="deleteProject(${i})">Delete</button>` : ""}
     </div>
     ${p.work_areas.length
       ? p.work_areas.map((w, j) =>
@@ -2723,8 +2793,8 @@ async function saveSgEditor() {
   await loadProjects();
 }
 
-loadUiState().then(refreshRuns);
-loadProjects();  // the sidebar shows declared projects even with no runs
+loadAccess().then(() => Promise.all([loadUiState(), loadProjects()]))
+  .then(refreshRuns);
 setInterval(refreshRuns, 2000);
 </script>
 </body>

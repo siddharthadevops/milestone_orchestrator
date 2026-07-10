@@ -72,6 +72,14 @@ browser.
 
     ./panel.sh                # from the repo root -> http://127.0.0.1:8700
     ./panel.sh --port 9000 --open
+    ./panel-remote.sh         # ngrok + Google OAuth exact-email allowlist
+
+Remote access fails closed unless ngrok injects a known Google identity.
+The configured administrator sees every project and assigns either configured
+user from each project's **Admin users** menu; ordinary users see and operate
+only assigned projects and their runs. Project creation/deletion, membership,
+filesystem browsing, recents, and global profile writes remain admin-only.
+Direct loopback access is the trusted administrator recovery path.
 
 Left pane: launched milestones (process dot, milestone status). Right pane:
 the selected run — pipeline, rounds, seals, failure banner, event log,

@@ -24,6 +24,7 @@ import urllib.parse
 import urllib.request
 from unittest import mock
 
+from orchestrator import access
 from orchestrator import driver as drv
 from orchestrator import kvstore, projects, registry, runners, service, workareas
 from orchestrator import state as st
@@ -128,10 +129,12 @@ class ProjectsServiceTestCase(unittest.TestCase):
 
     # -- request helpers -----------------------------------------------------
 
-    def request_json(self, method, path, payload=None):
+    def request_json(self, method, path, payload=None, headers=None):
         data = json.dumps(payload).encode("utf-8") if payload is not None else None
         req = urllib.request.Request(self.base + path, data=data, method=method)
         req.add_header("Content-Type", "application/json")
+        for key, value in (headers or {}).items():
+            req.add_header(key, value)
         try:
             with urllib.request.urlopen(req, timeout=10) as resp:
                 return resp.status, json.loads(resp.read().decode("utf-8"))
@@ -164,6 +167,14 @@ class ProjectsServiceTestCase(unittest.TestCase):
             part if part in ("work-areas", "meta") else self.q(part)
             for part in suffix
         ])
+
+    @staticmethod
+    def remote_headers(email, marker=access.REMOTE_MARKER):
+        return {
+            "Host": "example.ngrok-free.dev",
+            access.REMOTE_HEADER: marker,
+            access.USER_HEADER: email,
+        }
 
     # -- fixture helpers -----------------------------------------------------
 
@@ -273,6 +284,118 @@ class ProjectsServiceTestCase(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
+# Remote Google identity and per-project authorization
+
+
+class ProjectAccessApiTest(ProjectsServiceTestCase):
+    def test_admin_assigns_users_and_member_sees_only_assigned_project(self):
+        self.create_project(PROJECT)
+        self.create_project("other")
+        self.expect(
+            200, "POST", self.project_path(PROJECT, "users"),
+            {"users": [access.USER_EMAILS[0]]},
+        )
+
+        member = self.remote_headers(access.USER_EMAILS[0])
+        status, auth = self.request_json("GET", "/api/access", headers=member)
+        self.assertEqual(status, 200, auth)
+        self.assertEqual(auth["user"], access.USER_EMAILS[0])
+        self.assertFalse(auth["admin"])
+        self.assertNotIn("users", auth)
+
+        status, body = self.request_json("GET", "/api/projects", headers=member)
+        self.assertEqual(status, 200, body)
+        self.assertEqual([p["slug"] for p in body["projects"]], [PROJECT])
+        status, body = self.request_json(
+            "GET", self.project_path("other"), headers=member
+        )
+        self.assertEqual((status, body["error"]), (403, service.FORBIDDEN))
+
+        # Membership permits run work, never project rebinding/configuration.
+        # Otherwise a member could point the project at another host path and
+        # make the project boundary meaningless.
+        for method, path, payload in (
+            ("GET", self.project_path(PROJECT, "users"), None),
+            ("POST", self.project_path(PROJECT), {"defaults": {}}),
+            ("POST", "/api/projects", {"slug": "forbidden"}),
+            ("DELETE", self.project_path(PROJECT), None),
+            ("GET", "/api/fs", None),
+            ("GET", "/api/recents", None),
+        ):
+            with self.subTest(method=method, path=path):
+                status, body = self.request_json(
+                    method, path, payload, headers=member
+                )
+                self.assertEqual((status, body["error"]),
+                                 (403, service.FORBIDDEN))
+
+    def test_runs_are_filtered_and_guarded_by_project_membership(self):
+        for slug in (PROJECT, "other"):
+            self.create_project(slug)
+            self.declare(self.repo("repo-" + slug.replace(" ", "-")), slug=slug)
+        self.expect(
+            200, "POST", self.project_path(PROJECT, "users"),
+            {"users": [access.USER_EMAILS[1]]},
+        )
+        member = self.remote_headers(access.USER_EMAILS[1])
+        status, allowed = self.request_json(
+            "POST", "/api/runs",
+            {"project": PROJECT, "work_area": AREA, "goal": GOAL,
+             "name": "allowed", "autostart": False},
+            headers=member,
+        )
+        self.assertEqual(status, 201, allowed)
+        _, hidden = self.launch("other", name="hidden")
+
+        status, body = self.request_json("GET", "/api/runs", headers=member)
+        self.assertEqual(status, 200, body)
+        self.assertEqual(
+            [run["id"] for run in body["runs"]], [allowed["run"]["id"]]
+        )
+        status, body = self.request_json(
+            "GET", "/api/runs/" + hidden["run"]["id"], headers=member
+        )
+        self.assertEqual((status, body["error"]), (403, service.FORBIDDEN))
+        status, body = self.request_json(
+            "POST", "/api/runs",
+            {"project": "other", "work_area": AREA, "goal": GOAL,
+             "name": "forbidden", "autostart": False},
+            headers=member,
+        )
+        self.assertEqual((status, body["error"]), (403, service.FORBIDDEN))
+
+    def test_remote_requests_fail_closed_without_valid_injected_identity(self):
+        for headers in (
+            {"Host": "example.ngrok-free.dev"},
+            self.remote_headers("unknown@example.com"),
+            self.remote_headers(access.ADMIN_EMAIL, marker="spoofed"),
+        ):
+            with self.subTest(headers=headers):
+                status, body = self.request_json(
+                    "GET", "/api/access", headers=headers
+                )
+                self.assertEqual((status, body["error"]),
+                                 (403, service.FORBIDDEN))
+
+    def test_remote_admin_has_all_projects_and_manages_membership(self):
+        self.create_project(PROJECT)
+        self.create_project("other")
+        admin = self.remote_headers(access.ADMIN_EMAIL)
+        status, body = self.request_json("GET", "/api/projects", headers=admin)
+        self.assertEqual(status, 200, body)
+        self.assertEqual(
+            [project["slug"] for project in body["projects"]],
+            [PROJECT, "other"],
+        )
+        status, body = self.request_json(
+            "POST", self.project_path(PROJECT, "users"),
+            {"users": list(access.USER_EMAILS)}, headers=admin,
+        )
+        self.assertEqual(status, 200, body)
+        self.assertEqual(body["admin"], access.ADMIN_EMAIL)
+        self.assertEqual(body["users"], list(access.USER_EMAILS))
+
+
 # AC1 + AC2: project lifecycle, GET /api/projects, fail-closed markers
 
 

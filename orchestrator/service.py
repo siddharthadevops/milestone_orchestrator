@@ -5,6 +5,7 @@
 Serves a white two-pane panel (left: launched milestones; right: selected
 run's live state) and a JSON API:
 
+    GET    /api/access             authenticated email, role, assignable users
     GET    /api/runs               all runs + derived status
     GET    /api/fs                 read-only listing for the panel pickers:
                                    ?path=&mode=dir|file&ext=&hidden=1&nearest=1
@@ -46,6 +47,10 @@ work-area name rides as a URL-encoded path segment):
     DELETE /api/projects/<slug>    guarded: refuses while live work areas,
                                    live policies, or bound/unprovable run
                                    states exist
+    GET    /api/projects/<slug>/users
+                                   admin + assigned/available users
+    POST   /api/projects/<slug>/users
+                                   replace assigned users (admin only)
     POST   /api/projects/<slug>/work-areas
                                    declare -> pending: {name, display_name?,
                                    primary_path, additional_paths?}
@@ -143,6 +148,7 @@ import urllib.parse
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+from . import access as panel_access
 from . import driver, errclass, gitops, kvstore, profiles, projects, registry
 from . import reuse_audit
 from . import state as st
@@ -184,6 +190,7 @@ PROJECT_IN_USE = "project_in_use"
 PROJECTION_TOMBSTONE_FAILED = "projection_tombstone_failed"
 PRIMARY_NOT_REPO_ROOT = "primary_not_repo_root"
 MISSING_ADDITIONAL_ROOT = "missing_additional_root"
+FORBIDDEN = "forbidden"
 
 # Slice 2's reason -> HTTP class for the CRUD/read routes: validation
 # reasons 400, unknown 404, CAS exhaustion 409, store corruption 5xx.
@@ -309,9 +316,15 @@ def _project_entry_or_error(home, project):
     return entry
 
 
-def list_projects(home):
+def list_projects(home, who=None):
     rec = registry.load_projects_record(home)
-    return [_project_entry(home, p) for p in rec["projects"]]
+    visible = rec["projects"]
+    if who is not None and not who.get("admin"):
+        visible = [
+            project for project in visible
+            if panel_access.can_access_project(who, project)
+        ]
+    return [_project_entry(home, p) for p in visible]
 
 
 def create_project(home, body):
@@ -332,7 +345,7 @@ def create_project(home, body):
         kvstore.initialize_empty_store(
             os.path.join(registry.projects_base(home), slug)
         )
-        project = {"slug": slug, "defaults": defaults}
+        project = {"slug": slug, "defaults": defaults, "users": []}
         rec["projects"].append(project)
         registry.save_projects_record(home, rec)
     return _project_entry_or_error(home, project)
@@ -366,6 +379,29 @@ def update_project(home, slug, body):
         project["defaults"] = defaults
         registry.save_projects_record(home, rec)
     return _project_entry_or_error(home, project)
+
+
+def read_project_users(home, slug):
+    slug, rec = _require_declared(home, slug)
+    project = registry.get_project(rec, slug)
+    return {
+        "admin": panel_access.ADMIN_EMAIL,
+        "users": panel_access.project_users(project),
+        "available_users": list(panel_access.USER_EMAILS),
+    }
+
+
+def update_project_users(home, slug, body):
+    try:
+        users = panel_access.validated_users(body.get("users"))
+    except ValueError as exc:
+        raise ApiError(400, str(exc))
+    with registry.locked(home):
+        slug, rec = _require_declared(home, slug)
+        project = registry.get_project(rec, slug)
+        project["users"] = users
+        registry.save_projects_record(home, rec)
+    return read_project_users(home, slug)
 
 
 def delete_project(home, slug):
@@ -767,6 +803,13 @@ def projects_api(home, method, segments, body, query=None):
                 "ok": True,
                 "work_area": declare_work_area(home, segments[0], body),
             }
+    elif n == 2 and segments[1] == "users":
+        if method == "GET":
+            return 200, {"ok": True, **read_project_users(home, segments[0])}
+        if method == "POST":
+            return 200, {"ok": True, **update_project_users(
+                home, segments[0], body
+            )}
     elif n == 2 and segments[1] == "policies":
         if method == "POST":
             return 200, {
@@ -2480,6 +2523,65 @@ def read_log_tail(home, run_id, lines):
 
 
 # ---------------------------------------------------------------------------
+# Request identity and project authorization
+
+
+def access_view(who):
+    out = {
+        "user": who["email"],
+        "admin": bool(who.get("admin")),
+        "local": bool(who.get("local")),
+    }
+    if who.get("admin"):
+        out["users"] = list(panel_access.USER_EMAILS)
+    return out
+
+
+def require_project_access(home, who, slug):
+    try:
+        slug = workareas.validate_project_slug(slug)
+    except workareas.WorkAreaValidationError as exc:
+        raise ApiError(400, exc.reason)
+    rec = registry.load_projects_record(home)
+    project = registry.get_project(rec, slug)
+    if project is None:
+        raise ApiError(404, UNKNOWN_PROJECT)
+    if not panel_access.can_access_project(who, project):
+        raise ApiError(403, FORBIDDEN)
+    return project
+
+
+def require_run_access(home, who, run_id):
+    entry = registry.get(registry.load(home), run_id)
+    if entry is None:
+        raise ApiError(404, "unknown run %r" % run_id)
+    if who.get("admin"):
+        return entry
+    slug = entry.get("project")
+    if slug is None:
+        try:
+            slug = (load_summary(entry["state_path"]) or {}).get("project")
+        except Exception:
+            slug = None
+    if slug is None:
+        raise ApiError(403, FORBIDDEN)
+    require_project_access(home, who, slug)
+    return entry
+
+
+def visible_runs(home, who):
+    runs = list_runs(home)
+    if who.get("admin"):
+        return runs
+    rec = registry.load_projects_record(home)
+    allowed = {
+        project["slug"] for project in rec["projects"]
+        if panel_access.can_access_project(who, project)
+    }
+    return [run for run in runs if run.get("project") in allowed]
+
+
+# ---------------------------------------------------------------------------
 # HTTP layer
 
 
@@ -2491,20 +2593,50 @@ def make_handler(home):
             query = urllib.parse.parse_qs(parsed.query)
             return parsed.path, {k: v[-1] for k, v in query.items()}
 
+        def _who(self):
+            try:
+                return panel_access.identity(self.headers)
+            except panel_access.AccessDenied:
+                raise ApiError(403, FORBIDDEN)
+
+        def _require_admin(self, who):
+            if not who.get("admin"):
+                raise ApiError(403, FORBIDDEN)
+
+        def _authorize_project_route(self, who, method, segments):
+            if who.get("admin"):
+                return
+            if not segments:
+                if method != "GET":
+                    self._require_admin(who)
+                return
+            if len(segments) == 2 and segments[1] == "users":
+                self._require_admin(who)
+                return
+            if method != "GET":
+                self._require_admin(who)
+                return
+            require_project_access(home, who, segments[0])
+
         def do_GET(self):
             try:
                 route, query = self._route()
+                who = self._who()
                 if route in ("/", "/index.html"):
                     self._static("panel.html", "text/html; charset=utf-8")
+                elif route == "/api/access":
+                    self._json(200, {"ok": True, **access_view(who)})
                 elif route == "/api/runs":
-                    self._json(200, {"ok": True, "runs": list_runs(home)})
+                    self._json(200, {"ok": True, "runs": visible_runs(home, who)})
                 elif route == "/api/recents":
+                    self._require_admin(who)
                     self._json(200, {"ok": True, **recent_paths(home)})
                 elif route == "/api/ui-state":
                     self._json(200, {"ok": True, **registry.load_ui_state(home)})
                 elif route == "/api/profiles":
                     self._json(200, {"ok": True, "profiles": profiles_list(home)})
                 elif route == "/api/fs":
+                    self._require_admin(who)
                     exts = None
                     if "ext" in query:
                         exts = tuple(
@@ -2524,12 +2656,21 @@ def make_handler(home):
                     )
                     self._json(200, {"ok": True, **listing})
                 elif route == "/api/projects" or route.startswith("/api/projects/"):
-                    status, payload = projects_api(
-                        home, "GET", project_route_segments(route), None
-                    )
+                    segments = project_route_segments(route)
+                    self._authorize_project_route(who, "GET", segments)
+                    if not segments:
+                        status, payload = 200, {
+                            "ok": True, "projects": list_projects(home, who)
+                        }
+                    else:
+                        status, payload = projects_api(
+                            home, "GET", segments, None
+                        )
                     self._json(status, payload)
                 elif route.startswith("/api/runs/"):
                     parts = route.rstrip("/").split("/")
+                    if len(parts) >= 4:
+                        require_run_access(home, who, parts[3])
                     # /api/runs/<id>  or  /api/runs/<id>/log
                     if len(parts) == 4:
                         self._json(200, {"ok": True, **run_detail(home, parts[3])})
@@ -2565,8 +2706,14 @@ def make_handler(home):
         def do_POST(self):
             try:
                 route, _query = self._route()
+                who = self._who()
                 if route == "/api/runs":
-                    entry = create_run(home, self._body())
+                    body = self._body()
+                    if body.get("project") is None:
+                        self._require_admin(who)
+                    elif not who.get("admin"):
+                        require_project_access(home, who, body.get("project"))
+                    entry = create_run(home, body)
                     self._json(201, {"ok": True, "run": run_status(entry, home=home)})
                 elif route == "/api/ui-state":
                     self._json(
@@ -2574,16 +2721,21 @@ def make_handler(home):
                         {"ok": True, **registry.save_ui_state(home, self._body())},
                     )
                 elif route == "/api/profiles":
+                    self._require_admin(who)
                     saved = save_profile(home, self._body())
                     self._json(200, {"ok": True, "profile": saved})
                 elif route == "/api/projects" or route.startswith("/api/projects/"):
+                    segments = project_route_segments(route)
+                    self._authorize_project_route(who, "POST", segments)
                     status, payload = projects_api(
-                        home, "POST", project_route_segments(route),
+                        home, "POST", segments,
                         self._body(),
                     )
                     self._json(status, payload)
                 elif route.startswith("/api/runs/"):
                     parts = route.rstrip("/").split("/")
+                    if len(parts) >= 4:
+                        require_run_access(home, who, parts[3])
                     if len(parts) == 5 and parts[4] == "start":
                         entry = start_run(home, parts[3])
                         self._json(200, {"ok": True, "run": run_status(entry, home=home)})
@@ -2617,17 +2769,22 @@ def make_handler(home):
         def do_DELETE(self):
             try:
                 route, query = self._route()
+                who = self._who()
                 parts = route.rstrip("/").split("/")
                 if (len(parts) == 6 and route.startswith("/api/runs/")
                         and parts[4] == "amendments"):
+                    require_run_access(home, who, parts[3])
                     amendments = delete_amendment(home, parts[3], parts[5])
                     self._json(200, {"ok": True, "amendments": amendments})
                 elif len(parts) == 4 and route.startswith("/api/runs/"):
+                    require_run_access(home, who, parts[3])
                     self._json(200, {"ok": True, **delete_run(
                         home, parts[3], purge=query.get("purge") == "1")})
                 elif route == "/api/projects" or route.startswith("/api/projects/"):
+                    segments = project_route_segments(route)
+                    self._authorize_project_route(who, "DELETE", segments)
                     status, payload = projects_api(
-                        home, "DELETE", project_route_segments(route), None,
+                        home, "DELETE", segments, None,
                         query=query,
                     )
                     self._json(status, payload)
