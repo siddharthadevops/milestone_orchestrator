@@ -229,6 +229,7 @@ class TestCalculatorE2E(unittest.TestCase):
                 "name",
                 "docs_dir",
                 "failure",
+                "work_duration_s",
                 "units",
                 "events_total",
                 "last_events",
@@ -240,6 +241,7 @@ class TestCalculatorE2E(unittest.TestCase):
         self.assertEqual(summ["goal"], GOAL)
         self.assertEqual(summ["workspace"], self.work)
         self.assertIsInstance(summ["events_total"], int)
+        self.assertGreater(summ["work_duration_s"], 0)
         self.assertIsInstance(summ["last_events"], list)
         self.assertLessEqual(len(summ["last_events"]), 30)
         self.assertGreaterEqual(summ["events_total"], len(summ["last_events"]))
@@ -248,7 +250,7 @@ class TestCalculatorE2E(unittest.TestCase):
                 set(u.keys()),
                 {"unit", "status", "artifact", "gate_sha", "wip_sha", "draft",
                  "rounds", "seals", "opened_epoch", "closed_epoch", "debt",
-                 "reclassify"},
+                 "reclassify", "work_duration_s"},
             )
         # The CLI's JSON is exactly state.summary() over the on-disk state.
         self.assertEqual(summ, st.summary(self.disk_state()))

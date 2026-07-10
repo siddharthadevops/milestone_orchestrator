@@ -139,6 +139,12 @@ class ServiceApiTest(unittest.TestCase):
         self.assertIn("const sameFamilyReview = base.find", text)
         self.assertIn('addLine(`${family} review`', text)
         self.assertIn('addLine("Seal", `Attempt ${group.number}`', text)
+        self.assertIn('id="a_convergence_fixer_agent"', text)
+        self.assertIn('id="ra_convergence_fixer_model"', text)
+        self.assertIn("if (!sum || sum.work_duration_s == null)", text)
+        self.assertIn("const sliceDuration = present.length", text)
+        self.assertIn("u.work_duration_s != null", text)
+        self.assertNotIn("sum.last_event_epoch - sum.created_epoch", text)
 
     def test_unknown_path_is_404_json(self):
         status, body = self.request_json("GET", "/definitely/not/here")
@@ -640,6 +646,9 @@ class ActsApiTest(ServiceApiTest):
                                "model": "claude-sonnet-5",
                                "effort": "medium"},
              "fixer": "codex",
+             "convergence_fixer": {"agent": "codex",
+                                     "model": "gpt-5.6-sol",
+                                     "effort": "max"},
              "drafter": None})
         self.assertEqual(status, 200)
         self.assertEqual(body["acts"]["implementer"]["model"], "sonnet")
@@ -648,6 +657,7 @@ class ActsApiTest(ServiceApiTest):
         self.assertEqual(body["acts"]["review_claude"]["model"],
                          "claude-sonnet-5")
         self.assertNotIn("agent", body["acts"]["review_claude"])
+        self.assertEqual(body["acts"]["convergence_fixer"]["effort"], "max")
         status, body = self.request_json("GET", "/api/runs/%s" % rid)
         self.assertEqual(body["acts"]["fixer"], "codex")
         with open(os.path.join(ws, ".orchestrator", "acts.json"),

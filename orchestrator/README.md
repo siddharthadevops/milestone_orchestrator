@@ -122,6 +122,14 @@ live session leader — which a real driver always is and an OS-recycled pid
 almost never is — so stale pids neither wedge start/delete nor let stop
 signal an innocent process group.
 
+Panel time is completed LLM work derived from the append-only ledger, not
+driver wall time: draft/implement calls, review/fix/delta rounds, every seal
+half, reported builder gaps, repaired first strikes, and reclassifications each
+count once. Parallel calls both count because this measures work consumed. The
+global clock sums all units; each Slice heading sums its doc + implementation
+units. Verification, backoff, and interrupted calls without a completed
+duration stay out.
+
 Trust model: binds 127.0.0.1, no auth. It spawns full-permission LLM CLIs,
 exactly like running the driver yourself; never expose the port.
 
@@ -215,10 +223,15 @@ findings for the FIX LOOP:
          re-verify, or a fresh seal attempt)
 
 Per-act family policy (config "acts"): fixer and consultation are a fixed
-family name, "self", or "opposite" (relative to the act's origin). Delta
-review has no independent policy: it always uses the fixer's family and the
-selected Review profile for that family. Review rounds and seal halves keep
-their family identity by definition.
+family name, "self", or "opposite" (relative to the act's origin). After 10
+dirty delta reviews in the same fix episode, `convergence_fixer` replaces the
+normal fixer (default Codex Sol/max) and receives a compact summary of the last
+five dirty deltas to look for their shared cause. The threshold is configurable
+with `convergence_fixer_after_deltas`; its history survives Stop/Start and
+Resume even though Resume grants a fresh loop budget. Delta review has no
+independent policy: it always uses the latest fixer's family and the selected
+Review profile for that family. Review rounds and seal halves keep their family
+identity by definition.
 
 ### Adjudicated rejections (no infinite finding loops)
 

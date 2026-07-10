@@ -402,8 +402,10 @@
       pre-selected on purpose — the choice is explicit.</p>
     <p><b>Acts</b> — empty = family default (claude: opus-4.8/max, codex:
       gpt-5.6-sol/xhigh); model options adapt to the agent; editable mid-run
-      from the run view. The two review rows tune each fixed family for review
-      rounds, delta reviews and seals; family rotation never changes.</p>
+      from the run view. The convergence fixer takes over after 10 dirty
+      delta reviews in one fix chain (default: sol/max). The two review rows
+      tune each fixed family for review rounds, delta reviews and seals;
+      family rotation never changes.</p>
     <p><b>Verification</b> — left empty, the implementer reports the repo's
       official suite and the driver arms the gates with it.</p>
   </div>
@@ -471,6 +473,17 @@
       <select id="a_fixer_effort"><option value="">default</option>
         <option>low</option><option>medium</option><option>high</option>
         <option>xhigh</option><option>max</option></select>
+      <label>Convergence fix</label>
+      <select id="a_convergence_fixer_agent"
+        onchange="onAgentChange('a_','convergence_fixer')">
+        <option value="">default (codex)</option>
+        <option>codex</option><option>claude</option></select>
+      <input id="a_convergence_fixer_model" list="dl_a_convergence_fixer"
+        placeholder="default (sol)">
+      <select id="a_convergence_fixer_effort">
+        <option value="">default (max)</option>
+        <option>low</option><option>medium</option><option>high</option>
+        <option>xhigh</option><option>max</option></select>
       <label>Reclassify</label>
       <select id="a_reclassifier_agent"
         onchange="onAgentChange('a_','reclassifier')">
@@ -487,6 +500,7 @@
     <datalist id="dl_a_review_codex"></datalist>
     <datalist id="dl_a_review_claude"></datalist>
     <datalist id="dl_a_fixer"></datalist>
+    <datalist id="dl_a_convergence_fixer"></datalist>
     <datalist id="dl_a_reclassifier"></datalist></div>
   <div class="field">
     <button class="btn" type="button" id="f_more_btn"
@@ -570,6 +584,15 @@
       <option>codex</option><option>claude</option></select>
     <input id="ra_fixer_model" list="dl_ra_fixer" placeholder="default">
     <select id="ra_fixer_effort"><option value="">default</option></select>
+    <label>Convergence fix</label>
+    <select id="ra_convergence_fixer_agent"
+      onchange="onAgentChange('ra_','convergence_fixer')">
+      <option value="">default (codex)</option>
+      <option>codex</option><option>claude</option></select>
+    <input id="ra_convergence_fixer_model" list="dl_ra_convergence_fixer"
+      placeholder="default (sol)">
+    <select id="ra_convergence_fixer_effort">
+      <option value="">default (max)</option></select>
     <label>Reclassify</label>
     <select id="ra_reclassifier_agent"
       onchange="onAgentChange('ra_','reclassifier')">
@@ -584,8 +607,10 @@
   <datalist id="dl_ra_review_codex"></datalist>
   <datalist id="dl_ra_review_claude"></datalist>
   <datalist id="dl_ra_fixer"></datalist>
+  <datalist id="dl_ra_convergence_fixer"></datalist>
   <datalist id="dl_ra_reclassifier"></datalist>
   <div class="hint" style="margin-top:8px">Empty = launch config / defaults.
+    Convergence fix takes over after 10 dirty deltas in one fix chain.
     Binds from the NEXT act resolution (drivers started before this feature
     need one Stop → Start).</div>
   <div class="formrow">
@@ -908,15 +933,9 @@ function elapsed(t0) {
   if (!t0) return "";
   return fmtDHMS(Date.now() / 1000 - t0);
 }
-function runTime(sum, s) {
-  if (!sum || !sum.created_epoch) return "";
-  if (s.process === "running")
-    return elapsed(sum.created_epoch);
-  if (sum.last_event_epoch && sum.last_event_epoch > sum.created_epoch) {
-    const label = sum.milestone_status === "closed" ? "took" : "active for";
-    return `${label} ${fmtDHMS(sum.last_event_epoch - sum.created_epoch)}`;
-  }
-  return "";
+function runTime(sum) {
+  if (!sum || sum.work_duration_s == null) return "";
+  return fmtDHMS(sum.work_duration_s);
 }
 // Renders are innerHTML swaps, so a plain spinner restarts its animation at
 // every poll. Phase-lock it to the wall clock with a negative delay: the
@@ -1062,7 +1081,7 @@ function reclassifyChip(ev, unitKey) {
   const scale = two ? `dmg ${ev.drift_damage}` : risk;
   const label = ev.defer_ok ? `debt · ${scale}` : `kept · ${scale}`;
   const title = `${ev.finding_id || ""}${two ? ` · risk ${risk}` : ""}${ev.threshold ? ` (threshold ${ev.threshold})` : ""}`;
-  return `<span class="chip ${ev.defer_ok ? "clean" : "sev23"} clicky" title="${esc(title)}" onclick="showStory('debt:${esc(unitKey)}')">${esc(label)}</span>`;
+  return `<span class="chip ${ev.defer_ok ? "clean" : "sev23"} clicky" title="${esc(title)}" onclick="showStory('debt:${esc(unitKey)}')">${esc(label)}${fmtDur(ev.duration_s)}</span>`;
 }
 function unitHistory(u, activity, running) {
   const lead = [draftChip(u.draft, u.unit), docChip(u)].filter(Boolean);
@@ -1367,9 +1386,9 @@ async function refreshDetail() {
       // on the edit page.
       html += `<div class="run-sticky-head">`;
       if (s.project) html += `<div class="proj-title">${esc(s.project)}</div>`;
-      const totalTime = runTime(sum, s);
+      const totalTime = runTime(sum);
       html += `<div class="run-title-row"><h2>${esc(s.name)} ${msChip(s.milestone_status)}</h2>` +
-        (totalTime ? `<span class="run-clock">${esc(totalTime)}</span>` : "") +
+        (totalTime ? `<span class="run-clock" title="completed LLM work">${esc(totalTime)}</span>` : "") +
         `</div>`;
       html += workingContext(s, "detail");
       html += `</div>`;
@@ -1437,7 +1456,8 @@ async function refreshDetail() {
     const actLabel = {drafter: "draft", implementer: "impl",
                       review_codex: "review codex",
                       review_claude: "review claude",
-                      fixer: "fix", reclassifier: "reclass"};
+                      fixer: "fix", convergence_fixer: "convergence fix",
+                      reclassifier: "reclass"};
     const actsSum = ACT_NAMES.map(a => {
       const v = lastEffActs[a];
       const e = typeof v === "string" ? {agent: v} : (v || {});
@@ -1468,9 +1488,10 @@ async function refreshDetail() {
         const sl = (sum.slices || []).find(x => x.id === id);
         return sl ? `<span class="unit-title">${esc(sl.title)}</span>` : "";
       };
-      const catRow = (label, title, stat) =>
+      const catRow = (label, title, stat, duration) =>
         `<div class="pipe-cat"><span>${esc(label)}${title}</span>` +
-        (stat ? `<span class="st ${esc(stat)}">${esc(stat)}</span>` : "") +
+        (stat ? `<span class="st ${esc(stat)}">${esc(stat)}${
+          duration != null ? ` · ${fmtDHMS(duration)}` : ""}</span>` : "") +
         `</div>`;
       lastWebBase = d.commit_web_base;
       // Opens the LOCAL commit viewer (git show in the workspace): unlike
@@ -1486,11 +1507,8 @@ async function refreshDetail() {
           onclick="showCommit('${esc(u.unit)}')">${wip ? "wip " : ""}${esc(sha)}</span>`;
       };
       const unitRow = u => {
-        let time = "";
-        if (u.opened_epoch && u.closed_epoch)
-          time = ` · ${fmtDHMS(u.closed_epoch - u.opened_epoch)}`;
-        else if (u.opened_epoch && running && u.unit === sum.current_unit)
-          time = ` · ${elapsed(u.opened_epoch)}`;
+        const time = u.work_duration_s != null
+          ? ` · ${fmtDHMS(u.work_duration_s)}` : "";
         return `
         <div class="unit">
           <div class="unit-head"><span class="unit-name">${esc(u.unit)}</span>
@@ -1508,7 +1526,8 @@ async function refreshDetail() {
       const seen = {};
       let rows = "";
       if (byKey.skeleton) {
-        rows += catRow("Skeleton", "", byKey.skeleton.status)
+        rows += catRow("Skeleton", "", byKey.skeleton.status,
+                       byKey.skeleton.work_duration_s)
               + unitRow(byKey.skeleton);
         seen.skeleton = 1;
       }
@@ -1517,7 +1536,12 @@ async function refreshDetail() {
         const doc = byKey[`slice_doc-${pad}`], impl = byKey[`slice_impl-${pad}`];
         const slStat = impl ? impl.status
           : (doc && doc.status !== "sealed") ? doc.status : "pending";
-        rows += catRow(`Slice ${pad}`, sliceTitle(sl.id), slStat);
+        const present = [doc, impl].filter(Boolean);
+        const sliceDuration = present.length
+          ? present.reduce((total, u) => total + (u.work_duration_s || 0), 0)
+          : null;
+        rows += catRow(`Slice ${pad}`, sliceTitle(sl.id), slStat,
+                       sliceDuration);
         [`slice_doc-${pad}`, `slice_impl-${pad}`].forEach(k => {
           if (byKey[k]) { rows += unitRow(byKey[k]); seen[k] = 1; }
           else rows += ghostRow(k);
@@ -1994,7 +2018,8 @@ document.getElementById("pk_list").addEventListener("click", (ev) => {
   }
 });
 const ACT_NAMES = ["drafter", "implementer", "review_codex",
-                   "review_claude", "fixer", "reclassifier"];
+                   "review_claude", "fixer", "convergence_fixer",
+                   "reclassifier"];
 const FIXED_ACT_AGENTS = {
   review_codex: "codex",
   review_claude: "claude",

@@ -880,6 +880,75 @@ class TestEnterFixEpisode(TempWorkspaceCase):
 
 
 # ---------------------------------------------------------------------------
+# convergence history derived from immutable events
+
+
+class TestActiveFixDirtyDeltas(TempWorkspaceCase):
+    def _episode(self):
+        state = make_state(self.workspace)
+        unit = st.current_unit(state)
+        st.transition_unit(state, unit, st.U_PRE_REVIEW_VERIFY)
+        st.transition_unit(state, unit, st.U_ROUNDS)
+        st.enter_fix_episode(
+            state, unit, [verification_finding()], "round", "codex",
+            "skeleton-codex-r1", st.U_ROUNDS,
+        )
+        return state, unit
+
+    def _dirty_delta(self, state, unit, family="codex"):
+        st.transition_unit(state, unit, st.U_DELTA_REVIEW)
+        rec = st.record_round(
+            state, unit, family, contracts.KIND_DELTA_REVIEW,
+            dirty_review(contracts.KIND_DELTA_REVIEW),
+        )
+        st.transition_unit(state, unit, st.U_FIXING)
+        return rec
+
+    def test_counts_only_current_episode_and_resets_after_green(self):
+        state, unit = self._episode()
+        first = self._dirty_delta(state, unit)
+        second = self._dirty_delta(state, unit, family="claude")
+        self.assertEqual(st.active_fix_dirty_deltas(state, unit), 2)
+        self.assertEqual(
+            [r["id"] for r in st.active_fix_dirty_delta_rounds(state, unit)],
+            [first["id"], second["id"]],
+        )
+
+        # Close the chain through the real green-delta shape.
+        st.transition_unit(state, unit, st.U_DELTA_REVIEW)
+        st.record_round(
+            state, unit, "claude", contracts.KIND_DELTA_REVIEW,
+            clean_review(contracts.KIND_DELTA_REVIEW),
+        )
+        unit["fix_queue"] = []
+        unit["fix_source"] = None
+        st.transition_unit(state, unit, st.U_ROUNDS)
+        self.assertEqual(st.active_fix_dirty_deltas(state, unit), 0)
+
+        # A later episode finds the latest non-delta root, not old history.
+        st.enter_fix_episode(
+            state, unit, [verification_finding()], "round", "claude",
+            "skeleton-claude-r9", st.U_ROUNDS,
+        )
+        self.assertEqual(st.active_fix_dirty_deltas(state, unit), 0)
+        self._dirty_delta(state, unit, family="claude")
+        self.assertEqual(st.active_fix_dirty_deltas(state, unit), 1)
+
+    def test_resume_keeps_derived_convergence_count(self):
+        state, unit = self._episode()
+        self._dirty_delta(state, unit)
+        self._dirty_delta(state, unit)
+        st.fail_run(state, "loop budget exhausted", unit=unit)
+        self.assertEqual(st.active_fix_dirty_deltas(state, unit), 2)
+
+        st.resume_run(state)
+
+        self.assertEqual(unit["status"], st.U_FIXING)
+        self.assertEqual(unit["fix_loop_rounds"], 0)
+        self.assertEqual(st.active_fix_dirty_deltas(state, unit), 2)
+
+
+# ---------------------------------------------------------------------------
 # Adjudication registry (milestone-global, derived from immutable rounds)
 
 
@@ -1704,6 +1773,7 @@ class TestSummary(TempWorkspaceCase):
                 "name",
                 "docs_dir",
                 "failure",
+                "work_duration_s",
                 "units",
                 "events_total",
                 "last_events",
@@ -1729,7 +1799,7 @@ class TestSummary(TempWorkspaceCase):
             set(skel_view.keys()),
             {"unit", "status", "artifact", "gate_sha", "wip_sha", "draft",
              "rounds", "seals", "opened_epoch", "closed_epoch", "debt",
-             "reclassify"},
+             "reclassify", "work_duration_s"},
         )
         # The draft chip data: write-once record surfaced for the panel.
         self.assertEqual(
@@ -1763,6 +1833,67 @@ class TestSummary(TempWorkspaceCase):
         # doc view carries the dirty round's finding count
         self.assertEqual(doc_view["rounds"][0]["findings"], 2)
         self.assertEqual(doc_view["seals"], [])
+
+    def test_work_duration_sums_completed_llm_calls_once(self):
+        state = make_state(self.workspace)
+        unit = state["units"][0]
+        st.record_draft(
+            state, unit, contracts.KIND_DRAFT_SKELETON,
+            skeleton_draft(1), duration=10,
+        )
+        unit["status"] = st.U_ROUNDS
+        st.record_round(
+            state, unit, "codex", contracts.KIND_REVIEW_ROUND,
+            clean_review(), duration=20,
+        )
+        # Invalidated completed calls still consumed model work.
+        st.record_round(
+            state, unit, "claude", contracts.KIND_REVIEW_ROUND,
+            clean_review(), duration=30, meta={"invalidated": "tampered"},
+        )
+        unit["status"] = st.U_SEALING
+        halves = make_halves()
+        halves["codex"]["duration_s"] = 40
+        halves["claude"]["duration_s"] = 50
+        st.record_seal_attempt(
+            state, unit, halves, False, invalidated="tampered"
+        )
+        st.append_event(
+            state, "reclassify_recorded", unit="skeleton",
+            finding_id="codex-F1", defer_ok=False, duration_s=60,
+        )
+        # Explicit unit + matching label must be counted once, not once by
+        # each attribution route.
+        st.append_event(
+            state, "worker_malformed", unit="skeleton",
+            label="skeleton-codex-r1", duration_s=70,
+        )
+        # Historical strikes lacked unit; infer it from the durable label.
+        st.append_event(
+            state, "worker_malformed",
+            label="skeleton-seal-a1-codex", duration_s=80,
+        )
+        # Unassignable repaired work belongs only in the global total.
+        st.append_event(
+            state, "worker_malformed", label="legacy-unknown",
+            duration_s=90,
+        )
+        # Fatal/partial calls and non-LLM verification are deliberately out.
+        st.append_event(
+            state, "worker_malformed", unit="skeleton", fatal=True,
+            label="skeleton-fatal", duration_s=100,
+        )
+        st.append_event(
+            state, "verification", unit="skeleton", duration_s=110,
+        )
+
+        summ = st.summary(state)
+
+        self.assertEqual(summ["units"][0]["work_duration_s"], 360.0)
+        self.assertEqual(summ["work_duration_s"], 450.0)
+        self.assertEqual(
+            summ["units"][0]["reclassify"][0]["duration_s"], 60
+        )
 
     def test_summary_surfaces_effective_models_for_chips(self):
         state = make_state(self.workspace)

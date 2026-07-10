@@ -121,13 +121,29 @@ DEFAULT_CONFIG = {
     # implementer fall back to fix_family (legacy behavior). The operator
     # can hot-edit all of this mid-run via acts.json; the driver re-reads it
     # before every act resolution.
-    "acts": {"fixer": "codex", "consultation": "opposite",
-             # Who RATES findings for debt deferral: "opposite" (the
-             # pre-reform doctrine) or a fixed family (operator
-             # 2026-07-09: an 8-minute opposite-family rating of a
-             # 4-minute review's findings is upside down; a fixed fast
-             # rater is still a fresh stateless look).
-             "reclassifier": "opposite"},
+    "acts": {
+        "fixer": "codex",
+        # Once one fix chain has produced enough dirty delta reviews,
+        # use a deliberately stronger, independently configurable fixer.
+        # Frozen pre-feature configs fall back to this exact profile too;
+        # acts.json can still replace it mid-run.
+        "convergence_fixer": {
+            "agent": "codex",
+            "model": "gpt-5.6-sol",
+            "effort": "max",
+        },
+        "consultation": "opposite",
+        # Who RATES findings for debt deferral: "opposite" (the
+        # pre-reform doctrine) or a fixed family (operator
+        # 2026-07-09: an 8-minute opposite-family rating of a
+        # 4-minute review's findings is upside down; a fixed fast
+        # rater is still a fresh stateless look).
+        "reclassifier": "opposite",
+    },
+    # The fixer AFTER this many dirty delta reviews in the same active fix
+    # chain uses convergence_fixer. The count is derived from append-only
+    # history, so stopping/resuming a run cannot reset the escalation.
+    "convergence_fixer_after_deltas": 10,
     # Fixer+delta iterations allowed per fix episode before failing. A
     # deliberate resume grants a fresh budget (state.resume_run resets the
     # counter), so this is a soft ceiling, not a dead end.
@@ -548,6 +564,11 @@ class Driver(object):
             )
         return paths
 
+    def _worker_event_unit(self):
+        """Owning unit for worker incidents recorded outside unit records."""
+        unit = st.current_unit(self.state)
+        return st.unit_key(unit) if unit is not None else None
+
     def _record_fatal_malformed(self, raw_name, kind, family, exc,
                                 raw_paths):
         """The RED chip: ANY failed LLM call — a double contract
@@ -561,6 +582,7 @@ class Driver(object):
         st.append_event(
             self.state,
             "worker_malformed",
+            unit=self._worker_event_unit(),
             label=raw_name,
             kind=kind,
             family=family,
@@ -581,6 +603,7 @@ class Driver(object):
         st.append_event(
             self.state,
             "worker_malformed",
+            unit=self._worker_event_unit(),
             label=exc.protocol_label,
             kind=contracts.KIND_SEAL_HALF,
             family=exc.family,
@@ -971,6 +994,7 @@ class Driver(object):
         st.append_event(
             self.state,
             "worker_malformed",
+            unit=self._worker_event_unit(),
             label=raw_name,
             kind=kind,
             family=family,
@@ -1248,7 +1272,7 @@ class Driver(object):
             # (reform §3). Route it upstream (repair) or to the operator
             # (goal). The unit finished NOTHING and stays pending; it
             # re-drafts after the repair reseals.
-            return self._handle_gap(unit, output)
+            return self._handle_gap(unit, output, result.duration_s)
         self._check_worker_blocked(unit, output, kind)
         st.record_draft(self.state, unit, kind, output, raw_path,
                         family=family, duration=result.duration_s,
@@ -1344,10 +1368,11 @@ class Driver(object):
             finding["example"] = gap["example"]
         return finding
 
-    def _handle_gap(self, unit, output):
+    def _handle_gap(self, unit, output, duration_s=None):
         gaps = output.get("gaps", [])
         st.append_event(
             self.state, "gap_reported", unit=st.unit_key(unit),
+            duration_s=duration_s,
             count=len(gaps),
             gaps=[{k: g.get(k) for k in ("target", "forced_decision", "plain")}
                   for g in gaps],
@@ -1535,6 +1560,29 @@ class Driver(object):
         model, effort = self._review_profile(family)
         return family, model, effort
 
+    def _convergence_fixer_profile(self, origin_family=None):
+        """Effective profile for a fix chain that is failing to converge.
+
+        Runs freeze config at creation time, so old live runs do not contain
+        this act. They still receive the current Sol/max default. A hot
+        acts.json entry is detected explicitly and then resolved through the
+        ordinary policy machinery, preserving its normal precedence.
+        """
+        configured = (self.config.get("acts") or {}).get(
+            "convergence_fixer"
+        )
+        hot = self._acts_overlay().get("convergence_fixer")
+        if configured or hot:
+            return self._act_profile(
+                "convergence_fixer",
+                origin_family=origin_family,
+                default_family="codex",
+            )
+        fallback = DEFAULT_CONFIG["acts"]["convergence_fixer"]
+        return (
+            fallback["agent"], fallback["model"], fallback["effort"]
+        )
+
     def _resolve_act(self, act, origin_family):
         """Family-only view of _act_profile (legacy call sites/tests)."""
         fam, _m, _e = self._act_profile(
@@ -1666,9 +1714,29 @@ class Driver(object):
             )
             self._save()
             raise StopStep("fix loop cap")
-        family, fix_model, fix_effort = self._act_profile(
-            "fixer", source.get("family"), default_family="codex"
+        dirty_delta_rounds = st.active_fix_dirty_delta_rounds(
+            self.state, unit
         )
+        dirty_deltas = len(dirty_delta_rounds)
+        try:
+            convergence_after = int(self.config.get(
+                "convergence_fixer_after_deltas",
+                DEFAULT_CONFIG["convergence_fixer_after_deltas"],
+            ))
+        except (TypeError, ValueError):
+            convergence_after = DEFAULT_CONFIG[
+                "convergence_fixer_after_deltas"
+            ]
+        convergence_after = max(0, convergence_after)
+        convergence = dirty_deltas >= convergence_after
+        if convergence:
+            family, fix_model, fix_effort = (
+                self._convergence_fixer_profile(source.get("family"))
+            )
+        else:
+            family, fix_model, fix_effort = self._act_profile(
+                "fixer", source.get("family"), default_family="codex"
+            )
         consultation_family = self._resolve_act("consultation", family)
         project_context, extensions, roots = self._project_prompt_inputs(
             unit, contracts.KIND_FIX_FINDINGS
@@ -1693,6 +1761,14 @@ class Driver(object):
             killed_notice=bool(unit.pop("killed_fix_notice", None)),
             project_context=project_context,
             debt=self._debt(unit),
+            convergence=(
+                {
+                    "dirty_deltas": dirty_deltas,
+                    "rounds": dirty_delta_rounds[-5:],
+                }
+                if convergence
+                else None
+            ),
         )
         n_fix = 1 + len(
             [r for r in unit["rounds"] if r["kind"] == contracts.KIND_FIX_FINDINGS]
@@ -1753,6 +1829,11 @@ class Driver(object):
                 **(
                     {"model": fix_model, "effort": fix_effort}
                     if (fix_model or fix_effort)
+                    else {}
+                ),
+                **(
+                    {"convergence_dirty_deltas": dirty_deltas}
+                    if convergence
                     else {}
                 ),
             },
@@ -2133,6 +2214,7 @@ class Driver(object):
                 defer_ok, reason = False, "reclassification unavailable"
                 risk = None
                 damage = None
+                duration_s = None
                 if opp == raising_family and not explicit:
                     # No independent opposite family (single-family config):
                     # cross-family verification is impossible, so the finding
@@ -2184,6 +2266,7 @@ class Driver(object):
                             ),
                         )
                         self._save_raw(raw_name, result.text)
+                        duration_s = result.duration_s
                         self._record_repair(
                             raw_name, contracts.KIND_RECLASSIFY, opp, result
                         )
@@ -2222,6 +2305,7 @@ class Driver(object):
                     reclassifier=opp, drift_risk=risk,
                     drift_damage=damage, threshold=threshold,
                     defer_ok=defer_ok, reason=reason,
+                    duration_s=duration_s,
                 )
                 if defer_ok:
                     debt.append({
@@ -2748,6 +2832,7 @@ class Driver(object):
             if rep:
                 st.append_event(
                     self.state, "worker_malformed",
+                    unit=st.unit_key(unit),
                     label=rep["label"], kind=contracts.KIND_SEAL_HALF,
                     family=fam, error=rep["error"],
                     duration_s=rep["duration_s"], raw_path=rep["raw_path"],

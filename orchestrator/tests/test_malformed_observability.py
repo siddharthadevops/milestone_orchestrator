@@ -75,6 +75,7 @@ class MalformedObservabilityTest(unittest.TestCase):
         e = events[0]
         self.assertEqual(e["kind"], "review_round")
         self.assertEqual(e["family"], "codex")
+        self.assertEqual(e["unit"], "skeleton")
         self.assertIn("missing required key 'status'", e["error"])
         self.assertIsNotNone(e["duration_s"])
         self.assertTrue(e["label"].startswith("skeleton-codex-r"))
@@ -87,6 +88,11 @@ class MalformedObservabilityTest(unittest.TestCase):
         rounds = state["units"][0]["rounds"]
         self.assertEqual(len(rounds), 1)
         self.assertIsNone(rounds[0].get("invalidated"))
+        # Draft + malformed first strike + repaired review: three completed
+        # calls, each counted once.
+        self.assertAlmostEqual(
+            st.summary(state)["units"][0]["work_duration_s"], 0.03
+        )
 
     def test_seal_half_repair_records_event_on_the_main_thread(self):
         state = self._drive(
@@ -106,6 +112,7 @@ class MalformedObservabilityTest(unittest.TestCase):
         self.assertEqual(len(events), 1)
         self.assertEqual(events[0]["kind"], "seal_half")
         self.assertEqual(events[0]["family"], "codex")
+        self.assertEqual(events[0]["unit"], "skeleton")
         # The stashed strike never leaks into the recorded seal halves —
         # the ledger keeps its exact historical shape.
         for s_ in state["units"][0]["seals"]:

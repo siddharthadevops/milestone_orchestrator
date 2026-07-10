@@ -716,5 +716,159 @@ class TestActsResolution(DriverTestCase):
             self.assertIn("with the codex family", fix_prompt)
 
 
+# ---------------------------------------------------------------------------
+# convergence fixer: event-derived threshold and independent profile
+
+
+class TestConvergenceFixer(DriverTestCase):
+    def test_switches_after_threshold_and_delta_follows_new_family(self):
+        acts = {
+            "fixer": {
+                "agent": "claude",
+                "model": "claude-opus-4-8",
+                "effort": "xhigh",
+            },
+            "convergence_fixer": {
+                "agent": "codex",
+                "model": "gpt-5.6-sol",
+                "effort": "max",
+            },
+            "review_codex": {
+                "model": "gpt-5.6-terra",
+                "effort": "high",
+            },
+            "review_claude": {
+                "model": "claude-fable-5",
+                "effort": "medium",
+            },
+            "consultation": "opposite",
+        }
+        with tempfile.TemporaryDirectory(prefix="orch-mock-") as ws:
+            path = init_state(
+                ws,
+                make_config(
+                    acts=acts,
+                    convergence_fixer_after_deltas=2,
+                ),
+            )
+            mock = runners.MockRunner([
+                draft_step(),
+                step("review_round",
+                     report("review_round", [finding("F1", "root defect")]),
+                     family="codex"),
+                step("fix_findings",
+                     fix_ok([triaged("F1", "fixed", "root defect")],
+                            files_changed=["docs/skeleton.md"]),
+                     family="claude",
+                     side_effect=append_file("docs/skeleton.md", "\nfix1\n")),
+                step("delta_review",
+                     report("delta_review",
+                            [finding("D1", "first recurring symptom")]),
+                     family="claude"),
+                step("fix_findings",
+                     fix_ok([triaged("D1", "fixed",
+                                     "first recurring symptom")],
+                            files_changed=["docs/skeleton.md"]),
+                     family="claude",
+                     side_effect=append_file("docs/skeleton.md", "\nfix2\n")),
+                step("delta_review",
+                     report("delta_review",
+                            [finding("D2", "second recurring symptom")]),
+                     family="claude"),
+                # Exactly two dirty deltas: the NEXT fix escalates.
+                step("fix_findings",
+                     fix_ok([triaged("D2", "fixed",
+                                     "second recurring symptom")],
+                            files_changed=["docs/skeleton.md"]),
+                     family="codex",
+                     side_effect=append_file("docs/skeleton.md", "\nfix3\n")),
+                # Delta stays with the latest fixer's family, but uses that
+                # family's independently configured Review profile.
+                step("delta_review", report("delta_review"), family="codex"),
+                step("review_round", report("review_round"), family="codex"),
+                step("review_round", report("review_round"), family="claude"),
+                step("seal_half", report("seal_half"), family="codex"),
+                step("seal_half", report("seal_half"), family="claude"),
+            ])
+            driver = drv.Driver(path, runner=mock)
+            self.step_until(
+                driver,
+                lambda state: state["units"][0]["status"] == st.U_SEALED,
+            )
+            self.assertEqual(mock.script, [])
+
+            fixes = [
+                meta for call, meta in zip(mock.calls, mock.call_meta)
+                if call[1] == "fix_findings"
+            ]
+            self.assertEqual(
+                [(meta["family"], meta["model"], meta["effort"])
+                 for meta in fixes],
+                [
+                    ("claude", "claude-opus-4-8", "xhigh"),
+                    ("claude", "claude-opus-4-8", "xhigh"),
+                    ("codex", "gpt-5.6-sol", "max"),
+                ],
+            )
+            deltas = [
+                meta for call, meta in zip(mock.calls, mock.call_meta)
+                if call[1] == "delta_review"
+            ]
+            self.assertEqual(
+                [(meta["family"], meta["model"], meta["effort"])
+                 for meta in deltas],
+                [
+                    ("claude", "claude-fable-5", "medium"),
+                    ("claude", "claude-fable-5", "medium"),
+                    ("codex", "gpt-5.6-terra", "high"),
+                ],
+            )
+            fix_prompts = [
+                call[2] for call in mock.calls if call[1] == "fix_findings"
+            ]
+            self.assertNotIn("CONVERGENCE MODE", fix_prompts[0])
+            self.assertNotIn("CONVERGENCE MODE", fix_prompts[1])
+            self.assertIn("CONVERGENCE MODE", fix_prompts[2])
+            self.assertIn("first recurring symptom", fix_prompts[2])
+            self.assertIn("second recurring symptom", fix_prompts[2])
+            self.assertIn("diagnostic context ONLY", fix_prompts[2])
+
+            fix_rounds = [
+                round_ for round_ in st.load(path)["units"][0]["rounds"]
+                if round_["kind"] == "fix_findings"
+            ]
+            self.assertNotIn("convergence_dirty_deltas", fix_rounds[1])
+            self.assertEqual(
+                fix_rounds[2]["convergence_dirty_deltas"], 2
+            )
+
+    def test_old_frozen_config_gets_sol_max_default_and_hot_override(self):
+        import json as _json
+
+        with tempfile.TemporaryDirectory(prefix="orch-mock-") as ws:
+            # make_config is intentionally an old frozen shape: no
+            # convergence_fixer act and no family model defaults.
+            path = init_state(ws, make_config())
+            driver = drv.Driver(path, runner=runners.MockRunner([]))
+            self.assertEqual(
+                driver._convergence_fixer_profile("claude"),
+                ("codex", "gpt-5.6-sol", "max"),
+            )
+
+            with open(os.path.join(os.path.dirname(path), "acts.json"),
+                      "w", encoding="utf-8") as fh:
+                _json.dump({
+                    "convergence_fixer": {
+                        "agent": "claude",
+                        "model": "claude-fable-5",
+                        "effort": "max",
+                    },
+                }, fh)
+            self.assertEqual(
+                driver._convergence_fixer_profile("codex"),
+                ("claude", "claude-fable-5", "max"),
+            )
+
+
 if __name__ == "__main__":
     unittest.main()

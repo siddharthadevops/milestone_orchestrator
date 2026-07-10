@@ -90,6 +90,13 @@ class GapRoutingCase(unittest.TestCase):
         types = [e["type"] for e in state["events"]]
         self.assertIn("gap_reported", types)
         self.assertIn("reopened_for_repair", types)
+        gap_event = [e for e in state["events"]
+                     if e["type"] == "gap_reported"][-1]
+        self.assertEqual(gap_event["duration_s"], 0.01)
+        impl_view = {u["unit"]: u for u in st.summary(state)["units"]}[
+            "slice_impl-01"
+        ]
+        self.assertEqual(impl_view["work_duration_s"], 0.01)
 
     def test_impl_gap_targeting_the_skeleton_reopens_the_skeleton(self):
         path = self._state_to_impl_pending()

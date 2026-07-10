@@ -201,6 +201,11 @@ class TestP3Debt(DriverTestCase):
                   if e["type"] == "reclassify_recorded"][-1]
             self.assertEqual(ev["reclassifier"], "codex")
             self.assertTrue(ev["defer_ok"])
+            self.assertEqual(ev["duration_s"], 0.01)
+            # Draft + review + rating are three distinct completed calls.
+            self.assertAlmostEqual(
+                st.summary(state)["units"][0]["work_duration_s"], 0.03
+            )
 
     def test_reform_gates_on_damage_not_probability(self):
         # The two-axis decision (operator 2026-07-09): a certain-but-cheap

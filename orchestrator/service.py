@@ -1942,7 +1942,7 @@ def _write_amendments(entry, amendments):
 
 
 ACT_KEYS = ("drafter", "implementer", "review_codex", "review_claude",
-            "fixer", "consultation", "reclassifier")
+            "fixer", "convergence_fixer", "consultation", "reclassifier")
 FIXED_REVIEW_ACTS = {"review_codex": "codex", "review_claude": "claude"}
 
 
@@ -2896,8 +2896,9 @@ def main(argv=None):
     parser.add_argument("--port", type=int, default=8700)
     parser.add_argument("--open", action="store_true", help="open the browser")
     args = parser.parse_args(argv)
-    os.makedirs(args.home, exist_ok=True)
-    return serve(args.home, args.port, open_browser=args.open)
+    home = os.path.abspath(os.path.expanduser(args.home))
+    os.makedirs(home, exist_ok=True)
+    return serve(home, args.port, open_browser=args.open)
 
 
 if __name__ == "__main__":

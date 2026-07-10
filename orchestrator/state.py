@@ -455,6 +455,52 @@ def family_rounds(unit, family):
     return [r for r in unit["rounds"] if r["family"] == family]
 
 
+def active_fix_dirty_delta_rounds(state, unit):
+    """Accepted dirty delta rounds in the unit's ACTIVE fix episode.
+
+    This is deliberately derived from append-only events rather than a
+    mutable counter: resume_run grants fresh loop budgets, but it must not
+    erase the evidence that the same fix chain has already been circling.
+    A real episode starts at the latest transition into FIXING whose source
+    was not DELTA_REVIEW; later delta -> fixing back-edges stay inside it.
+    """
+    if not unit.get("fix_source"):
+        return []
+    key = unit_key(unit)
+    events = state.get("events") or []
+    root = None
+    for index in range(len(events) - 1, -1, -1):
+        event = events[index]
+        if (
+            event.get("type") == "unit_transition"
+            and event.get("unit") == key
+            and event.get("to_status") == U_FIXING
+            and event.get("from_status") != U_DELTA_REVIEW
+        ):
+            root = index
+            break
+    if root is None:
+        return []
+    dirty_ids = [
+        event.get("round")
+        for event in events[root + 1 :]
+        if (
+            event.get("type") == "round_recorded"
+            and event.get("unit") == key
+            and event.get("kind") == "delta_review"
+            and int(event.get("findings") or 0) > 0
+            and not event.get("invalidated")
+        )
+    ]
+    by_id = {round_["id"]: round_ for round_ in unit.get("rounds") or []}
+    return [by_id[round_id] for round_id in dirty_ids if round_id in by_id]
+
+
+def active_fix_dirty_deltas(state, unit):
+    """Number of dirty delta reviews in the active fix chain."""
+    return len(active_fix_dirty_delta_rounds(state, unit))
+
+
 def record_round(state, unit, family, kind, result, raw_path=None, duration=None,
                  meta=None):
     """Append an immutable round record. Never edited afterwards.
@@ -1054,11 +1100,82 @@ def _worst_severity(findings):
     return worst
 
 
+def _completed_duration(value):
+    """A persisted, completed worker-call duration, normalized for sums."""
+    try:
+        seconds = float(value)
+    except (TypeError, ValueError):
+        return 0.0
+    if seconds <= 0:
+        return 0.0
+    return seconds
+
+
+def _work_durations(state):
+    """Return ({unit_key: seconds}, unassigned_malformed_seconds).
+
+    This is *work consumed*, not elapsed wall time: concurrent seal halves
+    both count.  Every completed call has one durable home (draft, round,
+    seal half, reclassification, or a repaired malformed first strike), so
+    deriving the total here keeps it restart-safe and avoids mutable counters.
+    """
+    keys = [unit_key(unit) for unit in state.get("units") or []]
+    totals = dict((key, 0.0) for key in keys)
+
+    for unit in state.get("units") or []:
+        key = unit_key(unit)
+        draft = unit.get("draft") or {}
+        totals[key] += _completed_duration(draft.get("duration_s"))
+        totals[key] += sum(
+            _completed_duration(round_.get("duration_s"))
+            for round_ in unit.get("rounds") or []
+        )
+        totals[key] += sum(
+            _completed_duration(half.get("duration_s"))
+            for seal in unit.get("seals") or []
+            for half in (seal.get("halves") or {}).values()
+            if half
+        )
+
+    unassigned = 0.0
+    for event in state.get("events") or []:
+        etype = event.get("type")
+        if etype in ("reclassify_recorded", "gap_reported"):
+            key = event.get("unit")
+            if key in totals:
+                totals[key] += _completed_duration(event.get("duration_s"))
+            continue
+        if etype != "worker_malformed" or event.get("fatal"):
+            continue
+        seconds = _completed_duration(event.get("duration_s"))
+        if not seconds:
+            continue
+        key = event.get("unit")
+        if not key:
+            # Compatibility for historical repaired strikes: raw labels have
+            # always begun with the owning unit key.
+            label = str(event.get("label") or "")
+            key = next(
+                (
+                    candidate
+                    for candidate in keys
+                    if label == candidate or label.startswith(candidate + "-")
+                ),
+                None,
+            )
+        if key in totals:
+            totals[key] += seconds
+        else:
+            unassigned += seconds
+    return totals, unassigned
+
+
 def summary(state):
     unit = current_unit(state)
     model_defaults = state["config"].get("model_defaults") or {}
     debt_requeues = requeued_debt_refs(state)
     requeued_ids = requeued_debt_ids(state)
+    work_by_unit, unassigned_work = _work_durations(state)
 
     def effective_setting(family, explicit, field):
         if explicit:
@@ -1093,6 +1210,7 @@ def summary(state):
                     "drift_damage": e.get("drift_damage"),
                     "threshold": e.get("threshold"),
                     "defer_ok": e.get("defer_ok"),
+                    "duration_s": e.get("duration_s"),
                 }
             )
     units_view = []
@@ -1117,6 +1235,7 @@ def summary(state):
                     or _epoch((u.get("draft") or {}).get("at"))
                 ),
                 "closed_epoch": closed_at.get(unit_key(u)),
+                "work_duration_s": work_by_unit.get(unit_key(u), 0.0),
                 "draft": (
                     {
                         "kind": u["draft"]["kind"],
@@ -1234,6 +1353,7 @@ def summary(state):
             state["events"][-1]["at"] if state["events"] else None
         ),
         "failure": state["failure"],
+        "work_duration_s": sum(work_by_unit.values()) + unassigned_work,
         "units": units_view,
         "events_total": len(state["events"]),
         "last_events": state["events"][-30:],
