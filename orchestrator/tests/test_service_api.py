@@ -125,6 +125,15 @@ class ServiceApiTest(unittest.TestCase):
         text = body.decode("utf-8")
         self.assertIn("Milestone Orchestrator", text)
         self.assertIn('id="runs"', text)
+        self.assertIn(".run-sticky-head { position: sticky", text)
+        self.assertIn('class="run-sticky-head"', text)
+        self.assertIn(".run-title-row { display: flex", text)
+        self.assertIn(".run-clock { margin-left: auto", text)
+        self.assertIn(".activity-line { display: flex", text)
+        self.assertIn(".dot.running { background:", text)
+        self.assertIn("function currentWorkplace", text)
+        self.assertIn("function runStateRank", text)
+        self.assertIn("function projectStateRank", text)
 
     def test_unknown_path_is_404_json(self):
         status, body = self.request_json("GET", "/definitely/not/here")
@@ -372,10 +381,28 @@ class ServiceApiTest(unittest.TestCase):
         self.assertEqual(detail["status"]["milestone_status"], "open")
         self.assertEqual(detail["summary"]["milestone_status"], "open")
         self.assertEqual(detail["summary"]["current_unit"], "skeleton")
+        self.assertEqual(detail["status"]["slices_total"], 0)
         self.assertIsInstance(detail["log"], list)
         status, body = self.request_json("GET", "/api/runs/nope-id")
         self.assertEqual(status, 404)
         self.assertFalse(body["ok"])
+
+    def test_run_status_carries_slice_total_for_panel_context(self):
+        ws = self.workspace("ws-slice-total")
+        _, body = self.create_run(ws)
+        run_id = body["run"]["id"]
+        entry = registry.get(registry.load(self.home), run_id)
+        state = st.load(entry["state_path"])
+        state["milestone"]["slices"] = [
+            {"id": 1, "title": "one"}, {"id": 2, "title": "two"},
+        ]
+        st.save(entry["state_path"], state)
+
+        _, listing = self.request_json("GET", "/api/runs")
+        run = next(item for item in listing["runs"] if item["id"] == run_id)
+        self.assertEqual(run["slices_total"], 2)
+        _, detail = self.request_json("GET", "/api/runs/%s" % run_id)
+        self.assertEqual(detail["status"]["slices_total"], 2)
 
     def test_run_status_surfaces_model_for_legacy_in_flight_marker(self):
         ws = self.workspace("ws-model-chip")

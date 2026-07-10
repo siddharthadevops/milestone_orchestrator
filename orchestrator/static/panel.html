@@ -34,20 +34,23 @@
   #runs { overflow-y: auto; flex: 1; }
   .run { padding: 8px 14px 8px 33px; cursor: pointer; display: flex;
          align-items: center; gap: 8px; }
-  .run.sel { border-left: 3px solid var(--accent); padding-left: 30px; }
+  .run.sel { border-left: 3px solid var(--accent); padding-left: 30px;
+    background: #e8e8e8; }
+  .run-copy { flex: 1; min-width: 0; }
   .run .name { font-weight: 400; font-size: 13px; color: var(--text);
-    flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .activity-line { display: flex; align-items: center; gap: 4px;
+    color: #71717a; font-size: 11px; line-height: 1.35; min-width: 0; }
+  .activity-line.sidebar { margin-top: 2px; font-size: 10.5px;
+    white-space: nowrap; overflow: hidden; }
+  .activity-line.detail { margin-top: 2px; }
+  .activity-line .spin { width: 8px; height: 8px; border-width: 1.5px; }
   /* Run status dot: grey = stopped/idle, red = error; hidden when the
-     milestone is closed. A running run shows the .rchip instead. */
+     milestone is closed. Running work is the information line above. */
   .dot { width: 7px; height: 7px; border-radius: 50%; background: #cbccd1;
          flex: none; }
+  .dot.running { background: #16a34a; }
   .dot.err { background: var(--bad); }
-  .rchip { flex: none; font-size: 10px; font-weight: 600; padding: 1px 8px;
-    border-radius: 9px; background: #dcfce7; color: #15803d;
-    display: inline-flex; align-items: center; gap: 5px; }
-  .rchip::before { content: ""; width: 5px; height: 5px; border-radius: 50%;
-    background: #16a34a; animation: pulse 1.5s ease-in-out infinite; }
-  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: .25; } }
   .proj-group-header { position: relative; display: flex; align-items: center; gap: 7px;
     padding: 6px 12px; margin-top: 20px; font-size: 13px; font-weight: 700;
     color: #3f3f46; cursor: pointer; user-select: none; }
@@ -176,8 +179,15 @@
 
   /* right: state */
   section { flex: 1; overflow-y: auto; padding: 20px 26px; }
+  .run-sticky-head { position: sticky; top: -20px; z-index: 5;
+    margin: -20px -26px 16px; padding: 16px 26px 10px;
+    background: #fff; border-bottom: 1px solid var(--line); }
   .proj-title { font-size: 18px; font-weight: 700; color: var(--text);
     margin-bottom: 1px; }
+  .run-title-row { display: flex; align-items: baseline; gap: 12px; }
+  .run-title-row h2 { min-width: 0; margin-bottom: 0; }
+  .run-clock { margin-left: auto; color: var(--dim); font-size: 11px;
+    white-space: nowrap; font-variant-numeric: tabular-nums; }
   section h2 { font-size: 14px; font-weight: 600; margin-bottom: 2px;
     color: #3f3f46; }
   .goalline { color: var(--dim); font-size: 13px; margin-bottom: 12px;
@@ -332,6 +342,8 @@
     section#detail { display: none; }
     body.m-detail aside { display: none; }
     body.m-detail section#detail { display: block; padding: 14px; }
+    body.m-detail .run-sticky-head { top: -14px; margin: -14px -14px 12px;
+      padding: 12px 14px 8px; }
     body.m-detail #backbtn { display: inline-block; }
     dialog { width: calc(100vw - 20px); max-width: calc(100vw - 20px);
              padding: 14px; }
@@ -716,23 +728,20 @@ async function loadUiState() {
   } catch (e) { /* keep in-memory defaults */ }
 }
 function runRow(r) {
-  // Just the name and a discreet right-aligned status dot. The binding
-  // (project / work area / workspace) is redundant here — the project
-  // is the group header, and the full binding lives on the run's edit
-  // page.
+  // Running work sits on a second, quieter line; stopped/error state stays
+  // a discreet right-aligned dot. The project is already the group header.
   return `
       <div class="run ${r.id === selected ? "sel" : ""}" onclick="select('${esc(r.id)}')">
-        <span class="name">${esc(r.name)}</span>
+        <div class="run-copy">
+          <span class="name">${esc(r.name)}</span>
+          ${workingContext(r, "sidebar")}
+        </div>
         ${runStatusIndicator(r)}
       </div>`;
 }
 function runStatusIndicator(r) {
-  // A running run shows the SAME live activity chip as the detail view
-  // (spinner + e.g. "gpt-5.6-sol fix · 2m"); the green fallback covers the
-  // brief running-but-between-calls gap. Otherwise a dot: hidden when
-  // the milestone is closed (done), red on error, grey when stopped.
   if (r.process === "running")
-    return workingChip(r) || `<span class="rchip">running</span>`;
+    return `<span class="dot running" title="running"></span>`;
   if (r.milestone_status === "closed") return "";
   if (r.failure_reason || r.milestone_status === "failed")
     return `<span class="dot err" title="error"></span>`;
@@ -747,6 +756,16 @@ function groupRuns(runs) {
   }
   return byProject;
 }
+function runStateRank(r) {
+  // Active work first, then paused/open work, then completed history.
+  if (r.process === "running") return 0;
+  if (r.milestone_status === "closed") return 2;
+  return 1;
+}
+function projectStateRank(key, byProject) {
+  const runs = byProject.get(key) || [];
+  return runs.length ? Math.min(...runs.map(runStateRank)) : 2;
+}
 function presentProjectKeys() {
   // Every project the sidebar must show: all DECLARED projects (even
   // with zero runs — configuration is a first-class sidebar citizen)
@@ -757,10 +776,13 @@ function presentProjectKeys() {
     if (k !== null && !keys.includes(k)) keys.push(k);
   return keys;
 }
-function orderedProjectKeys(present) {
+function orderedProjectKeys(present, byProject) {
   const known = uiState.project_order.filter(k => present.includes(k));
   const fresh = present.filter(k => !known.includes(k));
-  return known.concat(fresh);
+  // Modern stable sort keeps the operator's project order as the tie-breaker.
+  return known.concat(fresh).sort(
+    (a, b) => projectStateRank(a, byProject) - projectStateRank(b, byProject)
+  );
 }
 function groupHeader(key, label, count, editable) {
   // The whole row toggles collapse. The folder identifies the project;
@@ -791,9 +813,11 @@ function renderRunsTree(runs) {
   const byProject = groupRuns(runs);
   const realKeys = presentProjectKeys();
   if (realKeys.length === 0) return "";
-  const ordered = orderedProjectKeys(realKeys);
+  const ordered = orderedProjectKeys(realKeys, byProject);
   return ordered.map((key) => {
-    const runsInGroup = byProject.get(key) || [];
+    const runsInGroup = [...(byProject.get(key) || [])].sort(
+      (a, b) => runStateRank(a) - runStateRank(b)
+    );
     const header = groupHeader(key, key, runsInGroup.length, true);
     if (uiState.collapsed.includes(key)) return header;
     return header + (runsInGroup.map(runRow).join("")
@@ -878,10 +902,10 @@ function elapsed(t0) {
 function runTime(sum, s) {
   if (!sum || !sum.created_epoch) return "";
   if (s.process === "running")
-    return ` · elapsed ${elapsed(sum.created_epoch)}`;
+    return `elapsed ${elapsed(sum.created_epoch)}`;
   if (sum.last_event_epoch && sum.last_event_epoch > sum.created_epoch) {
     const label = sum.milestone_status === "closed" ? "took" : "active for";
-    return ` · ${label}${fmtDur(sum.last_event_epoch - sum.created_epoch)}`;
+    return `${label} ${fmtDHMS(sum.last_event_epoch - sum.created_epoch)}`;
   }
   return "";
 }
@@ -904,6 +928,35 @@ const MODEL_LABELS = Object.freeze({
 function shortModel(model) {
   const id = String(model || "").replace(/^claude-/, "");
   return MODEL_LABELS[id] || id;
+}
+function currentWorkplace(r) {
+  const unit = String(r.current_unit || "");
+  if (unit === "skeleton") return "Skeleton";
+  const match = unit.match(/^slice_(doc|impl)-(\d+)$/);
+  if (match) {
+    const total = Number(r.slices_total || 0);
+    return `Slice ${Number(match[2])}${total ? ` / ${total}` : ""} · ${match[1]}`;
+  }
+  return unit;
+}
+function workingContext(r, placement) {
+  if (r.process !== "running") return "";
+  const place = currentWorkplace(r);
+  const f = r.in_flight;
+  let task = "running", title = "";
+  if (f && f.kind) {
+    const who = f.model ? `${shortModel(f.model)} ` : "";
+    task = `${who}${shortKind(f.kind)} · ${elapsed(f.started_at)}`;
+    title = f.label || "";
+  } else if (r.current_unit_status) {
+    const who = r.current_unit_status === "rounds" && r.current_model
+      ? shortModel(r.current_model) + " " : "";
+    task = who + (ACTIVITY[r.current_unit_status] || r.current_unit_status);
+  }
+  const spinner = placement === "sidebar" ? "" : spinEl();
+  return `<div class="activity-line ${placement || ""}" title="${esc(title)}">` +
+         `${place ? `<span>${esc(place)} ·</span>` : ""}` +
+         `${spinner}<span>${esc(task)}</span></div>`;
 }
 function inFlightChip(r) {
   const f = r.in_flight;
@@ -1218,10 +1271,14 @@ async function refreshDetail() {
       // project prefix); the run name is the subtitle below it. The old
       // info line (workspace / binding / suite / profile) now lives only
       // on the edit page.
+      html += `<div class="run-sticky-head">`;
       if (s.project) html += `<div class="proj-title">${esc(s.project)}</div>`;
-      html += `<h2>${esc(s.name)} ${msChip(s.milestone_status)}
-        ${workingChip(s)}
-        <span class="st">${running ? "· driver running (pid " + s.pid + ")" : "· driver stopped"}${runTime(sum, s)}</span></h2>`;
+      const totalTime = runTime(sum, s);
+      html += `<div class="run-title-row"><h2>${esc(s.name)} ${msChip(s.milestone_status)}</h2>` +
+        (totalTime ? `<span class="run-clock">${esc(totalTime)}</span>` : "") +
+        `</div>`;
+      html += workingContext(s, "detail");
+      html += `</div>`;
     }
     if (runView === "edit" && sum) {
       // The goal text lives here, not in the run header: it is consulted

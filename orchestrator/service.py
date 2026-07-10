@@ -1269,6 +1269,7 @@ def run_status(entry, home=None):
         "milestone_status": None,
         "current_unit": None,
         "current_unit_status": None,
+        "slices_total": 0,
         "current_family": None,
         "current_model": None,
         "failure_reason": None,
@@ -1282,6 +1283,7 @@ def run_status(entry, home=None):
         info["milestone_status"] = summ["milestone_status"]
         info["current_unit"] = summ["current_unit"]
         info["current_unit_status"] = summ["current_unit_status"]
+        info["slices_total"] = len(summ.get("slices") or [])
         info["current_family"] = summ.get("current_family")
         info["current_model"] = summ.get("current_model")
         in_flight = info.get("in_flight")
