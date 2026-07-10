@@ -1146,7 +1146,8 @@ const EFFORT_LABELS = Object.freeze({
 });
 function shortModel(model) {
   const id = String(model || "").replace(/^claude-/, "");
-  return (MODEL_LABELS[id] || id).toUpperCase();
+  const label = String(MODEL_LABELS[id] || id).toLowerCase();
+  return label ? label.slice(0, 1).toUpperCase() + label.slice(1) : "";
 }
 function modelEffort(model, effort) {
   const name = shortModel(model);
@@ -1295,7 +1296,11 @@ function draftChip(d, unitKey) {
   if (!d) return "";
   const kind = DRAFT_SHORT[d.kind] || d.kind;
   const who = d.model ? `${esc(modelEffort(d.model, d.effort))} ` : "";
-  return `<span class="chip work clicky" onclick="showStory('draft:${esc(unitKey)}')">${who}${esc(kind)}${fmtDur(d.duration_s)}</span>`;
+  const current = d.current !== false;
+  const click = current
+    ? ` clicky" onclick="showStory('draft:${esc(unitKey)}')` : "";
+  const title = current ? "" : ' title="historical implementation"';
+  return `<span class="chip work${click}"${title}>${who}${esc(kind)}${fmtDur(d.duration_s)}</span>`;
 }
 const WORK_KINDS = {fix_findings: 1, verification: 1};
 function sevClass(sev) {
@@ -1350,7 +1355,10 @@ function repairChip(repair, unitKey) {
     onclick="showStory('repair:${esc(unitKey)}:${esc(repair.seq)}')">Triggered by ${esc(source)}${fmtDur(repair.duration_s)}</span>`;
 }
 function unitHistory(u, activity, running) {
-  const lead = [draftChip(u.draft, u.unit), docChip(u)].filter(Boolean);
+  const drafts = Array.isArray(u.drafts) && u.drafts.length
+    ? u.drafts : (u.draft ? [u.draft] : []);
+  const lead = drafts.map(draft => draftChip(draft, u.unit))
+    .concat([docChip(u)]).filter(Boolean);
   const repairs = u.repairs || [];
   const repairRoundIds = new Set(repairs.flatMap(repair => repair.round_ids || []));
   const repairSealAttempts = new Set(repairs.flatMap(repair => repair.seal_attempts || []));
@@ -1435,7 +1443,19 @@ function unitHistory(u, activity, running) {
   }
   if (u.unit === activity.current_unit && running) {
     const chip = workingChip(activity);
-    if (current) current.chips.push(chip);
+    const inFlight = activity.in_flight || {};
+    const liveKind = inFlight.kind || (
+      activity.current_unit_status === "rounds" ? "review_round"
+        : activity.current_unit_status === "sealing" ? "seal_half" : ""
+    );
+    if (liveKind === "review_round") {
+      const family = inFlight.family || activity.current_family || "review";
+      groups.push({type: "review", family,
+                   number: (reviewCounts[family] || 0) + 1, chips: [chip]});
+    } else if (liveKind === "seal_half") {
+      const attempt = Math.max(0, ...(u.seals || []).map(s => s.attempt || 0)) + 1;
+      groups.push({type: "seal", number: attempt, chips: [chip]});
+    } else if (current) current.chips.push(chip);
     else lead.push(chip);
   }
   const sections = [];
@@ -1448,7 +1468,7 @@ function unitHistory(u, activity, running) {
     section.lines.push({label, chips});
   };
   if (lead.length) {
-    const title = u.draft && u.draft.kind === "implement"
+    const title = drafts.some(draft => draft.kind === "implement")
       ? "Implementation" : "Draft";
     addLine(title, "", lead);
   }

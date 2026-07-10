@@ -439,7 +439,22 @@ def record_draft(state, unit, kind, result, raw_path=None, family=None,
         "result": copy.deepcopy(result),
     }
     unit["artifact"] = result.get("artifact")
-    append_event(state, "draft_recorded", unit=unit_key(unit), kind=kind)
+    # Keep the lightweight implementation/draft history in the immutable
+    # ledger too. A unit can exceptionally be reset to pending after a
+    # documentation repair; its singular `draft` slot is then reused, but
+    # the panel and work-time projection must not lose the earlier call.
+    append_event(
+        state,
+        "draft_recorded",
+        at=unit["draft"]["at"],
+        unit=unit_key(unit),
+        kind=kind,
+        family=family,
+        model=model,
+        effort=effort,
+        duration_s=duration,
+        raw_path=raw_path,
+    )
     return unit["draft"]
 
 
@@ -1118,6 +1133,65 @@ def _completed_duration(value):
     return seconds
 
 
+def _draft_history(state, unit):
+    """All draft/implementation calls for a unit, oldest first.
+
+    Older ledgers recorded only the event kind. The current singular draft
+    fills its matching event with full metadata; superseded legacy calls stay
+    visible as generic historical chips instead of disappearing or borrowing
+    today's model configuration.
+    """
+    key = unit_key(unit)
+    current = unit.get("draft") or None
+    current_matched = False
+    records = []
+    draft_events = [
+        event for event in (state.get("events") or [])
+        if event.get("type") == "draft_recorded" and event.get("unit") == key
+    ]
+    current_position = None
+    if current:
+        for index, event in enumerate(draft_events):
+            if (
+                event.get("at") == current.get("at")
+                and event.get("kind") == current.get("kind")
+            ):
+                # Timestamps have one-second resolution; two fast test calls
+                # (or a future fast worker) may share it. The singular slot is
+                # always the latest matching immutable event.
+                current_position = index
+    for index, event in enumerate(draft_events):
+        is_current = bool(
+            current and index == current_position
+        )
+        source = dict(event)
+        if is_current:
+            source.update(current)
+            current_matched = True
+        records.append({
+            "kind": source.get("kind"),
+            "family": source.get("family"),
+            "model": source.get("model"),
+            "effort": source.get("effort"),
+            "duration_s": source.get("duration_s"),
+            "at": source.get("at"),
+            "raw_path": source.get("raw_path"),
+            "current": is_current,
+        })
+    if current and not current_matched:
+        records.append({
+            "kind": current.get("kind"),
+            "family": current.get("family"),
+            "model": current.get("model"),
+            "effort": current.get("effort"),
+            "duration_s": current.get("duration_s"),
+            "at": current.get("at"),
+            "raw_path": current.get("raw_path"),
+            "current": True,
+        })
+    return records
+
+
 def _work_durations(state):
     """Return ({unit_key: seconds}, unassigned_malformed_seconds).
 
@@ -1131,8 +1205,10 @@ def _work_durations(state):
 
     for unit in state.get("units") or []:
         key = unit_key(unit)
-        draft = unit.get("draft") or {}
-        totals[key] += _completed_duration(draft.get("duration_s"))
+        totals[key] += sum(
+            _completed_duration(draft.get("duration_s"))
+            for draft in _draft_history(state, unit)
+        )
         totals[key] += sum(
             _completed_duration(round_.get("duration_s"))
             for round_ in unit.get("rounds") or []
@@ -1310,6 +1386,7 @@ def summary(state):
             )
     units_view = []
     for u in state["units"]:
+        draft_history = _draft_history(state, u)
         units_view.append(
             {
                 "unit": unit_key(u),
@@ -1331,6 +1408,22 @@ def summary(state):
                 ),
                 "closed_epoch": closed_at.get(unit_key(u)),
                 "work_duration_s": work_by_unit.get(unit_key(u), 0.0),
+                "drafts": [
+                    {
+                        "kind": draft.get("kind"),
+                        "family": draft.get("family"),
+                        "model": effective_setting(
+                            draft.get("family"), draft.get("model"), "model"
+                        ),
+                        "effort": effective_setting(
+                            draft.get("family"), draft.get("effort"), "effort"
+                        ),
+                        "duration_s": draft.get("duration_s"),
+                        "at": draft.get("at"),
+                        "current": draft.get("current", False),
+                    }
+                    for draft in draft_history
+                ],
                 "draft": (
                     {
                         "kind": u["draft"]["kind"],

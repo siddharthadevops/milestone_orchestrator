@@ -601,6 +601,7 @@ class TestRecordDraft(TempWorkspaceCase):
         self.assertEqual(rec["result"], draft)
         self.assertIsNot(rec["result"], draft)  # deep-copied, not aliased
         self.assertEqual(state["events"][-1]["type"], "draft_recorded")
+        self.assertEqual(state["events"][-1]["raw_path"], "raw/x.txt")
 
     def test_write_once(self):
         state = make_state(self.workspace)
@@ -1797,7 +1798,7 @@ class TestSummary(TempWorkspaceCase):
         skel_view, doc_view = summ["units"]
         self.assertEqual(
             set(skel_view.keys()),
-            {"unit", "status", "artifact", "gate_sha", "wip_sha", "draft",
+            {"unit", "status", "artifact", "gate_sha", "wip_sha", "draft", "drafts",
              "rounds", "seals", "opened_epoch", "closed_epoch", "debt",
              "reclassify", "repairs", "work_duration_s"},
         )
@@ -1807,6 +1808,8 @@ class TestSummary(TempWorkspaceCase):
             {"kind", "family", "model", "effort", "duration_s", "at"},
         )
         self.assertEqual(skel_view["unit"], "skeleton")
+        self.assertEqual(len(skel_view["drafts"]), 1)
+        self.assertTrue(skel_view["drafts"][0]["current"])
         self.assertEqual(skel_view["status"], st.U_SEALED)
         self.assertEqual(skel_view["artifact"], "docs/skeleton.md")
         # rounds view: one clean round per family
@@ -1894,6 +1897,33 @@ class TestSummary(TempWorkspaceCase):
         self.assertEqual(
             summ["units"][0]["reclassify"][0]["duration_s"], 60
         )
+
+    def test_summary_preserves_implementation_history_after_redraft(self):
+        state = make_state(self.workspace)
+        unit = state["units"][0]
+        st.record_draft(
+            state, unit, contracts.KIND_IMPLEMENT, {"kind": "implement"},
+            family="claude", model="claude-fable-5", effort="max",
+            duration=10,
+        )
+        # Exceptional re-documentation resets the implementation unit to a
+        # fresh pending draft while immutable events retain the first call.
+        unit["draft"] = None
+        unit["status"] = st.U_PENDING
+        st.append_event(state, "operator_reset_unit", unit="skeleton")
+        st.record_draft(
+            state, unit, contracts.KIND_IMPLEMENT, {"kind": "implement"},
+            family="codex", model="gpt-5.6-sol", effort="max", duration=20,
+        )
+
+        view = st.summary(state)["units"][0]
+        self.assertEqual(len(view["drafts"]), 2)
+        self.assertEqual(
+            [(d["model"], d["duration_s"], d["current"])
+             for d in view["drafts"]],
+            [("claude-fable-5", 10, False), ("gpt-5.6-sol", 20, True)],
+        )
+        self.assertEqual(view["work_duration_s"], 30.0)
 
     def test_summary_surfaces_effective_models_for_chips(self):
         state = make_state(self.workspace)

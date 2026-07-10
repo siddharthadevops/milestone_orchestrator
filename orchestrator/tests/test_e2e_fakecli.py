@@ -248,7 +248,7 @@ class TestCalculatorE2E(unittest.TestCase):
         for u in summ["units"]:
             self.assertEqual(
                 set(u.keys()),
-                {"unit", "status", "artifact", "gate_sha", "wip_sha", "draft",
+                {"unit", "status", "artifact", "gate_sha", "wip_sha", "draft", "drafts",
                  "rounds", "seals", "opened_epoch", "closed_epoch", "debt",
                  "reclassify", "repairs", "work_duration_s"},
             )
