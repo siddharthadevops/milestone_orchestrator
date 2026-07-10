@@ -2189,7 +2189,8 @@ MALFORMED_RAW_CLIP = 20000
 def run_story(home, run_id, item):
     """The full record behind one pipeline chip — fetched on click, so
     the 2s-poll summary stays lean. item forms: round:<round_id>,
-    seal:<unit>:<attempt>, draft:<unit>, malformed:<event seq>."""
+    seal:<unit>:<attempt>, draft:<unit>, repair:<unit>:<event seq>,
+    malformed:<event seq>."""
     reg = registry.load(home)
     entry = registry.get(reg, run_id)
     if entry is None:
@@ -2199,6 +2200,19 @@ def run_story(home, run_id, item):
     except Exception as exc:
         raise ApiError(409, "state unreadable: %s" % exc)
     kind, _, ref = (item or "").partition(":")
+    if kind == "repair":
+        unit_key, _, seq = ref.rpartition(":")
+        for unit in st.summary(state)["units"]:
+            if unit["unit"] != unit_key:
+                continue
+            for repair in unit.get("repairs") or []:
+                if str(repair.get("seq")) == seq:
+                    return {
+                        "story": "repair",
+                        "unit": unit_key,
+                        **repair,
+                    }
+        raise ApiError(404, "unknown repair episode %r" % ref)
     if kind == "malformed":
         # The repaired-first-strike viewer: the raw path comes from the
         # run's OWN ledger event (never from the request), so this reads

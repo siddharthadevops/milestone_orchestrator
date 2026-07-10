@@ -931,6 +931,8 @@ def reopen_for_repair(state, unit, gap, reason, reported_by=None):
         target=gap.get("target"),
         forced_decision=str(gap.get("forced_decision", ""))[:300],
         plain=str(gap.get("plain", ""))[:300],
+        rounds_before=len(unit["rounds"]),
+        seals_before=len(unit["seals"]),
     )
     return unit
 
@@ -1170,12 +1172,100 @@ def _work_durations(state):
     return totals, unassigned
 
 
+def _repair_episodes(state):
+    """Compact downstream-gap repair history, grouped by target unit.
+
+    Rounds and seals remain append-only on the unit.  These episode handles
+    let viewers collapse that exceptional detour without losing its trigger
+    or confusing repair work with the unit's original review history.
+    """
+    events = state.get("events") or []
+    units = dict((unit_key(unit), unit) for unit in state.get("units") or [])
+    opened = [
+        (index, event)
+        for index, event in enumerate(events)
+        if event.get("type") == "reopened_for_repair" and event.get("unit")
+    ]
+    by_unit = {}
+    for position, (start_index, start) in enumerate(opened):
+        key = start["unit"]
+        next_index = len(events)
+        next_start = None
+        for later_index, later in opened[position + 1:]:
+            if later.get("unit") == key:
+                next_index = later_index
+                next_start = later
+                break
+        window = events[start_index:next_index]
+        completed = next((
+            event for event in window
+            if event.get("type") == "unit_transition"
+            and event.get("unit") == key
+            and event.get("to_status") == U_SEALED
+        ), None)
+        start_at = start.get("at") or ""
+        end_at = (completed or {}).get("at") or ""
+
+        def in_episode(record):
+            at = record.get("at") or ""
+            return bool(at and at >= start_at and (not end_at or at <= end_at))
+
+        unit = units.get(key) or {}
+        rounds = unit.get("rounds") or []
+        seals = unit.get("seals") or []
+        if start.get("rounds_before") is not None:
+            round_end = (
+                next_start.get("rounds_before")
+                if next_start and next_start.get("rounds_before") is not None
+                else len(rounds)
+            )
+            episode_rounds = rounds[start["rounds_before"]:round_end]
+        else:
+            episode_rounds = [record for record in rounds if in_episode(record)]
+        if start.get("seals_before") is not None:
+            seal_end = (
+                next_start.get("seals_before")
+                if next_start and next_start.get("seals_before") is not None
+                else len(seals)
+            )
+            episode_seals = seals[start["seals_before"]:seal_end]
+        else:
+            episode_seals = [record for record in seals if in_episode(record)]
+        round_ids = [record.get("id") for record in episode_rounds]
+        seal_attempts = [record.get("attempt") for record in episode_seals]
+        duration = None
+        if start_at and end_at:
+            duration = max(0.0, _epoch(end_at) - _epoch(start_at))
+        by_unit.setdefault(key, []).append({
+            "seq": start.get("seq"),
+            "at": start_at,
+            "completed_at": end_at or None,
+            "duration_s": duration,
+            "reported_by": start.get("reported_by"),
+            "target": start.get("target"),
+            "plain": start.get("plain"),
+            "forced_decision": start.get("forced_decision"),
+            "round_ids": round_ids,
+            "seal_attempts": seal_attempts,
+            "reclassifications": sum(
+                event.get("type") == "reclassify_recorded"
+                for event in window
+            ),
+            "malformed": sum(
+                event.get("type") == "worker_malformed"
+                for event in window
+            ),
+        })
+    return by_unit
+
+
 def summary(state):
     unit = current_unit(state)
     model_defaults = state["config"].get("model_defaults") or {}
     debt_requeues = requeued_debt_refs(state)
     requeued_ids = requeued_debt_ids(state)
     work_by_unit, unassigned_work = _work_durations(state)
+    repairs_by_unit = _repair_episodes(state)
 
     def effective_setting(family, explicit, field):
         if explicit:
@@ -1323,6 +1413,10 @@ def summary(state):
                 # so the panel can place each episode chronologically among
                 # the unit's round/seal chips and leave it there.
                 "reclassify": reclassify_by_unit.get(unit_key(u), []),
+                # A compact handle for every stop-report-repair-resume trip.
+                # Full immutable rounds/seals stay in their normal fields;
+                # the panel uses these ids to collapse the detour.
+                "repairs": repairs_by_unit.get(unit_key(u), []),
             }
         )
     families = state["config"].get("families_order", [])

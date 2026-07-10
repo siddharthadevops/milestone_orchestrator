@@ -141,6 +141,10 @@ class ServiceApiTest(unittest.TestCase):
         self.assertIn("function projectStateRank", text)
         self.assertIn(".unit-history { margin-top: 7px", text)
         self.assertIn("function unitHistory", text)
+        self.assertIn("function repairChip", text)
+        self.assertIn('addLine("Re-documentation"', text)
+        self.assertIn('`Episode ${group.number}`', text)
+        self.assertIn('d.story === "repair"', text)
         self.assertIn('id="eventsdialog"', text)
         self.assertIn('id="driverlogdialog"', text)
         self.assertIn('onclick="openEvents()">Events</button>', text)
@@ -829,6 +833,50 @@ class StoryApiTest(ServiceApiTest):
             "GET", "/api/runs/%s/story?item=draft:skeleton" % rid)
         self.assertEqual(status, 200)
         self.assertEqual(body["result"]["artifact"], "docs/skeleton.md")
+
+    def test_re_documentation_story_compacts_the_repair_episode(self):
+        ws = self.workspace("ws-repair-story")
+        rid = self._seed(ws)
+        entry = registry.get(registry.load(self.home), rid)
+        state = st.load(entry["state_path"])
+        unit = state["units"][0]
+        unit["rounds"].append({
+            "id": "skeleton-claude-r1", "family": "claude",
+            "kind": "fix_findings", "at": "2026-07-05T12:10:00+0200",
+            "duration_s": 40.0,
+            "result": {"status": "ok", "kind": "fix_findings",
+                       "findings": [{"id": "G1", "severity": "P1",
+                                     "summary": "pin grading content"}]},
+        })
+        unit["seals"].append({
+            "attempt": 2, "passed": True, "invalidated": None,
+            "at": "2026-07-05T12:20:00+0200",
+            "halves": {"codex": {"result": {"findings": []},
+                                    "duration_s": 30.0}},
+        })
+        state["events"].extend([
+            {"seq": 1002, "at": "2026-07-05T12:00:00+0200",
+             "type": "reopened_for_repair", "unit": "skeleton",
+             "reported_by": "slice_doc-04", "target": "skeleton",
+             "plain": "the grader lacks the question",
+             "forced_decision": "pin grading content"},
+            {"seq": 1003, "at": "2026-07-05T12:20:00+0200",
+             "type": "unit_transition", "unit": "skeleton",
+             "from_status": "sealing", "to_status": "sealed",
+             "reason": "repaired"},
+        ])
+        st.save(entry["state_path"], state)
+
+        _, detail = self.request_json("GET", "/api/runs/%s" % rid)
+        repair = detail["summary"]["units"][0]["repairs"][0]
+        self.assertEqual(repair["round_ids"], ["skeleton-claude-r1"])
+        self.assertEqual(repair["seal_attempts"], [2])
+        status, body = self.request_json(
+            "GET", "/api/runs/%s/story?item=repair:skeleton:1002" % rid)
+        self.assertEqual(status, 200)
+        self.assertEqual(body["story"], "repair")
+        self.assertEqual(body["reported_by"], "slice_doc-04")
+        self.assertEqual(body["plain"], "the grader lacks the question")
 
     def test_debt_story_and_summary_expose_deferred_p3(self):
         # The reclassify leaves no round, so the panel needs the deferred P3

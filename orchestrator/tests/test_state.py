@@ -1799,7 +1799,7 @@ class TestSummary(TempWorkspaceCase):
             set(skel_view.keys()),
             {"unit", "status", "artifact", "gate_sha", "wip_sha", "draft",
              "rounds", "seals", "opened_epoch", "closed_epoch", "debt",
-             "reclassify", "work_duration_s"},
+             "reclassify", "repairs", "work_duration_s"},
         )
         # The draft chip data: write-once record surfaced for the panel.
         self.assertEqual(
@@ -2112,6 +2112,8 @@ class TestReopenForRepair(TempWorkspaceCase):
         self.assertEqual(len(ev), 1)
         self.assertEqual(ev[0]["reported_by"], "slice_doc-01")
         self.assertEqual(ev[0]["target"], "goal")
+        self.assertEqual(ev[0]["rounds_before"], n_rounds)
+        self.assertEqual(ev[0]["seals_before"], n_seals)
 
     def test_reopen_requires_a_sealed_unit(self):
         state = make_state(self.workspace)
@@ -2121,7 +2123,12 @@ class TestReopenForRepair(TempWorkspaceCase):
 
     def test_repair_enters_a_fix_episode_and_reseals(self):
         state, unit = self._sealed()
-        st.reopen_for_repair(state, unit, {"target": "goal"}, "gap")
+        st.reopen_for_repair(
+            state, unit,
+            {"target": "skeleton", "forced_decision": "pin the source",
+             "plain": "the builder lacks an authority"},
+            "gap", reported_by="slice_doc-04",
+        )
         st.enter_fix_episode(
             state, unit,
             [{"id": "G1", "severity": "P1", "summary": "resolve the gap"}],
@@ -2134,6 +2141,12 @@ class TestReopenForRepair(TempWorkspaceCase):
         st.record_seal_attempt(state, unit, make_halves(), True)
         st.transition_unit(state, unit, st.U_SEALED)  # resealed
         self.assertEqual(unit["status"], st.U_SEALED)
+        repair = st.summary(state)["units"][0]["repairs"][0]
+        self.assertEqual(repair["reported_by"], "slice_doc-04")
+        self.assertEqual(repair["plain"], "the builder lacks an authority")
+        self.assertEqual(repair["forced_decision"], "pin the source")
+        self.assertEqual(repair["seal_attempts"], [2])
+        self.assertIsNotNone(repair["completed_at"])
 
     def test_append_only_permits_the_reopen(self):
         state, unit = self._sealed()

@@ -1254,11 +1254,31 @@ function reclassifyChip(ev, unitKey) {
   const title = `${ev.finding_id || ""}${two ? ` · risk ${risk}` : ""}${ev.threshold ? ` (threshold ${ev.threshold})` : ""}`;
   return `<span class="chip ${ev.defer_ok ? "clean" : "sev23"} clicky" title="${esc(title)}" onclick="showStory('debt:${esc(unitKey)}')">${esc(label)}${fmtDur(ev.duration_s)}</span>`;
 }
+function repairSourceLabel(unitKey) {
+  const match = String(unitKey || "").match(/^slice_(?:doc|impl)-(\d+)$/);
+  if (match) return `Slice ${match[1]}`;
+  return unitKey === "skeleton" ? "Skeleton" : (unitKey || "downstream work");
+}
+function repairChip(repair, unitKey) {
+  const source = repairSourceLabel(repair.reported_by);
+  const title = repair.plain || repair.forced_decision || "Downstream gap";
+  return `<span class="chip sev23 clicky" title="${esc(title)}"
+    onclick="showStory('repair:${esc(unitKey)}:${esc(repair.seq)}')">Triggered by ${esc(source)}${fmtDur(repair.duration_s)}</span>`;
+}
 function unitHistory(u, activity, running) {
   const lead = [draftChip(u.draft, u.unit), docChip(u)].filter(Boolean);
+  const repairs = u.repairs || [];
+  const repairRoundIds = new Set(repairs.flatMap(repair => repair.round_ids || []));
+  const repairSealAttempts = new Set(repairs.flatMap(repair => repair.seal_attempts || []));
+  const withinRepair = at => repairs.some(repair =>
+    at && at >= (repair.at || "") &&
+    (!repair.completed_at || at <= repair.completed_at));
   const base = [].concat(
-    (u.rounds || []).map(r => ({at: r.at || "", type: "round", item: r})),
-    (u.seals || []).map(s => ({at: s.at || "", type: "seal", item: s}))
+    (u.rounds || []).filter(r => !repairRoundIds.has(r.id))
+      .map(r => ({at: r.at || "", type: "round", item: r})),
+    (u.seals || []).filter(s => !repairSealAttempts.has(s.attempt))
+      .map(s => ({at: s.at || "", type: "seal", item: s})),
+    repairs.map(repair => ({at: repair.at || "", type: "repair", item: repair}))
   ).sort((a, b) => a.at < b.at ? -1 : a.at > b.at ? 1 : 0);
   // Reclassification is recorded immediately before its origin round/seal.
   // Prefer the same-family review at the same timestamp so a review and a
@@ -1266,6 +1286,7 @@ function unitHistory(u, activity, running) {
   const anchored = new Map(base.map(event => [event, []]));
   const loose = [];
   for (const item of (u.reclassify || [])) {
+    if (withinRepair(item.at || "")) continue;
     const family = String(item.finding_id || "").split("-", 1)[0];
     const sameFamilyReview = base.find(event =>
       event.at === (item.at || "") && event.type === "round" &&
@@ -1285,6 +1306,7 @@ function unitHistory(u, activity, running) {
     a.at < b.at ? -1 : a.at > b.at ? 1 : 0));
   const groups = [];
   const reviewCounts = {};
+  let repairCount = 0;
   let current = null;
   for (const event of events) {
     if (event.type === "round" && event.item.kind === "review_round") {
@@ -1296,6 +1318,11 @@ function unitHistory(u, activity, running) {
     } else if (event.type === "seal") {
       current = {type: "seal", number: event.item.attempt,
                  chips: [sealChip(event.item, u.unit)]};
+      groups.push(current);
+    } else if (event.type === "repair") {
+      repairCount += 1;
+      current = {type: "repair", number: repairCount,
+                 chips: [repairChip(event.item, u.unit)]};
       groups.push(current);
     } else {
       const chip = event.type === "round"
@@ -1329,7 +1356,10 @@ function unitHistory(u, activity, running) {
         : group.family === "claude" ? "Claude" : group.family;
       addLine(`${family} review`, `Round ${group.number}`, group.chips);
     } else {
-      addLine("Seal", `Attempt ${group.number}`, group.chips);
+      if (group.type === "seal")
+        addLine("Seal", `Attempt ${group.number}`, group.chips);
+      else
+        addLine("Re-documentation", `Episode ${group.number}`, group.chips);
     }
   }
   return `<div class="unit-history">${sections.map(section => {
@@ -1890,6 +1920,23 @@ async function showStory(item) {
     if (res.slices && res.slices.length)
       body += `<div class="story-note">slices:\n${esc(res.slices.map(x => x.id + ". " + x.title).join("\n"))}</div>`;
     if (res.notes) body += `<div class="story-note">${esc(res.notes)}</div>`;
+  } else if (d.story === "repair") {
+    title = `${d.unit} — re-documentation`;
+    body += `<div class="story-note"><b>Triggered by ${esc(repairSourceLabel(d.reported_by))}</b></div>`;
+    if (d.plain)
+      body += `<div class="story-finding">${esc(d.plain)}</div>`;
+    if (d.forced_decision)
+      body += `<div class="story-note"><b>Decision required</b>\n${esc(d.forced_decision)}</div>`;
+    const work = [];
+    if ((d.round_ids || []).length)
+      work.push(`${d.round_ids.length} repair round(s)`);
+    if ((d.seal_attempts || []).length)
+      work.push(`resealed in A${d.seal_attempts[d.seal_attempts.length - 1]}`);
+    if (d.reclassifications)
+      work.push(`${d.reclassifications} reclassification(s)`);
+    if (d.malformed)
+      work.push(`${d.malformed} malformed output(s) recovered`);
+    body += `<div class="story-meta">${esc(work.join(" · ") || "repair in progress")}</div>`;
   } else if (d.story === "malformed") {
     title = `Worker incident — ${d.label || "?"}`;
     if (d.fatal) {
