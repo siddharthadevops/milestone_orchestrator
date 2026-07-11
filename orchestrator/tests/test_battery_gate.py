@@ -530,11 +530,16 @@ class BatteryPromptGatingTest(unittest.TestCase):
     def test_delta_review_is_never_battery_aware(self):
         # Diff-scoped: the delta reviewer judges a fix delta, not the
         # artifact's battery — its builder takes no battery argument.
+        # Guard the QUESTION battery specifically: the SEVERITY battery
+        # is a different instrument (severity-scoring guidance) that
+        # legitimately rides every finding-producing prompt, deltas
+        # included.
         text = prompts.build_delta_review(
             "codex", "/ws", "goal", UNIT, "diff --git a/x b/x\n", [],
             unit_kind="skeleton")
-        self.assertNotIn("BATTERY", text)
-        self.assertNotIn("battery", text)
+        self.assertNotIn("QUESTION BATTERY", text)
+        self.assertNotIn("question battery", text)
+        self.assertNotIn(SETTLED_RULE, text)
 
 
 class ThreatModelAndEnforceabilityTest(unittest.TestCase):
