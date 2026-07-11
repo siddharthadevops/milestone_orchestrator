@@ -391,6 +391,9 @@ def transition_unit(state, unit, new_status, reason=None):
             % (unit_key(unit), old, new_status)
         )
     unit["status"] = new_status
+    if new_status == U_SEALED:
+        # A reseal ends the repair cycle: the artifact is read-only again.
+        unit.pop("under_repair", None)
     append_event(
         state,
         "unit_transition",
@@ -939,6 +942,14 @@ def reopen_for_repair(state, unit, gap, reason, reported_by=None):
             % (unit_key(unit), unit["status"])
         )
     transition_unit(state, unit, U_REPAIRING, reason=reason)
+    # The whole repair CYCLE (first fix, delta reviews, follow-up fixes,
+    # reseal) must know the unit's own artifact is editable — not just
+    # the first fix episode. The fix prompt's editability line keys off
+    # this flag, which only the reseal clears; keying off the queue's
+    # source type instead dropped the line on delta-loop fix rounds and
+    # made the fixer refuse its own repair (found live 2026-07-11,
+    # certification-llm skeleton repair).
+    unit["under_repair"] = True
     unit["fix_loop_rounds"] = 0
     unit["verify_fix_attempts"] = {"pre_review": 0, "pre_seal": 0}
     unit["rounds_amnesty"] = len(unit["rounds"])

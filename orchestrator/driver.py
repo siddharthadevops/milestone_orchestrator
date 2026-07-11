@@ -1902,8 +1902,16 @@ class Driver(object):
             project_context=project_context,
             debt=self._debt(unit),
             repair_artifact=(
+                # The editability declaration follows the unit's repair
+                # CYCLE (under_repair: reopen -> ... -> reseal), not the
+                # queue's source type: a delta-loop fix round inside a
+                # repair re-queues with source "delta_review", and keying
+                # off the source dropped the line there — the fixer then
+                # refused to edit its own under-repair artifact.
                 unit.get("artifact")
-                if source.get("type") == "repair" else None
+                if (source.get("type") == "repair"
+                    or unit.get("under_repair"))
+                else None
             ),
             convergence=(
                 {

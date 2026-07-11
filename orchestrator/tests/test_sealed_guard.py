@@ -257,5 +257,111 @@ class SealedGuardTest(unittest.TestCase):
             self.assertEqual(fh.read(), "# Skeleton\n\nLEGALLY AMENDED\n")
 
 
+class RepairEditabilityAcrossDeltaLoopsTest(unittest.TestCase):
+    """A repair cycle's EVERY fix round must declare the unit's own
+    artifact editable — not just the first one. Found live (2026-07-11,
+    certification-llm): the skeleton's repair fixer edited the doc, the
+    delta review queued follow-up findings (re-entering U_FIXING with
+    source "delta_review"), and the NEXT fix prompt dropped the
+    REOPENED-FOR-REPAIR line — so the fixer, correctly obeying its
+    prompt's "skeleton is READ-ONLY" rule, refused its own repair and
+    blocked the run."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(prefix="orch-repair-")
+        self.addCleanup(self.tmp.cleanup)
+        self.ws = os.path.join(self.tmp.name, "ws")
+        os.makedirs(self.ws)
+
+    def test_delta_loop_fix_round_keeps_the_repair_line(self):
+        path = init_state(self.ws, make_config())  # git ENABLED
+        seal_script = [
+            step("draft_skeleton",
+                 ok("draft_skeleton", artifact="docs/skeleton.md",
+                    slices=[{"id": 1, "title": "Core"}]),
+                 family="codex",
+                 side_effect=write_file("docs/skeleton.md",
+                                        "# Skeleton\n\nORIGINAL\n")),
+            step("review_round", report("review_round"), family="codex"),
+            step("review_round", report("review_round"), family="claude"),
+            step("seal_half", report("seal_half"), family="codex"),
+            step("seal_half", report("seal_half"), family="claude"),
+        ]
+        driver = drv.Driver(path, runner=runners.MockRunner(seal_script))
+        for _ in range(20):
+            if st.load(path)["units"][0]["status"] == "sealed":
+                break
+            driver.step()
+        state = st.load(path)
+        skeleton = state["units"][0]
+        self.assertEqual(skeleton["status"], "sealed")
+
+        # Reopen for repair exactly as the driver's gap flow does.
+        st.reopen_for_repair(
+            state, skeleton,
+            {"target": "skeleton", "forced_decision": "d", "plain": "p"},
+            reason="test repair", reported_by="test",
+        )
+        self.assertTrue(skeleton.get("under_repair"))
+        st.enter_fix_episode(
+            state, skeleton,
+            [finding("GAP1", "repair the skeleton", severity="P1")],
+            "repair", None, "skeleton-gap-repair", st.U_PRE_SEAL_VERIFY,
+        )
+        st.save(path, state)
+
+        repair_script = [
+            # Fix round 1 (source "repair"): edits the skeleton.
+            step("fix_findings",
+                 fix_ok([triaged("GAP1", "fixed", severity="P1")],
+                        files_changed=["docs/skeleton.md"]),
+                 side_effect=write_file("docs/skeleton.md",
+                                        "# Skeleton\n\nREPAIRED v1\n")),
+            # Delta review is DIRTY: queues a follow-up finding, so the
+            # unit re-enters U_FIXING with source "delta_review".
+            step("delta_review",
+                 report("delta_review",
+                        [finding("D1", "repair wording incomplete",
+                                 severity="P1")])),
+            # Fix round 2 — THE regression point: this prompt must still
+            # declare docs/skeleton.md editable.
+            step("fix_findings",
+                 fix_ok([triaged("D1", "fixed", severity="P1")],
+                        files_changed=["docs/skeleton.md"]),
+                 side_effect=write_file("docs/skeleton.md",
+                                        "# Skeleton\n\nREPAIRED v2\n")),
+            # Clean delta closes the loop toward the reseal.
+            step("delta_review", report("delta_review")),
+            step("seal_half", report("seal_half"), family="codex"),
+            step("seal_half", report("seal_half"), family="claude"),
+        ]
+        mock = runners.MockRunner(repair_script)
+        driver = drv.Driver(path, runner=mock)
+        for _ in range(30):
+            state = st.load(path)
+            if (state["units"][0]["status"] == "sealed"
+                    and not mock.script):
+                break
+            if state.get("failure"):
+                self.fail("run failed: %s" % state["failure"]["reason"])
+            driver.step()
+
+        fix_prompts = [p for (_f, kind, p) in mock.calls
+                       if kind == "fix_findings"]
+        self.assertEqual(len(fix_prompts), 2)
+        for i, prompt in enumerate(fix_prompts):
+            self.assertIn(
+                "REOPENED FOR REPAIR", prompt,
+                "fix round %d lost the editability declaration" % (i + 1),
+            )
+            self.assertIn("docs/skeleton.md", prompt)
+
+        # The reseal ends the repair cycle and clears the flag.
+        state = st.load(path)
+        skeleton = state["units"][0]
+        self.assertEqual(skeleton["status"], "sealed")
+        self.assertNotIn("under_repair", skeleton)
+
+
 if __name__ == "__main__":
     unittest.main()

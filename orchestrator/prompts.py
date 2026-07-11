@@ -1328,7 +1328,8 @@ def build_fix_findings(
         "SEALED ARTIFACTS (read-only)\n"
         + repair_line +
         "- The milestone skeleton and every SEALED slice note are\n"
-        "  READ-ONLY in this call: fixes never edit them. A `prevention`\n"
+        "  READ-ONLY in this call — except an artifact declared editable\n"
+        "  above because it is THE unit under repair. A `prevention`\n"
         "  edit may touch ONLY the artifact of the unit being fixed.\n"
         "- If a queued finding cannot be fixed without contradicting a\n"
         "  sealed note or the skeleton, do NOT edit the sealed document\n"
