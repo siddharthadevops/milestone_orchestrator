@@ -329,15 +329,16 @@ SLICE_SIZING_LINE = (
 
 SLICE_NOTE_CONTENT_BLOCK = (
     "SLICE NOTE CONTENT\n"
-    "- A complete slice note covers: scope, non-goals, likely files,\n"
-    "  dependencies, acceptance criteria, tests, risks, and reuse\n"
-    "  posture — as observable contracts, not implementation detail.\n"
-    "- Likely-files lists are ADVISORY orientation, never a gate:\n"
-    "  needing to touch or create a file the list omits is not a\n"
-    "  finding of any severity, and file-list entries in sealed notes\n"
-    "  are non-binding descriptions whose truthfulness is not\n"
-    "  reviewed. Explicit do-not-touch prohibitions, non-goals, and\n"
-    "  behavioral contracts remain fully binding.\n"
+    "- A complete slice note covers: scope, non-goals, dependencies,\n"
+    "  acceptance criteria, tests, risks, and reuse posture — as\n"
+    "  observable contracts, not implementation detail.\n"
+    "- NO file enumerations: a slice note does not list expected or\n"
+    "  likely files in any form — the work touches whatever it needs.\n"
+    "  Where such a list exists in an older note it is a non-binding\n"
+    "  leftover: a file's absence from it is never a finding and its\n"
+    "  'truthfulness' is not reviewed. Boundaries are carried by\n"
+    "  non-goals and explicit do-not-touch prohibitions, which remain\n"
+    "  fully binding.\n"
     + SLICE_SIZING_LINE
 )
 
@@ -862,10 +863,10 @@ def build_draft_slice_note(family, workspace, goal, slice_info, skeleton_path,
         + _project_context_block(project_context)
         + "Write %s: scope as observable contracts and the\n"
         % (note_path or ("docs/slice-%02d.md" % slice_info["id"]))
-        + "tests that pin them, non-goals, likely files (advisory\n"
-        "orientation, never a gate), dependencies, acceptance criteria,\n"
-        "risks, and reuse posture. State WHAT must be observably true,\n"
-        "not HOW code will do it.\n\n"
+        + "tests that pin them, non-goals, dependencies, acceptance\n"
+        "criteria, risks, and reuse posture. Do not enumerate expected\n"
+        "or likely files — the work touches whatever it needs. State\n"
+        "WHAT must be observably true, not HOW code will do it.\n\n"
         + (TWO_REGISTER_BLOCK if two_register else "")
         + (_battery_block(battery, "slice_doc") if battery else "")
         + SLICE_SIZING_LINE

@@ -528,21 +528,24 @@ class TestPortedCanonContentRules(unittest.TestCase):
             self.assertNotIn("record the reason in the slice note", prompt)
 
     def test_slice_note_checklist_reaches_author_and_reviewers(self):
-        checklist = ("scope, non-goals, likely files, dependencies, "
+        checklist = ("scope, non-goals, dependencies, "
                      "acceptance criteria, tests, risks, and reuse posture")
         self.assertIn(checklist, self.review("slice_doc"))
         self.assertIn(checklist, self.seal("slice_doc"))
-        # File lists are advisory (operator order, 2026-07-11): the rule
-        # must reach the author AND both reviewer prompts, or a reviewer
-        # will keep raising sealed-list "truthfulness" findings.
-        advisory = "ADVISORY orientation, never a gate"
-        self.assertIn(advisory, self.review("slice_doc"))
-        self.assertIn(advisory, self.seal("slice_doc"))
+        # Slice notes carry NO file lists (operator order, 2026-07-11).
+        # The prohibition must reach the author AND both reviewer prompts:
+        # authors would otherwise keep emitting the lists out of habit,
+        # and reviewers would keep raising sealed-list "truthfulness"
+        # findings against older notes that still have one.
+        rule = "NO file enumerations"
+        self.assertIn(rule, self.review("slice_doc"))
+        self.assertIn(rule, self.seal("slice_doc"))
         note = normalized(prompts.build_draft_slice_note(
             FAMILY, WORKSPACE, GOAL, SLICE, "docs/skeleton.md"))
-        self.assertIn("likely files (advisory orientation, never a gate), "
-                      "dependencies, acceptance criteria, "
-                      "risks, and reuse posture", note)
+        self.assertIn("Do not enumerate expected or likely files", note)
+        for prompt in (note, self.review("slice_doc"), self.seal("slice_doc")):
+            self.assertNotIn("expected files,", prompt)
+            self.assertNotIn("likely files,", prompt)
         sizing = "record the reason in the slice note"
         self.assertIn(sizing, note)
         self.assertIn(sizing, self.review("slice_doc"))
