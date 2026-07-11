@@ -2646,17 +2646,18 @@ class Driver(object):
         self._check_worker_blocked(unit, output, contracts.KIND_REVIEW_ROUND)
         self._validate_contests(unit, output, contracts.KIND_REVIEW_ROUND)
         findings = output.get("findings", [])
-        # Debt deferral: DOC phase only. The profile chooses the deferrable
-        # severity scope (interpreter.doc_defer_scope): legacy/profile-less
-        # runs rate P3; reform runs rate P2/P3. P0/P1 always fix. Candidates
-        # are rated independently: one serious finding must not drag cheap,
-        # accepted debt into the fix queue with it.
-        defer_scope = interpreter.doc_defer_scope(self.state)
+        # Debt deferral: the profile/phase chooses the deferrable severity
+        # scope (interpreter.defer_scope_for): the DOC phase rates P3
+        # (legacy) or P2/P3 (reform); the IMPL phase rates P3 only (a code
+        # P2 always fixes). P0/P1 always fix. Candidates are rated
+        # independently: one serious finding must not drag cheap, accepted
+        # debt into the fix queue with it.
+        defer_scope = interpreter.defer_scope_for(self.state, unit["kind"])
         deferred = []
         fix_findings = list(findings)
         if (findings
                 and self.config.get("p3_reclassify_debt")
-                and unit["kind"] in (st.UNIT_SKELETON, st.UNIT_SLICE_DOC)):
+                and defer_scope):
             candidates = [
                 (f, family) for f in findings
                 if f.get("severity") in defer_scope
@@ -3062,6 +3063,10 @@ class Driver(object):
             for fam in families
             for f in halves[fam]["result"].get("findings", [])
         ]
+        # The SEAL gate stays strict on the IMPL phase: an impl seal-half
+        # finding always fixes (never defers), so the final double-seal is
+        # a clean confirmation, not a debt-acceptance point. The review-round
+        # loop is where cosmetic P3 churn is absorbed (defer_scope_for).
         defer_scope = (
             interpreter.doc_defer_scope(self.state)
             if unit["kind"] in (st.UNIT_SKELETON, st.UNIT_SLICE_DOC)

@@ -1,10 +1,12 @@
 """Finding-debt deferral with opposite-family reclassification.
 
-When `p3_reclassify_debt` is on, eligible documentation review/seal findings
-receive a reclassification one by one. Ratings below the configured threshold
-become tracked debt; only the remaining findings reach the fixer. One blocking
-finding never drags accepted debt into its fix cycle. Implementation and delta
-findings always take the normal fix/reject path.
+When `p3_reclassify_debt` is on, eligible review/seal findings receive a
+reclassification one by one. Ratings below the configured threshold become
+tracked debt; only the remaining findings reach the fixer. One blocking
+finding never drags accepted debt into its fix cycle. The deferrable scope is
+phase-dependent (interpreter.defer_scope_for): the DOC phase defers P3 (legacy)
+or P2/P3 (reform); the IMPL phase defers cosmetic P3s only (a code P2 always
+fixes). Delta findings always take the normal fix/reject path.
 """
 
 import tempfile
@@ -28,6 +30,7 @@ from orchestrator.tests.test_driver_mock import (
     skeleton_script,
     step,
     triaged,
+    write_file,
 )
 
 
@@ -395,6 +398,96 @@ class TestP3Debt(DriverTestCase):
             self.assertNotIn("reclassify", [c[1] for c in mock.calls])
             self.assertEqual(unit["debt"], [])
             self.assertEqual([f["id"] for f in unit["fix_queue"]], ["F1"])
+
+    def _impl_pending(self, ws):
+        # State with skeleton + slice_doc SEALED and the slice_impl unit
+        # pending, ready for its implement draft (mirrors the setup the
+        # existing impl-seal test uses, but stops before implement).
+        path = init_state(ws, make_config(p3_reclassify_debt=True))
+        state = st.load(path)
+        state["milestone"]["slices"] = [{"id": 1, "title": "impl"}]
+        state["units"][0]["status"] = st.U_SEALED
+        st.ensure_next_unit(state)["status"] = st.U_SEALED
+        impl = st.ensure_next_unit(state)
+        self.assertEqual(impl["kind"], "slice_impl")
+        st.save(path, state)
+        return path
+
+    def test_impl_round_p3_only_is_deferred_as_debt(self):
+        # Regression: the debt valve used to be DOC-phase only, so an impl
+        # slice whose reviewer supplied an unbounded stream of fresh P3s
+        # fix-looped until the round cap FAILED the run (found live
+        # 2026-07-12, certification-llm slice_impl-08: 12 claude rounds, all
+        # P3, never a clean round). The impl REVIEW ROUND now defers cosmetic
+        # P3s as debt just like the doc phase — so a lone-P3 impl round is
+        # deferred-clean and advances toward the seal.
+        with tempfile.TemporaryDirectory(prefix="orch-mock-") as ws:
+            path = self._impl_pending(ws)
+            mock = runners.MockRunner([
+                step("implement",
+                     ok("implement", files_changed=["calculator.py"]),
+                     family="codex",
+                     side_effect=write_file(
+                         "calculator.py", "def add(a, b):\n    return a + b\n")),
+                # codex impl round: one lone P3 -> claude reclassifies -> defer
+                step("review_round",
+                     report("review_round",
+                            [finding("F1", "module lacks a docstring")]),
+                     family="codex"),
+                reclassify(True, family="claude", reason="cosmetic polish"),
+                # claude impl round: also a lone P3 -> codex defers
+                step("review_round",
+                     report("review_round",
+                            [finding("F1", "test names could be clearer")]),
+                     family="claude"),
+                reclassify(True, family="codex", reason="test-naming nit"),
+                step("seal_half", report("seal_half"), family="codex"),
+                step("seal_half", report("seal_half"), family="claude"),
+            ])
+            driver = drv.Driver(path, runner=mock)
+            self.step_until(
+                driver,
+                lambda s: s["units"][-1]["status"] == st.U_SEALED,
+                max_steps=200)
+            self.assertEqual(mock.script, [])
+            impl = st.load(path)["units"][-1]
+            self.assertEqual(impl["kind"], "slice_impl")
+            self.assertEqual(impl["status"], st.U_SEALED)
+            # No fix episode ever fired on the impl unit — the P3s deferred.
+            self.assertEqual(
+                [r for r in impl["rounds"] if r["kind"] == "fix_findings"], [])
+            # Both P3s recorded as impl debt for operator visibility.
+            self.assertEqual(len(impl["debt"]), 2)
+            self.assertEqual({d["cleared_by"] for d in impl["debt"]},
+                             {"claude", "codex"})
+
+    def test_impl_round_p2_is_never_deferred(self):
+        # The impl scope is P3-only: a code P2 (a real functional deviation)
+        # always reaches the fixer even with the debt valve armed.
+        with tempfile.TemporaryDirectory(prefix="orch-mock-") as ws:
+            path = self._impl_pending(ws)
+            mock = runners.MockRunner([
+                step("implement",
+                     ok("implement", files_changed=["calculator.py"]),
+                     family="codex",
+                     side_effect=write_file(
+                         "calculator.py", "def add(a, b):\n    return a + b\n")),
+                step("review_round",
+                     report("review_round",
+                            [finding("F1", "div by zero unhandled",
+                                     severity="P2")]),
+                     family="codex"),
+            ])
+            driver = drv.Driver(path, runner=mock)
+            self.step_until(
+                driver,
+                lambda s: s["units"][-1]["status"] == st.U_FIXING,
+                max_steps=200)
+            impl = st.load(path)["units"][-1]
+            self.assertEqual(impl["status"], st.U_FIXING)
+            self.assertEqual(impl["debt"], [])
+            self.assertNotIn("reclassify", [c[1] for c in mock.calls])
+            self.assertEqual([f["id"] for f in impl["fix_queue"]], ["F1"])
 
     def test_seal_p3_only_is_deferred_and_seals(self):
         with tempfile.TemporaryDirectory(prefix="orch-mock-") as ws:

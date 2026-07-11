@@ -154,6 +154,31 @@ class DocDeferScopeTest(unittest.TestCase):
         self.assertFalse(contracts.all_p3(p2p3))
 
 
+class ImplDeferScopeTest(unittest.TestCase):
+    """The IMPL-phase deferral scope: always P3 only — a code P2 is a
+    visible functional deviation that must be fixed even under the lightest
+    profile, so only cosmetic P3s become debt. defer_scope_for dispatches
+    by phase and returns empty for any non-unit kind."""
+
+    def test_impl_scope_is_p3_only_for_every_profile(self):
+        self.assertEqual(it.impl_defer_scope(_state({})), ("P3",))
+        for name in ("legacy", "strict", "light"):
+            state = _state({"profile": profiles.SEEDS[name]["profile"]})
+            self.assertEqual(it.impl_defer_scope(state), ("P3",))
+
+    def test_defer_scope_for_dispatches_by_phase(self):
+        # A reform profile: docs widen to P2/P3, impl stays P3-only.
+        state = _state({"profile": profiles.SEEDS["light"]["profile"]})
+        self.assertEqual(set(it.defer_scope_for(state, st.UNIT_SKELETON)),
+                         {"P2", "P3"})
+        self.assertEqual(set(it.defer_scope_for(state, st.UNIT_SLICE_DOC)),
+                         {"P2", "P3"})
+        self.assertEqual(it.defer_scope_for(state, st.UNIT_SLICE_IMPL),
+                         ("P3",))
+        # Any other kind defers nothing.
+        self.assertEqual(it.defer_scope_for(state, "something_else"), ())
+
+
 class ReformActiveTest(unittest.TestCase):
     """The single reform predicate: ON for every reform profile, OFF for
     the `legacy` compatibility artifact and for profile-less runs."""

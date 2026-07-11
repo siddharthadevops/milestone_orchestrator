@@ -157,6 +157,34 @@ def doc_defer_scope(state):
     return ("P3",)
 
 
+def impl_defer_scope(state):
+    """The severities an IMPLEMENTATION-phase review round / seal may defer
+    as tracked debt (subject to the drift-risk threshold). Always P3 only:
+    on the code phase a P2 is a visible functional deviation that must be
+    fixed even under the lightest profile, so only cosmetic P3s (polish,
+    test-completeness nits with no victim) become debt. Without this an
+    impl slice whose reviewer supplies an unbounded stream of fresh P3s
+    fix-loops until the round cap fails the run — the exact churn the debt
+    valve exists to stop, previously left unguarded on the code phase.
+
+    Returned as a tuple so callers pass it straight to
+    contracts.all_in_severity."""
+    return ("P3",)
+
+
+def defer_scope_for(state, unit_kind):
+    """The deferrable-severity scope for a unit by phase: the doc scope for
+    the skeleton and slice notes, the impl scope for implementation, and
+    empty for any other kind (nothing deferred)."""
+    from . import state as st
+
+    if unit_kind in (st.UNIT_SKELETON, st.UNIT_SLICE_DOC):
+        return doc_defer_scope(state)
+    if unit_kind == st.UNIT_SLICE_IMPL:
+        return impl_defer_scope(state)
+    return ()
+
+
 def verify_embedded(state):
     """Fail loudly if an embedded profile snapshot is internally
     inconsistent — its content hash must match the recorded profile_ref
