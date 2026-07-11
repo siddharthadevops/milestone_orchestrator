@@ -318,6 +318,10 @@ SKELETON_SCOPE_BLOCK = (
     "  rough slice intent and shared invariants, then leave scope,\n"
     "  files, tests, risks, and acceptance detail to the just-in-time\n"
     "  slice note. Do not draft slice notes during skeleton work.\n"
+    "- Shared mechanisms the skeleton pins carry a guarantee posture —\n"
+    "  strict, optimistic, eventual, or best-effort — so downstream\n"
+    "  notes and reviews judge behavior against the declared level,\n"
+    "  never an imagined stronger one.\n"
 )
 
 SLICE_SIZING_LINE = (
@@ -330,8 +334,16 @@ SLICE_SIZING_LINE = (
 SLICE_NOTE_CONTENT_BLOCK = (
     "SLICE NOTE CONTENT\n"
     "- A complete slice note covers: scope, non-goals, dependencies,\n"
-    "  acceptance criteria, tests, risks, and reuse posture — as\n"
-    "  observable contracts, not implementation detail.\n"
+    "  acceptance criteria, tests, risks, reuse posture, and guarantee\n"
+    "  posture — as observable contracts, not implementation detail.\n"
+    "- Guarantee posture: each mechanism the note pins names the\n"
+    "  consistency/delivery level it PROMISES — strict (serialized or\n"
+    "  transactional; violations are defects), optimistic (concurrent\n"
+    "  events resolve in arrival order; small windows accepted),\n"
+    "  eventual (converges; bounded staleness accepted), or best-effort\n"
+    "  (may not happen; no delivery guarantee) — so reviews judge\n"
+    "  behavior against the declared posture, not an imagined stronger\n"
+    "  one.\n"
     + SLICE_SIZING_LINE
 )
 
@@ -357,6 +369,38 @@ EVIDENCE_BLOCK = (
     "  inspection; prefer local search and file-reading tools for speed.\n"
     "  Use git for scope, diff comparison, relevant history, and\n"
     "  commit/ref verification.\n"
+)
+
+SEVERITY_BATTERY_BLOCK = (
+    "SEVERITY BATTERY\n"
+    "- Answer these BEFORE assigning any severity; the worst answer\n"
+    "  rules, and a P0-P2 finding must cite the answers that justify it:\n"
+    "  1. Defect or design? Does the behavior break a guarantee the\n"
+    "     mechanism DECLARES (its guarantee posture: strict, optimistic,\n"
+    "     eventual, or best-effort), or only a stronger guarantee the\n"
+    "     reviewer would prefer? Behavior within the declared posture is\n"
+    "     NOT a defect — at most a posture-change proposal (an operator\n"
+    "     decision) or an undocumented-posture note (P3). Where no\n"
+    "     posture is declared, infer it from the sealed design and say\n"
+    "     so.\n"
+    "  2. Victim: who concretely suffers — a user, the operator, data,\n"
+    "     another system? No nameable victim caps severity at P3.\n"
+    "  3. Damage: how much, and is it reversible? Does a trace show\n"
+    "     what happened?\n"
+    "  4. Functional deviation: left unfixed, how much does the\n"
+    "     mechanism's real behavior change — never, in rare corners, or\n"
+    "     in normal use?\n"
+    "  5. Exposure: how often will it occur in real use, and can anyone\n"
+    "     trigger or widen it at will — or is it a timing accident\n"
+    "     nobody controls?\n"
+    "- Mapping: real victim with grave or irreversible damage, a\n"
+    "  declared contract broken in normal use, or at-will triggerable\n"
+    "  -> P0/P1. Real victim with bounded reversible damage, or visible\n"
+    "  deviation in normal use -> P2. No nameable victim, negligible\n"
+    "  damage, unchanged behavior, rare and untriggerable -> P3 (debt).\n"
+    "- When the battery scores low but you remain uneasy, record the\n"
+    "  unease in the finding and score low anyway: recorded debt is\n"
+    "  recoverable; a milestone stalled on a victimless finding is not.\n"
 )
 
 FIX_EVIDENCE_BLOCK = (
@@ -593,7 +637,7 @@ def _governing_line(governing):
 
 
 def _review_quality_block(unit_kind):
-    parts = [EVIDENCE_BLOCK, REUSE_REVIEW_BLOCK]
+    parts = [EVIDENCE_BLOCK, SEVERITY_BATTERY_BLOCK, REUSE_REVIEW_BLOCK]
     if unit_kind in DOC_UNIT_KINDS:
         parts.append(REUSE_POSTURE_REVIEW_LINE)
         parts.append(ALTITUDE_BLOCK)
@@ -607,7 +651,7 @@ def _review_quality_block(unit_kind):
 
 
 def _delta_quality_block(unit_kind):
-    parts = [EVIDENCE_BLOCK, DELTA_COVERAGE_LINE]
+    parts = [EVIDENCE_BLOCK, SEVERITY_BATTERY_BLOCK, DELTA_COVERAGE_LINE]
     if unit_kind in DOC_UNIT_KINDS:
         parts.append(ALTITUDE_BLOCK)
         parts.append(ALTITUDE_REVIEW_BLOCK)
@@ -857,8 +901,10 @@ def build_draft_slice_note(family, workspace, goal, slice_info, skeleton_path,
         + "Write %s: scope as observable contracts and the\n"
         % (note_path or ("docs/slice-%02d.md" % slice_info["id"]))
         + "tests that pin them, non-goals, dependencies, acceptance\n"
-        "criteria, risks, and reuse posture. State WHAT must be\n"
-        "observably true, not HOW code will do it.\n\n"
+        "criteria, risks, reuse posture, and guarantee posture (the\n"
+        "consistency/delivery level each pinned mechanism promises:\n"
+        "strict, optimistic, eventual, or best-effort). State WHAT must\n"
+        "be observably true, not HOW code will do it.\n\n"
         + (TWO_REGISTER_BLOCK if two_register else "")
         + (_battery_block(battery, "slice_doc") if battery else "")
         + SLICE_SIZING_LINE

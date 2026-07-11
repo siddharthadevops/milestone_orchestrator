@@ -527,14 +527,43 @@ class TestPortedCanonContentRules(unittest.TestCase):
             self.assertIn("Do not split cohesive work artificially", prompt)
             self.assertNotIn("record the reason in the slice note", prompt)
 
+    def test_severity_battery_reaches_every_finding_producer(self):
+        # Severity follows damage, not mechanism (operator, 2026-07-11,
+        # after a victimless millisecond race scored P2 and stalled a
+        # night). The battery must ride every prompt that ASSIGNS
+        # severities — review rounds, seal halves, and delta reviews,
+        # for BOTH doc and impl units — so the defect-or-design gate,
+        # the victim question, and the damage mapping are answered
+        # before any P0-P2 is written.
+        battery = "SEVERITY BATTERY"
+        gate = "Defect or design?"
+        victim = "No nameable victim caps severity at P3"
+        for kind in ("slice_doc", "slice_impl", "skeleton"):
+            for surface in (self.review(kind), self.seal(kind),
+                            self.delta(kind)):
+                self.assertIn(battery, surface)
+                self.assertIn(gate, surface)
+                self.assertIn(victim, surface)
+
     def test_slice_note_checklist_reaches_author_and_reviewers(self):
         checklist = ("scope, non-goals, dependencies, "
-                     "acceptance criteria, tests, risks, and reuse posture")
+                     "acceptance criteria, tests, risks, reuse posture, "
+                     "and guarantee posture")
         self.assertIn(checklist, self.review("slice_doc"))
         self.assertIn(checklist, self.seal("slice_doc"))
         note = normalized(prompts.build_draft_slice_note(
             FAMILY, WORKSPACE, GOAL, SLICE, "docs/skeleton.md"))
         self.assertIn("non-goals, dependencies, acceptance", note)
+        # Guarantee posture (operator, 2026-07-11): the design declares
+        # each mechanism's consistency/delivery level up front so the
+        # severity battery's defect-or-design question is answered by
+        # READING, not guessing. Must reach the note author, both doc
+        # reviewers, and the skeleton surfaces.
+        posture = "strict, optimistic,"
+        self.assertIn("guarantee posture", note)
+        self.assertIn(posture, self.review("slice_doc"))
+        self.assertIn(posture, self.seal("slice_doc"))
+        self.assertIn("guarantee posture", self.review("skeleton"))
         # Slice notes carry NO file lists and the prompts say NOTHING
         # about them either way (operator, 2026-07-11: an unasked-for
         # list is not something an LLM produces spontaneously, and a
