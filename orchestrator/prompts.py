@@ -332,13 +332,6 @@ SLICE_NOTE_CONTENT_BLOCK = (
     "- A complete slice note covers: scope, non-goals, dependencies,\n"
     "  acceptance criteria, tests, risks, and reuse posture — as\n"
     "  observable contracts, not implementation detail.\n"
-    "- NO file enumerations: a slice note does not list expected or\n"
-    "  likely files in any form — the work touches whatever it needs.\n"
-    "  Where such a list exists in an older note it is a non-binding\n"
-    "  leftover: a file's absence from it is never a finding and its\n"
-    "  'truthfulness' is not reviewed. Boundaries are carried by\n"
-    "  non-goals and explicit do-not-touch prohibitions, which remain\n"
-    "  fully binding.\n"
     + SLICE_SIZING_LINE
 )
 
@@ -864,9 +857,8 @@ def build_draft_slice_note(family, workspace, goal, slice_info, skeleton_path,
         + "Write %s: scope as observable contracts and the\n"
         % (note_path or ("docs/slice-%02d.md" % slice_info["id"]))
         + "tests that pin them, non-goals, dependencies, acceptance\n"
-        "criteria, risks, and reuse posture. Do not enumerate expected\n"
-        "or likely files — the work touches whatever it needs. State\n"
-        "WHAT must be observably true, not HOW code will do it.\n\n"
+        "criteria, risks, and reuse posture. State WHAT must be\n"
+        "observably true, not HOW code will do it.\n\n"
         + (TWO_REGISTER_BLOCK if two_register else "")
         + (_battery_block(battery, "slice_doc") if battery else "")
         + SLICE_SIZING_LINE

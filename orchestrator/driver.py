@@ -374,6 +374,45 @@ class Driver(object):
     def _save(self):
         st.save(self.state_path, self.state)
 
+    # -- operator control (safe pause) -------------------------------------
+    # control.json lives NEXT to state.json and is written by the service
+    # while the driver runs — it must never ride state.json itself, whose
+    # single writer is the driver. The driver only READS it (at step
+    # boundaries) and clears the one-shot flag after honoring it, so the
+    # two processes never contend on the same file for writes.
+
+    def _control_path(self):
+        return os.path.join(os.path.dirname(self.state_path), "control.json")
+
+    def _control(self):
+        try:
+            with open(self._control_path(), "r", encoding="utf-8") as fh:
+                data = json.load(fh)
+        except (OSError, ValueError):
+            return {}
+        return data if isinstance(data, dict) else {}
+
+    def _clear_stop_after_seal(self):
+        ctl = self._control()
+        if not ctl.get("stop_after_seal"):
+            return
+        ctl.pop("stop_after_seal", None)
+        tmp = self._control_path() + ".tmp"
+        try:
+            with open(tmp, "w", encoding="utf-8") as fh:
+                json.dump(ctl, fh)
+            os.replace(tmp, self._control_path())
+        except OSError:
+            # Worst case the stale flag pauses the run once more at the
+            # next seal — an extra safe stop, never lost work.
+            pass
+
+    def _sealed_keys(self):
+        return {
+            st.unit_key(u) for u in self.state["units"]
+            if u["status"] == st.U_SEALED
+        }
+
     def _snapshot(self):
         """(mode, entries) content snapshot for tamper checks.
 
@@ -1214,8 +1253,27 @@ class Driver(object):
                 return 0
             if action.type == A_FAILED:
                 return 2
+            sealed_before = self._sealed_keys()
             self.step()
             steps += 1
+            newly_sealed = self._sealed_keys() - sealed_before
+            if newly_sealed and self._control().get("stop_after_seal"):
+                # Operator-ordered safe pause: a seal is the one point
+                # where worktree == HEAD == reviewed (the seal predicate),
+                # so stopping here leaves the repo committed and clean for
+                # an out-of-band build. One-shot: the flag clears on
+                # honoring; a plain start resumes exactly where paused.
+                with self._exclusive():
+                    self._assert_not_stale()
+                    st.append_event(
+                        self.state, "paused_after_seal",
+                        units=sorted(newly_sealed),
+                        note="operator-ordered safe pause at a sealed "
+                             "point (worktree == HEAD == reviewed)",
+                    )
+                    self._save()
+                self._clear_stop_after_seal()
+                return 4
         return 3
 
     def _goal_for(self, unit):
@@ -3594,6 +3652,9 @@ def cmd_run(args):
         print("milestone %s" % summ["milestone_status"])
     elif code == 2:
         print("RUN FAILED: %s" % (summ["failure"] or {}).get("reason"))
+    elif code == 4:
+        print("paused after seal (operator-ordered safe stop); "
+              "start again to resume")
     else:
         print("stopped after --max-steps")
     return code

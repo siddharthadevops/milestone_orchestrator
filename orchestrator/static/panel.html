@@ -1778,6 +1778,9 @@ async function refreshDetail() {
       <button class="btn ${s.failure_reason ? "" : "primary"}" ${running || s.milestone_status === "closed" || s.failure_reason ? "disabled" : ""}
         onclick="act('start')">Start</button>
       <button class="btn" ${running ? "" : "disabled"} onclick="act('stop')">Stop</button>
+      ${running || s.pause_after_seal
+        ? `<button class="btn" onclick="pauseAfterSeal(${s.pause_after_seal ? "false" : "true"})">${s.pause_after_seal ? "Cancel stop after seal" : "Stop after seal"}</button>`
+        : ""}
       <button class="btn" style="margin-left:auto"
         onclick="openRunEdit()">Edit&#8230;</button>
     </div>`;
@@ -2183,6 +2186,13 @@ async function act(verb) {
   try { await api(`/api/runs/${selected}/${verb}`, {method: "POST"}); }
   catch (e) { alert(e.message); }
   refreshRuns();
+}
+async function pauseAfterSeal(enable) {
+  try {
+    await postJSON(`/api/runs/${selected}/pause-after-seal`,
+                   {enabled: enable});
+  } catch (e) { alert(e.message); }
+  refreshDetail();
 }
 async function renameRun() {
   const value = prompt("Rename milestone:", currentRunName);

@@ -143,6 +143,7 @@ import shutil
 import signal
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import urllib.parse
@@ -1346,7 +1347,62 @@ def run_status(entry, home=None):
             _pump_projection(home, entry, summ)
     except Exception as exc:
         info["state_error"] = str(exc)
+    info["pause_after_seal"] = bool(
+        read_control(entry).get("stop_after_seal")
+    )
     return info
+
+
+def control_path(entry):
+    return os.path.join(
+        os.path.dirname(entry["state_path"]), "control.json"
+    )
+
+
+def read_control(entry):
+    """The driver-side control file (safe-pause orders). Tolerant like
+    every other sidecar read: missing or corrupt means no orders."""
+    try:
+        with open(control_path(entry), "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def set_pause_after_seal(home, run_id, body):
+    """Arm (or cancel) the operator's safe-pause order: the driver stops
+    cleanly right after the next unit seals — the one point where the
+    worktree equals HEAD equals the reviewed state — leaving the repo
+    committed and clean for an out-of-band build. The order rides
+    control.json (service-written, driver-read), NEVER state.json, whose
+    single writer is the driver."""
+    reg = registry.load(home)
+    entry = registry.get(reg, run_id)
+    if entry is None:
+        raise ApiError(404, "unknown run %r" % run_id)
+    enabled = True
+    if isinstance(body, dict) and "enabled" in body:
+        enabled = bool(body["enabled"])
+    ctl = read_control(entry)
+    if enabled:
+        ctl["stop_after_seal"] = True
+        ctl["requested_at"] = registry.now_iso()
+    else:
+        ctl.pop("stop_after_seal", None)
+    path = control_path(entry)
+    fd, tmp = tempfile.mkstemp(
+        prefix=".control-", suffix=".json", dir=os.path.dirname(path)
+    )
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            json.dump(ctl, fh, indent=2)
+            fh.write("\n")
+        os.replace(tmp, path)
+    finally:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+    return {"pause_after_seal": enabled}
 
 
 def rename_run(home, run_id, body):
@@ -2802,6 +2858,13 @@ def make_handler(home):
                     elif len(parts) == 5 and parts[4] == "resume":
                         entry = resume_run(home, parts[3])
                         self._json(200, {"ok": True, "run": run_status(entry, home=home)})
+                    elif len(parts) == 5 and parts[4] == "pause-after-seal":
+                        self._json(200, {
+                            "ok": True,
+                            **set_pause_after_seal(
+                                home, parts[3], self._body()
+                            ),
+                        })
                     elif len(parts) == 5 and parts[4] == "amendments":
                         amendments = add_amendment(
                             home, parts[3], self._body()

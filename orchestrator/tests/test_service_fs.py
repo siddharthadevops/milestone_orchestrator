@@ -363,6 +363,40 @@ class FsHttpTest(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertTrue(data["ok"])
 
+    def test_pause_after_seal_flag_roundtrip(self):
+        ws = os.path.join(self.tmp.name, "ws-pause")
+        os.makedirs(ws, exist_ok=True)
+        subprocess.run(["git", "init", "-q", ws], check=True)
+        status, data = _post(
+            self.port, "/api/runs",
+            {"workspace": ws, "goal": "g", "autostart": False,
+             "config": {"verification": []}},
+        )
+        self.assertEqual(status, 201, data)
+        rid = data["run"]["id"]
+        self.assertFalse(data["run"]["pause_after_seal"])
+        status, data = _post(
+            self.port, "/api/runs/%s/pause-after-seal" % rid, {}
+        )
+        self.assertEqual(status, 200)
+        self.assertTrue(data["pause_after_seal"])
+        _s, listing = _get(self.port, "/api/runs")
+        run = [r for r in listing["runs"] if r["id"] == rid][0]
+        self.assertTrue(run["pause_after_seal"])
+        status, data = _post(
+            self.port, "/api/runs/%s/pause-after-seal" % rid,
+            {"enabled": False},
+        )
+        self.assertEqual(status, 200)
+        self.assertFalse(data["pause_after_seal"])
+        _s, listing = _get(self.port, "/api/runs")
+        run = [r for r in listing["runs"] if r["id"] == rid][0]
+        self.assertFalse(run["pause_after_seal"])
+        status, _data = _post(
+            self.port, "/api/runs/nope/pause-after-seal", {}
+        )
+        self.assertEqual(status, 404)
+
     def test_ui_state_flow_get_post_merge(self):
         status, data = _get(self.port, "/api/ui-state")
         self.assertEqual(status, 200)

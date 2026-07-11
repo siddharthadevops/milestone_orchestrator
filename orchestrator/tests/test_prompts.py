@@ -532,20 +532,17 @@ class TestPortedCanonContentRules(unittest.TestCase):
                      "acceptance criteria, tests, risks, and reuse posture")
         self.assertIn(checklist, self.review("slice_doc"))
         self.assertIn(checklist, self.seal("slice_doc"))
-        # Slice notes carry NO file lists (operator order, 2026-07-11).
-        # The prohibition must reach the author AND both reviewer prompts:
-        # authors would otherwise keep emitting the lists out of habit,
-        # and reviewers would keep raising sealed-list "truthfulness"
-        # findings against older notes that still have one.
-        rule = "NO file enumerations"
-        self.assertIn(rule, self.review("slice_doc"))
-        self.assertIn(rule, self.seal("slice_doc"))
         note = normalized(prompts.build_draft_slice_note(
             FAMILY, WORKSPACE, GOAL, SLICE, "docs/skeleton.md"))
-        self.assertIn("Do not enumerate expected or likely files", note)
+        self.assertIn("non-goals, dependencies, acceptance", note)
+        # Slice notes carry NO file lists and the prompts say NOTHING
+        # about them either way (operator, 2026-07-11: an unasked-for
+        # list is not something an LLM produces spontaneously, and a
+        # prohibition is itself token waste). Pin only the absence.
         for prompt in (note, self.review("slice_doc"), self.seal("slice_doc")):
-            self.assertNotIn("expected files,", prompt)
-            self.assertNotIn("likely files,", prompt)
+            self.assertNotIn("expected files", prompt)
+            self.assertNotIn("likely files", prompt)
+            self.assertNotIn("file enumeration", prompt)
         sizing = "record the reason in the slice note"
         self.assertIn(sizing, note)
         self.assertIn(sizing, self.review("slice_doc"))

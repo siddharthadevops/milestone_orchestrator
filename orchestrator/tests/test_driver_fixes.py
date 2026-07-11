@@ -439,6 +439,65 @@ class TestConcurrentSeal(DriverTestCase):
             )
 
 
+class TestPauseAfterSeal(DriverTestCase):
+    """Operator safe pause: with control.json's stop_after_seal set, the
+    run loop exits cleanly (code 4) right after the next unit seals — the
+    one point where worktree == HEAD == reviewed — instead of proceeding.
+    One-shot: honoring the order clears the flag; a plain re-run resumes
+    and finishes the milestone."""
+
+    def _control_path(self, state_path):
+        return os.path.join(os.path.dirname(state_path), "control.json")
+
+    def test_pause_fires_after_first_seal_and_resume_completes(self):
+        with tempfile.TemporaryDirectory(prefix="orch-pause-") as ws:
+            path = init_state(ws, make_config())
+            with open(self._control_path(path), "w") as fh:
+                json.dump({"stop_after_seal": True}, fh)
+            mock = runners.MockRunner(
+                skeleton_script() + doc_script() + impl_script()
+            )
+            driver = drv.Driver(path, runner=mock)
+            self.assertEqual(driver.run(), 4)
+            state = st.load(path)
+            # Exactly the skeleton sealed; nothing further ran.
+            sealed = [st.unit_key(u) for u in state["units"]
+                      if u["status"] == st.U_SEALED]
+            self.assertEqual(sealed, ["skeleton"])
+            paused = [e for e in state["events"]
+                      if e["type"] == "paused_after_seal"]
+            self.assertEqual(len(paused), 1)
+            self.assertEqual(paused[0]["units"], ["skeleton"])
+            # The doc/impl scripts are untouched: the pause consumed no
+            # extra worker calls.
+            self.assertEqual(len(mock.script),
+                             len(doc_script()) + len(impl_script()))
+            # One-shot: the flag cleared when honored...
+            with open(self._control_path(path)) as fh:
+                self.assertNotIn("stop_after_seal", json.load(fh))
+            # ...so a plain re-run resumes and completes the milestone.
+            again = drv.Driver(path, runner=mock)
+            self.assertEqual(again.run(), 0)
+            self.assertEqual(mock.script, [])
+            state = st.load(path)
+            self.assertEqual(state["milestone"]["status"], "closed")
+            self.assertEqual(
+                len([e for e in state["events"]
+                     if e["type"] == "paused_after_seal"]), 1)
+
+    def test_no_flag_means_no_pause(self):
+        with tempfile.TemporaryDirectory(prefix="orch-pause-") as ws:
+            path = init_state(ws, make_config())
+            mock = runners.MockRunner(
+                skeleton_script() + doc_script() + impl_script()
+            )
+            self.assertEqual(drv.Driver(path, runner=mock).run(), 0)
+            state = st.load(path)
+            self.assertEqual(
+                [e for e in state["events"]
+                 if e["type"] == "paused_after_seal"], [])
+
+
 class TestMilestoneCloseIdempotent(DriverTestCase):
     def test_milestone_closed_recorded_exactly_once(self):
         """P2: run()'s A_DONE branch re-called maybe_close_milestone with
