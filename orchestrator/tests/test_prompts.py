@@ -528,13 +528,20 @@ class TestPortedCanonContentRules(unittest.TestCase):
             self.assertNotIn("record the reason in the slice note", prompt)
 
     def test_slice_note_checklist_reaches_author_and_reviewers(self):
-        checklist = ("scope, non-goals, expected files, dependencies, "
+        checklist = ("scope, non-goals, likely files, dependencies, "
                      "acceptance criteria, tests, risks, and reuse posture")
         self.assertIn(checklist, self.review("slice_doc"))
         self.assertIn(checklist, self.seal("slice_doc"))
+        # File lists are advisory (operator order, 2026-07-11): the rule
+        # must reach the author AND both reviewer prompts, or a reviewer
+        # will keep raising sealed-list "truthfulness" findings.
+        advisory = "ADVISORY orientation, never a gate"
+        self.assertIn(advisory, self.review("slice_doc"))
+        self.assertIn(advisory, self.seal("slice_doc"))
         note = normalized(prompts.build_draft_slice_note(
             FAMILY, WORKSPACE, GOAL, SLICE, "docs/skeleton.md"))
-        self.assertIn("expected files, dependencies, acceptance criteria, "
+        self.assertIn("likely files (advisory orientation, never a gate), "
+                      "dependencies, acceptance criteria, "
                       "risks, and reuse posture", note)
         sizing = "record the reason in the slice note"
         self.assertIn(sizing, note)

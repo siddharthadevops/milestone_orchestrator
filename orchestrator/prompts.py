@@ -329,9 +329,15 @@ SLICE_SIZING_LINE = (
 
 SLICE_NOTE_CONTENT_BLOCK = (
     "SLICE NOTE CONTENT\n"
-    "- A complete slice note covers: scope, non-goals, expected files,\n"
+    "- A complete slice note covers: scope, non-goals, likely files,\n"
     "  dependencies, acceptance criteria, tests, risks, and reuse\n"
     "  posture — as observable contracts, not implementation detail.\n"
+    "- Likely-files lists are ADVISORY orientation, never a gate:\n"
+    "  needing to touch or create a file the list omits is not a\n"
+    "  finding of any severity, and file-list entries in sealed notes\n"
+    "  are non-binding descriptions whose truthfulness is not\n"
+    "  reviewed. Explicit do-not-touch prohibitions, non-goals, and\n"
+    "  behavioral contracts remain fully binding.\n"
     + SLICE_SIZING_LINE
 )
 
@@ -856,9 +862,10 @@ def build_draft_slice_note(family, workspace, goal, slice_info, skeleton_path,
         + _project_context_block(project_context)
         + "Write %s: scope as observable contracts and the\n"
         % (note_path or ("docs/slice-%02d.md" % slice_info["id"]))
-        + "tests that pin them, non-goals, expected files, dependencies,\n"
-        "acceptance criteria, risks, and reuse posture. State WHAT must be\n"
-        "observably true, not HOW code will do it.\n\n"
+        + "tests that pin them, non-goals, likely files (advisory\n"
+        "orientation, never a gate), dependencies, acceptance criteria,\n"
+        "risks, and reuse posture. State WHAT must be observably true,\n"
+        "not HOW code will do it.\n\n"
         + (TWO_REGISTER_BLOCK if two_register else "")
         + (_battery_block(battery, "slice_doc") if battery else "")
         + SLICE_SIZING_LINE
