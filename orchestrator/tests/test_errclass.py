@@ -156,6 +156,23 @@ class TestClassifyChain(unittest.TestCase):
         self.assertEqual(len(runner.calls), 1)
         self.assertEqual(runner.calls[0][0], "claude")
 
+    def test_llm_selects_classification_regardless_of_json_position(self):
+        classification = (
+            '{"error_type":"busy","resume_at":null,"evidence":"overload"}'
+        )
+        for response in (
+            '{} explanation before ' + classification,
+            classification + ' explanation after {}',
+        ):
+            with self.subTest(response=response):
+                etype, resume_at, evidence = errclass.classify_failure(
+                    ["mystery"], runner=_FakeRunner(response),
+                    opposite_family="claude", workspace="/ws",
+                )
+                self.assertEqual(etype, "busy")
+                self.assertIsNone(resume_at)
+                self.assertEqual(evidence, "overload")
+
     def test_llm_garbage_degrades_to_unknown(self):
         runner = _FakeRunner("not json at all")
         etype, _, _ = errclass.classify_failure(

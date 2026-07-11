@@ -259,10 +259,15 @@ def llm_classify(runner, family, raw_texts, workspace, on_raw=None):
             timeout_override=CLASSIFIER_TIMEOUT_S,
         )
         raw = result.text
-        obj = runners.extract_json(result.text)
-        etype = obj.get("error_type")
-        if etype not in TYPES:
-            return "unknown", None, "classifier returned %r" % (etype,)
+        objects = runners.extract_json_objects(result.text)
+        matches = [obj for obj in objects if obj.get("error_type") in TYPES]
+        if len(matches) != 1:
+            reported = [obj.get("error_type") for obj in objects]
+            if len(matches) > 1:
+                return "unknown", None, "classifier returned multiple valid classifications"
+            return "unknown", None, "classifier returned %r" % (reported,)
+        obj = matches[0]
+        etype = obj["error_type"]
         resume_at = normalize_resume_at(obj.get("resume_at"))
         return etype, resume_at, str(obj.get("evidence") or "")[:300]
     except Exception as exc:  # the classifier must never worsen a failure

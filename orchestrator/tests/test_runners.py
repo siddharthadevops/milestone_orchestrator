@@ -93,9 +93,17 @@ class TestExtractJson(unittest.TestCase):
         text = 'noise {"k": "a\\\\", "n": 3} noise'
         self.assertEqual(extract_json(text), {"k": "a\\", "n": 3})
 
-    def test_multiple_objects_first_valid_wins(self):
+    def test_multiple_objects_last_valid_wins(self):
         text = '{"first": 1} and later {"second": 2}'
-        self.assertEqual(extract_json(text), {"first": 1})
+        self.assertEqual(extract_json(text), {"second": 2})
+
+    def test_json_example_before_worker_contract_is_ignored(self):
+        text = (
+            'The canonical empty object is {}. Fix complete.\n'
+            '{"status":"ok","kind":"fix_findings","findings":[], '
+            '"files_changed":[],"notes":"verified"}'
+        )
+        self.assertEqual(extract_json(text)["status"], "ok")
 
     def test_multiple_objects_skips_invalid_first_candidate(self):
         text = "{'not': json} but then {\"good\": true}"
@@ -950,6 +958,23 @@ class TestCallWorker(unittest.TestCase):
         self.assertEqual(obj, VALID_IMPLEMENT)
         self.assertEqual(len(runner.calls), 1)
         self.assertNotIn("REPAIR", runner.calls[0][2])
+
+    def test_contract_is_selected_regardless_of_json_position(self):
+        contract = json.dumps(VALID_IMPLEMENT)
+        for response in (
+            '{} explanation before ' + contract,
+            contract + ' explanation after {}',
+        ):
+            with self.subTest(response=response):
+                runner = MockRunner(
+                    [{"expect_kind": "implement", "response": response}]
+                )
+                obj, _ = call_worker(
+                    runner, "codex", make_prompt("implement"), "implement",
+                    self.workspace,
+                )
+                self.assertEqual(obj, VALID_IMPLEMENT)
+                self.assertEqual(len(runner.calls), 1)
 
     def test_repair_retry_after_junk_then_valid(self):
         runner = MockRunner(

@@ -893,7 +893,7 @@ async function loadAccess() {
 function runRow(r) {
   // The headline carries the milestone's accumulated work time. Context and
   // the compact state dot share the quieter second line.
-  const total = runStatusTime(r);
+  const total = runStatusClock(r);
   const context = workingContext(r, "sidebar");
   const indicator = runStatusIndicator(r);
   return `
@@ -901,7 +901,7 @@ function runRow(r) {
         <div class="run-copy">
           <div class="run-name-row">
             <span class="name">${esc(r.name)}</span>
-            ${total ? `<span class="run-total">${esc(total)}</span>` : ""}
+            ${total}
           </div>
           ${(context || indicator) ? `<div class="run-info-row">${context}${indicator}</div>` : ""}
         </div>
@@ -1115,15 +1115,27 @@ function liveWorkSeconds(completed, inFlight) {
     total += Math.max(0, Date.now() / 1000 - started);
   return total;
 }
-function runTime(sum, inFlight) {
-  if (!sum || sum.work_duration_s == null) return "";
-  return fmtDHMS(liveWorkSeconds(sum.work_duration_s, inFlight));
+function liveClock(completed, inFlight, className, title) {
+  const started = Number(inFlight && inFlight.started_at) || 0;
+  const value = fmtDHMS(liveWorkSeconds(completed, inFlight));
+  return `<span class="${className} live-clock" data-completed="${Number(completed) || 0}" ` +
+    `data-started="${started}"${title ? ` title="${esc(title)}"` : ""}>${esc(value)}</span>`;
 }
-function runStatusTime(r) {
+function elapsedClock(startedAt) {
+  return liveClock(0, {started_at: startedAt}, "", "");
+}
+function runStatusClock(r) {
   if (!r || r.work_duration_s == null) return "";
-  return fmtDHMS(liveWorkSeconds(
-    r.work_duration_s, r.process === "running" ? r.in_flight : null
-  ));
+  return liveClock(r.work_duration_s,
+    r.process === "running" ? r.in_flight : null, "run-total", "");
+}
+function tickLiveClocks() {
+  document.querySelectorAll(".live-clock").forEach((clock) => {
+    const completed = Number(clock.dataset.completed) || 0;
+    const started = Number(clock.dataset.started) || 0;
+    clock.textContent = fmtDHMS(completed +
+      (started > 0 ? Math.max(0, Date.now() / 1000 - started) : 0));
+  });
 }
 // Renders are innerHTML swaps, so a plain spinner restarts its animation at
 // every poll. Phase-lock it to the wall clock with a negative delay: the
@@ -1168,10 +1180,11 @@ function workingContext(r, placement) {
   if (r.process !== "running") return "";
   const place = currentWorkplace(r);
   const f = r.in_flight;
-  let task = "running", title = "";
+  let task = "running", title = "", startedAt = 0;
   if (f && f.kind) {
     const who = f.model ? `${modelEffort(f.model, f.effort)} ` : "";
-    task = `${who}${shortKind(f.kind)} · ${elapsed(f.started_at)}`;
+    task = `${who}${shortKind(f.kind)}`;
+    startedAt = f.started_at;
     title = f.label || "";
   } else if (r.current_unit_status) {
     const who = r.current_unit_status === "rounds" && r.current_model
@@ -1181,14 +1194,14 @@ function workingContext(r, placement) {
   const spinner = placement === "sidebar" ? "" : spinEl();
   return `<div class="activity-line ${placement || ""}" title="${esc(title)}">` +
          `${place ? `<span>${esc(place)} ·</span>` : ""}` +
-         `${spinner}<span>${esc(task)}</span></div>`;
+         `${spinner}<span>${esc(task)}${startedAt ? ` · ${elapsedClock(startedAt)}` : ""}</span></div>`;
 }
 function inFlightChip(r) {
   const f = r.in_flight;
   if (!f || !f.kind) return "";
   const who = f.model ? `${modelEffort(f.model, f.effort)} ` : "";
   return `<span class="chip working" title="${esc(f.label || "")}">` +
-         `${spinEl()}${esc(who)}${esc(shortKind(f.kind))} · ${elapsed(f.started_at)}</span>`;
+         `${spinEl()}${esc(who)}${esc(shortKind(f.kind))} · ${elapsedClock(f.started_at)}</span>`;
 }
 function workingChip(r) {
   if (r.process !== "running" || !r.current_unit_status) return "";
@@ -1724,10 +1737,13 @@ async function refreshDetail() {
       // on the edit page.
       html += `<div class="run-sticky-head">`;
       if (s.project) html += `<div class="proj-title">${esc(s.project)}</div>`;
-      const totalTime = runTime(sum, running ? s.in_flight : null);
+      const totalTime = sum && sum.work_duration_s != null
+        ? liveClock(sum.work_duration_s, running ? s.in_flight : null, "run-clock",
+          "total LLM work including the active call")
+        : "";
       html += `<div class="run-title-row"><h2>${esc(s.name)}<span class="title-sep">·</span>${msChip(s.milestone_status)}</h2>` +
         `<div class="run-title-actions">` +
-        (totalTime ? `<span class="run-clock" title="total LLM work including the active call">${esc(totalTime)}</span>` : "") +
+        totalTime +
         `</div></div>`;
       html += workingContext(s, "detail");
       html += `</div>`;
@@ -3082,7 +3098,23 @@ loadAccess().then(() => Promise.all([loadUiState(), loadProjects()]))
 document.getElementById("detail").addEventListener(
   "scroll", updateBottomJump, {passive: true}
 );
-setInterval(refreshRuns, 2000);
+function refreshDelay() {
+  const host = window.location.hostname.toLowerCase();
+  const throughNgrok = host === "ngrok.io" || host.endsWith(".ngrok.io") ||
+    host === "ngrok.app" || host.endsWith(".ngrok.app") ||
+    host === "ngrok-free.app" || host.endsWith(".ngrok-free.app") ||
+    host === "ngrok.dev" || host.endsWith(".ngrok.dev") ||
+    host === "ngrok-free.dev" || host.endsWith(".ngrok-free.dev");
+  return throughNgrok ? 30000 : 2000;
+}
+function scheduleRefresh() {
+  setTimeout(async () => {
+    await refreshRuns();
+    scheduleRefresh();
+  }, refreshDelay());
+}
+scheduleRefresh();
+setInterval(tickLiveClocks, 1000);
 </script>
 </body>
 </html>

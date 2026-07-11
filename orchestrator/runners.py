@@ -83,35 +83,21 @@ class RunnerResult(object):
 # JSON extraction
 
 
-def extract_json(text):
-    """Extract the first complete JSON object from text.
-
-    Accepts: a bare JSON object; an object wrapped in ```json fences; an
-    object surrounded by stray prose. Raises ValueError when no valid object
-    can be found. Never uses regex heuristics over findings prose — this is
-    the structural replacement for the old VERDICT-line parser.
-    """
+def extract_json_objects(text):
+    """Return every independent complete JSON object found in text."""
     if text is None:
         raise ValueError("no output text")
     stripped = text.strip()
-    if stripped.startswith("{"):
-        try:
-            return json.loads(stripped)
-        except json.JSONDecodeError:
-            pass
-    # Fenced block
-    if "```" in stripped:
-        parts = stripped.split("```")
-        for part in parts:
-            candidate = part.strip()
-            if candidate.startswith("json"):
-                candidate = candidate[4:].strip()
-            if candidate.startswith("{"):
-                try:
-                    return json.loads(candidate)
-                except json.JSONDecodeError:
-                    continue
-    # Balanced-brace scan from each '{'
+    if not stripped:
+        raise ValueError("no valid JSON object found in worker output")
+    try:
+        bare = json.loads(stripped)
+        if isinstance(bare, dict):
+            return [bare]
+    except json.JSONDecodeError:
+        pass
+
+    valid = []
     start = stripped.find("{")
     while start != -1:
         depth = 0
@@ -136,11 +122,50 @@ def extract_json(text):
                     if depth == 0:
                         candidate = stripped[start : i + 1]
                         try:
-                            return json.loads(candidate)
+                            obj = json.loads(candidate)
+                            if isinstance(obj, dict):
+                                valid.append(obj)
+                            start = stripped.find("{", i + 1)
                         except json.JSONDecodeError:
-                            break
-        start = stripped.find("{", start + 1)
-    raise ValueError("no valid JSON object found in worker output")
+                            start = stripped.find("{", start + 1)
+                        break
+        else:
+            start = stripped.find("{", start + 1)
+    if not valid:
+        raise ValueError("no valid JSON object found in worker output")
+    return valid
+
+
+def extract_json(text):
+    """Extract one complete JSON object for schema-less callers.
+
+    Accepts: a bare JSON object; an object wrapped in ```json fences; an
+    object surrounded by stray prose. Raises ValueError when no valid object
+    can be found. Worker protocol calls do not use this positional fallback:
+    they select the sole object satisfying the expected contract. Never uses
+    regex heuristics over findings prose — this is the structural replacement
+    for the old VERDICT-line parser.
+    """
+    return extract_json_objects(text)[-1]
+
+
+def _extract_contract_output(text, validate):
+    """Select by contract validity, never by an object's text position."""
+    matches = []
+    errors = []
+    for obj in extract_json_objects(text):
+        try:
+            matches.append(validate(obj))
+        except contracts.ContractError as exc:
+            errors.append(str(exc))
+    if len(matches) == 1:
+        return matches[0]
+    if len(matches) > 1:
+        raise ValueError(
+            "multiple JSON objects satisfy the worker contract; response is ambiguous"
+        )
+    detail = "; ".join(errors) if errors else "no object candidate"
+    raise contracts.ContractError("no JSON object satisfies the worker contract: " + detail)
 
 
 # ---------------------------------------------------------------------------
@@ -427,15 +452,13 @@ def call_worker(runner, family, prompt, kind, workspace,
 
     result = runner.call(family, prompt, workspace, model=model, effort=effort)
     try:
-        obj = extract_json(result.text)
-        return _validate(obj), result
+        return _extract_contract_output(result.text, _validate), result
     except (ValueError, contracts.ContractError) as exc:
         first_error = str(exc)
     repair_prompt = prompt + (REPAIR_SUFFIX % first_error)
     result2 = runner.call(family, repair_prompt, workspace, model=model, effort=effort)
     try:
-        obj = extract_json(result2.text)
-        validated = _validate(obj)
+        validated = _extract_contract_output(result2.text, _validate)
         # A repaired first strike must not stay invisible: hand the caller
         # what the worker actually returned (prompt/contract tuning needs
         # the malformed text and its cost, not just the happy ending).
