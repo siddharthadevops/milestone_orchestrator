@@ -21,7 +21,7 @@ from orchestrator.tests.test_driver_mock import (
     write_file, append_file,
 )
 from orchestrator.tests.test_state import (
-    seal_current_unit, skeleton_draft,
+    make_halves, seal_current_unit, skeleton_draft,
 )
 
 
@@ -151,6 +151,53 @@ class GapRoutingCase(unittest.TestCase):
                                     _gap("fits_remodel")))])
         self.assertIsNotNone(state["failure"])
         self.assertEqual(state["failure"]["type"], "gap_route")
+
+    def test_producer_with_pre_remodel_note_reads_the_remodel(self):
+        # A PRODUCER slice — not the gap reporter — whose note sealed BEFORE
+        # the skeleton's latest reseal must also read the remodel: only the
+        # reporter carries has_gap_remodel, and a producer building from its
+        # stale sealed note would omit the remodel's assignment and force
+        # the reporter to gap again.
+        path = init_state(self.ws, self._reform_config(git=False))
+        state = st.load(path)
+        seal_current_unit(state, skeleton_draft(2))
+        st.ensure_next_unit(state); seal_current_unit(state)   # doc-1
+        st.ensure_next_unit(state); seal_current_unit(state)   # impl-1
+        st.ensure_next_unit(state); seal_current_unit(state)   # doc-2
+        st.ensure_next_unit(state)                             # impl-2 pending
+        # A remodel (triggered elsewhere) reopens and reseals the skeleton
+        # AFTER doc-2 sealed.
+        skeleton = state["units"][0]
+        st.reopen_for_repair(
+            state, skeleton,
+            {"classification": "fits_remodel", "forced_decision": "d",
+             "plain": "p"},
+            "remodel", reported_by="slice_impl-01",
+        )
+        st.enter_fix_episode(
+            state, skeleton,
+            [{"id": "G1", "severity": "P1", "summary": "objective"}],
+            "repair", None, "skeleton-gap", st.U_PRE_SEAL_VERIFY)
+        st.transition_unit(state, skeleton, st.U_DELTA_REVIEW)
+        st.transition_unit(state, skeleton, st.U_PRE_SEAL_VERIFY)
+        st.transition_unit(state, skeleton, st.U_SEALING)
+        st.record_seal_attempt(state, skeleton, make_halves(), True)
+        # Ordering is by ledger seq (the reseal transition is a later event
+        # than doc-2's), so same-second seals cannot tie.
+        st.transition_unit(state, skeleton, st.U_SEALED)
+        st.save(path, state)
+
+        mock = runners.MockRunner(
+            [step("implement", ok("implement", files_changed=["calc.py"]),
+                  side_effect=write_file("calc.py", "x = 1\n"))])
+        drv.Driver(path, runner=mock).step()
+        impl_prompts = [p for (_f, kind, p) in mock.calls
+                        if kind == "implement"]
+        self.assertEqual(len(impl_prompts), 1)
+        self.assertIn("slice 2", impl_prompts[0])
+        # No has_gap_remodel flag on impl-2 — the note-predates-reseal
+        # predicate alone must expose the remodel.
+        self.assertIn("REMODEL ASSIGNMENT", impl_prompts[0])
 
     def test_full_cycle_fits_remodel_reseal_redraft_close(self):
         # End to end (git off — pure state flow; git gates are orthogonal

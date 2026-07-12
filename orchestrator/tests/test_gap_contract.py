@@ -177,8 +177,8 @@ class GapPromptGatingTest(unittest.TestCase):
         self.assertIn("docs/skeleton.md", redraft)
         # The implementer's authority ordering matches the reviewer's, so the
         # remodel over a stale own-note is not an unresolvable conflict.
-        self.assertIn("GOAL > current SKELETON > this slice's own note",
-                      redraft)
+        # (wrap-safe fragments: the full sentence spans a line break)
+        self.assertIn("current SKELETON > this slice's own note", redraft)
         self.assertIn("OVERRIDES any conflicting clause", redraft)
 
     def test_gap_semantics_predicate(self):

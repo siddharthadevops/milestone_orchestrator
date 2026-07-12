@@ -268,7 +268,10 @@ class DecideSeamTest(unittest.TestCase):
             cfg["profile"] = profile
         return {
             "failure": None,
-            "milestone": {"status": st.M_OPEN},
+            # slices: every real ledger carries it (new_state) and
+            # current_unit navigates in plan order, so the minimal
+            # fixture needs it too.
+            "milestone": {"status": st.M_OPEN, "slices": []},
             "units": [{"kind": st.UNIT_SKELETON, "slice_id": None,
                        "status": st.U_ROUNDS, "family_index": 0}],
             "config": cfg,

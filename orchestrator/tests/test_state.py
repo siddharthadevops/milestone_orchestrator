@@ -356,6 +356,81 @@ class TestNewState(TempWorkspaceCase):
 # Unit lifecycle per kind
 
 
+class TestPlanOrderNavigation(TempWorkspaceCase):
+    """current_unit follows PLAN (slice-table) order, not units-list creation
+    order. The two diverge after a mid-table remodel insert when unit records
+    for later slices already exist (long resume cycles pre-create them —
+    seen live: certification-llm ran slice 13 before the slice 19 it needs,
+    because 19's fresh records landed at the END of the units list)."""
+
+    def _state_with_pre_created_units(self):
+        state = make_state(self.workspace)
+        seal_current_unit(state, skeleton_draft(3))   # slices 1, 2, 3
+        st.ensure_next_unit(state)                    # doc-1
+        seal_current_unit(state)
+        st.ensure_next_unit(state)                    # impl-1
+        seal_current_unit(state)
+        # Pre-create the LATER slices' unit records, all pending, exactly as
+        # repeated resume cycles did live.
+        for _ in range(4):                            # doc/impl 2, doc/impl 3
+            st.ensure_next_unit(state)
+        return state
+
+    def test_mid_table_insert_runs_before_pre_created_later_units(self):
+        state = self._state_with_pre_created_units()
+        # A remodel inserts slice 9 right AFTER slice 1 in the table.
+        state["milestone"]["slices"].insert(
+            1, {"id": 9, "title": "inserted by remodel"})
+        appended = st.ensure_next_unit(state)
+        # ensure_next_unit appends the new record at the END of the list...
+        self.assertEqual(st.unit_key(appended), "slice_doc-09")
+        self.assertEqual(st.unit_key(state["units"][-1]), "slice_doc-09")
+        # ...but navigation follows the TABLE: the inserted slice runs before
+        # the pre-created doc-2 that sits earlier in the list.
+        self.assertEqual(st.unit_key(st.current_unit(state)), "slice_doc-09")
+
+    def test_ensure_due_unit_materializes_the_crash_window_record(self):
+        # Crash window: a seal landed but _after_seal's ensure_next_unit did
+        # not — after a mid-table insert, the DUE (inserted) unit has no
+        # record and navigation would fall through to a pre-created later
+        # one. ensure_due_unit materializes exactly that record.
+        state = self._state_with_pre_created_units()
+        state["milestone"]["slices"].insert(
+            1, {"id": 9, "title": "inserted by remodel"})
+        # (no ensure_next_unit ran — the crash)
+        self.assertEqual(st.unit_key(st.current_unit(state)), "slice_doc-02")
+        made = st.ensure_due_unit(state)
+        self.assertEqual(st.unit_key(made), "slice_doc-09")
+        self.assertEqual(st.unit_key(st.current_unit(state)), "slice_doc-09")
+
+    def test_ensure_due_unit_noops_while_an_earlier_unit_is_in_flight(self):
+        state = self._state_with_pre_created_units()
+        # doc-2 is pending (in flight); nothing missing is due.
+        self.assertIsNone(st.ensure_due_unit(state))
+        n = len(state["units"])
+        # Insert a slice AFTER the in-flight one: still not due — no record
+        # is pre-created for it.
+        state["milestone"]["slices"].insert(
+            2, {"id": 9, "title": "inserted later"})
+        self.assertIsNone(st.ensure_due_unit(state))
+        self.assertEqual(len(state["units"]), n)
+
+    def test_unit_dropped_from_the_plan_is_skipped_like_closure(self):
+        state = self._state_with_pre_created_units()
+        # A fixer returns a plan without slice 3; its pending unit records
+        # stay in the list but are no longer planned.
+        state["milestone"]["slices"] = [
+            sl for sl in state["milestone"]["slices"] if sl["id"] != 3
+        ]
+        self.assertEqual(st.unit_key(st.current_unit(state)), "slice_doc-02")
+        seal_current_unit(state)                      # doc-2
+        seal_current_unit(state)                      # impl-2
+        # The orphans never become current and do not block closure —
+        # current_unit mirrors maybe_close_milestone exactly.
+        self.assertIsNone(st.current_unit(state))
+        self.assertTrue(st.maybe_close_milestone(state))
+
+
 class TestUnitLifecycle(TempWorkspaceCase):
     def test_skeleton_happy_path(self):
         state = make_state(self.workspace)

@@ -322,9 +322,20 @@ def append_event(state, etype, **data):
 
 
 def current_unit(state):
-    """The first unit that is not sealed. None when all units are sealed."""
-    for unit in state["units"]:
-        if unit["status"] != U_SEALED:
+    """The first not-sealed unit in PLAN order — the skeleton's slice-table
+    row order, exactly the order maybe_close_milestone checks. NOT the
+    units-list (creation) order: a skeleton remodel may INSERT a slice
+    mid-table while unit records for later slices already exist, and its
+    fresh records land at the END of the list — list order would run the
+    very slices that depend on the inserted one first (seen live:
+    certification-llm ran slice 13 before the slice 19 it needs). A unit
+    whose slice is no longer in the plan is never current, mirroring
+    closure (it does not block the milestone). None when the plan is
+    fully sealed."""
+    by_key = {(u["kind"], u["slice_id"]): u for u in state["units"]}
+    for key in planned_units(state):
+        unit = by_key.get(key)
+        if unit is not None and unit["status"] != U_SEALED:
             return unit
     return None
 
@@ -355,6 +366,27 @@ def ensure_next_unit(state):
             state["units"].append(unit)
             append_event(state, "unit_opened", unit=unit_key(unit))
             return unit
+    return None
+
+
+def ensure_due_unit(state):
+    """Materialize the DUE unit's record when it is missing: the first
+    planned unit with no record while every planned unit before it is
+    sealed. That hole opens when a crash lands between a seal and its
+    _after_seal ensure_next_unit — with a mid-table remodel insert, the
+    inserted slice's record would not exist and navigation would fall
+    through to a later pre-created record, re-running the very slices
+    that depend on the inserted one. No-op in every other situation
+    (an earlier planned unit still in flight, or no record missing), so
+    it never pre-creates future records. Returns the appended unit or
+    None."""
+    by_key = {(u["kind"], u["slice_id"]): u for u in state["units"]}
+    for key in planned_units(state):
+        unit = by_key.get(key)
+        if unit is None:
+            return ensure_next_unit(state)  # appends exactly this key
+        if unit["status"] != U_SEALED:
+            return None
     return None
 
 

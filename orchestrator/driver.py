@@ -370,6 +370,23 @@ class Driver(object):
                     self._save()
         self._consume_stale_marker()
         self._consume_pending_gap()
+        # A crash between a seal and its _after_seal ensure_next_unit can
+        # leave the DUE planned unit without a record; with a mid-table
+        # remodel insert, navigation would fall through to a later
+        # pre-created record. Materialize it before any navigation — under
+        # the run lock with fresh state (a concurrent invocation may be
+        # mid-step; mutating beside it would surface as HistoryRewriteError
+        # instead of a clean refusal). On contention, skip: the lock holder
+        # materializes it.
+        if self.state.get("failure") is None:
+            try:
+                with self._exclusive():
+                    self.state = st.load(self.state_path)
+                    if self.state.get("failure") is None \
+                            and st.ensure_due_unit(self.state) is not None:
+                        self._save()
+            except ConcurrentRunError:
+                pass
 
     # -- helpers ----------------------------------------------------------
 
@@ -1400,13 +1417,19 @@ class Driver(object):
                 self._verification_commands(unit),
                 amendments=amendments,
                 project_context=project_context, gap_enabled=gap_enabled,
-                # A re-draft after this slice's gap remodelled the skeleton
-                # must READ that remodel — otherwise the prompt is unchanged
-                # and it re-reports the same gap until gap_stall. Gated on the
-                # DURABLE remodel flag, not gap_repairs (which resume resets),
-                # so a post-resume draft still reads the remodel.
+                # Any implement whose governing note predates the skeleton's
+                # latest reseal must READ that remodel — the gap REPORTER
+                # (durable has_gap_remodel flag, resume-proof) and equally a
+                # PRODUCER slice the remodel assigned work to whose own note
+                # sealed before it. Otherwise the builder follows the stale
+                # note, omits the assignment, and the reporter gaps again.
+                # Reform-gated (gap_enabled): the block speaks the gap-exit
+                # vocabulary, which legacy builders do not have.
                 skeleton_path=self._skeleton_artifact(),
-                remodeled=bool(unit.get("has_gap_remodel")),
+                remodeled=(gap_enabled
+                           and (bool(unit.get("has_gap_remodel"))
+                                or self._note_predates_skeleton(
+                                    unit["slice_id"]))),
             )
         # The reviewed baseline as it stands BEFORE the builder runs: the local
         # ref map, HEAD's branch identity and commit tip, and the index tree
@@ -1474,23 +1497,67 @@ class Driver(object):
                 return u
         return None
 
+    def _last_sealed_seq(self, unit_key):
+        """Event seq of the unit's LAST transition to sealed, or -1. The
+        ledger seq is the run's total order — unlike second-resolution
+        timestamps, it cannot tie (same-second seals) or run backwards
+        (DST rollback)."""
+        last = -1
+        for e in self.state["events"]:
+            if e.get("type") == "unit_transition" \
+                    and e.get("to_status") == st.U_SEALED \
+                    and e.get("unit") == unit_key:
+                last = e.get("seq", -1)
+        return last
+
+    @staticmethod
+    def _last_seal_at(unit):
+        for rec in reversed((unit or {}).get("seals") or []):
+            if rec.get("passed"):
+                return rec.get("at") or ""
+        return ""
+
+    def _note_predates_skeleton(self, slice_id):
+        """True when the governing slice note sealed BEFORE the skeleton's
+        latest reseal — i.e. a remodel happened after the note was written.
+        The implementer must then read the CURRENT skeleton: a remodel may
+        assign this slice work its (stale) note never mentions, and only
+        the gap REPORTER carries has_gap_remodel — a PRODUCER slice whose
+        note sealed pre-remodel would otherwise build from the stale note
+        and force the reporter to gap again. Ordered by ledger seq (total,
+        clock-proof); operator hand-seals may lack transition events, so
+        the second-resolution seal timestamps remain as fallback."""
+        skeleton = self._find_unit(st.UNIT_SKELETON, None)
+        note = self._find_unit(st.UNIT_SLICE_DOC, slice_id)
+        sk_seq = self._last_sealed_seq(st.UNIT_SKELETON)
+        note_seq = self._last_sealed_seq(st.unit_key(note)) if note else -1
+        if sk_seq >= 0 and note_seq >= 0:
+            return sk_seq > note_seq
+        sk_at, note_at = self._last_seal_at(skeleton), self._last_seal_at(note)
+        return bool(sk_at and note_at and sk_at > note_at)
+
     def _gap_to_finding(self, gap, i, reporter_key):
         """A fits_remodel gap becomes a P1 repair OBJECTIVE for the skeleton
         fixer — a documentary target ("the design under-specifies X; update it
-        so the REPORTING step produces X within its own scope"), never
-        orchestration vocabulary. The datum is pinned to `reporter_key` (the
-        step that gapped and will re-draft against the remodel): an earlier
-        step is already sealed and cannot be changed, and a later unbuilt step
-        runs too late to unblock it. Its proposal, when present, is carried as
-        CONTEXT and marked as a proposal — the fixer verifies it against the
-        sources, never adopts it on trust (reform decision 6)."""
+        so a NOT-YET-BUILT step produces X before the reporter needs it"),
+        never orchestration vocabulary. Steps run in the slice TABLE's row
+        order and the reporter re-drafts after the remodel, so the producer
+        may be the reporter itself or any unbuilt step placed before it —
+        including a NEW slice inserted in the table (current_unit follows
+        table order, so an inserted step genuinely runs first). Only
+        already-sealed steps cannot be changed. Its proposal, when present,
+        is carried as CONTEXT and marked as a proposal — the fixer verifies
+        it against the sources, never adopts it on trust (reform decision
+        6)."""
         summary = (
             "REMODEL OBJECTIVE (a step downstream cannot proceed): %s. "
-            "Update the skeleton design so this is resolved: specify that %s "
-            "(the step that reported this and will re-draft against the "
-            "remodel) produces/records what is missing within its own scope — "
-            "an already-sealed earlier step cannot be changed, and a later "
-            "unbuilt step runs too late to unblock it. Resolve: %s."
+            "Update the skeleton design so this is resolved: specify which "
+            "NOT-YET-BUILT step produces/records what is missing within its "
+            "own scope — %s itself (the step that reported this and will "
+            "re-draft against the remodel), or a step placed BEFORE it in "
+            "the slice table (steps run in table order; a new slice inserted "
+            "there runs first). An already-sealed step cannot be changed. "
+            "Resolve: %s."
         ) % (
             gap.get("missing_or_conflict", ""), reporter_key,
             gap.get("forced_decision", "")
