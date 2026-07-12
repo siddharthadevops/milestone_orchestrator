@@ -1909,7 +1909,11 @@ async function refreshDetail() {
               + unitRow(byKey.skeleton);
         seen.skeleton = 1;
       }
-      (sum.slices || []).forEach(sl => {
+      // Display order is NUMERIC by slice id; execution order stays the
+      // skeleton table's row order (a remodel may insert a new slice
+      // mid-table, e.g. 19 right after 12 — the machine runs it there,
+      // the panel lists it in its numeric place).
+      [...(sum.slices || [])].sort((a, b) => a.id - b.id).forEach(sl => {
         const pad = String(sl.id).padStart(2, "0");
         const doc = byKey[`slice_doc-${pad}`], impl = byKey[`slice_impl-${pad}`];
         const slStat = impl ? impl.status
