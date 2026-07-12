@@ -76,7 +76,7 @@ def note_ok(**extra):
 
 def _gap():
     return {
-        "target": "goal",
+        "classification": "needs_operator",
         "missing_or_conflict": "two goal sentences collide",
         "where": "verbatim: 'floats everywhere' vs 'integers only'",
         "forced_decision": "pick one arithmetic domain",

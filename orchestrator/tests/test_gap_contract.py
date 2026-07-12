@@ -14,10 +14,10 @@ from orchestrator import prompts
 
 def _gap(**over):
     g = {
-        "target": "skeleton",
+        "classification": "fits_remodel",
         "missing_or_conflict": "the transport discards the field",
         "where": "docs/skeleton.md:42",
-        "forced_decision": "carry the field, or drop the feature",
+        "forced_decision": "carry the field so downstream can read it",
         "plain": "the plan says use a field the pipes throw away",
         "example": "participant B's conflict code never reaches the UI",
     }
@@ -62,6 +62,17 @@ class GapContractTest(unittest.TestCase):
             del bad[field]
             with self.assertRaises(c.ContractError):
                 c.validate_worker_output(_impl(gaps=[bad]), "implement")
+
+    def test_classification_is_a_closed_enum(self):
+        # Both codes validate.
+        for code in c.GAP_CLASSIFICATIONS:
+            c.validate_worker_output(
+                _impl(gaps=[_gap(classification=code)]), "implement")
+        # Anything else — including the retired target vocabulary — fails.
+        for bad in ("skeleton", "goal", "slice_doc-01", "remodel", ""):
+            with self.assertRaises(c.ContractError):
+                c.validate_worker_output(
+                    _impl(gaps=[_gap(classification=bad)]), "implement")
 
     def test_gap_carries_no_artifact_claim(self):
         for claim in ("artifact", "files_changed", "slices"):
@@ -108,11 +119,67 @@ class GapPromptGatingTest(unittest.TestCase):
         self.assertNotIn("GAP EXIT", self._implement(False))
 
     def test_gap_block_present_when_enabled(self):
-        for text, target in ((self._skeleton(True), '"goal"'),
-                             (self._implement(True), "slice_doc-NN")):
+        # The worker classifies (needs_operator everywhere; fits_remodel for
+        # builders below the skeleton) — it never picks a routing target.
+        skel, impl = self._skeleton(True), self._implement(True)
+        for text in (skel, impl):
             self.assertIn("GAP EXIT", text)
             self.assertIn("stop-report-repair-resume", text)
-            self.assertIn(target, text)
+            self.assertIn("needs_operator", text)
+            self.assertIn("DOES FIXING THIS FIT", text)
+            # The retired target vocabulary is gone.
+            self.assertNotIn("slice_doc-NN", text)
+            # gap is disambiguated from blocked so a builder never routes an
+            # in-goal design hole to the operator via "blocked" (finding 4).
+            self.assertIn("A gap is NOT a \"blocked\"", text)
+        # fits_remodel is offered to the implementer, not to the skeleton
+        # drafter (the design authority writes in-goal design, never gaps it).
+        self.assertIn("fits_remodel", impl)
+        self.assertNotIn("fits_remodel", skel)
+
+    def test_remodel_scope_authority_reaches_full_and_delta_reviews(self):
+        # An impl folding in a skeleton-assigned upstream fix must be judged
+        # against the CURRENT skeleton in BOTH the full round and the fix
+        # delta — otherwise the delta reviewer rejects it as out-of-note
+        # (finding 5). Doc kinds never get the block.
+        full_impl = prompts.build_review_round(
+            "codex", "/ws", "goal", "slice_impl-01", "calc.py", [],
+            unit_kind="slice_impl")
+        delta_impl = prompts.build_delta_review(
+            "codex", "/ws", "goal", "slice_impl-01", "diff\n", [],
+            unit_kind="slice_impl")
+        for text in (full_impl, delta_impl):
+            self.assertIn("SCOPE AUTHORITY", text)
+            self.assertIn("authorized by the CURRENT sealed SKELETON", text)
+            # The reviewer's authority ordering matches the implementer's, so
+            # a remodel-assigned change over a stale own-note is not flagged.
+            self.assertIn("GOAL > current SKELETON", text)
+            self.assertIn("OUTRANKS this unit's own", text)
+        delta_doc = prompts.build_delta_review(
+            "codex", "/ws", "goal", "slice_doc-01", "diff\n", [],
+            unit_kind="slice_doc")
+        self.assertNotIn("SCOPE AUTHORITY", delta_doc)
+
+    def test_redraft_after_remodel_exposes_the_skeleton_assignment(self):
+        # A re-draft (gap_repairs>0) must READ the remodelled skeleton — the
+        # slice note is unchanged, so without this the prompt is byte-identical
+        # and the implementer re-gaps until gap_stall (finding 2, round 4).
+        base = prompts.build_implement(
+            "codex", "/ws", "goal", self.SLICE, "n.md", [],
+            gap_enabled=True, skeleton_path="docs/skeleton.md",
+            remodeled=False)
+        redraft = prompts.build_implement(
+            "codex", "/ws", "goal", self.SLICE, "n.md", [],
+            gap_enabled=True, skeleton_path="docs/skeleton.md",
+            remodeled=True)
+        self.assertNotIn("REMODEL ASSIGNMENT", base)
+        self.assertIn("REMODEL ASSIGNMENT", redraft)
+        self.assertIn("docs/skeleton.md", redraft)
+        # The implementer's authority ordering matches the reviewer's, so the
+        # remodel over a stale own-note is not an unresolvable conflict.
+        self.assertIn("GOAL > current SKELETON > this slice's own note",
+                      redraft)
+        self.assertIn("OVERRIDES any conflicting clause", redraft)
 
     def test_gap_semantics_predicate(self):
         self.assertFalse(it.gap_semantics({"config": {}}))

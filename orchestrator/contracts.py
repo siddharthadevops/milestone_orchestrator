@@ -262,14 +262,33 @@ def _assert_unique_finding_ids(findings, ctx):
 
 # A structured gap report (build-driven review reform §3): a draft/implement
 # worker that meets a hole or a contradiction which would change what it
-# builds STOPS and reports, instead of resolving it or building around it.
-# Every entry pins the same fields so a driver can route it without invention.
+# builds STOPS and reports the FACTS, instead of resolving it or building
+# around it. The worker CLASSIFIES the gap — it does not pick a routing
+# target; the machine derives the routing from the classification.
+#
+# The classification is the one question a builder asks: does fixing this
+# fit inside the goal it was given?
+#   fits_remodel  — IN-GOAL: the fix is work the goal already asks for; the
+#                   DESIGN just under-specified it (e.g. a step needs data no
+#                   earlier step produces). The machine reopens the skeleton
+#                   (the design authority) toward the gap as an objective —
+#                   it never reaches the operator.
+#   needs_operator — OUT-OF-GOAL: the fix would change something the goal does
+#                   not mandate (a designated provider, the database
+#                   technology, a payment contract, an external integration),
+#                   OR the goal contradicts itself. Only this reaches the
+#                   operator, the goal's sole author.
+CLASSIFY_FITS_REMODEL = "fits_remodel"
+CLASSIFY_NEEDS_OPERATOR = "needs_operator"
+GAP_CLASSIFICATIONS = (CLASSIFY_FITS_REMODEL, CLASSIFY_NEEDS_OPERATOR)
+
 GAP_REQUIRED_FIELDS = (
-    "target",            # goal | skeleton | slice_doc-NN — what to repair
+    "classification",    # fits_remodel | needs_operator (the goal-fit test)
     "missing_or_conflict",  # what is missing / contradicts
     "where",             # file:line on the upstream (or a verbatim quote for
                          # an inline-typed goal)
-    "forced_decision",   # the choice the gap forces
+    "forced_decision",   # what must be resolved (for needs_operator, the
+                         # decision the operator faces)
     "plain",             # one lay sentence a non-engineer follows
     "example",           # the smallest concrete failing scenario
 )
@@ -278,7 +297,8 @@ GAP_REQUIRED_FIELDS = (
 def validate_gap(gap, ctx):
     """One entry of a gap report. `proposal` is optional and may be null
     (a MARKED proposal, never self-service — the upstream fixer verifies it
-    independently); every other field is a required non-empty string."""
+    independently); every other field is a required non-empty string, and
+    `classification` must be one of GAP_CLASSIFICATIONS."""
     if not isinstance(gap, dict):
         raise ContractError("%s: gap must be an object" % ctx)
     for field in GAP_REQUIRED_FIELDS:
@@ -287,6 +307,11 @@ def validate_gap(gap, ctx):
             raise ContractError(
                 "%s: gap.%s must be a non-empty string" % (ctx, field)
             )
+    if gap["classification"] not in GAP_CLASSIFICATIONS:
+        raise ContractError(
+            "%s: gap.classification %r not in %r"
+            % (ctx, gap["classification"], GAP_CLASSIFICATIONS)
+        )
     proposal = gap.get("proposal")
     if proposal is not None and (
         not isinstance(proposal, str) or not proposal.strip()

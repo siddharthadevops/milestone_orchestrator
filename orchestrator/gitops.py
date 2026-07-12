@@ -69,7 +69,13 @@ def _scrubbed_env():
 def _run(workspace, *args, check=True):
     try:
         proc = subprocess.run(
-            ("git",) + args,
+            # `-c core.hooksPath=/dev/null` disables ALL repo hooks for every
+            # orchestrator git command: a command-line -c outranks any config
+            # or env, so a builder that installs .git/hooks/pre-commit or sets
+            # core.hooksPath cannot make the orchestrator's own commits (wip,
+            # amend, gate) execute its code. The orchestrator never has a
+            # legitimate use for a repo hook.
+            ("git", "-c", "core.hooksPath=/dev/null") + args,
             cwd=workspace,
             capture_output=True,
             text=True,
@@ -396,6 +402,144 @@ def restore_clean(workspace):
     _assert_workspace_root(workspace)
     _run(workspace, "reset", "-q", "--hard", "HEAD")
     _run(workspace, "clean", "-fdq")
+
+
+def has_builder_edits(workspace):
+    """True when the worktree diverges from the INDEX — unstaged edits to
+    tracked files or untracked (non-ignored) files. This is exactly a
+    worker's scratch work: the staged reviewed baseline (index) is excluded,
+    so an adopted repo's pre-run edits do not read as builder edits. Unlike
+    worktree_diff / has_pending_delta it does NOT stage anything (no
+    intent-to-add). Staged-only changes are invisible here — pair it with a
+    snapshot_index_tree comparison to catch a worker that `git add`ed."""
+    _assert_workspace_root(workspace)
+    if _run(workspace, "diff", "--quiet", check=False).returncode != 0:
+        return True
+    others = _run(
+        workspace, "ls-files", "--others", "--exclude-standard", "-z"
+    ).stdout
+    return bool(others.replace("\0", "").strip())
+
+
+def head_symbolic_ref(workspace):
+    """The branch HEAD points at, e.g. "refs/heads/main", or "" when HEAD is
+    detached. Part of the pre-call snapshot: a worker that switches branches
+    must be put back on its original one, not have whatever branch it left us
+    on reset to the saved sha."""
+    _assert_workspace_root(workspace)
+    proc = _run(workspace, "symbolic-ref", "-q", "HEAD", check=False)
+    return proc.stdout.strip()
+
+
+def snapshot_refs(workspace):
+    """A {refname: sha} map of EVERY ref under refs/ — branches, tags, the
+    stash, notes, anything a worker could move, delete, or create — the
+    pre-call ref map. Capturing ALL of them (not just heads/tags) means
+    restore_to_snapshot fully undoes a worker's ref surgery: moved or deleted
+    refs (e.g. a popped/cleared stash) are put back, worker-created refs are
+    removed. HEAD is not under refs/ and is snapshotted separately."""
+    _assert_workspace_root(workspace)
+    proc = _run(
+        workspace, "for-each-ref", "--format=%(objectname) %(refname)",
+    )
+    refs = {}
+    for line in proc.stdout.splitlines():
+        sha, _, refname = line.strip().partition(" ")
+        if refname:
+            refs[refname] = sha
+    return refs
+
+
+def head_full_sha(workspace):
+    """The FULL (unabbreviated) sha HEAD points at — the pre-call commit tip.
+    Distinct from head_sha (which returns a short sha for display): the
+    snapshot needs a full sha so restore_to_snapshot's update-ref is never
+    ambiguous. Pair with head_symbolic_ref, snapshot_index_tree and
+    restore_to_snapshot to undo everything a worker did, including commits or
+    ref moves it made itself."""
+    _assert_workspace_root(workspace)
+    return _run(workspace, "rev-parse", "HEAD").stdout.strip()
+
+
+def snapshot_index_tree(workspace):
+    """The tree sha of the current index — a cheap handle on the reviewed
+    baseline BEFORE a worker runs (index == HEAD, or an adopted repo's staged
+    pre-run edits). Pair with head_sha + restore_to_snapshot to undo a
+    worker's changes even if it staged them."""
+    _assert_workspace_root(workspace)
+    return _run(workspace, "write-tree").stdout.strip()
+
+
+def snapshot_stash(workspace):
+    """The stash STACK as a list of [sha, message] entries (newest first),
+    read from the refs/stash reflog. The stash is a reflog-backed stack, so
+    its ref tip alone (snapshot_refs) does not capture the older entries a
+    `git stash clear` or repeated `git stash pop` would drop. Best-effort:
+    an empty list when there is no stash."""
+    _assert_workspace_root(workspace)
+    proc = _run(
+        workspace, "reflog", "refs/stash", "--format=%H%x09%gs", check=False
+    )
+    entries = []
+    for line in proc.stdout.splitlines():
+        sha, _, msg = line.partition("\t")
+        if sha.strip():
+            entries.append([sha.strip(), msg])
+    return entries
+
+
+def _restore_stash(workspace, stash):
+    """Rebuild the stash stack to `stash` (from snapshot_stash) when it
+    diverged — clear the reflog and replay oldest-first via `git stash store`,
+    so a worker's `git stash clear`/pop is undone and its new stashes removed.
+    Compares by sha, so identical stacks are a no-op."""
+    current = [e[0] for e in snapshot_stash(workspace)]
+    if current == [e[0] for e in stash]:
+        return
+    _run(workspace, "stash", "clear", check=False)
+    for sha, msg in reversed(stash):
+        _run(workspace, "stash", "store", "-m", msg or "restored", sha,
+             check=False)
+
+
+def restore_to_snapshot(workspace, refs, sym, head, tree, stash=None):
+    """Restore the repo to a pre-call snapshot, undoing EVERYTHING a worker
+    could have touched locally:
+      - the ref map (`refs`): moved or deleted branches/tags are put back to
+        their recorded shas, and any ref the worker created is deleted;
+      - HEAD's IDENTITY (`sym`: the original branch, or detached when "");
+      - the index AND worktree (`tree`: the reviewed baseline, staged but
+        uncommitted on the first unit), then untracked files are removed.
+    So staged, committed, ref-moved, branch-switched, branch-deleted, or
+    new-branch junk is all discarded, while an adopted repo's staged pre-run
+    edits (captured in `tree`) survive. `stash` (from snapshot_stash) rebuilds
+    the full stash STACK — the ref map only carries its tip, so without this a
+    worker's `git stash clear`/pop would drop older entries. `clean -ffd` also
+    removes a builder-created NESTED repo (plain -fd refuses one); it honors
+    .gitignore, so .orchestrator/ survives."""
+    _assert_workspace_root(workspace)
+    now = snapshot_refs(workspace)
+    # Restore moved/deleted refs to their recorded shas (update-ref creates a
+    # missing ref), then delete refs the worker created.
+    for refname, sha in refs.items():
+        if now.get(refname) != sha:
+            _run(workspace, "update-ref", refname, sha)
+    for refname in now:
+        if refname not in refs:
+            _run(workspace, "update-ref", "-d", refname)
+    if sym:
+        # Re-point HEAD at the original branch (its sha was restored above).
+        _run(workspace, "symbolic-ref", "HEAD", sym)
+    else:
+        # HEAD was detached: set HEAD itself back to `head` (re-detaching if
+        # the worker had checked out a branch).
+        _run(workspace, "update-ref", "--no-deref", "HEAD", head)
+    _run(workspace, "read-tree", "-u", "--reset", tree)
+    _run(workspace, "clean", "-ffdq")
+    # The stash reflog stack (its tip was handled by the ref map above, but the
+    # older entries live only in the reflog); rebuild it last.
+    if stash is not None:
+        _restore_stash(workspace, stash)
 
 
 def newest_commit(workspace, shas):

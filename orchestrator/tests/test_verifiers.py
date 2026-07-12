@@ -767,6 +767,36 @@ class TestMergedOutputValidation(FilesystemCase):
             )
             self.assertIs(out, obj)
 
+    def _gap_output(self):
+        return {"status": "gap", "kind": "implement",
+                "gaps": [{"classification": "fits_remodel",
+                          "missing_or_conflict": "a field no earlier step "
+                                                 "records",
+                          "where": "docs/slice-01.md:12",
+                          "forced_decision": "record the field upstream",
+                          "plain": "the design never produces a needed field",
+                          "example": "the scorer reads a field never written"}]}
+
+    def test_gap_output_is_exempt(self):
+        # A gap finishes nothing (no artifact to audit), so — like blocked —
+        # it is exempt from extension enforcement. Without the exemption a
+        # project-bound builder's gap fails validation and never routes.
+        out = verifiers.validate_merged_output(
+            self._gap_output(), "implement", [self.ext], self.roots
+        )
+        self.assertEqual(out["status"], "gap")
+
+    def test_gap_output_is_exempt_from_operator_root_preflight(self):
+        for root in (self.outside, "nope"):
+            ext = self.string_ext(
+                [{"kind": "dir_listing_matches", "root": root,
+                  "match_field": "package"}]
+            )
+            out = verifiers.validate_merged_output(
+                self._gap_output(), "implement", [ext], self.roots
+            )
+            self.assertEqual(out["status"], "gap")
+
     def test_no_extensions_is_the_base_validation(self):
         # Valid without the extension field: nothing extra is demanded.
         obj = implement_output()

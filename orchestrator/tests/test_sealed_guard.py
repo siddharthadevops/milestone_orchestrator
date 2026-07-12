@@ -18,6 +18,7 @@ import unittest
 
 from orchestrator import contracts
 from orchestrator import driver as drv
+from orchestrator import gitops
 from orchestrator import runners
 from orchestrator import state as st
 
@@ -299,7 +300,8 @@ class RepairEditabilityAcrossDeltaLoopsTest(unittest.TestCase):
         # Reopen for repair exactly as the driver's gap flow does.
         st.reopen_for_repair(
             state, skeleton,
-            {"target": "skeleton", "forced_decision": "d", "plain": "p"},
+            {"classification": "fits_remodel", "forced_decision": "d",
+             "plain": "p"},
             reason="test repair", reported_by="test",
         )
         self.assertTrue(skeleton.get("under_repair"))
@@ -361,6 +363,572 @@ class RepairEditabilityAcrossDeltaLoopsTest(unittest.TestCase):
         skeleton = state["units"][0]
         self.assertEqual(skeleton["status"], "sealed")
         self.assertNotIn("under_repair", skeleton)
+
+
+def _git(ws, *args):
+    return subprocess.run(
+        ["git", *args], cwd=ws, capture_output=True, text=True,
+        check=True, timeout=60,
+    ).stdout.strip()
+
+
+class GapReopenCommitIsolationTest(unittest.TestCase):
+    """Reform §3, git on: a fits_remodel gap reopens the BURIED skeleton for
+    repair. Its repair must own a fresh commit — amending HEAD directly would
+    rewrite the latest sealed unit's commit (finding 1) — and a builder that
+    edited before gapping must not smuggle those edits into it (finding 3)."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(prefix="orch-gapreopen-")
+        self.addCleanup(self.tmp.cleanup)
+        self.ws = os.path.join(self.tmp.name, "ws")
+        os.makedirs(self.ws)
+
+    def _seal_doc_unit(self, kind, artifact, content):
+        return [
+            step("draft_%s" % ("skeleton" if kind == "skeleton"
+                               else "slice_note"),
+                 (ok("draft_skeleton", artifact=artifact,
+                     slices=[{"id": 1, "title": "Core"}])
+                  if kind == "skeleton"
+                  else ok("draft_slice_note", artifact=artifact)),
+                 family="codex",
+                 side_effect=write_file(artifact, content)),
+            step("review_round", report("review_round"), family="codex"),
+            step("review_round", report("review_round"), family="claude"),
+            step("seal_half", report("seal_half"), family="codex"),
+            step("seal_half", report("seal_half"), family="claude"),
+        ]
+
+    def test_skeleton_reopen_opens_fresh_commit_and_discards_builder_junk(self):
+        gap = {
+            "classification": "fits_remodel",
+            "missing_or_conflict": "this step needs a field no earlier "
+                                   "step records",
+            "where": "docs/slice-01.md:12",
+            "forced_decision": "record the field so this step can read it",
+            "plain": "the design never produces a field this step must read",
+            "example": "the scorer reads a field never written; it stalls",
+        }
+        script = (
+            self._seal_doc_unit("skeleton", "docs/skeleton.md",
+                                "# Skeleton\n\nSEALED\n")
+            + self._seal_doc_unit("slice_doc", "docs/slice-01.md",
+                                  "# Slice 01\n\nnote\n")
+            + [step("implement",
+                    {"status": "gap", "kind": "implement", "gaps": [gap]},
+                    family="codex",
+                    # A builder that edited scratch files THEN decided to gap.
+                    side_effect=write_file("junk.py", "# stray pre-gap edit\n"))]
+        )
+        path = init_state(self.ws, make_config())
+        driver = drv.Driver(path, runner=runners.MockRunner(script))
+
+        head_before = None
+        for _ in range(60):
+            state = st.load(path)
+            if state.get("failure"):
+                self.fail("run failed: %s" % state["failure"]["reason"])
+            cur = st.current_unit(state)
+            if (cur is not None and st.unit_key(cur) == "slice_impl-01"
+                    and cur["status"] == st.U_PENDING):
+                # slice_doc-01 just sealed and owns HEAD; capture it before
+                # the implement call gaps.
+                head_before = _git(self.ws, "rev-parse", "HEAD")
+                break
+            driver.step()
+        self.assertIsNotNone(head_before, "never reached pending slice_impl-01")
+
+        driver.step()  # implement -> gap -> discard junk -> reopen skeleton
+        state = st.load(path)
+        self.assertIsNone(state.get("failure"))
+        units = {st.unit_key(u): u for u in state["units"]}
+
+        # Finding 3: the builder's scratch edit was discarded, recorded, and
+        # never committed.
+        self.assertIn("gap_edits_discarded",
+                      [e["type"] for e in state["events"]])
+        self.assertFalse(os.path.exists(os.path.join(self.ws, "junk.py")))
+
+        # Finding 1: the skeleton is reopened and a FRESH repair commit is
+        # opened for it; HEAD advanced, and the latest sealed unit's commit
+        # (head_before) is still reachable — NOT rewritten.
+        self.assertEqual(units["skeleton"]["status"], st.U_FIXING)
+        self.assertEqual([f["id"] for f in units["skeleton"]["fix_queue"]],
+                         ["GAP1"])
+        wip = [e for e in state["events"]
+               if e["type"] == "wip_commit" and e["unit"] == "skeleton"]
+        self.assertTrue(wip, "no fresh repair commit was opened")
+        head_after = _git(self.ws, "rev-parse", "HEAD")
+        self.assertNotEqual(head_after, head_before, "HEAD did not advance")
+        reachable = _git(self.ws, "rev-list", "HEAD").split()
+        self.assertIn(head_before, reachable,
+                      "the latest sealed unit's commit was rewritten")
+
+    def test_staged_builder_junk_is_discarded_on_gap(self):
+        # A builder that `git add`s its scratch work before gapping must not
+        # smuggle it past cleanup (round 6): the pre-call snapshot restores the
+        # reviewed baseline regardless of what the builder staged.
+        def write_and_stage(rel, content):
+            def _effect(ws):
+                write_file(rel, content)(ws)
+                _git(ws, "add", rel)
+            return _effect
+
+        gap = {
+            "classification": "fits_remodel",
+            "missing_or_conflict": "this step needs a field no earlier "
+                                   "step records",
+            "where": "docs/slice-01.md:12",
+            "forced_decision": "record the field so this step can read it",
+            "plain": "the design never produces a field this step must read",
+            "example": "the scorer reads a field never written; it stalls",
+        }
+        script = (
+            self._seal_doc_unit("skeleton", "docs/skeleton.md",
+                                "# Skeleton\n\nSEALED\n")
+            + self._seal_doc_unit("slice_doc", "docs/slice-01.md",
+                                  "# Slice 01\n\nnote\n")
+            + [step("implement",
+                    {"status": "gap", "kind": "implement", "gaps": [gap]},
+                    family="codex",
+                    side_effect=write_and_stage("junk.py", "# staged\n"))]
+        )
+        path = init_state(self.ws, make_config())
+        driver = drv.Driver(path, runner=runners.MockRunner(script))
+        for _ in range(60):
+            state = st.load(path)
+            if state.get("failure"):
+                self.fail("run failed: %s" % state["failure"]["reason"])
+            cur = st.current_unit(state)
+            if (cur is not None and st.unit_key(cur) == "slice_impl-01"
+                    and cur["status"] == st.U_PENDING):
+                break
+            driver.step()
+        driver.step()  # implement -> gap -> discard staged junk -> reopen
+        state = st.load(path)
+        self.assertIsNone(state.get("failure"))
+        self.assertIn("gap_edits_discarded",
+                      [e["type"] for e in state["events"]])
+        # The staged junk is gone from the worktree AND from git's tracking:
+        # the fresh repair commit never adopted it.
+        self.assertFalse(os.path.exists(os.path.join(self.ws, "junk.py")))
+        self.assertNotIn("junk.py", _git(self.ws, "ls-files").split())
+
+    def test_committed_builder_junk_is_undone_on_gap(self):
+        # A builder that COMMITS its scratch work before gapping must not make
+        # the repair commit a child of that junk commit (round 8): the pre-call
+        # HEAD snapshot is restored, so the junk leaves history entirely.
+        def write_and_commit(rel, content):
+            def _effect(ws):
+                write_file(rel, content)(ws)
+                _git(ws, "add", rel)
+                _git(ws, "commit", "-q", "-m", "builder junk commit")
+            return _effect
+
+        gap = {
+            "classification": "fits_remodel",
+            "missing_or_conflict": "this step needs a field no earlier "
+                                   "step records",
+            "where": "docs/slice-01.md:12",
+            "forced_decision": "record the field so this step can read it",
+            "plain": "the design never produces a field this step must read",
+            "example": "the scorer reads a field never written; it stalls",
+        }
+        script = (
+            self._seal_doc_unit("skeleton", "docs/skeleton.md",
+                                "# Skeleton\n\nSEALED\n")
+            + self._seal_doc_unit("slice_doc", "docs/slice-01.md",
+                                  "# Slice 01\n\nnote\n")
+            + [step("implement",
+                    {"status": "gap", "kind": "implement", "gaps": [gap]},
+                    family="codex",
+                    side_effect=write_and_commit("junk.py", "# committed\n"))]
+        )
+        path = init_state(self.ws, make_config())
+        driver = drv.Driver(path, runner=runners.MockRunner(script))
+        head_before = None
+        for _ in range(60):
+            state = st.load(path)
+            if state.get("failure"):
+                self.fail("run failed: %s" % state["failure"]["reason"])
+            cur = st.current_unit(state)
+            if (cur is not None and st.unit_key(cur) == "slice_impl-01"
+                    and cur["status"] == st.U_PENDING):
+                head_before = _git(self.ws, "rev-parse", "HEAD")
+                break
+            driver.step()
+        driver.step()  # implement -> commit junk -> gap -> undo -> reopen
+        state = st.load(path)
+        self.assertIsNone(state.get("failure"))
+        self.assertIn("gap_edits_discarded",
+                      [e["type"] for e in state["events"]])
+        # The junk commit and file are gone; the repair commit's parent is the
+        # pre-call HEAD, not the builder's junk commit.
+        self.assertFalse(os.path.exists(os.path.join(self.ws, "junk.py")))
+        self.assertNotIn("junk.py", _git(self.ws, "ls-files").split())
+        reachable = _git(self.ws, "log", "--pretty=%s").splitlines()
+        self.assertNotIn("builder junk commit", reachable)
+        # The fresh repair commit sits directly on the pre-call baseline.
+        self.assertEqual(_git(self.ws, "rev-parse", "HEAD~1"), head_before)
+
+    def test_builder_created_branch_and_commits_are_fully_undone(self):
+        # A builder that switches to a NEW branch and commits junk there before
+        # gapping must be fully undone (round 9 + 11): HEAD back on the original
+        # branch, the repair on it, and the builder-created branch (with its
+        # junk) removed entirely — a worker-created ref is not legitimate
+        # history to keep.
+        def switch_and_commit(rel, content):
+            def _effect(ws):
+                _git(ws, "checkout", "-q", "-b", "release")
+                write_file(rel, content)(ws)
+                _git(ws, "add", rel)
+                _git(ws, "commit", "-q", "-m", "junk on release")
+            return _effect
+
+        gap = {
+            "classification": "fits_remodel",
+            "missing_or_conflict": "this step needs a field no earlier "
+                                   "step records",
+            "where": "docs/slice-01.md:12",
+            "forced_decision": "record the field so this step can read it",
+            "plain": "the design never produces a field this step must read",
+            "example": "the scorer reads a field never written; it stalls",
+        }
+        script = (
+            self._seal_doc_unit("skeleton", "docs/skeleton.md",
+                                "# Skeleton\n\nSEALED\n")
+            + self._seal_doc_unit("slice_doc", "docs/slice-01.md",
+                                  "# Slice 01\n\nnote\n")
+            + [step("implement",
+                    {"status": "gap", "kind": "implement", "gaps": [gap]},
+                    family="codex",
+                    side_effect=switch_and_commit("junk.py", "# on release\n"))]
+        )
+        path = init_state(self.ws, make_config())
+        driver = drv.Driver(path, runner=runners.MockRunner(script))
+        head_before = orig_branch = None
+        for _ in range(60):
+            state = st.load(path)
+            if state.get("failure"):
+                self.fail("run failed: %s" % state["failure"]["reason"])
+            cur = st.current_unit(state)
+            if (cur is not None and st.unit_key(cur) == "slice_impl-01"
+                    and cur["status"] == st.U_PENDING):
+                head_before = _git(self.ws, "rev-parse", "HEAD")
+                orig_branch = _git(self.ws, "symbolic-ref", "--short", "HEAD")
+                break
+            driver.step()
+        driver.step()  # implement -> switch+commit -> gap -> undo -> reopen
+        state = st.load(path)
+        self.assertIsNone(state.get("failure"))
+        self.assertIn("gap_edits_discarded",
+                      [e["type"] for e in state["events"]])
+        # HEAD is back on the ORIGINAL branch; the repair commit sits on it,
+        # directly atop the pre-call tip.
+        self.assertEqual(_git(self.ws, "symbolic-ref", "--short", "HEAD"),
+                         orig_branch)
+        self.assertEqual(_git(self.ws, "rev-parse", "HEAD~1"), head_before)
+        # The builder-created branch is gone, and its junk reaches no ref.
+        branches = _git(self.ws, "branch", "--format=%(refname:short)").split()
+        self.assertNotIn("release", branches)
+        self.assertNotIn("junk on release",
+                         _git(self.ws, "log", "--all", "--pretty=%s"))
+        self.assertFalse(os.path.exists(os.path.join(self.ws, "junk.py")))
+
+    def test_builder_deleted_branch_is_restored_on_gap(self):
+        # The other half (round 11): a builder that DELETES a legitimate branch
+        # with unpublished commits before gapping must have it put back.
+        gap = {
+            "classification": "fits_remodel",
+            "missing_or_conflict": "this step needs a field no earlier "
+                                   "step records",
+            "where": "docs/slice-01.md:12",
+            "forced_decision": "record the field so this step can read it",
+            "plain": "the design never produces a field this step must read",
+            "example": "the scorer reads a field never written; it stalls",
+        }
+        script = (
+            self._seal_doc_unit("skeleton", "docs/skeleton.md",
+                                "# Skeleton\n\nSEALED\n")
+            + self._seal_doc_unit("slice_doc", "docs/slice-01.md",
+                                  "# Slice 01\n\nnote\n")
+            + [step("implement",
+                    {"status": "gap", "kind": "implement", "gaps": [gap]},
+                    family="codex",
+                    # The builder destroys a branch the operator keeps.
+                    side_effect=lambda ws: _git(ws, "branch", "-D", "feature"))]
+        )
+        path = init_state(self.ws, make_config())
+        driver = drv.Driver(path, runner=runners.MockRunner(script))
+        for _ in range(60):
+            state = st.load(path)
+            if state.get("failure"):
+                self.fail("run failed: %s" % state["failure"]["reason"])
+            cur = st.current_unit(state)
+            if (cur is not None and st.unit_key(cur) == "slice_impl-01"
+                    and cur["status"] == st.U_PENDING):
+                break
+            driver.step()
+        # A legitimate branch the operator keeps, present before the builder
+        # runs (the repo now has commits, so branching is well-defined).
+        _git(self.ws, "branch", "feature")
+        feature_sha = _git(self.ws, "rev-parse", "feature")
+        driver.step()  # implement -> delete feature -> gap -> restore feature
+        state = st.load(path)
+        self.assertIsNone(state.get("failure"))
+        self.assertIn("gap_edits_discarded",
+                      [e["type"] for e in state["events"]])
+        # The deleted branch is restored to its recorded sha.
+        self.assertEqual(_git(self.ws, "rev-parse", "feature"), feature_sha)
+
+    def test_crashed_gap_repair_intent_completes_on_restart(self):
+        # A crash after the repair INTENT persisted but before the reopen
+        # applied must complete on the next driver init, not lose the gap to a
+        # re-draft of the reporter (round 14/15).
+        script = (
+            self._seal_doc_unit("skeleton", "docs/skeleton.md",
+                                "# Skeleton\n\nSEALED\n")
+            + self._seal_doc_unit("slice_doc", "docs/slice-01.md",
+                                  "# Slice 01\n\nnote\n")
+        )
+        path = init_state(self.ws, make_config())
+        driver = drv.Driver(path, runner=runners.MockRunner(script))
+        for _ in range(60):
+            state = st.load(path)
+            cur = st.current_unit(state)
+            if (cur is not None and st.unit_key(cur) == "slice_impl-01"
+                    and cur["status"] == st.U_PENDING):
+                break
+            driver.step()
+        # Simulate the crash mid-transaction: the validated gap is recorded
+        # (pending_gap) but NOT yet routed — skeleton still sealed, no repair
+        # commit at HEAD. The pre-call snapshot is the current (clean) baseline.
+        state = st.load(path)
+        state["pending_gap"] = {
+            "reporter": "slice_impl-01",
+            "gaps": [{"classification": "fits_remodel",
+                      "missing_or_conflict": "m", "where": "docs/x.md:1",
+                      "forced_decision": "record the field", "plain": "p",
+                      "example": "e"}],
+            "pre_tree": gitops.snapshot_index_tree(self.ws),
+            "pre_head": gitops.head_full_sha(self.ws),
+            "pre_sym": gitops.head_symbolic_ref(self.ws),
+            "pre_refs": gitops.snapshot_refs(self.ws),
+        }
+        st.save(path, state)
+        head_before = _git(self.ws, "rev-parse", "HEAD")
+        # Restart: a fresh driver re-routes the recorded gap on init.
+        drv.Driver(path, runner=runners.MockRunner([]))
+        state = st.load(path)
+        self.assertIsNone(state.get("pending_gap"))
+        units = {st.unit_key(u): u for u in state["units"]}
+        self.assertEqual(units["skeleton"]["status"], st.U_FIXING)
+        self.assertEqual([f["id"] for f in units["skeleton"]["fix_queue"]],
+                         ["GAP1"])
+        self.assertEqual(units["slice_impl-01"]["gap_repairs"], 1)
+        # A fresh repair commit was opened on restart, atop the pre-call tip.
+        self.assertNotEqual(_git(self.ws, "rev-parse", "HEAD"), head_before)
+        self.assertEqual(_git(self.ws, "rev-parse", "HEAD~1"), head_before)
+
+    def test_builder_cleared_stash_stack_is_fully_restored_on_gap(self):
+        # A worker that clears a pre-existing MULTI-entry stash before gapping
+        # must have the whole stack restored — the stash is a reflog-backed
+        # stack, so restoring only its tip would drop older entries (round 19).
+        gap = {
+            "classification": "fits_remodel",
+            "missing_or_conflict": "a field no earlier step records",
+            "where": "docs/slice-01.md:12",
+            "forced_decision": "record the field so this step can read it",
+            "plain": "the design never produces a field this step must read",
+            "example": "the scorer reads a field never written; it stalls",
+        }
+        script = (
+            self._seal_doc_unit("skeleton", "docs/skeleton.md",
+                                "# Skeleton\n\nSEALED\n")
+            + self._seal_doc_unit("slice_doc", "docs/slice-01.md",
+                                  "# Slice 01\n\nnote\n")
+            + [step("implement",
+                    {"status": "gap", "kind": "implement", "gaps": [gap]},
+                    family="codex",
+                    side_effect=lambda ws: _git(ws, "stash", "clear"))]
+        )
+        path = init_state(self.ws, make_config())
+        driver = drv.Driver(path, runner=runners.MockRunner(script))
+        for _ in range(60):
+            state = st.load(path)
+            if state.get("failure"):
+                self.fail("run failed: %s" % state["failure"]["reason"])
+            cur = st.current_unit(state)
+            if (cur is not None and st.unit_key(cur) == "slice_impl-01"
+                    and cur["status"] == st.U_PENDING):
+                break
+            driver.step()
+        # Two pre-existing stash entries the operator keeps.
+        write_file("docs/skeleton.md", "# Skeleton\n\nSEALED\nfirst\n")(self.ws)
+        _git(self.ws, "stash", "push", "-m", "operator stash one")
+        write_file("docs/skeleton.md", "# Skeleton\n\nSEALED\nsecond\n")(self.ws)
+        _git(self.ws, "stash", "push", "-m", "operator stash two")
+        before = _git(self.ws, "reflog", "refs/stash", "--format=%H").split()
+        self.assertEqual(len(before), 2)
+        driver.step()  # implement -> stash clear -> gap -> rebuild the stack
+        state = st.load(path)
+        self.assertIsNone(state.get("failure"))
+        self.assertIn("gap_edits_discarded",
+                      [e["type"] for e in state["events"]])
+        # `git stash list` is whole again, in order — not just the tip.
+        self.assertEqual(len(_git(self.ws, "stash", "list").splitlines()), 2)
+        after = _git(self.ws, "reflog", "refs/stash", "--format=%H").split()
+        self.assertEqual(after, before)
+
+    def test_pending_gap_recovery_survives_a_nested_repo(self):
+        # A crash after recording the gap but before cleanup can leave worker
+        # junk like a nested repo. Without a pre-clean, ensure_repo would reject
+        # the workspace and deadlock every resume; the pre-clean removes it so
+        # recovery completes (round 17).
+        script = (
+            self._seal_doc_unit("skeleton", "docs/skeleton.md",
+                                "# Skeleton\n\nSEALED\n")
+            + self._seal_doc_unit("slice_doc", "docs/slice-01.md",
+                                  "# Slice 01\n\nnote\n")
+        )
+        path = init_state(self.ws, make_config())
+        driver = drv.Driver(path, runner=runners.MockRunner(script))
+        for _ in range(60):
+            state = st.load(path)
+            cur = st.current_unit(state)
+            if (cur is not None and st.unit_key(cur) == "slice_impl-01"
+                    and cur["status"] == st.U_PENDING):
+                break
+            driver.step()
+        # Record the gap intent with the clean baseline snapshot (crash before
+        # cleanup ran).
+        state = st.load(path)
+        state["pending_gap"] = {
+            "reporter": "slice_impl-01",
+            "gaps": [{"classification": "fits_remodel",
+                      "missing_or_conflict": "m", "where": "docs/x.md:1",
+                      "forced_decision": "record the field", "plain": "p",
+                      "example": "e"}],
+            "pre_tree": gitops.snapshot_index_tree(self.ws),
+            "pre_head": gitops.head_full_sha(self.ws),
+            "pre_sym": gitops.head_symbolic_ref(self.ws),
+            "pre_refs": gitops.snapshot_refs(self.ws),
+        }
+        st.save(path, state)
+        # ...and a worker-created nested repo left behind.
+        nested = os.path.join(self.ws, "vendor", "thing")
+        os.makedirs(nested)
+        subprocess.run(["git", "init", "-q"], cwd=nested,
+                       capture_output=True, text=True, check=True, timeout=60)
+        # Restart: the pre-clean removes the nested repo, ensure_repo passes,
+        # and the recorded gap routes.
+        drv.Driver(path, runner=runners.MockRunner([]))
+        state = st.load(path)
+        self.assertIsNone(state.get("failure"))
+        self.assertIsNone(state.get("pending_gap"))
+        self.assertFalse(os.path.exists(nested))
+        units = {st.unit_key(u): u for u in state["units"]}
+        self.assertEqual(units["skeleton"]["status"], st.U_FIXING)
+
+    def test_stray_repair_commit_from_crash_is_undone_not_stacked(self):
+        # A prior attempt that created the repair commit but died before
+        # recording the reopen leaves a stray commit at HEAD. On restart the
+        # recovery cleanup resets the branch to the recorded pre-call HEAD
+        # (undoing the stray), then opens exactly ONE fresh repair commit —
+        # never a second stacked one, and never an unrelated same-named commit
+        # rewritten (round 10 + 20).
+        script = (
+            self._seal_doc_unit("skeleton", "docs/skeleton.md",
+                                "# Skeleton\n\nSEALED\n")
+            + self._seal_doc_unit("slice_doc", "docs/slice-01.md",
+                                  "# Slice 01\n\nnote\n")
+        )
+        path = init_state(self.ws, make_config())
+        driver = drv.Driver(path, runner=runners.MockRunner(script))
+        for _ in range(60):
+            state = st.load(path)
+            cur = st.current_unit(state)
+            if (cur is not None and st.unit_key(cur) == "slice_impl-01"
+                    and cur["status"] == st.U_PENDING):
+                break
+            driver.step()
+        clean_head = _git(self.ws, "rev-parse", "HEAD")
+        # Record the gap intent against the clean pre-crash baseline...
+        state = st.load(path)
+        state["pending_gap"] = {
+            "reporter": "slice_impl-01",
+            "gaps": [{"classification": "fits_remodel",
+                      "missing_or_conflict": "m", "where": "docs/x.md:1",
+                      "forced_decision": "record the field", "plain": "p",
+                      "example": "e"}],
+            "pre_tree": gitops.snapshot_index_tree(self.ws),
+            "pre_head": gitops.head_full_sha(self.ws),
+            "pre_sym": gitops.head_symbolic_ref(self.ws),
+            "pre_refs": gitops.snapshot_refs(self.ws),
+            "pre_stash": gitops.snapshot_stash(self.ws),
+        }
+        st.save(path, state)
+        # ...then simulate the crashed commit: a stray repair commit at HEAD.
+        _git(self.ws, "commit", "-q", "--allow-empty", "-m",
+             "wip-repair: skeleton")
+        # Restart: cleanup undoes the stray; routing opens one fresh commit.
+        drv.Driver(path, runner=runners.MockRunner([]))
+        state = st.load(path)
+        self.assertIsNone(state.get("failure"))
+        self.assertIsNone(state.get("pending_gap"))
+        units = {st.unit_key(u): u for u in state["units"]}
+        self.assertEqual(units["skeleton"]["status"], st.U_FIXING)
+        subjects = _git(self.ws, "log", "HEAD", "--pretty=%s").splitlines()
+        self.assertEqual(subjects.count("wip-repair: skeleton"), 1)
+        # The one fresh repair commit sits directly on the pre-crash baseline —
+        # the stray was undone, not built upon.
+        self.assertEqual(_git(self.ws, "rev-parse", "HEAD~1"), clean_head)
+
+    def test_needs_operator_gap_cleans_junk_but_keeps_adopted_baseline(self):
+        # A needs_operator gap on the FIRST unit stops for the operator. It
+        # must discard the builder's scratch edits (round 5: else a later
+        # resumed draft commits them) WITHOUT reverting an adopted repo's
+        # staged-but-uncommitted baseline (round 4). Reverting to the INDEX
+        # does both: the adopted edit is staged there, the junk is not.
+        path = init_state(self.ws, make_config())
+        # Prior history, then an adopted edit staged (as ensure_repo does) but
+        # NOT yet gate-committed.
+        write_file("baseline.txt", "committed\n")(self.ws)
+        _git(self.ws, "add", "baseline.txt")
+        _git(self.ws, "commit", "-q", "-m", "prior history")
+        write_file("baseline.txt", "committed\nadopted edit\n")(self.ws)
+        _git(self.ws, "add", "baseline.txt")
+
+        op_gap = {
+            "classification": "needs_operator",
+            "missing_or_conflict": "the goal names no persistence backend",
+            "where": "goal",
+            "forced_decision": "the operator must choose the database",
+            "plain": "the goal never says where data is stored",
+            "example": "cannot pick Postgres vs SQLite without the operator",
+        }
+        script = [step("draft_skeleton",
+                       {"status": "gap", "kind": "draft_skeleton",
+                        "gaps": [op_gap]},
+                       family="codex",
+                       # The builder scribbled junk before deciding to gap.
+                       side_effect=write_file("junk.py", "# scratch\n"))]
+        driver = drv.Driver(path, runner=runners.MockRunner(script))
+        for _ in range(10):
+            if st.load(path).get("failure"):
+                break
+            driver.step()
+        state = st.load(path)
+        self.assertEqual(state["failure"]["type"], "goal_gap")
+        # The adopted (staged) baseline edit SURVIVES.
+        with open(os.path.join(self.ws, "baseline.txt"),
+                  encoding="utf-8") as fh:
+            self.assertIn("adopted edit", fh.read())
+        # The builder's scratch junk was discarded and recorded.
+        self.assertFalse(os.path.exists(os.path.join(self.ws, "junk.py")))
+        self.assertIn("gap_edits_discarded",
+                      [e["type"] for e in state["events"]])
 
 
 if __name__ == "__main__":

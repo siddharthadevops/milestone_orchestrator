@@ -855,5 +855,36 @@ class EnabledTests(GitopsTestCase):
         self.assertTrue(gitops.enabled({"git": {"enabled": True}}))
 
 
+class HookIsolationTests(GitopsTestCase):
+    """A builder-controllable git hook must never run for orchestrator commits
+    — a builder could install .git/hooks/pre-commit or set core.hooksPath to
+    execute its code inside an orchestrator commit."""
+
+    def _failing_hook(self, hooks_dir):
+        os.makedirs(hooks_dir, exist_ok=True)
+        hook = os.path.join(hooks_dir, "pre-commit")
+        _write(hook, "#!/bin/sh\nexit 1\n")
+        os.chmod(hook, 0o755)
+
+    def test_default_pre_commit_hook_does_not_run(self):
+        ws = self.make_repo()
+        gitops.ensure_repo(ws)
+        self._failing_hook(os.path.join(ws, ".git", "hooks"))
+        _write(os.path.join(ws, "f.txt"), "x\n")
+        # If the failing hook ran, the commit would abort with a GitError.
+        self.assertTrue(gitops.commit_wip(ws, "wip"))
+
+    def test_core_hookspath_override_is_ignored(self):
+        ws = self.make_repo()
+        gitops.ensure_repo(ws)
+        hooks = os.path.join(ws, "evil-hooks")
+        self._failing_hook(hooks)
+        # A builder points hooks at its own dir via repo config; the
+        # command-line -c override must still win.
+        self.git(ws, "config", "core.hooksPath", hooks)
+        _write(os.path.join(ws, "f.txt"), "x\n")
+        self.assertTrue(gitops.commit_wip(ws, "wip"))
+
+
 if __name__ == "__main__":
     unittest.main()

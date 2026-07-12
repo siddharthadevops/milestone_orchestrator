@@ -922,7 +922,7 @@ class StoryApiTest(ServiceApiTest):
         state["events"].extend([
             {"seq": 1002, "at": "2026-07-05T12:00:00+0200",
              "type": "reopened_for_repair", "unit": "skeleton",
-             "reported_by": "slice_doc-04", "target": "skeleton",
+             "reported_by": "slice_doc-04", "classification": "fits_remodel",
              "plain": "the grader lacks the question",
              "forced_decision": "pin grading content"},
             {"seq": 1003, "at": "2026-07-05T12:20:00+0200",

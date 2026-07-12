@@ -488,7 +488,7 @@ def validate_merged_output(obj, kind, extensions, roots,
     Returns the object unchanged on success. Worker-authored violations
     raise contracts.ContractError at the same point as the base validation,
     so call_worker's single repair retry applies unchanged. A validly
-    blocked output is exempt from extension enforcement (it produced no
+    blocked OR gap output is exempt from extension enforcement (it produced no
     artifact to audit); with no extensions the validation is exactly the
     base one. require_plain/battery_questions (the reform's plain/example
     hard-require and question battery) ride through to every base
@@ -506,7 +506,11 @@ def validate_merged_output(obj, kind, extensions, roots,
                 % type(ext).__name__
             )
     _require_distinct_fields(extensions)
-    if isinstance(obj, dict) and obj.get("status") == "blocked":
+    if isinstance(obj, dict) and obj.get("status") in ("blocked", "gap"):
+        # blocked and gap both FINISH NOTHING — no artifact to audit, so they
+        # are exempt from extension/root enforcement (a gap payload carries no
+        # extension fields by contract). Base validation still checks their
+        # own contract (gap classification and required facts, blocked_reason).
         contracts.validate_worker_output(
             obj, kind, require_plain=require_plain,
             battery_questions=battery_questions,

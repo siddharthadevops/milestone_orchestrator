@@ -257,6 +257,21 @@ ALTITUDE_BLOCK = (
     "  review. Keep them short and executable.\n"
 )
 
+REMODEL_SCOPE_REVIEW_BLOCK = (
+    "SCOPE AUTHORITY\n"
+    "- Scope is authorized by the CURRENT sealed SKELETON, not only by this\n"
+    "  unit's own note. When the skeleton was remodelled to resolve a\n"
+    "  downstream gap, a unit legitimately does the work the skeleton now\n"
+    "  assigns it — including a modification an earlier step should have made\n"
+    "  — folded into its own change. Authority runs GOAL > current SKELETON >\n"
+    "  this unit's own note: the remodelled skeleton OUTRANKS this unit's own\n"
+    "  note where they diverge (the note predates the remodel and is stale on\n"
+    "  those points), so code that follows the remodel over its own note is\n"
+    "  NOT a violation. Judge against the CURRENT skeleton, and flag only work\n"
+    "  no unit is assigned, or a change that contradicts the GOAL or ANOTHER\n"
+    "  unit's sealed contract.\n"
+)
+
 ALTITUDE_REVIEW_BLOCK = (
     "- Check altitude in BOTH directions: under-specified observable\n"
     "  contracts and over-specified mechanism (control flow in prose)\n"
@@ -647,6 +662,11 @@ def _review_quality_block(unit_kind):
             else SLICE_NOTE_CONTENT_BLOCK
         )
         parts.append(ADOPT_CHECK_REVIEW_LINE)
+    if unit_kind == "slice_impl":
+        # An impl may fold in an upstream fix the skeleton assigned via a
+        # remodel; the reviewer judges scope against the skeleton, not only
+        # the slice note.
+        parts.append(REMODEL_SCOPE_REVIEW_BLOCK)
     return "".join(parts) + "\n"
 
 
@@ -655,6 +675,11 @@ def _delta_quality_block(unit_kind):
     if unit_kind in DOC_UNIT_KINDS:
         parts.append(ALTITUDE_BLOCK)
         parts.append(ALTITUDE_REVIEW_BLOCK)
+    if unit_kind == "slice_impl":
+        # The fix delta may carry the same skeleton-assigned upstream work the
+        # full review already scopes against the skeleton; the delta reviewer
+        # must judge it by the same authority, not reject it as out-of-note.
+        parts.append(REMODEL_SCOPE_REVIEW_BLOCK)
     return "".join(parts) + "\n"
 
 
@@ -668,23 +693,6 @@ def _fix_quality_block(unit_kind):
 
 # ---------------------------------------------------------------------------
 # Draft kinds
-
-
-# Per-builder gap TARGET vocabulary (spec §8, recursive; the vocabulary is
-# closed and covers the top of the chain). The driver validates the target
-# a worker actually returns against the unit's real position.
-GAP_TARGETS_SKELETON = (
-    '"goal" — the operator-authored goal document. A skeleton gap has no '
-    "upstream UNIT; it routes to the OPERATOR (who alone repairs the goal)."
-)
-GAP_TARGETS_SLICE_NOTE = (
-    '"skeleton" — the sealed skeleton; or "goal" ONLY when the skeleton '
-    "faithfully mirrors a goal-level contradiction."
-)
-GAP_TARGETS_IMPLEMENT = (
-    '"slice_doc-NN" — this slice\'s sealed note (NN = this slice number); '
-    'or "skeleton".'
-)
 
 
 TWO_REGISTER_BLOCK = (
@@ -823,33 +831,73 @@ def _battery_review_block(ids):
     )
 
 
-def _gap_block(targets_desc):
-    """The stop-report-repair-resume instruction for a builder (draft/
-    implement). Added ONLY when a reform profile governs the run — legacy
-    and profile-less builders never see it, so they never return a gap."""
+def _gap_block(skeleton_only=False):
+    """The stop-report-CLASSIFY instruction for a builder (draft/implement).
+    The worker does not route or decide whose job the fix is — it CLASSIFIES
+    the gap against one question and reports the facts; the machine derives
+    everything else. Added ONLY when a reform profile governs the run —
+    legacy and profile-less builders never see it, so they never return a
+    gap. `skeleton_only` marks the skeleton drafter, whose only gap class is
+    needs_operator (it is the design authority; an in-goal design hole is its
+    to write, not to report)."""
+    classify = (
+        "  classification: EXACTLY ONE of —\n"
+        "     needs_operator — the fix would change something the GOAL does\n"
+        "        NOT mandate (a designated provider, the database\n"
+        "        technology, a payment/Stripe contract, an external\n"
+        "        integration, any decision outside the goal's scope), OR the\n"
+        "        goal contradicts ITSELF and no reading satisfies it. Only\n"
+        "        this reaches the operator, the goal's sole author.\n"
+    )
+    if not skeleton_only:
+        classify += (
+            "     fits_remodel — the fix is work the goal ALREADY asks for;\n"
+            "        only the design under-specified it (e.g. this step needs\n"
+            "        data or a contract no earlier step provides, and the\n"
+            "        product cannot function without it). You do not decide\n"
+            "        who does it or how — the machine reopens the design to\n"
+            "        resolve this, and the pointer continues. This NEVER\n"
+            "        reaches the operator.\n"
+        )
     return (
         "GAP EXIT (this run runs stop-report-repair-resume):\n"
         "If you meet a hole or a contradiction that would CHANGE WHAT YOU\n"
-        "BUILD — a choice between readings, a missing fact, a conflict with\n"
-        "a sealed upstream — STOP. Do NOT resolve it yourself and do NOT\n"
+        "BUILD — a missing fact, a choice between readings, a conflict with\n"
+        "a sealed upstream, or data/a contract this step needs that no\n"
+        "earlier step provides — STOP. Do NOT resolve it yourself and do NOT\n"
         "build around it: continuing silently delegates to you the judgment\n"
         "of what the gap contaminates, which is drift through the back door.\n"
-        "Instead return status \"gap\", finishing NOTHING (no artifact, no\n"
-        "file changes), with a non-empty \"gaps\" array. Each entry:\n"
-        "  target: %s\n" % targets_desc
+        "You are not asked to fix it or decide whose job it is — only to\n"
+        "answer ONE question and report the facts: DOES FIXING THIS FIT\n"
+        "INSIDE THE GOAL YOU WERE GIVEN? Return status \"gap\", finishing\n"
+        "NOTHING: no artifact, no file changes, and NONE of the kind-specific\n"
+        "output fields (artifact/slices/files_changed) or the battery that the\n"
+        "OUTPUT CONTRACT and battery block below describe — those describe\n"
+        "FINISHED work you are not submitting. Provide only \"status\",\n"
+        "\"kind\", and a non-empty \"gaps\" array. Each entry:\n"
+        + classify
         + "  missing_or_conflict: what is missing, or the two facts that\n"
         "     collide\n"
         "  where: file:line on the upstream (or, for an inline goal\n"
         "     contradiction, a VERBATIM QUOTE of the conflicting text)\n"
-        "  forced_decision: the exact choice the gap forces\n"
+        "  forced_decision: what must be resolved (for needs_operator, the\n"
+        "     decision the operator faces)\n"
         "  proposal: null, OR a resolution CLEARLY MARKED as a proposal —\n"
-        "     never self-service; the upstream fixer verifies it against\n"
-        "     the sources before adopting\n"
+        "     never self-service; the fixer verifies it against the sources\n"
+        "     before adopting\n"
         "  plain: one lay sentence (<500 chars) a non-engineer follows\n"
         "  example: the smallest (<500 chars) concrete scenario the gap\n"
         "     breaks\n"
         "Do NOT rate your own blocker — any build-changing gap halts; there\n"
         "is no safe-to-continue gray zone.\n"
+        "The OUTPUT CONTRACT below lists \"status\" as ok|blocked; for THIS\n"
+        "kind, \"gap\" is also a permitted value (exactly as specified here).\n"
+        "A gap is NOT a \"blocked\": \"blocked\" means you cannot proceed at\n"
+        "all and the run ends with your reason. A gap means the DESIGN is\n"
+        "incomplete or contradictory — you report it with its classification\n"
+        "and the machine routes it (each class's outcome is stated above). For\n"
+        "a build-changing hole or contradiction, return \"gap\", never\n"
+        "\"blocked\".\n"
         "BRIGHT LINE — NOT a gap: an observation that does not change what\n"
         "you build (a typo, a shifted line citation, stale cosmetic wording)\n"
         "goes in `notes`, and you finish the work normally.\n\n"
@@ -880,7 +928,7 @@ def build_draft_skeleton(family, workspace, goal, amendments=None,
         + "\n"
         + _access_block(edit_allowed=True)
         + "\n"
-        + (_gap_block(GAP_TARGETS_SKELETON) if gap_enabled else "")
+        + (_gap_block(skeleton_only=True) if gap_enabled else "")
         + (_battery_contract_block(battery) if battery else "")
         + contracts.CONTRACT_TEXT
     )
@@ -915,23 +963,51 @@ def build_draft_slice_note(family, workspace, goal, slice_info, skeleton_path,
         + "\n"
         + _access_block(edit_allowed=True)
         + "\n"
-        + (_gap_block(GAP_TARGETS_SLICE_NOTE) if gap_enabled else "")
+        + (_gap_block() if gap_enabled else "")
         + (_battery_contract_block(battery) if battery else "")
         + contracts.CONTRACT_TEXT
     )
 
 
 def build_implement(family, workspace, goal, slice_info, note_path, verification,
-                    amendments=None, project_context=None, gap_enabled=False):
+                    amendments=None, project_context=None, gap_enabled=False,
+                    skeleton_path=None, remodeled=False):
     ver = "\n".join("  %s" % c for c in verification) or (
         "  (none yet — your suite_command will arm the gates)"
     )
+    # A RE-draft after this slice's earlier gap triggered a skeleton remodel:
+    # the slice note is UNCHANGED (only the skeleton was), so without this the
+    # prompt is byte-identical and the worker just re-reports the same gap.
+    # Point it at the CURRENT skeleton, which now carries the assignment.
+    remodel_block = ""
+    if remodeled and skeleton_path:
+        remodel_block = (
+            "REMODEL ASSIGNMENT (this is a RE-draft after your earlier gap)\n"
+            "- You reported a gap and the design was remodelled to resolve it.\n"
+            "  Read the CURRENT skeleton at %s — it is the design authority\n"
+            "  and now assigns THIS slice work its note may not mention: a\n"
+            "  datum, contract, or step an earlier (already-sealed) slice\n"
+            "  should have provided, now yours to produce/record within this\n"
+            "  slice's own scope, folded into this slice's change. Authority\n"
+            "  runs GOAL > current SKELETON > this slice's own note: where the\n"
+            "  current skeleton and your note diverge, the skeleton wins and\n"
+            "  the remodel assignment OVERRIDES any conflicting clause in your\n"
+            "  note (it predates the remodel). Do the assigned work; gap AGAIN\n"
+            "  if a build-changing hole still blocks you — the ORIGINAL one the\n"
+            "  remodel did not actually resolve, or a new one it exposed —\n"
+            "  classifying it by the same one question: does fixing it fit the\n"
+            "  goal? An in-goal design gap (even one that also needs ANOTHER\n"
+            "  slice's design revised) is fits_remodel; only an out-of-goal\n"
+            "  need or a goal that contradicts ITSELF is needs_operator.\n\n"
+            % skeleton_path
+        )
     return (
         _header(contracts.KIND_IMPLEMENT, family, workspace)
         + "\nTASK: implement slice %d (%s) exactly per its sealed note.\n"
         % (slice_info["id"], slice_info["title"])
         + "GOAL: %s\n" % goal
         + "SLICE NOTE: %s\n\n" % note_path
+        + remodel_block
         + _amendments_block(amendments)
         + _project_context_block(project_context)
         + "Implement the scope, including its tests. Run focused checks on\n"
@@ -951,7 +1027,7 @@ def build_implement(family, workspace, goal, slice_info, note_path, verification
         + "\n"
         + _access_block(edit_allowed=True)
         + "\n"
-        + (_gap_block(GAP_TARGETS_IMPLEMENT) if gap_enabled else "")
+        + (_gap_block() if gap_enabled else "")
         + contracts.CONTRACT_TEXT
     )
 

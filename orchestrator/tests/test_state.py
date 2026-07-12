@@ -2070,6 +2070,20 @@ class TestTypedResume(TempWorkspaceCase):
         self.assertEqual(unit["verify_fix_attempts"],
                          {"pre_review": 0, "pre_seal": 0})
 
+    def test_resume_resets_gap_repairs_but_keeps_the_remodel_flag(self):
+        # gap_repairs is a resettable convergence cap; has_gap_remodel is the
+        # DURABLE record that gates the re-draft's REMODEL ASSIGNMENT block. If
+        # resume cleared the flag too, a post-resume draft would omit the
+        # remodel and silently follow the stale sealed note (round 18).
+        state = make_state(self.workspace)
+        unit = unit_in_status(state, st.U_FIXING)
+        unit["gap_repairs"] = 3
+        unit["has_gap_remodel"] = True
+        st.fail_run(state, "some later failure", unit=unit)
+        st.resume_run(state)
+        self.assertEqual(unit["gap_repairs"], 0)
+        self.assertTrue(unit["has_gap_remodel"])
+
     def test_resume_grants_a_fresh_review_round_budget(self):
         # The max_rounds_per_family cap counts immutable rounds history, so
         # without an amnesty marker a run failed on it would re-fail
@@ -2130,7 +2144,8 @@ class TestReopenForRepair(TempWorkspaceCase):
         state, unit = self._sealed()
         self.assertEqual(unit["status"], st.U_SEALED)
         n_rounds, n_seals = len(unit["rounds"]), len(unit["seals"])
-        gap = {"target": "goal", "forced_decision": "carry the field",
+        gap = {"classification": "fits_remodel",
+               "forced_decision": "carry the field",
                "plain": "the plan uses a field the pipes drop"}
         st.reopen_for_repair(state, unit, gap, "downstream gap",
                              reported_by="slice_doc-01")
@@ -2141,7 +2156,7 @@ class TestReopenForRepair(TempWorkspaceCase):
         ev = [e for e in state["events"] if e["type"] == "reopened_for_repair"]
         self.assertEqual(len(ev), 1)
         self.assertEqual(ev[0]["reported_by"], "slice_doc-01")
-        self.assertEqual(ev[0]["target"], "goal")
+        self.assertEqual(ev[0]["classification"], "fits_remodel")
         self.assertEqual(ev[0]["rounds_before"], n_rounds)
         self.assertEqual(ev[0]["seals_before"], n_seals)
 
@@ -2149,13 +2164,14 @@ class TestReopenForRepair(TempWorkspaceCase):
         state = make_state(self.workspace)
         with self.assertRaises(st.IllegalTransition):
             st.reopen_for_repair(state, st.current_unit(state),
-                                 {"target": "goal"}, "x")
+                                 {"classification": "fits_remodel"}, "x")
 
     def test_repair_enters_a_fix_episode_and_reseals(self):
         state, unit = self._sealed()
         st.reopen_for_repair(
             state, unit,
-            {"target": "skeleton", "forced_decision": "pin the source",
+            {"classification": "fits_remodel",
+             "forced_decision": "pin the source",
              "plain": "the builder lacks an authority"},
             "gap", reported_by="slice_doc-04",
         )
@@ -2182,7 +2198,8 @@ class TestReopenForRepair(TempWorkspaceCase):
         state, unit = self._sealed()
         path = os.path.join(self.workspace, "reopen.json")
         st.save_new(path, state)
-        st.reopen_for_repair(state, unit, {"target": "goal"}, "gap")
+        st.reopen_for_repair(state, unit, {"classification": "fits_remodel"},
+                             "gap")
         st.save(path, state)  # must NOT raise HistoryRewriteError
         self.assertEqual(st.load(path)["units"][0]["status"], st.U_REPAIRING)
 

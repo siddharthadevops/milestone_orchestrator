@@ -329,12 +329,6 @@ class _StandingLawError(RuntimeError):
     operator's store, not the worker's output)."""
 
 
-class _GapRouteError(RuntimeError):
-    """A gap report named a target that is not routable from the reporting
-    unit's position (the §8 target vocabulary is closed). Surfaces as an
-    operator-gated run failure — the worker misused the gap contract."""
-
-
 class Driver(object):
     def __init__(self, state_path, runner=None):
         self.state_path = state_path
@@ -353,6 +347,13 @@ class Driver(object):
         self.runner = runner or runners.SubprocessRunner(
             self.config["commands"], self.config.get("timeouts", {})
         )
+        # Before repo validation: if a pending gap's cleanup never ran (a crash
+        # between recording the gap and cleaning up), worker junk such as a
+        # nested repo could make ensure_repo reject the workspace and deadlock
+        # every resume — ensure_repo would record a failure, and
+        # _consume_pending_gap skips under failure, so the junk is never
+        # removed. Best-effort restore the recorded snapshot first.
+        self._pre_clean_pending_gap()
         if gitops.enabled(self.config):
             try:
                 gitops.ensure_repo(
@@ -368,6 +369,7 @@ class Driver(object):
                     st.fail_run(self.state, "git unavailable: %s" % exc)
                     self._save()
         self._consume_stale_marker()
+        self._consume_pending_gap()
 
     # -- helpers ----------------------------------------------------------
 
@@ -1398,7 +1400,30 @@ class Driver(object):
                 self._verification_commands(unit),
                 amendments=amendments,
                 project_context=project_context, gap_enabled=gap_enabled,
+                # A re-draft after this slice's gap remodelled the skeleton
+                # must READ that remodel — otherwise the prompt is unchanged
+                # and it re-reports the same gap until gap_stall. Gated on the
+                # DURABLE remodel flag, not gap_repairs (which resume resets),
+                # so a post-resume draft still reads the remodel.
+                skeleton_path=self._skeleton_artifact(),
+                remodeled=bool(unit.get("has_gap_remodel")),
             )
+        # The reviewed baseline as it stands BEFORE the builder runs: the local
+        # ref map, HEAD's branch identity and commit tip, and the index tree
+        # (== HEAD, or an adopted repo's staged pre-run edits). If the builder
+        # gaps, these handles restore exactly this — undoing its scratch work
+        # even if it staged, committed, switched or deleted branches — without
+        # reverting the baseline.
+        pre_refs = pre_sym = pre_head = pre_tree = pre_stash = None
+        if gitops.enabled(self.config):
+            try:
+                pre_refs = gitops.snapshot_refs(self.workspace)
+                pre_sym = gitops.head_symbolic_ref(self.workspace)
+                pre_head = gitops.head_full_sha(self.workspace)
+                pre_tree = gitops.snapshot_index_tree(self.workspace)
+                pre_stash = gitops.snapshot_stash(self.workspace)
+            except gitops.GitError:
+                pre_refs = pre_sym = pre_head = pre_tree = pre_stash = None
         output, result, raw_path = self._call(
             family, prompt, kind, "%s-draft" % st.unit_key(unit),
             model=model, effort=effort, extensions=extensions, roots=roots,
@@ -1411,7 +1436,10 @@ class Driver(object):
             # (reform §3). Route it upstream (repair) or to the operator
             # (goal). The unit finished NOTHING and stays pending; it
             # re-drafts after the repair reseals.
-            return self._handle_gap(unit, output, result.duration_s)
+            return self._handle_gap(unit, output, result.duration_s,
+                                    pre_tree=pre_tree, pre_head=pre_head,
+                                    pre_sym=pre_sym, pre_refs=pre_refs,
+                                    pre_stash=pre_stash)
         self._enforce_sealed_artifacts("%s-draft" % st.unit_key(unit))
         self._check_worker_blocked(unit, output, kind)
         st.record_draft(self.state, unit, kind, output, raw_path,
@@ -1446,54 +1474,26 @@ class Driver(object):
                 return u
         return None
 
-    _SLICE_DOC_RE = re.compile(r"^slice_doc-0*(\d+)$")
-
-    def _route_gap_target(self, unit, target):
-        """Resolve a gap's `target` to ('operator', None) for the goal, or
-        ('unit', <sealed upstream unit>) for an upstream doc. Raises
-        _GapRouteError on a target that is not routable from `unit`."""
-        if target == "goal":
-            if unit["kind"] == st.UNIT_SLICE_IMPL:
-                raise _GapRouteError(
-                    "an implement gap must target its slice_doc or the "
-                    "skeleton, not the goal"
-                )
-            return ("operator", None)
-        up = None
-        if target == "skeleton":
-            up = self._find_unit(st.UNIT_SKELETON, None)
-        else:
-            m = self._SLICE_DOC_RE.match(target or "")
-            if m:
-                up = self._find_unit(st.UNIT_SLICE_DOC, int(m.group(1)))
-        if up is None:
-            raise _GapRouteError(
-                "gap target %r does not name a known upstream unit" % target
-            )
-        if up is unit or up["status"] != st.U_SEALED:
-            raise _GapRouteError(
-                "gap target %r is not a SEALED upstream unit (is %s)"
-                % (target, up["status"])
-            )
-        return ("unit", up)
-
-    def _gap_targets_unit(self, gap, upstream):
-        target = gap.get("target")
-        if target == "skeleton":
-            return upstream["kind"] == st.UNIT_SKELETON
-        m = self._SLICE_DOC_RE.match(target or "")
-        return bool(
-            m and upstream["kind"] == st.UNIT_SLICE_DOC
-            and int(m.group(1)) == upstream["slice_id"]
-        )
-
-    def _gap_to_finding(self, gap, i):
-        """A gap becomes a P1 repair finding for the upstream fixer. Its
-        proposal, when present, is carried as CONTEXT and marked as a
-        proposal — the fixer verifies it against the sources, never adopts
-        it on trust (reform decision 6)."""
-        summary = "REPAIR (downstream gap): %s. Forced decision: %s." % (
-            gap.get("missing_or_conflict", ""), gap.get("forced_decision", "")
+    def _gap_to_finding(self, gap, i, reporter_key):
+        """A fits_remodel gap becomes a P1 repair OBJECTIVE for the skeleton
+        fixer — a documentary target ("the design under-specifies X; update it
+        so the REPORTING step produces X within its own scope"), never
+        orchestration vocabulary. The datum is pinned to `reporter_key` (the
+        step that gapped and will re-draft against the remodel): an earlier
+        step is already sealed and cannot be changed, and a later unbuilt step
+        runs too late to unblock it. Its proposal, when present, is carried as
+        CONTEXT and marked as a proposal — the fixer verifies it against the
+        sources, never adopts it on trust (reform decision 6)."""
+        summary = (
+            "REMODEL OBJECTIVE (a step downstream cannot proceed): %s. "
+            "Update the skeleton design so this is resolved: specify that %s "
+            "(the step that reported this and will re-draft against the "
+            "remodel) produces/records what is missing within its own scope — "
+            "an already-sealed earlier step cannot be changed, and a later "
+            "unbuilt step runs too late to unblock it. Resolve: %s."
+        ) % (
+            gap.get("missing_or_conflict", ""), reporter_key,
+            gap.get("forced_decision", "")
         )
         if gap.get("proposal"):
             summary += (
@@ -1508,38 +1508,159 @@ class Driver(object):
             finding["example"] = gap["example"]
         return finding
 
-    def _handle_gap(self, unit, output, duration_s=None):
+    def _handle_gap(self, unit, output, duration_s=None, pre_tree=None,
+                    pre_head=None, pre_sym=None, pre_refs=None, pre_stash=None):
         gaps = output.get("gaps", [])
         st.append_event(
             self.state, "gap_reported", unit=st.unit_key(unit),
             duration_s=duration_s,
             count=len(gaps),
-            gaps=[{k: g.get(k) for k in ("target", "forced_decision", "plain")}
+            gaps=[{k: g.get(k)
+                   for k in ("classification", "forced_decision", "plain")}
                   for g in gaps],
         )
-        # Route the MOST UPSTREAM implicated target first (goal < skeleton <
-        # slice_doc); repairing it and re-drafting re-surfaces anything
-        # still open, so convergence needs no cross-target bookkeeping.
-        def _rank(t):
-            return {"goal": 0, "skeleton": 1}.get(t, 2)
-        try:
-            routed = sorted(
-                (
-                    (_rank(g.get("target")), g,
-                     self._route_gap_target(unit, g.get("target")))
-                    for g in gaps
-                ),
-                key=lambda r: r[0],
-            )
-        except _GapRouteError as exc:
-            st.fail_run(self.state, "gap routing failed: %s" % exc, unit=unit,
-                        type_="gap_route")
+        # Persist the validated gap BEFORE any cleanup or routing. From the
+        # moment the worker returns a gap, a crash must RE-ROUTE it on restart,
+        # never let the reporter silently re-draft: a divergent re-draft would
+        # bury the design hole — drift through the back door, exactly what the
+        # gap exit exists to prevent. The pre-call baseline snapshot rides along
+        # so recovery can still clean the worktree deterministically.
+        self.state["pending_gap"] = {
+            "reporter": st.unit_key(unit),
+            "gaps": gaps,
+            "pre_tree": pre_tree,
+            "pre_head": pre_head,
+            "pre_sym": pre_sym,
+            "pre_refs": pre_refs,
+            "pre_stash": pre_stash,
+        }
+        self._save()
+        return self._route_pending_gap()
+
+    def _route_pending_gap(self):
+        """Clean the worktree and route the recorded gap. Both the fresh path
+        and the restart path come here, so it is rerunnable after a crash at
+        any point: cleanup restores the recorded pre-call snapshot, and the
+        fits_remodel reopen reuses an already-made repair commit and skips an
+        already-applied reopen. Clears `pending_gap` once the gap reaches a
+        durable terminal (an operator-gated failure, or the reopen applied)."""
+        pending = self.state.get("pending_gap")
+        if not pending:
+            return "no pending gap"
+        unit = self._unit_by_key(pending["reporter"])
+        if unit is None:
+            self.state["pending_gap"] = None
             self._save()
-            raise StopStep(str(exc))
-        _, primary, (route_kind, target_unit) = routed[0]
-        if route_kind == "operator":
-            return self._route_goal_gap(unit, primary)
-        return self._reopen_and_repair(unit, target_unit, gaps, primary)
+            return "pending gap has no reporter; cleared"
+        gaps = pending["gaps"]
+        # A gap FINISHES NOTHING (contract: no artifact, no file changes). A
+        # builder that touched the repo before deciding to gap leaves that
+        # behind; left in place a later commit (the repair commit below, or —
+        # after the operator amends and resumes — the next successful draft's
+        # `git add -A`) would adopt it, and a junk commit the builder made
+        # itself would become the repair commit's parent. Undo it all now,
+        # BEFORE routing, on either branch, back to the pre-call snapshot: HEAD
+        # (undoing any commit/ref move) AND the index+worktree baseline (which
+        # preserves an adopted repo's staged pre-run edits). Cleanup that
+        # cannot be PROVEN to succeed FAILS (operator-gated) rather than route
+        # over a repo we could not restore.
+        if gitops.enabled(self.config):
+            pre_tree = pending.get("pre_tree")
+            pre_head = pending.get("pre_head")
+            pre_sym = pending.get("pre_sym")
+            pre_refs = pending.get("pre_refs")
+            pre_stash = pending.get("pre_stash")
+            if (pre_tree is None or pre_head is None or pre_sym is None
+                    or pre_refs is None):
+                # No pre-call snapshot (rare: the pre-draft git reads failed).
+                # Committed or staged-only junk, a branch switch, or a deleted
+                # branch is unrecoverable without it, so never route the gap
+                # over a repo we cannot restore. (pre_sym == "" is a valid
+                # DETACHED snapshot, not a missing one — only None means
+                # missing.)
+                st.fail_run(
+                    self.state,
+                    "cannot clean the repo after a gap from %s: the pre-draft "
+                    "baseline snapshot is missing, so a builder's scratch work "
+                    "cannot be safely discarded — operator inspection required"
+                    % st.unit_key(unit),
+                    unit=unit, type_="gap_cleanup",
+                )
+                self._save()
+                raise StopStep("gap cleanup: no baseline snapshot")
+
+            def _stash_shas():
+                return [e[0] for e in gitops.snapshot_stash(self.workspace)]
+
+            stash_want = ([e[0] for e in pre_stash]
+                          if pre_stash is not None else None)
+
+            def _diverges():
+                return (
+                    gitops.snapshot_refs(self.workspace) != pre_refs
+                    or gitops.head_symbolic_ref(self.workspace) != pre_sym
+                    or gitops.head_full_sha(self.workspace) != pre_head
+                    or gitops.snapshot_index_tree(self.workspace) != pre_tree
+                    or gitops.has_builder_edits(self.workspace)
+                    or (stash_want is not None
+                        and _stash_shas() != stash_want)
+                )
+            try:
+                if _diverges():
+                    gitops.restore_to_snapshot(
+                        self.workspace, pre_refs, pre_sym, pre_head, pre_tree,
+                        stash=pre_stash,
+                    )
+                    st.append_event(
+                        self.state, "gap_edits_discarded",
+                        unit=st.unit_key(unit),
+                    )
+                # Prove the repo is actually back to the snapshot; if anything
+                # resisted cleanup (e.g. a stubborn nested repo), FAIL rather
+                # than commit over it.
+                if _diverges():
+                    raise gitops.GitError(
+                        "repo still diverges from the baseline after restore"
+                    )
+            except gitops.GitError as exc:
+                st.fail_run(
+                    self.state,
+                    "could not clean the repo after a gap from %s (%s): the "
+                    "builder's scratch work cannot be safely discarded — "
+                    "operator inspection required"
+                    % (st.unit_key(unit), exc),
+                    unit=unit, type_="gap_cleanup",
+                )
+                self._save()
+                raise StopStep("gap cleanup failed")
+        # The worker classified; the machine routes. needs_operator OUTRANKS
+        # fits_remodel: a goal-level issue must reach the operator even if it
+        # arrived alongside in-goal remodels. Everything else (all
+        # fits_remodel) reopens the skeleton — the design authority — toward
+        # the gaps as an objective; the design is remodelled and the pointer
+        # continues, never touching the operator.
+        operator_gaps = [
+            g for g in gaps
+            if g.get("classification") == contracts.CLASSIFY_NEEDS_OPERATOR
+        ]
+        if operator_gaps:
+            return self._route_goal_gap(unit, operator_gaps[0])
+        skeleton = self._find_unit(st.UNIT_SKELETON, None)
+        if skeleton is None or skeleton is unit \
+                or skeleton["status"] != st.U_SEALED:
+            # A fits_remodel needs a sealed skeleton to remodel; a skeleton
+            # builder cannot remodel itself. That is a routing impossibility,
+            # not an operator decision — fail loudly rather than loop.
+            self.state["pending_gap"] = None
+            st.fail_run(
+                self.state,
+                "fits_remodel gap from %s has no sealed skeleton to remodel"
+                % st.unit_key(unit),
+                unit=unit, type_="gap_route",
+            )
+            self._save()
+            raise StopStep("fits_remodel gap with no sealed skeleton")
+        return self._reopen_and_repair(unit, skeleton, gaps, gaps[0])
 
     def _route_goal_gap(self, unit, primary):
         """A gap targeting the goal routes to the OPERATOR — the goal is
@@ -1561,43 +1682,172 @@ class Driver(object):
             % primary.get("forced_decision", ""),
             unit=unit, type_="goal_gap",
         )
+        # Escalated: the operator-gated failure is now the durable record, so
+        # the pending-gap intent is discharged.
+        self.state["pending_gap"] = None
         self._save()
         raise StopStep("goal gap reported to the operator")
 
+    def _commit_repair_wip(self, message):
+        """Open the fresh repair commit atomically: snapshot the repo state
+        immediately before committing, and on ANY GitError roll back to it —
+        a commit hook that dirties the tree then fails, or a commit that lands
+        but whose sha lookup fails, must not leave partial state the resumed
+        run would fold in. Re-raises for the caller to fail the run."""
+        snap = (
+            gitops.snapshot_refs(self.workspace),
+            gitops.head_symbolic_ref(self.workspace),
+            gitops.head_full_sha(self.workspace),
+            gitops.snapshot_index_tree(self.workspace),
+        )
+        try:
+            return gitops.commit_wip(self.workspace, message)
+        except gitops.GitError:
+            try:
+                gitops.restore_to_snapshot(self.workspace, *snap)
+            except gitops.GitError:
+                pass  # best effort; the caller fails the run regardless
+            raise
+
+    def _unit_by_key(self, key):
+        for u in self.state["units"]:
+            if st.unit_key(u) == key:
+                return u
+        return None
+
     def _reopen_and_repair(self, unit, target_unit, gaps, primary):
+        target_key = st.unit_key(target_unit)
+        reporter_key = st.unit_key(unit)
+        # Idempotent restart: if the reopen already applied before a crash, the
+        # pending-gap intent just needs discharging.
+        if target_unit.get("under_repair"):
+            self.state["pending_gap"] = None
+            self._save()
+            return "gap repair already applied; intent cleared"
         cap = int(self.config.get("max_gap_repairs", 3))
         n = int(unit.get("gap_repairs", 0)) + 1
-        unit["gap_repairs"] = n
         if n > cap:
+            unit["gap_repairs"] = n
+            self.state["pending_gap"] = None  # terminal failure; discharge it
             st.fail_run(
                 self.state,
-                "gap-repair cap (%d) exceeded on %s: the same gap keeps "
-                "reopening upstream — a stall, not convergence; operator "
-                "review needed" % (cap, st.unit_key(unit)),
+                "design remodel not converging after %d attempts on %s: the "
+                "skeleton keeps being reopened for the same objective without "
+                "clearing it — the objective may be malformed or the "
+                "downstream builder keeps re-reporting; needs a look"
+                % (cap, st.unit_key(unit)),
                 unit=unit, type_="gap_stall",
             )
             self._save()
             raise StopStep("gap-repair cap exceeded")
-        target_key = st.unit_key(target_unit)
-        repair_findings = [
-            self._gap_to_finding(g, i)
-            for i, g in enumerate(gaps) if self._gap_targets_unit(g, target_unit)
-        ]
+        # Every fits_remodel gap routes to the skeleton (the design
+        # authority), so all reported gaps become objectives for it, each
+        # pinned to the reporting unit's own scope.
+        repair_findings = [self._gap_to_finding(g, i, reporter_key)
+                           for i, g in enumerate(gaps)]
+        # The reopened design unit's own commit is buried under every unit
+        # sealed since (HEAD is the latest sealed unit's commit); its repair
+        # amends HEAD, so a fresh commit it owns keeps that amend from
+        # rewriting a later sealed unit's commit. Always open a FRESH commit:
+        # the whole gap transaction is durable (pending_gap was persisted
+        # before routing), and on a crash-retry _route_pending_gap's cleanup
+        # already reset the branch to the recorded pre-call HEAD — undoing any
+        # stray repair commit a prior attempt made — so nothing is reused and
+        # nothing stacks. (Reusing by commit shape could grab an unrelated
+        # same-named commit and let the amend rewrite it.)
+        sha = None
+        if gitops.enabled(self.config):
+            try:
+                sha = self._commit_repair_wip("wip-repair: %s" % target_key)
+            except gitops.GitError as exc:
+                st.fail_run(
+                    self.state,
+                    "repair reopen commit failed: %s" % exc, unit=target_unit,
+                )
+                self._save()
+                raise StopStep(str(exc))
+        unit["gap_repairs"] = n
+        # A DURABLE record that this slice's design was remodelled, distinct
+        # from gap_repairs (a convergence cap the operator's resume resets to
+        # 0): the re-draft's REMODEL ASSIGNMENT block gates on this, so a
+        # post-resume draft still reads the remodelled skeleton instead of
+        # silently following its stale sealed note.
+        unit["has_gap_remodel"] = True
         st.reopen_for_repair(
             self.state, target_unit, primary,
-            reason="downstream %s reported a gap" % st.unit_key(unit),
-            reported_by=st.unit_key(unit),
+            reason="downstream %s reported a gap" % reporter_key,
+            reported_by=reporter_key,
         )
+        if sha is not None:
+            st.append_event(
+                self.state, "wip_commit", unit=target_key, sha=sha
+            )
         st.enter_fix_episode(
             self.state, target_unit, repair_findings, "repair", None,
             "%s-gap-repair" % target_key, st.U_PRE_SEAL_VERIFY,
         )
+        # The reopen is applied and durable: discharge the intent.
+        self.state["pending_gap"] = None
+        self._save()
         return (
             "gap on %s -> reopened %s for repair (%d repair finding(s)); it "
             "reseals, then %s re-drafts"
-            % (st.unit_key(unit), target_key, len(repair_findings),
-               st.unit_key(unit))
+            % (reporter_key, target_key, len(repair_findings), reporter_key)
         )
+
+    def _pre_clean_pending_gap(self):
+        """Best-effort worktree restore for a persisted-but-unrouted gap, run
+        BEFORE repo validation so worker junk (e.g. a nested repo) cannot make
+        ensure_repo reject the workspace and deadlock every resume. Silent on
+        any error — a genuinely broken repo surfaces through ensure_repo, and
+        _route_pending_gap re-verifies the cleanup before routing anyway."""
+        pending = self.state.get("pending_gap")
+        if not pending or not gitops.enabled(self.config):
+            return
+        pre_refs = pending.get("pre_refs")
+        pre_sym = pending.get("pre_sym")
+        pre_head = pending.get("pre_head")
+        pre_tree = pending.get("pre_tree")
+        pre_stash = pending.get("pre_stash")
+        if pre_refs is None or pre_sym is None or pre_head is None \
+                or pre_tree is None:
+            return
+        # Under the run lock, so it cannot race a concurrent invocation's
+        # recovery; skips on contention (the lock holder restores) and on any
+        # git error (a genuinely broken repo surfaces through ensure_repo).
+        try:
+            with self._exclusive():
+                gitops.restore_to_snapshot(
+                    self.workspace, pre_refs, pre_sym, pre_head, pre_tree,
+                    stash=pre_stash,
+                )
+        except (ConcurrentRunError, gitops.GitError):
+            pass
+
+    def _consume_pending_gap(self):
+        """A driver that died mid gap transaction (the validated gap recorded,
+        not yet fully routed) re-routes it on startup, so the gap is never lost
+        to a re-draft of the reporter. Idempotent: no intent is a no-op, an
+        already-applied reopen just discharges the intent. Skipped while the
+        run is failed — resume clears the failure first, then this runs.
+
+        Runs UNDER the exclusive run lock, reloading fresh state so a second
+        concurrent invocation cannot restore refs while this one is opening the
+        repair commit; on lock contention it simply skips — the invocation that
+        holds the lock does the (idempotent) recovery."""
+        if not self.state.get("pending_gap") or self.state.get("failure"):
+            return
+        try:
+            with self._exclusive():
+                self.state = st.load(self.state_path)
+                if not self.state.get("pending_gap") \
+                        or self.state.get("failure"):
+                    return
+                self._route_pending_gap()
+        except ConcurrentRunError:
+            return
+        except StopStep:
+            pass  # a routing failure recorded a run failure; leave it be
 
     def _slice_info(self, slice_id):
         for sl in self.state["milestone"]["slices"]:
