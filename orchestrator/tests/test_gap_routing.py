@@ -80,8 +80,10 @@ class GapRoutingCase(unittest.TestCase):
                                                  _gap("fits_remodel")))])
         units = {st.unit_key(u): u for u in state["units"]}
         skel, impl = units["skeleton"], units["slice_impl-01"]
-        # The design authority (skeleton) is reopened with the objective;
-        # the slice_doc is NOT touched — the worker never routed to it.
+        # The design authority (skeleton) anchors the episode with the
+        # objective; every sealed slice note is CO-REOPENED with it (the
+        # re-documentation wave — the re-documenter has free rein under the
+        # goal, so nothing stays sealed against it).
         self.assertEqual(skel["status"], st.U_FIXING)
         self.assertEqual([f["id"] for f in skel["fix_queue"]], ["GAP1"])
         self.assertEqual(skel["fix_queue"][0]["severity"], "P1")
@@ -89,7 +91,10 @@ class GapRoutingCase(unittest.TestCase):
         # scope — never a future/sealed slice (finding 2).
         self.assertIn("REMODEL OBJECTIVE", skel["fix_queue"][0]["summary"])
         self.assertIn("slice_impl-01", skel["fix_queue"][0]["summary"])
-        self.assertEqual(units["slice_doc-01"]["status"], st.U_SEALED)
+        self.assertEqual(units["slice_doc-01"]["status"], st.U_REPAIRING)
+        self.assertEqual(state["redoc_wave"],
+                         {"anchor": "skeleton", "docs": ["slice_doc-01"],
+                          "reporter": "slice_impl-01"})
         # The downstream impl finished nothing — it stays pending and its
         # back-edge counter ticked.
         self.assertEqual(impl["status"], st.U_PENDING)
@@ -151,6 +156,50 @@ class GapRoutingCase(unittest.TestCase):
                                     _gap("fits_remodel")))])
         self.assertIsNotNone(state["failure"])
         self.assertEqual(state["failure"]["type"], "gap_route")
+
+    def test_stranded_wave_closes_on_startup(self):
+        # Crash window: the anchor SEALED but the wave close never ran (a
+        # gate failure after the seal transition saved). Once the failure is
+        # cleared, driver startup must close the wave — otherwise navigation
+        # picks a bare-REPAIRING note and decide() has no move for it.
+        path = init_state(self.ws, self._reform_config(git=False))
+        state = st.load(path)
+        seal_current_unit(state, skeleton_draft(1))
+        st.ensure_next_unit(state); seal_current_unit(state)   # doc-1
+        st.ensure_next_unit(state)                             # impl-1 pending
+        by = {st.unit_key(u): u for u in state["units"]}
+        gap = {"classification": "fits_remodel", "forced_decision": "d",
+               "plain": "p"}
+        st.reopen_for_repair(state, by["slice_doc-01"], gap, "wave",
+                             reported_by="slice_impl-01")
+        skeleton = state["units"][0]
+        st.reopen_for_repair(state, skeleton, gap, "gap",
+                             reported_by="slice_impl-01")
+        st.enter_fix_episode(
+            state, skeleton,
+            [{"id": "G1", "severity": "P1", "summary": "objective"}],
+            "repair", None, "skeleton-gap", st.U_PRE_SEAL_VERIFY)
+        state["redoc_wave"] = {"anchor": "skeleton",
+                               "docs": ["slice_doc-01"],
+                               "reporter": "slice_impl-01"}
+        # The anchor reseals... and the driver dies before the wave close.
+        st.transition_unit(state, skeleton, st.U_DELTA_REVIEW)
+        st.transition_unit(state, skeleton, st.U_PRE_SEAL_VERIFY)
+        st.transition_unit(state, skeleton, st.U_SEALING)
+        st.record_seal_attempt(state, skeleton, make_halves(), True)
+        st.transition_unit(state, skeleton, st.U_SEALED)
+        st.save(path, state)
+        # Startup recovery closes the stranded wave; navigation proceeds to
+        # the reporter's re-draft, never to a bare-repairing note.
+        drv.Driver(path, runner=runners.MockRunner([]))
+        state = st.load(path)
+        by = {st.unit_key(u): u for u in state["units"]}
+        self.assertIsNone(state.get("redoc_wave"))
+        self.assertEqual(by["slice_doc-01"]["status"], st.U_SEALED)
+        self.assertEqual(by["slice_doc-01"]["seals"][-1]["wave"],
+                         "skeleton-a2")
+        self.assertEqual(st.unit_key(st.current_unit(state)),
+                         "slice_impl-01")
 
     def test_producer_with_pre_remodel_note_reads_the_remodel(self):
         # A PRODUCER slice — not the gap reporter — whose note sealed BEFORE
@@ -258,6 +307,32 @@ class GapRoutingCase(unittest.TestCase):
         self.assertEqual(len(impl_prompts), 2)
         self.assertNotIn("REMODEL ASSIGNMENT", impl_prompts[0])
         self.assertIn("REMODEL ASSIGNMENT", impl_prompts[1])
+        # RE-DOCUMENTATION WAVE: doc-01 was co-reopened with the anchor and
+        # resealed by the wave when the anchor's seal passed — a WAVE seal
+        # record referencing the anchor's attempt, never its own episode.
+        doc = units["slice_doc-01"]
+        self.assertEqual(doc["status"], st.U_SEALED)
+        self.assertEqual(len(doc["seals"]), 2)
+        self.assertEqual(doc["seals"][-1]["wave"], "skeleton-a2")
+        self.assertTrue(doc["seals"][-1]["passed"])
+        self.assertIsNone(state.get("redoc_wave"))
+        self.assertIn("redoc_wave_closed",
+                      [e["type"] for e in state["events"]])
+        # The wave's fixer + seal prompts declared the SET (re-documenter
+        # framing; the seal certifies the whole documentation set).
+        fix_prompts = [p for (_f, kind, p) in mock.calls
+                       if kind == "fix_findings"]
+        self.assertTrue(any("RE-DOCUMENTATION WAVE" in p
+                            and "docs/slice-01.md" in p
+                            for p in fix_prompts))
+        seal_prompts = [p for (_f, kind, p) in mock.calls
+                        if kind == "seal_half"]
+        self.assertTrue(any("WAVE SEAL" in p and "docs/slice-01.md" in p
+                            for p in seal_prompts))
+        # Post-wave the producer predicate is self-consistent: the note
+        # resealed AFTER the skeleton, so nothing "predates" the design.
+        d = drv.Driver(path, runner=runners.MockRunner([]))
+        self.assertFalse(d._note_predates_skeleton(1))
 
 
 if __name__ == "__main__":

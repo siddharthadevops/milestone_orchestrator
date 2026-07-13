@@ -2371,6 +2371,9 @@ def run_story(home, run_id, item):
                         "passed": s_["passed"],
                         "at": s_["at"],
                         "invalidated": s_.get("invalidated"),
+                        # Wave provenance: resealed by the anchor's wave
+                        # seal (None for ordinary seals).
+                        "wave": s_.get("wave"),
                         "halves": s_.get("halves"),
                     }
         raise ApiError(404, "unknown seal %r" % ref)

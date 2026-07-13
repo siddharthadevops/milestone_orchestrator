@@ -1333,6 +1333,10 @@ function roundChip(r) {
 function sealChip(s, unitKey) {
   const dur = fmtDur(s.duration_s);
   const click = ` clicky" onclick="showStory('seal:${esc(unitKey)}:${s.attempt}')`;
+  if (s.passed && s.wave)
+    // Wave provenance: resealed by the anchor's wave seal — the unit ran
+    // no seal episode of its own.
+    return `<span class="chip pass${click}" title="re-documentation wave ${esc(s.wave)}">Seal A${s.attempt} &#10003; wave${dur}</span>`;
   if (s.passed)
     return `<span class="chip pass${click}">Seal A${s.attempt} &#10003;${dur}</span>`;
   if (s.invalidated)
@@ -2040,7 +2044,11 @@ async function showStory(item) {
     if (res.notes)
       body += `<div class="story-note">${esc(res.notes)}</div>`;
   } else if (d.story === "seal") {
-    title = `${d.unit} — seal attempt ${d.attempt} (${d.passed ? "pass" : "not passed"})`;
+    title = `${d.unit} — seal attempt ${d.attempt} (${d.passed ? "pass" : "not passed"})${d.wave ? " — re-documentation wave" : ""}`;
+    if (d.wave)
+      // Wave provenance: a synthetic reseal carried by the anchor's wave
+      // seal — it has no halves of its own, and that is the story.
+      body += `<div class="story-note">Resealed by the anchor's wave seal (${esc(d.wave)}): the wave certified the whole documentation set — this unit ran no seal episode of its own. See the anchor's seal attempt for the halves.</div>`;
     if (d.invalidated)
       body += `<div class="story-note">INVALIDATED: ${esc(d.invalidated)}</div>`;
     for (const [fam, h] of Object.entries(d.halves || {})) {

@@ -78,7 +78,8 @@ function roundChip(r) {
 }
 function sealChip(s) {
   const cls = s.passed ? "pass" : "fail";
-  const label = s.passed ? "pass" : (s.invalidated ? "invalid" : "findings");
+  const label = s.passed ? (s.wave ? `pass (wave ${esc(s.wave)})` : "pass")
+    : (s.invalidated ? "invalid" : "findings");
   const counts = Object.entries(s.findings || {})
     .map(([f, n]) => `${f}:${n === null ? "×" : n}`).join(" ");
   return `<span class="chip ${cls}">seal a${s.attempt} ${label} ${esc(counts)}</span>`;

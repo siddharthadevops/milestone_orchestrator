@@ -147,10 +147,13 @@ def render_milestone(state):
     ]
     for unit in state["units"]:
         seals = ", ".join(
-            "a%d:%s"
+            "a%d:%s%s"
             % (
                 s["attempt"],
                 "pass" if s["passed"] else ("invalid" if s["invalidated"] else "findings"),
+                # Wave provenance: a note resealed by the ANCHOR's wave seal
+                # never ran its own episode — the record must say so.
+                (" (wave %s)" % s["wave"]) if s.get("wave") else "",
             )
             for s in unit["seals"]
         ) or "-"
@@ -222,15 +225,23 @@ def render_review_log(state):
         for seal in unit["seals"]:
             lines += [
                 "",
-                "### Seal attempt a%d — %s"
+                "### Seal attempt a%d — %s%s"
                 % (
                     seal["attempt"],
                     "PASSED"
                     if seal["passed"]
                     else ("INVALIDATED" if seal["invalidated"] else "findings"),
+                    (" (re-documentation wave %s)" % seal["wave"])
+                    if seal.get("wave") else "",
                 ),
                 "",
             ]
+            if seal.get("wave"):
+                lines.append(
+                    "- resealed by the anchor's wave seal (%s): the wave "
+                    "certified the whole documentation set; this unit ran "
+                    "no seal episode of its own" % seal["wave"]
+                )
             if seal["invalidated"]:
                 lines.append("- invalidated: %s" % seal["invalidated"])
             for fam in sorted(seal["halves"]):

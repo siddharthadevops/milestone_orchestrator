@@ -1069,13 +1069,36 @@ def build_review_round(family, workspace, goal, unit_desc, artifact, registry,
 
 def build_delta_review(family, workspace, goal, unit_desc, diff_text, registry,
                        unit_kind=None, governing=None, amendments=None,
-                       project_context=None, debt=None):
+                       project_context=None, debt=None, wave_docs=None):
+    # During a re-documentation wave the fixer legitimately edits SEVERAL
+    # milestone documents at once (they are co-reopened, not sealed); the
+    # delta reviewer must judge the multi-document diff as one coherent
+    # re-documentation, not flag the breadth itself. `is not None`: an
+    # EMPTY list is still a wave (no notes sealed yet). Note edits in the
+    # delta are judged with the slice-note content criteria too.
+    wave_block = ""
+    if wave_docs is not None:
+        listing = ("".join("  %s\n" % p for p in wave_docs)
+                   or "  (no slice notes are sealed yet — the set is the\n"
+                      "  skeleton alone)\n")
+        wave_block = (
+            "RE-DOCUMENTATION WAVE IN PROGRESS\n"
+            "- The skeleton and every slice note below are co-reopened: the\n"
+            "  fixer may edit ANY of them (including ones no finding names)\n"
+            "  to keep the documentation coherent and continuable under the\n"
+            "  GOAL. Multi-document breadth is NOT a finding; judge the\n"
+            "  delta's coherence across the set.\n"
+            + listing
+            + "\n"
+            + (SLICE_NOTE_CONTENT_BLOCK + "\n" if wave_docs else "")
+        )
     return (
         _header(contracts.KIND_DELTA_REVIEW, family, workspace)
         + "\nTASK: incremental review of the pending fix delta on %s.\n"
         % unit_desc
         + "REPORT ONLY.\n"
         + "GOAL: %s\n\n" % goal
+        + wave_block
         + _amendments_block(amendments)
         + _project_context_block(project_context)
         + _delta_governing_line(governing)
@@ -1105,13 +1128,39 @@ def build_delta_review(family, workspace, goal, unit_desc, diff_text, registry,
 def build_seal_half(family, workspace, goal, unit_desc, artifact, registry,
                     unit_kind=None, governing=None, amendments=None,
                     verified_suite=None, project_context=None,
-                    battery=None, debt=None):
+                    battery=None, debt=None, wave_docs=None):
+    # A re-documentation wave's seal certifies the WHOLE documentation set,
+    # edited or not: the re-documenter choosing to leave a note untouched
+    # asserted it is coherent with the re-documented design — this seal
+    # verifies exactly that assertion. `wave_docs is not None` marks a wave
+    # (an EMPTY list is still a wave: no notes sealed yet, the set is the
+    # skeleton alone); co-reopened notes bring the slice-note content
+    # criteria into the seal, or an incomplete edited note would reseal on
+    # skeleton criteria only.
+    wave_block = ""
+    if wave_docs is not None:
+        listing = ("".join("  %s\n" % p for p in wave_docs)
+                   or "  (no slice notes are sealed yet — the set is the\n"
+                      "  skeleton alone)\n")
+        wave_block = (
+            "WAVE SEAL — the ENTIRE documentation set is the candidate\n"
+            "- This seal closes a re-documentation wave: it certifies the\n"
+            "  skeleton TOGETHER WITH every slice note below, edited or\n"
+            "  not (an untouched note was asserted coherent; verify it).\n"
+            "  Judge the SET's coherence and continuability against the\n"
+            "  GOAL — a contradiction between any two documents of the set\n"
+            "  is a finding on this seal.\n"
+            + listing
+            + "\n"
+            + (SLICE_NOTE_CONTENT_BLOCK + "\n" if wave_docs else "")
+        )
     return (
         _header(contracts.KIND_SEAL_HALF, family, workspace)
         + "\nTASK: independent final seal review of %s. REPORT ONLY.\n"
         % unit_desc
         + "GOAL: %s\n" % goal
         + "TARGET: %s (plus any code/tests it governs)\n\n" % artifact
+        + wave_block
         + _amendments_block(amendments)
         + _project_context_block(project_context)
         + _governing_line(governing)
@@ -1305,6 +1354,7 @@ def build_fix_findings(
     debt=None,
     convergence=None,
     repair_artifact=None,
+    repair_wave_docs=None,
 ):
     lines = []
     for f in findings:
@@ -1388,7 +1438,37 @@ def build_fix_findings(
             % (dirty_deltas, "\n".join(delta_lines) or "(none recorded)")
         )
     repair_line = ""
-    if repair_artifact:
+    if repair_artifact and repair_wave_docs is not None:
+        # RE-DOCUMENTATION WAVE: the whole documentation set is reopened
+        # with the anchor. The re-documenter's authority is the GOAL — the
+        # findings state the objective, never the edit scope. Process-level
+        # declaration for the same reason as the single-artifact line: a
+        # fixer must never take editability from a FINDING. An EMPTY doc
+        # list is still a wave (no notes sealed yet: the set is the
+        # skeleton alone, same authority and same code-read-only rule).
+        repair_line = (
+            "- RE-DOCUMENTATION WAVE: this unit (the design authority) was\n"
+            "  reopened together with EVERY slice note. The ENTIRE\n"
+            "  documentation set is EDITABLE in this call:\n"
+            "  %s\n"
+            "%s"
+            "  You are the RE-DOCUMENTER. Your authority is the GOAL: leave\n"
+            "  the milestone's documentation COHERENT and CONTINUABLE. The\n"
+            "  queued findings state WHAT must be resolved — they do NOT\n"
+            "  bound WHERE: amend any document above, including ones no\n"
+            "  finding names, if coherence needs it; you may restructure the\n"
+            "  REMAINING (unbuilt) slice table (return the full `slices`\n"
+            "  field when you change it). The set reseals as ONE wave with\n"
+            "  fresh reviews. Sealed IMPLEMENTATIONS and code stay read-only:\n"
+            "  corrective code lands in the current slice later, never here.\n"
+            % (
+                repair_artifact,
+                ("".join("  %s\n" % p for p in repair_wave_docs)
+                 or "  (no slice notes are sealed yet — the set is the\n"
+                    "  skeleton alone)\n"),
+            )
+        )
+    elif repair_artifact:
         # Process-level authority for the repair path: a fixer must not
         # take "you may edit the sealed note" from a FINDING (that is
         # exactly what a malicious finding would claim — found live
@@ -1407,9 +1487,9 @@ def build_fix_findings(
         "SEALED ARTIFACTS (read-only)\n"
         + repair_line +
         "- The milestone skeleton and every SEALED slice note are\n"
-        "  READ-ONLY in this call — except an artifact declared editable\n"
-        "  above because it is THE unit under repair. A `prevention`\n"
-        "  edit may touch ONLY the artifact of the unit being fixed.\n"
+        "  READ-ONLY in this call — except artifacts declared editable\n"
+        "  above (the unit under repair, or a re-documentation wave's\n"
+        "  set). A `prevention` edit may touch ONLY editable artifacts.\n"
         "- If a queued finding cannot be fixed without contradicting a\n"
         "  sealed note or the skeleton, do NOT edit the sealed document\n"
         "  and do NOT code around it: dispose that finding \"blocked\",\n"

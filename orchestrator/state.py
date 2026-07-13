@@ -413,7 +413,11 @@ def transition_unit(state, unit, new_status, reason=None):
         # repair immediately enters a fix episode (U_REPAIRING -> U_FIXING)
         # and reseals through the normal seal path.
         U_SEALED: (U_REPAIRING,),
-        U_REPAIRING: (U_FIXING, U_FAILED),
+        # REPAIRING -> SEALED is the re-documentation wave's close: a slice
+        # note co-reopened with the skeleton reseals when the ANCHOR's wave
+        # seal passes (the wave certifies the whole documentation set); it
+        # never runs its own episode.
+        U_REPAIRING: (U_FIXING, U_SEALED, U_FAILED),
         U_FAILED: (),
     }
     old = unit["status"]
@@ -965,9 +969,12 @@ def reopen_for_repair(state, unit, gap, reason, reported_by=None):
     §3, stop-report-repair-resume). Transitions sealed -> repairing and
     grants FRESH fix/seal budgets — the repair and its reseal must not
     inherit the exhausted counters of the original build (same amnesty as
-    resume_run). The caller immediately queues the repair as a fix episode
-    (U_REPAIRING -> U_FIXING), so a persisted unit is never left in bare
-    U_REPAIRING. New machinery: sealed units are otherwise terminal."""
+    resume_run). Two callers: the wave ANCHOR (the skeleton) immediately
+    enters a fix episode (U_REPAIRING -> U_FIXING); a slice note
+    co-reopened by a re-documentation wave WAITS in U_REPAIRING while the
+    anchor's episode runs (the anchor's fixer may edit it) and reseals via
+    close_redoc_wave when the anchor's wave seal passes. New machinery:
+    sealed units are otherwise terminal."""
     if unit["status"] != U_SEALED:
         raise IllegalTransition(
             "reopen_for_repair requires a sealed unit (%s is %s)"
@@ -998,6 +1005,75 @@ def reopen_for_repair(state, unit, gap, reason, reported_by=None):
         seals_before=len(unit["seals"]),
     )
     return unit
+
+
+def close_redoc_wave(state, anchor):
+    """PHASE 1 of the wave close, run BEFORE the anchor's gate commit so
+    the gate's generated ledgers render the truth: every co-reopened slice
+    note returns repairing -> sealed carrying a WAVE seal record that
+    references the anchor's passing attempt. The wave seal certified the
+    ENTIRE documentation set — edited or not, a note the re-documenter
+    chose to leave untouched was asserted coherent and the seal verified
+    it — so the notes never run their own episodes. KEEPS state["redoc_wave"]
+    (phase 2, stamp_redoc_wave_gate, clears it after the gate commit binds
+    the shas — a crash between the phases must stay recoverable).
+    Idempotent: already-sealed notes are skipped. Returns the closed keys."""
+    wave = state.get("redoc_wave") or {}
+    anchor_key = unit_key(anchor)
+    if wave.get("anchor") != anchor_key:
+        return []
+    attempt = len(anchor["seals"])
+    by_key = {unit_key(u): u for u in state["units"]}
+    closed = []
+    for key in wave.get("docs") or []:
+        unit = by_key.get(key)
+        if unit is None or unit["status"] != U_REPAIRING:
+            continue
+        unit["seals"].append({
+            "attempt": len(unit["seals"]) + 1,
+            "at": now_iso(),
+            "passed": True,
+            "invalidated": None,
+            "halves": {},
+            "wave": "%s-a%d" % (anchor_key, attempt),
+        })
+        transition_unit(
+            state, unit, U_SEALED, reason="re-documentation wave reseal"
+        )
+        closed.append(key)
+    if closed:
+        append_event(
+            state,
+            "redoc_wave_closed",
+            anchor=anchor_key,
+            attempt=attempt,
+            docs=closed,
+        )
+    return closed
+
+
+def stamp_redoc_wave_gate(state, anchor, gate_sha):
+    """PHASE 2 of the wave close, run AFTER the anchor's gate commit:
+    stamp the wave gate's sha as every co-closed note's gate_commit (the
+    anchor's gate holds every note's current bytes; the sealed-artifact
+    guard baselines on the run's newest gate anyway) and clear the wave
+    record. Safe with gate_sha None (git disabled): it only clears.
+    Returns the stamped keys."""
+    wave = state.get("redoc_wave") or {}
+    anchor_key = unit_key(anchor)
+    if wave.get("anchor") != anchor_key:
+        return []
+    by_key = {unit_key(u): u for u in state["units"]}
+    stamped = []
+    for key in wave.get("docs") or []:
+        unit = by_key.get(key)
+        if unit is None or unit["status"] != U_SEALED:
+            continue
+        if gate_sha:
+            unit["gate_commit"] = gate_sha
+            stamped.append(key)
+    state["redoc_wave"] = None
+    return stamped
 
 
 def enter_fix_episode(state, unit, findings, source_type, source_family,
@@ -1511,6 +1587,9 @@ def summary(state):
                         "attempt": s["attempt"],
                         "passed": s["passed"],
                         "invalidated": s["invalidated"],
+                        # Wave provenance: resealed by the anchor's wave
+                        # seal, no episode of its own (None otherwise).
+                        "wave": s.get("wave"),
                         "findings": {
                             fam: (
                                 len(h["result"].get("findings", []))

@@ -370,6 +370,7 @@ class Driver(object):
                     self._save()
         self._consume_stale_marker()
         self._consume_pending_gap()
+        self._consume_pending_wave()
         # A crash between a seal and its _after_seal ensure_next_unit can
         # leave the DUE planned unit without a record; with a mid-table
         # remodel insert, navigation would fall through to a later
@@ -1840,11 +1841,45 @@ class Driver(object):
         # post-resume draft still reads the remodelled skeleton instead of
         # silently following its stale sealed note.
         unit["has_gap_remodel"] = True
+        # RE-DOCUMENTATION WAVE: the remodel reopens the WHOLE documentation
+        # set — the skeleton (anchor) plus every sealed slice note. Whatever
+        # the gap NAMED only orients the objective; it never bounds the edit
+        # scope: the re-documenter has free rein under the GOAL to leave the
+        # documentation coherent and continuable (restricting the set to the
+        # named docs could leave an unnamed note incoherent and re-loop).
+        # The notes wait in U_REPAIRING while the anchor's episode runs (its
+        # fixer may edit them; the sealed-artifact guard only polices SEALED
+        # units) and reseal via close_redoc_wave when the anchor's wave seal
+        # passes. Docs reopen BEFORE the anchor so a crash mid-loop resumes
+        # through the normal path (anchor still sealed -> re-route re-runs;
+        # already-repairing docs are skipped).
+        wave_docs = []
+        for u in self.state["units"]:
+            if u["kind"] != st.UNIT_SLICE_DOC:
+                continue
+            if u is target_unit or u is unit:
+                continue
+            if u.get("under_repair"):
+                wave_docs.append(st.unit_key(u))  # resume: already reopened
+                continue
+            if u["status"] != st.U_SEALED:
+                continue
+            st.reopen_for_repair(
+                self.state, u, primary,
+                reason="re-documentation wave (gap from %s)" % reporter_key,
+                reported_by=reporter_key,
+            )
+            wave_docs.append(st.unit_key(u))
         st.reopen_for_repair(
             self.state, target_unit, primary,
             reason="downstream %s reported a gap" % reporter_key,
             reported_by=reporter_key,
         )
+        self.state["redoc_wave"] = {
+            "anchor": target_key,
+            "docs": wave_docs,
+            "reporter": reporter_key,
+        }
         if sha is not None:
             st.append_event(
                 self.state, "wip_commit", unit=target_key, sha=sha
@@ -1857,9 +1892,11 @@ class Driver(object):
         self.state["pending_gap"] = None
         self._save()
         return (
-            "gap on %s -> reopened %s for repair (%d repair finding(s)); it "
-            "reseals, then %s re-drafts"
-            % (reporter_key, target_key, len(repair_findings), reporter_key)
+            "gap on %s -> re-documentation wave: reopened %s + %d slice "
+            "note(s) (%d repair finding(s)); the set reseals, then %s "
+            "re-drafts"
+            % (reporter_key, target_key, len(wave_docs),
+               len(repair_findings), reporter_key)
         )
 
     def _pre_clean_pending_gap(self):
@@ -1915,6 +1952,61 @@ class Driver(object):
             return
         except StopStep:
             pass  # a routing failure recorded a run failure; leave it be
+
+    def _consume_pending_wave(self):
+        """A re-documentation wave whose ANCHOR sealed but whose close never
+        ran (the anchor's gate commit failed after the seal transition saved:
+        failure recorded, wave record left open, notes stranded in bare
+        REPAIRING — navigation would pick one and decide() has no move for
+        it). On startup with the failure cleared: retry the missing gate
+        commit, then close the wave. Idempotent (a closed wave has no
+        record; an unsealed anchor means the episode is still in flight and
+        the normal path closes it). Same locking discipline as
+        _consume_pending_gap."""
+        wave = self.state.get("redoc_wave")
+        if not wave or self.state.get("failure"):
+            return
+        try:
+            with self._exclusive():
+                self.state = st.load(self.state_path)
+                wave = self.state.get("redoc_wave")
+                if not wave or self.state.get("failure"):
+                    return
+                anchor = self._unit_by_key(wave.get("anchor"))
+                if anchor is None or anchor["status"] != st.U_SEALED:
+                    return  # episode still in flight; closes via _after_seal
+                # Presence of gate_commit is NOT enough: the reopen kept the
+                # anchor's PRE-WAVE gate sha, and closing against it would
+                # let the sealed-artifact guard restore pre-wave bytes. The
+                # reseal's gate exists only if a gate_commit event for the
+                # anchor POSTDATES its last transition to sealed; otherwise
+                # the crash was the gate itself — retry it (fails the run
+                # again if the cause persists; never close the wave on bytes
+                # no gate holds).
+                anchor_key = st.unit_key(anchor)
+                sealed_seq = gate_seq = -1
+                for e in self.state["events"]:
+                    if e.get("unit") != anchor_key:
+                        continue
+                    if e.get("type") == "unit_transition" \
+                            and e.get("to_status") == st.U_SEALED:
+                        sealed_seq = e.get("seq", -1)
+                    elif e.get("type") == "gate_commit":
+                        gate_seq = e.get("seq", -1)
+                # Same two phases as _after_seal: state close first (so a
+                # retried gate's ledgers render sealed notes), gate retry if
+                # the reseal's gate never ran, then stamp + clear.
+                st.close_redoc_wave(self.state, anchor)
+                if gitops.enabled(self.config) and gate_seq < sealed_seq:
+                    self._gate_commit(anchor)
+                st.stamp_redoc_wave_gate(
+                    self.state, anchor, anchor.get("gate_commit")
+                )
+                self._save()
+        except ConcurrentRunError:
+            return
+        except StopStep:
+            pass  # the retried gate failed again; failure is recorded
 
     def _slice_info(self, slice_id):
         for sl in self.state["milestone"]["slices"]:
@@ -2230,6 +2322,7 @@ class Driver(object):
                     or unit.get("under_repair"))
                 else None
             ),
+            repair_wave_docs=self._wave_doc_paths(unit),
             convergence=(
                 {
                     "dirty_deltas": dirty_deltas,
@@ -2510,6 +2603,7 @@ class Driver(object):
             amendments=self._amendments(),
             project_context=project_context,
             debt=self._debt(unit),
+            wave_docs=self._wave_doc_paths(unit),
         )
         n_delta = 1 + len(
             [r for r in unit["rounds"] if r["kind"] == contracts.KIND_DELTA_REVIEW]
@@ -3127,6 +3221,7 @@ class Driver(object):
         tamper_family = None  # sequential mode can attribute the tampering
         amendments = self._amendments()  # once, before any half thread
         verified_suite = self._verified_suite(unit)
+        wave_docs = self._wave_doc_paths(unit)  # once; None unless anchor
         # A seal attempt is ONE judgment surface: selection/compile/meta
         # run once here, in the main thread (fail-closed before any half
         # runs; the seen ledger gains at most one event per pair), and
@@ -3157,7 +3252,7 @@ class Driver(object):
                 unit_kind=unit["kind"], governing=self._governing(unit),
                 amendments=amendments, verified_suite=verified_suite,
                 project_context=project_context, battery=seal_battery,
-                debt=debt,
+                debt=debt, wave_docs=wave_docs,
             )
             raw_name = "%s-seal-a%d-%s" % (st.unit_key(unit), attempt_no, family)
             try:
@@ -3461,10 +3556,45 @@ class Driver(object):
         return ("seal attempt %d: %d finding(s) queued for the fixer; "
                 "%d deferred" % (attempt_no, len(merged), len(deferred)))
 
+    def _wave_doc_paths(self, unit):
+        """Artifact paths of the slice notes co-reopened with `unit` by an
+        active re-documentation wave — None unless `unit` is the wave's
+        anchor. Feeds the fixer's re-documenter framing and the wave seal's
+        set declaration."""
+        wave = self.state.get("redoc_wave")
+        if not wave or wave.get("anchor") != st.unit_key(unit):
+            return None
+        by_key = {st.unit_key(u): u for u in self.state["units"]}
+        paths = []
+        for key in wave.get("docs") or []:
+            u = by_key.get(key)
+            if u is not None and u.get("artifact"):
+                paths.append(u["artifact"])
+        return paths
+
     def _after_seal(self, unit):
         if unit["kind"] == st.UNIT_SLICE_IMPL:
             st.close_slice(self.state, unit)
+        # A re-documentation wave closes in two phases around the gate:
+        # PHASE 1 (before the gate) reseals every co-reopened note with the
+        # wave's seal record, so the gate's GENERATED LEDGERS render the
+        # truth — sealed notes with their wave seal, never "repairing";
+        # PHASE 2 (after the gate) stamps the wave gate's sha as the notes'
+        # baseline and clears the record. Both run in the same handler as
+        # the seal transition, so the close is atomic with it on disk; a
+        # crash between the phases leaves the record set and startup
+        # recovery completes it.
+        is_anchor = bool(
+            (self.state.get("redoc_wave") or {}).get("anchor")
+            == st.unit_key(unit)
+        )
+        if is_anchor:
+            st.close_redoc_wave(self.state, unit)
         self._gate_commit(unit)
+        if is_anchor:
+            st.stamp_redoc_wave_gate(
+                self.state, unit, unit.get("gate_commit")
+            )
         nxt = st.ensure_next_unit(self.state)
         if nxt is None and st.maybe_close_milestone(self.state):
             self._final_commit()

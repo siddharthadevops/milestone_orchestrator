@@ -596,9 +596,11 @@ EXPECTED_ALLOWED = {
     # restored, attempt retried): no self-loop transition is needed.
     st.U_SEALING: {st.U_SEALED, st.U_FIXING, st.U_FAILED},
     # Sealed is terminal EXCEPT reopen_for_repair (reform §3): sealed ->
-    # repairing -> fixing (the repair) -> ... -> resealed.
+    # repairing -> fixing (the repair) -> ... -> resealed. repairing ->
+    # sealed is the re-documentation wave's close: a co-reopened slice
+    # note reseals with the anchor's wave seal, never its own episode.
     st.U_SEALED: {st.U_REPAIRING},
-    st.U_REPAIRING: {st.U_FIXING, st.U_FAILED},
+    st.U_REPAIRING: {st.U_FIXING, st.U_SEALED, st.U_FAILED},
     st.U_FAILED: set(),
 }
 
@@ -1901,12 +1903,14 @@ class TestSummary(TempWorkspaceCase):
         seal = skel_view["seals"][0]
         self.assertEqual(
             set(seal.keys()),
-            {"attempt", "passed", "invalidated", "findings", "duration_s",
-             "severity", "at"},
+            {"attempt", "passed", "invalidated", "wave", "findings",
+             "duration_s", "severity", "at"},
         )
         self.assertEqual(seal["attempt"], 1)
         self.assertTrue(seal["passed"])
         self.assertIsNone(seal["invalidated"])
+        # Ordinary seal: no wave provenance.
+        self.assertIsNone(seal["wave"])
         self.assertEqual(seal["findings"], {"codex": 0, "claude": 0})
         # doc view carries the dirty round's finding count
         self.assertEqual(doc_view["rounds"][0]["findings"], 2)
@@ -2204,6 +2208,88 @@ class TestTypedResume(TempWorkspaceCase):
                          "2026-07-06T00:37:00+0200")
         ev = [e for e in state["events"] if e["type"] == "run_failed"][-1]
         self.assertEqual(ev["failure_type"], "quota")
+
+
+class TestCloseRedocWave(TempWorkspaceCase):
+    """close_redoc_wave: co-reopened slice notes reseal with the anchor's
+    wave seal — a WAVE record referencing the anchor's attempt, no episode
+    of their own."""
+
+    def _wave_state(self):
+        state = make_state(self.workspace)
+        seal_current_unit(state, skeleton_draft(2))
+        st.ensure_next_unit(state); seal_current_unit(state)   # doc-1
+        st.ensure_next_unit(state); seal_current_unit(state)   # impl-1
+        st.ensure_next_unit(state); seal_current_unit(state)   # doc-2
+        gap = {"classification": "fits_remodel", "forced_decision": "d",
+               "plain": "p"}
+        by = {st.unit_key(u): u for u in state["units"]}
+        for key in ("slice_doc-01", "slice_doc-02"):
+            st.reopen_for_repair(state, by[key], gap, "wave",
+                                 reported_by="slice_impl-02")
+        skeleton = state["units"][0]
+        st.reopen_for_repair(state, skeleton, gap, "gap",
+                             reported_by="slice_impl-02")
+        st.enter_fix_episode(
+            state, skeleton,
+            [{"id": "G1", "severity": "P1", "summary": "objective"}],
+            "repair", None, "skeleton-gap", st.U_PRE_SEAL_VERIFY)
+        state["redoc_wave"] = {"anchor": "skeleton",
+                               "docs": ["slice_doc-01", "slice_doc-02"],
+                               "reporter": "slice_impl-02"}
+        # Anchor reseals through the normal path.
+        st.transition_unit(state, skeleton, st.U_DELTA_REVIEW)
+        st.transition_unit(state, skeleton, st.U_PRE_SEAL_VERIFY)
+        st.transition_unit(state, skeleton, st.U_SEALING)
+        st.record_seal_attempt(state, skeleton, make_halves(), True)
+        st.transition_unit(state, skeleton, st.U_SEALED)
+        return state, skeleton, by
+
+    def test_wave_close_reseals_every_co_reopened_note(self):
+        state, skeleton, by = self._wave_state()
+        # PHASE 1 (pre-gate): notes reseal with the wave record; the wave
+        # record STAYS (a crash before the gate stamps must be recoverable).
+        closed = st.close_redoc_wave(state, skeleton)
+        self.assertEqual(closed, ["slice_doc-01", "slice_doc-02"])
+        for key in closed:
+            doc = by[key]
+            self.assertEqual(doc["status"], st.U_SEALED)
+            self.assertNotIn("under_repair", doc)
+            rec = doc["seals"][-1]
+            self.assertTrue(rec["passed"])
+            self.assertEqual(rec["wave"], "skeleton-a2")
+        self.assertIsNotNone(state["redoc_wave"])
+        ev = [e for e in state["events"] if e["type"] == "redoc_wave_closed"]
+        self.assertEqual(ev[-1]["docs"], closed)
+        # Idempotent phase 1: nothing left repairing, no duplicate event.
+        n_ev = len(ev)
+        self.assertEqual(st.close_redoc_wave(state, skeleton), [])
+        self.assertEqual(
+            len([e for e in state["events"]
+                 if e["type"] == "redoc_wave_closed"]), n_ev)
+        # PHASE 2 (post-gate): the wave gate's sha becomes every note's
+        # baseline and the record clears.
+        stamped = st.stamp_redoc_wave_gate(state, skeleton, "abc123")
+        self.assertEqual(stamped, closed)
+        for key in closed:
+            self.assertEqual(by[key]["gate_commit"], "abc123")
+        self.assertIsNone(state["redoc_wave"])
+
+    def test_wave_stamp_with_no_gate_only_clears(self):
+        # git disabled: no gate sha — phase 2 just clears the record.
+        state, skeleton, by = self._wave_state()
+        st.close_redoc_wave(state, skeleton)
+        self.assertEqual(st.stamp_redoc_wave_gate(state, skeleton, None), [])
+        self.assertIsNone(state["redoc_wave"])
+        self.assertEqual(by["slice_doc-01"]["status"], st.U_SEALED)
+
+    def test_wave_close_ignores_a_foreign_anchor(self):
+        state, skeleton, by = self._wave_state()
+        state["redoc_wave"]["anchor"] = "slice_doc-99"
+        self.assertEqual(st.close_redoc_wave(state, skeleton), [])
+        self.assertEqual(st.stamp_redoc_wave_gate(state, skeleton, "x"), [])
+        self.assertEqual(by["slice_doc-01"]["status"], st.U_REPAIRING)
+        self.assertIsNotNone(state["redoc_wave"])
 
 
 class TestReopenForRepair(TempWorkspaceCase):

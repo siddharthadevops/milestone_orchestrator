@@ -26,6 +26,7 @@ from orchestrator.tests.test_driver_mock import (
     finding, fix_ok, init_state, make_config, ok, report, step, triaged,
     write_file, append_file,
 )
+from orchestrator.tests.test_state import make_halves
 
 GOAL = "Build a small CLI calculator (add/sub/mul/div) with unit tests"
 
@@ -929,6 +930,155 @@ class GapReopenCommitIsolationTest(unittest.TestCase):
         self.assertFalse(os.path.exists(os.path.join(self.ws, "junk.py")))
         self.assertIn("gap_edits_discarded",
                       [e["type"] for e in state["events"]])
+
+    def test_stranded_wave_recovery_retries_the_gate_not_the_old_sha(self):
+        # Crash window with git ON: the anchor RESEALED (wave) but its gate
+        # commit failed — the anchor still carries its PRE-WAVE gate sha.
+        # Startup recovery must detect that the reseal's gate never ran (no
+        # gate_commit event after the last sealed transition), RETRY the
+        # gate, and close the wave against the NEW sha — closing against
+        # the old one would let the guard restore pre-wave documentation.
+        path = init_state(self.ws, make_config())
+        driver = drv.Driver(path, runner=runners.MockRunner(
+            self._seal_doc_unit("skeleton", "docs/skeleton.md",
+                                "# Skeleton\n\nSEALED v1\n")
+            + self._seal_doc_unit("slice_doc", "docs/slice-01.md",
+                                  "# Slice 01\n\nnote v1\n")))
+        for _ in range(40):
+            state = st.load(path)
+            cur = st.current_unit(state)
+            if (cur is not None and st.unit_key(cur) == "slice_impl-01"
+                    and cur["status"] == st.U_PENDING):
+                break
+            driver.step()
+        state = st.load(path)
+        by = {st.unit_key(u): u for u in state["units"]}
+        old_gate = by["skeleton"]["gate_commit"]
+        self.assertTrue(old_gate)
+        # Simulate the wave mid-flight: docs + anchor reopened, the wave's
+        # re-documented bytes written and wip-committed, the anchor resealed
+        # in state... and the driver died before the gate commit.
+        gap = {"classification": "fits_remodel", "forced_decision": "d",
+               "plain": "p"}
+        st.reopen_for_repair(state, by["slice_doc-01"], gap, "wave",
+                             reported_by="slice_impl-01")
+        skeleton = by["skeleton"]
+        st.reopen_for_repair(state, skeleton, gap, "gap",
+                             reported_by="slice_impl-01")
+        st.enter_fix_episode(
+            state, skeleton,
+            [{"id": "G1", "severity": "P1", "summary": "objective"}],
+            "repair", None, "skeleton-gap", st.U_PRE_SEAL_VERIFY)
+        state["redoc_wave"] = {"anchor": "skeleton",
+                               "docs": ["slice_doc-01"],
+                               "reporter": "slice_impl-01"}
+        st.save(path, state)   # the routing save (reopens persisted first)
+        write_file("docs/skeleton.md", "# Skeleton\n\nwave v2\n")(self.ws)
+        write_file("docs/slice-01.md", "# Slice 01\n\nnote v2\n")(self.ws)
+        gitops.commit_wip(self.ws, "wip-repair: skeleton")
+        st.transition_unit(state, skeleton, st.U_DELTA_REVIEW)
+        st.transition_unit(state, skeleton, st.U_PRE_SEAL_VERIFY)
+        st.transition_unit(state, skeleton, st.U_SEALING)
+        st.record_seal_attempt(state, skeleton, make_halves(), True)
+        st.transition_unit(state, skeleton, st.U_SEALED)
+        st.save(path, state)   # gate_commit still = old_gate; no gate event
+        # Startup: retries the gate (new sha), closes the wave against it.
+        drv.Driver(path, runner=runners.MockRunner([]))
+        state = st.load(path)
+        by = {st.unit_key(u): u for u in state["units"]}
+        self.assertIsNone(state.get("redoc_wave"))
+        new_gate = by["skeleton"]["gate_commit"]
+        self.assertNotEqual(new_gate, old_gate)
+        self.assertEqual(by["slice_doc-01"]["gate_commit"], new_gate)
+        self.assertEqual(by["slice_doc-01"]["status"], st.U_SEALED)
+        # The re-documented bytes are what the new gate holds — a later
+        # guard pass keeps v2, never restores v1.
+        self.assertIn("note v2",
+                      gitops.show_file(self.ws, new_gate, "docs/slice-01.md")
+                      .decode())
+
+    def test_wave_fixer_edits_co_reopened_note_without_restore(self):
+        # RE-DOCUMENTATION WAVE, git on: the anchor's fixer legitimately
+        # edits a CO-REOPENED slice note (repairing, so the sealed-artifact
+        # guard must not restore it), the wave reseal makes the edited bytes
+        # the new gate baseline, and the note reseals with a WAVE record.
+        gap = {
+            "classification": "fits_remodel",
+            "missing_or_conflict": "a field no earlier step records",
+            "where": "docs/slice-01.md:12",
+            "forced_decision": "record the field so this step can read it",
+            "plain": "the design never produces a field this step must read",
+            "example": "the scorer reads a field never written; it stalls",
+        }
+        script = (
+            self._seal_doc_unit("skeleton", "docs/skeleton.md",
+                                "# Skeleton\n\nSEALED v1\n")
+            + self._seal_doc_unit("slice_doc", "docs/slice-01.md",
+                                  "# Slice 01\n\nnote v1\n")
+            + [step("implement",
+                    {"status": "gap", "kind": "implement", "gaps": [gap]},
+                    family="codex"),
+               # The wave's fixer re-documents BOTH the anchor and the note.
+               step("fix_findings",
+                    fix_ok([triaged("GAP1", "fixed", "re-documented",
+                                    severity="P1")],
+                           files_changed=["docs/skeleton.md",
+                                          "docs/slice-01.md"]),
+                    family="codex",
+                    side_effect=lambda ws: (
+                        write_file("docs/skeleton.md",
+                                   "# Skeleton\n\nre-documented v2\n")(ws),
+                        write_file("docs/slice-01.md",
+                                   "# Slice 01\n\nnote v2 (wave)\n")(ws),
+                    )),
+               step("delta_review", report("delta_review"), family="codex"),
+               step("seal_half", report("seal_half"), family="codex"),
+               step("seal_half", report("seal_half"), family="claude"),
+               # The reporter re-drafts after the wave closed; the guard's
+               # post-draft sweep must accept the note's NEW bytes (the wave
+               # gate is the baseline now) and restore nothing.
+               step("implement", ok("implement", files_changed=["calc.py"]),
+                    family="codex",
+                    side_effect=write_file("calc.py", "x = 1\n"))]
+        )
+        path = init_state(self.ws, make_config())
+        driver = drv.Driver(path, runner=runners.MockRunner(script))
+        for _ in range(60):
+            state = st.load(path)
+            if state.get("failure"):
+                self.fail("run failed: %s" % state["failure"]["reason"])
+            units = {st.unit_key(u): u for u in state["units"]}
+            impl = units.get("slice_impl-01")
+            if impl is not None and impl.get("draft"):
+                break
+            driver.step()
+        state = st.load(path)
+        units = {st.unit_key(u): u for u in state["units"]}
+        # No restore fired — the co-reopened note was legitimately editable
+        # during the wave and its new bytes are the baseline afterwards.
+        self.assertNotIn("sealed_artifact_restored",
+                         [e["type"] for e in state["events"]])
+        with open(os.path.join(self.ws, "docs", "slice-01.md"),
+                  encoding="utf-8") as fh:
+            self.assertIn("note v2 (wave)", fh.read())
+        doc = units["slice_doc-01"]
+        self.assertEqual(doc["status"], st.U_SEALED)
+        self.assertEqual(doc["seals"][-1].get("wave"), "skeleton-a2")
+        self.assertEqual(doc.get("gate_commit"),
+                         units["skeleton"].get("gate_commit"))
+        self.assertIsNone(state.get("redoc_wave"))
+        # The wave gate's GENERATED LEDGERS render the truth: the note is
+        # sealed with WAVE provenance, never "repairing" or a blank
+        # ordinary seal (the note ran no episode of its own).
+        from orchestrator import ledgers
+        gate = units["skeleton"]["gate_commit"]
+        record = gitops.show_file(self.ws, gate,
+                                  ledgers.record_path(state)).decode()
+        self.assertIn("(wave skeleton-a2)", record)
+        self.assertNotIn("| repairing |", record)
+        review_log = gitops.show_file(
+            self.ws, gate, ledgers.review_log_path(state)).decode()
+        self.assertIn("re-documentation wave skeleton-a2", review_log)
 
 
 if __name__ == "__main__":
