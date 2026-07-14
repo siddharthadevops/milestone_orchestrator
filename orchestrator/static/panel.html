@@ -40,6 +40,10 @@
   .btn:disabled { opacity: .45; cursor: default; }
   #runs { overflow-y: auto; flex: 1; }
   .run { padding: 8px 14px 8px 33px; cursor: pointer; }
+  /* Unfinished milestones get a lighter card than the #f7f7f7 sidebar so
+     the live work stands out; closed rows keep the sidebar tone. The
+     selected row's rule below still wins (same specificity, later). */
+  .run:not(.closed) { background: #ffffff; }
   .run.sel { border-left: 3px solid var(--accent); padding-left: 30px;
     background: #e8e8e8; }
   .run-copy { flex: 1; min-width: 0; }
