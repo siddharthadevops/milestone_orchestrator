@@ -49,6 +49,9 @@
     display: block; flex: 1; min-width: 0; overflow: hidden;
     text-overflow: ellipsis; white-space: nowrap; }
   .run.closed .name { color: var(--dim); }
+  /* Closed rows render a single line (no activity/dot row); tighter
+     vertical padding keeps them from floating in a two-line-sized box. */
+  .run.closed { padding-top: 5px; padding-bottom: 5px; }
   .run-total { flex: none; color: #71717a; font-size: 10.5px;
     white-space: nowrap; font-variant-numeric: tabular-nums; }
   .run-info-row { margin-top: 2px; min-height: 10px; }
