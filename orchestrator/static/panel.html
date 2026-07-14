@@ -48,6 +48,7 @@
   .run .name { font-weight: 400; font-size: 13px; color: var(--text);
     display: block; flex: 1; min-width: 0; overflow: hidden;
     text-overflow: ellipsis; white-space: nowrap; }
+  .run.closed .name { color: var(--dim); }
   .run-total { flex: none; color: #71717a; font-size: 10.5px;
     white-space: nowrap; font-variant-numeric: tabular-nums; }
   .run-info-row { margin-top: 2px; min-height: 10px; }
@@ -897,7 +898,7 @@ function runRow(r) {
   const context = workingContext(r, "sidebar");
   const indicator = runStatusIndicator(r);
   return `
-      <div class="run ${r.id === selected ? "sel" : ""}" onclick="select('${esc(r.id)}')">
+      <div class="run ${r.milestone_status === "closed" ? "closed " : ""}${r.id === selected ? "sel" : ""}" onclick="select('${esc(r.id)}')">
         <div class="run-copy">
           <div class="run-name-row">
             <span class="name">${esc(r.name)}</span>
