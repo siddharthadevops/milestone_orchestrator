@@ -32,8 +32,13 @@ def _impl(**over):
 
 
 class GapContractTest(unittest.TestCase):
-    def test_valid_gap_on_each_builder_kind(self):
-        for kind in ("draft_skeleton", "draft_slice_note", "implement"):
+    def test_valid_gap_on_each_gap_eligible_kind(self):
+        # Builders gap on a build hole; the FIXER gaps on a queued finding
+        # that is unfixable in scope because the sealed set contradicts itself
+        # (operator rule 2026-07-15: the right to route a contradiction does
+        # not depend on who found it).
+        for kind in ("draft_skeleton", "draft_slice_note", "implement",
+                     "fix_findings"):
             out = {"status": "gap", "kind": kind, "gaps": [_gap()]}
             self.assertIs(c.validate_worker_output(out, kind), out)
 
@@ -46,8 +51,11 @@ class GapContractTest(unittest.TestCase):
             c.validate_worker_output(_impl(gaps=[_gap(proposal="")]), "implement")
 
     def test_reviewer_kinds_may_not_report_a_gap(self):
+        # Plain reviewers still only file findings — one family must not
+        # unilaterally reopen the sealed design; the fixer is the confirmation
+        # choke-point (a contradiction survives INTO a repair attempt first).
         for kind in ("review_round", "delta_review", "seal_half",
-                     "reclassify", "fix_findings"):
+                     "reclassify"):
             with self.assertRaises(c.ContractError):
                 c.validate_worker_output(
                     {"status": "gap", "kind": kind, "gaps": [_gap()]}, kind)

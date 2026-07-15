@@ -1577,12 +1577,14 @@ class Driver(object):
         return finding
 
     def _handle_gap(self, unit, output, duration_s=None, pre_tree=None,
-                    pre_head=None, pre_sym=None, pre_refs=None, pre_stash=None):
+                    pre_head=None, pre_sym=None, pre_refs=None, pre_stash=None,
+                    from_fixer=False):
         gaps = output.get("gaps", [])
         st.append_event(
             self.state, "gap_reported", unit=st.unit_key(unit),
             duration_s=duration_s,
             count=len(gaps),
+            from_fixer=from_fixer,
             gaps=[{k: g.get(k)
                    for k in ("classification", "forced_decision", "plain")}
                   for g in gaps],
@@ -1601,6 +1603,11 @@ class Driver(object):
             "pre_sym": pre_sym,
             "pre_refs": pre_refs,
             "pre_stash": pre_stash,
+            # A FIXER gap is mid-episode, not a "finished nothing" builder:
+            # its reporter already committed a draft wip and may hold prior
+            # fix work, so the builder scratch-cleanup (restore to the
+            # pre-CALL snapshot) misfires. _route_pending_gap branches on this.
+            "from_fixer": from_fixer,
         }
         self._save()
         return self._route_pending_gap()
@@ -1621,18 +1628,22 @@ class Driver(object):
             self._save()
             return "pending gap has no reporter; cleared"
         gaps = pending["gaps"]
-        # A gap FINISHES NOTHING (contract: no artifact, no file changes). A
-        # builder that touched the repo before deciding to gap leaves that
-        # behind; left in place a later commit (the repair commit below, or —
-        # after the operator amends and resumes — the next successful draft's
-        # `git add -A`) would adopt it, and a junk commit the builder made
-        # itself would become the repair commit's parent. Undo it all now,
-        # BEFORE routing, on either branch, back to the pre-call snapshot: HEAD
-        # (undoing any commit/ref move) AND the index+worktree baseline (which
-        # preserves an adopted repo's staged pre-run edits). Cleanup that
-        # cannot be PROVEN to succeed FAILS (operator-gated) rather than route
-        # over a repo we could not restore.
-        if gitops.enabled(self.config):
+        # A BUILDER gap FINISHES NOTHING (contract: no artifact, no file
+        # changes). A builder that touched the repo before deciding to gap
+        # leaves that behind; left in place a later commit (the repair commit
+        # below, or — after the operator amends and resumes — the next
+        # successful draft's `git add -A`) would adopt it, and a junk commit
+        # the builder made itself would become the repair commit's parent. Undo
+        # it all now, BEFORE routing, back to the pre-call snapshot. A FIXER gap
+        # is DIFFERENT: its reporter already committed a draft wip and may hold
+        # prior legitimate fix work, so the pre-CALL snapshot is mid-slice, not
+        # pre-draft — restoring to it would either delete earlier fixes
+        # (needs_operator) or keep the abandoned draft as the wave's parent
+        # (fits_remodel). The fixer branch skips this cleanup: needs_operator
+        # preserves the worktree for the operator's resume, and fits_remodel
+        # unwinds the reporter's whole slice to the last sealed baseline inside
+        # _reopen_and_repair (before the wave commits).
+        if not pending.get("from_fixer") and gitops.enabled(self.config):
             pre_tree = pending.get("pre_tree")
             pre_head = pending.get("pre_head")
             pre_sym = pending.get("pre_sym")
@@ -1701,6 +1712,81 @@ class Driver(object):
                 )
                 self._save()
                 raise StopStep("gap cleanup failed")
+        # A FIXER gap's reporter already committed a draft wip and may hold
+        # accumulated fix work from a dirty-delta loop — none of it cleanly
+        # separable from the gapping call's own scratch. Rather than try to
+        # preserve part of it (which laundered untracked scratch into a later
+        # commit, or deleted earlier fixes), UNWIND the reporter's whole slice
+        # to the last sealed baseline and re-draft it, for BOTH routes: a
+        # fits_remodel reporter re-drafts against the remodelled skeleton, a
+        # needs_operator reporter re-drafts against the amended goal — each
+        # from a clean baseline, exactly as a builder-gap reporter does.
+        # (1) restore_to_snapshot undoes ref/branch moves and removes untracked
+        # scratch (its clean -ffdq); (2) reset --hard to the newest sealed gate
+        # unwinds the reporter's own draft wip (every sealed unit is an
+        # ancestor of that gate; only the reporter's unfinished slice sits on
+        # top). Idempotent on restart: pre_head stays a valid object for
+        # restore_to_snapshot to re-point, and reset to the stable baseline
+        # re-lands the same clean tree.
+        if pending.get("from_fixer"):
+            if gitops.enabled(self.config):
+                pre_refs = pending.get("pre_refs")
+                pre_sym = pending.get("pre_sym")
+                pre_head = pending.get("pre_head")
+                pre_tree = pending.get("pre_tree")
+                # The baseline is the newest GATE commit among all units that
+                # have one — keyed on gate_commit, NOT on current status: a unit
+                # sealed earlier but now under repair (a wave anchor) still
+                # contributed a durable gate commit that the reporter's slice
+                # sits on top of. Filtering by status==SEALED would drop it and
+                # leave no baseline.
+                baseline = gitops.newest_commit(
+                    self.workspace,
+                    [u.get("gate_commit") for u in self.state["units"]
+                     if u.get("gate_commit")],
+                )
+                if (baseline is None or pre_refs is None or pre_sym is None
+                        or pre_head is None or pre_tree is None):
+                    self.state["pending_gap"] = None
+                    st.fail_run(
+                        self.state,
+                        "cannot unwind the fixer-gap reporter %s: missing the "
+                        "pre-call baseline snapshot or a sealed gate to reset "
+                        "to — operator inspection required" % st.unit_key(unit),
+                        unit=unit, type_="gap_cleanup",
+                    )
+                    self._save()
+                    raise StopStep("fixer-gap unwind: no baseline")
+                try:
+                    gitops.restore_to_snapshot(
+                        self.workspace, pre_refs, pre_sym, pre_head, pre_tree,
+                        stash=pending.get("pre_stash"),
+                    )
+                    gitops.reset_hard(self.workspace, baseline)
+                except gitops.GitError as exc:
+                    st.fail_run(
+                        self.state,
+                        "could not unwind the fixer-gap reporter %s (%s): its "
+                        "abandoned slice cannot be safely discarded — operator "
+                        "inspection required" % (st.unit_key(unit), exc),
+                        unit=unit, type_="gap_cleanup",
+                    )
+                    self._save()
+                    raise StopStep(str(exc))
+                st.append_event(
+                    self.state, "gap_edits_discarded", unit=st.unit_key(unit),
+                )
+            # Reset the reporter to a fresh re-draft (idempotent: a restart
+            # after this already ran finds it pending and skips). fits_remodel
+            # sets has_gap_remodel on it in _reopen_and_repair (reads the
+            # remodelled skeleton); needs_operator leaves it off (the goal, not
+            # the skeleton, changed).
+            if unit["status"] != st.U_PENDING:
+                st.reset_for_redraft(
+                    self.state, unit,
+                    reason="re-drafts from a clean baseline after its fixer "
+                           "gapped a sealed contradiction",
+                )
         # The worker classified; the machine routes. needs_operator OUTRANKS
         # fits_remodel: a goal-level issue must reach the operator even if it
         # arrived alongside in-goal remodels. Everything else (all
@@ -1904,7 +1990,13 @@ class Driver(object):
         BEFORE repo validation so worker junk (e.g. a nested repo) cannot make
         ensure_repo reject the workspace and deadlock every resume. Silent on
         any error — a genuinely broken repo surfaces through ensure_repo, and
-        _route_pending_gap re-verifies the cleanup before routing anyway."""
+        _route_pending_gap re-verifies the cleanup before routing anyway.
+
+        A FIXER gap runs this too (it must — its worker may have left a nested
+        repo that would deadlock ensure_repo on every resume). Restoring to the
+        pre-CALL snapshot here is harmless for a fixer gap: routing then unwinds
+        the reporter's whole slice to the last sealed baseline anyway, so no
+        prior work is being 'preserved' that this could destroy."""
         pending = self.state.get("pending_gap")
         if not pending or not gitops.enabled(self.config):
             return
@@ -2323,6 +2415,25 @@ class Driver(object):
                 else None
             ),
             repair_wave_docs=self._wave_doc_paths(unit),
+            # The fixer earns the gap exit under the same reform gate as the
+            # builders — but SCOPED to its primary case: a NORMAL slice fixer
+            # (a doc/impl being built) that meets a queued finding unfixable in
+            # scope because the sealed set contradicts itself. Excluded, keeping
+            # the existing `blocked`->operator path:
+            #  - git OFF: the gap unwinds the reporter's slice via git; without
+            #    it the abandoned files cannot be discarded (production is git
+            #    on; this only affects pure-CLI/test runs).
+            #  - an UNDER_REPAIR reporter (a wave's co-reopened note): it is
+            #    already inside a repair episode; a nested remodel is out of
+            #    scope, and its worktree is the repair wip, not a slice draft.
+            #  - the SKELETON: it cannot remodel itself, and it is not a slice
+            #    to unwind to a predecessor gate.
+            gap_enabled=(
+                interpreter.gap_semantics(self.state)
+                and gitops.enabled(self.config)
+                and not unit.get("under_repair")
+                and unit["kind"] != st.UNIT_SKELETON
+            ),
             convergence=(
                 {
                     "dirty_deltas": dirty_deltas,
@@ -2335,6 +2446,22 @@ class Driver(object):
         n_fix = 1 + len(
             [r for r in unit["rounds"] if r["kind"] == contracts.KIND_FIX_FINDINGS]
         )
+        # Pre-call snapshot, exactly as the builder captures before its draft:
+        # if the fixer GAPS (a queued finding is valid but unfixable in scope —
+        # the sealed doc set contradicts itself), the gap FINISHES NOTHING and
+        # this handle set restores the repo to here, discarding the fixer's
+        # abandoned scratch edits before the wave re-documents from the sealed
+        # baseline. Captured only with git on (same guard as the builder).
+        pre_refs = pre_sym = pre_head = pre_tree = pre_stash = None
+        if gitops.enabled(self.config):
+            try:
+                pre_refs = gitops.snapshot_refs(self.workspace)
+                pre_sym = gitops.head_symbolic_ref(self.workspace)
+                pre_head = gitops.head_full_sha(self.workspace)
+                pre_tree = gitops.snapshot_index_tree(self.workspace)
+                pre_stash = gitops.snapshot_stash(self.workspace)
+            except gitops.GitError:
+                pre_refs = pre_sym = pre_head = pre_tree = pre_stash = None
         output, result, raw_path = self._call(
             family,
             prompt,
@@ -2345,7 +2472,48 @@ class Driver(object):
             extensions=extensions,
             roots=roots,
         )
+        # The sealed-artifact guard runs on EVERY outcome (gap or not, in
+        # envelope or not) BEFORE any branch returns: a fixer that tampered with
+        # a sealed doc and then gapped must still be caught and restored — the
+        # gap must never be a side door around tamper detection.
         self._enforce_sealed_artifacts("%s-fix%d" % (st.unit_key(unit), n_fix))
+        if output.get("status") == "gap":
+            # The fixer met an insoluble-in-scope contradiction: a queued
+            # finding is valid, but the only repair rewrites a sealed doc this
+            # call may not touch. Rather than dead-end at `blocked` (operator),
+            # it classifies the contradiction and the machine routes it exactly
+            # like a builder gap — fits_remodel reopens the whole doc set as a
+            # re-documentation wave (full dosage: re-document -> delta ->
+            # reseal), needs_operator stops for the operator. The fix episode
+            # finishes NOTHING; its sound findings are re-surfaced and re-fixed
+            # after the design is made coherent.
+            #
+            # The fixer gap is advertised ONLY under a reform profile, with git
+            # on, on a normal slice (see gap_enabled above). This interception
+            # is the AUTHORITATIVE safety gate and must mirror that envelope
+            # EXACTLY (gap_semantics included): a gap arriving outside it — a
+            # legacy/profile-less run, git off, under_repair, or the skeleton —
+            # cannot be safely unwound, so it is a `blocked` operator stop, not
+            # routed. Keeping this in lockstep with gap_enabled prevents the
+            # prompt (no GAP EXIT) and the router (would route) from disagreeing.
+            if not (interpreter.gap_semantics(self.state)
+                    and gitops.enabled(self.config)
+                    and not unit.get("under_repair")
+                    and unit["kind"] != st.UNIT_SKELETON):
+                st.fail_run(
+                    self.state,
+                    "%s returned a contradiction gap outside the supported "
+                    "envelope (needs a reform profile, git on, a normal slice, "
+                    "not under repair) — resolve as an operator-reopened repair"
+                    % contracts.KIND_FIX_FINDINGS,
+                    unit=unit, type_="worker_blocked",
+                )
+                self._save()
+                raise StopStep("fixer gap outside supported envelope")
+            return self._handle_gap(unit, output, result.duration_s,
+                                    pre_tree=pre_tree, pre_head=pre_head,
+                                    pre_sym=pre_sym, pre_refs=pre_refs,
+                                    pre_stash=pre_stash, from_fixer=True)
         self._check_worker_blocked(unit, output, contracts.KIND_FIX_FINDINGS)
         try:
             contracts.validate_fix_coverage(output, unit.get("fix_queue") or [])

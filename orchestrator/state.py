@@ -1007,6 +1007,48 @@ def reopen_for_repair(state, unit, gap, reason, reported_by=None):
     return unit
 
 
+def reset_for_redraft(state, unit, reason):
+    """Return a non-pending unit to a fresh re-draft, mirroring the state a
+    BUILDER-gap reporter is already left in (pending, draft=None). This is the
+    FIXER-gap counterpart: when a fixer gaps (a queued finding was unfixable in
+    scope because the sealed set contradicted itself), its unit was mid-episode
+    (fixing/sealing), not pending. After the machine reopens the design as a
+    re-documentation wave, that unit must redo its slice AGAINST the remodelled
+    design — exactly as a builder-gap reporter re-drafts. Grants fresh
+    review/seal budgets (same amnesty as reopen_for_repair/resume) and clears
+    the abandoned fix episode. `has_gap_remodel`/`gap_repairs` are set by the
+    caller (_reopen_and_repair) and deliberately preserved so the re-draft
+    reads the remodelled skeleton. History (rounds/seals) is append-only and
+    stays; the amnesty markers reset the caps. Status is set directly (a
+    backward reset, like resume_run, is outside the forward transition table)."""
+    prior = unit["status"]
+    unit["draft"] = None
+    unit["artifact"] = None
+    unit["fix_queue"] = []
+    unit["fix_source"] = None
+    unit.pop("under_repair", None)
+    unit["fix_loop_rounds"] = 0
+    unit["verify_fix_attempts"] = {"pre_review": 0, "pre_seal": 0}
+    unit["rounds_amnesty"] = len(unit["rounds"])
+    unit["seals_amnesty"] = len(unit["seals"])
+    # The re-draft starts a FRESH review cycle from the first family; a unit
+    # whose family_index had advanced (a seal-fixer gap, or a gap after the
+    # first family cleared) would otherwise reach U_ROUNDS with no family to
+    # run (IllegalTransition) or silently skip the first family's review.
+    unit["family_index"] = 0
+    unit["status"] = U_PENDING
+    append_event(
+        state,
+        "reset_for_redraft",
+        unit=unit_key(unit),
+        from_status=prior,
+        reason=reason,
+        rounds_before=len(unit["rounds"]),
+        seals_before=len(unit["seals"]),
+    )
+    return unit
+
+
 def close_redoc_wave(state, anchor):
     """PHASE 1 of the wave close, run BEFORE the anchor's gate commit so
     the gate's generated ledgers render the truth: every co-reopened slice

@@ -904,6 +904,52 @@ def _gap_block(skeleton_only=False):
     )
 
 
+def _fix_gap_block():
+    """The stop-report-CLASSIFY instruction for the FIXER — the same right a
+    builder has, but at the other end of the cycle. A builder gaps on a hole
+    that changes WHAT IT BUILDS; the fixer gaps when a QUEUED FINDING is valid
+    yet UNFIXABLE IN SCOPE because the sealed documentation set contradicts
+    itself (the only repair rewrites a sealed doc this call may not touch).
+    The operator's rule (2026-07-15): the right to route a contradiction does
+    not depend on who found it. Added only when a reform profile governs."""
+    return (
+        "GAP EXIT (this run runs stop-report-repair-resume):\n"
+        "If a queued finding is VALID but you cannot fix it without rewriting\n"
+        "a SEALED doc (a note or the skeleton) — the sealed design set\n"
+        "contradicts itself — do NOT edit the sealed doc, do NOT code around\n"
+        "it, and do NOT dead-end at \"blocked\". CLASSIFY the contradiction and\n"
+        "let the machine route it. Return status \"gap\", finishing NOTHING\n"
+        "(no dispositions, no file changes): this fix round is abandoned and\n"
+        "its SOUND findings are re-surfaced and re-fixed after the design is\n"
+        "made coherent. Provide only \"status\", \"kind\", and a non-empty\n"
+        "\"gaps\" array. Answer ONE question per gap — DOES RESOLVING THIS FIT\n"
+        "INSIDE THE GOAL YOU WERE GIVEN? — with:\n"
+        "  classification: EXACTLY ONE of —\n"
+        "     fits_remodel — re-documenting the sealed set UNDER THE GOAL\n"
+        "        resolves the contradiction (the two sealed texts collide but\n"
+        "        the goal admits a coherent reading). The machine reopens the\n"
+        "        WHOLE documentation set, re-documents it coherently, and\n"
+        "        reseals with the full review dosage. This NEVER reaches the\n"
+        "        operator.\n"
+        "     needs_operator — resolving it needs a decision the GOAL does\n"
+        "        NOT settle (a designated provider, payment/Stripe contract,\n"
+        "        database technology, external integration, or the goal\n"
+        "        contradicting itself). Only this reaches the operator.\n"
+        "  missing_or_conflict: the two sealed facts that collide\n"
+        "  where: file:line of BOTH sealed texts (the note/skeleton lines)\n"
+        "  forced_decision: what must be resolved (for needs_operator, the\n"
+        "     decision the operator faces)\n"
+        "  proposal: null, OR a resolution CLEARLY MARKED as a proposal\n"
+        "  plain: one lay sentence (<500 chars) a non-engineer follows\n"
+        "  example: the smallest (<500 chars) concrete scenario it breaks\n"
+        "The OUTPUT CONTRACT below lists \"status\" as ok|blocked; for THIS\n"
+        "kind, \"gap\" is also permitted (exactly as specified here). A gap is\n"
+        "NOT a \"blocked\": \"blocked\" ends the run with your reason; a gap\n"
+        "reports a sealed-design contradiction the machine repairs. Reserve\n"
+        "\"blocked\" for a finding that is NOT a sealed-design contradiction.\n\n"
+    )
+
+
 def build_draft_skeleton(family, workspace, goal, amendments=None,
                          artifact_path="docs/skeleton.md",
                          project_context=None, gap_enabled=False,
@@ -1355,6 +1401,7 @@ def build_fix_findings(
     convergence=None,
     repair_artifact=None,
     repair_wave_docs=None,
+    gap_enabled=False,
 ):
     lines = []
     for f in findings:
@@ -1490,13 +1537,28 @@ def build_fix_findings(
         "  READ-ONLY in this call — except artifacts declared editable\n"
         "  above (the unit under repair, or a re-documentation wave's\n"
         "  set). A `prevention` edit may touch ONLY editable artifacts.\n"
-        "- If a queued finding cannot be fixed without contradicting a\n"
-        "  sealed note or the skeleton, do NOT edit the sealed document\n"
-        "  and do NOT code around it: dispose that finding \"blocked\",\n"
-        "  stating the exact contradiction (file:line of the sealed text\n"
-        "  vs the demanded behavior). The run stops and the operator\n"
-        "  reopens the document through the repair path (fresh seals).\n"
-        "- A silent rewrite of a sealed document is a process violation:\n"
+        # The contradiction path depends on whether the run advertises the
+        # gap exit: a reform run routes the contradiction (GAP EXIT below);
+        # a legacy/profile-less run has no gap contract, so it keeps the
+        # bare `blocked` dead-end (this call must stay bit-identical there).
+        + (
+            "- If a queued finding is valid but cannot be fixed without\n"
+            "  contradicting a sealed note or the skeleton, do NOT edit the\n"
+            "  sealed document and do NOT code around it — but do NOT\n"
+            "  dead-end at \"blocked\" either. RETURN A GAP (see GAP EXIT\n"
+            "  below): the design set contradicts itself, and that routes\n"
+            "  for repair just like a builder's design hole. Use\n"
+            "  \"blocked\" ONLY when the finding is not a sealed-design\n"
+            "  contradiction at all (your task is impossible otherwise).\n"
+            if gap_enabled else
+            "- If a queued finding cannot be fixed without contradicting a\n"
+            "  sealed note or the skeleton, do NOT edit the sealed document\n"
+            "  and do NOT code around it: dispose that finding \"blocked\",\n"
+            "  stating the exact contradiction (file:line of the sealed text\n"
+            "  vs the demanded behavior). The run stops and the operator\n"
+            "  reopens the document through the repair path (fresh seals).\n"
+        )
+        + "- A silent rewrite of a sealed document is a process violation:\n"
         "  it is detected mechanically and reverted.\n\n"
     )
     slice_table_block = ""
@@ -1514,6 +1576,7 @@ def build_fix_findings(
         + "\nTASK: triage and fix the queued findings on %s.\n" % unit_desc
         + "GOAL: %s\n\n" % goal
         + sealed_block
+        + (_fix_gap_block() if gap_enabled else "")
         + slice_table_block
         + killed_block
         + phantom_block

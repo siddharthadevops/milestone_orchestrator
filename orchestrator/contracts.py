@@ -323,10 +323,22 @@ def validate_gap(gap, ctx):
     return gap
 
 
-# Kinds whose worker may report a gap: the BUILDERS (draft/implement). A
-# reviewer never reports a gap — it files findings.
+# Kinds whose worker may report a gap. The BUILDERS (draft/implement) gap
+# when they cannot BUILD coherently. The FIXER also gaps — but at the other
+# end of the cycle: when a queued finding is valid yet UNFIXABLE in scope
+# because the sealed documentation set contradicts itself (fixing it would
+# require rewriting a sealed doc the fix call may not touch). The operator's
+# rule (2026-07-15): the right to route a contradiction does not depend on
+# WHO found it — a fixer is the same AI as a builder, and a review finding
+# that exposes an insoluble-in-scope contradiction must route (fits_remodel
+# -> re-documentation wave; needs_operator -> operator), never dead-end at
+# a bare `blocked`. The fixer is the confirmation choke-point: a contradiction
+# a reviewer merely suspected has survived into an actual repair attempt
+# before it can reopen the sealed skeleton. A plain reviewer still only files
+# findings (one family must not unilaterally reopen the design).
 GAP_ELIGIBLE_KINDS = (
     KIND_DRAFT_SKELETON, KIND_DRAFT_SLICE_NOTE, KIND_IMPLEMENT,
+    KIND_FIX_FINDINGS,
 )
 
 

@@ -19,6 +19,7 @@ import unittest
 from orchestrator import contracts
 from orchestrator import driver as drv
 from orchestrator import gitops
+from orchestrator import profiles
 from orchestrator import runners
 from orchestrator import state as st
 
@@ -385,21 +386,41 @@ class GapReopenCommitIsolationTest(unittest.TestCase):
         self.ws = os.path.join(self.tmp.name, "ws")
         os.makedirs(self.ws)
 
-    def _seal_doc_unit(self, kind, artifact, content):
-        return [
+    def _seal_doc_unit(self, kind, artifact, content, reform=False):
+        # Under a reform profile every DOC draft answers the engineering
+        # battery as structure; profile-less runs must NOT carry it. The seal
+        # halves are unchanged (the strict profile keeps double-seal).
+        def _battery(ids):
+            return [{"question": q, "answer": "answered: %s" % q,
+                     "evidence": ["%s:1" % artifact]} for q in ids]
+        if kind == "skeleton":
+            draft = ok("draft_skeleton", artifact=artifact,
+                       slices=[{"id": 1, "title": "Core"}],
+                       **({"battery": _battery(
+                           contracts.BATTERY_QUESTIONS_SKELETON)}
+                          if reform else {}))
+        else:
+            draft = ok("draft_slice_note", artifact=artifact,
+                       **({"battery": _battery(
+                           contracts.BATTERY_QUESTIONS_SLICE_NOTE)}
+                          if reform else {}))
+        steps = [
             step("draft_%s" % ("skeleton" if kind == "skeleton"
                                else "slice_note"),
-                 (ok("draft_skeleton", artifact=artifact,
-                     slices=[{"id": 1, "title": "Core"}])
-                  if kind == "skeleton"
-                  else ok("draft_slice_note", artifact=artifact)),
-                 family="codex",
+                 draft, family="codex",
                  side_effect=write_file(artifact, content)),
             step("review_round", report("review_round"), family="codex"),
             step("review_round", report("review_round"), family="claude"),
-            step("seal_half", report("seal_half"), family="codex"),
-            step("seal_half", report("seal_half"), family="claude"),
         ]
+        if not reform:
+            # Legacy/profile-less: explicit double-seal halves. A reform
+            # profile seals by PREDICATE after both families' clean rounds —
+            # no seal_half calls.
+            steps += [
+                step("seal_half", report("seal_half"), family="codex"),
+                step("seal_half", report("seal_half"), family="claude"),
+            ]
+        return steps
 
     def test_skeleton_reopen_opens_fresh_commit_and_discards_builder_junk(self):
         gap = {
@@ -1079,6 +1100,213 @@ class GapReopenCommitIsolationTest(unittest.TestCase):
         review_log = gitops.show_file(
             self.ws, gate, ledgers.review_log_path(state)).decode()
         self.assertIn("re-documentation wave skeleton-a2", review_log)
+
+    def test_out_of_envelope_gap_still_runs_the_sealed_guard(self):
+        # Codex round 6 P1: the out-of-envelope rejection must NOT be a side
+        # door around tamper detection. A profile-less (git-on) fixer that
+        # edits the SEALED skeleton and then returns a gap is rejected
+        # (worker_blocked), but the sealed-artifact guard must run FIRST and
+        # restore the tampered bytes.
+        script = (
+            self._seal_doc_unit("skeleton", "docs/skeleton.md",
+                                "# Skeleton\n\nSEALED v1\n")
+            + self._seal_doc_unit("slice_doc", "docs/slice-01.md",
+                                  "# Slice 01\n\nnote\n")
+            + [step("implement", ok("implement", files_changed=["impl.py"]),
+                    family="codex", side_effect=write_file("impl.py", "v1\n")),
+               step("review_round",
+                    report("review_round",
+                           [finding("F1", "x", severity="P1")]),
+                    family="codex"),
+               step("fix_findings",
+                    {"status": "gap", "kind": "fix_findings",
+                     "gaps": [self._fixer_gap("fits_remodel")]},
+                    family="codex",
+                    # Tamper: overwrite the sealed skeleton, then gap.
+                    side_effect=write_file("docs/skeleton.md",
+                                           "# Skeleton\n\nTAMPERED\n"))]
+        )
+        path = init_state(self.ws, make_config())  # profile-less: no gap sem.
+        driver = drv.Driver(path, runner=runners.MockRunner(script))
+        for _ in range(40):
+            state = st.load(path)
+            if state.get("failure"):
+                break
+            driver.step()
+        state = st.load(path)
+        self.assertEqual(state["failure"]["type"], "worker_blocked")
+        # The guard ran despite the gap rejection: the tamper was restored.
+        self.assertIn("sealed_artifact_restored",
+                      [e["type"] for e in state["events"]])
+        with open(os.path.join(self.ws, "docs", "skeleton.md"),
+                  encoding="utf-8") as fh:
+            self.assertIn("SEALED v1", fh.read())
+            self.assertNotIn("TAMPERED", fh.read())
+
+    def _fixer_gap(self, classification):
+        return {
+            "classification": classification,
+            "missing_or_conflict": "two sealed texts collide",
+            "where": "docs/skeleton.md:10 and docs/slice-01.md:12",
+            "forced_decision": "reconcile the two sealed contracts",
+            "plain": "the design contradicts itself",
+            "example": "the impl cannot satisfy both sealed texts at once",
+        }
+
+    def _drive_to_gap(self, gap):
+        # A REAL flow (git on): impl drafts (writes abandoned.py, commits its
+        # own wip), a review finding queues, and the fixer meets a sealed
+        # contradiction and GAPS instead of disposing.
+        script = (
+            self._seal_doc_unit("skeleton", "docs/skeleton.md",
+                                "# Skeleton\n\nSEALED\n", reform=True)
+            + self._seal_doc_unit("slice_doc", "docs/slice-01.md",
+                                  "# Slice 01\n\nnote\n", reform=True)
+            + [step("implement",
+                    ok("implement", files_changed=["abandoned.py"]),
+                    family="codex",
+                    side_effect=write_file("abandoned.py", "old junk\n")),
+               step("review_round",
+                    report("review_round",
+                           [finding("F1", "contradiction", severity="P1")]),
+                    family="codex"),
+               step("fix_findings",
+                    {"status": "gap", "kind": "fix_findings", "gaps": [gap]},
+                    family="codex",
+                    # The gapping fixer leaves an UNTRACKED scratch file: a bare
+                    # reset --hard would keep it and git add -A would fold it
+                    # into the wave.
+                    side_effect=write_file("scratch_untracked.py", "junk\n"))]
+        )
+        # The fixer gap is advertised/routed only under a reform profile.
+        cfg = make_config()
+        cfg["profile"] = profiles.SEEDS["strict"]["profile"]
+        path = init_state(self.ws, cfg)
+        driver = drv.Driver(path, runner=runners.MockRunner(script))
+        for _ in range(30):
+            state = st.load(path)
+            if state.get("failure") or state.get("redoc_wave"):
+                break
+            driver.step()
+        return path, st.load(path)
+
+    def test_fixer_gap_fits_remodel_unwinds_the_abandoned_slice(self):
+        # Defect (codex round 1): the fixer-gap reporter already committed a
+        # draft wip; reusing the builder's pre-CALL cleanup left that abandoned
+        # work as the wave's parent, contaminating the re-draft. The fix unwinds
+        # the reporter's whole slice to the last sealed baseline before the wave
+        # commits.
+        path, state = self._drive_to_gap(self._fixer_gap("fits_remodel"))
+        self.assertIsNone(state.get("failure"))
+        units = {st.unit_key(u): u for u in state["units"]}
+        self.assertEqual(units["skeleton"]["status"], st.U_FIXING)
+        self.assertEqual(units["slice_doc-01"]["status"], st.U_REPAIRING)
+        self.assertEqual(units["slice_impl-01"]["status"], st.U_PENDING)
+        # The abandoned draft's file is GONE from the worktree...
+        self.assertFalse(
+            os.path.exists(os.path.join(self.ws, "abandoned.py")))
+        # ...the fixer's UNTRACKED scratch is gone too (restore_to_snapshot's
+        # clean ran before the reset, so git add -A cannot fold it in)...
+        self.assertFalse(
+            os.path.exists(os.path.join(self.ws, "scratch_untracked.py")))
+        # ...and the reporter's wip is NOT an ancestor of the wave commit
+        # (the repair baseline is the last sealed gate, not the abandoned wip).
+        log = subprocess.run(
+            ["git", "log", "--format=%s", "-5"], cwd=self.ws, text=True,
+            capture_output=True, check=True).stdout
+        self.assertNotIn("wip: slice_impl-01", log)
+        self.assertIn("wip-repair: skeleton", log)
+        self.assertIn("gap_edits_discarded",
+                      [e["type"] for e in state["events"]])
+
+    def test_fixer_gap_needs_operator_unwinds_and_redrafts(self):
+        # A needs_operator fixer gap stops for the operator AND unwinds the
+        # reporter's slice to a clean baseline, resetting it to re-draft — so
+        # no gapping-call scratch can be laundered into a later commit (codex
+        # round 3), and after the operator amends the goal the reporter
+        # re-drafts against it from a clean tree.
+        path, state = self._drive_to_gap(self._fixer_gap("needs_operator"))
+        self.assertEqual(state["failure"]["type"], "goal_gap")
+        units = {st.unit_key(u): u for u in state["units"]}
+        # The reporter's abandoned draft AND the gapping fixer's untracked
+        # scratch are both gone (unwound to the last sealed baseline).
+        self.assertFalse(os.path.exists(os.path.join(self.ws, "abandoned.py")))
+        self.assertFalse(
+            os.path.exists(os.path.join(self.ws, "scratch_untracked.py")))
+        self.assertIn("gap_edits_discarded",
+                      [e["type"] for e in state["events"]])
+        # The reporter re-drafts on resume: it failed FROM pending (reset), so
+        # resume restores it to pending — never the skeleton is remodelled here.
+        self.assertEqual(units["slice_impl-01"].get("failed_from"),
+                         st.U_PENDING)
+        self.assertFalse(units["slice_impl-01"].get("has_gap_remodel"))
+        st.resume_run(state)
+        self.assertEqual(units["slice_impl-01"]["status"], st.U_PENDING)
+
+    def test_fixer_gap_restart_unwinds_idempotently(self):
+        # Codex round 2/3: a crash leaves pending_gap(from_fixer) persisted;
+        # startup recovery must route it (unwind + goal_gap) without the
+        # startup _pre_clean_pending_gap corrupting the repo first, and the
+        # unwind must be idempotent.
+        script = (
+            self._seal_doc_unit("skeleton", "docs/skeleton.md",
+                                "# Skeleton\n\nSEALED\n", reform=True)
+            + self._seal_doc_unit("slice_doc", "docs/slice-01.md",
+                                  "# Slice 01\n\nnote\n", reform=True)
+            + [step("implement", ok("implement", files_changed=["impl.py"]),
+                    family="codex", side_effect=write_file("impl.py", "v1\n")),
+               step("review_round",
+                    report("review_round",
+                           [finding("F1", "first", severity="P1")]),
+                    family="codex"),
+               step("fix_findings",
+                    fix_ok([triaged("F1", "fixed", "first", severity="P1")],
+                           files_changed=["prior_fix.py"]),
+                    family="codex",
+                    side_effect=write_file("prior_fix.py", "legit prior\n")),
+               step("delta_review",
+                    report("delta_review",
+                           [finding("D1", "second", severity="P1")]),
+                    family="codex")]
+        )
+        cfg = make_config()
+        cfg["profile"] = profiles.SEEDS["strict"]["profile"]
+        path = init_state(self.ws, cfg)
+        driver = drv.Driver(path, runner=runners.MockRunner(script))
+        for _ in range(40):
+            state = st.load(path)
+            u = st.current_unit(state)
+            if (u and st.unit_key(u) == "slice_impl-01"
+                    and u["status"] == st.U_FIXING
+                    and (u.get("fix_queue") or [{}])[0].get("id") == "D1"):
+                break
+            driver.step()
+        # Simulate the crash: the second fixer returned a needs_operator gap
+        # (pending_gap persisted with from_fixer) and the driver died before
+        # routing. A fresh driver runs startup recovery.
+        state = st.load(path)
+        state["pending_gap"] = {
+            "reporter": "slice_impl-01",
+            "gaps": [self._fixer_gap("needs_operator")],
+            "pre_tree": gitops.snapshot_index_tree(self.ws),
+            "pre_head": gitops.head_full_sha(self.ws),
+            "pre_sym": gitops.head_symbolic_ref(self.ws),
+            "pre_refs": gitops.snapshot_refs(self.ws),
+            "pre_stash": gitops.snapshot_stash(self.ws),
+            "from_fixer": True,
+        }
+        st.save(path, state)
+        drv.Driver(path, runner=runners.MockRunner([]))
+        state = st.load(path)
+        self.assertEqual(state["failure"]["type"], "goal_gap")
+        self.assertIsNone(state.get("pending_gap"))
+        # Unwound to the clean sealed baseline: the reporter's slice work is
+        # gone and the worktree is clean (no dangling accumulated fixes).
+        self.assertFalse(os.path.exists(os.path.join(self.ws, "prior_fix.py")))
+        self.assertFalse(gitops.has_builder_edits(self.ws))
+        # A SECOND startup recovery is a no-op (intent already discharged).
+        drv.Driver(path, runner=runners.MockRunner([]))
+        self.assertIsNone(st.load(path).get("pending_gap"))
 
 
 if __name__ == "__main__":

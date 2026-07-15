@@ -334,6 +334,40 @@ class GapRoutingCase(unittest.TestCase):
         d = drv.Driver(path, runner=runners.MockRunner([]))
         self.assertFalse(d._note_predates_skeleton(1))
 
+    def test_fixer_gap_requires_git_envelope(self):
+        # The fixer gap unwinds the reporter's slice via git; with git OFF it
+        # cannot be safely unwound, so a gap arriving there is handled as a
+        # `blocked` operator stop, never routed. (The full git-on routing +
+        # unwind is covered in test_sealed_guard.)
+        path = self._state_to_impl_pending(git=False)
+        state = st.load(path)
+        units = {st.unit_key(u): u for u in state["units"]}
+        impl = units["slice_impl-01"]
+        impl["draft"] = {"kind": "implement", "artifact": None}
+        st.transition_unit(state, impl, st.U_PRE_REVIEW_VERIFY)
+        st.transition_unit(state, impl, st.U_ROUNDS)
+        st.enter_fix_episode(
+            state, impl,
+            [{"id": "F1", "severity": "P1", "summary": "valid but unfixable"}],
+            "review", "codex", "impl-round", st.U_ROUNDS)
+        st.save(path, state)
+
+        # The fixer returns a GAP, but git is off.
+        mock = runners.MockRunner(
+            [step("fix_findings",
+                  _gap_output("fix_findings", _gap("fits_remodel")),
+                  family="codex")])
+        drv.Driver(path, runner=mock).step()
+
+        state = st.load(path)
+        # No wave: the run stopped for the operator (outside the git envelope).
+        self.assertIsNone(state.get("redoc_wave"))
+        self.assertEqual(state["failure"]["type"], "worker_blocked")
+        # The prompt did NOT advertise the gap exit (git off gates it off).
+        fix_prompts = [p for (_f, kind, p) in mock.calls
+                       if kind == "fix_findings"]
+        self.assertTrue(all("GAP EXIT" not in p for p in fix_prompts))
+
 
 if __name__ == "__main__":
     unittest.main()

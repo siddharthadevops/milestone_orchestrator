@@ -573,6 +573,18 @@ def newest_commit(workspace, shas):
     return out or None
 
 
+def reset_hard(workspace, revspec):
+    """Hard-reset the current branch to `revspec` (a commit sha), discarding
+    every commit and working-tree change after it. Used to unwind a fixer-gap
+    reporter's abandoned slice (its draft wip + uncommitted fix edits) back to
+    the last sealed baseline before a re-documentation wave commits, so the
+    abandoned work never becomes the wave's parent. Raises GitError on
+    failure — the caller fails the run rather than proceed on a dirty tree."""
+    _assert_workspace_root(workspace)
+    _run(workspace, "reset", "--hard", revspec)
+    return head_full_sha(workspace)
+
+
 def show_file(workspace, rev, relpath):
     """The file's BYTES at `rev` (e.g. a unit's gate commit), or None
     when the rev or path cannot be read. Byte-exact on purpose: the
