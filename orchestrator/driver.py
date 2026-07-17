@@ -2772,6 +2772,7 @@ class Driver(object):
             project_context=project_context,
             debt=self._debt(unit),
             wave_docs=self._wave_doc_paths(unit),
+            gap_enabled=interpreter.gap_semantics(self.state),
         )
         n_delta = 1 + len(
             [r for r in unit["rounds"] if r["kind"] == contracts.KIND_DELTA_REVIEW]
@@ -3173,6 +3174,7 @@ class Driver(object):
             project_context=project_context,
             battery=interpreter.battery_questions(self.state, unit["kind"]),
             debt=self._debt(unit),
+            gap_enabled=interpreter.gap_semantics(self.state),
         )
         # Raw/label numbering counts ALL history (like fix/delta and the
         # ledger round ids): the amnesty-relative `done` must never make a
@@ -3390,6 +3392,7 @@ class Driver(object):
         amendments = self._amendments()  # once, before any half thread
         verified_suite = self._verified_suite(unit)
         wave_docs = self._wave_doc_paths(unit)  # once; None unless anchor
+        gap_enabled_seal = interpreter.gap_semantics(self.state)  # once
         # A seal attempt is ONE judgment surface: selection/compile/meta
         # run once here, in the main thread (fail-closed before any half
         # runs; the seen ledger gains at most one event per pair), and
@@ -3421,6 +3424,7 @@ class Driver(object):
                 amendments=amendments, verified_suite=verified_suite,
                 project_context=project_context, battery=seal_battery,
                 debt=debt, wave_docs=wave_docs,
+                gap_enabled=gap_enabled_seal,
             )
             raw_name = "%s-seal-a%d-%s" % (st.unit_key(unit), attempt_no, family)
             try:

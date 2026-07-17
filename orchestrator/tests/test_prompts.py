@@ -102,6 +102,21 @@ def build_all():
     }
 
 
+def build_all_reform():
+    """The three builders that carry the reuse addenda, built with the
+    reform flag ON (gap_enabled=True) — the reform layer of the canon."""
+    return {
+        "draft_skeleton": prompts.build_draft_skeleton(
+            FAMILY, WORKSPACE, GOAL, gap_enabled=True),
+        "draft_slice_note": prompts.build_draft_slice_note(
+            FAMILY, WORKSPACE, GOAL, SLICE, "docs/skeleton.md",
+            gap_enabled=True),
+        "implement": prompts.build_implement(
+            FAMILY, WORKSPACE, GOAL, SLICE, "docs/slice-01.md",
+            ["make test"], gap_enabled=True),
+    }
+
+
 class TestProcessAuthorityInEveryBuilder(unittest.TestCase):
     """(1) All builders emit PROCESS AUTHORITY with its load-bearing
     phrases — the section lives in _access_block, which every builder
@@ -431,16 +446,18 @@ class TestPortedCanonContentRules(unittest.TestCase):
         "An exhaustive pass with zero findings is a valid outcome."
     )
 
-    def review(self, kind):
+    def review(self, kind, reform=False):
         return normalized(prompts.build_review_round(
             FAMILY, WORKSPACE, GOAL, UNIT, "docs/x.md", [],
             unit_kind=kind, governing="docs/skeleton.md",
+            gap_enabled=reform,
         ))
 
-    def seal(self, kind):
+    def seal(self, kind, reform=False):
         return normalized(prompts.build_seal_half(
             FAMILY, WORKSPACE, GOAL, UNIT, "docs/x.md", [],
             unit_kind=kind, governing="docs/skeleton.md",
+            gap_enabled=reform,
         ))
 
     def fix(self, kind):
@@ -449,10 +466,10 @@ class TestPortedCanonContentRules(unittest.TestCase):
             ["claude", "-p"], unit_kind=kind,
         ))
 
-    def delta(self, kind):
+    def delta(self, kind, reform=False):
         return normalized(prompts.build_delta_review(
             FAMILY, WORKSPACE, GOAL, UNIT, "diff --git a/x b/x\n", [],
-            unit_kind=kind,
+            unit_kind=kind, gap_enabled=reform,
         ))
 
     def test_altitude_reaches_doc_drafts(self):
@@ -513,6 +530,123 @@ class TestPortedCanonContentRules(unittest.TestCase):
         for prompt in (self.review("slice_impl"), self.seal("slice_impl")):
             self.assertIn("check the reuse gate", prompt)
             self.assertNotIn("Reuse Posture", prompt)
+
+    def test_new_machinery_needs_an_authority_outside_this_plan(self):
+        # Reform layer: a reuse posture that answers "why is this machinery
+        # necessary?" with "because the requirement I just adopted demands
+        # it" proves nothing — the justification must point OUT of the
+        # document (goal, governing sealed design, existing contract,
+        # verified current-code behaviour). Reviewers invert the finding
+        # onto the invented demand.
+        for name, built in build_all_reform().items():
+            if name in ("draft_skeleton", "draft_slice_note"):
+                p = normalized(built)
+                self.assertIn("exists INDEPENDENTLY of this document", p)
+                self.assertIn("CIRCULAR and justifies nothing", p)
+                self.assertIn("the governing sealed design", p)
+                self.assertIn("verified behaviour of the current code", p)
+        for kind in ("skeleton", "slice_doc", "slice_impl"):
+            for p in (self.review(kind, reform=True),
+                      self.seal(kind, reform=True),
+                      self.delta(kind, reform=True)):
+                self.assertIn("Trace each justification to its authority", p)
+                self.assertIn(
+                    "the finding is the invented requirement, not the "
+                    "absent machinery", p)
+
+    def test_reuse_altitude_inherits_the_domains_accepted_rigor(self):
+        for name, built in build_all_reform().items():
+            if name in ("draft_skeleton", "draft_slice_note", "implement"):
+                p = normalized(built)
+                self.assertIn(
+                    "match the rigor the surrounding domain already "
+                    "accepts", p, name)
+                self.assertIn("it is over-building", p, name)
+        for kind in ("skeleton", "slice_doc", "slice_impl"):
+            for p in (self.review(kind, reform=True),
+                      self.seal(kind, reform=True),
+                      self.delta(kind, reform=True)):
+                self.assertIn("Check altitude", p)
+                self.assertIn("unless the goal demands the stricter bar", p)
+
+    def test_requirements_are_judged_where_they_live(self):
+        # TIME and ROUTE replace authority ranking: an UNSEALED artifact's
+        # requirements are ordinary reviewable content (an invented one is a
+        # reuse finding on the artifact, never deflected as a posture-change
+        # proposal); SEALED requirements are settled for this review, and a
+        # goal contradiction routes through the repair machinery instead of
+        # slice-level findings against sealed text.
+        for kind in ("skeleton", "slice_doc", "slice_impl"):
+            for p in (self.review(kind, reform=True),
+                      self.seal(kind, reform=True),
+                      self.delta(kind, reform=True)):
+                self.assertIn("judged WHERE IT LIVES", p)
+                self.assertIn("never deflected as a mere posture-change "
+                              "proposal", p)
+                self.assertIn("do not file findings against sealed text", p)
+                self.assertIn("design contradiction for the repair "
+                              "machinery", p)
+                self.assertIn("re-documenting the design under the goal", p)
+
+    def test_severity_battery_stays_pristine(self):
+        # The battery judges BEHAVIOR against its declared contract; posture
+        # legitimacy belongs to REUSE. Five review rounds proved every
+        # battery-side carve-out leaks — the battery must carry NO authority
+        # ranking and NO invented-posture exception, in any run mode.
+        for kind in ("skeleton", "slice_doc", "slice_impl"):
+            for p in (self.review(kind), self.review(kind, reform=True),
+                      self.seal(kind), self.seal(kind, reform=True),
+                      self.delta(kind), self.delta(kind, reform=True)):
+                self.assertIn("Behavior within the declared posture is NOT "
+                              "a defect", p)
+                self.assertNotIn("The authorities, in rank", p)
+                self.assertNotIn("shields nothing", p)
+                self.assertNotIn("in rank: the GOAL", p)
+
+    def test_legacy_prompts_carry_no_reform_reuse_text(self):
+        # Bit-identity: without the reform flag, none of the addenda render
+        # — legacy/profile-less prompts keep the pre-reform reuse canon
+        # exactly (base gate, posture section duty, review reuse line).
+        legacy_markers = (
+            "Trace each justification to its authority",
+            # NOT bare "Check altitude": the pre-existing documentation
+            # ALTITUDE block legitimately says "Check altitude in BOTH
+            # directions" in every doc review, reform or not.
+            "Check altitude: machinery that exists to satisfy a stricter",
+            "judged WHERE IT LIVES",
+            "exists INDEPENDENTLY of this document",
+            "match the rigor the surrounding domain already accepts",
+            "A section is HOLLOW when",
+        )
+        for name, built in build_all().items():
+            p = normalized(built)
+            for m in legacy_markers:
+                self.assertNotIn(m, p, name)
+        for kind in ("skeleton", "slice_doc", "slice_impl"):
+            for p in (self.review(kind), self.seal(kind), self.delta(kind)):
+                for m in legacy_markers:
+                    self.assertNotIn(m, p)
+        # The base canon still rides where it pre-existed (full reviews and
+        # seals) — but legacy DELTAS carried no reuse canon at all, so the
+        # base block must be absent there too (found by codex round 7: the
+        # base block had leaked into legacy deltas unconditionally).
+        for kind in ("skeleton", "slice_doc"):
+            self.assertIn("must include a short `Reuse Posture` section",
+                          " ".join(self.review(kind).split()))
+        for kind in ("skeleton", "slice_doc", "slice_impl"):
+            self.assertNotIn("When the artifact proposes new machinery",
+                             self.delta(kind))
+
+    def test_hollow_reuse_posture_is_defined_for_reviewers(self):
+        # "Hollow" used to be undefined, so it never bit. Both failure
+        # shapes are now named — under reform, where the definition lives.
+        for kind in ("skeleton", "slice_doc"):
+            for p in (self.review(kind, reform=True),
+                      self.seal(kind, reform=True)):
+                self.assertIn("A section is HOLLOW when", p)
+                self.assertIn("only by this plan's own adopted requirements",
+                              p)
+                self.assertIn("without a goal demand", p)
 
     def test_skeleton_scope_rules(self):
         for prompt in (

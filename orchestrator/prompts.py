@@ -293,6 +293,23 @@ ALTITUDE_FIX_BLOCK = (
     "  not a substantial scope or design change.\n"
 )
 
+# The reuse canon has two layers. The BASE blocks below predate the reform
+# and ride EVERY run unconditionally (universal content canon). The
+# *_REFORM addenda carry the invented-requirement rules (operator,
+# 2026-07-17): they are gated on the reform profile because their routing
+# leans on reform machinery (the gap exit and the re-documentation wave),
+# and gating keeps legacy/profile-less prompts byte-identical.
+#
+# Design note — why there is NO authority ranking here: legitimacy
+# questions are resolved by TIME and ROUTE, not rank. While an artifact is
+# UNSEALED its declarations are ordinary reviewable content — an invented
+# requirement is killed at its own review. Once SEALED, a declaration is
+# settled for slice-level review; a contradiction with the goal (or
+# machinery it forces) routes through the gap/repair mechanism, where the
+# re-documenter works UNDER THE GOAL — which is how the goal outranks a
+# stale sealed text without any static hierarchy in prose. (Five review
+# rounds of ranking language each leaked a new hole; this dissolution is
+# the fix.)
 REUSE_GATE_BLOCK = (
     "REUSE GATE\n"
     "- Before proposing new machinery, first check existing project\n"
@@ -302,10 +319,30 @@ REUSE_GATE_BLOCK = (
     "  machinery.\n"
 )
 
+REUSE_GATE_REFORM_ADDENDUM = (
+    "- ALTITUDE: match the rigor the surrounding domain already accepts\n"
+    "  for comparable work. An existing accepted guarantee is the\n"
+    "  DEFAULT for new work of the same class — inherit it rather than\n"
+    "  restate it stricter. Demanding MORE than the neighbouring\n"
+    "  contracts settle for is itself new machinery: it needs the same\n"
+    "  justification, and without a goal demand behind it, it is\n"
+    "  over-building.\n"
+)
+
 REUSE_POSTURE_LINE = (
     "- Include a short `Reuse Posture` section: what was checked; what\n"
     "  is reused or extended; why any new machinery is necessary; how\n"
     "  the new path stays compatible with existing contracts.\n"
+)
+
+REUSE_POSTURE_REFORM_ADDENDUM = (
+    "- Each new-machinery justification must cite an authority that\n"
+    "  exists INDEPENDENTLY of this document: the goal, the governing\n"
+    "  sealed design, an existing contract, or verified behaviour of\n"
+    "  the current code. A need that exists only because this same plan\n"
+    "  adopted the requirement creating it is CIRCULAR and justifies\n"
+    "  nothing — reconsider the adopted requirement before building\n"
+    "  machinery to satisfy it.\n"
 )
 
 REUSE_REVIEW_BLOCK = (
@@ -315,9 +352,41 @@ REUSE_REVIEW_BLOCK = (
     "  already-approved platform surfaces come first.\n"
 )
 
+REUSE_REVIEW_REFORM_ADDENDUM = (
+    "- Trace each justification to its authority. When the only thing\n"
+    "  demanding the machinery is a requirement this same artifact\n"
+    "  adopts, the justification is circular: the finding is the\n"
+    "  invented requirement, not the absent machinery.\n"
+    "- Check altitude: machinery that exists to satisfy a stricter\n"
+    "  guarantee than comparable existing work accepts is over-building\n"
+    "  unless the goal demands the stricter bar.\n"
+    "- A requirement or guarantee posture is judged WHERE IT LIVES.\n"
+    "  While its artifact is under review it is ordinary reviewable\n"
+    "  content: an invented requirement no independent authority asks\n"
+    "  for is a reuse finding on THIS artifact — that is a defect of the\n"
+    "  document, not a behavior-vs-posture question, so it is never\n"
+    "  deflected as a mere posture-change proposal. Once a document is\n"
+    "  SEALED its requirements are settled for this review: do not file\n"
+    "  findings against sealed text — satisfying it while it stands is\n"
+    "  correct work. If satisfying a sealed requirement would contradict\n"
+    "  the GOAL or force machinery no authority outside that document\n"
+    "  justifies, that is a design contradiction for the repair\n"
+    "  machinery (report it so the fix stage can route it); it is\n"
+    "  resolved by re-documenting the design under the goal, never by\n"
+    "  slice-level findings against the sealed text.\n"
+)
+
 REUSE_POSTURE_REVIEW_LINE = (
     "- Every skeleton and slice note must include a short `Reuse\n"
     "  Posture` section; a missing or hollow one is a finding.\n"
+)
+
+REUSE_HOLLOW_REFORM_ADDENDUM = (
+    "  A section\n"
+    "  is HOLLOW when it lists what was checked but justifies its new\n"
+    "  machinery only by this plan's own adopted requirements, or when\n"
+    "  it accepts a stricter bar than comparable existing work without a\n"
+    "  goal demand.\n"
 )
 
 SKELETON_SCOPE_BLOCK = (
@@ -651,10 +720,14 @@ def _governing_line(governing):
     )
 
 
-def _review_quality_block(unit_kind):
+def _review_quality_block(unit_kind, reform=False):
     parts = [EVIDENCE_BLOCK, SEVERITY_BATTERY_BLOCK, REUSE_REVIEW_BLOCK]
+    if reform:
+        parts.append(REUSE_REVIEW_REFORM_ADDENDUM)
     if unit_kind in DOC_UNIT_KINDS:
         parts.append(REUSE_POSTURE_REVIEW_LINE)
+        if reform:
+            parts.append(REUSE_HOLLOW_REFORM_ADDENDUM)
         parts.append(ALTITUDE_BLOCK)
         parts.append(ALTITUDE_REVIEW_BLOCK)
         parts.append(
@@ -670,9 +743,26 @@ def _review_quality_block(unit_kind):
     return "".join(parts) + "\n"
 
 
-def _delta_quality_block(unit_kind):
-    parts = [EVIDENCE_BLOCK, SEVERITY_BATTERY_BLOCK, DELTA_COVERAGE_LINE]
+def _delta_quality_block(unit_kind, reform=False):
+    # REUSE rides here too: the battery's posture rule points at "see REUSE",
+    # and a fix delta is exactly where an invented stricter posture (and the
+    # machinery it summons) gets introduced — a delta reviewer without the
+    # authority/altitude rules would approve it and let it be amended in,
+    # leaving the later full/seal round to recover.
+    # Deltas carried NO reuse canon pre-reform: base AND addendum are both
+    # reform-gated here (unlike full reviews/seals, whose base block
+    # predates the reform and stays unconditional).
+    parts = [EVIDENCE_BLOCK, SEVERITY_BATTERY_BLOCK]
+    if reform:
+        parts.append(REUSE_REVIEW_BLOCK)
+        parts.append(REUSE_REVIEW_REFORM_ADDENDUM)
+    parts.append(DELTA_COVERAGE_LINE)
     if unit_kind in DOC_UNIT_KINDS:
+        # NOT REUSE_POSTURE_REVIEW_LINE: whether the ARTIFACT carries a Reuse
+        # Posture section is a whole-document duty the full round and the seal
+        # already enforce. A delta reviewer judges only the delta — demanding
+        # the section here would let a typo-only delta be rejected for a
+        # pre-existing hollow section it never touched.
         parts.append(ALTITUDE_BLOCK)
         parts.append(ALTITUDE_REVIEW_BLOCK)
     if unit_kind == "slice_impl":
@@ -916,7 +1006,10 @@ def _fix_gap_block():
         "GAP EXIT (this run runs stop-report-repair-resume):\n"
         "If a queued finding is VALID but you cannot fix it without rewriting\n"
         "a SEALED doc (a note or the skeleton) — the sealed design set\n"
-        "contradicts itself — do NOT edit the sealed doc, do NOT code around\n"
+        "contradicts itself, a sealed requirement contradicts the GOAL, or a\n"
+        "sealed requirement summons machinery that no authority outside its\n"
+        "own document justifies (over-invention sealed in) —\n"
+        "do NOT edit the sealed doc, do NOT code around\n"
         "it, and do NOT dead-end at \"blocked\". CLASSIFY the contradiction and\n"
         "let the machine route it. Return status \"gap\", finishing NOTHING\n"
         "(no dispositions, no file changes): this fix round is abandoned and\n"
@@ -926,8 +1019,11 @@ def _fix_gap_block():
         "INSIDE THE GOAL YOU WERE GIVEN? — with:\n"
         "  classification: EXACTLY ONE of —\n"
         "     fits_remodel — re-documenting the sealed set UNDER THE GOAL\n"
-        "        resolves the contradiction (the two sealed texts collide but\n"
-        "        the goal admits a coherent reading). The machine reopens the\n"
+        "        resolves it: two sealed texts collide, a sealed text\n"
+        "        collides with the goal, or a sealed requirement exceeds\n"
+        "        every authority (the re-documenter right-sizes or strips\n"
+        "        it), and the goal admits a coherent reading. The machine\n"
+        "        reopens the\n"
         "        WHOLE documentation set, re-documents it coherently, and\n"
         "        reseals with the full review dosage. This NEVER reaches the\n"
         "        operator.\n"
@@ -935,8 +1031,12 @@ def _fix_gap_block():
         "        NOT settle (a designated provider, payment/Stripe contract,\n"
         "        database technology, external integration, or the goal\n"
         "        contradicting itself). Only this reaches the operator.\n"
-        "  missing_or_conflict: the two sealed facts that collide\n"
-        "  where: file:line of BOTH sealed texts (the note/skeleton lines)\n"
+        "  missing_or_conflict: the colliding facts (sealed vs sealed, or\n"
+        "     sealed vs goal), or — for over-invention — the sealed\n"
+        "     requirement and what the goal ACTUALLY asks for\n"
+        "  where: file:line of EACH sealed text involved; when one side is\n"
+        "     the goal, a VERBATIM QUOTE of the goal text (or of its\n"
+        "     closest passage, when the point is that it asks for less)\n"
         "  forced_decision: what must be resolved (for needs_operator, the\n"
         "     decision the operator faces)\n"
         "  proposal: null, OR a resolution CLEARLY MARKED as a proposal\n"
@@ -969,7 +1069,9 @@ def build_draft_skeleton(family, workspace, goal, amendments=None,
         + SKELETON_SCOPE_BLOCK
         + ALTITUDE_BLOCK
         + REUSE_GATE_BLOCK
+        + (REUSE_GATE_REFORM_ADDENDUM if gap_enabled else "")
         + REUSE_POSTURE_LINE
+        + (REUSE_POSTURE_REFORM_ADDENDUM if gap_enabled else "")
         + PLANNING_CONTEXT_LINE
         + "\n"
         + _access_block(edit_allowed=True)
@@ -1004,7 +1106,9 @@ def build_draft_slice_note(family, workspace, goal, slice_info, skeleton_path,
         + SLICE_SIZING_LINE
         + ALTITUDE_BLOCK
         + REUSE_GATE_BLOCK
+        + (REUSE_GATE_REFORM_ADDENDUM if gap_enabled else "")
         + REUSE_POSTURE_LINE
+        + (REUSE_POSTURE_REFORM_ADDENDUM if gap_enabled else "")
         + PLANNING_CONTEXT_LINE
         + "\n"
         + _access_block(edit_allowed=True)
@@ -1070,6 +1174,7 @@ def build_implement(family, workspace, goal, slice_info, note_path, verification
         + ver
         + "\n\n"
         + REUSE_GATE_BLOCK
+        + (REUSE_GATE_REFORM_ADDENDUM if gap_enabled else "")
         + PLANNING_CONTEXT_LINE
         + "- Run local/focused checks after each modification when they\n"
         "  are cheap or directly relevant.\n"
@@ -1088,7 +1193,7 @@ def build_implement(family, workspace, goal, slice_info, note_path, verification
 def build_review_round(family, workspace, goal, unit_desc, artifact, registry,
                        unit_kind=None, governing=None, amendments=None,
                        verified_suite=None, project_context=None,
-                       battery=None, debt=None):
+                       battery=None, debt=None, gap_enabled=False):
     return (
         _header(contracts.KIND_REVIEW_ROUND, family, workspace)
         + "\nTASK: full review round of %s. REPORT ONLY.\n" % unit_desc
@@ -1102,7 +1207,7 @@ def build_review_round(family, workspace, goal, unit_desc, artifact, registry,
         "will verify your findings against the real files and concede or\n"
         "dissent.\n\n"
         + _verified_suite_block(verified_suite, unit_kind)
-        + _review_quality_block(unit_kind)
+        + _review_quality_block(unit_kind, reform=gap_enabled)
         + (_battery_review_block(battery) if battery else "")
         + _debt_block(debt)
         + _registry_block(registry)
@@ -1115,7 +1220,8 @@ def build_review_round(family, workspace, goal, unit_desc, artifact, registry,
 
 def build_delta_review(family, workspace, goal, unit_desc, diff_text, registry,
                        unit_kind=None, governing=None, amendments=None,
-                       project_context=None, debt=None, wave_docs=None):
+                       project_context=None, debt=None, wave_docs=None,
+                       gap_enabled=False):
     # During a re-documentation wave the fixer legitimately edits SEVERAL
     # milestone documents at once (they are co-reopened, not sealed); the
     # delta reviewer must judge the multi-document diff as one coherent
@@ -1161,7 +1267,7 @@ def build_delta_review(family, workspace, goal, unit_desc, diff_text, registry,
         "------------\n"
         + (diff_text or "(empty diff)")
         + "\n------------\n\n"
-        + _delta_quality_block(unit_kind)
+        + _delta_quality_block(unit_kind, reform=gap_enabled)
         + _debt_block(debt)
         + _registry_block(registry)
         + "\n"
@@ -1174,7 +1280,8 @@ def build_delta_review(family, workspace, goal, unit_desc, diff_text, registry,
 def build_seal_half(family, workspace, goal, unit_desc, artifact, registry,
                     unit_kind=None, governing=None, amendments=None,
                     verified_suite=None, project_context=None,
-                    battery=None, debt=None, wave_docs=None):
+                    battery=None, debt=None, wave_docs=None,
+                    gap_enabled=False):
     # A re-documentation wave's seal certifies the WHOLE documentation set,
     # edited or not: the re-documenter choosing to leave a note untouched
     # asserted it is coherent with the re-documented design — this seal
@@ -1215,7 +1322,7 @@ def build_seal_half(family, workspace, goal, unit_desc, artifact, registry,
         + EXHAUSTIVE_SENTENCE
         + "You fix nothing and triage nothing.\n\n"
         + _verified_suite_block(verified_suite, unit_kind)
-        + _review_quality_block(unit_kind)
+        + _review_quality_block(unit_kind, reform=gap_enabled)
         + (_battery_review_block(battery) if battery else "")
         + _debt_block(debt)
         + _registry_block(registry)
