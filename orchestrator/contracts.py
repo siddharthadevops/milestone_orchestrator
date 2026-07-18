@@ -342,6 +342,56 @@ GAP_ELIGIBLE_KINDS = (
 )
 
 
+DESIGN_CORRECTION_DECISIONS = (
+    "ratify", "retry", "remodel", "needs_operator",
+)
+
+
+def validate_design_correction(value, ctx):
+    """A fixer's one-shot proposal to correct its own sealed slice note."""
+    if not isinstance(value, dict):
+        raise ContractError("%s.design_correction must be an object" % ctx)
+    for field in (
+        "artifact", "authority_artifact", "contradiction", "resolution",
+    ):
+        item = value.get(field)
+        if not isinstance(item, str) or not item.strip():
+            raise ContractError(
+                "%s.design_correction.%s must be a non-empty string"
+                % (ctx, field)
+            )
+    return value
+
+
+def validate_design_correction_verdict(value, findings, ctx):
+    """Independent delta-review decision on a provisional correction."""
+    if not isinstance(value, dict):
+        raise ContractError(
+            "%s.design_correction_verdict must be an object" % ctx
+        )
+    decision = value.get("decision")
+    if decision not in DESIGN_CORRECTION_DECISIONS:
+        raise ContractError(
+            "%s.design_correction_verdict.decision must be one of %r"
+            % (ctx, DESIGN_CORRECTION_DECISIONS)
+        )
+    reason = value.get("reason")
+    if not isinstance(reason, str) or not reason.strip():
+        raise ContractError(
+            "%s.design_correction_verdict.reason must be non-empty" % ctx
+        )
+    if decision == "ratify" and findings:
+        raise ContractError(
+            "%s: ratify requires a clean delta; use retry with findings"
+            % ctx
+        )
+    if decision == "retry" and not findings:
+        raise ContractError(
+            "%s: retry requires at least one actionable finding" % ctx
+        )
+    return value
+
+
 # The engineering question battery (build-driven review reform §4): under
 # a reform profile every DOC draft answers a fixed set of engineering
 # questions as STRUCTURE — one entry per question with its answer and
@@ -440,7 +490,9 @@ def validate_battery(battery, required_questions, ctx):
 
 def validate_worker_output(obj, kind, require_plain=False,
                            battery_questions=None,
-                           require_drift_damage=False):
+                           require_drift_damage=False,
+                           allow_design_correction=False,
+                           require_design_correction_verdict=False):
     """Validate the full worker JSON output for a call of `kind`.
 
     require_plain: reform runs hard-require the plain/example lay mirror
@@ -497,7 +549,10 @@ def validate_worker_output(obj, kind, require_plain=False,
         for i, g in enumerate(gaps):
             validate_gap(g, "%s.gaps[%d]" % (ctx, i))
         # A gap carries NO artifact claim — nothing was finished.
-        for claim in ("artifact", "files_changed", "slices", "battery"):
+        for claim in (
+            "artifact", "files_changed", "slices", "battery",
+            "design_correction", "design_correction_verdict",
+        ):
             if obj.get(claim):
                 raise ContractError(
                     "%s: a gap response must not also claim %r "
@@ -549,6 +604,18 @@ def validate_worker_output(obj, kind, require_plain=False,
             raise ContractError(
                 "%s: report kinds must not claim file changes" % ctx
             )
+        verdict = obj.get("design_correction_verdict")
+        if require_design_correction_verdict:
+            if kind != KIND_DELTA_REVIEW:
+                raise ContractError(
+                    "%s: a design-correction verdict is delta-review only"
+                    % ctx
+                )
+            validate_design_correction_verdict(verdict, findings, ctx)
+        elif verdict is not None:
+            raise ContractError(
+                "%s: unexpected design_correction_verdict" % ctx
+            )
     elif kind == KIND_FIX_FINDINGS:
         findings = _require(obj, "findings", list, ctx)
         for i, f in enumerate(findings):
@@ -564,6 +631,14 @@ def validate_worker_output(obj, kind, require_plain=False,
                     "%s: slices, when present, must be non-empty" % ctx
                 )
             validate_slices(slices, "%s.slices" % ctx)
+        correction = obj.get("design_correction")
+        if correction is not None:
+            if not allow_design_correction:
+                raise ContractError(
+                    "%s: design_correction was not offered for this call"
+                    % ctx
+                )
+            validate_design_correction(correction, ctx)
     elif kind == KIND_RECLASSIFY:
         risk = _require(obj, "drift_risk", str, ctx)
         if risk not in DRIFT_RISK_LEVELS:
@@ -605,12 +680,17 @@ KIND_OUTPUT_KEYS = {
     KIND_DRAFT_SLICE_NOTE: frozenset({"artifact", "battery"}),
     KIND_IMPLEMENT: frozenset({"files_changed", "suite_command"}),
     KIND_REVIEW_ROUND: frozenset({"findings", "files_changed"}),
-    KIND_DELTA_REVIEW: frozenset({"findings", "files_changed"}),
+    KIND_DELTA_REVIEW: frozenset(
+        {"findings", "files_changed", "design_correction_verdict"}
+    ),
     KIND_SEAL_HALF: frozenset({"findings", "files_changed"}),
     # fix_findings may also carry suite_command (the driver adopts it when
     # correcting/arming the verification gate).
     KIND_FIX_FINDINGS: frozenset(
-        {"findings", "files_changed", "slices", "suite_command"}
+        {
+            "findings", "files_changed", "slices", "suite_command",
+            "design_correction",
+        }
     ),
 }
 

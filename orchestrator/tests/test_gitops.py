@@ -25,6 +25,7 @@ import shutil
 import subprocess
 import tempfile
 import unittest
+from unittest import mock
 
 from orchestrator import gitops
 
@@ -725,6 +726,41 @@ class WipAmendGateTests(GitopsTestCase):
         self.assertIn(
             "draft = 'fixed'", self.git(ws, "show", "HEAD:draft.py")
         )
+
+    def test_note_ratification_restores_index_when_tree_snapshot_fails(self):
+        ws = self.make_repo(files={"docs/note.md": "limit 50\n"})
+        gitops.ensure_repo(ws)
+        _write(os.path.join(ws, "docs", "note.md"), "limit 30\n")
+        note_gate = gitops.commit_wip(ws, "Seal slice 01 note")
+        _write(os.path.join(ws, "impl.py"), "limit = 50\n")
+        gitops.commit_wip(ws, "wip: slice_impl-01")
+        _write(os.path.join(ws, "docs", "note.md"), "limit 30 corrected\n")
+        _write(os.path.join(ws, "impl.py"), "limit = 30\n")
+        head_before = gitops.head_full_sha(ws)
+        index_before = gitops.snapshot_index_tree(ws)
+        diff_before = self.git(ws, "diff", "HEAD")
+        real_run = gitops._run
+        writes = {"count": 0}
+
+        def fail_second_write_tree(workspace, *args, **kwargs):
+            if args == ("write-tree",):
+                writes["count"] += 1
+                if writes["count"] == 2:
+                    raise gitops.GitError("injected write-tree failure")
+            return real_run(workspace, *args, **kwargs)
+
+        with mock.patch.object(
+            gitops, "_run", side_effect=fail_second_write_tree
+        ):
+            with self.assertRaises(gitops.GitError):
+                gitops.ratify_note_correction(
+                    ws, "docs/note.md", note_gate,
+                    "Ratify slice 01 note correction",
+                )
+
+        self.assertEqual(gitops.head_full_sha(ws), head_before)
+        self.assertEqual(gitops.snapshot_index_tree(ws), index_before)
+        self.assertEqual(self.git(ws, "diff", "HEAD"), diff_before)
 
     def test_finalize_gate_replaces_the_message(self):
         ws = self.make_repo(files={"seed.txt": "seed\n"})

@@ -18,6 +18,7 @@ Usage:
 import argparse
 import contextlib
 import copy
+import hashlib
 import json
 import os
 import re
@@ -1121,7 +1122,7 @@ class Driver(object):
                          % (label, fam, model or dm, effort or de))
         return "; ".join(parts)
 
-    def _enforce_sealed_artifacts(self, raw_name):
+    def _enforce_sealed_artifacts(self, raw_name, editable_sealed=None):
         """SEALED units' doc artifacts are read-only for every edit-kind
         call (found live 2026-07-10: a fixer materially REWROTE the
         sealed slice-02 note to legalize behaviors the sealed version
@@ -1144,6 +1145,7 @@ class Driver(object):
         repaired, so its own repair episode is naturally exempt."""
         if not gitops.enabled(self.config):
             return []
+        editable_sealed = set(editable_sealed or ())
         last_gate = gitops.newest_commit(
             self.workspace,
             [u.get("gate_commit") for u in self.state["units"]],
@@ -1154,6 +1156,8 @@ class Driver(object):
                 continue
             gate, art = u.get("gate_commit"), u.get("artifact")
             if not gate or not art:
+                continue
+            if art in editable_sealed:
                 continue
             canonical = gitops.show_file(
                 self.workspace, last_gate or gate, art
@@ -1188,6 +1192,262 @@ class Driver(object):
             )
             restored.append(art)
         return restored
+
+    @staticmethod
+    def _safe_design_path(value):
+        if not isinstance(value, str) or not value.strip():
+            return None
+        value = os.path.normpath(value.strip())
+        if os.path.isabs(value) or value in (".", "..") \
+                or value.startswith(".." + os.sep):
+            return None
+        return value
+
+    def _design_correction_offer(self, unit):
+        """One-shot semantic exception for a normal implementation fixer."""
+        if (
+            unit.get("kind") != st.UNIT_SLICE_IMPL
+            or unit.get("under_repair")
+            or unit.get("design_correction")
+            or unit.get("design_correction_attempted")
+            or self.state.get("redoc_wave")
+            or not interpreter.gap_semantics(self.state)
+            or not gitops.enabled(self.config)
+        ):
+            return None
+        note = self._find_unit(st.UNIT_SLICE_DOC, unit.get("slice_id"))
+        if note is None or note.get("status") != st.U_SEALED \
+                or not note.get("gate_commit"):
+            return None
+        return {
+            "mode": "offer",
+            "artifact": note.get("artifact")
+            or self._slice_note_artifact(unit["slice_id"]),
+            "note_unit": st.unit_key(note),
+            "authority_gate": note["gate_commit"],
+        }
+
+    def _design_correction_context(self, unit):
+        correction = unit.get("design_correction") or {}
+        if correction.get("phase") == "proposed":
+            return {"mode": "active", **correction}
+        return self._design_correction_offer(unit)
+
+    def _workspace_bytes(self, relpath):
+        try:
+            with open(os.path.join(self.workspace, relpath), "rb") as fh:
+                return fh.read()
+        except OSError:
+            return None
+
+    def _start_design_correction(
+        self, unit, declaration, files_changed, offer,
+        pre_refs, pre_sym, pre_head, pre_tree, pre_worktree_tree, pre_stash,
+    ):
+        """Validate the mechanical envelope; semantic judgment is next."""
+        baseline = {
+            "refs": pre_refs,
+            "sym": pre_sym,
+            "head": pre_head,
+            "tree": pre_worktree_tree,
+            "index_tree": pre_tree,
+            "stash": pre_stash,
+        }
+        candidate = {
+            "phase": "proposed",
+            "baseline": baseline,
+            "original_fix_queue": copy.deepcopy(unit.get("fix_queue") or []),
+            "original_fix_source": copy.deepcopy(unit.get("fix_source")),
+            "original_fix_loop_rounds": int(unit.get("fix_loop_rounds") or 0),
+        }
+        if offer is None or offer.get("mode") != "offer":
+            return candidate, "the one-shot correction envelope is not open"
+        if any(value is None for value in (
+            pre_refs, pre_sym, pre_head, pre_tree, pre_worktree_tree,
+        )):
+            return candidate, "the normal pre-fix Git snapshot is unavailable"
+        artifact = self._safe_design_path(declaration.get("artifact"))
+        authority = self._safe_design_path(
+            declaration.get("authority_artifact")
+        )
+        expected = self._safe_design_path(offer.get("artifact"))
+        if artifact != expected:
+            return candidate, "only the implementation's own slice note is editable"
+        if authority is None or authority == artifact:
+            return candidate, "authority must be one different pre-existing artifact"
+        changed = {
+            self._safe_design_path(path) for path in (files_changed or [])
+        }
+        if artifact not in changed:
+            return candidate, "the corrected note is absent from files_changed"
+        note_before = gitops.show_file(self.workspace, pre_head, artifact)
+        note_after = self._workspace_bytes(artifact)
+        if note_before is None or note_after is None or note_before == note_after:
+            return candidate, "the proposed correction did not change its note"
+        authority_gate = offer.get("authority_gate")
+        authority_before = gitops.show_file(
+            self.workspace, authority_gate, authority
+        )
+        if authority_before is None:
+            return candidate, "the cited authority did not predate the sealed note"
+        if (
+            gitops.show_file(self.workspace, pre_head, authority)
+            != authority_before
+            or self._workspace_bytes(authority) != authority_before
+        ):
+            return candidate, "the cited authority is not unchanged and pre-existing"
+        candidate.update({
+            "artifact": artifact,
+            "note_unit": offer["note_unit"],
+            "authority_artifact": authority,
+            "authority_sha256": hashlib.sha256(authority_before).hexdigest(),
+            "original_note_sha256": hashlib.sha256(note_before).hexdigest(),
+            "contradiction": declaration["contradiction"],
+            "resolution": declaration["resolution"],
+        })
+        unit["design_correction"] = candidate
+        unit["design_correction_attempted"] = True
+        st.append_event(
+            self.state,
+            "design_correction_proposed",
+            unit=st.unit_key(unit),
+            artifact=artifact,
+            authority_artifact=authority,
+        )
+        return candidate, None
+
+    def _design_correction_integrity_error(self, correction):
+        authority = self._safe_design_path(
+            (correction or {}).get("authority_artifact")
+        )
+        content = self._workspace_bytes(authority) if authority else None
+        if content is None or hashlib.sha256(content).hexdigest() != (
+            correction or {}
+        ).get("authority_sha256"):
+            return "the cited authority changed while the correction was provisional"
+        return None
+
+    def _rollback_design_correction(self, unit, reason, correction=None):
+        """Discard the provisional fixer delta and retry without authority."""
+        correction = correction or unit.get("design_correction") or {}
+        baseline = correction.get("baseline") or {}
+        try:
+            gitops.restore_to_snapshot(
+                self.workspace,
+                baseline["refs"],
+                baseline["sym"],
+                baseline["head"],
+                baseline["tree"],
+                stash=baseline.get("stash"),
+            )
+            gitops.restore_index_tree(
+                self.workspace, baseline.get("index_tree") or baseline["tree"]
+            )
+        except (KeyError, TypeError, gitops.GitError) as exc:
+            st.fail_run(
+                self.state,
+                "design correction rollback failed: %s" % exc,
+                unit=unit,
+                type_="gap_cleanup",
+            )
+            self._save()
+            raise StopStep("design correction rollback failed")
+        unit["design_correction"] = None
+        unit["design_correction_attempted"] = True
+        unit["fix_queue"] = copy.deepcopy(
+            correction.get("original_fix_queue") or []
+        )
+        unit["fix_source"] = copy.deepcopy(
+            correction.get("original_fix_source")
+        )
+        unit["fix_loop_rounds"] = int(
+            correction.get("original_fix_loop_rounds") or 0
+        )
+        if unit.get("status") != st.U_FIXING:
+            st.transition_unit(
+                self.state, unit, st.U_FIXING,
+                reason="design correction rejected; retry without exception",
+            )
+        st.append_event(
+            self.state,
+            "design_correction_rolled_back",
+            unit=st.unit_key(unit),
+            reason=str(reason or "")[:300],
+        )
+        return "design correction rejected; fixer retries without exception"
+
+    @staticmethod
+    def _design_correction_gap(correction, decision, reason):
+        return {
+            "classification": (
+                contracts.CLASSIFY_NEEDS_OPERATOR
+                if decision == "needs_operator"
+                else contracts.CLASSIFY_FITS_REMODEL
+            ),
+            "missing_or_conflict": correction.get("contradiction"),
+            "where": correction.get("artifact"),
+            "forced_decision": reason,
+            "plain": correction.get("contradiction"),
+            "example": correction.get("resolution"),
+            "proposal": correction.get("resolution"),
+        }
+
+    def _ratify_design_correction(self, unit, correction, verdict, return_to):
+        note = self._unit_by_key(correction.get("note_unit"))
+        content = self._workspace_bytes(correction.get("artifact"))
+        if note is None or content is None:
+            st.fail_run(
+                self.state, "ratified design correction lost its note", unit=unit
+            )
+            self._save()
+            raise StopStep("ratified correction note missing")
+        if hashlib.sha256(content).hexdigest() == correction.get(
+            "original_note_sha256"
+        ):
+            return self._rollback_design_correction(
+                unit,
+                "the correction reviewer ratified an unchanged governing note",
+                correction,
+            )
+        try:
+            note_sha, sha = gitops.ratify_note_correction(
+                self.workspace,
+                correction["artifact"],
+                note["gate_commit"],
+                "Ratify slice %02d note correction" % unit["slice_id"],
+            )
+        except gitops.GitError as exc:
+            st.fail_run(self.state, "ratification failed: %s" % exc, unit=unit)
+            self._save()
+            raise StopStep(str(exc))
+        correction["phase"] = "ratified"
+        correction["approved_sha256"] = hashlib.sha256(content).hexdigest()
+        correction["ratified_commit"] = note_sha
+        correction["verdict_reason"] = verdict.get("reason")
+        for key in (
+            "baseline", "original_fix_queue", "original_fix_source",
+            "original_fix_loop_rounds",
+        ):
+            correction.pop(key, None)
+        note["gate_commit"] = note_sha
+        st.append_event(self.state, "amended", unit=st.unit_key(unit), sha=sha)
+        st.append_event(
+            self.state,
+            "design_correction_ratified",
+            unit=st.unit_key(unit),
+            artifact=correction.get("artifact"),
+            sha=sha,
+            note_sha=note_sha,
+            reason=str(verdict.get("reason") or "")[:300],
+        )
+        unit["fix_queue"] = []
+        unit["fix_source"] = None
+        unit.pop("phantom_retried", None)
+        st.transition_unit(
+            self.state, unit, return_to,
+            reason="own-note correction independently ratified",
+        )
+        return "design correction ratified; amended (%s)" % sha
 
     def _maybe_update_slices(self, unit, output):
         """A fix call on the skeleton unit may report an updated slice plan
@@ -2382,6 +2642,7 @@ class Driver(object):
         project_context, extensions, roots = self._project_prompt_inputs(
             unit, contracts.KIND_FIX_FINDINGS
         )
+        design_context = self._design_correction_context(unit)
         prompt = prompts.build_fix_findings(
             family,
             self.workspace,
@@ -2434,6 +2695,7 @@ class Driver(object):
                 and not unit.get("under_repair")
                 and unit["kind"] != st.UNIT_SKELETON
             ),
+            design_correction=design_context,
             convergence=(
                 {
                     "dirty_deltas": dirty_deltas,
@@ -2452,16 +2714,24 @@ class Driver(object):
         # this handle set restores the repo to here, discarding the fixer's
         # abandoned scratch edits before the wave re-documents from the sealed
         # baseline. Captured only with git on (same guard as the builder).
-        pre_refs = pre_sym = pre_head = pre_tree = pre_stash = None
+        pre_refs = pre_sym = pre_head = pre_tree = pre_worktree_tree = None
+        pre_stash = None
         if gitops.enabled(self.config):
             try:
                 pre_refs = gitops.snapshot_refs(self.workspace)
                 pre_sym = gitops.head_symbolic_ref(self.workspace)
                 pre_head = gitops.head_full_sha(self.workspace)
                 pre_tree = gitops.snapshot_index_tree(self.workspace)
+                pre_worktree_tree = (
+                    gitops.snapshot_worktree_tree(self.workspace)
+                    if design_context
+                    and design_context.get("mode") == "offer"
+                    else pre_tree
+                )
                 pre_stash = gitops.snapshot_stash(self.workspace)
             except gitops.GitError:
-                pre_refs = pre_sym = pre_head = pre_tree = pre_stash = None
+                pre_refs = pre_sym = pre_head = pre_tree = None
+                pre_worktree_tree = pre_stash = None
         output, result, raw_path = self._call(
             family,
             prompt,
@@ -2471,12 +2741,28 @@ class Driver(object):
             effort=fix_effort,
             extensions=extensions,
             roots=roots,
+            validate_opts=(
+                {"allow_design_correction": True}
+                if design_context
+                and design_context.get("mode") == "offer"
+                else None
+            ),
         )
         # The sealed-artifact guard runs on EVERY outcome (gap or not, in
         # envelope or not) BEFORE any branch returns: a fixer that tampered with
         # a sealed doc and then gapped must still be caught and restored — the
         # gap must never be a side door around tamper detection.
-        self._enforce_sealed_artifacts("%s-fix%d" % (st.unit_key(unit), n_fix))
+        declaration = output.get("design_correction")
+        active_correction = unit.get("design_correction") or {}
+        editable_note = None
+        if active_correction.get("phase") == "proposed":
+            editable_note = active_correction.get("artifact")
+        elif declaration is not None and design_context:
+            editable_note = design_context.get("artifact")
+        restored = self._enforce_sealed_artifacts(
+            "%s-fix%d" % (st.unit_key(unit), n_fix),
+            editable_sealed=([editable_note] if editable_note else None),
+        )
         if output.get("status") == "gap":
             # The fixer met an insoluble-in-scope contradiction: a queued
             # finding is valid, but the only repair rewrites a sealed doc this
@@ -2510,6 +2796,17 @@ class Driver(object):
                 )
                 self._save()
                 raise StopStep("fixer gap outside supported envelope")
+            if active_correction.get("phase") == "proposed":
+                baseline = active_correction.get("baseline") or {}
+                self._rollback_design_correction(
+                    unit, "fixer chose the normal gap exit",
+                    active_correction,
+                )
+                pre_refs = baseline.get("refs")
+                pre_sym = baseline.get("sym")
+                pre_head = baseline.get("head")
+                pre_tree = baseline.get("tree")
+                pre_stash = baseline.get("stash")
             return self._handle_gap(unit, output, result.duration_s,
                                     pre_tree=pre_tree, pre_head=pre_head,
                                     pre_sym=pre_sym, pre_refs=pre_refs,
@@ -2523,6 +2820,42 @@ class Driver(object):
             raise StopStep(str(exc))
         self._validate_adjudication_refs(unit, output)
         self._validate_contested_dispositions(unit, output)
+        if active_correction.get("phase") == "proposed":
+            correction_error = self._design_correction_integrity_error(
+                active_correction
+            )
+            if restored:
+                correction_error = (
+                    "the provisional correction touched other sealed "
+                    "artifacts: %s" % ", ".join(restored)
+                )
+            if correction_error:
+                return self._rollback_design_correction(
+                    unit, correction_error, active_correction
+                )
+        elif declaration is not None:
+            candidate, correction_error = self._start_design_correction(
+                unit,
+                declaration,
+                output.get("files_changed") or [],
+                design_context,
+                pre_refs,
+                pre_sym,
+                pre_head,
+                pre_tree,
+                pre_worktree_tree,
+                pre_stash,
+            )
+            if restored:
+                correction_error = (
+                    "the correction touched other sealed artifacts: %s"
+                    % ", ".join(restored)
+                )
+            if correction_error:
+                unit["design_correction_attempted"] = True
+                return self._rollback_design_correction(
+                    unit, correction_error, candidate
+                )
         if (
             isinstance(output.get("suite_command"), str)
             and output["suite_command"].strip()
@@ -2626,6 +2959,10 @@ class Driver(object):
 
     def _do_delta_review(self):
         unit = st.current_unit(self.state)
+        correction = unit.get("design_correction") or {}
+        provisional = (
+            correction if correction.get("phase") == "proposed" else None
+        )
         source = unit.get("fix_source") or {}
         return_to = source.get("return_to") or st.U_PRE_REVIEW_VERIFY
         try:
@@ -2635,6 +2972,12 @@ class Driver(object):
             self._save()
             raise StopStep(str(exc))
         if not delta.strip():
+            if provisional:
+                return self._rollback_design_correction(
+                    unit,
+                    "the proposed correction left no delta to ratify",
+                    provisional,
+                )
             # An all-rejections episode leaves no delta: nothing to amend.
             # But the fixer's claims must agree with that: a 'fixed'
             # disposition, a non-empty files_changed, or a prevention edit
@@ -2704,7 +3047,8 @@ class Driver(object):
         # history makes Stop/Start and Resume unable to restart the budget;
         # phantom attempts do not count because they produced no dirty delta.
         fix_number = 1 + dirty_deltas
-        if (return_to == st.U_ROUNDS
+        if (not provisional
+                and return_to == st.U_ROUNDS
                 and checkpoint_after
                 and fix_number >= checkpoint_after):
             # The fifth fix has already incorporated the previous delta's
@@ -2773,6 +3117,7 @@ class Driver(object):
             debt=self._debt(unit),
             wave_docs=self._wave_doc_paths(unit),
             gap_enabled=interpreter.gap_semantics(self.state),
+            design_correction=provisional,
         )
         n_delta = 1 + len(
             [r for r in unit["rounds"] if r["kind"] == contracts.KIND_DELTA_REVIEW]
@@ -2787,10 +3132,16 @@ class Driver(object):
             roots=roots,
             # Reform runs hard-require plain/example on every finding;
             # the delta prompt itself is NOT battery-aware (diff-scoped).
-            validate_opts=(
-                {"require_plain": True}
-                if interpreter.reform_active(self.state) else None
-            ),
+            validate_opts={
+                **(
+                    {"require_plain": True}
+                    if interpreter.reform_active(self.state) else {}
+                ),
+                **(
+                    {"require_design_correction_verdict": True}
+                    if provisional else {}
+                ),
+            } or None,
             model=delta_model,
             effort=delta_effort,
         )
@@ -2819,6 +3170,41 @@ class Driver(object):
             duration=result.duration_s,
             meta={"model": delta_model, "effort": delta_effort},
         )
+        if provisional:
+            verdict = output["design_correction_verdict"]
+            decision = verdict["decision"]
+            if decision == "ratify":
+                correction_error = self._design_correction_integrity_error(
+                    provisional
+                )
+                if correction_error:
+                    return self._rollback_design_correction(
+                        unit, correction_error, provisional
+                    )
+                return self._ratify_design_correction(
+                    unit, provisional, verdict, return_to
+                )
+            if decision in ("remodel", "needs_operator"):
+                baseline = provisional.get("baseline") or {}
+                gap = self._design_correction_gap(
+                    provisional, decision, verdict.get("reason")
+                )
+                self._rollback_design_correction(
+                    unit, verdict.get("reason"), provisional
+                )
+                return self._handle_gap(
+                    unit,
+                    {"gaps": [gap]},
+                    result.duration_s,
+                    pre_tree=baseline.get("tree"),
+                    pre_head=baseline.get("head"),
+                    pre_sym=baseline.get("sym"),
+                    pre_refs=baseline.get("refs"),
+                    pre_stash=baseline.get("stash"),
+                    from_fixer=True,
+                )
+            # retry intentionally falls through to the existing dirty-delta
+            # path below; the contract requires actionable findings.
         if contracts.findings_clean(output):
             try:
                 sha = gitops.amend(self.workspace)
@@ -3795,6 +4181,11 @@ class Driver(object):
             self._save()
             raise StopStep(str(exc))
         unit["gate_commit"] = sha
+        correction = unit.get("design_correction") or {}
+        if correction.get("phase") == "ratified":
+            note = self._unit_by_key(correction.get("note_unit"))
+            if note is not None:
+                note["gate_commit"] = sha
         st.append_event(
             self.state,
             "gate_commit",

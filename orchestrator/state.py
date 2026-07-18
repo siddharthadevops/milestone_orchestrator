@@ -1027,6 +1027,8 @@ def reset_for_redraft(state, unit, reason):
     unit["fix_queue"] = []
     unit["fix_source"] = None
     unit.pop("under_repair", None)
+    unit.pop("design_correction", None)
+    unit.pop("design_correction_attempted", None)
     unit["fix_loop_rounds"] = 0
     unit["verify_fix_attempts"] = {"pre_review": 0, "pre_seal": 0}
     unit["rounds_amnesty"] = len(unit["rounds"])

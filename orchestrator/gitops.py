@@ -373,6 +373,50 @@ def amend(workspace):
     return _run(workspace, "rev-parse", "--short", "HEAD").stdout.strip()
 
 
+def ratify_note_correction(workspace, artifact, base, message):
+    """Insert a note-only ratification commit beneath the implementation WIP.
+
+    The pending tree contains both the corrected note and implementation
+    fixes.  The note needs its own clean gate so a later implementation unwind
+    keeps the correction without keeping unfinished code.
+    """
+    _assert_workspace_root(workspace)
+    _assert_no_embedded_repos(workspace)
+    original = head_full_sha(workspace)
+    original_index = snapshot_index_tree(workspace)
+    full_tree = None
+    try:
+        parent = _run(workspace, "rev-parse", "HEAD^").stdout.strip()
+        expected = _run(
+            workspace, "rev-parse", "%s^{commit}" % base
+        ).stdout.strip()
+        if parent != expected:
+            raise GitError(
+                "the implementation WIP is not based on the note gate"
+            )
+        _run(workspace, "add", "-A")
+        full_tree = _run(workspace, "write-tree").stdout.strip()
+        _run(workspace, "reset", "--hard", parent)
+        _run(workspace, "checkout", full_tree, "--", artifact)
+        _run(workspace, "commit", "-q", "-m", message)
+        note_sha = head_sha(workspace)
+        _run(workspace, "read-tree", "-u", "--reset", full_tree)
+        _run(workspace, "commit", "-q", "--allow-empty", "-C", original)
+        return note_sha, head_sha(workspace)
+    except GitError:
+        try:
+            if full_tree is not None:
+                _run(workspace, "reset", "--hard", original, check=False)
+                _run(
+                    workspace, "read-tree", "-u", "--reset", full_tree,
+                    check=False,
+                )
+            _run(workspace, "read-tree", original_index, check=False)
+        except GitError:
+            pass
+        raise
+
+
 def finalize_gate(workspace, message):
     """Seal passed: fold the generated ledgers into the unit's commit and
     retitle it with the canonical gate message. Returns the short sha."""
@@ -468,6 +512,22 @@ def snapshot_index_tree(workspace):
     worker's changes even if it staged them."""
     _assert_workspace_root(workspace)
     return _run(workspace, "write-tree").stdout.strip()
+
+
+def snapshot_worktree_tree(workspace):
+    """Tree object for the current worktree without advancing the index."""
+    original_index = snapshot_index_tree(workspace)
+    try:
+        _run(workspace, "add", "-A")
+        return _run(workspace, "write-tree").stdout.strip()
+    finally:
+        _run(workspace, "read-tree", original_index, check=False)
+
+
+def restore_index_tree(workspace, tree):
+    """Restore only the index; leave the worktree bytes untouched."""
+    _assert_workspace_root(workspace)
+    _run(workspace, "read-tree", tree)
 
 
 def snapshot_stash(workspace):

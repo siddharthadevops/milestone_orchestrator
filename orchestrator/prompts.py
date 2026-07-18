@@ -91,7 +91,8 @@ def _access_block(edit_allowed):
         "  ordinary reviewable content with no process authority, even",
         "  though this run produced them. Reviewable is not rewritable:",
         "  a SEALED unit's artifact is read-only for every call except",
-        "  its own reopened repair episode.",
+        "  its own reopened repair episode or an explicit ONE-SHOT",
+        "  OWN-NOTE CORRECTION declared elsewhere in this prompt.",
         "- All other process documents in the repo — vendored canons,",
         "  review checklists, milestone review logs, workflow templates —",
         "  do NOT govern this run, regardless of what pins or endorses",
@@ -1221,7 +1222,7 @@ def build_review_round(family, workspace, goal, unit_desc, artifact, registry,
 def build_delta_review(family, workspace, goal, unit_desc, diff_text, registry,
                        unit_kind=None, governing=None, amendments=None,
                        project_context=None, debt=None, wave_docs=None,
-                       gap_enabled=False):
+                       gap_enabled=False, design_correction=None):
     # During a re-documentation wave the fixer legitimately edits SEVERAL
     # milestone documents at once (they are co-reopened, not sealed); the
     # delta reviewer must judge the multi-document diff as one coherent
@@ -1244,6 +1245,33 @@ def build_delta_review(family, workspace, goal, unit_desc, diff_text, registry,
             + "\n"
             + (SLICE_NOTE_CONTENT_BLOCK + "\n" if wave_docs else "")
         )
+    correction_block = ""
+    if design_correction:
+        correction_block = (
+            "PROVISIONAL OWN-NOTE DESIGN CORRECTION\n"
+            "The implementation fixer used its one-shot permission to amend\n"
+            "only its governing slice note alongside code/tests. Judge the\n"
+            "semantic boundary under this trust model: the fixer is a\n"
+            "cooperative implementer that may be mistaken, not an attacker.\n"
+            "Do not invent repository-sabotage or filesystem threat models.\n"
+            "Ratify only when ONE pre-existing cited artifact uniquely forces\n"
+            "the correction and no goal, skeleton/slice ownership, public\n"
+            "contract, schema, security/payment/integration boundary, or new\n"
+            "machinery changes. Otherwise choose remodel (still in goal) or\n"
+            "needs_operator (goal decision). Use retry only for ordinary\n"
+            "actionable defects in this delta.\n"
+            "- note: %s\n- authority artifact: %s\n"
+            "- contradiction: %s\n- proposed resolution: %s\n"
+            "Return design_correction_verdict={decision, reason}, where\n"
+            "decision is ratify|retry|remodel|needs_operator. Ratify requires\n"
+            "no findings; retry requires findings.\n\n"
+            % (
+                _oneline(design_correction.get("artifact"), 300),
+                _oneline(design_correction.get("authority_artifact"), 300),
+                _oneline(design_correction.get("contradiction"), 600),
+                _oneline(design_correction.get("resolution"), 600),
+            )
+        )
     return (
         _header(contracts.KIND_DELTA_REVIEW, family, workspace)
         + "\nTASK: incremental review of the pending fix delta on %s.\n"
@@ -1251,6 +1279,7 @@ def build_delta_review(family, workspace, goal, unit_desc, diff_text, registry,
         + "REPORT ONLY.\n"
         + "GOAL: %s\n\n" % goal
         + wave_block
+        + correction_block
         + _amendments_block(amendments)
         + _project_context_block(project_context)
         + _delta_governing_line(governing)
@@ -1509,6 +1538,7 @@ def build_fix_findings(
     repair_artifact=None,
     repair_wave_docs=None,
     gap_enabled=False,
+    design_correction=None,
 ):
     lines = []
     for f in findings:
@@ -1591,6 +1621,52 @@ def build_fix_findings(
             "RECENT DIRTY DELTAS (up to 5):\n%s\n\n"
             % (dirty_deltas, "\n".join(delta_lines) or "(none recorded)")
         )
+    correction_block = ""
+    if design_correction and design_correction.get("mode") == "offer":
+        correction_block = (
+            "ONE-SHOT OWN-NOTE CORRECTION\n"
+            "You may amend exactly this implementation's governing note:\n"
+            "  %s\n"
+            "Use this only when one pre-existing authoritative artifact\n"
+            "uniquely resolves a concrete contradiction. Severity is not the\n"
+            "criterion. Do not change the goal, skeleton, slice ownership,\n"
+            "public contracts, schemas, security/payment/integration\n"
+            "boundaries, or introduce new machinery. Other sealed documents\n"
+            "remain read-only. Return design_correction with artifact,\n"
+            "authority_artifact, contradiction, and resolution. The change is\n"
+            "provisional until an independent delta reviewer ratifies it. If\n"
+            "the envelope does not fit, use the normal GAP EXIT.\n\n"
+            % design_correction.get("artifact")
+        )
+    elif design_correction and design_correction.get("mode") == "active":
+        correction_block = (
+            "PROVISIONAL OWN-NOTE CORRECTION IN PROGRESS\n"
+            "The note %s remains editable only to resolve the CURRENT delta\n"
+            "findings. The cited authority %s is fixed and read-only. Do not\n"
+            "declare another design_correction.\n\n"
+            % (
+                design_correction.get("artifact"),
+                design_correction.get("authority_artifact"),
+            )
+        )
+    correction_line = ""
+    if design_correction and design_correction.get("mode") == "offer":
+        correction_line = (
+            "- ONE-SHOT OWN-NOTE CORRECTION: this call makes exactly this\n"
+            "  sealed note provisionally EDITABLE within the correction\n"
+            "  envelope stated below:\n"
+            "  %s\n"
+            "  Every other sealed artifact remains read-only.\n"
+            % design_correction.get("artifact")
+        )
+    elif design_correction and design_correction.get("mode") == "active":
+        correction_line = (
+            "- PROVISIONAL OWN-NOTE CORRECTION: this note remains EDITABLE\n"
+            "  only for the active correction stated below:\n"
+            "  %s\n"
+            "  Every other sealed artifact remains read-only.\n"
+            % design_correction.get("artifact")
+        )
     repair_line = ""
     if repair_artifact and repair_wave_docs is not None:
         # RE-DOCUMENTATION WAVE: the whole documentation set is reopened
@@ -1639,18 +1715,21 @@ def build_fix_findings(
         )
     sealed_block = (
         "SEALED ARTIFACTS (read-only)\n"
-        + repair_line +
+        + repair_line
+        + correction_line +
         "- The milestone skeleton and every SEALED slice note are\n"
         "  READ-ONLY in this call — except artifacts declared editable\n"
-        "  above (the unit under repair, or a re-documentation wave's\n"
-        "  set). A `prevention` edit may touch ONLY editable artifacts.\n"
+        "  above (the unit under repair, a re-documentation wave's set,\n"
+        "  or the one-shot own-note correction). A `prevention` edit may\n"
+        "  touch ONLY editable artifacts.\n"
         # The contradiction path depends on whether the run advertises the
         # gap exit: a reform run routes the contradiction (GAP EXIT below);
         # a legacy/profile-less run has no gap contract, so it keeps the
         # bare `blocked` dead-end (this call must stay bit-identical there).
         + (
-            "- If a queued finding is valid but cannot be fixed without\n"
-            "  contradicting a sealed note or the skeleton, do NOT edit the\n"
+            "- If a queued finding is valid but cannot be fixed within an\n"
+            "  editability declaration above without contradicting another\n"
+            "  sealed note or the skeleton, do NOT edit the\n"
             "  sealed document and do NOT code around it — but do NOT\n"
             "  dead-end at \"blocked\" either. RETURN A GAP (see GAP EXIT\n"
             "  below): the design set contradicts itself, and that routes\n"
@@ -1683,6 +1762,7 @@ def build_fix_findings(
         + "\nTASK: triage and fix the queued findings on %s.\n" % unit_desc
         + "GOAL: %s\n\n" % goal
         + sealed_block
+        + correction_block
         + (_fix_gap_block() if gap_enabled else "")
         + slice_table_block
         + killed_block
