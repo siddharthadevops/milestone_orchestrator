@@ -1583,8 +1583,16 @@ def build_fix_findings(
             "delta was EMPTY — nothing was actually written, and those\n"
             "claims were discarded. This is your one retry: either apply\n"
             "the edits to disk for real, or dispose honestly ('rejected'\n"
-            "with its consultation, or 'blocked'). A second empty-delta\n"
-            "claim fails the run.\n\n"
+            "with its consultation, or 'blocked'). EXCEPTION: when a\n"
+            "queued finding identifies a missing, narrowed, or wrong\n"
+            "verification gate, return the corrected `suite_command` and\n"
+            "its `suite_command_finding_id`; that is a real DRIVER-STATE\n"
+            "fix and may correctly have `files_changed: []`. Do not edit a\n"
+            "generated ledger or manufacture a repository change for it.\n"
+            "This exception credits only that one bound finding; every\n"
+            "other fixed/prevention/file claim still requires a real\n"
+            "worktree edit. A second uncredited empty-delta claim fails the\n"
+            "run.\n\n"
         )
     convergence_block = ""
     if convergence:

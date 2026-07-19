@@ -801,6 +801,18 @@ class TestPortedCanonContentRules(unittest.TestCase):
             ["claude", "-p"])
         self.assertNotIn("KILLED-CALL NOTICE", clean)
 
+    def test_phantom_retry_explains_suite_state_fix_exception(self):
+        prompt = normalized(prompts.build_fix_findings(
+            FAMILY, WORKSPACE, GOAL, UNIT, FINDINGS, [], "claude",
+            ["claude", "-p"], phantom_retry=True,
+        ))
+        self.assertIn("RETRY NOTICE", prompt)
+        self.assertIn("that is a real DRIVER-STATE fix", prompt)
+        self.assertIn("may correctly have `files_changed: []`", prompt)
+        self.assertIn("Do not edit a generated ledger or manufacture a "
+                      "repository change for it", prompt)
+        self.assertIn("credits only that one bound finding", prompt)
+
     def test_convergence_context_is_bounded_and_not_a_second_queue(self):
         rounds = [
             {
