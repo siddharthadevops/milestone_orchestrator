@@ -582,7 +582,7 @@ class Driver(object):
         configured = self.config.get("verification") or []
         if (
             not discovered
-            or len(configured) != 1
+            or not configured
             or configured == [discovered]
         ):
             return None
@@ -591,7 +591,11 @@ class Driver(object):
                 if round_info.get("kind") != contracts.KIND_FIX_FINDINGS:
                     continue
                 result = round_info.get("result") or {}
-                if result.get("suite_command") != discovered:
+                reported = result.get("suite_command")
+                if (
+                    not isinstance(reported, str)
+                    or reported.strip() != discovered
+                ):
                     continue
                 if any(
                     f.get("disposition") == "fixed"
@@ -2856,24 +2860,37 @@ class Driver(object):
                 return self._rollback_design_correction(
                     unit, correction_error, candidate
                 )
+        suite_corrected = False
         if (
             isinstance(output.get("suite_command"), str)
             and output["suite_command"].strip()
-            and (
-                source.get("type") == "verification"
-                or not self.state.get("suite_command")
-            )
         ):
-            # A verification fixer may CORRECT a wrong command; any fixer
-            # may ARM a run that has none yet (live case: a reviewer
-            # flagged the vacuous gate, the fixer supplied `mix test` —
-            # dropping it on the floor forced a re-flag loop).
-            if st.set_discovered_suite(self.state, output["suite_command"]):
-                # Arming the suite IS a real fix even with zero file
-                # edits: exempt THIS fix round's 'fixed' dispositions
-                # from the phantom check. One-shot by construction —
-                # adoption only fires when it actually changes state.
-                unit["suite_armed_by_fix"] = True
+            # A queued finding may expose a missing OR narrowed suite from a
+            # verification failure, review round, or seal.  Correcting that
+            # run state is a real fix even with zero file edits.  Re-run the
+            # corrected gate before any reviewer is allowed to rely on it.
+            command = output["suite_command"].strip()
+            effective_before = self._verification_commands(unit)
+            suite_state_changed = st.set_discovered_suite(
+                self.state, output["suite_command"], replace=True
+            )
+            suite_corrected = bool(
+                unit.get("suite_verification_pending")
+                or (
+                    bool(self.config.get("verification") or [])
+                    and effective_before != [command]
+                )
+                # With no explicit verification, changing stored state is
+                # the correction.  A documentation unit intentionally has
+                # no effective gate, so merely repeating the already stored
+                # command must not earn state-fix credit.
+                or (
+                    not bool(self.config.get("verification") or [])
+                    and suite_state_changed
+                )
+            )
+            if suite_corrected:
+                unit["suite_verification_pending"] = True
         st.record_round(
             self.state,
             unit,
@@ -2900,6 +2917,7 @@ class Driver(object):
                     if convergence
                     else {}
                 ),
+                **({"suite_corrected": True} if suite_corrected else {}),
             },
         )
         self._maybe_update_slices(unit, output)
@@ -2913,6 +2931,8 @@ class Driver(object):
             )
         # Without git there is no delta to review or amend: return directly.
         target = source.get("return_to") or st.U_PRE_REVIEW_VERIFY
+        if suite_corrected and target == st.U_ROUNDS:
+            target = st.U_PRE_REVIEW_VERIFY
         st.transition_unit(self.state, unit, target, reason="fix applied (no git)")
         return "fix call done; continuing (git disabled)"
 
@@ -2925,14 +2945,30 @@ class Driver(object):
         last_fix = None
         for r in reversed(unit["rounds"]):
             if r["kind"] == contracts.KIND_FIX_FINDINGS:
-                last_fix = r["result"]
+                last_fix = r
                 break
         if last_fix is None:
             return []
-        armed_now = unit.pop("suite_armed_by_fix", None)
+        result = last_fix["result"]
+        suite_corrected = bool(
+            last_fix.get("suite_corrected")
+            # Resume compatibility for a state saved by the earlier
+            # suite-arming implementation between fix and delta review.
+            or unit.pop("suite_armed_by_fix", None)
+        )
+        suite_finding_id = result.get("suite_command_finding_id")
+        if suite_corrected and not suite_finding_id:
+            # Old states predate the explicit binding.  Their arming fix was
+            # safe only in the historical single-fixed-finding shape.
+            fixed_ids = [
+                finding.get("id") for finding in result.get("findings", [])
+                if finding.get("disposition") == "fixed"
+            ]
+            if len(fixed_ids) == 1:
+                suite_finding_id = fixed_ids[0]
         claims = []
         changed = []
-        for p in last_fix.get("files_changed") or []:
+        for p in result.get("files_changed") or []:
             norm = os.path.normpath(str(p))
             # Runtime-bookkeeping paths (either layout) are not real edits.
             if any(seg in (".orchestrator", ".run")
@@ -2941,14 +2977,16 @@ class Driver(object):
             changed.append(p)
         if changed:
             claims.append("files_changed=%s" % (changed,))
-        for f in last_fix.get("findings", []):
+        for f in result.get("findings", []):
             if f.get("disposition") == "fixed":
-                if armed_now:
-                    # This fix ARMED the run's suite command — a real
-                    # state-level fix; its 'fixed' verdicts are earned
-                    # even without file edits.
-                    continue
-                claims.append("finding %s disposed 'fixed'" % f.get("id"))
+                if not (
+                    suite_corrected and f.get("id") == suite_finding_id
+                ):
+                    # Only the explicitly bound finding earns state-fix
+                    # credit; unrelated fixed claims still require real edits.
+                    claims.append(
+                        "finding %s disposed 'fixed'" % f.get("id")
+                    )
             if f.get("prevention"):
                 claims.append(
                     "finding %s claims a prevention edit in %s"
@@ -2965,6 +3003,12 @@ class Driver(object):
         )
         source = unit.get("fix_source") or {}
         return_to = source.get("return_to") or st.U_PRE_REVIEW_VERIFY
+        suite_verification_pending = bool(
+            unit.get("suite_verification_pending")
+            or unit.get("suite_armed_by_fix")
+        )
+        if suite_verification_pending and return_to == st.U_ROUNDS:
+            return_to = st.U_PRE_REVIEW_VERIFY
         try:
             delta = gitops.worktree_diff(self.workspace)
         except gitops.GitError as exc:
@@ -3022,7 +3066,12 @@ class Driver(object):
             unit.pop("phantom_retried", None)
             unit["fix_queue"] = []
             unit["fix_source"] = None
-            if return_to in (st.U_PRE_REVIEW_VERIFY, st.U_PRE_SEAL_VERIFY):
+            if (
+                not suite_verification_pending
+                and return_to in (
+                    st.U_PRE_REVIEW_VERIFY, st.U_PRE_SEAL_VERIFY
+                )
+            ):
                 # Zero edits since the gate last proved this tree green:
                 # let _do_verify reuse that result instead of re-running
                 # a potentially long suite for a bit-identical tree.
@@ -3293,6 +3342,8 @@ class Driver(object):
         if ok:
             # The cap bounds consecutive fix attempts for the CURRENT
             # failing stage; a pass closes the episode.
+            unit.pop("suite_verification_pending", None)
+            unit.pop("suite_armed_by_fix", None)
             unit["verify_fix_attempts"][stage_key] = 0
             if stage == st.U_PRE_REVIEW_VERIFY:
                 st.transition_unit(self.state, unit, st.U_ROUNDS, reason="verified")

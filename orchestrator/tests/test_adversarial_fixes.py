@@ -27,6 +27,7 @@ All git activity happens inside tempfile.TemporaryDirectory workspaces —
 NEVER against the canon repository.
 """
 
+import json
 import os
 import subprocess
 import tempfile
@@ -363,6 +364,7 @@ class TestPhantomFixEmptyDelta(DriverTestCase):
                                     "no official suite recorded",
                                     severity="P1")]),
                     suite_command="mix test",
+                    suite_command_finding_id="F1",
                 )),
                 step("review_round", report("review_round"),
                      family="codex"),
@@ -382,6 +384,404 @@ class TestPhantomFixEmptyDelta(DriverTestCase):
                               if e["type"] == "phantom_fix_retry"])
             self.assertTrue([e for e in state["events"]
                              if e["type"] == "suite_discovered"])
+
+    def test_suite_state_credit_does_not_hide_another_phantom_fix(self):
+        with tempfile.TemporaryDirectory(prefix="orch-adv-") as ws:
+            path = init_state(ws, make_config(verification=[]))
+            driver = drv.Driver(path, runner=runners.MockRunner([
+                draft_step(),
+                step(
+                    "review_round",
+                    report("review_round", [
+                        finding("F1", "no official suite", severity="P1"),
+                        finding("F2", "missing non-goals", severity="P2"),
+                    ]),
+                    family="codex",
+                ),
+                step(
+                    "fix_findings",
+                    dict(
+                        fix_ok([
+                            triaged(
+                                "F1", "fixed", "no official suite",
+                                severity="P1",
+                            ),
+                            triaged(
+                                "F2", "fixed", "missing non-goals",
+                                severity="P2",
+                            ),
+                        ]),
+                        suite_command="test -f docs/skeleton.md",
+                        suite_command_finding_id="F1",
+                    ),
+                ),
+                step(
+                    "fix_findings",
+                    dict(
+                        fix_ok([
+                            triaged(
+                                "F1", "fixed", "no official suite",
+                                severity="P1",
+                            ),
+                            triaged(
+                                "F2", "rejected", "missing non-goals",
+                                severity="P2",
+                                consultation={
+                                    "resolution": "the goal already states it"
+                                },
+                            ),
+                        ]),
+                        suite_command="test -f docs/skeleton.md",
+                        suite_command_finding_id="F1",
+                    ),
+                ),
+            ]))
+            self.step_until(
+                driver,
+                lambda state: (
+                    state["units"][0]["status"] == st.U_ROUNDS
+                    and len([
+                        round_info for round_info in state["units"][0]["rounds"]
+                        if round_info["kind"] == contracts.KIND_FIX_FINDINGS
+                    ]) == 2
+                ),
+                max_steps=20,
+            )
+            state = st.load(path)
+            retries = [
+                event for event in state["events"]
+                if event["type"] == "phantom_fix_retry"
+            ]
+            self.assertEqual(len(retries), 1)
+            self.assertIn("F2", retries[0]["claims"])
+            self.assertIsNone(state["failure"])
+
+    def test_copying_effective_configured_suite_earns_no_state_credit(self):
+        command = "test -f docs/skeleton.md"
+        with tempfile.TemporaryDirectory(prefix="orch-adv-") as ws:
+            path = init_state(ws, make_config(verification=[command]))
+            driver = drv.Driver(path, runner=runners.MockRunner([
+                draft_step(),
+                step(
+                    "review_round",
+                    report("review_round", [finding(
+                        "F1", "unrelated defect", severity="P2"
+                    )]),
+                    family="codex",
+                ),
+                step(
+                    "fix_findings",
+                    dict(
+                        fix_ok([triaged(
+                            "F1", "fixed", "unrelated defect", severity="P2"
+                        )]),
+                        suite_command=command,
+                        suite_command_finding_id="F1",
+                    ),
+                ),
+            ]))
+            self.step_until(
+                driver,
+                lambda state: any(
+                    event["type"] == "phantom_fix_retry"
+                    for event in state["events"]
+                ),
+                max_steps=15,
+            )
+
+    def test_repeating_stored_suite_on_doc_earns_no_state_credit(self):
+        command = "test -f docs/skeleton.md"
+        with tempfile.TemporaryDirectory(prefix="orch-adv-") as ws:
+            path = init_state(ws, make_config(verification=[]))
+            state = st.load(path)
+            st.set_discovered_suite(state, command)
+            st.save(path, state)
+            driver = drv.Driver(path, runner=runners.MockRunner([
+                draft_step(),
+                step(
+                    "review_round",
+                    report("review_round", [finding(
+                        "F1", "unrelated documentation defect", severity="P2"
+                    )]),
+                    family="codex",
+                ),
+                step(
+                    "fix_findings",
+                    dict(
+                        fix_ok([triaged(
+                            "F1", "fixed", "unrelated documentation defect",
+                            severity="P2",
+                        )]),
+                        suite_command=command,
+                        suite_command_finding_id="F1",
+                    ),
+                ),
+            ]))
+            self.step_until(
+                driver,
+                lambda current: any(
+                    event["type"] == "phantom_fix_retry"
+                    for event in current["events"]
+                ),
+                max_steps=15,
+            )
+
+    def test_suite_state_credit_does_not_hide_prevention_claim(self):
+        with tempfile.TemporaryDirectory(prefix="orch-adv-") as ws:
+            path = init_state(ws, make_config(verification=[]))
+            driver = drv.Driver(path, runner=runners.MockRunner([
+                draft_step(),
+                step(
+                    "review_round",
+                    report("review_round", [finding(
+                        "F1", "no official suite", severity="P1"
+                    )]),
+                    family="codex",
+                ),
+                step(
+                    "fix_findings",
+                    dict(
+                        fix_ok([triaged(
+                            "F1", "fixed", "no official suite", severity="P1",
+                            prevention={
+                                "documented_in": "docs/skeleton.md",
+                                "note": "claimed but not written",
+                            },
+                        )]),
+                        suite_command="test -f docs/skeleton.md",
+                        suite_command_finding_id="F1",
+                    ),
+                ),
+            ]))
+            self.step_until(
+                driver,
+                lambda state: any(
+                    event["type"] == "phantom_fix_retry"
+                    for event in state["events"]
+                ),
+                max_steps=15,
+            )
+            state = st.load(path)
+            retry = [
+                event for event in state["events"]
+                if event["type"] == "phantom_fix_retry"
+            ][-1]
+            self.assertIn("prevention edit", retry["claims"])
+
+    def test_legacy_suite_arming_resume_still_routes_to_verification(self):
+        with tempfile.TemporaryDirectory(prefix="orch-adv-") as ws:
+            path = init_state(ws, make_config(verification=[]))
+            mock = runners.MockRunner([
+                draft_step(),
+                step(
+                    "review_round",
+                    report("review_round", [finding(
+                        "F1", "no official suite recorded", severity="P1"
+                    )]),
+                    family="codex",
+                ),
+                step(
+                    "fix_findings",
+                    dict(
+                        fix_ok([triaged(
+                            "F1", "fixed", "no official suite recorded",
+                            severity="P1",
+                        )]),
+                        suite_command="test -f docs/skeleton.md",
+                        suite_command_finding_id="F1",
+                    ),
+                ),
+            ])
+            driver = drv.Driver(path, runner=mock)
+            self.step_until(
+                driver,
+                lambda state: state["units"][0]["status"] == st.U_DELTA_REVIEW,
+                max_steps=15,
+            )
+
+            # Shape written by the pre-fix implementation between the fixer
+            # call and delta review.
+            state = st.load(path)
+            unit = state["units"][0]
+            unit.pop("suite_verification_pending", None)
+            unit["rounds"][-1].pop("suite_corrected", None)
+            unit["rounds"][-1]["result"].pop(
+                "suite_command_finding_id", None
+            )
+            unit["suite_armed_by_fix"] = True
+            # Simulate loading bytes produced by the previous release.  The
+            # current append-only writer correctly refuses history rewrites,
+            # so the fixture is written as an old on-disk state directly.
+            with open(path, "w", encoding="utf-8") as state_file:
+                json.dump(state, state_file)
+
+            resumed = drv.Driver(path, runner=mock)
+            resumed.step()
+            state = st.load(path)
+            unit = state["units"][0]
+            self.assertEqual(unit["status"], st.U_PRE_REVIEW_VERIFY)
+            self.assertNotIn("skip_next_verify", unit)
+
+    def test_review_suite_correction_is_state_fix_and_reruns_gate(self):
+        """A review can detect that a green but narrowed command is wrong.
+
+        Its metadata-only correction must replace the run state, avoid the
+        phantom-fix retry, and actually run the corrected command before the
+        reviewer is allowed to continue.
+        """
+        narrow = "test -f core.txt"
+        official = "test -s core.txt"
+        with tempfile.TemporaryDirectory(prefix="orch-adv-") as ws:
+            path = init_state(ws, make_config(verification=[]))
+            script = [
+                draft_step(),
+                step("review_round", report("review_round"), family="codex"),
+                step("review_round", report("review_round"), family="claude"),
+                step("seal_half", report("seal_half"), family="codex"),
+                step("seal_half", report("seal_half"), family="claude"),
+                step(
+                    "draft_slice_note",
+                    ok("draft_slice_note", artifact="docs/slice-01.md"),
+                    family="codex",
+                    side_effect=write_file(
+                        "docs/slice-01.md", "# Slice 01\n\nBuild core.\n"
+                    ),
+                ),
+                step("review_round", report("review_round"), family="codex"),
+                step("review_round", report("review_round"), family="claude"),
+                step("seal_half", report("seal_half"), family="codex"),
+                step("seal_half", report("seal_half"), family="claude"),
+                step(
+                    "implement",
+                    ok(
+                        "implement",
+                        files_changed=["core.txt"],
+                        suite_command=narrow,
+                    ),
+                    family="codex",
+                    side_effect=write_file("core.txt", "implemented\n"),
+                ),
+                step(
+                    "review_round",
+                    report(
+                        "review_round",
+                        [finding(
+                            "F1", "reported suite is narrower than official",
+                            severity="P1",
+                        )],
+                    ),
+                    family="codex",
+                ),
+                step(
+                    "fix_findings",
+                    dict(
+                        fix_ok([triaged(
+                            "F1", "fixed",
+                            "reported suite is narrower than official",
+                            severity="P1",
+                        )]),
+                        suite_command=official,
+                        suite_command_finding_id="F1",
+                    ),
+                    family="codex",
+                ),
+            ]
+            mock = runners.MockRunner(script)
+            driver = drv.Driver(path, runner=mock)
+
+            def corrected_gate_ran(state):
+                unit = st.current_unit(state)
+                if unit is None or unit["kind"] != st.UNIT_SLICE_IMPL:
+                    return False
+                verification = [
+                    event for event in state["events"]
+                    if event["type"] == "verification"
+                    and event["unit"] == "slice_impl-01"
+                ]
+                return (
+                    unit["status"] == st.U_ROUNDS
+                    and len(verification) == 2
+                    and verification[-1]["commands"] == [official]
+                )
+
+            self.step_until(driver, corrected_gate_ran, max_steps=30)
+            state = st.load(path)
+            self.assertEqual(mock.script, [])
+            self.assertEqual(state["suite_command"], official)
+            self.assertFalse([
+                event for event in state["events"]
+                if event["type"] == "phantom_fix_retry"
+            ])
+            verification = [
+                event for event in state["events"]
+                if event["type"] == "verification"
+                and event["unit"] == "slice_impl-01"
+            ]
+            self.assertEqual(
+                [event["commands"] for event in verification],
+                [[narrow], [official]],
+            )
+            self.assertNotIn("reused", verification[-1])
+
+    def test_review_correction_overrides_stale_configured_commands(self):
+        official = "test -f docs/skeleton.md"
+        stale = ["test -d docs", "test -s docs/skeleton.md"]
+        with tempfile.TemporaryDirectory(prefix="orch-adv-") as ws:
+            path = init_state(ws, make_config(verification=stale))
+            state = st.load(path)
+            st.set_discovered_suite(state, official)
+            st.save(path, state)
+            mock = runners.MockRunner([
+                draft_step(),
+                step(
+                    "review_round",
+                    report("review_round", [finding(
+                        "F1", "configured verification is stale",
+                        severity="P1",
+                    )]),
+                    family="codex",
+                ),
+                step(
+                    "fix_findings",
+                    dict(
+                        fix_ok([triaged(
+                            "F1", "fixed", "configured verification is stale",
+                            severity="P1",
+                        )]),
+                        suite_command="  %s  " % official,
+                        suite_command_finding_id="F1",
+                    ),
+                    family="codex",
+                ),
+            ])
+            driver = drv.Driver(path, runner=mock)
+
+            def corrected_gate_ran(current):
+                verification = [
+                    event for event in current["events"]
+                    if event["type"] == "verification"
+                    and event["unit"] == "skeleton"
+                ]
+                return (
+                    current["units"][0]["status"] == st.U_ROUNDS
+                    and len(verification) == 2
+                )
+
+            self.step_until(driver, corrected_gate_ran, max_steps=15)
+            state = st.load(path)
+            verification = [
+                event for event in state["events"]
+                if event["type"] == "verification"
+                and event["unit"] == "skeleton"
+            ]
+            self.assertEqual(
+                [event["commands"] for event in verification],
+                [stale, [official]],
+            )
+            self.assertFalse([
+                event for event in state["events"]
+                if event["type"] == "phantom_fix_retry"
+            ])
 
     def test_pure_rejection_episode_still_closes_green(self):
         """The legitimate empty-delta case: all rejections, no edit claims

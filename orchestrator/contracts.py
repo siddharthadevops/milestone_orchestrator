@@ -488,6 +488,24 @@ def validate_battery(battery, required_questions, ctx):
     return battery
 
 
+def validate_suite_command(command, ctx):
+    if not isinstance(command, str) or not command.strip():
+        raise ContractError(
+            "%s: suite_command, when present, must be a non-empty string"
+            % ctx
+        )
+    lowered = command.strip().lower()
+    if (
+        lowered in ("true", "false", ":", "exit 0", "exit")
+        or lowered.startswith("echo ")
+        or lowered.startswith("printf ")
+    ):
+        raise ContractError(
+            "%s: suite_command %r is a no-op, not a test suite"
+            % (ctx, command)
+        )
+
+
 def validate_worker_output(obj, kind, require_plain=False,
                            battery_questions=None,
                            require_drift_damage=False,
@@ -577,22 +595,7 @@ def validate_worker_output(obj, kind, require_plain=False,
     elif kind == KIND_IMPLEMENT:
         _require(obj, "files_changed", list, ctx)
         if obj.get("suite_command") is not None:
-            sc = obj["suite_command"]
-            if not isinstance(sc, str) or not sc.strip():
-                raise ContractError(
-                    "%s: suite_command, when present, must be a non-empty "
-                    "string" % ctx
-                )
-            lowered = sc.strip().lower()
-            if (
-                lowered in ("true", "false", ":", "exit 0", "exit")
-                or lowered.startswith("echo ")
-                or lowered.startswith("printf ")
-            ):
-                raise ContractError(
-                    "%s: suite_command %r is a no-op, not a test suite"
-                    % (ctx, sc)
-                )
+            validate_suite_command(obj["suite_command"], ctx)
     elif kind in REPORT_KINDS:
         findings = _require(obj, "findings", list, ctx)
         for i, f in enumerate(findings):
@@ -622,6 +625,29 @@ def validate_worker_output(obj, kind, require_plain=False,
             validate_fix_finding(f, "%s.findings[%d]" % (ctx, i))
         _assert_unique_finding_ids(findings, ctx)
         _optional(obj, "files_changed", list, ctx, default=[])
+        suite_command = obj.get("suite_command")
+        suite_finding_id = obj.get("suite_command_finding_id")
+        if suite_command is not None:
+            validate_suite_command(suite_command, ctx)
+            suite_finding_id = _require(
+                obj, "suite_command_finding_id", str, ctx
+            )
+            matches = [
+                finding for finding in findings
+                if finding.get("id") == suite_finding_id
+            ]
+            if (
+                len(matches) != 1
+                or matches[0].get("disposition") != "fixed"
+            ):
+                raise ContractError(
+                    "%s: suite_command_finding_id must name exactly one "
+                    "finding disposed 'fixed'" % ctx
+                )
+        elif suite_finding_id is not None:
+            raise ContractError(
+                "%s: suite_command_finding_id requires suite_command" % ctx
+            )
         # Optional updated slice plan: only meaningful when the fix touched
         # the milestone skeleton's slice table (before the skeleton seals).
         slices = _optional(obj, "slices", list, ctx)
@@ -689,7 +715,7 @@ KIND_OUTPUT_KEYS = {
     KIND_FIX_FINDINGS: frozenset(
         {
             "findings", "files_changed", "slices", "suite_command",
-            "design_correction",
+            "suite_command_finding_id", "design_correction",
         }
     ),
 }
@@ -779,10 +805,12 @@ Kind implement adds:
    be non-interactive and run the suite exactly ONCE and exit — never a
    watch mode; null or omitted if the repo has no suite>"
 
-Kind fix_findings may ALSO include "suite_command" when the queued
-findings came from a failing verification gate (correcting a wrong
-command) or when the run has no recorded suite yet (arming it) — the
-driver adopts it.
+Kind fix_findings may ALSO include "suite_command" when a queued finding
+identifies a missing, narrowed, or wrong verification gate — whether the
+finding came from verification, review, or seal. The driver adopts that
+state correction and runs the corrected gate before review continues.
+It must also include "suite_command_finding_id", naming that queued finding;
+the referenced finding must be disposed "fixed".
 
 REVIEW kinds (review_round / delta_review / seal_half) add:
   "findings": [

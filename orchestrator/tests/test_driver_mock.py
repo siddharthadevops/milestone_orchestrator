@@ -1005,6 +1005,23 @@ class TestSuiteDiscoveryProtocol(DriverTestCase):
                     else:
                         self.assertFalse(has, kind)
 
+    def test_later_discovery_does_not_replace_established_suite(self):
+        with tempfile.TemporaryDirectory(prefix="orch-mock-") as ws:
+            path = init_state(ws, make_config(verification=[]))
+            state = st.load(path)
+
+            self.assertTrue(st.set_discovered_suite(state, "mix precommit"))
+            self.assertFalse(st.set_discovered_suite(state, "mix test"))
+            self.assertEqual(state["suite_command"], "mix precommit")
+
+            ignored = [
+                event for event in state["events"]
+                if event["type"] == "suite_discovery_ignored"
+            ]
+            self.assertEqual(len(ignored), 1)
+            self.assertEqual(ignored[0]["command"], "mix test")
+            self.assertEqual(ignored[0]["established"], "mix precommit")
+
     def test_suite_fix_overrides_stale_config_verification(self):
         with tempfile.TemporaryDirectory(prefix="orch-mock-") as ws:
             stale = "python3 -m unittest discover -s orchestrator/tests"
@@ -1020,6 +1037,7 @@ class TestSuiteDiscoveryProtocol(DriverTestCase):
                     "status": "ok",
                     "kind": contracts.KIND_FIX_FINDINGS,
                     "suite_command": corrected,
+                    "suite_command_finding_id": "F1",
                     "findings": [
                         {"id": "F1", "severity": "P1",
                          "summary": "wrong suite",

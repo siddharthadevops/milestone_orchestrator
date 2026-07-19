@@ -282,6 +282,10 @@ class TestFieldCollisions(unittest.TestCase):
             {"status", "kind", "blocked_reason", "notes", "gaps",
              "files_changed", "suite_command"},
         )
+        self.assertIn(
+            "suite_command_finding_id",
+            contracts.reserved_output_keys("fix_findings"),
+        )
         self.assertIn("artifact", contracts.reserved_output_keys("draft_skeleton"))
         self.assertIn("findings", contracts.reserved_output_keys("seal_half"))
         with self.assertRaises(contracts.ContractError):

@@ -1181,6 +1181,50 @@ class TestImplementSuiteCommand(unittest.TestCase):
                 self.base(suite_command=42), "implement")
 
 
+class TestFixSuiteCommand(unittest.TestCase):
+    def base(self, **extra):
+        obj = ok_output(
+            contracts.KIND_FIX_FINDINGS,
+            findings=[dict(full_finding("fixed"), id="F1")],
+            files_changed=[],
+        )
+        obj.update(extra)
+        return obj
+
+    def test_command_is_bound_to_fixed_finding(self):
+        contracts.validate_worker_output(
+            self.base(
+                suite_command="mix precommit",
+                suite_command_finding_id="F1",
+            ),
+            contracts.KIND_FIX_FINDINGS,
+        )
+
+    def test_command_without_finding_binding_is_rejected(self):
+        with self.assertRaises(contracts.ContractError):
+            contracts.validate_worker_output(
+                self.base(suite_command="mix precommit"),
+                contracts.KIND_FIX_FINDINGS,
+            )
+
+    def test_binding_must_name_fixed_finding(self):
+        with self.assertRaises(contracts.ContractError):
+            contracts.validate_worker_output(
+                self.base(
+                    suite_command="mix precommit",
+                    suite_command_finding_id="F2",
+                ),
+                contracts.KIND_FIX_FINDINGS,
+            )
+
+    def test_binding_without_command_is_rejected(self):
+        with self.assertRaises(contracts.ContractError):
+            contracts.validate_worker_output(
+                self.base(suite_command_finding_id="F1"),
+                contracts.KIND_FIX_FINDINGS,
+            )
+
+
 # snapshot_workspace
 
 

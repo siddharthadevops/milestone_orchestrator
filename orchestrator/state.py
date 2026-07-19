@@ -440,16 +440,27 @@ def transition_unit(state, unit, new_status, reason=None):
     )
 
 
-def set_discovered_suite(state, command):
-    """Record the official suite command the implementer discovered. The
-    ledger gets a suite_discovered event; re-discovery of a different
-    command overwrites (latest implementer knows best) with a fresh
-    event. Explicit config verification always wins over this at gate
-    time — this is the zero-config path."""
+def set_discovered_suite(state, command, replace=False):
+    """Record the official suite command discovered for this run.
+
+    The first implementer arms the zero-config gate.  A later implementer
+    reporting a different command cannot silently replace an already proven
+    gate; the discrepancy is recorded and needs an explicit fixer correction.
+    ``replace`` is that correction lane.  Explicit config verification still
+    wins at gate time.
+    """
     command = str(command or "").strip()
     if not command or state.get("suite_command") == command:
         return False
     previous = state.get("suite_command")
+    if previous and not replace:
+        append_event(
+            state,
+            "suite_discovery_ignored",
+            command=command,
+            established=previous,
+        )
+        return False
     state["suite_command"] = command
     append_event(
         state, "suite_discovered", command=command, previous=previous
