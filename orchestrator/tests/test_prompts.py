@@ -171,29 +171,34 @@ class TestProcessAuthorityInEveryBuilder(unittest.TestCase):
 
 
 class TestAccessModelStillIntact(unittest.TestCase):
-    """(2) The PROCESS AUTHORITY append must not have disturbed the
-    access model: report-only builders keep the REPORT-ONLY ban, edit
-    builders keep the workspace-edit line, and neither leaks into the
-    other side."""
+    """(2) The access model stays clean: edit builders carry the
+    workspace-edit grant and report-only builders never do. Report-only
+    roles are read-only by the ABSENCE of that grant — the old
+    "modifications invalidate your entire output" warning was removed
+    because it made reviewers self-block over .gitignore'd build/test
+    churn the deterministic guard never counts (2026-07-20)."""
 
-    REPORT_ONLY_LINE = (
-        "REPORT-ONLY: do not create, edit, delete, or move any file"
-    )
     EDIT_LINE = "Edit permissions INSIDE the workspace only"
+    # The removed self-block trigger must not creep back into any builder.
+    DROPPED_SCARE = "invalidate your entire output"
 
-    def test_report_builders_carry_report_only(self):
+    def test_report_builders_have_no_edit_grant(self):
         built = build_all()
         for name in REPORT_BUILDERS:
             with self.subTest(builder=name):
-                self.assertIn(self.REPORT_ONLY_LINE, built[name])
                 self.assertNotIn(self.EDIT_LINE, built[name])
+
+    def test_no_builder_carries_the_dropped_tamper_warning(self):
+        built = build_all()
+        for name, text in built.items():
+            with self.subTest(builder=name):
+                self.assertNotIn(self.DROPPED_SCARE, text)
 
     def test_edit_builders_carry_workspace_edit_line(self):
         built = build_all()
         for name in EDIT_BUILDERS:
             with self.subTest(builder=name):
                 self.assertIn(self.EDIT_LINE, built[name])
-                self.assertNotIn(self.REPORT_ONLY_LINE, built[name])
 
     def test_authority_section_follows_access_section(self):
         # PROCESS AUTHORITY is appended inside the ACCESS block; it must
@@ -849,12 +854,6 @@ class TestPortedCanonContentRules(unittest.TestCase):
                 self.assertIn(
                     "Never include secrets, credentials, tokens, private "
                     "keys, raw PII", normalized(prompt))
-
-    def test_report_finding_instead_of_editing(self):
-        for name in REPORT_BUILDERS:
-            self.assertIn(
-                "If you believe a file should change, report a finding "
-                "instead of changing it", normalized(build_all()[name]))
 
     def test_brainstorming_adopt_revise_reject(self):
         drafts = ("draft_skeleton", "draft_slice_note", "implement")

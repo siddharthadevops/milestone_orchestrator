@@ -60,13 +60,16 @@ def _access_block(edit_allowed):
             "  changes yourself; never describe a fix without applying it.",
             "  Never modify anything outside WORKSPACE.",
         ]
-    else:
-        lines += [
-            "- REPORT-ONLY: do not create, edit, delete, or move any file,",
-            "  anywhere. Workspace modifications are detected mechanically",
-            "  and invalidate your entire output. If you believe a file",
-            "  should change, report a finding instead of changing it.",
-        ]
+    # Report-only roles (reviewers, seal halves, reclassifiers) get no edit
+    # grant, which is the whole instruction: they return findings, not file
+    # changes. The old "do not modify ANY file, anywhere — it invalidates
+    # your entire output" warning was dropped deliberately: the real guard
+    # is the orchestrator's deterministic before/after snapshot diff, which
+    # already ignores .gitignore'd build/test artifact churn — so a reviewer
+    # that ran the project's tests would read that warning literally and
+    # block itself over untracked `_build` churn the guard never counts
+    # (observed live 2026-07-20). Actual tampering with tracked files is
+    # still reverted mechanically, prompt or no prompt.
     lines += [
         "- Never include secrets, credentials, tokens, private keys, raw",
         "  PII, or raw sensitive operational data in anything you write",

@@ -838,9 +838,8 @@ REVIEW kinds (review_round / delta_review / seal_half) add:
       REJECTIONS list>", "new_evidence": "<the new fact that contradicts
       the recorded rationale>"}}
   ]
-  Rules: you REVIEW ONLY — no disposition field, and you must not create,
-  edit, delete, or move ANY file (modifications are detected mechanically
-  and invalidate your output). Finding ids must be unique within this
+  Rules: you REVIEW ONLY — you return findings, no disposition field.
+  Finding ids must be unique within this
   response. An empty findings list means the target is clean. EVERY
   finding MUST include `plain` AND `example` — a finding without its
   plain-language sentence and its smallest (<500 chars) concrete failure
