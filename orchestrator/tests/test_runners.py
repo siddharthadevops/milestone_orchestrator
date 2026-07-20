@@ -1130,6 +1130,55 @@ class TestUnterminatedEnvelopeRecovery(unittest.TestCase):
         with self.assertRaises((ValueError, contracts.ContractError)):
             runners._extract_contract_output(text, self._validate_review)
 
+    def test_text_cut_mid_number_is_not_recovered(self):
+        # The dangerous case: a bare token cut mid-way still PARSES after
+        # closing, but means something else. `"id": 1` truncated from `10`
+        # would validate and silently change the slice id.
+        text = (
+            '{"status": "ok", "kind": "draft_skeleton", '
+            '"artifact": "docs/skeleton.md", '
+            '"slices": [{"title": "ten", "id": 1'
+        )
+
+        def validate_skeleton(obj):
+            return contracts.validate_worker_output(obj, "draft_skeleton")
+
+        self.assertIsNone(runners._repair_unterminated(text))
+        with self.assertRaises((ValueError, contracts.ContractError)):
+            runners._extract_contract_output(text, validate_skeleton)
+
+    def test_bare_literal_tails_are_not_recovered(self):
+        for tail in ('"n": 1', '"n": tru', '"n": null', '"n": -1.5'):
+            text = (
+                '{"status": "ok", "kind": "review_round", "findings": [], '
+                + tail
+            )
+            with self.subTest(tail=tail):
+                self.assertIsNone(runners._repair_unterminated(text))
+
+    def test_object_inside_an_unterminated_array_is_not_recovered(self):
+        # The object is an ELEMENT of a container the worker had not
+        # finished emitting. Closing just the element would promote it to
+        # the whole answer and drop the rest.
+        text = '[{"status": "ok", "kind": "review_round", "findings": []'
+        self.assertIsNone(runners._repair_unterminated(text))
+        with self.assertRaises((ValueError, contracts.ContractError)):
+            runners._extract_contract_output(text, self._validate_review)
+
+    def test_prose_preamble_does_not_block_recovery(self):
+        # The live shape: ordinary prose (with balanced punctuation) before
+        # the envelope must still recover.
+        text = (
+            'Review complete (2 items, see below). No P0-P2.\n\n'
+            '{"status": "ok", "kind": "review_round", "findings": [], '
+            '"notes": "n"\n'
+        )
+        obj, closers = runners._extract_contract_output(
+            text, self._validate_review
+        )
+        self.assertEqual(closers, "}")
+        self.assertEqual(obj["notes"], "n")
+
     def test_recovered_object_must_still_satisfy_the_contract(self):
         # Balanced-but-incomplete: the brace is all that is missing, yet a
         # required key is absent. Recovery is not a contract bypass.

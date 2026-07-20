@@ -3920,7 +3920,12 @@ class Driver(object):
                 "model": review_profiles[family][0],
                 "effort": review_profiles[family][1],
             }
-            rep = getattr(result, "repair", None)
+            # A delimiter recovery counts exactly like a repaired strike:
+            # the seal is the LAST place a malformed output may pass
+            # unseen, so both channels feed the same trail.
+            rep = getattr(result, "repair", None) or getattr(
+                result, "recovered", None
+            )
             if rep:
                 # Thread-safe part only: write the per-family raw file
                 # (distinct names, no race) and stash the strike; the
@@ -3930,7 +3935,7 @@ class Driver(object):
                 half["repair"] = {
                     "label": raw_name,
                     "error": str(rep["error"])[:300],
-                    "duration_s": rep["duration_s"],
+                    "duration_s": rep.get("duration_s"),
                     "raw_path": self._save_raw(
                         "%s-malformed" % raw_name, rep["raw_text"]
                     ),

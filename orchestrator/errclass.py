@@ -66,7 +66,11 @@ _PATTERNS = (
         # `limit reached` misses it and a plain quota stop was typed
         # `unknown`, which the guard re-probes every 15 min instead of
         # parking until the window resets (found live 2026-07-19).
-        r"reached your .{0,40}\blimit\b",
+        # The second-person opener is load-bearing: a bare
+        # "reached ... limit" also fits worker prose ("the fixer reached
+        # your configured retry limit"), and a false quota verdict puts a
+        # content failure on an auto-resume loop.
+        r"you(?:'ve| have) reached your .{0,30}\blimit\b",
         r"/usage-credits",
         r"out of (free )?credits",
     )),

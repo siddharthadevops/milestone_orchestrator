@@ -150,6 +150,32 @@ class MalformedObservabilityTest(unittest.TestCase):
             for half in (s_.get("halves") or {}).values():
                 self.assertNotIn("repair", half)
 
+    def test_seal_half_recovery_is_not_silent(self):
+        # The seal is the LAST place a malformed output could slip past
+        # unseen: a clean seal_half missing only its final `}` recovers,
+        # so it must still leave the same trail a repaired strike does.
+        seal = report("seal_half")
+        state = self._drive(
+            [
+                draft(),
+                step("review_round", report("review_round"), family="codex"),
+                step("review_round", report("review_round"), family="claude"),
+                step("seal_half", json.dumps(seal)[:-1] + "\n",
+                     family="codex"),
+                step("seal_half", report("seal_half"), family="claude"),
+            ],
+            stop=lambda s: s["units"][0]["status"] == st.U_SEALED,
+        )
+        self.assertEqual(state["units"][0]["status"], st.U_SEALED)
+        events = self._malformed_events(state)
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0]["kind"], "seal_half")
+        self.assertEqual(events[0]["family"], "codex")
+        self.assertIn("unterminated", events[0]["error"])
+        for s_ in state["units"][0]["seals"]:
+            for half in (s_.get("halves") or {}).values():
+                self.assertNotIn("repair", half)
+
     def test_summary_projects_the_malformed_trail(self):
         state = self._drive(
             [

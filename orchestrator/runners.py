@@ -185,6 +185,46 @@ def _closers_from(stripped, start):
     return "".join(reversed(stack))
 
 
+# The only characters a recoverable text may end on. Each one PROVES the
+# preceding token finished: a closing quote ends a string, `}`/`]` end a
+# container. Anything else may be a token cut mid-way — and a bare token
+# is the dangerous case, because it can still parse after closing while
+# meaning something different: `"id": 1` truncated from `10` would
+# silently validate as 1. Refusing here is what keeps "append only
+# grammar-determined punctuation" an honest claim rather than a guess.
+_COMPLETE_TOKEN_TAIL = ('"', "}", "]")
+
+
+def _prefix_opens_nothing(stripped, start):
+    """No unmatched opener sits before `start` (outside strings).
+
+    A prefix that still has one open means the object is an ELEMENT of a
+    larger unterminated structure (`[{...`), not a top-level object that
+    lost its brace. Closing the element alone would silently promote it to
+    the whole answer and drop whatever the container had yet to emit."""
+    depth = 0
+    in_str = False
+    esc = False
+    for ch in stripped[:start]:
+        if in_str:
+            if esc:
+                esc = False
+            elif ch == "\\":
+                esc = True
+            elif ch == '"':
+                in_str = False
+            continue
+        if ch == '"':
+            in_str = True
+        elif ch in "{[":
+            depth += 1
+        elif ch in "}]":
+            depth -= 1
+            if depth < 0:
+                return False
+    return depth == 0 and not in_str
+
+
 def _repair_unterminated(text):
     """Recover a top-level object whose CLOSING DELIMITERS are missing.
 
@@ -195,22 +235,26 @@ def _repair_unterminated(text):
     thrown away, and its replacement re-review reached a different verdict
     (one dropped two findings and the unit sealed clean).
 
-    Returns (object, closers) or None. This only ever appends punctuation
-    the grammar fully determines; it never invents content, and a text cut
-    mid-string or mid-token stays unrecoverable. The caller additionally
-    requires the result to satisfy the worker contract, so a genuinely
-    incomplete object is still rejected."""
+    Returns (object, closers) or None. Three independent conditions must
+    all hold, because "append only punctuation" is a claim that has to be
+    earned: the text must end on a character proving its last token
+    finished, nothing may be left open before the object starts, and the
+    result must parse. The caller then requires the worker contract on top.
+    Anything cut mid-string, mid-number, or mid-literal stays unrecoverable."""
     stripped = (text or "").strip()
+    if stripped[-1:] not in _COMPLETE_TOKEN_TAIL:
+        return None
     start = stripped.find("{")
     while start != -1:
-        closers = _closers_from(stripped, start)
-        if closers:
-            try:
-                obj = json.loads(stripped[start:] + closers)
-            except json.JSONDecodeError:
-                obj = None
-            if isinstance(obj, dict):
-                return obj, closers
+        if _prefix_opens_nothing(stripped, start):
+            closers = _closers_from(stripped, start)
+            if closers:
+                try:
+                    obj = json.loads(stripped[start:] + closers)
+                except json.JSONDecodeError:
+                    obj = None
+                if isinstance(obj, dict):
+                    return obj, closers
         start = stripped.find("{", start + 1)
     return None
 

@@ -47,14 +47,17 @@ class TestPatterns(unittest.TestCase):
             "quota",
         )
 
-    def test_limit_phrasing_does_not_swallow_unrelated_prose(self):
-        # "reached" and "limit" far apart must not read as a quota banner.
-        self.assertIsNone(
-            errclass.classify_text(
-                "The fixer reached the sealed note and respected every "
-                "boundary the design puts on what a slice may change."
-            )
-        )
+    def test_limit_phrasing_does_not_swallow_worker_prose(self):
+        # A false quota verdict is worse than no verdict: it puts a CONTENT
+        # failure on the guard's auto-resume loop. Short worker prose that
+        # happens to say "reached ... limit" must not type as quota.
+        for prose in (
+            "the fixer reached your configured retry limit",
+            "The reviewer reached your stated line limit for the note.",
+            "Round 3 reached the round limit for this family.",
+        ):
+            with self.subTest(prose=prose):
+                self.assertIsNone(errclass.classify_text(prose))
 
     def test_busy_and_network(self):
         self.assertEqual(
