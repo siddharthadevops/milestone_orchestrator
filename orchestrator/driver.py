@@ -3033,7 +3033,20 @@ class Driver(object):
             correction if correction.get("phase") == "proposed" else None
         )
         source = unit.get("fix_source") or {}
-        return_to = source.get("return_to") or st.U_PRE_REVIEW_VERIFY
+        # The episode's ORIGINAL return target — where the fix chain was
+        # born. A pending suite re-verify redirects `return_to` to
+        # pre_review_verify just below, but the delta convergence
+        # checkpoint must key off `origin_return`, not the redirected
+        # value: a review-originated loop has to escalate to a full review
+        # after delta_full_review_after_fixes fixes even while a suite
+        # correction is pending. Keying off the redirected target silently
+        # disabled the checkpoint and let the loop run to max_fix_loops —
+        # and because that loop never returns to verify, the pending flag
+        # never cleared, so the suppression was permanent for the episode
+        # (found live 2026-07-21: a slice ran 8 dirty deltas with the
+        # 5-fix checkpoint suppressed this way).
+        origin_return = source.get("return_to") or st.U_PRE_REVIEW_VERIFY
+        return_to = origin_return
         suite_verification_pending = bool(
             unit.get("suite_verification_pending")
             or unit.get("suite_armed_by_fix")
@@ -3128,14 +3141,16 @@ class Driver(object):
         # phantom attempts do not count because they produced no dirty delta.
         fix_number = 1 + dirty_deltas
         if (not provisional
-                and return_to == st.U_ROUNDS
+                and origin_return == st.U_ROUNDS
                 and checkpoint_after
                 and fix_number >= checkpoint_after):
             # The fifth fix has already incorporated the previous delta's
             # known findings.  At this point another diff-only review would
             # inspect a large cumulative patch with less context than the
             # active full reviewer.  Checkpoint the WIP and follow the exact
-            # clean-delta return edge; family_index is deliberately untouched.
+            # clean-delta return edge (the REDIRECTED return_to, so a pending
+            # suite re-verify still runs first, then the full review);
+            # family_index is deliberately untouched.
             try:
                 sha = gitops.amend(self.workspace)
             except gitops.GitError as exc:

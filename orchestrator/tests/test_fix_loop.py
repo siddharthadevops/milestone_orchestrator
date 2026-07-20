@@ -300,6 +300,100 @@ class TestDeltaFullReviewCheckpoint(DriverTestCase):
                 for event in state["events"]
             ))
 
+    def test_checkpoint_fires_even_with_suite_verify_pending(self):
+        # Live bug (2026-07-21): a fixer that also corrected the suite
+        # command sets suite_verification_pending, which redirects the delta
+        # loop's return_to from rounds to pre_review_verify. The checkpoint
+        # keyed off that redirected target, so it was silently disabled and
+        # the review-originated loop ran to max_fix_loops instead of
+        # escalating to a full review after N fixes — and because the loop
+        # never returned to verify, the flag never cleared, making the
+        # suppression permanent (a slice ran 8 dirty deltas this way). The
+        # checkpoint must key off where the episode was BORN (a review
+        # round), not the suite redirect.
+        with tempfile.TemporaryDirectory(prefix="orch-mock-") as ws:
+            path = init_state(
+                ws, make_config(delta_full_review_after_fixes=2)
+            )
+            mock = runners.MockRunner([
+                draft_step(),
+                step("review_round", report("review_round"), family="codex"),
+                step(
+                    "review_round",
+                    report("review_round", [finding("F1", "first defect")]),
+                    family="claude",
+                ),
+                step(
+                    "fix_findings",
+                    fix_ok(
+                        [triaged("F1", "fixed", "first defect")],
+                        files_changed=["docs/skeleton.md"],
+                    ),
+                    family="codex",
+                    side_effect=append_file("docs/skeleton.md", "\nfix1\n"),
+                ),
+                step(
+                    "delta_review",
+                    report("delta_review", [finding("D1", "delta defect")]),
+                    family="codex",
+                ),
+                step(
+                    "fix_findings",
+                    fix_ok(
+                        [triaged("D1", "fixed", "delta defect")],
+                        files_changed=["docs/skeleton.md"],
+                    ),
+                    family="codex",
+                    side_effect=append_file("docs/skeleton.md", "\nfix2\n"),
+                ),
+                # After the checkpoint the redirect runs pre_review_verify
+                # (vacuous on a skeleton, which clears the flag), then the
+                # whole-commit review resumes with the active family.
+                step("review_round", report("review_round"), family="claude"),
+                step("seal_half", report("seal_half"), family="codex"),
+                step("seal_half", report("seal_half"), family="claude"),
+            ])
+            driver = drv.Driver(path, runner=mock)
+            self.step_until(
+                driver,
+                lambda state: (
+                    state["units"][0]["status"] == st.U_FIXING
+                    and any(
+                        round_["kind"] == "delta_review"
+                        for round_ in state["units"][0]["rounds"]
+                    )
+                ),
+            )
+            # A suite-correcting fixer earlier in this same review episode
+            # would have set this; inject it to prove it no longer suppresses
+            # the checkpoint.
+            driver.state["units"][0]["suite_verification_pending"] = True
+            st.save(path, driver.state)
+            self.step_until(
+                driver,
+                lambda state: state["units"][0]["status"] == st.U_SEALED,
+            )
+            self.assertEqual(mock.script, [])
+            state = st.load(path)
+            checkpoint = [
+                e for e in state["events"] if e["type"] == "delta_checkpoint"
+            ]
+            self.assertEqual(len(checkpoint), 1)
+            self.assertEqual(checkpoint[0]["fixes"], 2)
+            # It followed the REDIRECTED edge (suite re-verify first), proving
+            # the flag was set yet the checkpoint still fired.
+            self.assertEqual(checkpoint[0]["return_to"], st.U_PRE_REVIEW_VERIFY)
+            # The pending flag was cleared by the re-verify it routed through.
+            self.assertFalse(
+                state["units"][0].get("suite_verification_pending")
+            )
+            # Exactly one delta: the loop escalated instead of running on.
+            self.assertEqual(
+                len([r for r in state["units"][0]["rounds"]
+                     if r["kind"] == "delta_review"]),
+                1,
+            )
+
 
 # ---------------------------------------------------------------------------
 # (c) fix-loop cap
