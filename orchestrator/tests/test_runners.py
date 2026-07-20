@@ -1380,7 +1380,7 @@ class TestApplyModelEffort(unittest.TestCase):
             d["codex"], {"model": "gpt-5.6-sol", "effort": "xhigh"}
         )
         self.assertEqual(d["claude"],
-                         {"model": "claude-opus-4-8", "effort": "max"})
+                         {"model": "claude-fable-5", "effort": "high"})
 
     def test_no_placeholder_no_flag_ignores_overrides(self):
         from orchestrator.runners import apply_model_effort

@@ -78,7 +78,7 @@ DEFAULT_CONFIG = {
     # (runners.WORKFLOW_DISABLED_ENV): the async workflow model is
     # incompatible with the one-shot call contract.
     "model_defaults": {
-        "claude": {"model": "claude-opus-4-8", "effort": "max"},
+        "claude": {"model": "claude-fable-5", "effort": "high"},
         "codex": {"model": "gpt-5.6-sol", "effort": "xhigh"},
     },
     # No timeouts by default: worker calls run as long as the work needs
