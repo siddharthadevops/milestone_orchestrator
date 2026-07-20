@@ -77,9 +77,10 @@ _PATTERNS = (
         # the worker reached your configured retry limit; mention
         # /usage-credits only for quota failures") does not. Two anchors: the
         # bare banner (claude's stdout), and the same banner wrapped by the
-        # runner's own no-output RunnerError ("... stderr tail: You've
-        # reached your ... limit. Run /usage-credits").
-        r"(?:^|tail:\s*)\W{0,4}you(?:'ve| have) reached your "
+        # runner's own no-output RunnerError, whose literal prefix is
+        # "stderr tail: " (matching a bare "tail:" also catches the suffix
+        # of unrelated words like "Detail:").
+        r"(?:^|stderr tail:\s*)\W{0,4}you(?:'ve| have) reached your "
         r"[^.\n]{0,30}\blimit\b[^\n]{0,80}/usage-credits",
         r"out of (free )?credits",
     )),

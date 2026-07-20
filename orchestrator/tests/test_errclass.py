@@ -73,6 +73,10 @@ class TestPatterns(unittest.TestCase):
             "the fixer reached your configured retry limit",
             "Mention /usage-credits in the docs when the window resets.",
             "Round 3 reached the round limit for this family.",
+            # The `tail:` anchor must be the literal "stderr tail:", not the
+            # suffix of an unrelated word like "Detail:".
+            "Detail: You've reached your configured retry limit. Run "
+            "/usage-credits only when the account window is exhausted.",
         ):
             with self.subTest(prose=prose):
                 self.assertIsNone(errclass.classify_text(prose))
