@@ -61,6 +61,13 @@ _PATTERNS = (
         r"rate limit",
         r"\bquota\b",
         r"limit reached",
+        # The claude CLI states it the other way round — "You've reached
+        # your Fable 5 limit. Run /usage-credits to continue" — so
+        # `limit reached` misses it and a plain quota stop was typed
+        # `unknown`, which the guard re-probes every 15 min instead of
+        # parking until the window resets (found live 2026-07-19).
+        r"reached your .{0,40}\blimit\b",
+        r"/usage-credits",
         r"out of (free )?credits",
     )),
     ("busy", (
@@ -235,10 +242,18 @@ CLASSIFIER_TIMEOUT_S = 120
 _RAW_CLIP = 4000
 
 
-def llm_classify(runner, family, raw_texts, workspace, on_raw=None):
+def llm_classify(runner, family, raw_texts, workspace, on_raw=None,
+                 model=None, effort=None):
     """One opposite-family attempt at classifying noisy failure output.
     NEVER raises and never blocks beyond its own timeout: any problem
     returns ("unknown", None, <why>).
+
+    model/effort MUST be the classifier family's resolved profile: a
+    command template carrying {model}/{effort} placeholders (codex) cannot
+    be built without them, so omitting them killed this stage before it
+    ever reached the CLI ("command template uses {model} but no value was
+    resolved") and every unmatched failure degraded to `unknown` — the
+    whole LLM fallback layer silently dead (found live 2026-07-19).
 
     on_raw(family, prompt, response_or_error), if given, is invoked
     best-effort with the classifier's prompt and its raw response — or the
@@ -256,6 +271,7 @@ def llm_classify(runner, family, raw_texts, workspace, on_raw=None):
     try:
         result = runner.call(
             family, prompt, workspace,
+            model=model, effort=effort,
             timeout_override=CLASSIFIER_TIMEOUT_S,
         )
         raw = result.text
@@ -283,11 +299,15 @@ def llm_classify(runner, family, raw_texts, workspace, on_raw=None):
 
 
 def classify_failure(raw_texts, runner=None, opposite_family=None,
-                     workspace=None, use_llm=True, on_llm_raw=None):
+                     workspace=None, use_llm=True, on_llm_raw=None,
+                     classifier_model=None, classifier_effort=None):
     """Full chain: patterns first, LLM fallback, unknown last.
 
     Returns (type, resume_at_iso_or_None, evidence). on_llm_raw is forwarded
     to llm_classify to persist the classifier's I/O when the LLM stage runs.
+    classifier_model/classifier_effort are the OPPOSITE family's resolved
+    profile; without them a placeholder-carrying template cannot be built
+    and the LLM stage cannot run at all (see llm_classify).
     """
     for text in raw_texts:
         etype = classify_text(text)
@@ -298,5 +318,6 @@ def classify_failure(raw_texts, runner=None, opposite_family=None,
             return etype, resume_at, "pattern match"
     if use_llm and runner is not None and opposite_family:
         return llm_classify(runner, opposite_family, raw_texts, workspace,
-                            on_raw=on_llm_raw)
+                            on_raw=on_llm_raw,
+                            model=classifier_model, effort=classifier_effort)
     return "unknown", None, "no pattern matched"

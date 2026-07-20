@@ -149,21 +149,107 @@ def extract_json(text):
     return extract_json_objects(text)[-1]
 
 
+def _closers_from(stripped, start):
+    """The closing delimiters the object opening at `start` still needs, or
+    None when the text cannot be completed by punctuation alone.
+
+    None means: an unterminated string, mismatched nesting, or an object
+    that already closed. Only a value cut exactly at a structural boundary
+    is completable — anything else would require inventing content."""
+    stack = []
+    in_str = False
+    esc = False
+    for ch in stripped[start:]:
+        if in_str:
+            if esc:
+                esc = False
+            elif ch == "\\":
+                esc = True
+            elif ch == '"':
+                in_str = False
+            continue
+        if ch == '"':
+            in_str = True
+        elif ch == "{":
+            stack.append("}")
+        elif ch == "[":
+            stack.append("]")
+        elif ch in "}]":
+            if not stack or stack[-1] != ch:
+                return None
+            stack.pop()
+            if not stack:
+                return None
+    if in_str or not stack:
+        return None
+    return "".join(reversed(stack))
+
+
+def _repair_unterminated(text):
+    """Recover a top-level object whose CLOSING DELIMITERS are missing.
+
+    Workers occasionally stop one token early: the last value's string is
+    closed, a newline follows, and generation ends without the object's
+    final `}`. Observed live across three claude review rounds, each
+    otherwise complete and contract-valid — a finished review was being
+    thrown away, and its replacement re-review reached a different verdict
+    (one dropped two findings and the unit sealed clean).
+
+    Returns (object, closers) or None. This only ever appends punctuation
+    the grammar fully determines; it never invents content, and a text cut
+    mid-string or mid-token stays unrecoverable. The caller additionally
+    requires the result to satisfy the worker contract, so a genuinely
+    incomplete object is still rejected."""
+    stripped = (text or "").strip()
+    start = stripped.find("{")
+    while start != -1:
+        closers = _closers_from(stripped, start)
+        if closers:
+            try:
+                obj = json.loads(stripped[start:] + closers)
+            except json.JSONDecodeError:
+                obj = None
+            if isinstance(obj, dict):
+                return obj, closers
+        start = stripped.find("{", start + 1)
+    return None
+
+
 def _extract_contract_output(text, validate):
-    """Select by contract validity, never by an object's text position."""
+    """Select by contract validity, never by an object's text position.
+
+    Returns (validated_output, closers) — `closers` is None normally, or
+    the delimiter run that recovered an unterminated envelope."""
     matches = []
     errors = []
-    for obj in extract_json_objects(text):
+    unparseable = None
+    try:
+        candidates = extract_json_objects(text)
+    except ValueError as exc:
+        candidates = []
+        unparseable = exc
+    for obj in candidates:
         try:
             matches.append(validate(obj))
         except contracts.ContractError as exc:
             errors.append(str(exc))
     if len(matches) == 1:
-        return matches[0]
+        return matches[0], None
     if len(matches) > 1:
         raise ValueError(
             "multiple JSON objects satisfy the worker contract; response is ambiguous"
         )
+    # Last resort, never a shortcut: only an envelope missing nothing but
+    # its closing delimiters, and only when it then satisfies the contract.
+    recovered = _repair_unterminated(text)
+    if recovered is not None:
+        obj, closers = recovered
+        try:
+            return validate(obj), closers
+        except contracts.ContractError as exc:
+            errors.append(str(exc))
+    if unparseable is not None and not errors:
+        raise unparseable
     detail = "; ".join(errors) if errors else "no object candidate"
     raise contracts.ContractError("no JSON object satisfies the worker contract: " + detail)
 
@@ -414,6 +500,23 @@ REPAIR_SUFFIX = (
 )
 
 
+def _note_recovery(result, closers):
+    """Record a delimiter recovery on the result so it cannot pass silently.
+
+    The output WAS malformed and the operator must keep seeing that — the
+    model dropping its closing brace is a real defect worth tracking. What
+    changes is only the price: no retry is spent and no completed review is
+    discarded."""
+    if not closers:
+        return
+    result.recovered = {
+        "error": "unterminated JSON object: recovered by appending %r "
+                 "(no repair retry spent)" % closers,
+        "raw_text": result.text,
+        "closers": closers,
+    }
+
+
 def call_worker(runner, family, prompt, kind, workspace,
                 model=None, effort=None, extensions=None, roots=None,
                 validate_opts=None):
@@ -452,13 +555,16 @@ def call_worker(runner, family, prompt, kind, workspace,
 
     result = runner.call(family, prompt, workspace, model=model, effort=effort)
     try:
-        return _extract_contract_output(result.text, _validate), result
+        validated, closers = _extract_contract_output(result.text, _validate)
+        _note_recovery(result, closers)
+        return validated, result
     except (ValueError, contracts.ContractError) as exc:
         first_error = str(exc)
     repair_prompt = prompt + (REPAIR_SUFFIX % first_error)
     result2 = runner.call(family, repair_prompt, workspace, model=model, effort=effort)
     try:
-        validated = _extract_contract_output(result2.text, _validate)
+        validated, closers = _extract_contract_output(result2.text, _validate)
+        _note_recovery(result2, closers)
         # A repaired first strike must not stay invisible: hand the caller
         # what the worker actually returned (prompt/contract tuning needs
         # the malformed text and its cost, not just the happy ending).

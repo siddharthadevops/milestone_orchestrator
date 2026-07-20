@@ -1032,6 +1032,119 @@ class TestCallWorker(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
+# Unterminated envelope recovery
+#
+# Live regression (life "mentions-persona-proyections", 2026-07-19): three
+# claude review rounds ended without the envelope's final `}` — everything
+# else complete, brackets balanced, the last string closed. The extractor
+# skipped the unterminated object, matched the FINDING objects inside the
+# array instead, and rejected them all for "missing required key 'status'".
+# A finished, contract-valid review was thrown away and a full replacement
+# re-review ran instead; on slice_impl-07 the replacement returned 0
+# findings where the first pass had two, and the unit sealed clean.
+
+
+# Shaped exactly like the live failures: prose preamble, single-line
+# envelope, notes last, no closing brace.
+UNTERMINATED_REVIEW = (
+    'Review complete. Two P3 debt findings; no P0-P2.\n\n'
+    '{"status": "ok", "kind": "review_round", "findings": [], '
+    '"notes": "Exhaustive pass; nothing above P3."\n'
+)
+
+
+class TestUnterminatedEnvelopeRecovery(unittest.TestCase):
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.workspace = self._tmp.name
+
+    def _validate_review(self, obj):
+        return contracts.validate_worker_output(obj, "review_round")
+
+    def test_missing_final_brace_is_recovered(self):
+        obj, closers = runners._extract_contract_output(
+            UNTERMINATED_REVIEW, self._validate_review
+        )
+        self.assertEqual(closers, "}")
+        self.assertEqual(obj["status"], "ok")
+        self.assertIn("Exhaustive pass", obj["notes"])
+
+    def test_recovery_keeps_the_findings_the_worker_actually_reported(self):
+        finding = {
+            "id": "F1", "severity": "P3", "summary": "s",
+            "plain": "p", "example": "e",
+        }
+        text = (
+            '{"status": "ok", "kind": "review_round", "findings": ['
+            + json.dumps(finding)
+            + '], "notes": "n"\n'
+        )
+        obj, closers = runners._extract_contract_output(
+            text, self._validate_review
+        )
+        self.assertEqual(closers, "}")
+        self.assertEqual([f["id"] for f in obj["findings"]], ["F1"])
+
+    def test_nested_open_containers_are_all_closed(self):
+        text = (
+            '{"status": "ok", "kind": "review_round", "findings": ['
+            '{"id": "F1", "severity": "P3", "summary": "s", '
+            '"plain": "p", "example": "e"'
+        )
+        obj, closers = runners._extract_contract_output(
+            text, self._validate_review
+        )
+        self.assertEqual(closers, "}]}")
+        self.assertEqual(obj["findings"][0]["id"], "F1")
+
+    def test_call_worker_spends_no_retry_and_reports_the_recovery(self):
+        runner = MockRunner(
+            [{"expect_kind": "review_round", "response": UNTERMINATED_REVIEW}]
+        )
+        obj, result = call_worker(
+            runner, "claude", make_prompt("review_round"), "review_round",
+            self.workspace,
+        )
+        self.assertEqual(obj["status"], "ok")
+        # The whole point: one call, not two.
+        self.assertEqual(len(runner.calls), 1)
+        # ...and the malformed output stays visible to the operator.
+        self.assertEqual(result.recovered["closers"], "}")
+        self.assertIn("unterminated", result.recovered["error"])
+        self.assertEqual(result.recovered["raw_text"], UNTERMINATED_REVIEW)
+
+    def test_clean_output_reports_no_recovery(self):
+        runner = MockRunner(
+            [{"expect_kind": "implement", "response": VALID_IMPLEMENT}]
+        )
+        _obj, result = call_worker(
+            runner, "codex", make_prompt("implement"), "implement",
+            self.workspace,
+        )
+        self.assertIsNone(getattr(result, "recovered", None))
+
+    def test_text_cut_mid_string_is_not_recovered(self):
+        # Closing this would invent the rest of the value.
+        text = '{"status": "ok", "kind": "review_round", "notes": "cut here'
+        with self.assertRaises((ValueError, contracts.ContractError)):
+            runners._extract_contract_output(text, self._validate_review)
+
+    def test_recovered_object_must_still_satisfy_the_contract(self):
+        # Balanced-but-incomplete: the brace is all that is missing, yet a
+        # required key is absent. Recovery is not a contract bypass.
+        text = '{"kind": "review_round", "findings": []\n'
+        with self.assertRaises(contracts.ContractError):
+            runners._extract_contract_output(text, self._validate_review)
+
+    def test_general_extractor_still_rejects_unbalanced_input(self):
+        # The tolerance lives in the contract-selecting path only; the
+        # schema-less extractor keeps its strict behaviour.
+        with self.assertRaises(ValueError):
+            extract_json('{"never": "closed"')
+
+
+# ---------------------------------------------------------------------------
 # MockRunner semantics
 
 

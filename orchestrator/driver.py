@@ -1057,7 +1057,9 @@ class Driver(object):
         text lands in raw/ and a worker_malformed event carries the error,
         the wasted duration, and the raw path — the panel surfaces it as a
         chip; prompt/contract tuning needs these strikes visible."""
-        rep = getattr(result, "repair", None)
+        rep = getattr(result, "repair", None) or getattr(
+            result, "recovered", None
+        )
         if not rep:
             return
         raw_path = self._save_raw("%s-malformed" % raw_name, rep["raw_text"])
@@ -1069,7 +1071,10 @@ class Driver(object):
             kind=kind,
             family=family,
             error=str(rep["error"])[:300],
-            duration_s=rep["duration_s"],
+            # A delimiter recovery costs no retry, so it wasted no time —
+            # it still reports as malformed because the output WAS, and
+            # the model dropping its closing brace must stay visible.
+            duration_s=rep.get("duration_s"),
             raw_path=raw_path,
         )
 
@@ -1086,13 +1091,17 @@ class Driver(object):
         texts.append(str(exc))
         if isinstance(exc, runners.RunnerError) and "timed out" in str(exc):
             return "timeout", None, "runner timeout"
+        opposite = self._opposite(family)
+        cls_model, cls_effort = self._family_defaults(opposite)
         return errclass.classify_failure(
             texts,
             runner=self.runner,
-            opposite_family=self._opposite(family),
+            opposite_family=opposite,
             workspace=self.workspace,
             use_llm=bool(self.config.get("error_classifier", True)),
             on_llm_raw=self._classify_raw_saver(raw_name),
+            classifier_model=cls_model,
+            classifier_effort=cls_effort,
         )
 
     def _classify_raw_saver(self, raw_name):
@@ -3934,18 +3943,20 @@ class Driver(object):
             # races the seal worker threads.
             etype, resume_at, evidence = "unknown", None, None
             if raw_texts:
+                cls_family = self._opposite(failed_family or families[0])
+                cls_model, cls_effort = self._family_defaults(cls_family)
                 etype, resume_at, evidence = errclass.classify_failure(
                     raw_texts,
                     runner=self.runner,
-                    opposite_family=self._opposite(
-                        failed_family or families[0]
-                    ),
+                    opposite_family=cls_family,
                     workspace=self.workspace,
                     use_llm=bool(self.config.get("error_classifier", True)),
                     on_llm_raw=self._classify_raw_saver(
                         "%s-seal-a%d-classify"
                         % (st.unit_key(unit), attempt_no)
                     ),
+                    classifier_model=cls_model,
+                    classifier_effort=cls_effort,
                 )
                 resume_at = errclass.normalize_resume_at(resume_at)
                 if etype in errclass.AUTO_RESUMABLE and not resume_at:

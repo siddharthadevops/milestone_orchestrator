@@ -11,6 +11,7 @@ on the MAIN thread after the join; the seal record keeps its historical
 shape), and the summary projection.
 """
 
+import json
 import os
 import tempfile
 import unittest
@@ -93,6 +94,36 @@ class MalformedObservabilityTest(unittest.TestCase):
         self.assertAlmostEqual(
             st.summary(state)["units"][0]["work_duration_s"], 0.03
         )
+
+    def test_unterminated_envelope_is_visible_without_costing_a_retry(self):
+        # Live shape (2026-07-19): a complete review whose envelope lacks
+        # only its final `}`. It must still surface as malformed — the
+        # model dropping the brace is a real defect — but it must NOT cost
+        # a replacement re-review, which is what silently changed verdicts.
+        valid = report("review_round")
+        unterminated = json.dumps(valid)[:-1] + "\n"
+        state = self._drive(
+            [
+                draft(),
+                step("review_round", unterminated, family="codex"),
+            ],
+            stop=lambda s: self._malformed_events(s),
+        )
+        events = self._malformed_events(state)
+        self.assertEqual(len(events), 1)
+        e = events[0]
+        self.assertEqual(e["kind"], "review_round")
+        self.assertIn("unterminated", e["error"])
+        # No retry was spent, so no wasted duration is attributed.
+        self.assertIsNone(e["duration_s"])
+        with open(os.path.join(state["workspace"], e["raw_path"]),
+                  "r", encoding="utf-8") as fh:
+            self.assertEqual(fh.read(), unterminated)
+        # The round landed with the findings the worker actually reported,
+        # not a second opinion.
+        rounds = state["units"][0]["rounds"]
+        self.assertEqual(len(rounds), 1)
+        self.assertEqual(rounds[0]["result"]["findings"], valid["findings"])
 
     def test_seal_half_repair_records_event_on_the_main_thread(self):
         state = self._drive(

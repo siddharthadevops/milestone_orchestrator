@@ -30,6 +30,32 @@ class TestPatterns(unittest.TestCase):
             "quota",
         )
 
+    def test_claude_cli_usage_limit_banner_is_quota(self):
+        # The exact live banner (2026-07-19): it words the limit the other
+        # way round, so `limit reached` missed it and a plain quota stop was
+        # typed `unknown` — re-probed every 15 min into an exhausted window
+        # instead of parking until the reset.
+        self.assertEqual(
+            errclass.classify_text(
+                "You've reached your Fable 5 limit. Run /usage-credits to "
+                "continue or switch models with /model."
+            ),
+            "quota",
+        )
+        self.assertEqual(
+            errclass.classify_text("You've reached your Opus limit."),
+            "quota",
+        )
+
+    def test_limit_phrasing_does_not_swallow_unrelated_prose(self):
+        # "reached" and "limit" far apart must not read as a quota banner.
+        self.assertIsNone(
+            errclass.classify_text(
+                "The fixer reached the sealed note and respected every "
+                "boundary the design puts on what a slice may change."
+            )
+        )
+
     def test_busy_and_network(self):
         self.assertEqual(
             errclass.classify_text("Error: 529 overloaded"), "busy")
@@ -121,11 +147,13 @@ class _FakeRunner(object):
         self.text = text
         self.raise_exc = raise_exc
         self.calls = []
+        self.profiles = []  # (model, effort) per call
         self.timeouts = {}
 
     def call(self, family, prompt, workspace, model=None, effort=None,
              timeout_override=None):
         self.calls.append((family, prompt))
+        self.profiles.append((model, effort))
         if self.raise_exc:
             raise self.raise_exc
         return RunnerResult(self.text, 0, 1.0)
@@ -141,6 +169,19 @@ class TestClassifyChain(unittest.TestCase):
         self.assertEqual(etype, "quota")
         self.assertIsNotNone(resume_at)
         self.assertEqual(runner.calls, [])  # patterns decided; no LLM
+
+    def test_classifier_receives_its_family_profile(self):
+        # A codex template carries {model}/{effort}; without values
+        # apply_model_effort raises before the CLI is ever reached, so the
+        # whole LLM fallback stage was dead and EVERY unmatched failure
+        # degraded to `unknown` (found live 2026-07-19).
+        runner = _FakeRunner('{"error_type": "busy"}')
+        errclass.classify_failure(
+            ["some unrecognizable failure text"],
+            runner=runner, opposite_family="codex", workspace="/ws",
+            classifier_model="gpt-5.6-sol", classifier_effort="xhigh",
+        )
+        self.assertEqual(runner.profiles, [("gpt-5.6-sol", "xhigh")])
 
     def test_llm_fallback_enum(self):
         runner = _FakeRunner(
