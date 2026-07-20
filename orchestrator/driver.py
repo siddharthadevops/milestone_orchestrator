@@ -1057,26 +1057,32 @@ class Driver(object):
         text lands in raw/ and a worker_malformed event carries the error,
         the wasted duration, and the raw path — the panel surfaces it as a
         chip; prompt/contract tuning needs these strikes visible."""
-        rep = getattr(result, "repair", None) or getattr(
-            result, "recovered", None
-        )
-        if not rep:
-            return
-        raw_path = self._save_raw("%s-malformed" % raw_name, rep["raw_text"])
-        st.append_event(
-            self.state,
-            "worker_malformed",
-            unit=self._worker_event_unit(),
-            label=raw_name,
-            kind=kind,
-            family=family,
-            error=str(rep["error"])[:300],
-            # A delimiter recovery costs no retry, so it wasted no time —
-            # it still reports as malformed because the output WAS, and
-            # the model dropping its closing brace must stay visible.
-            duration_s=rep.get("duration_s"),
-            raw_path=raw_path,
-        )
+        # BOTH channels, never `or`: a repair retry that itself needed
+        # delimiter recovery produced two distinct strikes, and reporting
+        # only the first would hide the second.
+        for attr in ("repair", "recovered"):
+            rep = getattr(result, attr, None)
+            if not rep:
+                continue
+            raw_path = self._save_raw(
+                "%s-malformed%s"
+                % (raw_name, "" if attr == "repair" else "-tail"),
+                rep["raw_text"],
+            )
+            st.append_event(
+                self.state,
+                "worker_malformed",
+                unit=self._worker_event_unit(),
+                label=raw_name,
+                kind=kind,
+                family=family,
+                error=str(rep["error"])[:300],
+                # A delimiter recovery costs no retry, so it wasted no
+                # time — it still reports as malformed because the output
+                # WAS, and the model dropping its brace must stay visible.
+                duration_s=rep.get("duration_s"),
+                raw_path=raw_path,
+            )
 
     def _classify_failure(self, family, exc, raw_name=None):
         """Type a failed worker call: deterministic patterns over the raw
@@ -3833,6 +3839,12 @@ class Driver(object):
             family: self._review_profile(family) for family in families
         }
         halves = {}
+        # Malformed strikes stashed by the half threads, keyed by family so
+        # concurrent writes never collide. Kept OUTSIDE `halves` because a
+        # half that blocks or fails never lands there, and its strike must
+        # still reach the ledger. Drained on the main thread only (events
+        # are never appended from a worker thread).
+        pending_strikes = {}
         invalidated = None
         tamper_family = None  # sequential mode can attribute the tampering
         amendments = self._amendments()  # once, before any half thread
@@ -3907,6 +3919,28 @@ class Driver(object):
                     protocol_label=raw_name,
                 )
             raw_path = self._save_raw(raw_name, result.text)
+            # Stash malformed strikes BEFORE any exit below: a blocked half
+            # used to raise first, so a blocked-and-recovered output left an
+            # orphan raw file and no event at all. Both channels are kept —
+            # a repair retry that itself needed delimiter recovery has two
+            # distinct strikes, and `or` would have hidden the second.
+            # Thread-safe: distinct per-family file names and dict keys.
+            strikes = []
+            for attr in ("repair", "recovered"):
+                rep = getattr(result, attr, None)
+                if rep:
+                    strikes.append({
+                        "label": raw_name,
+                        "error": str(rep["error"])[:300],
+                        "duration_s": rep.get("duration_s"),
+                        "raw_path": self._save_raw(
+                            "%s-malformed%s"
+                            % (raw_name, "" if attr == "repair" else "-tail"),
+                            rep["raw_text"],
+                        ),
+                    })
+            if strikes:
+                pending_strikes[family] = strikes
             if output["status"] == "blocked":
                 raise _SealHalfFailure(
                     "%s worker blocked: %s"
@@ -3920,37 +3954,18 @@ class Driver(object):
                 "model": review_profiles[family][0],
                 "effort": review_profiles[family][1],
             }
-            # A delimiter recovery counts exactly like a repaired strike:
-            # the seal is the LAST place a malformed output may pass
-            # unseen, so both channels feed the same trail.
-            rep = getattr(result, "repair", None) or getattr(
-                result, "recovered", None
-            )
-            if rep:
-                # Thread-safe part only: write the per-family raw file
-                # (distinct names, no race) and stash the strike; the
-                # main thread emits the worker_malformed event after the
-                # halves join (events must never be appended from half
-                # threads).
-                half["repair"] = {
-                    "label": raw_name,
-                    "error": str(rep["error"])[:300],
-                    "duration_s": rep.get("duration_s"),
-                    "raw_path": self._save_raw(
-                        "%s-malformed" % raw_name, rep["raw_text"]
-                    ),
-                }
             return half
 
         def flush_half_strikes():
-            """Emit the malformed strikes stashed by the halves that DID
-            complete. Called before every exit, not just the happy one: a
-            sibling half failing must not erase the evidence that another
-            half came back malformed — that used to leave an orphan raw
-            file and no event at all."""
-            for fam in list(halves):
-                rep = halves[fam].pop("repair", None)
-                if rep:
+            """Emit every stashed malformed strike, on the MAIN thread.
+
+            Called before every exit, not just the happy one: a sibling
+            half failing (or blocking) must not erase the evidence that
+            another half came back malformed. Drains in `families` order,
+            never dict-insertion order, so the ledger sequence does not
+            depend on which thread finished first."""
+            for fam in families:
+                for rep in pending_strikes.pop(fam, []):
                     st.append_event(
                         self.state, "worker_malformed",
                         unit=st.unit_key(unit),

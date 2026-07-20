@@ -190,6 +190,62 @@ class MalformedObservabilityTest(unittest.TestCase):
         self.assertEqual(summ["malformed"][0]["kind"], "review_round")
         self.assertIn("seq", summ["malformed"][0])
 
+    def test_recovered_half_is_reported_on_the_concurrent_path_too(self):
+        # The sequential path proves nothing about worker-thread stashing:
+        # events may never be appended from a half thread, so the
+        # concurrent path must reach the ledger through the main-thread
+        # drain, in configured family order.
+        seal = report("seal_half")
+        path = init_state(
+            self.ws,
+            make_config(git={"enabled": False}, seal_concurrent=True),
+        )
+        script = [
+            draft(),
+            step("review_round", report("review_round"), family="codex"),
+            step("review_round", report("review_round"), family="claude"),
+            step("seal_half", json.dumps(seal)[:-1] + "\n", family="codex"),
+            step("seal_half", json.dumps(seal)[:-1] + "\n", family="claude"),
+        ]
+        driver = drv.Driver(path, runner=runners.MockRunner(script))
+        for _ in range(40):
+            state = st.load(path)
+            if state["units"][0]["status"] == st.U_SEALED:
+                break
+            action, _n = driver.step()
+            if action.type in (drv.A_DONE, drv.A_FAILED):
+                break
+        state = st.load(path)
+        self.assertEqual(state["units"][0]["status"], st.U_SEALED)
+        events = [e for e in self._malformed_events(state)
+                  if e["kind"] == "seal_half"]
+        self.assertEqual([e["family"] for e in events], ["codex", "claude"])
+        for e in events:
+            self.assertIn("unterminated", e["error"])
+
+    def test_a_blocked_half_still_reports_its_recovery(self):
+        # The blocked check used to raise before the strike was stashed,
+        # so a blocked-and-recovered half left an orphan raw file.
+        blocked = {"status": "blocked", "kind": "seal_half",
+                   "blocked_reason": "cannot verify the pinned claim"}
+        state = self._drive(
+            [
+                draft(),
+                step("review_round", report("review_round"), family="codex"),
+                step("review_round", report("review_round"), family="claude"),
+                step("seal_half", json.dumps(blocked)[:-1] + "\n",
+                     family="codex"),
+            ],
+            stop=lambda s: s.get("failure"),
+        )
+        events = [e for e in self._malformed_events(state)
+                  if "unterminated" in e["error"]]
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0]["family"], "codex")
+        self.assertTrue(os.path.exists(
+            os.path.join(state["workspace"], events[0]["raw_path"])
+        ))
+
     def test_a_failing_sibling_half_does_not_erase_a_recovered_one(self):
         # codex's half recovers; claude's then violates the contract twice
         # and fails the attempt. The failure path used to exit before the

@@ -1062,10 +1062,16 @@ class TestUnterminatedEnvelopeRecovery(unittest.TestCase):
     def _validate_review(self, obj):
         return contracts.validate_worker_output(obj, "review_round")
 
-    def test_missing_final_brace_is_recovered(self):
-        obj, closers = runners._extract_contract_output(
-            UNTERMINATED_REVIEW, self._validate_review
+    def _extract(self, text, kind="review_round"):
+        """Recovery is gated on the kind, so tests must state one."""
+        return runners._extract_contract_output(
+            text,
+            lambda o: contracts.validate_worker_output(o, kind),
+            kind,
         )
+
+    def test_missing_final_brace_is_recovered(self):
+        obj, closers = self._extract(UNTERMINATED_REVIEW)
         self.assertEqual(closers, "}")
         self.assertEqual(obj["status"], "ok")
         self.assertIn("Exhaustive pass", obj["notes"])
@@ -1080,9 +1086,7 @@ class TestUnterminatedEnvelopeRecovery(unittest.TestCase):
             + json.dumps(finding)
             + '], "notes": "n"\n'
         )
-        obj, closers = runners._extract_contract_output(
-            text, self._validate_review
-        )
+        obj, closers = self._extract(text)
         self.assertEqual(closers, "}")
         self.assertEqual([f["id"] for f in obj["findings"]], ["F1"])
 
@@ -1104,9 +1108,7 @@ class TestUnterminatedEnvelopeRecovery(unittest.TestCase):
             with self.subTest(tail=tail):
                 if tail == "]":
                     # Only the object's own brace is missing: recoverable.
-                    obj, closers = runners._extract_contract_output(
-                        text, self._validate_review
-                    )
+                    obj, closers = self._extract(text)
                     self.assertEqual(closers, "}")
                     self.assertEqual(obj["findings"][0]["id"], "F1")
                 else:
@@ -1114,9 +1116,7 @@ class TestUnterminatedEnvelopeRecovery(unittest.TestCase):
                     with self.assertRaises(
                         (ValueError, contracts.ContractError)
                     ):
-                        runners._extract_contract_output(
-                            text, self._validate_review
-                        )
+                        self._extract(text)
 
     def test_echoed_example_plus_truncated_answer_is_ambiguous(self):
         # A complete contract-shaped example must not be silently chosen
@@ -1128,7 +1128,7 @@ class TestUnterminatedEnvelopeRecovery(unittest.TestCase):
         text = example + '\n\n{"status": "ok", "kind": "review_round", ' \
                          '"findings": [], "notes": "the real answer"\n'
         with self.assertRaises(ValueError) as cm:
-            runners._extract_contract_output(text, self._validate_review)
+            self._extract(text)
         self.assertIn("ambiguous", str(cm.exception))
 
     def test_call_worker_spends_no_retry_and_reports_the_recovery(self):
@@ -1161,7 +1161,7 @@ class TestUnterminatedEnvelopeRecovery(unittest.TestCase):
         # Closing this would invent the rest of the value.
         text = '{"status": "ok", "kind": "review_round", "notes": "cut here'
         with self.assertRaises((ValueError, contracts.ContractError)):
-            runners._extract_contract_output(text, self._validate_review)
+            self._extract(text)
 
     def test_text_cut_mid_number_is_not_recovered(self):
         # The dangerous case: a bare token cut mid-way still PARSES after
@@ -1178,7 +1178,9 @@ class TestUnterminatedEnvelopeRecovery(unittest.TestCase):
 
         self.assertIsNone(runners._repair_unterminated(text))
         with self.assertRaises((ValueError, contracts.ContractError)):
-            runners._extract_contract_output(text, validate_skeleton)
+            runners._extract_contract_output(
+                text, validate_skeleton, "draft_skeleton"
+            )
 
     def test_bare_literal_tails_are_not_recovered(self):
         for tail in ('"n": 1', '"n": tru', '"n": null', '"n": -1.5'):
@@ -1196,7 +1198,7 @@ class TestUnterminatedEnvelopeRecovery(unittest.TestCase):
         text = '[{"status": "ok", "kind": "review_round", "findings": []'
         self.assertIsNone(runners._repair_unterminated(text))
         with self.assertRaises((ValueError, contracts.ContractError)):
-            runners._extract_contract_output(text, self._validate_review)
+            self._extract(text)
 
     def test_prose_preamble_does_not_block_recovery(self):
         # The live shape: ordinary prose (with balanced punctuation) before
@@ -1206,9 +1208,7 @@ class TestUnterminatedEnvelopeRecovery(unittest.TestCase):
             '{"status": "ok", "kind": "review_round", "findings": [], '
             '"notes": "n"\n'
         )
-        obj, closers = runners._extract_contract_output(
-            text, self._validate_review
-        )
+        obj, closers = self._extract(text)
         self.assertEqual(closers, "}")
         self.assertEqual(obj["notes"], "n")
 
@@ -1217,13 +1217,41 @@ class TestUnterminatedEnvelopeRecovery(unittest.TestCase):
         # required key is absent. Recovery is not a contract bypass.
         text = '{"kind": "review_round", "findings": []\n'
         with self.assertRaises(contracts.ContractError):
-            runners._extract_contract_output(text, self._validate_review)
+            self._extract(text)
 
     def test_general_extractor_still_rejects_unbalanced_input(self):
         # The tolerance lives in the contract-selecting path only; the
         # schema-less extractor keeps its strict behaviour.
         with self.assertRaises(ValueError):
             extract_json('{"never": "closed"')
+
+    def test_only_report_only_kinds_are_recoverable(self):
+        # A kind whose optional keys DIRECT the machine must never be
+        # recovered: `implement` carries suite_command, which retargets
+        # the verification gate, so "the required keys are present" does
+        # not prove the object was finished. Those keep the repair retry.
+        self.assertEqual(
+            runners.RECOVERABLE_KINDS, frozenset({"review_round", "seal_half"})
+        )
+        text = (
+            '{"status": "ok", "kind": "implement", '
+            '"files_changed": ["calc.py"]'
+        )
+        # Recoverable in shape (only the brace is missing) yet refused,
+        # because a `,"suite_command": ...` may have been cut.
+        self.assertIsNotNone(runners._repair_unterminated(text))
+        with self.assertRaises((ValueError, contracts.ContractError)):
+            runners._extract_contract_output(
+                text,
+                lambda o: contracts.validate_worker_output(o, "implement"),
+                "implement",
+            )
+
+    def test_prefix_scan_matches_delimiter_types(self):
+        # A depth COUNTER reads `[}` as balanced and would promote the
+        # object out of an unterminated array.
+        text = '[} {"status": "ok", "kind": "seal_half", "findings": []'
+        self.assertIsNone(runners._repair_unterminated(text))
 
 
 # ---------------------------------------------------------------------------

@@ -195,14 +195,31 @@ def _closers_from(stripped, start):
 _COMPLETE_TOKEN_TAIL = ('"', "}", "]")
 
 
+# Kinds whose output only REPORTS. Their optional keys are descriptive,
+# so an envelope recovered by its closing brace cannot have lost anything
+# that changes what the machine does.
+#
+# Every other kind DIRECTS the machine through optional keys — implement
+# and fix_findings carry `suite_command`, which retargets the verification
+# gate; drafts carry `slices`. For those, "the required keys are present"
+# does NOT mean the object was finished: a truncation just before
+# `,"suite_command": ...` would validate and silently seal against the
+# wrong suite. They keep the repair retry, whose cost is honest.
+RECOVERABLE_KINDS = frozenset({contracts.KIND_REVIEW_ROUND,
+                               contracts.KIND_SEAL_HALF})
+
+
 def _prefix_opens_nothing(stripped, start):
     """No unmatched opener sits before `start` (outside strings).
 
     A prefix that still has one open means the object is an ELEMENT of a
     larger unterminated structure (`[{...`), not a top-level object that
     lost its brace. Closing the element alone would silently promote it to
-    the whole answer and drop whatever the container had yet to emit."""
-    depth = 0
+    the whole answer and drop whatever the container had yet to emit.
+
+    Delimiter TYPES are matched, not merely counted: a bare depth counter
+    reads `[}` as balanced and would let exactly that promotion through."""
+    stack = []
     in_str = False
     esc = False
     for ch in stripped[:start]:
@@ -216,13 +233,14 @@ def _prefix_opens_nothing(stripped, start):
             continue
         if ch == '"':
             in_str = True
-        elif ch in "{[":
-            depth += 1
+        elif ch == "{":
+            stack.append("}")
+        elif ch == "[":
+            stack.append("]")
         elif ch in "}]":
-            depth -= 1
-            if depth < 0:
+            if not stack or stack.pop() != ch:
                 return False
-    return depth == 0 and not in_str
+    return not stack and not in_str
 
 
 def _repair_unterminated(text):
@@ -268,11 +286,13 @@ def _repair_unterminated(text):
     return None
 
 
-def _extract_contract_output(text, validate):
+def _extract_contract_output(text, validate, kind=None):
     """Select by contract validity, never by an object's text position.
 
     Returns (validated_output, closers) — `closers` is None normally, or
-    the delimiter run that recovered an unterminated envelope."""
+    the delimiter run that recovered an unterminated envelope. Recovery is
+    attempted only for RECOVERABLE_KINDS; every other kind behaves exactly
+    as before."""
     matches = []
     errors = []
     unparseable = None
@@ -292,7 +312,9 @@ def _extract_contract_output(text, validate):
     # silently chosen over the answer. Two viable readings is exactly the
     # ambiguity the caller already refuses.
     recovered = None
-    repaired = _repair_unterminated(text)
+    repaired = (
+        _repair_unterminated(text) if kind in RECOVERABLE_KINDS else None
+    )
     if repaired is not None:
         try:
             recovered = (validate(repaired[0]), repaired[1])
@@ -613,7 +635,9 @@ def call_worker(runner, family, prompt, kind, workspace,
 
     result = runner.call(family, prompt, workspace, model=model, effort=effort)
     try:
-        validated, closers = _extract_contract_output(result.text, _validate)
+        validated, closers = _extract_contract_output(
+            result.text, _validate, kind
+        )
         _note_recovery(result, closers)
         return validated, result
     except (ValueError, contracts.ContractError) as exc:
@@ -621,7 +645,9 @@ def call_worker(runner, family, prompt, kind, workspace,
     repair_prompt = prompt + (REPAIR_SUFFIX % first_error)
     result2 = runner.call(family, repair_prompt, workspace, model=model, effort=effort)
     try:
-        validated, closers = _extract_contract_output(result2.text, _validate)
+        validated, closers = _extract_contract_output(
+            result2.text, _validate, kind
+        )
         _note_recovery(result2, closers)
         # A repaired first strike must not stay invisible: hand the caller
         # what the worker actually returned (prompt/contract tuning needs

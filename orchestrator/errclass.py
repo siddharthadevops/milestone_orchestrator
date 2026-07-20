@@ -72,7 +72,12 @@ _PATTERNS = (
         # verdict is worse than none: it puts a CONTENT failure on the
         # guard's auto-resume loop. Under-matching merely falls through to
         # the LLM classifier, so the tight form is the safe one.
-        r"reached your [^.\n]{0,30}\blimit\b[^\n]{0,80}/usage-credits",
+        # Anchored at the start: a real banner OPENS with the sentence,
+        # while prose that merely contains both phrases ("Finding: the
+        # worker reached your configured retry limit; mention
+        # /usage-credits only for quota failures") does not.
+        r"^\W{0,4}you(?:'ve| have) reached your [^.\n]{0,30}\blimit\b"
+        r"[^\n]{0,80}/usage-credits",
         r"out of (free )?credits",
     )),
     ("busy", (
