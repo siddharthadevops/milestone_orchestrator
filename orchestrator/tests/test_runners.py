@@ -1253,6 +1253,18 @@ class TestUnterminatedEnvelopeRecovery(unittest.TestCase):
         text = '[} {"status": "ok", "kind": "seal_half", "findings": []'
         self.assertIsNone(runners._repair_unterminated(text))
 
+    def test_duplicate_key_recovery_is_refused(self):
+        # json.loads keeps the LAST of duplicate keys, so a recovered
+        # `status` could silently flip ok<->blocked. A duplicate is never
+        # legitimate worker output.
+        text = ('{"status": "ok", "kind": "seal_half", '
+                '"status": "blocked", "findings": []')
+        self.assertIsNone(runners._repair_unterminated(text))
+        # ...including a duplicated nested/extension field.
+        nested = ('{"status": "ok", "kind": "review_round", '
+                  '"findings": [{"id": "F1", "id": "F2"}]')
+        self.assertIsNone(runners._repair_unterminated(nested))
+
 
 # ---------------------------------------------------------------------------
 # MockRunner semantics

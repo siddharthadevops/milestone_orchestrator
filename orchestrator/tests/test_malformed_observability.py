@@ -223,6 +223,24 @@ class MalformedObservabilityTest(unittest.TestCase):
         for e in events:
             self.assertIn("unterminated", e["error"])
 
+    def test_strike_raw_is_not_overwritten_across_a_resumed_attempt(self):
+        # A failed seal attempt leaves no seal record, so a resume runs the
+        # SAME attempt number and re-saves the strike raw. Overwriting it
+        # would leave the first attempt's ledger event pointing at replaced
+        # bytes. _save_raw_noclobber keeps each distinct.
+        path = init_state(self.ws, make_config(git={"enabled": False}))
+        driver = drv.Driver(path, runner=runners.MockRunner([]))
+        rel1 = driver._save_raw_noclobber("skeleton-seal-a1-codex-malformed",
+                                          "first attempt strike")
+        rel2 = driver._save_raw_noclobber("skeleton-seal-a1-codex-malformed",
+                                          "second attempt strike")
+        self.assertNotEqual(rel1, rel2)
+        base = os.path.join(self.ws)
+        with open(os.path.join(base, rel1), encoding="utf-8") as fh:
+            self.assertEqual(fh.read(), "first attempt strike")
+        with open(os.path.join(base, rel2), encoding="utf-8") as fh:
+            self.assertEqual(fh.read(), "second attempt strike")
+
     def test_a_blocked_half_still_reports_its_recovery(self):
         # The blocked check used to raise before the strike was stashed,
         # so a blocked-and-recovered half left an orphan raw file.

@@ -243,6 +243,23 @@ def _prefix_opens_nothing(stripped, start):
     return not stack and not in_str
 
 
+def _reject_duplicate_keys(pairs):
+    """json object hook that refuses any object with a repeated key.
+
+    json.loads keeps the LAST of duplicate keys, so without this a
+    recovered `{"status":"ok",...,"status":"blocked"}` (or a duplicated
+    project-extension field) would silently collapse to one value and the
+    "the object is complete and valid" proof would not hold. A duplicate
+    is never legitimate worker output, so rejecting is free of false
+    negatives."""
+    seen = {}
+    for key, value in pairs:
+        if key in seen:
+            raise ValueError("duplicate key %r" % key)
+        seen[key] = value
+    return seen
+
+
 def _repair_unterminated(text):
     """Recover a top-level object whose CLOSING DELIMITERS are missing.
 
@@ -253,12 +270,13 @@ def _repair_unterminated(text):
     thrown away, and its replacement re-review reached a different verdict
     (one dropped two findings and the unit sealed clean).
 
-    Returns (object, closers) or None. Four independent conditions must
+    Returns (object, closers) or None. Five independent conditions must
     all hold, because "append only punctuation" is a claim that has to be
     earned: the text must end on a character proving its last token
     finished, nothing may be left open before the object starts, the ONLY
-    missing delimiter must be the top-level object's own brace, and the
-    result must parse. The caller then requires the worker contract on top.
+    missing delimiter must be the top-level object's own brace, it must
+    parse, and it must carry no duplicate key. The caller then requires
+    the worker contract on top.
 
     The single-brace rule is what keeps this honest. A deeper truncation
     ends inside a COLLECTION, and no amount of punctuation can tell us
@@ -266,7 +284,14 @@ def _repair_unterminated(text):
     `"findings": [F1` yields a valid object reporting one finding when the
     worker may have been writing five. Losing a finding that way is the
     exact damage this whole change exists to prevent, so anything deeper
-    than the outermost brace is refused and pays the re-review instead."""
+    than the outermost brace is refused and pays the re-review instead.
+
+    Residual limit, stated honestly: a truncation that dropped a LATER
+    re-emission of an already-present key (e.g. a second `status`) cannot
+    be detected from the text alone. It is mitigated structurally — status
+    is required and emitted first, so a recovered object already carries
+    its verdict — and by the report-only kind gate the caller applies; a
+    duplicate that IS present in the recovered text is rejected here."""
     stripped = (text or "").strip()
     if stripped[-1:] not in _COMPLETE_TOKEN_TAIL:
         return None
@@ -277,8 +302,9 @@ def _repair_unterminated(text):
         if _prefix_opens_nothing(stripped, start):
             if _closers_from(stripped, start) == "}":
                 try:
-                    obj = json.loads(stripped[start:] + "}")
-                except json.JSONDecodeError:
+                    obj = json.loads(stripped[start:] + "}",
+                                     object_pairs_hook=_reject_duplicate_keys)
+                except ValueError:
                     obj = None
                 if isinstance(obj, dict):
                     return obj, "}"

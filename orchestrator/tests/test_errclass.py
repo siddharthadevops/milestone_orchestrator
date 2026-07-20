@@ -50,6 +50,20 @@ class TestPatterns(unittest.TestCase):
             errclass.classify_text("You've reached your Opus limit.")
         )
 
+    def test_claude_limit_banner_wrapped_in_runner_error_is_quota(self):
+        # The no-output shape: claude exits nonzero and the banner rides on
+        # stderr inside the runner's own RunnerError message. A start-only
+        # anchor missed it and it degraded to `unknown` when the LLM
+        # classifier family was also down.
+        self.assertEqual(
+            errclass.classify_text(
+                "family claude exited 1 with no output; stderr tail: "
+                "You've reached your Fable 5 limit. Run /usage-credits "
+                "to continue."
+            ),
+            "quota",
+        )
+
     def test_limit_phrasing_does_not_swallow_worker_prose(self):
         # A false quota verdict is worse than no verdict: it puts a CONTENT
         # failure on the guard's auto-resume loop. EITHER half of the

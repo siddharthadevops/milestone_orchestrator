@@ -72,12 +72,15 @@ _PATTERNS = (
         # verdict is worse than none: it puts a CONTENT failure on the
         # guard's auto-resume loop. Under-matching merely falls through to
         # the LLM classifier, so the tight form is the safe one.
-        # Anchored at the start: a real banner OPENS with the sentence,
-        # while prose that merely contains both phrases ("Finding: the
-        # worker reached your configured retry limit; mention
-        # /usage-credits only for quota failures") does not.
-        r"^\W{0,4}you(?:'ve| have) reached your [^.\n]{0,30}\blimit\b"
-        r"[^\n]{0,80}/usage-credits",
+        # Anchored to a line/segment start so a real banner OPENS with the
+        # sentence, while prose that merely contains both phrases ("Finding:
+        # the worker reached your configured retry limit; mention
+        # /usage-credits only for quota failures") does not. Two anchors: the
+        # bare banner (claude's stdout), and the same banner wrapped by the
+        # runner's own no-output RunnerError ("... stderr tail: You've
+        # reached your ... limit. Run /usage-credits").
+        r"(?:^|tail:\s*)\W{0,4}you(?:'ve| have) reached your "
+        r"[^.\n]{0,30}\blimit\b[^\n]{0,80}/usage-credits",
         r"out of (free )?credits",
     )),
     ("busy", (

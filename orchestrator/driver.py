@@ -540,6 +540,22 @@ class Driver(object):
             fh.write(text or "")
         return os.path.relpath(path, self.workspace)
 
+    def _save_raw_noclobber(self, name, text):
+        """Like _save_raw but never overwrites an existing file, appending
+        -2, -3 ... instead. Used for malformed-strike artifacts: a seal
+        attempt that failed leaves no seal record, so a manual resume runs
+        the SAME attempt number and would otherwise overwrite the earlier
+        attempt's strike raw — leaving a live ledger event pointing at
+        replaced bytes. Distinct per-family names keep concurrent halves
+        from racing; this guards only the across-resume reuse."""
+        raw_dir = self._raw_dir()
+        candidate = name
+        n = 1
+        while os.path.exists(os.path.join(raw_dir, candidate + ".txt")):
+            n += 1
+            candidate = "%s-%d" % (name, n)
+        return self._save_raw(candidate, text)
+
     def _unit_desc(self, unit):
         if unit["kind"] == st.UNIT_SKELETON:
             return "the milestone skeleton"
@@ -1064,7 +1080,7 @@ class Driver(object):
             rep = getattr(result, attr, None)
             if not rep:
                 continue
-            raw_path = self._save_raw(
+            raw_path = self._save_raw_noclobber(
                 "%s-malformed%s"
                 % (raw_name, "" if attr == "repair" else "-tail"),
                 rep["raw_text"],
@@ -3933,7 +3949,7 @@ class Driver(object):
                         "label": raw_name,
                         "error": str(rep["error"])[:300],
                         "duration_s": rep.get("duration_s"),
-                        "raw_path": self._save_raw(
+                        "raw_path": self._save_raw_noclobber(
                             "%s-malformed%s"
                             % (raw_name, "" if attr == "repair" else "-tail"),
                             rep["raw_text"],
