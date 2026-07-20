@@ -111,6 +111,10 @@
   .grpmenu-item .ui-icon { width: 15px; height: 15px; }
   .grp-empty { padding: 4px 14px 6px 33px; font-size: 11px; color: var(--dim);
     font-style: italic; }
+  /* "show more/less" toggle under a project's first milestones */
+  .grp-more { padding: 3px 14px 7px 33px; font-size: 11px; color: var(--dim);
+    cursor: pointer; user-select: none; }
+  .grp-more:hover { color: var(--accent); }
   .btn.sm { padding: 3px 8px; font-size: 11px; }
   .rootrow { display: flex; align-items: center; gap: 6px;
     font-size: 12px; padding: 2px 0; }
@@ -938,6 +942,29 @@ function runStateRank(r) {
   if (r.milestone_status === "closed") return 2;
   return 1;
 }
+function runEpoch(r) {
+  // created_at is ISO-8601 with an offset; Date.parse honors the offset.
+  const t = Date.parse(r.created_at);
+  return Number.isNaN(t) ? 0 : t;
+}
+function compareRunsForSidebar(a, b) {
+  // The running milestone leads; the rest follow newest-first.
+  const ra = a.process === "running" ? 0 : 1;
+  const rb = b.process === "running" ? 0 : 1;
+  if (ra !== rb) return ra - rb;
+  return runEpoch(b) - runEpoch(a);
+}
+// How many milestones each project shows before "show more" (per project,
+// in-memory: it survives the 2s sidebar repaint like projectMenuOpen and
+// resets on reload — a view preference, not persisted state).
+const SIDEBAR_RUN_LIMIT = 2;
+let expandedProjects = new Set();
+function toggleProjectExpand(event, key) {
+  event.stopPropagation();
+  if (expandedProjects.has(key)) expandedProjects.delete(key);
+  else expandedProjects.add(key);
+  renderRunsTree_paint();
+}
 function projectStateRank(key, byProject) {
   const runs = byProject.get(key) || [];
   return runs.length ? Math.min(...runs.map(runStateRank)) : 2;
@@ -994,12 +1021,24 @@ function renderRunsTree(runs) {
   const ordered = orderedProjectKeys(realKeys, byProject);
   return ordered.map((key) => {
     const runsInGroup = [...(byProject.get(key) || [])].sort(
-      (a, b) => runStateRank(a) - runStateRank(b)
+      compareRunsForSidebar
     );
     const header = groupHeader(key, key, runsInGroup.length, appAccess.admin);
     if (uiState.collapsed.includes(key)) return header;
-    return header + (runsInGroup.map(runRow).join("")
-      || '<div class="grp-empty">no runs yet</div>');
+    if (!runsInGroup.length)
+      return header + '<div class="grp-empty">no runs yet</div>';
+    const expanded = expandedProjects.has(key);
+    const shown = expanded
+      ? runsInGroup
+      : runsInGroup.slice(0, SIDEBAR_RUN_LIMIT);
+    const hidden = runsInGroup.length - shown.length;
+    const safeKey = esc(escJsSq(key));
+    let more = "";
+    if (hidden > 0)
+      more = `<div class="grp-more" onclick="toggleProjectExpand(event, '${safeKey}')">Show ${hidden} more</div>`;
+    else if (expanded && runsInGroup.length > SIDEBAR_RUN_LIMIT)
+      more = `<div class="grp-more" onclick="toggleProjectExpand(event, '${safeKey}')">Show less</div>`;
+    return header + shown.map(runRow).join("") + more;
   }).join("");
 }
 // Each click posts the operator's FULL current arrangement, fire-
