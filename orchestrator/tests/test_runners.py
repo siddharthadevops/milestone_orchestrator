@@ -1086,17 +1086,50 @@ class TestUnterminatedEnvelopeRecovery(unittest.TestCase):
         self.assertEqual(closers, "}")
         self.assertEqual([f["id"] for f in obj["findings"]], ["F1"])
 
-    def test_nested_open_containers_are_all_closed(self):
-        text = (
-            '{"status": "ok", "kind": "review_round", "findings": ['
-            '{"id": "F1", "severity": "P3", "summary": "s", '
-            '"plain": "p", "example": "e"'
+    def test_truncation_inside_the_findings_array_is_refused(self):
+        # Punctuation cannot tell us whether the array had more elements:
+        # closing after F1 reports one finding when the worker may have
+        # been writing five. Losing a finding is the exact damage this
+        # change exists to prevent, so only the outermost brace may be
+        # supplied and this pays the re-review instead.
+        finding = {
+            "id": "F1", "severity": "P3", "summary": "s",
+            "plain": "p", "example": "e",
+        }
+        for tail in ("", "]"):   # cut mid-array, and after the array closed
+            text = (
+                '{"status": "ok", "kind": "review_round", "findings": ['
+                + json.dumps(finding) + tail
+            )
+            with self.subTest(tail=tail):
+                if tail == "]":
+                    # Only the object's own brace is missing: recoverable.
+                    obj, closers = runners._extract_contract_output(
+                        text, self._validate_review
+                    )
+                    self.assertEqual(closers, "}")
+                    self.assertEqual(obj["findings"][0]["id"], "F1")
+                else:
+                    self.assertIsNone(runners._repair_unterminated(text))
+                    with self.assertRaises(
+                        (ValueError, contracts.ContractError)
+                    ):
+                        runners._extract_contract_output(
+                            text, self._validate_review
+                        )
+
+    def test_echoed_example_plus_truncated_answer_is_ambiguous(self):
+        # A complete contract-shaped example must not be silently chosen
+        # over the worker's real (truncated) answer.
+        example = json.dumps(
+            {"status": "ok", "kind": "review_round", "findings": [],
+             "notes": "example"}
         )
-        obj, closers = runners._extract_contract_output(
-            text, self._validate_review
-        )
-        self.assertEqual(closers, "}]}")
-        self.assertEqual(obj["findings"][0]["id"], "F1")
+        text = example + '\n\n{"status": "ok", "kind": "review_round", ' \
+                         '"findings": [], "notes": "the real answer"\n'
+        with self.assertRaises(ValueError) as cm:
+            runners._extract_contract_output(text, self._validate_review)
+        self.assertIn("ambiguous", str(cm.exception))
 
     def test_call_worker_spends_no_retry_and_reports_the_recovery(self):
         runner = MockRunner(

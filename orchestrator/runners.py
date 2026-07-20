@@ -235,26 +235,35 @@ def _repair_unterminated(text):
     thrown away, and its replacement re-review reached a different verdict
     (one dropped two findings and the unit sealed clean).
 
-    Returns (object, closers) or None. Three independent conditions must
+    Returns (object, closers) or None. Four independent conditions must
     all hold, because "append only punctuation" is a claim that has to be
     earned: the text must end on a character proving its last token
-    finished, nothing may be left open before the object starts, and the
+    finished, nothing may be left open before the object starts, the ONLY
+    missing delimiter must be the top-level object's own brace, and the
     result must parse. The caller then requires the worker contract on top.
-    Anything cut mid-string, mid-number, or mid-literal stays unrecoverable."""
+
+    The single-brace rule is what keeps this honest. A deeper truncation
+    ends inside a COLLECTION, and no amount of punctuation can tell us
+    whether that collection had more elements coming: closing
+    `"findings": [F1` yields a valid object reporting one finding when the
+    worker may have been writing five. Losing a finding that way is the
+    exact damage this whole change exists to prevent, so anything deeper
+    than the outermost brace is refused and pays the re-review instead."""
     stripped = (text or "").strip()
     if stripped[-1:] not in _COMPLETE_TOKEN_TAIL:
         return None
+    if _prefix_opens_nothing(stripped, len(stripped)):
+        return None  # nothing is left open; there is nothing to recover
     start = stripped.find("{")
     while start != -1:
         if _prefix_opens_nothing(stripped, start):
-            closers = _closers_from(stripped, start)
-            if closers:
+            if _closers_from(stripped, start) == "}":
                 try:
-                    obj = json.loads(stripped[start:] + closers)
+                    obj = json.loads(stripped[start:] + "}")
                 except json.JSONDecodeError:
                     obj = None
                 if isinstance(obj, dict):
-                    return obj, closers
+                    return obj, "}"
         start = stripped.find("{", start + 1)
     return None
 
@@ -277,21 +286,26 @@ def _extract_contract_output(text, validate):
             matches.append(validate(obj))
         except contracts.ContractError as exc:
             errors.append(str(exc))
-    if len(matches) == 1:
-        return matches[0], None
-    if len(matches) > 1:
+    # The recovery candidate is weighed ALONGSIDE the complete ones, never
+    # only after they fail: a worker that echoes a contract-shaped example
+    # and then truncates its real answer would otherwise have the example
+    # silently chosen over the answer. Two viable readings is exactly the
+    # ambiguity the caller already refuses.
+    recovered = None
+    repaired = _repair_unterminated(text)
+    if repaired is not None:
+        try:
+            recovered = (validate(repaired[0]), repaired[1])
+        except contracts.ContractError as exc:
+            errors.append(str(exc))
+    if len(matches) + (1 if recovered else 0) > 1:
         raise ValueError(
             "multiple JSON objects satisfy the worker contract; response is ambiguous"
         )
-    # Last resort, never a shortcut: only an envelope missing nothing but
-    # its closing delimiters, and only when it then satisfies the contract.
-    recovered = _repair_unterminated(text)
-    if recovered is not None:
-        obj, closers = recovered
-        try:
-            return validate(obj), closers
-        except contracts.ContractError as exc:
-            errors.append(str(exc))
+    if matches:
+        return matches[0], None
+    if recovered:
+        return recovered
     if unparseable is not None and not errors:
         raise unparseable
     detail = "; ".join(errors) if errors else "no object candidate"

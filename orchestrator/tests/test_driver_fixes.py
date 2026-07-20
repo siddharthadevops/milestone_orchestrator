@@ -241,6 +241,8 @@ class _FailingRunner(object):
     def call(self, family, prompt, workspace, model=None, effort=None,
              timeout_override=None):
         self.calls += 1
+        self.profiles = getattr(self, "profiles", [])
+        self.profiles.append((family, model, effort))
         if self.failures:
             raise self.failures.pop(0)
         import json as _json
@@ -278,6 +280,41 @@ class TestTypedInfraFailures(DriverTestCase):
             state = st.load(path)
             self.assertEqual(state["failure"]["type"], "login")
             self.assertIsNone(state["failure"]["resume_at"])
+
+    def test_classifier_call_carries_its_family_profile(self):
+        # The classifier runs on the OPPOSITE family, whose command
+        # template may carry {model}/{effort}. Calling it without them
+        # raised "command template uses {model} but no value was resolved"
+        # before the CLI was ever reached, so the whole LLM fallback stage
+        # was dead and EVERY unmatched failure degraded to `unknown`
+        # (found live 2026-07-19). This pins the driver call site, not
+        # just errclass.
+        with tempfile.TemporaryDirectory(prefix="orch-fix-") as ws:
+            cfg = make_config(
+                infra_retry_backoff_s=[],
+                error_classifier=True,
+                model_defaults={
+                    "codex": {"model": "gpt-5.6-sol", "effort": "xhigh"},
+                    "claude": {"model": "claude-fable-5", "effort": "high"},
+                },
+            )
+            path = init_state(ws, cfg)
+            runner = _FailingRunner(
+                [runners.RunnerError(
+                    "family codex exited 1 with no output; stderr tail: "
+                    "an unrecognizable banner")],
+                then=[{"error_type": "busy", "resume_at": None,
+                       "evidence": "transient"}],
+            )
+            driver = drv.Driver(path, runner=runner)
+            driver.step()
+            state = st.load(path)
+            # It reached the CLI at all, and as the opposite family.
+            self.assertEqual(state["failure"]["type"], "busy")
+            classify_calls = [p for p in runner.profiles if p[0] == "claude"]
+            self.assertEqual(
+                classify_calls, [("claude", "claude-fable-5", "high")]
+            )
 
     def test_classifier_io_is_persisted_and_evidence_recorded(self):
         # An LLM-classified failure must leave an auditable trail: the

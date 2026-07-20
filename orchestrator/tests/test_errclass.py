@@ -42,18 +42,22 @@ class TestPatterns(unittest.TestCase):
             ),
             "quota",
         )
-        self.assertEqual(
-            errclass.classify_text("You've reached your Opus limit."),
-            "quota",
+        # The remedy pointer is required, deliberately. A bare limit
+        # sentence is indistinguishable from prose, and a false quota
+        # verdict auto-resumes a CONTENT failure; an unmatched real banner
+        # merely falls through to the LLM classifier, which now works.
+        self.assertIsNone(
+            errclass.classify_text("You've reached your Opus limit.")
         )
 
     def test_limit_phrasing_does_not_swallow_worker_prose(self):
         # A false quota verdict is worse than no verdict: it puts a CONTENT
-        # failure on the guard's auto-resume loop. Short worker prose that
-        # happens to say "reached ... limit" must not type as quota.
+        # failure on the guard's auto-resume loop. EITHER half of the
+        # banner alone is ordinary prose and must not type as quota.
         for prose in (
+            "You've reached your configured retry limit",
             "the fixer reached your configured retry limit",
-            "The reviewer reached your stated line limit for the note.",
+            "Mention /usage-credits in the docs when the window resets.",
             "Round 3 reached the round limit for this family.",
         ):
             with self.subTest(prose=prose):

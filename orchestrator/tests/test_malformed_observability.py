@@ -190,6 +190,36 @@ class MalformedObservabilityTest(unittest.TestCase):
         self.assertEqual(summ["malformed"][0]["kind"], "review_round")
         self.assertIn("seq", summ["malformed"][0])
 
+    def test_a_failing_sibling_half_does_not_erase_a_recovered_one(self):
+        # codex's half recovers; claude's then violates the contract twice
+        # and fails the attempt. The failure path used to exit before the
+        # stashed strike was emitted, leaving an orphan raw file and no
+        # event — the recovered half's defect vanished from the ledger.
+        seal = report("seal_half")
+        state = self._drive(
+            [
+                draft(),
+                step("review_round", report("review_round"), family="codex"),
+                step("review_round", report("review_round"), family="claude"),
+                step("seal_half", json.dumps(seal)[:-1] + "\n",
+                     family="codex"),
+                step("seal_half", MALFORMED_SEAL, family="claude"),
+                step("seal_half", MALFORMED_SEAL, family="claude"),
+            ],
+            stop=lambda s: s.get("failure"),
+        )
+        self.assertIsNotNone(state["failure"])
+        recovered = [
+            e for e in self._malformed_events(state)
+            if e["family"] == "codex" and "unterminated" in e["error"]
+        ]
+        self.assertEqual(len(recovered), 1)
+        self.assertEqual(recovered[0]["kind"], "seal_half")
+        # Its raw file is referenced by a real event, not orphaned.
+        self.assertTrue(os.path.exists(
+            os.path.join(state["workspace"], recovered[0]["raw_path"])
+        ))
+
     def test_double_violation_records_a_fatal_event(self):
         # BOTH attempts malformed: the run fails AND the strike is a
         # FATAL event carrying both attempts' raw paths (the red chip).

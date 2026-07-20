@@ -3942,7 +3942,26 @@ class Driver(object):
                 }
             return half
 
+        def flush_half_strikes():
+            """Emit the malformed strikes stashed by the halves that DID
+            complete. Called before every exit, not just the happy one: a
+            sibling half failing must not erase the evidence that another
+            half came back malformed — that used to leave an orphan raw
+            file and no event at all."""
+            for fam in list(halves):
+                rep = halves[fam].pop("repair", None)
+                if rep:
+                    st.append_event(
+                        self.state, "worker_malformed",
+                        unit=st.unit_key(unit),
+                        label=rep["label"], kind=contracts.KIND_SEAL_HALF,
+                        family=fam, error=rep["error"],
+                        duration_s=rep["duration_s"],
+                        raw_path=rep["raw_path"],
+                    )
+
         def fail_attempt(reason, raw_texts=None, failed_family=None):
+            flush_half_strikes()
             # Runs on the main thread (sequential path directly; concurrent
             # path only after every half has joined), so _save_raw here never
             # races the seal worker threads.
@@ -4075,19 +4094,10 @@ class Driver(object):
                 "seal attempt %d lost half(s) for: %s"
                 % (attempt_no, ", ".join(sorted(set(families) - set(halves))))
             )
-        for fam in families:
-            # Main-thread emission of any half's repaired first strike
-            # (stashed thread-safely in run_half_pure); popped so the
-            # seal record itself stays exactly its historical shape.
-            rep = halves[fam].pop("repair", None)
-            if rep:
-                st.append_event(
-                    self.state, "worker_malformed",
-                    unit=st.unit_key(unit),
-                    label=rep["label"], kind=contracts.KIND_SEAL_HALF,
-                    family=fam, error=rep["error"],
-                    duration_s=rep["duration_s"], raw_path=rep["raw_path"],
-                )
+        # Main-thread emission of any half's repaired first strike
+        # (stashed thread-safely in run_half_pure); popped so the seal
+        # record itself stays exactly its historical shape.
+        flush_half_strikes()
         clean = all(
             contracts.findings_clean(halves[fam]["result"]) for fam in families
         )
