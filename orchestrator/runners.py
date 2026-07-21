@@ -628,21 +628,14 @@ class SubprocessRunner(object):
         if family not in self.commands:
             raise RunnerError("no command configured for family %r" % family)
         template = apply_model_effort(self.commands[family], model, effort)
-        output_file = None
-        argv = []
-        for arg in template:
-            if "{output_file}" in arg:
-                if output_file is None:
-                    fd, output_file = tempfile.mkstemp(
-                        prefix="orch-last-", suffix=".txt"
-                    )
-                    os.close(fd)
-                arg = arg.replace("{output_file}", output_file)
-            arg = arg.replace("{workspace}", workspace)
-            argv.append(arg)
-
         timeout = timeout_override or self.timeouts.get(family)
         started = time.time()
+
+        output_file = None
+        so_fd = stdout_path = None
+        proc = None
+        reaped = False
+        watchdog = wd_done = wd_state = None
 
         def _cleanup_files():
             if stdout_path:
@@ -650,42 +643,69 @@ class SubprocessRunner(object):
             if output_file:
                 _unlink_quiet(output_file)
 
-        # stdout goes to a FILE, not a pipe, so the watchdog can watch it
-        # grow as a liveness signal: a slow token streamer burns little CPU
-        # but is working, and its bytes land here as they arrive.
-        so_fd = stdout_path = None
+        def _reap(p):
+            # SIGKILL the whole group, then WAIT so the leader is not left a
+            # zombie with open pipes. Killing the group first makes stderr
+            # EOF (every writer dies), so this communicate cannot block on a
+            # lingering child. Skipped when communicate already reaped it
+            # (returncode set). Best-effort: a cleanup path never re-raises.
+            _kill_group(p)
+            if p.returncode is None:
+                try:
+                    p.communicate(timeout=PS_SAMPLE_TIMEOUT)
+                except Exception:
+                    pass
+            _untrack_worker(p)
+
+        # ONE guard around the whole lifecycle. Any failure OR a
+        # KeyboardInterrupt at ANY point — building argv (which may create
+        # {output_file}), allocating the stdout temp, spawning, tracking, or
+        # the gaps between — must close the parent fd, reap a spawned
+        # full-permission worker, and delete every temp file. Popen either
+        # returns a handle or reaps its own child, so a worker is reachable
+        # for reaping exactly when proc is not None; `reaped` guards against
+        # a pid-reuse double-kill once the inner finally has waited on it.
         try:
+            argv = []
+            for arg in template:
+                if "{output_file}" in arg:
+                    if output_file is None:
+                        fd, output_file = tempfile.mkstemp(
+                            prefix="orch-last-", suffix=".txt"
+                        )
+                        os.close(fd)
+                    arg = arg.replace("{output_file}", output_file)
+                arg = arg.replace("{workspace}", workspace)
+                argv.append(arg)
+
+            # stdout goes to a FILE, not a pipe, so the watchdog can watch it
+            # grow as a liveness signal: a slow token streamer burns little
+            # CPU but is working, and its bytes land here as they arrive.
             so_fd, stdout_path = tempfile.mkstemp(
                 prefix="orch-stdout-", suffix=".txt"
             )
-            proc = subprocess.Popen(
-                argv,
-                stdin=subprocess.PIPE,
-                stdout=so_fd,
-                stderr=subprocess.PIPE,
-                cwd=self.cwd or workspace,
-                env=_worker_env(self.env, family),
-                start_new_session=True,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-            )
-        except Exception as exc:
-            # ANY spawn/temp failure: close the fd, delete every temp file
-            # (including a {output_file} created above), and surface it.
-            if so_fd is not None:
-                try:
-                    os.close(so_fd)
-                except OSError:
-                    pass
-            _cleanup_files()
-            raise RunnerError("failed to spawn %r: %s" % (argv[0], exc))
-        os.close(so_fd)   # the child holds its own dup; parent no longer needs it
-        _track_worker(proc)
-        watchdog = wd_done = wd_state = None
-        # Outer try: temp files are deleted on EVERY exit, including a
-        # KeyboardInterrupt raised mid-communicate.
-        try:
+            try:
+                proc = subprocess.Popen(
+                    argv,
+                    stdin=subprocess.PIPE,
+                    stdout=so_fd,
+                    stderr=subprocess.PIPE,
+                    cwd=self.cwd or workspace,
+                    env=_worker_env(self.env, family),
+                    start_new_session=True,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                )
+            except Exception as exc:
+                raise RunnerError("failed to spawn %r: %s" % (argv[0], exc))
+            finally:
+                # The child dup'd stdout; the parent's fd is done with whether
+                # the spawn returned or raised (Exception or KeyboardInterrupt).
+                os.close(so_fd)
+                so_fd = None
+
+            _track_worker(proc)
             try:
                 # Start the watchdog INSIDE the try so a Thread.start()
                 # failure cannot leak the tracked worker.
@@ -709,20 +729,13 @@ class SubprocessRunner(object):
                 if watchdog is not None:
                     watchdog.join(timeout=PS_SAMPLE_TIMEOUT)
                 # Reap the whole group: a descendant the worker left running
-                # after closing stderr would otherwise linger unwatched. A
-                # clean exit's group is already gone, so this no-ops there.
-                _kill_group(proc)
-                _untrack_worker(proc)
-            # Raise a stall ONLY when the kill actually took effect (the
-            # process died by signal). If the worker completed in the tiny
-            # race between the watchdog's sample and its SIGKILL, returncode
-            # is >= 0 and its real output must be honored, not discarded.
-            if wd_state and wd_state["stalled"] and (proc.returncode or 0) < 0:
-                raise WorkerStalled(
-                    "family %s stalled: its process tree burned under %ss of "
-                    "CPU over a %ss window (frozen worker)"
-                    % (family, self.stall_min_cpu_s, self.stall_window_s)
-                )
+                # after closing stderr would otherwise linger unwatched, and
+                # an interrupt during watchdog start leaves the leader
+                # unwaited. A clean exit's group is already gone, so the kill
+                # no-ops and the wait is skipped.
+                _reap(proc)
+                reaped = True
+
             duration = time.time() - started
             try:
                 with open(stdout_path, "r", encoding="utf-8",
@@ -738,6 +751,24 @@ class SubprocessRunner(object):
                         text = file_text
                 except OSError:
                     pass
+            # The watchdog sets "stalled" only after a full flat window, then
+            # kills the group. Classify that as an auto-resumable stall
+            # whenever the kill defined the outcome: the leader died by our
+            # signal (returncode < 0), OR it had already exited (0 or an error
+            # code) yet left no usable output — e.g. it exited early while a
+            # frozen child held the stderr pipe open for a whole window, so
+            # communicate() blocked and the watchdog killed the child while the
+            # leader's returncode stayed 0. Only a stall that STILL produced
+            # real output (the worker finished in the race between the last
+            # sample and the SIGKILL) is honored rather than discarded.
+            if (wd_state and wd_state["stalled"]
+                    and ((proc.returncode or 0) < 0
+                         or not (text or "").strip())):
+                raise WorkerStalled(
+                    "family %s stalled: its process tree burned under %ss of "
+                    "CPU over a %ss window (frozen worker)"
+                    % (family, self.stall_min_cpu_s, self.stall_window_s)
+                )
             if proc.returncode != 0 and not (text or "").strip():
                 # Lead with the provider's own ERROR lines: codex buries
                 # them under plugin WARN noise, which misled the operator
@@ -757,6 +788,18 @@ class SubprocessRunner(object):
                 )
             return RunnerResult(text, proc.returncode, duration)
         finally:
+            # BaseException-safe cleanup. so_fd is still open only if we were
+            # interrupted before the spawn's finally closed it; proc needs
+            # reaping only if it was spawned but the inner finally never ran
+            # (an interrupt in the setup gap) — `reaped` prevents a pid-reuse
+            # double-kill after a normal wait.
+            if so_fd is not None:
+                try:
+                    os.close(so_fd)
+                except OSError:
+                    pass
+            if proc is not None and not reaped:
+                _reap(proc)
             _cleanup_files()
 
 

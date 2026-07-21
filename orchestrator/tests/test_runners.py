@@ -1358,6 +1358,69 @@ class TestStallWatchdog(unittest.TestCase):
         with self.assertRaises(OSError):   # ESRCH: the child was reaped
             os.kill(child_pid, 0)
 
+    def test_stall_after_leader_exits_zero_is_recoverable(self):
+        # The leader exits 0 with NO stdout, but a frozen child inherits the
+        # stderr pipe so communicate() blocks. The watchdog kills the child
+        # after a flat window; proc.returncode is the leader's 0, yet the
+        # call produced nothing only because the worker froze. It must surface
+        # as an auto-resumable WorkerStalled, never an empty success or a hard
+        # protocol failure keyed off the (zero) returncode.
+        runner = self._runner(
+            [sys.executable, "-c",
+             "import subprocess,sys\n"
+             # child inherits the stderr pipe and sleeps; leader exits 0 now
+             "subprocess.Popen([sys.executable,'-c',"
+             "'import time; time.sleep(30)'])\n"],
+            window=1, floor=0.5,
+        )
+        t0 = time.time()
+        with self.assertRaises(runners.WorkerStalled):
+            runner.call("fam", "", self.ws)
+        # Killed at a window (~2s), not after the child's 30s sleep.
+        self.assertLess(time.time() - t0, 15)
+
+    def test_interrupt_in_setup_reaps_worker_and_cleans_temps(self):
+        # A KeyboardInterrupt in the setup gap (after spawn, before the
+        # communicate try/finally can reap) must NOT orphan the
+        # full-permission worker nor leak temp files. Force it by making
+        # _track_worker raise, with a template that also creates {output_file}
+        # so BOTH temp files are exercised.
+        runner = self._runner(
+            [sys.executable, "-c", "import time; time.sleep(30)",
+             "{output_file}"],
+            window=0, floor=0,   # watchdog off; the interrupt precedes it
+        )
+        created = []
+        captured = {}
+        real_mkstemp = tempfile.mkstemp
+        real_track = runners._track_worker
+
+        def rec_mkstemp(*a, **k):
+            fd, path = real_mkstemp(*a, **k)
+            created.append(path)
+            return fd, path
+
+        def boom(proc):
+            captured["pid"] = proc.pid
+            raise KeyboardInterrupt
+
+        tempfile.mkstemp = rec_mkstemp
+        runners._track_worker = boom
+        try:
+            with self.assertRaises(KeyboardInterrupt):
+                runner.call("fam", "", self.ws)
+        finally:
+            tempfile.mkstemp = real_mkstemp
+            runners._track_worker = real_track
+        # The spawned worker's group was SIGKILLed, not left running.
+        time.sleep(0.3)
+        with self.assertRaises(OSError):   # ESRCH
+            os.kill(captured["pid"], 0)
+        # Both temp files this call created (orch-last + orch-stdout) are gone.
+        self.assertEqual(len(created), 2)
+        for path in created:
+            self.assertFalse(os.path.exists(path), "leaked temp file %s" % path)
+
     def test_watchdog_disabled_lets_an_idle_worker_finish(self):
         # window=0 disables the watchdog entirely: an idle worker completes.
         runner = self._runner(
