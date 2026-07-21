@@ -1340,6 +1340,24 @@ class TestStallWatchdog(unittest.TestCase):
         result = runner.call("fam", "", self.ws)
         self.assertIn("tok 5", result.text)
 
+    def test_leader_exit_reaps_a_lingering_child(self):
+        # communicate() with a file stdout returns when the LEADER exits, not
+        # at pipe EOF; a descendant the worker left running (holding stdout)
+        # must still be reaped, not orphaned. Watchdog off: this is the reap.
+        runner = self._runner(
+            [sys.executable, "-c",
+             "import subprocess,sys\n"
+             "p=subprocess.Popen([sys.executable,'-c',"
+             "'import time; time.sleep(60)'])\n"
+             "print(p.pid, flush=True)\n"],
+            window=0, floor=0,
+        )
+        result = runner.call("fam", "", self.ws)
+        child_pid = int(result.text.strip())
+        time.sleep(0.5)
+        with self.assertRaises(OSError):   # ESRCH: the child was reaped
+            os.kill(child_pid, 0)
+
     def test_watchdog_disabled_lets_an_idle_worker_finish(self):
         # window=0 disables the watchdog entirely: an idle worker completes.
         runner = self._runner(

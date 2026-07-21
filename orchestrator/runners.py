@@ -648,11 +648,21 @@ class SubprocessRunner(object):
 
         timeout = timeout_override or self.timeouts.get(family)
         started = time.time()
+
+        def _cleanup_files():
+            if stdout_path:
+                _unlink_quiet(stdout_path)
+            if output_file:
+                _unlink_quiet(output_file)
+
         # stdout goes to a FILE, not a pipe, so the watchdog can watch it
         # grow as a liveness signal: a slow token streamer burns little CPU
         # but is working, and its bytes land here as they arrive.
-        so_fd, stdout_path = tempfile.mkstemp(prefix="orch-stdout-", suffix=".txt")
+        so_fd = stdout_path = None
         try:
+            so_fd, stdout_path = tempfile.mkstemp(
+                prefix="orch-stdout-", suffix=".txt"
+            )
             proc = subprocess.Popen(
                 argv,
                 stdin=subprocess.PIPE,
@@ -665,21 +675,19 @@ class SubprocessRunner(object):
                 encoding="utf-8",
                 errors="replace",
             )
-        except OSError as exc:
-            os.close(so_fd)
-            _unlink_quiet(stdout_path)
-            if output_file:
-                _unlink_quiet(output_file)
+        except Exception as exc:
+            # ANY spawn/temp failure: close the fd, delete every temp file
+            # (including a {output_file} created above), and surface it.
+            if so_fd is not None:
+                try:
+                    os.close(so_fd)
+                except OSError:
+                    pass
+            _cleanup_files()
             raise RunnerError("failed to spawn %r: %s" % (argv[0], exc))
         os.close(so_fd)   # the child holds its own dup; parent no longer needs it
         _track_worker(proc)
         watchdog = wd_done = wd_state = None
-
-        def _cleanup_files():
-            _unlink_quiet(stdout_path)
-            if output_file:
-                _unlink_quiet(output_file)
-
         try:
             # Start the watchdog INSIDE the try so a Thread.start() failure
             # cannot leak the tracked worker or its files.
@@ -701,6 +709,12 @@ class SubprocessRunner(object):
                 wd_done.set()
             if watchdog is not None:
                 watchdog.join(timeout=PS_SAMPLE_TIMEOUT)
+            # communicate() with a FILE stdout returns when the LEADER exits,
+            # NOT when every writer closes stdout (a pipe's EOF). So reap the
+            # whole group: a descendant the worker left running (holding
+            # stdout) would otherwise be orphaned, unwatched. A clean exit's
+            # group is already gone, so this is a no-op there.
+            _kill_group(proc)
             _untrack_worker(proc)
         # Raise a stall ONLY when the kill actually took effect (the process
         # died by signal). If the worker completed in the tiny race between
@@ -750,8 +764,12 @@ class SubprocessRunner(object):
 
 
 def _kill_group(proc):
+    # Every worker is spawned with start_new_session=True, so its pgid ==
+    # its pid. Kill by proc.pid DIRECTLY, not via os.getpgid(proc.pid):
+    # getpgid raises once the leader is reaped, but the group lives on while
+    # a lingering child holds it, and killpg still reaches that child.
     try:
-        os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+        os.killpg(proc.pid, signal.SIGKILL)
     except (ProcessLookupError, PermissionError, OSError):
         try:
             proc.kill()

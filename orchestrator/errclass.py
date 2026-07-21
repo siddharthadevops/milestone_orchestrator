@@ -121,10 +121,11 @@ _PATTERNS = (
     ("timeout", (
         r"timed out after \d+s",
         # The runner's exact self-authored stall message, numeric parts and
-        # all, so worker prose merely mentioning "stalled" / "frozen worker"
-        # cannot masquerade as an auto-resumable infra failure.
-        r"stalled: its process tree burned under [\d.]+s of cpu "
-        r"over a [\d.]+s window \(frozen worker\)",
+        # all (the numbers may be scientific notation, e.g. 1e-05), so worker
+        # prose merely mentioning "stalled" / "frozen worker" cannot
+        # masquerade as an auto-resumable infra failure.
+        r"stalled: its process tree burned under [\d.eE+-]+s of cpu "
+        r"over a [\d.eE+-]+s window \(frozen worker\)",
     )),
 )
 
