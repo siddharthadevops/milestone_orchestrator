@@ -81,13 +81,23 @@ DEFAULT_CONFIG = {
         "claude": {"model": "claude-fable-5", "effort": "high"},
         "codex": {"model": "gpt-5.6-sol", "effort": "xhigh"},
     },
-    # No timeouts by default: worker calls run as long as the work needs
-    # (an implement call may legitimately run hours of test suites). A
-    # fixed cap killed a real 15-minute-plus implement mid-flight; a hung
-    # CLI is the operator's Stop button (a liveness mechanism — e.g.
-    # periodic workspace-diff progress checks — is future work). Operators
-    # can still set per-family caps here when a run warrants them.
+    # No hard wall-clock timeout: worker calls run as long as the work needs
+    # (an implement call may legitimately run hours of test suites). A fixed
+    # cap killed a real 15-minute-plus implement mid-flight. Instead a
+    # LIVENESS watchdog (below) kills only a FROZEN worker. Operators can
+    # still set per-family hard caps here when a run warrants them.
     "timeouts": {},
+    # Liveness watchdog: a worker whose whole process TREE burns less than
+    # worker_stall_min_cpu_s of CPU across a full worker_stall_window_s
+    # window is frozen (dead CLI spawn, or a provider-side hang with no
+    # bytes flowing) and gets SIGKILLed + typed `stalled` (recoverable,
+    # auto-resumed; a fresh call re-issues the work). Measured live: a hung
+    # codex burned 0.03s over 5h (~0.001s/window); a WORKING worker — even a
+    # report-only review that mostly waits on the LLM — burns ~7-75s/window
+    # (streaming keeps CPU flowing). 1s/15min sits ~1000x above frozen and
+    # ~7x below the lightest real work. Set the window to 0 to disable.
+    "worker_stall_window_s": 900,
+    "worker_stall_min_cpu_s": 1.0,
     "verification": [],
     # Unlimited by default, same philosophy as worker timeouts: a real
     # suite may take 15+ minutes and a gate that kills it converts honest
@@ -114,23 +124,25 @@ DEFAULT_CONFIG = {
     # independently configurable: it always uses the fixer's family and that
     # family's Review profile.
     # Acts may also be objects: {"agent": "claude", "model": "sonnet",
-    # "effort": "high"} — who leads drafting ("drafter": skeleton + slice
-    # notes), implementation ("implementer") and fixes ("fixer"), and with
-    # which model/effort. `review_codex` / `review_claude` tune each fixed
-    # review family independently without changing family rotation; they
-    # apply to whole-artifact rounds, delta reviews, and seal halves. Absent drafter /
-    # implementer fall back to fix_family (legacy behavior). The operator
-    # can hot-edit all of this mid-run via acts.json; the driver re-reads it
-    # before every act resolution.
+    # "effort": "high"} — who leads SKELETON content work ("skeletoner":
+    # its draft, re-drafts, AND fixes — only skeleton reviews stay on the
+    # review families), slice-note drafting ("drafter"), implementation
+    # ("implementer") and fixes ("fixer"), and with which model/effort.
+    # `review_codex` / `review_claude` tune each fixed review family
+    # independently without changing family rotation; they apply to
+    # whole-artifact rounds, delta reviews, and seal halves. Absent
+    # drafter / implementer fall back to fix_family (legacy behavior). The
+    # operator can hot-edit all of this mid-run via acts.json; the driver
+    # re-reads it before every act resolution.
     "acts": {
         "fixer": "codex",
-        # Once one fix chain has produced enough dirty delta reviews,
-        # use a deliberately stronger, independently configurable fixer.
-        # Frozen pre-feature configs fall back to this exact profile too;
-        # acts.json can still replace it mid-run.
-        "convergence_fixer": {
-            "agent": "codex",
-            "model": "gpt-5.6-sol",
+        # The skeleton is drafted, re-drafted, and fixed by one chosen
+        # model — skeleton work is high-leverage planning, so it defaults
+        # to claude-fable-5 at max effort. Reviews of the skeleton are
+        # unaffected (they use review_codex/review_claude).
+        "skeletoner": {
+            "agent": "claude",
+            "model": "claude-fable-5",
             "effort": "max",
         },
         "consultation": "opposite",
@@ -141,15 +153,12 @@ DEFAULT_CONFIG = {
         # rater is still a fresh stateless look).
         "reclassifier": "opposite",
     },
-    # The fixer AFTER this many dirty delta reviews in the same active fix
-    # chain uses convergence_fixer. The count is derived from append-only
-    # history, so stopping/resuming a run cannot reset the escalation.
-    "convergence_fixer_after_deltas": 10,
     # A delta stops being meaningfully incremental after enough cumulative
-    # fixes.  After this many fixes in one episode, amend the pending diff
-    # without fabricating a clean delta result and return exactly where a
-    # real clean delta would return.  In review rounds this preserves the
-    # active family, which then reviews the whole amended commit again.
+    # fixes.  After this many fixes in one episode born from a review round
+    # or a seal, amend the pending diff without fabricating a clean delta
+    # result and return exactly where a real clean delta would return: a
+    # review episode re-reviews the whole amended commit, a seal episode
+    # re-runs the suite and opens a fresh full seal.
     "delta_full_review_after_fixes": 5,
     # Fixer+delta iterations allowed per fix episode before failing. A
     # deliberate resume grants a fresh budget (state.resume_run resets the
@@ -346,7 +355,9 @@ class Driver(object):
         interpreter.verify_embedded(self.state)
         self.workspace = self.state["workspace"]
         self.runner = runner or runners.SubprocessRunner(
-            self.config["commands"], self.config.get("timeouts", {})
+            self.config["commands"], self.config.get("timeouts", {}),
+            stall_window_s=self.config.get("worker_stall_window_s"),
+            stall_min_cpu_s=self.config.get("worker_stall_min_cpu_s"),
         )
         # Before repo validation: if a pending gap's cleanup never ran (a crash
         # between recording the gap and cleaning up), worker junk such as a
@@ -1111,6 +1122,11 @@ class Driver(object):
         auditable after the fact."""
         texts = list(getattr(exc, "raw_texts", []) or [])
         texts.append(str(exc))
+        if isinstance(exc, runners.WorkerStalled):
+            # A frozen worker: recoverable near-term, exactly like a timeout
+            # (a fresh call re-issues the same work). No LLM classifier —
+            # there is nothing to classify, the process produced nothing.
+            return "timeout", None, "worker stalled (no CPU progress)"
         if isinstance(exc, runners.RunnerError) and "timed out" in str(exc):
             return "timeout", None, "runner timeout"
         opposite = self._opposite(family)
@@ -1660,9 +1676,16 @@ class Driver(object):
 
     def _do_draft(self):
         unit = st.current_unit(self.state)
-        act = (
-            "implementer" if unit["kind"] == st.UNIT_SLICE_IMPL else "drafter"
-        )
+        # Skeleton drafts (and re-drafts on remodel) run the `skeletoner`
+        # act — one operator-chosen model for all skeleton content work,
+        # default claude-fable-5/max; slice docs keep `drafter`, impl keeps
+        # `implementer`. Only skeleton REVIEWS stay on the review families.
+        if unit["kind"] == st.UNIT_SKELETON:
+            act = "skeletoner"
+        elif unit["kind"] == st.UNIT_SLICE_IMPL:
+            act = "implementer"
+        else:
+            act = "drafter"
         family, model, effort = self._act_profile(act)
         goal = self._goal_for(unit)
         amendments = self._amendments()
@@ -2496,29 +2519,6 @@ class Driver(object):
         model, effort = self._review_profile(family)
         return family, model, effort
 
-    def _convergence_fixer_profile(self, origin_family=None):
-        """Effective profile for a fix chain that is failing to converge.
-
-        Runs freeze config at creation time, so old live runs do not contain
-        this act. They still receive the current Sol/max default. A hot
-        acts.json entry is detected explicitly and then resolved through the
-        ordinary policy machinery, preserving its normal precedence.
-        """
-        configured = (self.config.get("acts") or {}).get(
-            "convergence_fixer"
-        )
-        hot = self._acts_overlay().get("convergence_fixer")
-        if configured or hot:
-            return self._act_profile(
-                "convergence_fixer",
-                origin_family=origin_family,
-                default_family="codex",
-            )
-        fallback = DEFAULT_CONFIG["acts"]["convergence_fixer"]
-        return (
-            fallback["agent"], fallback["model"], fallback["effort"]
-        )
-
     def _resolve_act(self, act, origin_family):
         """Family-only view of _act_profile (legacy call sites/tests)."""
         fam, _m, _e = self._act_profile(
@@ -2650,24 +2650,13 @@ class Driver(object):
             )
             self._save()
             raise StopStep("fix loop cap")
-        dirty_delta_rounds = st.active_fix_dirty_delta_rounds(
-            self.state, unit
-        )
-        dirty_deltas = len(dirty_delta_rounds)
-        try:
-            convergence_after = int(self.config.get(
-                "convergence_fixer_after_deltas",
-                DEFAULT_CONFIG["convergence_fixer_after_deltas"],
-            ))
-        except (TypeError, ValueError):
-            convergence_after = DEFAULT_CONFIG[
-                "convergence_fixer_after_deltas"
-            ]
-        convergence_after = max(0, convergence_after)
-        convergence = dirty_deltas >= convergence_after
-        if convergence:
-            family, fix_model, fix_effort = (
-                self._convergence_fixer_profile(source.get("family"))
+        if unit["kind"] == st.UNIT_SKELETON:
+            # The skeleton is drafted, fixed, and re-drafted by ONE
+            # operator-chosen model (the `skeletoner` act, default
+            # claude-fable-5/max); only its reviews stay on the review
+            # families. So a skeleton fix runs `skeletoner`, not `fixer`.
+            family, fix_model, fix_effort = self._act_profile(
+                "skeletoner", source.get("family"), default_family="codex"
             )
         else:
             family, fix_model, fix_effort = self._act_profile(
@@ -2731,14 +2720,6 @@ class Driver(object):
                 and unit["kind"] != st.UNIT_SKELETON
             ),
             design_correction=design_context,
-            convergence=(
-                {
-                    "dirty_deltas": dirty_deltas,
-                    "rounds": dirty_delta_rounds[-5:],
-                }
-                if convergence
-                else None
-            ),
         )
         n_fix = 1 + len(
             [r for r in unit["rounds"] if r["kind"] == contracts.KIND_FIX_FINDINGS]
@@ -2943,11 +2924,6 @@ class Driver(object):
                     if (fix_model or fix_effort)
                     else {}
                 ),
-                **(
-                    {"convergence_dirty_deltas": dirty_deltas}
-                    if convergence
-                    else {}
-                ),
                 **({"suite_corrected": True} if suite_corrected else {}),
             },
         )
@@ -3033,20 +3009,27 @@ class Driver(object):
             correction if correction.get("phase") == "proposed" else None
         )
         source = unit.get("fix_source") or {}
-        # The episode's ORIGINAL return target — where the fix chain was
-        # born. A pending suite re-verify redirects `return_to` to
-        # pre_review_verify just below, but the delta convergence
-        # checkpoint must key off `origin_return`, not the redirected
-        # value: a review-originated loop has to escalate to a full review
-        # after delta_full_review_after_fixes fixes even while a suite
-        # correction is pending. Keying off the redirected target silently
-        # disabled the checkpoint and let the loop run to max_fix_loops —
-        # and because that loop never returns to verify, the pending flag
-        # never cleared, so the suppression was permanent for the episode
-        # (found live 2026-07-21: a slice ran 8 dirty deltas with the
-        # 5-fix checkpoint suppressed this way).
-        origin_return = source.get("return_to") or st.U_PRE_REVIEW_VERIFY
-        return_to = origin_return
+        # The delta convergence checkpoint (delta_full_review_after_fixes)
+        # escalates a fix loop to a full re-review after N fixes: a REVIEW
+        # episode (source type "round") returns to a full review, a SEAL
+        # episode ("seal") returns to a full seal. It is keyed off the
+        # source TYPE, never off return_to — a pending suite re-verify
+        # rewrites return_to to pre_review_verify below, and pre_seal_verify
+        # is also shared by gap-repair and verification episodes, so
+        # return_to cannot distinguish the cases. A round/seal loop must
+        # escalate at N even while a suite correction is pending (found live
+        # 2026-07-21: a slice ran 8 dirty deltas with the checkpoint
+        # suppressed because it keyed off the redirected return_to).
+        # Verification and gap-repair episodes keep real deltas.
+        origin_type = source.get("origin_type")
+        if origin_type:
+            checkpoint_source = origin_type in ("round", "seal")
+        else:
+            # Frozen pre-feature runs have no origin_type; the checkpoint
+            # then applied to review episodes only, keyed off the (never
+            # clobbered) return target.
+            checkpoint_source = source.get("return_to") == st.U_ROUNDS
+        return_to = source.get("return_to") or st.U_PRE_REVIEW_VERIFY
         suite_verification_pending = bool(
             unit.get("suite_verification_pending")
             or unit.get("suite_armed_by_fix")
@@ -3141,16 +3124,17 @@ class Driver(object):
         # phantom attempts do not count because they produced no dirty delta.
         fix_number = 1 + dirty_deltas
         if (not provisional
-                and origin_return == st.U_ROUNDS
+                and checkpoint_source
                 and checkpoint_after
                 and fix_number >= checkpoint_after):
             # The fifth fix has already incorporated the previous delta's
             # known findings.  At this point another diff-only review would
-            # inspect a large cumulative patch with less context than the
-            # active full reviewer.  Checkpoint the WIP and follow the exact
-            # clean-delta return edge (the REDIRECTED return_to, so a pending
-            # suite re-verify still runs first, then the full review);
-            # family_index is deliberately untouched.
+            # inspect a large cumulative patch with less context than a full
+            # re-review.  Checkpoint the WIP and follow the exact clean-delta
+            # return edge (the REDIRECTED return_to, so a pending suite
+            # re-verify still runs first): a review episode lands in a full
+            # review, a seal episode re-runs the suite and opens a fresh full
+            # seal.  family_index is deliberately untouched.
             try:
                 sha = gitops.amend(self.workspace)
             except gitops.GitError as exc:

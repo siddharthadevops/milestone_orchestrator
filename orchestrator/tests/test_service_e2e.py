@@ -146,6 +146,10 @@ class TestServicePanelE2E(unittest.TestCase):
                 "claude": list(worker_cmd),
             },
             "timeouts": {"codex": 60, "claude": 60},
+            # The skeleton defaults to claude/fable-5/max in real runs; in this
+            # fake-CLI scenario keep it on codex (the fake claude only scripts
+            # review/seal work, not skeleton drafting/fixing).
+            "acts": {"skeletoner": "codex"},
             "verification": ["python3 run_checks.py"],
             # This scenario deliberately exercises the sequential double-seal
             # REOPEN path (the fake worker raises a README finding on claude's

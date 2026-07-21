@@ -51,7 +51,7 @@ def make_config(**overrides):
         "max_seal_attempts": 4,
         "max_verify_fix_attempts": 2,
         "seal_concurrent": False,
-        "acts": {"fixer": "codex", "delta_review": "codex",
+        "acts": {"skeletoner": "codex", "fixer": "codex", "delta_review": "codex",
                  "consultation": "opposite"},
         "max_fix_loops": 4,
     }

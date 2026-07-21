@@ -1267,6 +1267,80 @@ class TestUnterminatedEnvelopeRecovery(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
+# Liveness watchdog (frozen-worker detection)
+
+
+class TestStallWatchdog(unittest.TestCase):
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.ws = os.path.join(self._tmp.name, "ws")
+        os.makedirs(self.ws)
+
+    def _runner(self, argv, window, floor):
+        return SubprocessRunner(
+            {"fam": argv}, {}, stall_window_s=window, stall_min_cpu_s=floor
+        )
+
+    def test_frozen_worker_is_killed_as_stalled(self):
+        # A worker that only sleeps burns ~no CPU -> flat window -> killed.
+        runner = self._runner(
+            [sys.executable, "-c", "import time; time.sleep(30)"],
+            window=1, floor=0.5,
+        )
+        t0 = time.time()
+        with self.assertRaises(runners.WorkerStalled):
+            runner.call("fam", "", self.ws)
+        # Killed at the first window (~1s), not after the 30s sleep.
+        self.assertLess(time.time() - t0, 10)
+
+    def test_cpu_burning_worker_is_not_killed(self):
+        # A worker that burns CPU clears the floor every window and finishes.
+        runner = self._runner(
+            [sys.executable, "-c",
+             "import time\nt=time.time()+2.5\nwhile time.time()<t: pass\n"
+             "print('done')"],
+            window=1, floor=0.2,
+        )
+        result = runner.call("fam", "", self.ws)
+        self.assertIn("done", result.text)
+        self.assertEqual(result.exit_code, 0)
+
+    def test_watchdog_disabled_lets_an_idle_worker_finish(self):
+        # window=0 disables the watchdog entirely: an idle worker completes.
+        runner = self._runner(
+            [sys.executable, "-c", "import time; time.sleep(1); print('ok')"],
+            window=0, floor=1.0,
+        )
+        result = runner.call("fam", "", self.ws)
+        self.assertIn("ok", result.text)
+
+    def test_stalled_is_typed_recoverable(self):
+        # WorkerStalled is a RunnerError; the driver types it as a timeout
+        # (recoverable, auto-resumed).
+        self.assertTrue(issubclass(runners.WorkerStalled, runners.RunnerError))
+
+    def test_tree_cpu_sums_descendants(self):
+        # A parent that spawns a CPU-burning child: the tree total must
+        # reflect the child's compute, not just the (idle) parent.
+        import subprocess as _sp
+        parent = _sp.Popen(
+            [sys.executable, "-c",
+             "import subprocess,sys,time\n"
+             "c=subprocess.Popen([sys.executable,'-c',"
+             "'t=__import__(\"time\").time()+1.5\\nwhile __import__(\"time\").time()<t: pass'])\n"
+             "c.wait()"],
+        )
+        try:
+            time.sleep(1.0)
+            total = runners.tree_cpu_seconds(parent.pid)
+            self.assertIsNotNone(total)
+            self.assertGreater(total, 0.3)  # the child's busy loop shows up
+        finally:
+            parent.wait(timeout=5)
+
+
+# ---------------------------------------------------------------------------
 # MockRunner semantics
 
 

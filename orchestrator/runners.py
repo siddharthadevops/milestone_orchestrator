@@ -62,6 +62,91 @@ class RunnerError(RuntimeError):
     with no usable output)."""
 
 
+class WorkerStalled(RunnerError):
+    """A liveness watchdog killed the worker: its whole process tree burned
+    less than the configured CPU floor over a full sampling window, i.e. it
+    was frozen (no local compute, so no bytes flowing from the provider and
+    no local work either) — the dead-CLI-spawn / provider-side-hang that has
+    no timeout to catch it. Typed like a timeout: recoverable, auto-resumed,
+    and a fresh call re-issues the same work."""
+
+
+def _parse_ps_time(text):
+    """Cumulative CPU seconds from a `ps -o time=` field. Formats seen:
+    `MM:SS`, `M:SS.ss`, `HH:MM:SS`, `DD-HH:MM:SS`. Returns None on garbage."""
+    text = (text or "").strip()
+    if not text:
+        return None
+    days = 0
+    if "-" in text:
+        d, _, text = text.partition("-")
+        try:
+            days = int(d)
+        except ValueError:
+            return None
+    parts = text.split(":")
+    try:
+        nums = [float(p) for p in parts]
+    except ValueError:
+        return None
+    secs = 0.0
+    for n in nums:
+        secs = secs * 60 + n
+    return days * 86400 + secs
+
+
+def tree_cpu_seconds(root_pid):
+    """Total cumulative CPU seconds consumed by `root_pid` AND every
+    descendant. Best-effort: returns None when it cannot be measured (a ps
+    failure, an unreadable pid) so the caller treats "can't measure" as
+    "alive" and never kills on a blind spot.
+
+    The whole TREE matters: an implement/fix worker's compute is burned by
+    child test/build processes, not the CLI itself, so watching only the
+    worker pid would read a running suite as idle."""
+    try:
+        proc = subprocess.run(
+            ["ps", "-Ao", "pid=,ppid=,time="],
+            capture_output=True, text=True, timeout=PS_SAMPLE_TIMEOUT,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if proc.returncode != 0:
+        return None
+    children = {}
+    cpu = {}
+    for line in proc.stdout.splitlines():
+        f = line.split(None, 2)
+        if len(f) < 3:
+            continue
+        try:
+            pid = int(f[0]); ppid = int(f[1])
+        except ValueError:
+            continue
+        secs = _parse_ps_time(f[2])
+        if secs is None:
+            continue
+        cpu[pid] = secs
+        children.setdefault(ppid, []).append(pid)
+    if root_pid not in cpu:
+        return None
+    total = 0.0
+    seen = set()
+    stack = [root_pid]
+    while stack:
+        pid = stack.pop()
+        if pid in seen:
+            continue
+        seen.add(pid)
+        total += cpu.get(pid, 0.0)
+        stack.extend(children.get(pid, ()))
+    return total
+
+
+# ps sampling is cheap but bounded so a wedged ps can never hang the watchdog.
+PS_SAMPLE_TIMEOUT = 10
+
+
 class WorkerProtocolError(RuntimeError):
     """The CLI ran but its output violates the JSON contract even after the
     repair retry. Carries the raw output texts of both attempts so the
@@ -428,11 +513,53 @@ class SubprocessRunner(object):
                      (codex's --output-last-message pattern).
     """
 
-    def __init__(self, commands, timeouts, cwd=None, env=None):
+    def __init__(self, commands, timeouts, cwd=None, env=None,
+                 stall_window_s=None, stall_min_cpu_s=None):
         self.commands = commands
         self.timeouts = timeouts or {}
         self.cwd = cwd
         self.env = env
+        # Liveness watchdog: kill a worker whose whole process tree burns
+        # less than stall_min_cpu_s of CPU over a stall_window_s window
+        # (a frozen call — no local compute at all). Disabled when either
+        # is unset/<=0, so MockRunner-based tests and unconfigured runs keep
+        # exactly their current behavior. There is deliberately no hard wall
+        # clock timeout: a legitimate multi-hour test suite keeps burning
+        # CPU and is never touched; only a truly idle process is.
+        self.stall_window_s = stall_window_s
+        self.stall_min_cpu_s = stall_min_cpu_s
+
+    def _start_stall_watchdog(self, proc, family):
+        """Sample the worker tree's cumulative CPU every window; if a full
+        window passes with less than the floor of CPU burned, the process
+        is frozen — SIGKILL its group and flag the stall. Returns
+        (thread, done_event, state) or (None, None, None) when disabled.
+
+        Fail-open by construction: a window where CPU cannot be measured
+        (ps hiccup) is treated as alive, never as a stall."""
+        window = self.stall_window_s
+        floor = self.stall_min_cpu_s
+        if not window or not floor or floor <= 0:
+            return None, None, None
+        done = threading.Event()
+        state = {"stalled": False}
+
+        def watch():
+            last = tree_cpu_seconds(proc.pid)
+            while not done.wait(window):
+                cur = tree_cpu_seconds(proc.pid)
+                if last is None or cur is None:
+                    last = cur
+                    continue  # can't measure this window -> assume alive
+                if cur - last < floor:
+                    state["stalled"] = True
+                    _kill_group(proc)
+                    return
+                last = cur
+
+        t = threading.Thread(target=watch, name="stall-watchdog", daemon=True)
+        t.start()
+        return t, done, state
 
     def call(self, family, prompt, workspace, model=None, effort=None,
              timeout_override=None):
@@ -472,6 +599,7 @@ class SubprocessRunner(object):
                 _unlink_quiet(output_file)
             raise RunnerError("failed to spawn %r: %s" % (argv[0], exc))
         _track_worker(proc)
+        watchdog, wd_done, wd_state = self._start_stall_watchdog(proc, family)
         try:
             try:
                 stdout, stderr = proc.communicate(input=prompt, timeout=timeout)
@@ -484,7 +612,21 @@ class SubprocessRunner(object):
                     "family %s timed out after %ss" % (family, timeout)
                 )
         finally:
+            if wd_done is not None:
+                wd_done.set()
+            if watchdog is not None:
+                watchdog.join(timeout=PS_SAMPLE_TIMEOUT)
             _untrack_worker(proc)
+        if wd_state and wd_state["stalled"]:
+            # The watchdog SIGKILLed a frozen worker; communicate() returned
+            # because the process died. Surface it as a recoverable stall.
+            if output_file:
+                _unlink_quiet(output_file)
+            raise WorkerStalled(
+                "family %s stalled: its process tree burned under %ss of CPU "
+                "over a %ss window (frozen worker)"
+                % (family, self.stall_min_cpu_s, self.stall_window_s)
+            )
         duration = time.time() - started
         text = stdout
         if output_file:

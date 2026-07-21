@@ -818,36 +818,6 @@ class TestPortedCanonContentRules(unittest.TestCase):
                       "repository change for it", prompt)
         self.assertIn("credits only that one bound finding", prompt)
 
-    def test_convergence_context_is_bounded_and_not_a_second_queue(self):
-        rounds = [
-            {
-                "id": "delta-r%d" % index,
-                "result": {
-                    "findings": [{
-                        "id": "D%d" % index,
-                        "severity": "P2",
-                        "summary": "recurring symptom %d" % index,
-                    }],
-                },
-            }
-            for index in range(6)
-        ]
-        prompt = normalized(prompts.build_fix_findings(
-            FAMILY, WORKSPACE, GOAL, UNIT, FINDINGS, [], "claude",
-            ["claude", "-p"],
-            convergence={"dirty_deltas": 6, "rounds": rounds},
-        ))
-
-        self.assertIn("CONVERGENCE MODE", prompt)
-        self.assertIn("6 dirty delta reviews", prompt)
-        self.assertIn("diagnostic context ONLY", prompt)
-        self.assertIn("not queued findings, not debt", prompt)
-        self.assertIn("smallest coherent systemic fix", prompt)
-        self.assertNotIn("delta-r0", prompt)
-        self.assertIn("delta-r1", prompt)
-        self.assertIn("delta-r5", prompt)
-        self.assertIn("CURRENT queue", prompt)
-
     def test_never_send_secrets_in_every_builder(self):
         for name, prompt in build_all().items():
             with self.subTest(builder=name):

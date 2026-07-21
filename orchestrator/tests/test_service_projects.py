@@ -72,7 +72,9 @@ def draft_step():
             artifact="docs/skeleton.md",
             slices=[{"id": 1, "title": "One"}],
         ),
-        family="codex",
+        # The service config inherits the skeletoner default (claude), so a
+        # real bound run drafts the skeleton with claude.
+        family="claude",
         side_effect=write_file("docs/skeleton.md", "# Skeleton\n"),
     )
 

@@ -99,6 +99,7 @@ class TestCalculatorE2E(unittest.TestCase):
             "max_seal_attempts": 4,
             "git": {"enabled": True},
             "acts": {
+                "skeletoner": "codex",
                 "fixer": "codex",
                 "delta_review": "codex",
                 "consultation": "opposite",

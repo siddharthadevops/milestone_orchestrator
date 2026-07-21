@@ -121,7 +121,7 @@ def _base_config():
         "max_rounds_per_family": 6,
         "max_seal_attempts": 4,
         "git": {"enabled": True},
-        "acts": {"fixer": "codex", "delta_review": "codex",
+        "acts": {"skeletoner": "codex", "fixer": "codex", "delta_review": "codex",
                  "consultation": "opposite"},
         "max_fix_loops": 4,
         "docs_dir": "docs",

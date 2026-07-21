@@ -1137,6 +1137,11 @@ def enter_fix_episode(state, unit, findings, source_type, source_family,
     unit["fix_queue"] = copy.deepcopy(findings)
     unit["fix_source"] = {
         "type": source_type,
+        # The episode's ORIGINAL kind, never clobbered: a dirty-delta
+        # re-queue rewrites `type` to "delta", so the convergence checkpoint
+        # (which must know a round/seal episode from a verification/repair
+        # one) reads this instead.
+        "origin_type": source_type,
         "family": source_family,
         "source_round_id": source_round_id,
         "return_to": return_to,

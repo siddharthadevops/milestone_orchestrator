@@ -897,6 +897,7 @@ class TestEnterFixEpisode(TempWorkspaceCase):
             unit["fix_source"],
             {
                 "type": "round",
+                "origin_type": "round",
                 "family": "claude",
                 "source_round_id": "skeleton-claude-r1",
                 "return_to": st.U_ROUNDS,

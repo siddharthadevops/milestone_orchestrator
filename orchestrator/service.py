@@ -2068,8 +2068,8 @@ def _write_amendments(entry, amendments):
     os.replace(tmp, path)
 
 
-ACT_KEYS = ("drafter", "implementer", "review_codex", "review_claude",
-            "fixer", "convergence_fixer", "consultation", "reclassifier")
+ACT_KEYS = ("skeletoner", "drafter", "implementer", "review_codex",
+            "review_claude", "fixer", "consultation", "reclassifier")
 FIXED_REVIEW_ACTS = {"review_codex": "codex", "review_claude": "claude"}
 
 

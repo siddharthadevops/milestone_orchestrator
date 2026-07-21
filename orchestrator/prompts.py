@@ -1537,7 +1537,6 @@ def build_fix_findings(
     killed_notice=False,
     project_context=None,
     debt=None,
-    convergence=None,
     repair_artifact=None,
     repair_wave_docs=None,
     gap_enabled=False,
@@ -1596,41 +1595,6 @@ def build_fix_findings(
             "other fixed/prevention/file claim still requires a real\n"
             "worktree edit. A second uncredited empty-delta claim fails the\n"
             "run.\n\n"
-        )
-    convergence_block = ""
-    if convergence:
-        dirty_deltas = int(convergence.get("dirty_deltas") or 0)
-        delta_lines = []
-        for round_ in (convergence.get("rounds") or [])[-5:]:
-            findings_ = (round_.get("result") or {}).get("findings") or []
-            shown = findings_[:3]
-            summaries = "; ".join(
-                "%s [%s] %s" % (
-                    _oneline(finding.get("id"), ID_CLIP),
-                    finding.get("severity"),
-                    _oneline(finding.get("summary"), 180),
-                )
-                for finding in shown
-            )
-            if len(findings_) > len(shown):
-                summaries += "; (+%d more)" % (len(findings_) - len(shown))
-            delta_lines.append(
-                "- %s: %s" % (
-                    _oneline(round_.get("id"), ID_CLIP),
-                    summaries or "(no retained summaries)",
-                )
-            )
-        convergence_block = (
-            "CONVERGENCE MODE\n"
-            "This active fix chain has produced %d dirty delta reviews.\n"
-            "Treat the recent delta findings below as diagnostic context "
-            "ONLY: they are not queued findings, not debt, and require no "
-            "separate dispositions. Use them to identify a common root "
-            "cause, then make the smallest coherent systemic fix that "
-            "resolves the CURRENT queue. Do not broaden into unrelated "
-            "refactoring.\n"
-            "RECENT DIRTY DELTAS (up to 5):\n%s\n\n"
-            % (dirty_deltas, "\n".join(delta_lines) or "(none recorded)")
         )
     correction_block = ""
     if design_correction and design_correction.get("mode") == "offer":
@@ -1778,7 +1742,6 @@ def build_fix_findings(
         + slice_table_block
         + killed_block
         + phantom_block
-        + convergence_block
         + _amendments_block(amendments)
         + _project_context_block(project_context)
         + "QUEUED FINDINGS (claims, not facts — verify each against the\n"

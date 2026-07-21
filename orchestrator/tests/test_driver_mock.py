@@ -68,7 +68,7 @@ def make_config(**overrides):
         "max_verify_fix_attempts": 2,
         "seal_concurrent": False,
         "git": {"enabled": True},
-        "acts": {"fixer": "codex", "delta_review": "codex",
+        "acts": {"skeletoner": "codex", "fixer": "codex", "delta_review": "codex",
                  "consultation": "opposite"},
         "max_fix_loops": 6,
         "snapshot_exclude_dirs": [],
@@ -1191,12 +1191,13 @@ class TestActProfiles(DriverTestCase):
     model/effort — configured at launch (config acts) and hot-editable
     mid-run via .orchestrator/acts.json."""
 
-    def test_drafter_act_routes_family_and_model(self):
+    def test_skeletoner_act_routes_family_and_model(self):
         import json as _json
         with tempfile.TemporaryDirectory(prefix="orch-mock-") as ws:
             cfg = make_config()
             cfg["acts"] = dict(cfg["acts"])
-            cfg["acts"]["drafter"] = {
+            # The skeleton draft runs the `skeletoner` act, not `drafter`.
+            cfg["acts"]["skeletoner"] = {
                 "agent": "claude", "model": "sonnet", "effort": "high",
             }
             path = init_state(ws, cfg)
@@ -1220,7 +1221,7 @@ class TestActProfiles(DriverTestCase):
             cfg["model_defaults"] = {"claude": {"model": "opus",
                                                 "effort": "max"}}
             cfg["acts"] = dict(cfg["acts"])
-            cfg["acts"]["drafter"] = "claude"
+            cfg["acts"]["skeletoner"] = "claude"
             path = init_state(ws, cfg)
             script = skeleton_script()
             script[0]["expect_family"] = "claude"
