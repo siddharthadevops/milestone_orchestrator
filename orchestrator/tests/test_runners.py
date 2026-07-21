@@ -1373,8 +1373,11 @@ class TestStallWatchdog(unittest.TestCase):
         self.assertTrue(issubclass(runners.WorkerStalled, runners.RunnerError))
 
     def test_tree_cpu_sums_descendants(self):
-        # A parent that spawns a CPU-burning child: the tree total must
-        # reflect the child's compute, not just the (idle) parent.
+        # A parent that spawns a CPU-burning child: the group total must
+        # reflect the child's compute, not just the (idle) parent. The
+        # parent is a session leader (start_new_session) so its pgid==pid,
+        # matching how the runner launches workers — group_cpu_by_pid keys
+        # on the group, and the child inherits the parent's pgid.
         import subprocess as _sp
         parent = _sp.Popen(
             [sys.executable, "-c",
@@ -1382,6 +1385,7 @@ class TestStallWatchdog(unittest.TestCase):
              "c=subprocess.Popen([sys.executable,'-c',"
              "'t=__import__(\"time\").time()+1.5\\nwhile __import__(\"time\").time()<t: pass'])\n"
              "c.wait()"],
+            start_new_session=True,
         )
         try:
             time.sleep(1.0)

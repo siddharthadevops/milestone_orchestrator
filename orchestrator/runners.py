@@ -96,57 +96,50 @@ def _parse_ps_time(text):
     return days * 86400 + secs
 
 
-def tree_cpu_by_pid(root_pid):
-    """{pid: cumulative_cpu_seconds} for `root_pid` AND every descendant, or
-    None when it cannot be measured (a ps failure, an unreadable member) so
-    the caller fails open — never kills on a blind spot.
+def group_cpu_by_pid(pgid):
+    """{pid: cumulative_cpu_seconds} for every process in process GROUP
+    `pgid`, or None when it cannot be measured (a ps failure, an unreadable
+    member) so the caller fails open — never kills on a blind spot.
 
-    Per-pid (not a bare sum) because the watchdog must accumulate a MONOTONIC
-    total: a bare tree sum is not monotonic (an exited child's lifetime CPU
-    leaves the live-process set), so its window-to-window delta is unusable."""
+    Keyed on the process GROUP, not a ppid tree, because a worker is spawned
+    as its own session/group leader (pgid == pid) and its descendants inherit
+    that pgid: they stay in the group even after the leader exits and they
+    reparent to init. A ppid walk would LOSE those reparented children —
+    reading them as gone (miss a real hang) or, worse, seeing only the frozen
+    leader and killing a child that is still working."""
     try:
         proc = subprocess.run(
-            ["ps", "-Ao", "pid=,ppid=,time="],
+            ["ps", "-Ao", "pid=,pgid=,time="],
             capture_output=True, text=True, timeout=PS_SAMPLE_TIMEOUT,
         )
     except (OSError, subprocess.TimeoutExpired):
         return None
     if proc.returncode != 0:
         return None
-    children = {}
-    cpu = {}
+    out = {}
     for line in proc.stdout.splitlines():
         f = line.split(None, 2)
         if len(f) < 3:
             continue
         try:
-            pid = int(f[0]); ppid = int(f[1])
+            pid = int(f[0])
+            this_pgid = int(f[1])
         except ValueError:
             continue
-        cpu[pid] = _parse_ps_time(f[2])   # may be None (unparseable)
-        children.setdefault(ppid, []).append(pid)
-    if root_pid not in cpu:
-        return None
-    out = {}
-    stack = [root_pid]
-    while stack:
-        pid = stack.pop()
-        if pid in out:
+        if this_pgid != pgid:
             continue
-        secs = cpu.get(pid)
+        secs = _parse_ps_time(f[2])
         if secs is None:
-            # A tree member whose CPU we could not read: fail open (can't
-            # measure -> treat as alive) rather than undercount.
+            # A group member whose CPU we could not read: fail open.
             return None
         out[pid] = secs
-        stack.extend(children.get(pid, ()))
-    return out
+    return out or None
 
 
 def tree_cpu_seconds(root_pid):
-    """Sum of tree_cpu_by_pid, or None. NOT monotonic across child churn —
+    """Sum of group_cpu_by_pid, or None. NOT monotonic across child churn —
     for one-shot measurement/tests only, never for stall deltas."""
-    m = tree_cpu_by_pid(root_pid)
+    m = group_cpu_by_pid(root_pid)
     return None if m is None else sum(m.values())
 
 
@@ -588,15 +581,17 @@ class SubprocessRunner(object):
             # new output. Residual, stated honestly: a worker fully idle while
             # a helper both spawns AND exits, producing nothing, inside one
             # window — negligible at the real 15-minute window.
-            tree = tree_cpu_by_pid(proc.pid)
+            tree = group_cpu_by_pid(proc.pid)
             last_total = None if tree is None else sum(tree.values())
             last_pids = None if tree is None else frozenset(tree)
             last_out = out_bytes()
             while not done.wait(window):
-                tree = tree_cpu_by_pid(proc.pid)
-                # The worker may have finished during the wait or the ps
-                # sample; a completed worker is never a stall.
-                if done.is_set() or proc.poll() is not None:
+                tree = group_cpu_by_pid(proc.pid)
+                # `done` is set in the caller's finally AFTER communicate()
+                # returns — which, with stderr piped, waits for the whole
+                # group (not just the leader). So the watchdog covers the
+                # ENTIRE call and never stops early on a bare leader exit.
+                if done.is_set():
                     return
                 cur_out = out_bytes()
                 grew = cur_out > last_out
@@ -688,79 +683,81 @@ class SubprocessRunner(object):
         os.close(so_fd)   # the child holds its own dup; parent no longer needs it
         _track_worker(proc)
         watchdog = wd_done = wd_state = None
+        # Outer try: temp files are deleted on EVERY exit, including a
+        # KeyboardInterrupt raised mid-communicate.
         try:
-            # Start the watchdog INSIDE the try so a Thread.start() failure
-            # cannot leak the tracked worker or its files.
-            watchdog, wd_done, wd_state = self._start_stall_watchdog(
-                proc, family,
-                output_paths=[stdout_path] + ([output_file] if output_file else []),
-            )
             try:
-                _, stderr = proc.communicate(input=prompt, timeout=timeout)
-            except subprocess.TimeoutExpired:
-                _kill_group(proc)
-                proc.communicate()
-                _cleanup_files()
-                raise RunnerError(
-                    "family %s timed out after %ss" % (family, timeout)
+                # Start the watchdog INSIDE the try so a Thread.start()
+                # failure cannot leak the tracked worker.
+                watchdog, wd_done, wd_state = self._start_stall_watchdog(
+                    proc, family,
+                    output_paths=(
+                        [stdout_path] + ([output_file] if output_file else [])
+                    ),
                 )
-        finally:
-            if wd_done is not None:
-                wd_done.set()
-            if watchdog is not None:
-                watchdog.join(timeout=PS_SAMPLE_TIMEOUT)
-            # communicate() with a FILE stdout returns when the LEADER exits,
-            # NOT when every writer closes stdout (a pipe's EOF). So reap the
-            # whole group: a descendant the worker left running (holding
-            # stdout) would otherwise be orphaned, unwatched. A clean exit's
-            # group is already gone, so this is a no-op there.
-            _kill_group(proc)
-            _untrack_worker(proc)
-        # Raise a stall ONLY when the kill actually took effect (the process
-        # died by signal). If the worker completed in the tiny race between
-        # the watchdog's poll() and its SIGKILL, returncode is >= 0 and its
-        # real output must be honored, not discarded.
-        if wd_state and wd_state["stalled"] and (proc.returncode or 0) < 0:
-            _cleanup_files()
-            raise WorkerStalled(
-                "family %s stalled: its process tree burned under %ss of CPU "
-                "over a %ss window (frozen worker)"
-                % (family, self.stall_min_cpu_s, self.stall_window_s)
-            )
-        duration = time.time() - started
-        try:
-            with open(stdout_path, "r", encoding="utf-8", errors="replace") as fh:
-                stdout = fh.read()
-        except OSError:
-            stdout = ""
-        _unlink_quiet(stdout_path)
-        text = stdout
-        if output_file:
-            try:
-                with open(output_file, "r", encoding="utf-8") as fh:
-                    file_text = fh.read()
-                if file_text.strip():
-                    text = file_text
+                try:
+                    _, stderr = proc.communicate(input=prompt, timeout=timeout)
+                except subprocess.TimeoutExpired:
+                    _kill_group(proc)
+                    proc.communicate()
+                    raise RunnerError(
+                        "family %s timed out after %ss" % (family, timeout)
+                    )
             finally:
-                _unlink_quiet(output_file)
-        if proc.returncode != 0 and not (text or "").strip():
-            # Lead with the provider's own ERROR lines: codex buries
-            # them under plugin WARN noise, which misled the operator
-            # ("doesn't look like quota") and starved parse_resume_at
-            # of a front-position window time (found live 2026-07-10).
-            # The raw tail stays for forensics and pattern matching.
-            stderr_text = stderr or ""
-            errors = []
-            for line in stderr_text.splitlines():
-                line = line.strip()
-                if line.upper().startswith("ERROR") and line not in errors:
-                    errors.append(line)
-            lead = ("; ".join(errors)[:400] + " | ") if errors else ""
-            raise RunnerError(
-                "family %s exited %d with no output; %sstderr tail: %s"
-                % (family, proc.returncode, lead, stderr_text[-500:])
-            )
-        return RunnerResult(text, proc.returncode, duration)
+                if wd_done is not None:
+                    wd_done.set()
+                if watchdog is not None:
+                    watchdog.join(timeout=PS_SAMPLE_TIMEOUT)
+                # Reap the whole group: a descendant the worker left running
+                # after closing stderr would otherwise linger unwatched. A
+                # clean exit's group is already gone, so this no-ops there.
+                _kill_group(proc)
+                _untrack_worker(proc)
+            # Raise a stall ONLY when the kill actually took effect (the
+            # process died by signal). If the worker completed in the tiny
+            # race between the watchdog's sample and its SIGKILL, returncode
+            # is >= 0 and its real output must be honored, not discarded.
+            if wd_state and wd_state["stalled"] and (proc.returncode or 0) < 0:
+                raise WorkerStalled(
+                    "family %s stalled: its process tree burned under %ss of "
+                    "CPU over a %ss window (frozen worker)"
+                    % (family, self.stall_min_cpu_s, self.stall_window_s)
+                )
+            duration = time.time() - started
+            try:
+                with open(stdout_path, "r", encoding="utf-8",
+                          errors="replace") as fh:
+                    text = fh.read()
+            except OSError:
+                text = ""
+            if output_file:
+                try:
+                    with open(output_file, "r", encoding="utf-8") as fh:
+                        file_text = fh.read()
+                    if file_text.strip():
+                        text = file_text
+                except OSError:
+                    pass
+            if proc.returncode != 0 and not (text or "").strip():
+                # Lead with the provider's own ERROR lines: codex buries
+                # them under plugin WARN noise, which misled the operator
+                # ("doesn't look like quota") and starved parse_resume_at
+                # of a front-position window time (found live 2026-07-10).
+                # The raw tail stays for forensics and pattern matching.
+                stderr_text = stderr or ""
+                errors = []
+                for line in stderr_text.splitlines():
+                    line = line.strip()
+                    if line.upper().startswith("ERROR") and line not in errors:
+                        errors.append(line)
+                lead = ("; ".join(errors)[:400] + " | ") if errors else ""
+                raise RunnerError(
+                    "family %s exited %d with no output; %sstderr tail: %s"
+                    % (family, proc.returncode, lead, stderr_text[-500:])
+                )
+            return RunnerResult(text, proc.returncode, duration)
+        finally:
+            _cleanup_files()
 
 
 def _kill_group(proc):
