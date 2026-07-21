@@ -1027,6 +1027,60 @@ class TestActiveFixDirtyDeltas(TempWorkspaceCase):
         self.assertEqual(st.active_fix_dirty_deltas(state, unit), 2)
 
 
+class TestActiveFixOriginType(TempWorkspaceCase):
+    def _seal_episode(self):
+        state = make_state(self.workspace)
+        unit = st.current_unit(state)
+        st.transition_unit(state, unit, st.U_PRE_REVIEW_VERIFY)
+        st.transition_unit(state, unit, st.U_ROUNDS)
+        st.transition_unit(state, unit, st.U_PRE_SEAL_VERIFY)
+        st.enter_fix_episode(
+            state, unit, [verification_finding()], "seal", "codex",
+            "skeleton-codex-r1", st.U_PRE_SEAL_VERIFY,
+        )
+        return state, unit
+
+    def test_returns_none_without_an_episode(self):
+        state = make_state(self.workspace)
+        unit = st.current_unit(state)
+        self.assertIsNone(st.active_fix_origin_type(state, unit))
+
+    def test_reads_origin_type_off_the_source(self):
+        state, unit = self._seal_episode()
+        self.assertEqual(st.active_fix_origin_type(state, unit), "seal")
+
+    def test_survives_the_dirty_delta_type_clobber(self):
+        # A dirty-delta re-queue rewrites fix_source["type"] to "delta";
+        # the origin must still resolve to "seal".
+        state, unit = self._seal_episode()
+        st.transition_unit(state, unit, st.U_DELTA_REVIEW)
+        st.record_round(
+            state, unit, "codex", contracts.KIND_DELTA_REVIEW,
+            dirty_review(contracts.KIND_DELTA_REVIEW),
+        )
+        st.transition_unit(state, unit, st.U_FIXING)
+        unit["fix_source"]["type"] = "delta"
+        self.assertEqual(st.active_fix_origin_type(state, unit), "seal")
+
+    def test_reconstructs_pre_feature_origin_from_the_root_event(self):
+        # Episodes persisted before fix_source carried origin_type are
+        # reconstructed from the immutable root transition reason.
+        state, unit = self._seal_episode()
+        unit["fix_source"].pop("origin_type")
+        self.assertEqual(st.active_fix_origin_type(state, unit), "seal")
+
+    def test_returns_none_when_the_root_reason_is_unparseable(self):
+        state, unit = self._seal_episode()
+        unit["fix_source"].pop("origin_type")
+        # A root that did not come from enter_fix_episode (no known suffix)
+        # cannot be classified; the checkpoint then stays conservative.
+        for event in state["events"]:
+            if (event.get("type") == "unit_transition"
+                    and event.get("to_status") == st.U_FIXING):
+                event["reason"] = "restored by some other path"
+        self.assertIsNone(st.active_fix_origin_type(state, unit))
+
+
 # ---------------------------------------------------------------------------
 # Adjudication registry (milestone-global, derived from immutable rounds)
 

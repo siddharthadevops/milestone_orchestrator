@@ -1682,11 +1682,11 @@ class Driver(object):
         # `implementer`. Only skeleton REVIEWS stay on the review families.
         if unit["kind"] == st.UNIT_SKELETON:
             act = "skeletoner"
-        elif unit["kind"] == st.UNIT_SLICE_IMPL:
-            act = "implementer"
+            family, model, effort = self._skeletoner_profile()
         else:
-            act = "drafter"
-        family, model, effort = self._act_profile(act)
+            act = "implementer" if unit["kind"] == st.UNIT_SLICE_IMPL \
+                else "drafter"
+            family, model, effort = self._act_profile(act)
         goal = self._goal_for(unit)
         amendments = self._amendments()
         kind = {
@@ -2489,6 +2489,29 @@ class Driver(object):
             fam = policy
         return fam, model, effort
 
+    def _skeletoner_profile(self, origin_family=None):
+        """(family, model, effort) for the `skeletoner` act, with the
+        skeleton's OWN defaults re-asserted.
+
+        The skeleton's declared defaults live in
+        DEFAULT_CONFIG["acts"]["skeletoner"] (claude / claude-fable-5 / max),
+        but merge_config replaces a whole act entry on a partial override —
+        so a panel that customizes only the model drops the agent and
+        effort. Left to the generic fallback, a model-only override would
+        silently resolve to the codex fix-family (breaking: the codex CLI
+        cannot run a claude model) and to claude's family effort instead of
+        the skeleton's max. Re-assert the skeleton's family and effort here.
+        The model stays None so _call fills it from the RESOLVED family's
+        defaults — correct whichever family wins, whereas the skeleton's
+        default model belongs only to its default family.
+        """
+        defaults = DEFAULT_CONFIG["acts"]["skeletoner"]
+        family, model, effort = self._act_profile(
+            "skeletoner", origin_family,
+            default_family=defaults.get("agent"),
+        )
+        return family, model, effort or defaults.get("effort")
+
     def _family_defaults(self, family):
         d = (self.config.get("model_defaults") or {}).get(family) or {}
         return d.get("model"), d.get("effort")
@@ -2655,8 +2678,8 @@ class Driver(object):
             # operator-chosen model (the `skeletoner` act, default
             # claude-fable-5/max); only its reviews stay on the review
             # families. So a skeleton fix runs `skeletoner`, not `fixer`.
-            family, fix_model, fix_effort = self._act_profile(
-                "skeletoner", source.get("family"), default_family="codex"
+            family, fix_model, fix_effort = self._skeletoner_profile(
+                source.get("family")
             )
         else:
             family, fix_model, fix_effort = self._act_profile(
@@ -3011,24 +3034,22 @@ class Driver(object):
         source = unit.get("fix_source") or {}
         # The delta convergence checkpoint (delta_full_review_after_fixes)
         # escalates a fix loop to a full re-review after N fixes: a REVIEW
-        # episode (source type "round") returns to a full review, a SEAL
-        # episode ("seal") returns to a full seal. It is keyed off the
-        # source TYPE, never off return_to — a pending suite re-verify
+        # episode (origin "round") returns to a full review, a SEAL episode
+        # (origin "seal") returns to a full seal. It is keyed off the
+        # episode's ORIGIN, never off return_to — a pending suite re-verify
         # rewrites return_to to pre_review_verify below, and pre_seal_verify
         # is also shared by gap-repair and verification episodes, so
         # return_to cannot distinguish the cases. A round/seal loop must
         # escalate at N even while a suite correction is pending (found live
         # 2026-07-21: a slice ran 8 dirty deltas with the checkpoint
         # suppressed because it keyed off the redirected return_to).
-        # Verification and gap-repair episodes keep real deltas.
-        origin_type = source.get("origin_type")
-        if origin_type:
-            checkpoint_source = origin_type in ("round", "seal")
-        else:
-            # Frozen pre-feature runs have no origin_type; the checkpoint
-            # then applied to review episodes only, keyed off the (never
-            # clobbered) return target.
-            checkpoint_source = source.get("return_to") == st.U_ROUNDS
+        # active_fix_origin_type reads origin_type off the source and, for
+        # episodes persisted before that field existed, reconstructs it from
+        # the immutable root transition — so both a fresh and a resumed
+        # pre-feature seal loop escalate. Verification and gap-repair
+        # episodes resolve to their own origins and keep real deltas.
+        origin_type = st.active_fix_origin_type(self.state, unit)
+        checkpoint_source = origin_type in ("round", "seal")
         return_to = source.get("return_to") or st.U_PRE_REVIEW_VERIFY
         suite_verification_pending = bool(
             unit.get("suite_verification_pending")

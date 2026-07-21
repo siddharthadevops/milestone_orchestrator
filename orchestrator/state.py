@@ -520,6 +520,61 @@ def family_rounds(unit, family):
     return [r for r in unit["rounds"] if r["family"] == family]
 
 
+# enter_fix_episode logs this suffix on the episode-root transition; the
+# origin source_type ("round"/"seal"/"verification"/a gap-repair key) is
+# the prefix. Reconstructing origin_type from it lets pre-feature episodes
+# (persisted before fix_source carried origin_type) still be classified.
+_FIX_QUEUED_SUFFIX = " findings queued for fixing"
+
+
+def _active_fix_root_index(events, key):
+    """Index of the transition that OPENED the unit's active fix episode.
+
+    The episode root is the latest transition into FIXING whose source was
+    not DELTA_REVIEW; later delta -> fixing back-edges stay inside the same
+    episode. Returns None when no such transition exists.
+    """
+    for index in range(len(events) - 1, -1, -1):
+        event = events[index]
+        if (
+            event.get("type") == "unit_transition"
+            and event.get("unit") == key
+            and event.get("to_status") == U_FIXING
+            and event.get("from_status") != U_DELTA_REVIEW
+        ):
+            return index
+    return None
+
+
+def active_fix_origin_type(state, unit):
+    """The active fix episode's ORIGINAL source_type, independent of the
+    mutable fix_source["type"] that a dirty-delta re-queue clobbers to
+    "delta". Returns "round", "seal", "verification", a gap-repair key, or
+    None when the episode or its origin cannot be resolved.
+
+    New episodes carry origin_type on the source directly. Episodes
+    persisted before that field existed are reconstructed from the immutable
+    root transition, whose reason enter_fix_episode wrote as
+    "<source_type> findings queued for fixing" -- the same append-only
+    evidence active_fix_dirty_delta_rounds trusts, so Stop/Start and Resume
+    cannot erase it.
+    """
+    source = unit.get("fix_source") or {}
+    if not source:
+        return None
+    origin = source.get("origin_type")
+    if origin:
+        return origin
+    events = state.get("events") or []
+    root = _active_fix_root_index(events, unit_key(unit))
+    if root is None:
+        return None
+    reason = events[root].get("reason") or ""
+    if reason.endswith(_FIX_QUEUED_SUFFIX):
+        return reason[: -len(_FIX_QUEUED_SUFFIX)] or None
+    return None
+
+
 def active_fix_dirty_delta_rounds(state, unit):
     """Accepted dirty delta rounds in the unit's ACTIVE fix episode.
 
@@ -533,17 +588,7 @@ def active_fix_dirty_delta_rounds(state, unit):
         return []
     key = unit_key(unit)
     events = state.get("events") or []
-    root = None
-    for index in range(len(events) - 1, -1, -1):
-        event = events[index]
-        if (
-            event.get("type") == "unit_transition"
-            and event.get("unit") == key
-            and event.get("to_status") == U_FIXING
-            and event.get("from_status") != U_DELTA_REVIEW
-        ):
-            root = index
-            break
+    root = _active_fix_root_index(events, key)
     if root is None:
         return []
     dirty_ids = [

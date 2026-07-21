@@ -1051,6 +1051,46 @@ class TestActsResolution(DriverTestCase):
             self.assertEqual(fix_meta["family"], "claude")
             self.assertEqual(fix_meta["model"], "claude-fable-5")
 
+    def test_model_only_skeletoner_override_keeps_claude_default(self):
+        # A panel override that customizes ONLY the model sends
+        # {"model": X} with no agent/effort -- merge_config replaces the
+        # whole act entry, dropping the DEFAULT_CONFIG agent=claude and
+        # effort=max. Both the skeleton DRAFT and its FIX must still run on
+        # the skeleton's default CLAUDE family at max effort, never fall
+        # back to the codex fix-family (which cannot run a claude model) or
+        # to claude's family effort.
+        acts = {"skeletoner": {"model": "claude-opus-4-8"}}
+        with tempfile.TemporaryDirectory(prefix="orch-mock-") as ws:
+            mock = self._run_skeleton(ws, acts, draft_family="claude",
+                                      script_tail=[
+                step("review_round",
+                     report("review_round", [finding("F1", "defect")]),
+                     family="codex"),
+                step("fix_findings",
+                     fix_ok([triaged("F1", "fixed", "defect")],
+                            files_changed=["docs/skeleton.md"]),
+                     family="claude",
+                     side_effect=append_file("docs/skeleton.md", "\nfix\n")),
+                step("delta_review", report("delta_review"), family="claude"),
+                step("review_round", report("review_round"), family="codex"),
+                step("review_round", report("review_round"), family="claude"),
+                step("seal_half", report("seal_half"), family="codex"),
+                step("seal_half", report("seal_half"), family="claude"),
+            ])
+            # call[0] is the skeleton draft.
+            self.assertEqual(mock.calls[0][1], "draft_skeleton")
+            self.assertEqual(
+                (mock.call_meta[0]["family"], mock.call_meta[0]["model"],
+                 mock.call_meta[0]["effort"]),
+                ("claude", "claude-opus-4-8", "max"),
+            )
+            fix_meta = [m for c, m in zip(mock.calls, mock.call_meta)
+                        if c[1] == "fix_findings"][0]
+            self.assertEqual(
+                (fix_meta["family"], fix_meta["model"], fix_meta["effort"]),
+                ("claude", "claude-opus-4-8", "max"),
+            )
+
 
 if __name__ == "__main__":
     unittest.main()
