@@ -552,58 +552,80 @@ class SubprocessRunner(object):
         self.stall_window_s = _positive_float(stall_window_s)
         self.stall_min_cpu_s = _positive_float(stall_min_cpu_s)
 
-    def _start_stall_watchdog(self, proc, family):
-        """Sample the worker tree's cumulative CPU every window; if a full
-        window passes with less than the floor of CPU burned, the process
-        is frozen — SIGKILL its group and flag the stall. Returns
+    def _start_stall_watchdog(self, proc, family, output_paths=()):
+        """Watch the worker for a FROZEN window and SIGKILL it. Returns
         (thread, done_event, state) or (None, None, None) when disabled.
 
-        Fail-open by construction: a window where CPU cannot be measured
-        (ps hiccup) is treated as alive, never as a stall."""
+        Fail-open by construction: a window where a signal cannot be measured
+        is treated as alive, never as a stall."""
         window = self.stall_window_s
         floor = self.stall_min_cpu_s
         if not window or not floor:
             return None, None, None
         done = threading.Event()
         state = {"stalled": False}
+        output_paths = tuple(output_paths)
+
+        def out_bytes():
+            total = 0
+            for p in output_paths:
+                try:
+                    total += os.path.getsize(p)
+                except OSError:
+                    pass
+            return total
 
         def watch():
-            # Two liveness signals, because sampled tree CPU alone is not a
-            # reliable measure of work: (1) the tree's CPU sum grew by at
-            # least the floor this window; (2) the tree's PROCESS SET changed
-            # — a child appeared or exited, which is activity even when the
-            # live-process CPU sum FELL (an exited child's CPU leaves the
-            # sum, and a child that lived entirely between two samples never
-            # entered it). Only a STABLE process set whose CPU barely moved
-            # is a frozen worker. Residual, stated honestly: a worker that is
-            # itself idle while a helper both spawns AND exits inside one
-            # window is invisible — negligible at the real 15-minute window,
-            # where a working CLI streams (its own CPU) and long jobs are
-            # sampled repeatedly.
+            # THREE liveness signals, because none alone is a reliable proxy
+            # for "the worker is doing its job":
+            #  (1) the tree's CPU sum grew by at least the floor this window;
+            #  (2) the tree's PROCESS SET changed — a child appeared or exited
+            #      (activity even when the live-process CPU sum FELL, e.g. an
+            #      exited child whose CPU left the sum);
+            #  (3) the worker produced OUTPUT (stdout / last-message file grew)
+            #      — a slow token streamer burns little CPU but is working.
+            # A stall is ONLY a stable process set AND sub-floor CPU AND no
+            # new output. Residual, stated honestly: a worker fully idle while
+            # a helper both spawns AND exits, producing nothing, inside one
+            # window — negligible at the real 15-minute window.
             tree = tree_cpu_by_pid(proc.pid)
             last_total = None if tree is None else sum(tree.values())
             last_pids = None if tree is None else frozenset(tree)
+            last_out = out_bytes()
             while not done.wait(window):
                 tree = tree_cpu_by_pid(proc.pid)
                 # The worker may have finished during the wait or the ps
                 # sample; a completed worker is never a stall.
                 if done.is_set() or proc.poll() is not None:
                     return
+                cur_out = out_bytes()
+                grew = cur_out > last_out
+                last_out = cur_out
                 if tree is None or last_total is None:
                     last_total = None if tree is None else sum(tree.values())
                     last_pids = None if tree is None else frozenset(tree)
-                    continue  # can't measure this window -> assume alive
+                    continue  # can't measure CPU this window -> assume alive
                 pids = frozenset(tree)
                 cur_total = sum(tree.values())
-                if pids == last_pids and (cur_total - last_total) < floor:
+                stalled = (
+                    pids == last_pids
+                    and (cur_total - last_total) < floor
+                    and not grew
+                )
+                last_total = cur_total
+                last_pids = pids
+                if stalled:
                     state["stalled"] = True
                     _kill_group(proc)
                     return
-                last_total = cur_total
-                last_pids = pids
 
         t = threading.Thread(target=watch, name="stall-watchdog", daemon=True)
-        t.start()
+        try:
+            t.start()
+        except RuntimeError:
+            # Thread creation failed (resource exhaustion): run WITHOUT a
+            # watchdog rather than abort the call and orphan the worker.
+            return None, None, None
         return t, done, state
 
     def call(self, family, prompt, workspace, model=None, effort=None,
@@ -626,11 +648,15 @@ class SubprocessRunner(object):
 
         timeout = timeout_override or self.timeouts.get(family)
         started = time.time()
+        # stdout goes to a FILE, not a pipe, so the watchdog can watch it
+        # grow as a liveness signal: a slow token streamer burns little CPU
+        # but is working, and its bytes land here as they arrive.
+        so_fd, stdout_path = tempfile.mkstemp(prefix="orch-stdout-", suffix=".txt")
         try:
             proc = subprocess.Popen(
                 argv,
                 stdin=subprocess.PIPE,
-                stdout=subprocess.PIPE,
+                stdout=so_fd,
                 stderr=subprocess.PIPE,
                 cwd=self.cwd or workspace,
                 env=_worker_env(self.env, family),
@@ -640,24 +666,33 @@ class SubprocessRunner(object):
                 errors="replace",
             )
         except OSError as exc:
+            os.close(so_fd)
+            _unlink_quiet(stdout_path)
             if output_file:
                 _unlink_quiet(output_file)
             raise RunnerError("failed to spawn %r: %s" % (argv[0], exc))
+        os.close(so_fd)   # the child holds its own dup; parent no longer needs it
         _track_worker(proc)
         watchdog = wd_done = wd_state = None
+
+        def _cleanup_files():
+            _unlink_quiet(stdout_path)
+            if output_file:
+                _unlink_quiet(output_file)
+
         try:
             # Start the watchdog INSIDE the try so a Thread.start() failure
-            # cannot leak the tracked worker or the output_file.
+            # cannot leak the tracked worker or its files.
             watchdog, wd_done, wd_state = self._start_stall_watchdog(
-                proc, family
+                proc, family,
+                output_paths=[stdout_path] + ([output_file] if output_file else []),
             )
             try:
-                stdout, stderr = proc.communicate(input=prompt, timeout=timeout)
+                _, stderr = proc.communicate(input=prompt, timeout=timeout)
             except subprocess.TimeoutExpired:
                 _kill_group(proc)
-                stdout, stderr = proc.communicate()
-                if output_file:
-                    _unlink_quiet(output_file)
+                proc.communicate()
+                _cleanup_files()
                 raise RunnerError(
                     "family %s timed out after %ss" % (family, timeout)
                 )
@@ -672,14 +707,19 @@ class SubprocessRunner(object):
         # the watchdog's poll() and its SIGKILL, returncode is >= 0 and its
         # real output must be honored, not discarded.
         if wd_state and wd_state["stalled"] and (proc.returncode or 0) < 0:
-            if output_file:
-                _unlink_quiet(output_file)
+            _cleanup_files()
             raise WorkerStalled(
                 "family %s stalled: its process tree burned under %ss of CPU "
                 "over a %ss window (frozen worker)"
                 % (family, self.stall_min_cpu_s, self.stall_window_s)
             )
         duration = time.time() - started
+        try:
+            with open(stdout_path, "r", encoding="utf-8", errors="replace") as fh:
+                stdout = fh.read()
+        except OSError:
+            stdout = ""
+        _unlink_quiet(stdout_path)
         text = stdout
         if output_file:
             try:

@@ -1325,6 +1325,21 @@ class TestStallWatchdog(unittest.TestCase):
         result = runner.call("fam", "", self.ws)
         self.assertIn("done", result.text)
 
+    def test_slow_output_streamer_is_not_killed(self):
+        # A worker that burns almost no CPU (mostly sleeping) but STREAMS
+        # output is working, not frozen. The output-growth signal keeps it
+        # alive where a CPU-only rule would SIGKILL it.
+        runner = self._runner(
+            [sys.executable, "-u", "-c",
+             "import time\n"
+             "for i in range(6):\n"
+             "    print('tok', i, flush=True)\n"
+             "    time.sleep(0.5)\n"],
+            window=1, floor=0.3,
+        )
+        result = runner.call("fam", "", self.ws)
+        self.assertIn("tok 5", result.text)
+
     def test_watchdog_disabled_lets_an_idle_worker_finish(self):
         # window=0 disables the watchdog entirely: an idle worker completes.
         runner = self._runner(
