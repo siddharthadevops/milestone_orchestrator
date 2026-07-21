@@ -545,18 +545,22 @@ class SubprocessRunner(object):
         self.stall_window_s = _positive_float(stall_window_s)
         self.stall_min_cpu_s = _positive_float(stall_min_cpu_s)
 
-    def _start_stall_watchdog(self, proc, family, output_paths=()):
-        """Watch the worker for a FROZEN window and SIGKILL it. Returns
-        (thread, done_event, state) or (None, None, None) when disabled.
+    def _start_stall_watchdog(self, proc, family, done, state, output_paths=()):
+        """Watch the worker for a FROZEN window and SIGKILL it. Returns the
+        watchdog thread, or None when the watchdog is disabled or its thread
+        cannot start.
+
+        `done` (an Event) and `state` (a dict carrying "stalled") are OWNED by
+        the caller and created BEFORE this call: a caller interrupted after the
+        thread starts can still set `done` and stop it, so the thread is never
+        left armed with handles the caller cannot reach.
 
         Fail-open by construction: a window where a signal cannot be measured
         is treated as alive, never as a stall."""
         window = self.stall_window_s
         floor = self.stall_min_cpu_s
         if not window or not floor:
-            return None, None, None
-        done = threading.Event()
-        state = {"stalled": False}
+            return None
         output_paths = tuple(output_paths)
 
         def out_bytes():
@@ -620,8 +624,8 @@ class SubprocessRunner(object):
         except RuntimeError:
             # Thread creation failed (resource exhaustion): run WITHOUT a
             # watchdog rather than abort the call and orphan the worker.
-            return None, None, None
-        return t, done, state
+            return None
+        return t
 
     def call(self, family, prompt, workspace, model=None, effort=None,
              timeout_override=None):
@@ -632,10 +636,16 @@ class SubprocessRunner(object):
         started = time.time()
 
         output_file = None
+        of_fd = None
         so_fd = stdout_path = None
         proc = None
         reaped = False
-        watchdog = wd_done = wd_state = None
+        watchdog = None
+        # OWNED here, before any thread starts, so an interrupt that lands
+        # after the watchdog thread starts can still stop it (the finally sets
+        # wd_done) — the thread is never left armed with unreachable handles.
+        wd_done = threading.Event()
+        wd_state = {"stalled": False}
 
         def _cleanup_files():
             if stdout_path:
@@ -644,13 +654,18 @@ class SubprocessRunner(object):
                 _unlink_quiet(output_file)
 
         def _reap(p):
-            # SIGKILL the whole group, then WAIT so the leader is not left a
-            # zombie with open pipes. Killing the group first makes stderr
-            # EOF (every writer dies), so this communicate cannot block on a
-            # lingering child. Skipped when communicate already reaped it
-            # (returncode set). Best-effort: a cleanup path never re-raises.
-            _kill_group(p)
+            # Signal the group ONLY while the leader has not been waited on
+            # (returncode is None): a running-or-zombie leader still reserves
+            # its pid, so its pgid is provably ours and killpg cannot hit a
+            # REUSED group. Once communicate() has reaped the leader the pid
+            # may be recycled, so we never killpg then — its stderr-holding
+            # children were already waited on there. Killing the group before
+            # the wait also makes stderr EOF so this communicate cannot block.
+            # This gate also makes a double _reap (an interrupt between the
+            # call and reaped=True) a safe no-op the second time. Best-effort:
+            # a cleanup path never re-raises.
             if p.returncode is None:
+                _kill_group(p)
                 try:
                     p.communicate(timeout=PS_SAMPLE_TIMEOUT)
                 except Exception:
@@ -660,20 +675,30 @@ class SubprocessRunner(object):
         # ONE guard around the whole lifecycle. Any failure OR a
         # KeyboardInterrupt at ANY point — building argv (which may create
         # {output_file}), allocating the stdout temp, spawning, tracking, or
-        # the gaps between — must close the parent fd, reap a spawned
-        # full-permission worker, and delete every temp file. Popen either
-        # returns a handle or reaps its own child, so a worker is reachable
-        # for reaping exactly when proc is not None; `reaped` guards against
-        # a pid-reuse double-kill once the inner finally has waited on it.
+        # the gaps between — closes both parent temp FDs (of_fd, so_fd, each
+        # nulled the instant it is closed so the finally never double-closes),
+        # reaps a spawned worker (proc is not None), and deletes every temp
+        # file. `reaped` guards against a pid-reuse double-kill once the inner
+        # finally has waited. RESIDUAL, stated honestly: if an async exception
+        # lands INSIDE subprocess.Popen after the child has exec'd but before
+        # __init__ returns, `proc` never binds and CPython neither kills nor
+        # returns that child — it is orphaned to init. The only close for that
+        # window is blocking signals across the fork, which is rejected: the
+        # child inherits the blocked mask (verified), corrupting the worker's
+        # own signal handling for a microsecond-wide, shutdown-only window.
         try:
             argv = []
             for arg in template:
                 if "{output_file}" in arg:
                     if output_file is None:
-                        fd, output_file = tempfile.mkstemp(
+                        # Track the fd until it is closed so an interrupt in
+                        # the mkstemp->close gap does not leak it (the outer
+                        # finally closes any still-open of_fd).
+                        of_fd, output_file = tempfile.mkstemp(
                             prefix="orch-last-", suffix=".txt"
                         )
-                        os.close(fd)
+                        os.close(of_fd)
+                        of_fd = None
                     arg = arg.replace("{output_file}", output_file)
                 arg = arg.replace("{workspace}", workspace)
                 argv.append(arg)
@@ -708,9 +733,12 @@ class SubprocessRunner(object):
             _track_worker(proc)
             try:
                 # Start the watchdog INSIDE the try so a Thread.start()
-                # failure cannot leak the tracked worker.
-                watchdog, wd_done, wd_state = self._start_stall_watchdog(
-                    proc, family,
+                # failure cannot leak the tracked worker. wd_done/wd_state
+                # are owned by call() (created above), so even if this
+                # assignment is interrupted after the thread starts, the
+                # finally still sets wd_done and stops it.
+                watchdog = self._start_stall_watchdog(
+                    proc, family, wd_done, wd_state,
                     output_paths=(
                         [stdout_path] + ([output_file] if output_file else [])
                     ),
@@ -724,8 +752,10 @@ class SubprocessRunner(object):
                         "family %s timed out after %ss" % (family, timeout)
                     )
             finally:
-                if wd_done is not None:
-                    wd_done.set()
+                # Stop the watchdog BEFORE reaping: a set `done` makes it exit
+                # without sampling, so it can never SIGKILL a group whose pid
+                # we are about to let be recycled.
+                wd_done.set()
                 if watchdog is not None:
                     watchdog.join(timeout=PS_SAMPLE_TIMEOUT)
                 # Reap the whole group: a descendant the worker left running
@@ -761,7 +791,7 @@ class SubprocessRunner(object):
             # leader's returncode stayed 0. Only a stall that STILL produced
             # real output (the worker finished in the race between the last
             # sample and the SIGKILL) is honored rather than discarded.
-            if (wd_state and wd_state["stalled"]
+            if (wd_state["stalled"]
                     and ((proc.returncode or 0) < 0
                          or not (text or "").strip())):
                 raise WorkerStalled(
@@ -788,16 +818,22 @@ class SubprocessRunner(object):
                 )
             return RunnerResult(text, proc.returncode, duration)
         finally:
-            # BaseException-safe cleanup. so_fd is still open only if we were
-            # interrupted before the spawn's finally closed it; proc needs
-            # reaping only if it was spawned but the inner finally never ran
-            # (an interrupt in the setup gap) — `reaped` prevents a pid-reuse
-            # double-kill after a normal wait.
-            if so_fd is not None:
-                try:
-                    os.close(so_fd)
-                except OSError:
-                    pass
+            # BaseException-safe cleanup for the setup gaps the inner finally
+            # cannot reach. Stop the watchdog first (a set `done` makes it exit
+            # before it can SIGKILL a soon-to-be-recycled pid); then close any
+            # still-open parent temp FD (of_fd/so_fd, open only if an interrupt
+            # beat their own close); then reap a spawned-but-not-yet-reaped
+            # worker (`reaped` prevents a pid-reuse double-kill after a normal
+            # wait); then delete the temp files.
+            wd_done.set()
+            if watchdog is not None:
+                watchdog.join(timeout=PS_SAMPLE_TIMEOUT)
+            for fd in (of_fd, so_fd):
+                if fd is not None:
+                    try:
+                        os.close(fd)
+                    except OSError:
+                        pass
             if proc is not None and not reaped:
                 _reap(proc)
             _cleanup_files()

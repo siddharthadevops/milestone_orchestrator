@@ -1421,6 +1421,66 @@ class TestStallWatchdog(unittest.TestCase):
         for path in created:
             self.assertFalse(os.path.exists(path), "leaked temp file %s" % path)
 
+    def test_interrupt_between_output_fd_mkstemp_and_close_is_not_leaked(self):
+        # The {output_file} temp fd is tracked (of_fd), so a KeyboardInterrupt
+        # in the mkstemp->close gap does not leak it: the outer finally closes
+        # any still-open of_fd.
+        import errno
+        runner = self._runner(
+            [sys.executable, "-c", "print('x')", "{output_file}"],
+            window=0, floor=0,
+        )
+        real_close = os.close
+        state = {"armed": True, "fd": None}
+
+        def close_boom(fd):
+            # Fire once, on the FIRST os.close — which is of_fd (the argv
+            # loop runs before any other close). Record the fd, then let the
+            # outer finally close it for real.
+            if state["armed"]:
+                state["armed"] = False
+                state["fd"] = fd
+                raise KeyboardInterrupt
+            return real_close(fd)
+
+        os.close = close_boom
+        try:
+            with self.assertRaises(KeyboardInterrupt):
+                runner.call("fam", "", self.ws)
+        finally:
+            os.close = real_close
+        self.assertIsNotNone(state["fd"])
+        # The finally closed the fd the interrupt skipped: fstat -> EBADF.
+        with self.assertRaises(OSError) as cm:
+            os.fstat(state["fd"])
+        self.assertEqual(cm.exception.errno, errno.EBADF)
+
+    def test_setup_interrupt_leaves_no_running_watchdog(self):
+        # wd_done/wd_state are owned by call() BEFORE the watchdog starts, so
+        # an interrupt that lands after the thread is armed but loses the
+        # returned handle can still stop it (the finally sets wd_done). No
+        # stall-watchdog thread must survive.
+        import threading
+        runner = self._runner(
+            [sys.executable, "-c", "import time; time.sleep(30)"],
+            window=1, floor=0.5,
+        )
+        real_start = runner._start_stall_watchdog
+
+        def start_then_boom(proc, family, done, state, output_paths=()):
+            # Arm the real watchdog, then interrupt before the caller can
+            # capture the thread handle.
+            real_start(proc, family, done, state, output_paths=output_paths)
+            raise KeyboardInterrupt
+
+        runner._start_stall_watchdog = start_then_boom
+        with self.assertRaises(KeyboardInterrupt):
+            runner.call("fam", "", self.ws)
+        # The daemon observes the finally's wd_done.set() and exits promptly.
+        time.sleep(2.0)
+        alive = [t for t in threading.enumerate() if t.name == "stall-watchdog"]
+        self.assertEqual(alive, [])
+
     def test_watchdog_disabled_lets_an_idle_worker_finish(self):
         # window=0 disables the watchdog entirely: an idle worker completes.
         runner = self._runner(
