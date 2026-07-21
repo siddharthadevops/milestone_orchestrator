@@ -123,10 +123,7 @@ def tree_cpu_seconds(root_pid):
             pid = int(f[0]); ppid = int(f[1])
         except ValueError:
             continue
-        secs = _parse_ps_time(f[2])
-        if secs is None:
-            continue
-        cpu[pid] = secs
+        cpu[pid] = _parse_ps_time(f[2])   # may be None (unparseable)
         children.setdefault(ppid, []).append(pid)
     if root_pid not in cpu:
         return None
@@ -138,13 +135,30 @@ def tree_cpu_seconds(root_pid):
         if pid in seen:
             continue
         seen.add(pid)
-        total += cpu.get(pid, 0.0)
+        secs = cpu.get(pid)
+        if secs is None:
+            # A member of the tree whose CPU we could not read: fail open
+            # (can't measure -> treat as alive) rather than undercount and
+            # risk a false stall.
+            return None
+        total += secs
         stack.extend(children.get(pid, ()))
     return total
 
 
 # ps sampling is cheap but bounded so a wedged ps can never hang the watchdog.
 PS_SAMPLE_TIMEOUT = 10
+
+
+def _positive_float(value):
+    """Coerce a config knob to a positive float, or None. A malformed value
+    (string, negative, zero) disables the feature instead of raising later
+    on the hot call path and leaking a spawned worker."""
+    try:
+        f = float(value)
+    except (TypeError, ValueError):
+        return None
+    return f if f > 0 else None
 
 
 class WorkerProtocolError(RuntimeError):
@@ -526,8 +540,10 @@ class SubprocessRunner(object):
         # exactly their current behavior. There is deliberately no hard wall
         # clock timeout: a legitimate multi-hour test suite keeps burning
         # CPU and is never touched; only a truly idle process is.
-        self.stall_window_s = stall_window_s
-        self.stall_min_cpu_s = stall_min_cpu_s
+        # Coerced to float here so a malformed config value disables the
+        # watchdog rather than raising mid-call and leaking the worker.
+        self.stall_window_s = _positive_float(stall_window_s)
+        self.stall_min_cpu_s = _positive_float(stall_min_cpu_s)
 
     def _start_stall_watchdog(self, proc, family):
         """Sample the worker tree's cumulative CPU every window; if a full
@@ -539,7 +555,7 @@ class SubprocessRunner(object):
         (ps hiccup) is treated as alive, never as a stall."""
         window = self.stall_window_s
         floor = self.stall_min_cpu_s
-        if not window or not floor or floor <= 0:
+        if not window or not floor:
             return None, None, None
         done = threading.Event()
         state = {"stalled": False}
@@ -548,14 +564,23 @@ class SubprocessRunner(object):
             last = tree_cpu_seconds(proc.pid)
             while not done.wait(window):
                 cur = tree_cpu_seconds(proc.pid)
+                # The worker may have finished during the wait or the ps
+                # sample; a completed worker is never a stall.
+                if done.is_set() or proc.poll() is not None:
+                    return
                 if last is None or cur is None:
                     last = cur
                     continue  # can't measure this window -> assume alive
-                if cur - last < floor:
+                delta = cur - last
+                last = cur
+                # A DROP (delta < 0) means a CPU-heavy child exited and its
+                # lifetime CPU left the live-process sum — that is evidence
+                # of work, not a stall. Only a small NON-NEGATIVE delta (the
+                # whole tree barely moved) is a frozen worker.
+                if 0 <= delta < floor:
                     state["stalled"] = True
                     _kill_group(proc)
                     return
-                last = cur
 
         t = threading.Thread(target=watch, name="stall-watchdog", daemon=True)
         t.start()

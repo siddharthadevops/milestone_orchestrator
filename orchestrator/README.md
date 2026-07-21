@@ -230,26 +230,31 @@ findings for the FIX LOOP:
          where the dirty review left off (next round of the same family,
          re-verify, or a fresh seal attempt)
 
-For findings raised by a full review round, the pending diff is checkpointed
-after the fifth fix instead of launching another delta review. No synthetic
-clean round is recorded: the WIP commit is amended, the checkpoint is logged,
-and the same active Codex or Claude family resumes a whole-commit review. The
-limit is derived from the episode history, so Stop/Start or Resume cannot reset
-it. Verification and seal repair episodes keep their real delta reviews because
-there is no active full-review family waiting immediately behind them. The
-threshold is configurable with `delta_full_review_after_fixes` (zero disables
-it).
+For a fix episode born from a review round OR a seal, the pending diff is
+checkpointed after the fifth fix instead of launching another delta review. No
+synthetic clean round is recorded: the WIP commit is amended, the checkpoint is
+logged, and the episode returns to a full re-review — a review episode to a
+whole-commit review by the same active family, a seal episode to a fresh full
+seal (via the pre-seal gate). The limit is derived from the episode history, so
+Stop/Start or Resume cannot reset it, and it keys off the episode's original
+kind so a dirty-delta re-queue cannot disable it. Verification and gap-repair
+episodes keep their real delta reviews. The threshold is configurable with
+`delta_full_review_after_fixes` (zero disables it).
 
 Per-act family policy (config "acts"): fixer and consultation are a fixed
-family name, "self", or "opposite" (relative to the act's origin). After 10
-dirty delta reviews in the same fix episode, `convergence_fixer` replaces the
-normal fixer (default Codex Sol/max) and receives a compact summary of the last
-five dirty deltas to look for their shared cause. The threshold is configurable
-with `convergence_fixer_after_deltas`; its history survives Stop/Start and
-Resume even though Resume grants a fresh loop budget. Delta review has no
-independent policy: it always uses the latest fixer's family and the selected
-Review profile for that family. Review rounds and seal halves keep their family
+family name, "self", or "opposite" (relative to the act's origin). The
+`skeletoner` act drives all skeleton content work — its draft, re-drafts, and
+fixes — with one operator-chosen model (default claude-fable-5/max); only
+skeleton reviews stay on the review families. Delta review has no independent
+policy: it always uses the latest fixer's family and the selected Review
+profile for that family. Review rounds and seal halves keep their family
 identity by definition.
+
+The liveness watchdog kills a worker whose whole process tree burns less than
+`worker_stall_min_cpu_s` of CPU across a full `worker_stall_window_s` window (a
+frozen CLI); it is typed as a recoverable timeout and auto-resumed. There is no
+hard wall-clock timeout, so a legitimate long-running test suite is never
+touched. Set the window to zero to disable it.
 
 ### Adjudicated rejections (no infinite finding loops)
 

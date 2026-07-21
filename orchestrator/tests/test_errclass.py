@@ -30,6 +30,20 @@ class TestPatterns(unittest.TestCase):
             "quota",
         )
 
+    def test_liveness_stall_message_is_timeout(self):
+        # The seal-half path wraps a WorkerStalled into a RunnerError string,
+        # so the driver's isinstance special-case never runs; the message
+        # must classify deterministically as a recoverable timeout, not
+        # degrade to `unknown` and never auto-resume.
+        self.assertEqual(
+            errclass.classify_text(
+                "seal_half call failed: family codex stalled: its process "
+                "tree burned under 1.0s of CPU over a 900s window "
+                "(frozen worker)"
+            ),
+            "timeout",
+        )
+
     def test_claude_cli_usage_limit_banner_is_quota(self):
         # The exact live banner (2026-07-19): it words the limit the other
         # way round, so `limit reached` missed it and a plain quota stop was

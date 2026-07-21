@@ -112,11 +112,15 @@ _PATTERNS = (
         r"\bdns\b",
         r"socket hang ?up",
     )),
-    # The timeout message is authored by runners.py itself — a safe
-    # self-match, unlike worker prose (covers the seal-half path where
-    # the driver's isinstance special-case does not run).
+    # The timeout / stall messages are authored by runners.py itself — a
+    # safe self-match, unlike worker prose. The stall pattern covers the
+    # seal-half path, where the failure arrives as a wrapped RunnerError
+    # string and the driver's isinstance(WorkerStalled) special-case never
+    # runs; without it a frozen seal worker would degrade to `unknown` and
+    # never auto-resume.
     ("timeout", (
         r"timed out after \d+s",
+        r"stalled:[^\n]{0,80}frozen worker",
     )),
 )
 

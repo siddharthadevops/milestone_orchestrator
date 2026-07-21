@@ -394,6 +394,50 @@ class TestDeltaFullReviewCheckpoint(DriverTestCase):
                 1,
             )
 
+    def test_checkpoint_fires_for_a_seal_episode(self):
+        # A seal that raises a finding opens a fix episode of origin_type
+        # "seal"; after N fixes it must checkpoint back to a full seal (via
+        # pre_seal_verify), not keep looping deltas. This is the path that,
+        # left unbounded, was the last place convergence could have fired.
+        with tempfile.TemporaryDirectory(prefix="orch-mock-") as ws:
+            path = init_state(
+                ws, make_config(delta_full_review_after_fixes=1)
+            )
+            mock = runners.MockRunner([
+                draft_step(),
+                step("review_round", report("review_round"), family="codex"),
+                step("review_round", report("review_round"), family="claude"),
+                # seal a1: codex clean, claude raises S1 -> seal fix episode.
+                step("seal_half", report("seal_half"), family="codex"),
+                step("seal_half",
+                     report("seal_half", [finding("S1", "seal defect")]),
+                     family="claude"),
+                step("fix_findings",
+                     fix_ok([triaged("claude-S1", "fixed", "seal defect")],
+                            files_changed=["docs/skeleton.md"]),
+                     family="codex",
+                     side_effect=append_file("docs/skeleton.md", "\nfix\n")),
+                # The checkpoint fires here (no delta_review call) and returns
+                # to the pre-seal gate; seal a2 is a fresh full seal.
+                step("seal_half", report("seal_half"), family="codex"),
+                step("seal_half", report("seal_half"), family="claude"),
+            ])
+            driver = drv.Driver(path, runner=mock)
+            self.step_until(
+                driver, lambda s: s["units"][0]["status"] == st.U_SEALED)
+            self.assertEqual(mock.script, [])
+            state = st.load(path)
+            checkpoint = [e for e in state["events"]
+                          if e["type"] == "delta_checkpoint"]
+            self.assertEqual(len(checkpoint), 1)
+            self.assertEqual(checkpoint[0]["return_to"], st.U_PRE_SEAL_VERIFY)
+            # It escalated instead of running a delta: no delta_review round.
+            self.assertEqual(
+                len([r for r in state["units"][0]["rounds"]
+                     if r["kind"] == "delta_review"]),
+                0,
+            )
+
 
 # ---------------------------------------------------------------------------
 # (c) fix-loop cap
@@ -960,7 +1004,37 @@ class TestActsResolution(DriverTestCase):
                           if c[1] == "fix_findings"][0]
             self.assertIn("with the codex family", fix_prompt)
 
-
+    def test_skeleton_fix_routes_through_skeletoner_not_fixer(self):
+        # Routing check with the two acts set to DIFFERENT families: the
+        # skeleton fix must resolve `skeletoner`, never the general `fixer`.
+        acts = {
+            "fixer": "codex",
+            "skeletoner": {"agent": "claude", "model": "claude-fable-5",
+                           "effort": "max"},
+            "consultation": "opposite",
+        }
+        with tempfile.TemporaryDirectory(prefix="orch-mock-") as ws:
+            mock = self._run_skeleton(ws, acts, draft_family="claude",
+                                      script_tail=[
+                step("review_round",
+                     report("review_round", [finding("F1", "defect")]),
+                     family="codex"),
+                step("fix_findings",
+                     fix_ok([triaged("F1", "fixed", "defect")],
+                            files_changed=["docs/skeleton.md"]),
+                     family="claude",
+                     side_effect=append_file("docs/skeleton.md", "\nfix\n")),
+                step("delta_review", report("delta_review"), family="claude"),
+                step("review_round", report("review_round"), family="codex"),
+                step("review_round", report("review_round"), family="claude"),
+                step("seal_half", report("seal_half"), family="codex"),
+                step("seal_half", report("seal_half"), family="claude"),
+            ])
+            fix_meta = [m for c, m in zip(mock.calls, mock.call_meta)
+                        if c[1] == "fix_findings"][0]
+            # skeletoner (claude/fable-5), not fixer (codex).
+            self.assertEqual(fix_meta["family"], "claude")
+            self.assertEqual(fix_meta["model"], "claude-fable-5")
 
 
 if __name__ == "__main__":

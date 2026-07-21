@@ -1306,6 +1306,25 @@ class TestStallWatchdog(unittest.TestCase):
         self.assertIn("done", result.text)
         self.assertEqual(result.exit_code, 0)
 
+    def test_cpu_heavy_child_exit_is_not_a_stall(self):
+        # The summed tree CPU is not monotonic: when a CPU-heavy child exits
+        # its lifetime CPU leaves the live-process sum, so the total DROPS.
+        # A drop is evidence a child did work, never a stall. Parent spawns a
+        # busy child, waits for it (sum climbs then drops), then busy-loops.
+        runner = self._runner(
+            [sys.executable, "-c",
+             "import subprocess,sys,time\n"
+             "b='t=__import__(\"time\").time()+2\\n"
+             "while __import__(\"time\").time()<t: pass'\n"
+             "subprocess.Popen([sys.executable,'-c',b]).wait()\n"
+             "t=time.time()+2\n"
+             "while time.time()<t: pass\n"
+             "print('done')"],
+            window=1, floor=0.3,
+        )
+        result = runner.call("fam", "", self.ws)
+        self.assertIn("done", result.text)
+
     def test_watchdog_disabled_lets_an_idle_worker_finish(self):
         # window=0 disables the watchdog entirely: an idle worker completes.
         runner = self._runner(
