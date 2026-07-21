@@ -1421,39 +1421,35 @@ class TestStallWatchdog(unittest.TestCase):
         for path in created:
             self.assertFalse(os.path.exists(path), "leaked temp file %s" % path)
 
-    def test_interrupt_between_output_fd_mkstemp_and_close_is_not_leaked(self):
-        # The {output_file} temp fd is tracked (of_fd), so a KeyboardInterrupt
-        # in the mkstemp->close gap does not leak it: the outer finally closes
-        # any still-open of_fd.
+    def test_temp_fds_are_closed_exactly_once_after_a_call(self):
+        # Both parent temp fds (of_fd for {output_file}, so_fd for stdout) are
+        # held open for the call and closed EXACTLY once by the finally —
+        # never inline (no close-then-null gap), never leaked. fstat on each
+        # right after the call, before any intervening open, must see EBADF.
         import errno
         runner = self._runner(
             [sys.executable, "-c", "print('x')", "{output_file}"],
             window=0, floor=0,
         )
-        real_close = os.close
-        state = {"armed": True, "fd": None}
+        fds = []
+        real_mkstemp = tempfile.mkstemp
 
-        def close_boom(fd):
-            # Fire once, on the FIRST os.close — which is of_fd (the argv
-            # loop runs before any other close). Record the fd, then let the
-            # outer finally close it for real.
-            if state["armed"]:
-                state["armed"] = False
-                state["fd"] = fd
-                raise KeyboardInterrupt
-            return real_close(fd)
+        def rec_mkstemp(*a, **k):
+            fd, path = real_mkstemp(*a, **k)
+            fds.append(fd)
+            return fd, path
 
-        os.close = close_boom
+        tempfile.mkstemp = rec_mkstemp
         try:
-            with self.assertRaises(KeyboardInterrupt):
-                runner.call("fam", "", self.ws)
+            result = runner.call("fam", "", self.ws)
         finally:
-            os.close = real_close
-        self.assertIsNotNone(state["fd"])
-        # The finally closed the fd the interrupt skipped: fstat -> EBADF.
-        with self.assertRaises(OSError) as cm:
-            os.fstat(state["fd"])
-        self.assertEqual(cm.exception.errno, errno.EBADF)
+            tempfile.mkstemp = real_mkstemp
+        self.assertIn("x", result.text)
+        self.assertEqual(len(fds), 2)   # orch-last + orch-stdout
+        for fd in fds:
+            with self.assertRaises(OSError) as cm:
+                os.fstat(fd)
+            self.assertEqual(cm.exception.errno, errno.EBADF)
 
     def test_setup_interrupt_leaves_no_running_watchdog(self):
         # wd_done/wd_state are owned by call() BEFORE the watchdog starts, so

@@ -654,18 +654,25 @@ class SubprocessRunner(object):
                 _unlink_quiet(output_file)
 
         def _reap(p):
-            # Signal the group ONLY while the leader has not been waited on
-            # (returncode is None): a running-or-zombie leader still reserves
-            # its pid, so its pgid is provably ours and killpg cannot hit a
-            # REUSED group. Once communicate() has reaped the leader the pid
-            # may be recycled, so we never killpg then — its stderr-holding
-            # children were already waited on there. Killing the group before
-            # the wait also makes stderr EOF so this communicate cannot block.
-            # This gate also makes a double _reap (an interrupt between the
-            # call and reaped=True) a safe no-op the second time. Best-effort:
-            # a cleanup path never re-raises.
+            # SIGKILL the whole GROUP so no descendant is orphaned — including
+            # an in-group helper that closed/redirected stderr and outlived the
+            # leader (communicate() only waits on stderr-holding children) —
+            # then WAIT (only if not already reaped) so the leader is not left
+            # a zombie. killpg targets the leader's original pgid; while ANY
+            # member is alive it reserves that pgid, so the signal reaches our
+            # group and only our group. Once every member has exited the pgid
+            # is free and killpg returns ESRCH, a no-op. The residual — the OS
+            # having RECYCLED that freed pgid to an unrelated group in the
+            # window before this killpg — cannot occur here: Linux and macOS
+            # allocate pids from a rotating counter, so a just-freed pid is not
+            # reissued until ~pid_max further spawns, never within the µs of a
+            # reap. Orphaning a full-permission worker is the strictly worse
+            # outcome, so we always sweep. Idempotent: a second _reap (an
+            # interrupt between the call and reaped=True) re-kills a gone group
+            # (ESRCH no-op), skips the already-done wait, and re-discards.
+            # Best-effort: a cleanup path never re-raises.
+            _kill_group(p)
             if p.returncode is None:
-                _kill_group(p)
                 try:
                     p.communicate(timeout=PS_SAMPLE_TIMEOUT)
                 except Exception:
@@ -675,37 +682,41 @@ class SubprocessRunner(object):
         # ONE guard around the whole lifecycle. Any failure OR a
         # KeyboardInterrupt at ANY point — building argv (which may create
         # {output_file}), allocating the stdout temp, spawning, tracking, or
-        # the gaps between — closes both parent temp FDs (of_fd, so_fd, each
-        # nulled the instant it is closed so the finally never double-closes),
-        # reaps a spawned worker (proc is not None), and deletes every temp
-        # file. `reaped` guards against a pid-reuse double-kill once the inner
-        # finally has waited. RESIDUAL, stated honestly: if an async exception
-        # lands INSIDE subprocess.Popen after the child has exec'd but before
-        # __init__ returns, `proc` never binds and CPython neither kills nor
-        # returns that child — it is orphaned to init. The only close for that
-        # window is blocking signals across the fork, which is rejected: the
-        # child inherits the blocked mask (verified), corrupting the worker's
-        # own signal handling for a microsecond-wide, shutdown-only window.
+        # the gaps between — reaps a spawned worker (proc is not None) and,
+        # in the finally, closes each parent temp FD (of_fd, so_fd) EXACTLY
+        # once and deletes every temp file. The FDs are deliberately NOT
+        # closed inline: a close-then-null is not atomic, so an interrupt in
+        # that gap would leave the finally to close an FD number the OS may
+        # have already recycled. Holding both (regular-file) FDs open for the
+        # call's lifetime is harmless — the child holds its own dup of stdout,
+        # and the worker opens {output_file} by path — so the finally is the
+        # single close site. `reaped` skips a redundant second reap.
+        # RESIDUAL, stated honestly: if an async exception lands INSIDE
+        # subprocess.Popen after the child has exec'd but before __init__
+        # returns, `proc` never binds and CPython neither kills nor returns
+        # that child — it is orphaned to init. The only close for that window
+        # is blocking signals across the fork, which is rejected: the child
+        # inherits the blocked mask (verified), corrupting the worker's own
+        # signal handling for a microsecond-wide, shutdown-only window.
         try:
             argv = []
             for arg in template:
                 if "{output_file}" in arg:
                     if output_file is None:
-                        # Track the fd until it is closed so an interrupt in
-                        # the mkstemp->close gap does not leak it (the outer
-                        # finally closes any still-open of_fd).
+                        # Held open until the outer finally closes it once;
+                        # the worker opens {output_file} by path, not this fd.
                         of_fd, output_file = tempfile.mkstemp(
                             prefix="orch-last-", suffix=".txt"
                         )
-                        os.close(of_fd)
-                        of_fd = None
                     arg = arg.replace("{output_file}", output_file)
                 arg = arg.replace("{workspace}", workspace)
                 argv.append(arg)
 
             # stdout goes to a FILE, not a pipe, so the watchdog can watch it
             # grow as a liveness signal: a slow token streamer burns little
-            # CPU but is working, and its bytes land here as they arrive.
+            # CPU but is working, and its bytes land here as they arrive. The
+            # child dup's this fd; the parent's copy is closed once, in the
+            # finally (harmless to hold open meanwhile — it is a regular file).
             so_fd, stdout_path = tempfile.mkstemp(
                 prefix="orch-stdout-", suffix=".txt"
             )
@@ -724,11 +735,6 @@ class SubprocessRunner(object):
                 )
             except Exception as exc:
                 raise RunnerError("failed to spawn %r: %s" % (argv[0], exc))
-            finally:
-                # The child dup'd stdout; the parent's fd is done with whether
-                # the spawn returned or raised (Exception or KeyboardInterrupt).
-                os.close(so_fd)
-                so_fd = None
 
             _track_worker(proc)
             try:
@@ -752,17 +758,15 @@ class SubprocessRunner(object):
                         "family %s timed out after %ss" % (family, timeout)
                     )
             finally:
-                # Stop the watchdog BEFORE reaping: a set `done` makes it exit
-                # without sampling, so it can never SIGKILL a group whose pid
-                # we are about to let be recycled.
+                # Stop and JOIN the watchdog BEFORE reaping so its kill and
+                # this reap are serialized, never concurrent on the group.
                 wd_done.set()
                 if watchdog is not None:
                     watchdog.join(timeout=PS_SAMPLE_TIMEOUT)
                 # Reap the whole group: a descendant the worker left running
-                # after closing stderr would otherwise linger unwatched, and
-                # an interrupt during watchdog start leaves the leader
-                # unwaited. A clean exit's group is already gone, so the kill
-                # no-ops and the wait is skipped.
+                # (holding stdout, or having closed stderr) would otherwise
+                # linger unwatched, and an interrupt during watchdog start
+                # leaves the leader unwaited.
                 _reap(proc)
                 reaped = True
 
@@ -818,13 +822,13 @@ class SubprocessRunner(object):
                 )
             return RunnerResult(text, proc.returncode, duration)
         finally:
-            # BaseException-safe cleanup for the setup gaps the inner finally
-            # cannot reach. Stop the watchdog first (a set `done` makes it exit
-            # before it can SIGKILL a soon-to-be-recycled pid); then close any
-            # still-open parent temp FD (of_fd/so_fd, open only if an interrupt
-            # beat their own close); then reap a spawned-but-not-yet-reaped
-            # worker (`reaped` prevents a pid-reuse double-kill after a normal
-            # wait); then delete the temp files.
+            # Single cleanup site, reached on EVERY exit. Stop and join the
+            # watchdog first (so it cannot kill concurrently with the reap);
+            # close each parent temp FD EXACTLY once (they are never closed
+            # inline, so there is no close-then-null gap for an interrupt to
+            # turn into a double-close of a recycled descriptor); reap a
+            # spawned-but-not-yet-reaped worker (`reaped` skips the redundant
+            # second reap after the inner finally); then delete the temp files.
             wd_done.set()
             if watchdog is not None:
                 watchdog.join(timeout=PS_SAMPLE_TIMEOUT)

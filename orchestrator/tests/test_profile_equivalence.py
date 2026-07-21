@@ -22,6 +22,7 @@ compared field-by-field.
 import copy
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -65,19 +66,27 @@ def _strip(obj):
     return obj
 
 
+# unittest's own summary line carries a wall-clock float ("Ran 4 tests in
+# 0.000s") that differs run to run inside captured suite output — the same
+# class of nondeterminism as duration_s, but embedded in a string rather than
+# a field. Neutralized to a placeholder so the deterministic remainder still
+# compares byte-for-byte.
+_SUITE_TIMING_RE = re.compile(r"(Ran \d+ tests? in )\d+\.\d+s")
+
+
 def _normalize_ws(obj, ws):
-    """Neutralize the one nondeterministic SUBSTRING that survives key
-    stripping: the run's absolute workspace path, which is embedded inside
-    captured suite output (tracebacks name `<ws>/test_calculator.py`). Each
-    run's own workspace path is replaced with a fixed placeholder, so the
-    deterministic remainder of the output is still compared byte-for-byte —
-    a genuinely different suite output would still fail the gate."""
+    """Neutralize the nondeterministic SUBSTRINGS that survive key stripping:
+    the run's absolute workspace path (tracebacks name `<ws>/test_x.py`) and
+    unittest's own timing line, both embedded inside captured suite output.
+    Each is replaced with a fixed placeholder, so the deterministic remainder
+    of the output is still compared byte-for-byte — a genuinely different
+    suite output would still fail the gate."""
     if isinstance(obj, dict):
         return {k: _normalize_ws(v, ws) for k, v in obj.items()}
     if isinstance(obj, list):
         return [_normalize_ws(x, ws) for x in obj]
     if isinstance(obj, str):
-        return obj.replace(ws, "<WS>")
+        return _SUITE_TIMING_RE.sub(r"\1<T>s", obj.replace(ws, "<WS>"))
     return obj
 
 
@@ -247,6 +256,19 @@ class EquivalenceMachineryTest(unittest.TestCase):
     def test_ws_normalization_neutralizes_only_the_path(self):
         norm = _normalize_ws({"out": "/tmp/ws/x.py failed: 3 != 4"}, "/tmp/ws")
         self.assertEqual(norm, {"out": "<WS>/x.py failed: 3 != 4"})
+
+    def test_suite_timing_is_neutralized(self):
+        # unittest's "Ran N tests in X.XXXs" float differs run to run; only
+        # the timing is placeholdered, the rest of the line is preserved.
+        a = _normalize_ws("Ran 4 tests in 0.000s\nFAILED", "/tmp/ws")
+        b = _normalize_ws("Ran 4 tests in 0.013s\nFAILED", "/tmp/ws")
+        self.assertEqual(a, b)
+        self.assertEqual(a, "Ran 4 tests in <T>s\nFAILED")
+        # A different test COUNT is a real difference and survives.
+        self.assertNotEqual(
+            _normalize_ws("Ran 4 tests in 0.0s", "/tmp/ws"),
+            _normalize_ws("Ran 5 tests in 0.0s", "/tmp/ws"),
+        )
 
 
 if __name__ == "__main__":
