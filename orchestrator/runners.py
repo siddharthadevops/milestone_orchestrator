@@ -17,6 +17,7 @@ explanation in the log — no prose parsing, ever.
 import fnmatch
 import hashlib
 import json
+import math
 import os
 import signal
 import subprocess
@@ -95,15 +96,14 @@ def _parse_ps_time(text):
     return days * 86400 + secs
 
 
-def tree_cpu_seconds(root_pid):
-    """Total cumulative CPU seconds consumed by `root_pid` AND every
-    descendant. Best-effort: returns None when it cannot be measured (a ps
-    failure, an unreadable pid) so the caller treats "can't measure" as
-    "alive" and never kills on a blind spot.
+def tree_cpu_by_pid(root_pid):
+    """{pid: cumulative_cpu_seconds} for `root_pid` AND every descendant, or
+    None when it cannot be measured (a ps failure, an unreadable member) so
+    the caller fails open — never kills on a blind spot.
 
-    The whole TREE matters: an implement/fix worker's compute is burned by
-    child test/build processes, not the CLI itself, so watching only the
-    worker pid would read a running suite as idle."""
+    Per-pid (not a bare sum) because the watchdog must accumulate a MONOTONIC
+    total: a bare tree sum is not monotonic (an exited child's lifetime CPU
+    leaves the live-process set), so its window-to-window delta is unusable."""
     try:
         proc = subprocess.run(
             ["ps", "-Ao", "pid=,ppid=,time="],
@@ -127,23 +127,27 @@ def tree_cpu_seconds(root_pid):
         children.setdefault(ppid, []).append(pid)
     if root_pid not in cpu:
         return None
-    total = 0.0
-    seen = set()
+    out = {}
     stack = [root_pid]
     while stack:
         pid = stack.pop()
-        if pid in seen:
+        if pid in out:
             continue
-        seen.add(pid)
         secs = cpu.get(pid)
         if secs is None:
-            # A member of the tree whose CPU we could not read: fail open
-            # (can't measure -> treat as alive) rather than undercount and
-            # risk a false stall.
+            # A tree member whose CPU we could not read: fail open (can't
+            # measure -> treat as alive) rather than undercount.
             return None
-        total += secs
+        out[pid] = secs
         stack.extend(children.get(pid, ()))
-    return total
+    return out
+
+
+def tree_cpu_seconds(root_pid):
+    """Sum of tree_cpu_by_pid, or None. NOT monotonic across child churn —
+    for one-shot measurement/tests only, never for stall deltas."""
+    m = tree_cpu_by_pid(root_pid)
+    return None if m is None else sum(m.values())
 
 
 # ps sampling is cheap but bounded so a wedged ps can never hang the watchdog.
@@ -151,14 +155,17 @@ PS_SAMPLE_TIMEOUT = 10
 
 
 def _positive_float(value):
-    """Coerce a config knob to a positive float, or None. A malformed value
-    (string, negative, zero) disables the feature instead of raising later
-    on the hot call path and leaking a spawned worker."""
+    """Coerce a config knob to a positive FINITE float, or None. A malformed
+    value (string, negative, zero, inf/nan) disables the feature instead of
+    raising later on the hot call path (inf window overflows the wait; inf
+    floor kills every worker) or leaking a spawned worker."""
     try:
         f = float(value)
     except (TypeError, ValueError):
         return None
-    return f if f > 0 else None
+    if not math.isfinite(f) or f <= 0:
+        return None
+    return f
 
 
 class WorkerProtocolError(RuntimeError):
@@ -561,26 +568,39 @@ class SubprocessRunner(object):
         state = {"stalled": False}
 
         def watch():
-            last = tree_cpu_seconds(proc.pid)
+            # Two liveness signals, because sampled tree CPU alone is not a
+            # reliable measure of work: (1) the tree's CPU sum grew by at
+            # least the floor this window; (2) the tree's PROCESS SET changed
+            # — a child appeared or exited, which is activity even when the
+            # live-process CPU sum FELL (an exited child's CPU leaves the
+            # sum, and a child that lived entirely between two samples never
+            # entered it). Only a STABLE process set whose CPU barely moved
+            # is a frozen worker. Residual, stated honestly: a worker that is
+            # itself idle while a helper both spawns AND exits inside one
+            # window is invisible — negligible at the real 15-minute window,
+            # where a working CLI streams (its own CPU) and long jobs are
+            # sampled repeatedly.
+            tree = tree_cpu_by_pid(proc.pid)
+            last_total = None if tree is None else sum(tree.values())
+            last_pids = None if tree is None else frozenset(tree)
             while not done.wait(window):
-                cur = tree_cpu_seconds(proc.pid)
+                tree = tree_cpu_by_pid(proc.pid)
                 # The worker may have finished during the wait or the ps
                 # sample; a completed worker is never a stall.
                 if done.is_set() or proc.poll() is not None:
                     return
-                if last is None or cur is None:
-                    last = cur
+                if tree is None or last_total is None:
+                    last_total = None if tree is None else sum(tree.values())
+                    last_pids = None if tree is None else frozenset(tree)
                     continue  # can't measure this window -> assume alive
-                delta = cur - last
-                last = cur
-                # A DROP (delta < 0) means a CPU-heavy child exited and its
-                # lifetime CPU left the live-process sum — that is evidence
-                # of work, not a stall. Only a small NON-NEGATIVE delta (the
-                # whole tree barely moved) is a frozen worker.
-                if 0 <= delta < floor:
+                pids = frozenset(tree)
+                cur_total = sum(tree.values())
+                if pids == last_pids and (cur_total - last_total) < floor:
                     state["stalled"] = True
                     _kill_group(proc)
                     return
+                last_total = cur_total
+                last_pids = pids
 
         t = threading.Thread(target=watch, name="stall-watchdog", daemon=True)
         t.start()
@@ -624,8 +644,13 @@ class SubprocessRunner(object):
                 _unlink_quiet(output_file)
             raise RunnerError("failed to spawn %r: %s" % (argv[0], exc))
         _track_worker(proc)
-        watchdog, wd_done, wd_state = self._start_stall_watchdog(proc, family)
+        watchdog = wd_done = wd_state = None
         try:
+            # Start the watchdog INSIDE the try so a Thread.start() failure
+            # cannot leak the tracked worker or the output_file.
+            watchdog, wd_done, wd_state = self._start_stall_watchdog(
+                proc, family
+            )
             try:
                 stdout, stderr = proc.communicate(input=prompt, timeout=timeout)
             except subprocess.TimeoutExpired:
@@ -642,9 +667,11 @@ class SubprocessRunner(object):
             if watchdog is not None:
                 watchdog.join(timeout=PS_SAMPLE_TIMEOUT)
             _untrack_worker(proc)
-        if wd_state and wd_state["stalled"]:
-            # The watchdog SIGKILLed a frozen worker; communicate() returned
-            # because the process died. Surface it as a recoverable stall.
+        # Raise a stall ONLY when the kill actually took effect (the process
+        # died by signal). If the worker completed in the tiny race between
+        # the watchdog's poll() and its SIGKILL, returncode is >= 0 and its
+        # real output must be honored, not discarded.
+        if wd_state and wd_state["stalled"] and (proc.returncode or 0) < 0:
             if output_file:
                 _unlink_quiet(output_file)
             raise WorkerStalled(

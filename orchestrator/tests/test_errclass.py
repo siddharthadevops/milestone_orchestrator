@@ -43,6 +43,10 @@ class TestPatterns(unittest.TestCase):
             ),
             "timeout",
         )
+        # ...but worker PROSE that merely mentions stalling / a frozen worker
+        # is content, not an infra failure, and must NOT auto-resume.
+        self.assertIsNone(errclass.classify_text(
+            "Analysis stalled: retrying a frozen worker is unsafe."))
 
     def test_claude_cli_usage_limit_banner_is_quota(self):
         # The exact live banner (2026-07-19): it words the limit the other

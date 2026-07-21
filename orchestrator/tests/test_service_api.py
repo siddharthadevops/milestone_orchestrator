@@ -182,6 +182,11 @@ class ServiceApiTest(unittest.TestCase):
         self.assertIn('id="a_skeletoner_agent"', text)
         self.assertIn('id="ra_skeletoner_model"', text)
         self.assertNotIn('convergence_fixer', text)
+        # Switching an act's family resets model+effort (not just the
+        # datalist): the onAgentChange userChanged branch clears both.
+        self.assertIn("function onAgentChange(prefix, act, userChanged)", text)
+        self.assertIn("if (userChanged)", text)
+        self.assertIn("modelEl.value = \"\"", text)
         self.assertIn("function liveWorkSeconds", text)
         self.assertIn("function runStatusClock", text)
         self.assertIn("function tickLiveClocks", text)

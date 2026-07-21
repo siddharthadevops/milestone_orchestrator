@@ -399,9 +399,12 @@ class TestDeltaFullReviewCheckpoint(DriverTestCase):
         # "seal"; after N fixes it must checkpoint back to a full seal (via
         # pre_seal_verify), not keep looping deltas. This is the path that,
         # left unbounded, was the last place convergence could have fired.
+        # Threshold 2 (not 1) so a dirty delta REQUEUES first — proving the
+        # checkpoint keys off origin_type, which survives the requeue that
+        # rewrites fix_source["type"] to "delta".
         with tempfile.TemporaryDirectory(prefix="orch-mock-") as ws:
             path = init_state(
-                ws, make_config(delta_full_review_after_fixes=1)
+                ws, make_config(delta_full_review_after_fixes=2)
             )
             mock = runners.MockRunner([
                 draft_step(),
@@ -416,9 +419,19 @@ class TestDeltaFullReviewCheckpoint(DriverTestCase):
                      fix_ok([triaged("claude-S1", "fixed", "seal defect")],
                             files_changed=["docs/skeleton.md"]),
                      family="codex",
-                     side_effect=append_file("docs/skeleton.md", "\nfix\n")),
-                # The checkpoint fires here (no delta_review call) and returns
-                # to the pre-seal gate; seal a2 is a fresh full seal.
+                     side_effect=append_file("docs/skeleton.md", "\nf1\n")),
+                # Dirty delta -> requeue D1 (fix_source["type"] becomes
+                # "delta", but origin_type stays "seal").
+                step("delta_review",
+                     report("delta_review", [finding("D1", "delta defect")]),
+                     family="codex"),
+                step("fix_findings",
+                     fix_ok([triaged("D1", "fixed", "delta defect")],
+                            files_changed=["docs/skeleton.md"]),
+                     family="codex",
+                     side_effect=append_file("docs/skeleton.md", "\nf2\n")),
+                # Fix #2 -> the checkpoint fires (no second delta call) and
+                # returns to the pre-seal gate; seal a2 is a fresh full seal.
                 step("seal_half", report("seal_half"), family="codex"),
                 step("seal_half", report("seal_half"), family="claude"),
             ])
@@ -430,12 +443,14 @@ class TestDeltaFullReviewCheckpoint(DriverTestCase):
             checkpoint = [e for e in state["events"]
                           if e["type"] == "delta_checkpoint"]
             self.assertEqual(len(checkpoint), 1)
+            self.assertEqual(checkpoint[0]["fixes"], 2)
             self.assertEqual(checkpoint[0]["return_to"], st.U_PRE_SEAL_VERIFY)
-            # It escalated instead of running a delta: no delta_review round.
+            # Exactly one real delta ran (the dirty one); the second was the
+            # checkpoint, not another delta_review.
             self.assertEqual(
                 len([r for r in state["units"][0]["rounds"]
                      if r["kind"] == "delta_review"]),
-                0,
+                1,
             )
 
 
