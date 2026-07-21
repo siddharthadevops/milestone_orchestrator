@@ -545,15 +545,20 @@ class SubprocessRunner(object):
         self.stall_window_s = _positive_float(stall_window_s)
         self.stall_min_cpu_s = _positive_float(stall_min_cpu_s)
 
-    def _start_stall_watchdog(self, proc, family, done, state, output_paths=()):
+    def _start_stall_watchdog(self, proc, family, done, state, kill_lock,
+                              output_paths=()):
         """Watch the worker for a FROZEN window and SIGKILL it. Returns the
         watchdog thread, or None when the watchdog is disabled or its thread
         cannot start.
 
-        `done` (an Event) and `state` (a dict carrying "stalled") are OWNED by
-        the caller and created BEFORE this call: a caller interrupted after the
-        thread starts can still set `done` and stop it, so the thread is never
-        left armed with handles the caller cannot reach.
+        `done` (an Event), `state` (a dict carrying "stalled"), and
+        `kill_lock` are OWNED by the caller and created BEFORE this call: a
+        caller interrupted after the thread starts can still set `done` and
+        stop it, so the thread is never left armed with handles the caller
+        cannot reach. The kill and the caller's reap both run under
+        `kill_lock` with a `done` recheck, so they can never both signal the
+        group — no join-timeout window in which the watchdog resumes and
+        SIGKILLs a pgid the caller already reaped and let be recycled.
 
         Fail-open by construction: a window where a signal cannot be measured
         is treated as alive, never as a stall."""
@@ -614,8 +619,17 @@ class SubprocessRunner(object):
                 last_total = cur_total
                 last_pids = pids
                 if stalled:
-                    state["stalled"] = True
-                    _kill_group(proc)
+                    # Recheck `done` and kill UNDER the lock: if the caller has
+                    # begun its reap (set done, then sweeps under the same
+                    # lock), we see done and skip — never SIGKILLing a pgid it
+                    # already reaped and may have let be recycled. done unset
+                    # here means the caller has not reached its finally, so the
+                    # leader is still alive and its pgid is ours.
+                    with kill_lock:
+                        if done.is_set():
+                            return
+                        state["stalled"] = True
+                        _kill_group(proc)
                     return
 
         t = threading.Thread(target=watch, name="stall-watchdog", daemon=True)
@@ -646,6 +660,12 @@ class SubprocessRunner(object):
         # wd_done) — the thread is never left armed with unreachable handles.
         wd_done = threading.Event()
         wd_state = {"stalled": False}
+        # Serializes the watchdog's kill with this call's reap so they can
+        # never both signal the group. The caller sets wd_done, then sweeps
+        # under this lock; the watchdog rechecks wd_done under it before
+        # killing. A join-timeout can no longer let the watchdog resume and
+        # kill a pgid the caller already reaped.
+        kill_lock = threading.Lock()
 
         def _cleanup_files():
             if stdout_path:
@@ -670,13 +690,17 @@ class SubprocessRunner(object):
             # outcome, so we always sweep. Idempotent: a second _reap (an
             # interrupt between the call and reaped=True) re-kills a gone group
             # (ESRCH no-op), skips the already-done wait, and re-discards.
-            # Best-effort: a cleanup path never re-raises.
-            _kill_group(p)
-            if p.returncode is None:
-                try:
-                    p.communicate(timeout=PS_SAMPLE_TIMEOUT)
-                except Exception:
-                    pass
+            # Best-effort: a cleanup path never re-raises. The kill+wait run
+            # under kill_lock (paired with the watchdog's own kill); callers
+            # MUST set wd_done before calling so a watchdog that takes the lock
+            # after us observes done and skips its kill.
+            with kill_lock:
+                _kill_group(p)
+                if p.returncode is None:
+                    try:
+                        p.communicate(timeout=PS_SAMPLE_TIMEOUT)
+                    except Exception:
+                        pass
             _untrack_worker(p)
 
         # ONE guard around the whole lifecycle. Any failure OR a
@@ -744,7 +768,7 @@ class SubprocessRunner(object):
                 # assignment is interrupted after the thread starts, the
                 # finally still sets wd_done and stops it.
                 watchdog = self._start_stall_watchdog(
-                    proc, family, wd_done, wd_state,
+                    proc, family, wd_done, wd_state, kill_lock,
                     output_paths=(
                         [stdout_path] + ([output_file] if output_file else [])
                     ),
@@ -758,17 +782,20 @@ class SubprocessRunner(object):
                         "family %s timed out after %ss" % (family, timeout)
                     )
             finally:
-                # Stop and JOIN the watchdog BEFORE reaping so its kill and
-                # this reap are serialized, never concurrent on the group.
+                # Order matters: set wd_done, THEN reap under kill_lock, THEN
+                # join. Because the watchdog rechecks wd_done under the same
+                # lock, a watchdog still past its own done check cannot kill
+                # the group after we sweep it — the lock, not the (timed) join,
+                # is what serializes them, so a slow-`ps` watchdog can no
+                # longer resume and SIGKILL a reaped, recyclable pgid. The
+                # sweep reaps any descendant the worker left running (holding
+                # stdout, or having closed stderr); join then confirms the
+                # daemon has exited.
                 wd_done.set()
-                if watchdog is not None:
-                    watchdog.join(timeout=PS_SAMPLE_TIMEOUT)
-                # Reap the whole group: a descendant the worker left running
-                # (holding stdout, or having closed stderr) would otherwise
-                # linger unwatched, and an interrupt during watchdog start
-                # leaves the leader unwaited.
                 _reap(proc)
                 reaped = True
+                if watchdog is not None:
+                    watchdog.join(timeout=PS_SAMPLE_TIMEOUT)
 
             duration = time.time() - started
             try:
@@ -822,14 +849,17 @@ class SubprocessRunner(object):
                 )
             return RunnerResult(text, proc.returncode, duration)
         finally:
-            # Single cleanup site, reached on EVERY exit. Stop and join the
-            # watchdog first (so it cannot kill concurrently with the reap);
-            # close each parent temp FD EXACTLY once (they are never closed
-            # inline, so there is no close-then-null gap for an interrupt to
-            # turn into a double-close of a recycled descriptor); reap a
-            # spawned-but-not-yet-reaped worker (`reaped` skips the redundant
-            # second reap after the inner finally); then delete the temp files.
+            # Single cleanup site, reached on EVERY exit. Set wd_done, then
+            # reap a spawned-but-not-yet-reaped worker under kill_lock (so the
+            # watchdog rechecking wd_done under the same lock never kills after
+            # us), then join the daemon. `reaped` skips the redundant second
+            # reap after the inner finally. Close each parent temp FD EXACTLY
+            # once (never closed inline, so there is no close-then-null gap for
+            # an interrupt to turn into a double-close of a recycled
+            # descriptor); then delete the temp files.
             wd_done.set()
+            if proc is not None and not reaped:
+                _reap(proc)
             if watchdog is not None:
                 watchdog.join(timeout=PS_SAMPLE_TIMEOUT)
             for fd in (of_fd, so_fd):
@@ -838,8 +868,6 @@ class SubprocessRunner(object):
                         os.close(fd)
                     except OSError:
                         pass
-            if proc is not None and not reaped:
-                _reap(proc)
             _cleanup_files()
 
 

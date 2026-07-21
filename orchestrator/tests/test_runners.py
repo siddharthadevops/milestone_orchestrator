@@ -1463,10 +1463,12 @@ class TestStallWatchdog(unittest.TestCase):
         )
         real_start = runner._start_stall_watchdog
 
-        def start_then_boom(proc, family, done, state, output_paths=()):
+        def start_then_boom(proc, family, done, state, kill_lock,
+                            output_paths=()):
             # Arm the real watchdog, then interrupt before the caller can
             # capture the thread handle.
-            real_start(proc, family, done, state, output_paths=output_paths)
+            real_start(proc, family, done, state, kill_lock,
+                       output_paths=output_paths)
             raise KeyboardInterrupt
 
         runner._start_stall_watchdog = start_then_boom
