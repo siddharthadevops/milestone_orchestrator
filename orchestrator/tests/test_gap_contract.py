@@ -159,6 +159,13 @@ class GapPromptGatingTest(unittest.TestCase):
         self.assertIn("RE-DOCUMENTATION WAVE", fix)
         self.assertIn("RE-DOCUMENTER", fix)
         self.assertIn("do NOT\n  bound WHERE", fix)
+        flat_fix = " ".join(fix.split())
+        self.assertIn("read-only DURING THIS documentation call only",
+                      flat_fix)
+        self.assertIn("phase boundary, not permanent ownership", flat_fix)
+        self.assertIn("current reporting slice", flat_fix)
+        self.assertIn("insert a new unbuilt slice", flat_fix)
+        self.assertIn("Evaluate both assignments before concluding", flat_fix)
         for d in docs:
             self.assertIn(d, fix)
         delta = prompts.build_delta_review(

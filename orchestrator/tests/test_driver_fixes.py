@@ -83,7 +83,17 @@ def reported(kind, summary, fid="F1", severity="P2"):
     """A reviewer finding: NO disposition (whoever detects never fixes)."""
     return ok(
         kind,
-        findings=[{"id": fid, "severity": severity, "summary": summary}],
+        findings=[{
+            "id": fid,
+            "severity": severity,
+            "summary": summary,
+            "validity": {
+                "permitted_baseline": "the documented behavior",
+                "actual_outcome": "the observed behavior",
+                "incremental_harm": "the observed behavior breaks it",
+                "exceeds_baseline": True,
+            },
+        }],
     )
 
 
@@ -98,6 +108,12 @@ def fix_fixed(*ids, **extra):
                 "summary": "queued finding %s addressed" % fid,
                 "disposition": "fixed",
                 "consultation": None,
+                "validity": {
+                    "permitted_baseline": "the documented behavior",
+                    "actual_outcome": "the observed behavior",
+                    "incremental_harm": "the observed behavior breaks it",
+                    "exceeds_baseline": True,
+                },
             }
             for fid in ids
         ],

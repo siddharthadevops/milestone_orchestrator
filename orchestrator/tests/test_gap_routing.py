@@ -91,6 +91,10 @@ class GapRoutingCase(unittest.TestCase):
         # scope — never a future/sealed slice (finding 2).
         self.assertIn("REMODEL OBJECTIVE", skel["fix_queue"][0]["summary"])
         self.assertIn("slice_impl-01", skel["fix_queue"][0]["summary"])
+        self.assertIn("Do not rerun or assign new work to an already-sealed "
+                      "step", skel["fix_queue"][0]["summary"])
+        self.assertIn("may modify code first introduced by a sealed step",
+                      skel["fix_queue"][0]["summary"])
         self.assertEqual(units["slice_doc-01"]["status"], st.U_REPAIRING)
         self.assertEqual(state["redoc_wave"],
                          {"anchor": "skeleton", "docs": ["slice_doc-01"],

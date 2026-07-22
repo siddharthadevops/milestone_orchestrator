@@ -1517,6 +1517,32 @@ class Driver(object):
             )
 
     def _check_worker_blocked(self, unit, output, kind):
+        if output["status"] == "retry":
+            # A fixer could not complete its mandatory opposite-family
+            # consultation. This is neither a finding disposition nor an
+            # operator decision: fail through the established `unknown`
+            # lane so the service guard restores failed_from=U_FIXING and
+            # retries the same queue after its 15-minute emergency interval.
+            # Preserve any partial delta for the next fixer to inspect, just
+            # like a killed fixer call; sealed-doc tampering was already
+            # restored by _enforce_sealed_artifacts before this check.
+            unit["killed_fix_notice"] = "consultation unavailable"
+            detail = str(output.get("notes") or "").strip()
+            reason = (
+                "%s consultation unavailable; transient retry requested"
+                % kind
+            )
+            if detail:
+                reason += ": %s" % detail[:500]
+            st.fail_run(
+                self.state,
+                reason,
+                unit=unit,
+                type_="unknown",
+                evidence="worker reported consultation_unavailable",
+            )
+            self._save()
+            raise StopStep("consultation unavailable")
         # type_="worker_blocked": a blocked worker is an OPERATOR-gated
         # stop (like goal_gap/gap_stall), not an unclassified transient —
         # left untyped it defaults to "unknown" and the service guard
@@ -1863,11 +1889,13 @@ class Driver(object):
         order and the reporter re-drafts after the remodel, so the producer
         may be the reporter itself or any unbuilt step placed before it —
         including a NEW slice inserted in the table (current_unit follows
-        table order, so an inserted step genuinely runs first). Only
-        already-sealed steps cannot be changed. Its proposal, when present,
-        is carried as CONTEXT and marked as a proposal — the fixer verifies
-        it against the sources, never adopts it on trust (reform decision
-        6)."""
+        table order, so an inserted step genuinely runs first). A sealed
+        step is not rerun and its historical episode is not reopened, but it
+        does not permanently own the files or code it introduced: the
+        reporting or newly inserted slice may modify them when the revised
+        skeleton assigns that work. Its proposal, when present, is carried
+        as CONTEXT and marked as a proposal — the fixer verifies it against
+        the sources, never adopts it on trust (reform decision 6)."""
         summary = (
             "REMODEL OBJECTIVE (a step downstream cannot proceed): %s. "
             "Update the skeleton design so this is resolved: specify which "
@@ -1875,7 +1903,11 @@ class Driver(object):
             "own scope — %s itself (the step that reported this and will "
             "re-draft against the remodel), or a step placed BEFORE it in "
             "the slice table (steps run in table order; a new slice inserted "
-            "there runs first). An already-sealed step cannot be changed. "
+            "there runs first). Do not rerun or assign new work to an "
+            "already-sealed step; instead assign the correction to one of "
+            "those unbuilt steps. That implementing step may modify code "
+            "first introduced by a sealed step when the revised scope "
+            "requires it; historical seals stay closed. "
             "Resolve: %s."
         ) % (
             gap.get("missing_or_conflict", ""), reporter_key,
@@ -1887,7 +1919,19 @@ class Driver(object):
                 "sources, do not adopt on trust): %s" % gap["proposal"]
             )
         finding = {"id": "GAP%d" % (i + 1), "severity": "P1",
-                   "summary": summary}
+                   "summary": summary,
+                   "validity": {
+                       "permitted_baseline": (
+                           "the goal is represented by a coherent skeleton "
+                           "that assigns every required implementation"
+                       ),
+                       "actual_outcome": gap.get("missing_or_conflict", ""),
+                       "incremental_harm": (
+                           "the reporting step cannot implement the goal "
+                           "until the design assigns the missing work"
+                       ),
+                       "exceeds_baseline": True,
+                   }}
         if gap.get("plain"):
             finding["plain"] = gap["plain"]
         if gap.get("example"):
@@ -3328,6 +3372,7 @@ class Driver(object):
                 "id": f["id"],
                 "severity": f["severity"],
                 "summary": f["summary"],
+                "validity": copy.deepcopy(f["validity"]),
                 "contests": f.get("contests"),
             }
             for f in output["findings"]
@@ -3448,6 +3493,19 @@ class Driver(object):
                     "severity": "P1",
                     "summary": "the verification suite failed (see the "
                     "verification output in this prompt)",
+                    "validity": {
+                        "permitted_baseline": (
+                            "the configured verification suite passes"
+                        ),
+                        "actual_outcome": (
+                            "the configured verification suite failed"
+                        ),
+                        "incremental_harm": (
+                            "the candidate cannot demonstrate its required "
+                            "verification gate"
+                        ),
+                        "exceeds_baseline": True,
+                    },
                 }
             ],
             "verification",
@@ -3765,6 +3823,7 @@ class Driver(object):
                     "id": f["id"],
                     "severity": f["severity"],
                     "summary": f["summary"],
+                    "validity": copy.deepcopy(f["validity"]),
                     "contests": f.get("contests"),
                 }
                 for f in fix_findings
@@ -4226,6 +4285,7 @@ class Driver(object):
                 "id": "%s-%s" % (fam, f["id"]),
                 "severity": f["severity"],
                 "summary": "[%s seal half] %s" % (fam, f["summary"]),
+                "validity": copy.deepcopy(f["validity"]),
                 "contests": f.get("contests"),
             }
             for f, fam in fix_seal_findings

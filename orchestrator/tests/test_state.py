@@ -49,11 +49,25 @@ def clean_review(kind=contracts.KIND_REVIEW_ROUND):
     return obj
 
 
+def finding_validity(exceeds=True):
+    return {
+        "permitted_baseline": "the documented behavior",
+        "actual_outcome": "the observed behavior",
+        "incremental_harm": (
+            "the observed behavior breaks the documented behavior"
+            if exceeds else "no harm beyond the documented behavior"
+        ),
+        "exceeds_baseline": exceeds,
+    }
+
+
 def dirty_review(kind=contracts.KIND_REVIEW_ROUND, n=1):
     # Reviewer findings carry NO disposition (whoever detects never fixes)
     # and report kinds must not claim file changes.
     findings = [
-        {"id": "F%d" % (i + 1), "severity": "P1", "summary": "issue %d" % (i + 1)}
+        {"id": "F%d" % (i + 1), "severity": "P1",
+         "summary": "issue %d" % (i + 1),
+         "validity": finding_validity(True)}
         for i in range(n)
     ]
     obj = {"status": "ok", "kind": kind, "findings": findings}
@@ -67,6 +81,7 @@ def fixed_finding(fid="F1", severity="P1"):
         "severity": severity,
         "summary": "issue %s" % fid,
         "disposition": "fixed",
+        "validity": finding_validity(True),
     }
 
 
@@ -78,6 +93,7 @@ def rejected_finding(fid="F1", resolution="the artifact is correct",
         "summary": summary or "issue %s" % fid,
         "disposition": "rejected",
         "consultation": {"resolution": resolution},
+        "validity": finding_validity(False),
     }
     if prevention is not None:
         f["prevention"] = prevention
@@ -91,6 +107,7 @@ def adjudicated_finding(fid, ref, severity="P2"):
         "summary": "duplicate of settled finding",
         "disposition": "rejected_adjudicated",
         "adjudication_ref": ref,
+        "validity": finding_validity(False),
     }
 
 
@@ -100,6 +117,7 @@ def blocked_finding(fid="F1"):
         "severity": "P0",
         "summary": "cannot proceed",
         "disposition": "blocked",
+        "validity": finding_validity(True),
     }
 
 
@@ -121,6 +139,7 @@ def verification_finding():
         "severity": "P1",
         "summary": "the verification suite failed (see the verification "
         "output in this prompt)",
+        "validity": finding_validity(True),
     }
 
 
@@ -130,13 +149,15 @@ def queued(finding):
         "id": finding["id"],
         "severity": finding["severity"],
         "summary": finding["summary"],
+        "validity": copy.deepcopy(finding["validity"]),
         "contests": finding.get("contests"),
     }
 
 
 def seal_half_result(n_findings=0):
     findings = [
-        {"id": "F%d" % (i + 1), "severity": "P2", "summary": "seal issue"}
+        {"id": "F%d" % (i + 1), "severity": "P2",
+         "summary": "seal issue", "validity": finding_validity(True)}
         for i in range(n_findings)
     ]
     obj = {"status": "ok", "kind": contracts.KIND_SEAL_HALF, "findings": findings}
@@ -549,7 +570,8 @@ class TestUnitLifecycle(TempWorkspaceCase):
         st.enter_fix_episode(
             state, impl,
             [{"id": "claude-F1", "severity": "P2",
-              "summary": "[claude seal half] seal issue", "contests": None}],
+              "summary": "[claude seal half] seal issue",
+              "validity": finding_validity(True), "contests": None}],
             "seal", None, "slice_impl-01-seal-a1", st.U_PRE_SEAL_VERIFY,
         )
         run_fix_episode_green(state, impl, [fixed_finding("claude-F1", "P2")])

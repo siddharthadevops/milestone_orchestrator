@@ -914,8 +914,8 @@ class TestDuplicateFindingIds(unittest.TestCase):
             "status": "ok",
             "kind": kind,
             "findings": [
-                {"id": "F1", "severity": "P2", "summary": "first"},
-                {"id": "F1", "severity": "P3", "summary": "second"},
+                finding("F1", "first", severity="P2"),
+                finding("F1", "second", severity="P3"),
             ],
         }
 
@@ -930,8 +930,8 @@ class TestDuplicateFindingIds(unittest.TestCase):
             "status": "ok",
             "kind": "review_round",
             "findings": [
-                {"id": "F1", "severity": "P2", "summary": "first"},
-                {"id": "F2", "severity": "P3", "summary": "second"},
+                finding("F1", "first", severity="P2"),
+                finding("F2", "second", severity="P3"),
             ],
         }
         self.assertIs(
@@ -943,10 +943,8 @@ class TestDuplicateFindingIds(unittest.TestCase):
             "status": "ok",
             "kind": "fix_findings",
             "findings": [
-                {"id": "F1", "severity": "P2", "summary": "a",
-                 "disposition": "fixed", "consultation": None},
-                {"id": "F1", "severity": "P2", "summary": "b",
-                 "disposition": "fixed", "consultation": None},
+                triaged("F1", "fixed", "a", severity="P2"),
+                triaged("F1", "fixed", "b", severity="P2"),
             ],
             "files_changed": [],
         }
@@ -961,8 +959,8 @@ class TestDuplicateFindingIdsEndToEnd(DriverTestCase):
             "status": "ok",
             "kind": "review_round",
             "findings": [
-                {"id": "F1", "severity": "P2", "summary": "first"},
-                {"id": "F1", "severity": "P3", "summary": "second"},
+                finding("F1", "first", severity="P2"),
+                finding("F1", "second", severity="P3"),
             ],
         }
         with tempfile.TemporaryDirectory(prefix="orch-adv-") as ws:

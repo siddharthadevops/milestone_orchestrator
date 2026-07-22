@@ -115,11 +115,24 @@ def report(kind, findings=()):
     return ok(kind, findings=list(findings))
 
 
+def validity(exceeds=True):
+    return {
+        "permitted_baseline": "the documented behavior",
+        "actual_outcome": "the observed behavior",
+        "incremental_harm": (
+            "the observed behavior breaks the documented behavior"
+            if exceeds else "no harm beyond the documented behavior"
+        ),
+        "exceeds_baseline": exceeds,
+    }
+
+
 def finding(fid, summary, severity="P3", contests=None, plain=None,
             example=None):
     # Every test finding carries the lay mirror by default: optional in
     # the base contract, hard-required under a reform profile.
     f = {"id": fid, "severity": severity, "summary": summary,
+         "validity": validity(True),
          "plain": plain or ("plain: %s" % summary),
          "example": example or ("example: %s" % summary)}
     if contests is not None:
@@ -141,6 +154,7 @@ def triaged(fid, disposition, summary="triaged finding", severity="P3",
         "summary": summary,
         "disposition": disposition,
         "consultation": consultation,
+        "validity": validity(disposition in ("fixed", "blocked")),
     }
     if prevention is not None:
         entry["prevention"] = prevention
@@ -688,9 +702,11 @@ class TestSealFindingsMerged(DriverTestCase):
                 [
                     {"id": "codex-S1", "severity": "P3",
                      "summary": "[codex seal half] missing usage docs",
+                     "validity": validity(True),
                      "contests": None},
                     {"id": "claude-S2", "severity": "P3",
                      "summary": "[claude seal half] missing error handling note",
+                     "validity": validity(True),
                      "contests": None},
                 ],
             )
@@ -1387,6 +1403,42 @@ class TestFixerProtocolFailures(DriverTestCase):
                  "queued=['F1']", "got=['X9']"],
                 unit_key="skeleton",
             )
+
+    def test_unavailable_consultation_retries_the_same_fix_episode(self):
+        retry = {
+            "status": "retry",
+            "kind": contracts.KIND_FIX_FINDINGS,
+            "retry_reason": contracts.RETRY_CONSULTATION_UNAVAILABLE,
+            "notes": "opposite family did not return a clear result",
+        }
+        with tempfile.TemporaryDirectory(prefix="orch-mock-") as ws:
+            path = init_state(ws, make_config())
+            mock = runners.MockRunner(
+                self._dirty_round_prefix()
+                + [step("fix_findings", retry, family="codex")]
+            )
+            driver = drv.Driver(path, runner=mock)
+            _actions, final = self.drive(driver)
+            self.assertEqual(final.type, drv.A_FAILED)
+
+            state = st.load(path)
+            unit = state["units"][0]
+            self.assertEqual(state["failure"]["type"], "unknown")
+            self.assertIn("consultation unavailable",
+                          state["failure"]["reason"])
+            self.assertEqual(unit["status"], st.U_FAILED)
+            self.assertEqual(unit["failed_from"], st.U_FIXING)
+            self.assertEqual([f["id"] for f in unit["fix_queue"]], ["F1"])
+            self.assertFalse([
+                r for r in unit["rounds"]
+                if r["kind"] == contracts.KIND_FIX_FINDINGS
+            ])
+            self.assertTrue(unit.get("killed_fix_notice"))
+
+            st.resume_run(state)
+            self.assertEqual(unit["status"], st.U_FIXING)
+            self.assertEqual([f["id"] for f in unit["fix_queue"]], ["F1"])
+            self.assertIsNone(state["failure"])
 
     def test_rejected_without_consultation_is_protocol_error(self):
         bad = fix_ok([triaged("F1", "rejected",

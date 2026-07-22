@@ -488,9 +488,9 @@ def validate_merged_output(obj, kind, extensions, roots,
     Returns the object unchanged on success. Worker-authored violations
     raise contracts.ContractError at the same point as the base validation,
     so call_worker's single repair retry applies unchanged. A validly
-    blocked OR gap output is exempt from extension enforcement (it produced no
-    artifact to audit); with no extensions the validation is exactly the
-    base one. require_plain/battery_questions (the reform's plain/example
+    blocked, retry, OR gap output is exempt from extension enforcement (it
+    produced no artifact to audit); with no extensions the validation is
+    exactly the base one. require_plain/battery_questions (the reform's plain/example
     hard-require and question battery) ride through to every base
     validation call — including the blocked early path, harmless there,
     keeping one shape.
@@ -506,16 +506,27 @@ def validate_merged_output(obj, kind, extensions, roots,
                 % type(ext).__name__
             )
     _require_distinct_fields(extensions)
-    if isinstance(obj, dict) and obj.get("status") in ("blocked", "gap"):
-        # blocked and gap both FINISH NOTHING — no artifact to audit, so they
-        # are exempt from extension/root enforcement (a gap payload carries no
-        # extension fields by contract). Base validation still checks their
-        # own contract (gap classification and required facts, blocked_reason).
+    if isinstance(obj, dict) and obj.get("status") in (
+        "blocked", "retry", "gap"
+    ):
+        # These statuses FINISH NOTHING — no artifact to audit, so they are
+        # exempt from extension/root enforcement. Base validation still
+        # checks their own contract. A retry is stricter: it must not smuggle
+        # an extension claim into an otherwise no-artifact response.
         contracts.validate_worker_output(
             obj, kind, require_plain=require_plain,
             battery_questions=battery_questions,
             require_drift_damage=require_drift_damage,
         )
+        if obj.get("status") == "retry":
+            ctx = "worker[%s]" % kind
+            for ext in extensions:
+                if ext.field in obj:
+                    raise contracts.ContractError(
+                        "%s: a retry response must not include project-"
+                        "contract field %r (nothing was finished)"
+                        % (ctx, ext.field)
+                    )
         return obj
     if extensions:
         _preflight_operator_roots(extensions, roots)

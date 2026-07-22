@@ -60,6 +60,8 @@ def parse_queued(prompt):
                 findings.append(
                     {"id": m.group(1), "severity": m.group(2), "summary": summary}
                 )
+            elif line.startswith("  "):
+                continue
             elif findings and not line.startswith("- "):
                 break
     return findings
@@ -184,6 +186,13 @@ def ok(kind, **extra):
 
 
 def report(kind, findings):
+    for finding in findings:
+        finding["validity"] = {
+            "permitted_baseline": "the documented calculator behavior",
+            "actual_outcome": finding["summary"],
+            "incremental_harm": "the candidate misses that behavior",
+            "exceeds_baseline": True,
+        }
     return ok(kind, findings=findings)
 
 
@@ -269,6 +278,20 @@ def respond(kind, family, workspace, count, prompt):
                     "summary": f["summary"],
                     "disposition": disposition,
                     "consultation": None,
+                    "validity": {
+                        "permitted_baseline": (
+                            "the documented calculator behavior"
+                        ),
+                        "actual_outcome": f["summary"],
+                        "incremental_harm": (
+                            "the candidate misses that behavior"
+                            if disposition in ("fixed", "blocked")
+                            else "no harm beyond the documented behavior"
+                        ),
+                        "exceeds_baseline": disposition in (
+                            "fixed", "blocked"
+                        ),
+                    },
                 }
                 entry.update(extra)
                 out.append(entry)

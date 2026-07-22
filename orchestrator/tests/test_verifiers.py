@@ -258,6 +258,14 @@ class TestFieldCollisions(unittest.TestCase):
             make_policy(field="artifact", kinds=["implement"])
         )
         self.assertEqual(ext.field, "artifact")
+        ext = verifiers.compile_policy(
+            make_policy(field="retry_reason", kinds=["implement"])
+        )
+        self.assertEqual(ext.field, "retry_reason")
+        with self.assertRaises(verifiers.PolicyConfigError):
+            verifiers.compile_policy(
+                make_policy(field="retry_reason", kinds=["fix_findings"])
+            )
 
     def test_reserved_keys_come_from_contracts_not_a_relisting(self):
         # Changing the exposed protocol keys changes what collides: the
@@ -285,6 +293,12 @@ class TestFieldCollisions(unittest.TestCase):
         self.assertIn(
             "suite_command_finding_id",
             contracts.reserved_output_keys("fix_findings"),
+        )
+        self.assertIn(
+            "retry_reason", contracts.reserved_output_keys("fix_findings")
+        )
+        self.assertNotIn(
+            "retry_reason", contracts.reserved_output_keys("implement")
         )
         self.assertIn("artifact", contracts.reserved_output_keys("draft_skeleton"))
         self.assertIn("findings", contracts.reserved_output_keys("seal_half"))
@@ -800,6 +814,29 @@ class TestMergedOutputValidation(FilesystemCase):
                 self._gap_output(), "implement", [ext], self.roots
             )
             self.assertEqual(out["status"], "gap")
+
+    def test_retry_output_is_exempt_but_cannot_claim_extension_work(self):
+        ext = verifiers.compile_policy(
+            make_policy(kinds=["fix_findings"], unit_kinds=["skeleton"])
+        )
+        retry = {
+            "status": "retry",
+            "kind": "fix_findings",
+            "retry_reason": contracts.RETRY_CONSULTATION_UNAVAILABLE,
+        }
+        self.assertIs(
+            verifiers.validate_merged_output(
+                retry, "fix_findings", [ext], self.roots
+            ),
+            retry,
+        )
+        claimed = dict(retry, reuse_audit=[])
+        with self.assertRaisesRegex(
+            contracts.ContractError, "must not include project-contract field"
+        ):
+            verifiers.validate_merged_output(
+                claimed, "fix_findings", [ext], self.roots
+            )
 
     def test_no_extensions_is_the_base_validation(self):
         # Valid without the extension field: nothing extra is demanded.

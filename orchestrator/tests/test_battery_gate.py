@@ -88,8 +88,17 @@ def _gap():
 def bare_finding(fid="F1", severity="P1"):
     """A finding WITHOUT the plain/example lay mirror (the fields the
     reform hard-requires; optional pre-reform)."""
-    return {"id": fid, "severity": severity,
-            "summary": "the doc boundary is unstated"}
+    return {
+        "id": fid,
+        "severity": severity,
+        "summary": "the doc boundary is unstated",
+        "validity": {
+            "permitted_baseline": "the documented boundary is explicit",
+            "actual_outcome": "the boundary is unstated",
+            "incremental_harm": "implementers cannot tell where to stop",
+            "exceeds_baseline": True,
+        },
+    }
 
 
 def full_finding(fid="F1", severity="P1"):

@@ -42,6 +42,7 @@ SEVERITIES = ("P0", "P1", "P2", "P3")
 # 13-minute strike). The doubled bound still stops runaway prose.
 FINDING_TEXT_MAX = 1000
 DISPOSITIONS = ("fixed", "rejected", "rejected_adjudicated", "blocked")
+RETRY_CONSULTATION_UNAVAILABLE = "consultation_unavailable"
 
 # Worker call kinds. Every prompt carries a `KIND:` header with one of these.
 KIND_DRAFT_SKELETON = "draft_skeleton"
@@ -112,6 +113,28 @@ def _optional(obj, key, types, ctx, default=None):
     return val
 
 
+def _validate_finding_validity(finding, ctx, expected_exceeds_baseline):
+    """Validate the evidence-backed comparison that makes a finding real.
+
+    Reviewers may report only outcomes outside the mechanism's permitted
+    operating envelope. Fixers repeat that comparison independently: an
+    accepted finding exceeds the baseline; a rejected one does not.
+    """
+    validity = _require(finding, "validity", dict, ctx)
+    vctx = "%s.validity" % ctx
+    for key in ("permitted_baseline", "actual_outcome", "incremental_harm"):
+        value = _require(validity, key, str, vctx)
+        if not value.strip():
+            raise ContractError("%s: key %r must be non-empty" % (vctx, key))
+    exceeds = _require(validity, "exceeds_baseline", bool, vctx)
+    if exceeds is not expected_exceeds_baseline:
+        raise ContractError(
+            "%s: exceeds_baseline must be %s for this finding outcome"
+            % (vctx, str(expected_exceeds_baseline).lower())
+        )
+    return validity
+
+
 def validate_slices(slices, ctx):
     """Validate a slice-plan list: every entry is {"id": int, "title": str},
     ids are true integers (bool is rejected: JSON true/false would alias
@@ -152,6 +175,12 @@ def validate_report_finding(finding, ctx, require_plain=False):
     sev = _require(finding, "severity", str, ctx)
     if sev not in SEVERITIES:
         raise ContractError("%s: severity %r not in %s" % (ctx, sev, SEVERITIES))
+    if finding.get("disposition") is not None:
+        raise ContractError(
+            "%s: reviewer findings carry no disposition (whoever detects "
+            "never fixes; triage belongs to the fixer)" % ctx
+        )
+    _validate_finding_validity(finding, ctx, expected_exceeds_baseline=True)
     # The lay-language mirror and the minimal failure example. Optional
     # for now (workers spawned before the fields existed must keep
     # validating); the prompt demands both.
@@ -178,11 +207,6 @@ def validate_report_finding(finding, ctx, require_plain=False):
                 "%s: missing or empty 'example' — this run REQUIRES both "
                 "'plain' and 'example' on every finding" % ctx
             )
-    if finding.get("disposition") is not None:
-        raise ContractError(
-            "%s: reviewer findings carry no disposition (whoever detects "
-            "never fixes; triage belongs to the fixer)" % ctx
-        )
     contests = _optional(finding, "contests", dict, ctx)
     if contests is not None:
         rid = contests.get("rejection_id")
@@ -214,6 +238,11 @@ def validate_fix_finding(finding, ctx):
         raise ContractError(
             "%s: disposition %r not in %s" % (ctx, disp, DISPOSITIONS)
         )
+    _validate_finding_validity(
+        finding,
+        ctx,
+        expected_exceeds_baseline=disp in ("fixed", "blocked"),
+    )
     consultation = _optional(finding, "consultation", dict, ctx)
     prevention = _optional(finding, "prevention", dict, ctx)
     if prevention is not None:
@@ -517,7 +546,7 @@ def validate_worker_output(obj, kind, require_plain=False,
     on every reviewer finding. battery_questions: when non-None, a doc
     draft (skeleton/slice note) must carry a `battery` answering exactly
     these question ids (reform §4). Both checks run only on `ok` outputs
-    — blocked and gap outputs are exempt (a gap finishes nothing).
+    — blocked, retry, and gap outputs are exempt (none finishes work).
 
     Returns the object unchanged on success; raises ContractError otherwise.
     """
@@ -528,9 +557,10 @@ def validate_worker_output(obj, kind, require_plain=False,
         raise ContractError("%s: output must be a JSON object" % ctx)
 
     status = _require(obj, "status", str, ctx)
-    if status not in ("ok", "blocked", "gap"):
+    if status not in ("ok", "blocked", "retry", "gap"):
         raise ContractError(
-            "%s: status %r not in ('ok','blocked','gap')" % (ctx, status)
+            "%s: status %r not in ('ok','blocked','retry','gap')"
+            % (ctx, status)
         )
     echoed = _require(obj, "kind", str, ctx)
     if echoed != kind:
@@ -552,6 +582,28 @@ def validate_worker_output(obj, kind, require_plain=False,
             raise ContractError(
                 "%s: blocked status requires a non-empty blocked_reason" % ctx
             )
+        return obj
+    if status == "retry":
+        if kind != KIND_FIX_FINDINGS:
+            raise ContractError(
+                "%s: retry status is only allowed for fix_findings" % ctx
+            )
+        reason = _require(obj, "retry_reason", str, ctx)
+        if reason != RETRY_CONSULTATION_UNAVAILABLE:
+            raise ContractError(
+                "%s: retry_reason must be %r"
+                % (ctx, RETRY_CONSULTATION_UNAVAILABLE)
+            )
+        for claim in (
+            "findings", "files_changed", "slices", "artifact", "gaps",
+            "battery", "suite_command", "suite_command_finding_id",
+            "design_correction", "design_correction_verdict",
+        ):
+            if claim in obj:
+                raise ContractError(
+                    "%s: a retry response must not include %r "
+                    "(nothing was finished)" % (ctx, claim)
+                )
         return obj
     if status == "gap":
         if kind not in GAP_ELIGIBLE_KINDS:
@@ -716,6 +768,7 @@ KIND_OUTPUT_KEYS = {
         {
             "findings", "files_changed", "slices", "suite_command",
             "suite_command_finding_id", "design_correction",
+            "retry_reason",
         }
     ),
 }
@@ -784,12 +837,18 @@ Respond with EXACTLY ONE JSON object and nothing else: no prose before or
 after it, no markdown fences. The object must satisfy:
 
 Common fields (all kinds):
-  "status": "ok" | "blocked"
+  "status": "ok" | "blocked" | "retry"
   "kind": "<echo the KIND header of this prompt>"
   "blocked_reason": string    (required when status is "blocked": explain
                                precisely what stops you; the run will end
                                with this explanation in the log)
   "notes": string             (optional, short)
+
+`status: "retry"` is allowed ONLY for kind fix_findings when its mandatory
+opposite-family consultation could not run or ended without a clear result:
+  "retry_reason": "consultation_unavailable"
+Return no findings or work claims with it. The driver records a transient
+failure and the process guard retries the same fix episode after 15 minutes.
 
 Kind draft_skeleton adds:
   "artifact": "<workspace-relative path of the skeleton document you wrote>"
@@ -815,6 +874,12 @@ the referenced finding must be disposed "fixed".
 REVIEW kinds (review_round / delta_review / seal_half) add:
   "findings": [
     {"id": "F1", "severity": "P0"|"P1"|"P2"|"P3", "summary": "...",
+     "validity": {
+       "permitted_baseline": "<the normal/allowed outcome under the goal,
+                              design, and declared guarantee posture>",
+       "actual_outcome": "<the concrete observed outcome>",
+       "incremental_harm": "<harm beyond that permitted baseline>",
+       "exceeds_baseline": true},
      "plain": "<ONE sentence, <500 chars, a non-engineer understands: name what is
       being built and what is actually wrong, in everyday words — e.g.
       'we are specifying a floating menu; the doc and the package README
@@ -843,7 +908,9 @@ REVIEW kinds (review_round / delta_review / seal_half) add:
   response. An empty findings list means the target is clean. EVERY
   finding MUST include `plain` AND `example` — a finding without its
   plain-language sentence and its smallest (<500 chars) concrete failure
-  scenario is incomplete. Before filing any finding, check the ADJUDICATED REJECTIONS list
+  scenario is incomplete. `validity.exceeds_baseline` MUST be true: if the
+  actual outcome stays within the permitted baseline, emit no finding.
+  Before filing any finding, check the ADJUDICATED REJECTIONS list
   in this prompt: if your finding challenges one of them you MUST fill
   `contests` with its id and genuinely new evidence; re-raising an
   adjudicated finding without new evidence is a protocol violation.
@@ -852,6 +919,12 @@ Kind fix_findings adds:
   "findings": [
     {"id": "<echo the queued finding's id>", "severity": "<echo>",
      "summary": "...",
+     "validity": {
+       "permitted_baseline": "<independently verified normal/allowed outcome>",
+       "actual_outcome": "<the concrete observed outcome>",
+       "incremental_harm": "<harm beyond that permitted baseline, or why
+                            there is none>",
+       "exceeds_baseline": true | false},
      "disposition": "fixed" | "rejected" | "rejected_adjudicated" | "blocked",
      "consultation": null | {"resolution": "<one-paragraph outcome of the
                               opposite-family dialogue you ran>"},
@@ -868,14 +941,16 @@ Kind fix_findings adds:
    change leaves the added slices unbuilt. Omit it when the table is
    untouched.)
   Rules: triage EXACTLY the queued findings (same ids, nothing else).
-  Verify each against the real code/doc before deciding. "rejected"
+  Verify each against the real code/doc before deciding. `fixed` and
+  `blocked` require `validity.exceeds_baseline: true`; `rejected` and
+  `rejected_adjudicated` require false. "rejected"
   REQUIRES the consultation; when the target was correct but misreadable,
   ALSO make the minimal clarifying edit and record it in `prevention` so
   the finding cannot keep being reborn. "rejected_adjudicated" is for
   findings duplicating an entry of the ADJUDICATED REJECTIONS list without
   new evidence: cite it in adjudication_ref, no consultation needed, do
   not re-litigate. Use "blocked" only when neither fixing nor a justified
-  rejection is possible (an unresolved or unavailable consultation means a
-  justified rejection is NOT possible); the run will stop and show your
-  reason.
+  rejection is possible for a CONFIRMED finding; the run will stop and show
+  your reason. An unresolved or unavailable consultation is NOT a finding
+  disposition: return top-level `status: "retry"` as specified above.
 """

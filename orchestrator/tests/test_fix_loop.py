@@ -123,6 +123,20 @@ class TestFixLoopSameEpisode(DriverTestCase):
             self.assertEqual(fixes[1]["source_round_id"], "skeleton-codex-r3")
             self.assertEqual(
                 [f["id"] for f in fixes[1]["result"]["findings"]], ["D1"])
+            fix_prompts = [
+                prompt for (_family, kind, prompt) in mock.calls
+                if kind == "fix_findings"
+            ]
+            self.assertEqual(len(fix_prompts), 2)
+            for prompt in fix_prompts:
+                self.assertIn(
+                    "permitted_baseline: the documented behavior", prompt
+                )
+                self.assertIn(
+                    "incremental_harm: the observed behavior breaks the "
+                    "documented behavior",
+                    prompt,
+                )
             # Same episode: the loop counter reached 2 and only ONE episode
             # was ever opened from rounds.
             self.assertEqual(unit["fix_loop_rounds"], 2)

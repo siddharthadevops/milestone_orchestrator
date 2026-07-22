@@ -30,7 +30,17 @@ WORKSPACE = "/tmp/ws"
 GOAL = "One-call workspace discovery"
 UNIT = "slice 1 (core)"
 SLICE = {"id": 1, "title": "core"}
-FINDINGS = [{"id": "R1-F1", "severity": "P2", "summary": "off-by-one"}]
+FINDINGS = [{
+    "id": "R1-F1",
+    "severity": "P2",
+    "summary": "off-by-one",
+    "validity": {
+        "permitted_baseline": "BASELINE_SENTINEL",
+        "actual_outcome": "OUTCOME_SENTINEL",
+        "incremental_harm": "HARM_SENTINEL",
+        "exceeds_baseline": True,
+    },
+}]
 
 EDIT_BUILDERS = (
     "draft_skeleton",
@@ -168,6 +178,29 @@ class TestProcessAuthorityInEveryBuilder(unittest.TestCase):
                     "contract meaning",
                     flat,
                 )
+
+    def test_seal_closes_history_without_owning_code_forever(self):
+        for name, prompt in build_all().items():
+            with self.subTest(builder=name):
+                flat = normalized(prompt)
+                self.assertIn(
+                    "does NOT grant permanent ownership of files or code",
+                    flat,
+                )
+                self.assertIn(
+                    "the historical unit remains sealed and is not rerun",
+                    flat,
+                )
+
+    def test_remodel_assignment_can_modify_earlier_code(self):
+        prompt = normalized(prompts.build_implement(
+            FAMILY, WORKSPACE, GOAL, SLICE, "docs/slice-01.md",
+            ["make test"], skeleton_path="docs/skeleton.md",
+            remodeled=True,
+        ))
+        self.assertIn("File provenance is not scope ownership", prompt)
+        self.assertIn("code first introduced by an already-sealed slice",
+                      prompt)
 
 
 class TestAccessModelStillIntact(unittest.TestCase):
@@ -323,6 +356,17 @@ class TestExistingPromptInvariants(unittest.TestCase):
                 continue
             with self.subTest(builder=name):
                 self.assertNotIn(self.CONSULTATION_MARKER, built[name])
+
+    def test_consultation_rechecks_baseline_relative_damage(self):
+        prompt = normalized(build_all()["fix_findings"])
+        for field in ("permitted_baseline", "actual_outcome",
+                      "incremental_harm", "exceeds_baseline"):
+            self.assertIn(field, prompt)
+        self.assertIn("not damage without a distinct outcome beyond its "
+                      "allowed envelope", prompt)
+        for value in ("BASELINE_SENTINEL", "OUTCOME_SENTINEL",
+                      "HARM_SENTINEL"):
+            self.assertIn(value, prompt)
 
     def test_registry_entries_rendered_when_present(self):
         registry = [
@@ -684,6 +728,22 @@ class TestPortedCanonContentRules(unittest.TestCase):
                 self.assertIn(gate, surface)
                 self.assertIn(victim, surface)
 
+    def test_baseline_relative_validity_reaches_reviewers_and_fixer(self):
+        fields = ("permitted_baseline", "actual_outcome",
+                  "incremental_harm", "exceeds_baseline")
+        surfaces = [build_all()["fix_findings"]]
+        for kind in ("slice_doc", "slice_impl", "skeleton"):
+            surfaces.extend((self.review(kind), self.seal(kind),
+                             self.delta(kind)))
+        for surface in surfaces:
+            flat = normalized(surface)
+            self.assertIn("PERMITTED BASELINE", flat)
+            self.assertIn("delta BEYOND the permitted baseline", flat)
+            for field in fields:
+                self.assertIn(field, flat)
+        self.assertNotIn("ttl", prompts.FINDING_VALIDITY_BLOCK.lower())
+        self.assertNotIn("race", prompts.FINDING_VALIDITY_BLOCK.lower())
+
     def test_slice_note_checklist_reaches_author_and_reviewers(self):
         checklist = ("scope, non-goals, dependencies, "
                      "acceptance criteria, tests, risks, reuse posture, "
@@ -751,19 +811,23 @@ class TestPortedCanonContentRules(unittest.TestCase):
         self.assertIn("Never reject a P0 or P1 finding without a clear "
                       "consultation resolution", prompt)
 
-    def test_unresolved_consultation_blocks_never_concedes(self):
-        # Canon: an unresolved dispute escalates (README.md:250-252); the
-        # regime's escalation is 'blocked'. A silent concede-and-fix
-        # branch must never exist — it would apply disputed findings
-        # with no operator visibility and no registry record.
+    def test_unresolved_consultation_retries_never_concedes(self):
+        # An unresolved dispute is a transient CALL failure, not evidence
+        # that the finding exceeds its permitted baseline. The fixer returns
+        # no disposition; the guard retries the same queue after 15 minutes.
         prompt = self.fix("slice_impl")
         self.assertIn("an unresolved dispute means a justified rejection "
                       "is NOT possible", prompt)
-        self.assertIn("never silently concede, never reject", prompt)
+        self.assertIn("top-level status 'retry'", prompt)
+        self.assertIn("retry_reason 'consultation_unavailable'", prompt)
+        self.assertIn("after 15 minutes", prompt)
+        self.assertIn("Never mark the finding 'blocked'", prompt)
+        self.assertIn("silently concede, or reject", prompt)
         self.assertNotIn("reasonably fixable", prompt)
-        self.assertIn("an unresolved or unavailable consultation means a "
-                      "justified rejection is NOT possible",
-                      normalized(contracts.CONTRACT_TEXT))
+        contract = normalized(contracts.CONTRACT_TEXT)
+        self.assertIn("An unresolved or unavailable consultation is NOT a "
+                      "finding disposition", contract)
+        self.assertIn('status: "retry"', contract)
 
     def test_delta_review_is_exhaustive_and_knows_its_standard(self):
         prompt = normalized(prompts.build_delta_review(

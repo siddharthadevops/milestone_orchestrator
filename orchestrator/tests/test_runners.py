@@ -132,9 +132,22 @@ def ok_output(kind, **extra):
     return base
 
 
+def finding_validity(exceeds=True):
+    return {
+        "permitted_baseline": "the documented behavior",
+        "actual_outcome": "the observed behavior",
+        "incremental_harm": (
+            "the observed behavior breaks the documented behavior"
+            if exceeds else "no harm beyond the documented behavior"
+        ),
+        "exceeds_baseline": exceeds,
+    }
+
+
 def report_finding(severity="P2", contests=None):
     """A reviewer finding: no disposition (reviewers never triage)."""
-    f = {"id": "F1", "severity": severity, "summary": "a finding"}
+    f = {"id": "F1", "severity": severity, "summary": "a finding",
+         "validity": finding_validity(True)}
     if contests is not None:
         f["contests"] = contests
     return f
@@ -148,6 +161,9 @@ def full_finding(disposition="fixed", severity="P2", consultation=None,
         "severity": severity,
         "summary": "a finding",
         "disposition": disposition,
+        "validity": finding_validity(
+            disposition in ("fixed", "blocked")
+        ),
     }
     if consultation is not None:
         f["consultation"] = consultation
@@ -193,6 +209,81 @@ class TestValidateWorkerOutputHappy(unittest.TestCase):
         )
         contracts.validate_worker_output(obj, contracts.KIND_REVIEW_ROUND)
         self.assertFalse(contracts.findings_clean(obj))
+
+    def test_report_finding_requires_a_real_baseline_delta(self):
+        missing = report_finding()
+        del missing["validity"]
+        with self.assertRaisesRegex(contracts.ContractError, "validity"):
+            contracts.validate_worker_output(
+                ok_output(contracts.KIND_REVIEW_ROUND, findings=[missing]),
+                contracts.KIND_REVIEW_ROUND,
+            )
+
+        inside_baseline = report_finding()
+        inside_baseline["validity"] = finding_validity(False)
+        with self.assertRaisesRegex(contracts.ContractError,
+                                    "exceeds_baseline must be true"):
+            contracts.validate_worker_output(
+                ok_output(
+                    contracts.KIND_REVIEW_ROUND,
+                    findings=[inside_baseline],
+                ),
+                contracts.KIND_REVIEW_ROUND,
+            )
+
+        wrong_type = report_finding()
+        wrong_type["validity"]["exceeds_baseline"] = 1
+        with self.assertRaisesRegex(contracts.ContractError, "expected"):
+            contracts.validate_worker_output(
+                ok_output(
+                    contracts.KIND_REVIEW_ROUND,
+                    findings=[wrong_type],
+                ),
+                contracts.KIND_REVIEW_ROUND,
+            )
+
+    def test_validity_explanations_are_non_empty_strings(self):
+        for key in ("permitted_baseline", "actual_outcome",
+                    "incremental_harm"):
+            with self.subTest(key=key):
+                finding = report_finding()
+                finding["validity"][key] = "  "
+                with self.assertRaisesRegex(contracts.ContractError,
+                                            "must be non-empty"):
+                    contracts.validate_worker_output(
+                        ok_output(
+                            contracts.KIND_REVIEW_ROUND,
+                            findings=[finding],
+                        ),
+                        contracts.KIND_REVIEW_ROUND,
+                    )
+
+    def test_fixer_disposition_must_match_the_baseline_delta(self):
+        cases = (
+            full_finding("fixed", validity=finding_validity(False)),
+            full_finding("blocked", validity=finding_validity(False)),
+            full_finding(
+                "rejected",
+                consultation={"resolution": "both families agree"},
+                validity=finding_validity(True),
+            ),
+            full_finding(
+                "rejected_adjudicated",
+                adjudication_ref="skeleton-claude-r1/F1",
+                validity=finding_validity(True),
+            ),
+        )
+        for finding in cases:
+            with self.subTest(disposition=finding["disposition"]):
+                with self.assertRaisesRegex(contracts.ContractError,
+                                            "exceeds_baseline"):
+                    contracts.validate_worker_output(
+                        ok_output(
+                            contracts.KIND_FIX_FINDINGS,
+                            findings=[finding],
+                        ),
+                        contracts.KIND_FIX_FINDINGS,
+                    )
 
     def test_report_finding_accepts_the_plain_language_mirror(self):
         # `plain` (one lay-language sentence naming what is being built
@@ -314,7 +405,12 @@ class TestValidateWorkerOutputHappy(unittest.TestCase):
     def test_seal_half_report_only_finding(self):
         obj = ok_output(
             contracts.KIND_SEAL_HALF,
-            findings=[{"id": "F1", "severity": "P1", "summary": "leak"}],
+            findings=[{
+                "id": "F1",
+                "severity": "P1",
+                "summary": "leak",
+                "validity": finding_validity(True),
+            }],
         )
         self.assertIs(
             contracts.validate_worker_output(obj, contracts.KIND_SEAL_HALF), obj
@@ -346,6 +442,20 @@ class TestValidateWorkerOutputHappy(unittest.TestCase):
                 }
                 # Blocked outputs need no kind-specific payload.
                 self.assertIs(contracts.validate_worker_output(obj, kind), obj)
+
+    def test_fixer_may_request_a_consultation_retry(self):
+        obj = {
+            "status": "retry",
+            "kind": contracts.KIND_FIX_FINDINGS,
+            "retry_reason": contracts.RETRY_CONSULTATION_UNAVAILABLE,
+            "notes": "opposite family did not return a clear result",
+        }
+        self.assertIs(
+            contracts.validate_worker_output(
+                obj, contracts.KIND_FIX_FINDINGS
+            ),
+            obj,
+        )
 
 
 class TestValidateWorkerOutputViolations(unittest.TestCase):
@@ -398,6 +508,26 @@ class TestValidateWorkerOutputViolations(unittest.TestCase):
             },
             contracts.KIND_IMPLEMENT,
             "blocked_reason",
+        )
+
+    def test_retry_is_only_for_a_bare_consultation_failure(self):
+        base = {
+            "status": "retry",
+            "kind": contracts.KIND_FIX_FINDINGS,
+            "retry_reason": contracts.RETRY_CONSULTATION_UNAVAILABLE,
+        }
+        wrong_kind = dict(base, kind=contracts.KIND_IMPLEMENT)
+        self.assertContract(
+            wrong_kind, contracts.KIND_IMPLEMENT, "only allowed"
+        )
+        wrong_reason = dict(base, retry_reason="something_else")
+        self.assertContract(
+            wrong_reason, contracts.KIND_FIX_FINDINGS,
+            "consultation_unavailable",
+        )
+        with_claim = dict(base, findings=[])
+        self.assertContract(
+            with_claim, contracts.KIND_FIX_FINDINGS, "must not include"
         )
 
     def test_skeleton_missing_artifact(self):
@@ -1080,6 +1210,7 @@ class TestUnterminatedEnvelopeRecovery(unittest.TestCase):
         finding = {
             "id": "F1", "severity": "P3", "summary": "s",
             "plain": "p", "example": "e",
+            "validity": finding_validity(True),
         }
         text = (
             '{"status": "ok", "kind": "review_round", "findings": ['
@@ -1099,6 +1230,7 @@ class TestUnterminatedEnvelopeRecovery(unittest.TestCase):
         finding = {
             "id": "F1", "severity": "P3", "summary": "s",
             "plain": "p", "example": "e",
+            "validity": finding_validity(True),
         }
         for tail in ("", "]"):   # cut mid-array, and after the array closed
             text = (
