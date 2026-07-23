@@ -21,3 +21,18 @@
 - `codex-F4` (raised codex, cleared codex): The Slice 8 reuse posture omits the existing provisional design-correction path, including integrity checks, rollback, independent delta ratification, and note-gate preservation. The new independent discussion remains justified, but its milestone adapter lacks a reuse mandate for the closest approved amendment machinery. This is maintenance/design debt with no current behavioral victim, so P3. — The skeleton requires normal delta review but does not pin Slice 8 to the existing correction lane, so a capable builder could silently create a parallel rollback and ratification adapter, while correcting that mistake would remain bounded rework within Slice 8 and its own tests and review.
 - `claude-F1` (raised claude, cleared codex): The Verification Contract's milestone-close coverage list (skeleton.md:126-134) omits 'unresolved closure at the round limit', one of the sixteen test topics mandated by goal acceptance item 14 (goal.md:368-374); the other fifteen topics are all represented, so the skeleton's stated close condition is strictly weaker than the mandate on exactly this scenario, and 'both terminal results including failure before a completed turn' names a different failure trigger, not round exhaustion. — The explicitly exhaustive close checklist omits a mandated test and can therefore silently authorize incomplete coverage despite the correct behavior being pinned elsewhere, but correction is only a focused round-exhaustion test and any small local closure fix it exposes.
 
+## slice_doc-01 (Session contract and durable state)
+
+- draft: kind `draft_slice_note`, artifact `implementation/milestones/brainstorming/slices/slice-01.md` (raw: `implementation/milestones/brainstorming/.run/raw/slice_doc-01-draft.txt`)
+
+| Round | Kind | Family | Findings | Triage | Raw |
+|---|---|---|---|---|---|
+| slice_doc-01-codex-r1 | review_round | codex | 1 | 1 reported | `implementation/milestones/brainstorming/.run/raw/slice_doc-01-codex-r1.txt` |
+| slice_doc-01-claude-r1 | review_round | claude | 0 | clean | `implementation/milestones/brainstorming/.run/raw/slice_doc-01-claude-r1.txt` |
+
+### Seal attempt a1 — PASSED
+
+
+**Deferred debt (opposite-family verified):**
+- `codex-F1` (raised codex, cleared codex): Participant resolution has no enforceable input or ownership seam — The note simultaneously treats the roster as caller-resolved and requires family-aware service resolution without an eligible-candidate input, so a capable builder should stop on the contradiction rather than drift silently, while any missed interpretation would require bounded contract, resolver, a
+
