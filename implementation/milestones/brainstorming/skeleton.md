@@ -22,10 +22,10 @@ milestone does not build that adapter.
 
 ### Guarantee Posture
 
-- **Strict:** accepted requests and participant rosters are validated; roles
-  and turn order are fixed for the run; only the lead changes the target;
-  complete rounds, target revisions, votes, terminal results, and the ordered
-  human transcript agree with durable state.
+- **Strict:** accepted requests and rosters are validated; roles and turn order
+  are fixed; only the lead changes the target; a turn is accepted only after
+  worker quiescence and a target-ownership check; rounds, revisions, votes,
+  results, and the ordered human transcript agree with durable state.
 - **Best-effort:** frozen-process detection inherits the existing measurable
   CPU, process-set, and output-progress watchdog. An unmeasurable interval is
   treated as live; this milestone does not claim perfect provider liveness or
@@ -56,8 +56,8 @@ milestone does not build that adapter.
   liveness and stop propagation; workspace-change detection; inherited root
   context; and the service's lifecycle, access, and projection conventions.
 - **Extended:** a separate brainstorming lifecycle, durable discussion state,
-  persistent logical participant sessions, target-revision closure, human
-  transcript, standalone interface, and one milestone adapter.
+  persistent participant sessions, exclusive quiescent turn acceptance,
+  revision-bound closure, transcript, standalone interface, and one adapter.
 - **Why new machinery:** today's workers and fixer consultation are bounded
   one-shot calls. They neither maintain a multi-party discussion nor let one
   designated lead progressively revise a target, and milestone rounds cannot
@@ -89,7 +89,7 @@ milestone does not build that adapter.
 | cheaper_alternative | Doing nothing preserves the full-reset cost. Extending today's fixer consultation is cheaper but rejected: it exists only to decide a finding rejection, permits at most two dialogue rounds, and has no target-construction lifecycle. Reusing milestone review rounds is rejected by the independent-process mandate; the low-level validation, state, process, context, access, and projection machinery is reused instead. | `implementation/milestones/brainstorming/goal.md:30-54`; `orchestrator/prompts.py:211-238`; `orchestrator/runners.py:1-14` |
 | cost | Build: eight narrow slices across contracts/state, participant execution, coordination, transcript, closure, standalone API/view, and the milestone adapter. Migration: additive brainstorming state plus an additive Milestone worker-result/transition path; no milestone-ledger, target-data, or Agent99 migration. Maintenance: provider continuation compatibility, lifecycle schemas, transcript/closure conformance, and one additional service projection. | this skeleton, Planned Slices; `implementation/milestones/brainstorming/goal.md:336-374`; `orchestrator/contracts.py:538-645` |
 | threat_model | No new remote attacker or permission model is introduced. Trusted inputs are operator/product configuration and the caller-resolved execution context. Untrusted inputs are participant-produced control envelopes and claims or content found in supplied context/references; envelopes are validated, context is examined rather than obeyed as authority, and only the lead may change the target. Existing service identity and project/run access remain the external boundary. | `implementation/milestones/brainstorming/goal.md:85-89,137-160,164-183`; `orchestrator/runners.py:986-1053`; `orchestrator/access.py:41-58`; `orchestrator/service.py:2668-2695` |
-| enforceability | Existing mechanisms can enforce structured envelopes, atomic append-only history, legal transitions, edit/no-edit boundaries, inherited roots, process-group supervision, stop propagation, and eventual UI projection. Two mechanisms do not exist yet: the current runner is one-shot, so Slice 2 must pin and test a provider-neutral logical-session continuation seam before persistent or same-session claims are valid; Slice 5 must add explicit revision/vote transitions before deterministic closure is valid. No dependent slice may claim either guarantee earlier. | `orchestrator/contracts.py:454-517,538-645`; `orchestrator/state.py:221-317,393-440`; `orchestrator/runners.py:30-58,548-642,739-783,1121-1191`; `orchestrator/driver.py:911-958,2662-2676`; `orchestrator/service.py:1815-1886`; `orchestrator/static/panel.html:1263-1270,1749-1759,3178-3193`; this skeleton, Planned Slices 2 and 5 |
+| enforceability | Existing mechanisms can enforce structured envelopes, atomic append-only history, legal transitions, inherited roots, process-group supervision, stop propagation, and eventual UI projection. Three extensions are required: Slice 2 pins provider-neutral logical-session continuation; Slice 3 owns exclusive worker admission, quiescence, and final target observation before append-only turn acceptance; Slice 5 adds explicit revision/vote transitions. No dependent slice may claim persistent sessions, strict lead-only accepted state, or deterministic closure before its gate exists. | `orchestrator/contracts.py:454-517,538-645`; `orchestrator/state.py:221-317,393-440`; `orchestrator/runners.py:30-58,548-642,739-783,1121-1191`; `orchestrator/driver.py:911-958,2662-2676`; `orchestrator/service.py:1815-1886`; `orchestrator/static/panel.html:1263-1270,1749-1759,3178-3193`; this skeleton, Planned Slices 2, 3, and 5; Operator Amendment A1, **Target versioning clarification** |
 
 ## Register 2 — Pinned Facts
 
@@ -99,8 +99,8 @@ milestone does not build that adapter.
 | Request and context | Required request names are `workspace_path`, `target_path`, `question`, `context`, and `max_rounds`. `context.brief` is non-empty; ordered `references` is optional; JSON-compatible `source_payload` is optional, preserved unchanged, and never drives core workflow. `target_path` is always the output; consulted material stays context. Caller/session/timestamp metadata may not alter the request or resolved roster. There is no answer-options field or problem/domain type. | `implementation/milestones/brainstorming/goal.md:65-115` | touch generic contract; do-not-add taxonomy or interpret `source_payload` |
 | Resolved roster | Before execution, persist each participant's stable id, role, executor reference, model family, and turn order; require exactly one lead and at least one interlocutor. Prefer different families, but permit and record independent same-family fallback. | `implementation/milestones/brainstorming/goal.md:91-104` | touch session resolution; do-not-leave roles as process-global defaults |
 | Execution context | `workspace_path` is orientation, not confinement. Inherit the caller's tools, environment, primary/additional roots, sibling access, and access rules; define no new permission or work-area policy. | `implementation/milestones/brainstorming/goal.md:148-160`; `orchestrator/driver.py:911-958`; `orchestrator/prompts.py:584-619` | touch pass-through only; do-not-resolve or narrow roots again |
-| Participant supervision | Each participant retains one logical CLI session across the discussion. Reuse current process-group CPU/process-set/output liveness and stop propagation. Liveness detection is best-effort; no new idempotency or provider-internal assumption. | `implementation/milestones/brainstorming/goal.md:177-183`; `orchestrator/runners.py:30-58,548-642,739-783` | touch participant-session adapter; do-not-create parallel supervision |
-| Roles and rounds | Only the lead edits `target_path`; interlocutors analyze and the coordinator only orders/validates. A round is one completed turn per persisted participant in order; only a complete pass increments `rounds_used`; control and ballot events consume no round. | `implementation/milestones/brainstorming/goal.md:162-179,230-241` | touch coordinator and edit guard; do-not-allow other writers or partial-round counts |
+| Participant supervision | Each participant retains one logical CLI session across the discussion. Slice 3 owns an exclusive turn-acceptance window: before an outcome may become a completed turn, every supervised local process from that attempt must be quiescent; the provider-side logical session may persist. Reuse current process-group CPU/process-set/output liveness and stop propagation. Liveness detection is best-effort; no new idempotency or provider-internal assumption. | `implementation/milestones/brainstorming/goal.md:177-183`; `orchestrator/runners.py:30-58,548-642,739-783` | touch Slice 3 coordination and the existing execution seam only as needed to establish quiescence; do-not-create parallel supervision |
+| Roles and rounds | Only the lead edits `target_path`; interlocutors analyze and the coordinator only orders/validates. A valid envelope becomes a completed turn only after the exclusive acceptance window has reached worker quiescence and the final target-ownership check. No competing or later attempt may overlap that window. A round is one completed turn per persisted participant in order; only a complete pass increments `rounds_used`; control and ballot events consume no round. | `implementation/milestones/brainstorming/goal.md:162-179,230-241`; Operator Amendment A1, **Target versioning clarification** | touch Slice 3 coordinator, edit guard, and focused tests; do-not-allow overlapping writers or partial-round counts |
 | Human transcript | The append-only transcript is named `chat.md`. Before any turn, its plain opening names the question/reason, target, participants/lead, closure rule, and round cap. Every completed turn records the human-facing name and round; only material interruptions appear. Its closing always records agreement/result reason, produced or unfinished target, completed rounds, and unresolved objections, even when no turn completes. Machine identifiers, telemetry, and raw diagnostics stay elsewhere. | `implementation/milestones/brainstorming/goal.md:185-228`; `orchestrator/state.py:221-317` | touch transcript projection; do-not-turn it into a process log |
 | Closure and result | Votes are exactly `accept` or `object` against one identifiable target revision; edits invalidate prior votes. `unanimity` requires every participant; `majority_with_lead_tiebreak` uses one vote each, strict majority, and the lead on an exact tie. A failed vote resumes discussion while rounds remain. Terminal results are exactly `success` or `failure`; round exhaustion is `failure`, partial work is never promoted, and the inspectable target/state plus target/transcript references, `rounds_used`, and failure reason remain available. | `implementation/milestones/brainstorming/goal.md:243-279` | touch closure/result state; do-not-add core caller actions |
 | Contextual closing record | Every participant uses the same scope, real-affected-parties, damage-altitude, comparable-rigor, proportionality, and escalation-evidence check. The closing account records affected parties, damage altitude, proportionality, and concrete escalation evidence without inventing victims, guarantees, threats, or preferences. | `implementation/milestones/brainstorming/goal.md:117-146,351-357` | touch common participant prompt and closing projection; do-not-add domain taxonomy |
@@ -127,11 +127,11 @@ Each slice adds focused contract and lifecycle checks for the surface it owns.
 The milestone closes only when the repository's full suite
 (`python3 -m unittest discover -s orchestrator/tests -t .`) covers standalone
 operation, participant/family resolution, persistent logical sessions,
-complete-pass accounting, transcript boundaries and order, lead-only target
-construction, both closure policies and vote invalidation, both terminal
-results including failure before a completed turn, opaque context and
-multi-root pass-through, liveness/stop behavior, both milestone return routes,
-and the motivating amendment flow.
+worker-quiescent turn acceptance, complete-pass accounting, transcript
+boundaries and order, lead-only target construction, both closure policies and
+vote invalidation, both terminal results including failure before a completed
+turn, opaque context and multi-root pass-through, liveness/stop behavior, both
+milestone return routes, and the motivating amendment flow.
 
 Authority: `implementation/milestones/brainstorming/goal.md:336-374`;
 `orchestrator/README.md:309-319`.

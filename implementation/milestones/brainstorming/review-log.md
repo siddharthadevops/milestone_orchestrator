@@ -10,9 +10,18 @@
 |---|---|---|---|---|---|
 | skeleton-codex-r1 | review_round | codex | 4 | 4 reported | `implementation/milestones/brainstorming/.run/raw/skeleton-codex-r1.txt` |
 | skeleton-claude-r1 | review_round | claude | 1 | 1 reported | `implementation/milestones/brainstorming/.run/raw/skeleton-claude-r1.txt` |
+| skeleton-codex-r2 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/brainstorming/.run/raw/skeleton-fix1.txt` |
+| skeleton-codex-r3 | delta_review | codex | 0 | clean | `implementation/milestones/brainstorming/.run/raw/skeleton-delta1.txt` |
 
 ### Seal attempt a1 — PASSED
 
+
+### Seal attempt a2 — PASSED
+
+- claude half: 0 finding(s); workspace_modified=False; raw `implementation/milestones/brainstorming/.run/raw/skeleton-seal-a2-claude.txt`
+- codex half: 2 finding(s); workspace_modified=False; raw `implementation/milestones/brainstorming/.run/raw/skeleton-seal-a2-codex.txt`
+  - [P2] Slice 3 omits the mandatory contextualization check from its turn-view and verification contracts. This breaks a required prompt contract on every turn; the operator and target quality are affected, while damage remains bounded and reversible through later review.
+  - [P3] Slice 1's size posture contradicts its delivered scope and records no permitted overrun rationale.
 
 **Deferred debt (opposite-family verified):**
 - `codex-F1` (raised codex, cleared codex): Standalone authorization is under-specified. The cited access check authorizes milestone registry entries, but brainstorming state lives outside that ledger and the skeleton defines no equivalent session-to-caller/project binding. This breaks the inherited-access guarantee in normal standalone use; exposure is not yet implemented, so P2 rather than P1. — This is an authorization-correctness omission, but a capable builder must confront access control when defining the standalone API and should infer the durable project binding from the explicitly reused service conventions or stop for repair, while any miss requires bounded state, endpoint, and test
@@ -20,6 +29,8 @@
 - `codex-F3` (raised codex, cleared codex): The human transcript contract drops a mandated closure record. The goal requires the target revision, every vote, and applied policy in the transcript, while the skeleton's transcript slice and verification list only opening, turns, interruptions, closing, boundaries, and order. The operator loses a normal-use audit trail, although structured state limits damage to P2. — The skeleton repeatedly specifies a complete transcript without requiring its mandated target revision, individual votes, or applied policy, so a capable builder could silently omit them, but the exact evidence remains in structured state and correction is a small local transcript-and-test change on
 - `codex-F4` (raised codex, cleared codex): The Slice 8 reuse posture omits the existing provisional design-correction path, including integrity checks, rollback, independent delta ratification, and note-gate preservation. The new independent discussion remains justified, but its milestone adapter lacks a reuse mandate for the closest approved amendment machinery. This is maintenance/design debt with no current behavioral victim, so P3. — The skeleton requires normal delta review but does not pin Slice 8 to the existing correction lane, so a capable builder could silently create a parallel rollback and ratification adapter, while correcting that mistake would remain bounded rework within Slice 8 and its own tests and review.
 - `claude-F1` (raised claude, cleared codex): The Verification Contract's milestone-close coverage list (skeleton.md:126-134) omits 'unresolved closure at the round limit', one of the sixteen test topics mandated by goal acceptance item 14 (goal.md:368-374); the other fifteen topics are all represented, so the skeleton's stated close condition is strictly weaker than the mandate on exactly this scenario, and 'both terminal results including failure before a completed turn' names a different failure trigger, not round exhaustion. — The explicitly exhaustive close checklist omits a mandated test and can therefore silently authorize incomplete coverage despite the correct behavior being pinned elsewhere, but correction is only a focused round-exhaustion test and any small local closure fix it exposes.
+- `codex-F1` (raised codex, cleared codex): Slice 3 omits the mandatory contextualization check from its turn-view and verification contracts. This breaks a required prompt contract on every turn; the operator and target quality are affected, while damage remains bounded and reversible through later review. — The skeleton pins the six-part check for every participant prompt but omits it from Slice 3 and the verification list, so a capable builder should recover or stop on the inconsistency, while any silent drift needs only localized prompt and test fixes.
+- `codex-F2` (raised codex, cleared codex): Slice 1's size posture contradicts its delivered scope and records no permitted overrun rationale. — The skeleton only calls the eight planned slices “narrow” and contains neither a sub-500-line target nor the claimed “comfortably below” certification, so this historical size-accounting issue cannot plausibly steer later implementation and would require only a local wording or rationale correction.
 
 ## slice_doc-01 (Session contract and durable state)
 
@@ -32,6 +43,10 @@
 
 ### Seal attempt a1 — PASSED
 
+
+### Seal attempt a2 — PASSED (re-documentation wave skeleton-a2)
+
+- resealed by the anchor's wave seal (skeleton-a2): the wave certified the whole documentation set; this unit ran no seal episode of its own
 
 **Deferred debt (opposite-family verified):**
 - `codex-F1` (raised codex, cleared codex): Participant resolution has no enforceable input or ownership seam — The note simultaneously treats the roster as caller-resolved and requires family-aware service resolution without an eligible-candidate input, so a capable builder should stop on the contradiction rather than drift silently, while any missed interpretation would require bounded contract, resolver, a
@@ -66,6 +81,10 @@
 
 ### Seal attempt a1 — PASSED
 
+
+### Seal attempt a2 — PASSED (re-documentation wave skeleton-a2)
+
+- resealed by the anchor's wave seal (skeleton-a2): the wave certified the whole documentation set; this unit ran no seal episode of its own
 
 **Deferred debt (opposite-family verified):**
 - `codex-F1` (raised codex, cleared codex): The strict running-only acceptance guarantee is checked only before provider invocation; no named gate orders an in-flight continuation or repair against concurrent terminalization. The operator/session is the concrete victim: a stop or failure can admit one bounded, traceable post-terminal turn. Damage is reversible but visible, and stopping an active session can trigger it. — The artifact pins running-only enforcement and its test only before invocation, plausibly steering implementation and coverage into the stated concurrency bug, while correction is bounded to an acceptance-versus-terminalization ordering gate and focused race test.
@@ -105,10 +124,24 @@
 ### Seal attempt a1 — PASSED
 
 
+### Seal attempt a2 — PASSED (re-documentation wave skeleton-a2)
+
+- resealed by the anchor's wave seal (skeleton-a2): the wave certified the whole documentation set; this unit ran no seal episode of its own
+
 **Deferred debt (opposite-family verified):**
 - `codex-F3` (raised codex, cleared codex): The slice-owned discussion prompt omits the sealed proportionality check required for every participant in normal use. — Because Slice 03’s concrete prompt contract and named prompt test omit the sealed proportionality baseline, a capable builder could silently implement and validate wrong behavior, but correction is a local prompt-and-focused-test amendment.
 - `codex-F3` (raised codex, cleared codex): The strict one-active-turn promise lacks crash-surviving ownership evidence; a hard coordinator failure can release the local guard while its detached worker remains active, causing bounded target and quota conflicts in a rare recovery corner. — The note pins a local advisory guard as enforcing strict single-turn behavior, but detached workers survive a hard coordinator death, so this can silently produce wrong coordination code and missing crash coverage, while correction is bounded to crash-surviving ownership/recovery and tests within th
 - `codex-F4` (raised codex, cleared codex): Lead-change narration is declared strict but enforced only by requesting arbitrary non-empty Markdown; normal terse output can leave the operator or replacement agent with a durable revision that has no usable explanation. — The artifact's behavior and tests accept any non-empty Markdown while promising a usable strict change account, so terse narration can silently reach Slice 4, but correction remains bounded to adding and testing a narration-validity or repair gate without changing the durable turn shape.
 - `codex-F1` (raised codex, cleared codex): Successful protocol repair is classified as non-turn work, contradicting the sealed participant-execution contract and complete-pass accounting. — The slice repeatedly and explicitly requires a successfully repaired exchange to consume no turn even though the execution seam returns it as the participant’s valid envelope, so the builder would likely encode the wrong accounting, but correction is a local acceptance-condition and focused-test cha
 - `codex-F2` (raised codex, cleared codex): Relative target_path resolution is unspecified and untested, so participant execution and target revision recovery can address different artifacts. — The slice promises exact target-only recovery while excluding root resolution and specifying neither a base for relative target_path nor a cross-working-directory test, so participant and recovery can silently address different files, but correction is a local path-resolution rule plus focused regre
+
+## slice_impl-03 (Ordered rounds and lead-owned target)
+
+
+| Round | Kind | Family | Findings | Triage | Raw |
+|---|---|---|---|---|---|
+| slice_impl-03-codex-r1 | review_round | codex | 3 | 3 reported | `implementation/milestones/brainstorming/.run/raw/slice_impl-03-codex-r1.txt` |
+| slice_impl-03-codex-r2 | fix_findings | codex | 3 | 3 fixed | `implementation/milestones/brainstorming/.run/raw/slice_impl-03-fix1.txt` |
+| slice_impl-03-codex-r3 | delta_review | codex | 0 | clean | `implementation/milestones/brainstorming/.run/raw/slice_impl-03-delta1.txt` |
+| slice_impl-03-codex-r4 | review_round | codex | 2 | 2 reported | `implementation/milestones/brainstorming/.run/raw/slice_impl-03-codex-r2.txt` |
 
