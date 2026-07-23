@@ -86,3 +86,29 @@
 ### Seal attempt a1 — PASSED
 
 
+## slice_doc-03 (Ordered rounds and lead-owned target)
+
+- draft: kind `draft_slice_note`, artifact `implementation/milestones/brainstorming/slices/slice-03.md` (raw: `implementation/milestones/brainstorming/.run/raw/slice_doc-03-draft.txt`)
+
+| Round | Kind | Family | Findings | Triage | Raw |
+|---|---|---|---|---|---|
+| slice_doc-03-codex-r1 | review_round | codex | 3 | 3 reported | `implementation/milestones/brainstorming/.run/raw/slice_doc-03-codex-r1.txt` |
+| slice_doc-03-codex-r2 | fix_findings | codex | 2 | 2 fixed | `implementation/milestones/brainstorming/.run/raw/slice_doc-03-fix1.txt` |
+| slice_doc-03-codex-r3 | delta_review | codex | 0 | clean | `implementation/milestones/brainstorming/.run/raw/slice_doc-03-delta1.txt` |
+| slice_doc-03-codex-r4 | review_round | codex | 2 | 2 reported | `implementation/milestones/brainstorming/.run/raw/slice_doc-03-codex-r2.txt` |
+| slice_doc-03-codex-r5 | fix_findings | codex | 2 | 2 fixed | `implementation/milestones/brainstorming/.run/raw/slice_doc-03-fix2.txt` |
+| slice_doc-03-codex-r6 | delta_review | codex | 0 | clean | `implementation/milestones/brainstorming/.run/raw/slice_doc-03-delta2.txt` |
+| slice_doc-03-codex-r7 | review_round | codex | 4 | 4 reported | `implementation/milestones/brainstorming/.run/raw/slice_doc-03-codex-r3.txt` |
+| slice_doc-03-codex-r8 | review_round | codex | 2 | 2 reported | `implementation/milestones/brainstorming/.run/raw/slice_doc-03-codex-r4.txt` |
+| slice_doc-03-claude-r1 | review_round | claude | 0 | clean | `implementation/milestones/brainstorming/.run/raw/slice_doc-03-claude-r1.txt` |
+
+### Seal attempt a1 — PASSED
+
+
+**Deferred debt (opposite-family verified):**
+- `codex-F3` (raised codex, cleared codex): The slice-owned discussion prompt omits the sealed proportionality check required for every participant in normal use. — Because Slice 03’s concrete prompt contract and named prompt test omit the sealed proportionality baseline, a capable builder could silently implement and validate wrong behavior, but correction is a local prompt-and-focused-test amendment.
+- `codex-F3` (raised codex, cleared codex): The strict one-active-turn promise lacks crash-surviving ownership evidence; a hard coordinator failure can release the local guard while its detached worker remains active, causing bounded target and quota conflicts in a rare recovery corner. — The note pins a local advisory guard as enforcing strict single-turn behavior, but detached workers survive a hard coordinator death, so this can silently produce wrong coordination code and missing crash coverage, while correction is bounded to crash-surviving ownership/recovery and tests within th
+- `codex-F4` (raised codex, cleared codex): Lead-change narration is declared strict but enforced only by requesting arbitrary non-empty Markdown; normal terse output can leave the operator or replacement agent with a durable revision that has no usable explanation. — The artifact's behavior and tests accept any non-empty Markdown while promising a usable strict change account, so terse narration can silently reach Slice 4, but correction remains bounded to adding and testing a narration-validity or repair gate without changing the durable turn shape.
+- `codex-F1` (raised codex, cleared codex): Successful protocol repair is classified as non-turn work, contradicting the sealed participant-execution contract and complete-pass accounting. — The slice repeatedly and explicitly requires a successfully repaired exchange to consume no turn even though the execution seam returns it as the participant’s valid envelope, so the builder would likely encode the wrong accounting, but correction is a local acceptance-condition and focused-test cha
+- `codex-F2` (raised codex, cleared codex): Relative target_path resolution is unspecified and untested, so participant execution and target revision recovery can address different artifacts. — The slice promises exact target-only recovery while excluding root resolution and specifying neither a base for relative target_path nor a cross-working-directory test, so participant and recovery can silently address different files, but correction is a local path-resolution rule plus focused regre
+

@@ -410,4 +410,5 @@ The goal is satisfied when:
 | slice_doc-01 (Session contract and durable state) | sealed | 2 | a1:pass | da9c7c7 |
 | slice_impl-01 (Session contract and durable state) | sealed | 5 | a1:pass | 88bd24d |
 | slice_doc-02 (Persistent participant execution) | sealed | 2 | a1:pass | d692441 |
-| slice_impl-02 (Persistent participant execution) | sealed | 5 | a1:pass | - |
+| slice_impl-02 (Persistent participant execution) | sealed | 5 | a1:pass | 9b5103f |
+| slice_doc-03 (Ordered rounds and lead-owned target) | sealed | 9 | a1:pass | - |
