@@ -24,6 +24,7 @@ import subprocess
 import tempfile
 import threading
 import time
+import uuid
 
 from . import contracts
 
@@ -172,10 +173,14 @@ class WorkerProtocolError(RuntimeError):
 
 
 class RunnerResult(object):
-    def __init__(self, text, exit_code, duration_s):
+    def __init__(self, text, exit_code, duration_s, transport_text=None):
         self.text = text
         self.exit_code = exit_code
         self.duration_s = duration_s
+        # stdout before {output_file} selection. Session-capable Codex calls
+        # emit their explicit thread id here while keeping the final answer in
+        # the historical last-message file.
+        self.transport_text = text if transport_text is None else transport_text
 
 
 # ---------------------------------------------------------------------------
@@ -474,6 +479,7 @@ def _extract_contract_output(text, validate, kind=None):
 # survives every stop/start/resume/relaunch, and applies to every claude
 # call regardless of model or effort.
 WORKFLOW_DISABLED_ENV = {"claude": {"CLAUDE_CODE_DISABLE_WORKFLOWS": "1"}}
+_AMBIENT_EXECUTION = object()
 
 
 def _worker_env(base_env, family):
@@ -487,6 +493,26 @@ def _worker_env(base_env, family):
     env = dict(base_env if base_env is not None else os.environ)
     env.update(overrides)
     return env
+
+
+def _codex_session_ref(transport_text):
+    """Read the explicit thread id from Codex's documented JSONL stream."""
+    refs = []
+    for line in (transport_text or "").splitlines():
+        try:
+            event = json.loads(line)
+        except (TypeError, json.JSONDecodeError):
+            continue
+        if not isinstance(event, dict) or event.get("type") != "thread.started":
+            continue
+        ref = event.get("thread_id")
+        if isinstance(ref, str) and ref.strip() and ref not in refs:
+            refs.append(ref)
+    if len(refs) != 1:
+        raise RunnerError(
+            "codex session start did not expose exactly one thread id"
+        )
+    return refs[0]
 
 
 def apply_model_effort(argv, model, effort):
@@ -528,11 +554,19 @@ class SubprocessRunner(object):
     """
 
     def __init__(self, commands, timeouts, cwd=None, env=None,
-                 stall_window_s=None, stall_min_cpu_s=None):
+                 stall_window_s=None, stall_min_cpu_s=None,
+                 participant_process_factory=None):
         self.commands = commands
         self.timeouts = timeouts or {}
         self.cwd = cwd
         self.env = env
+        # Participant execution must apply the caller-resolved capability
+        # bundle, not silently inherit this service process's authority.
+        # The factory is the caller-owned pass-through seam: it receives the
+        # exact opaque bundle plus the prepared argv/Popen kwargs and returns
+        # the supervised process. Ordinary one-shot calls keep using Popen
+        # directly and therefore remain byte-for-byte compatible.
+        self.participant_process_factory = participant_process_factory
         # Liveness watchdog: kill a worker whose whole process tree burns
         # less than stall_min_cpu_s of CPU over a stall_window_s window
         # (a frozen call — no local compute at all). Disabled when either
@@ -646,6 +680,141 @@ class SubprocessRunner(object):
         if family not in self.commands:
             raise RunnerError("no command configured for family %r" % family)
         template = apply_model_effort(self.commands[family], model, effort)
+        return self._call_template(
+            family,
+            prompt,
+            workspace,
+            template,
+            timeout_override=timeout_override,
+        )
+
+    def supports_session_continuation(self, family):
+        """Whether the configured family has an explicit-reference CLI seam."""
+        template = self.commands.get(family)
+        if (
+            not isinstance(template, list)
+            or not template
+            or not callable(self.participant_process_factory)
+        ):
+            return False
+        if family == "codex":
+            return (
+                len(template) >= 2
+                and template[1] == "exec"
+                and "--ephemeral" not in template
+                and any(
+                    arg == "--output-last-message"
+                    and index + 1 < len(template)
+                    and "{output_file}" in template[index + 1]
+                    for index, arg in enumerate(template)
+                )
+            )
+        if family == "claude":
+            return (
+                ("-p" in template or "--print" in template)
+                and "--no-session-persistence" not in template
+                and "--session-id" not in template
+                and "--resume" not in template
+                and "--continue" not in template
+                and "-c" not in template
+                and "-r" not in template
+            )
+        return False
+
+    def start_session(
+        self,
+        family,
+        prompt,
+        workspace,
+        execution_context,
+        model=None,
+        effort=None,
+        timeout_override=None,
+    ):
+        """Start one provider conversation and return its explicit reference."""
+        if not self.supports_session_continuation(family):
+            raise RunnerError(
+                "family %r has no explicit session continuation support"
+                % family
+            )
+        template = apply_model_effort(self.commands[family], model, effort)
+        if family == "codex":
+            if "--json" not in template:
+                template = list(template) + ["--json"]
+            result = self._call_template(
+                family,
+                prompt,
+                workspace,
+                template,
+                timeout_override=timeout_override,
+                execution_context=execution_context,
+            )
+            result.session_ref = _codex_session_ref(result.transport_text)
+            return result
+
+        session_ref = str(uuid.uuid4())
+        template = list(template) + ["--session-id", session_ref]
+        result = self._call_template(
+            family,
+            prompt,
+            workspace,
+            template,
+            timeout_override=timeout_override,
+            execution_context=execution_context,
+        )
+        result.session_ref = session_ref
+        return result
+
+    def continue_session(
+        self,
+        family,
+        session_ref,
+        prompt,
+        workspace,
+        execution_context,
+        model=None,
+        effort=None,
+        timeout_override=None,
+    ):
+        """Continue exactly ``session_ref``; there is no recency fallback."""
+        if not isinstance(session_ref, str) or not session_ref.strip():
+            raise RunnerError("session_ref must be a non-empty string")
+        if not self.supports_session_continuation(family):
+            raise RunnerError(
+                "family %r has no explicit session continuation support"
+                % family
+            )
+        template = apply_model_effort(self.commands[family], model, effort)
+        if family == "codex":
+            template = list(template[:2]) + ["resume"] + list(template[2:])
+            if "--json" not in template:
+                template.append("--json")
+            # `-` makes stdin the prompt explicitly; omitting it would leave
+            # room for CLI recency/picker behavior in future versions.
+            template.extend([session_ref, "-"])
+        else:
+            template = list(template) + ["--resume", session_ref]
+        result = self._call_template(
+            family,
+            prompt,
+            workspace,
+            template,
+            timeout_override=timeout_override,
+            execution_context=execution_context,
+        )
+        result.session_ref = session_ref
+        return result
+
+    def _call_template(
+        self,
+        family,
+        prompt,
+        workspace,
+        template,
+        timeout_override=None,
+        execution_context=_AMBIENT_EXECUTION,
+    ):
+        """Run one prepared argv through the shared supervised call path."""
         timeout = timeout_override or self.timeouts.get(family)
         started = time.time()
 
@@ -745,18 +914,23 @@ class SubprocessRunner(object):
                 prefix="orch-stdout-", suffix=".txt"
             )
             try:
-                proc = subprocess.Popen(
-                    argv,
-                    stdin=subprocess.PIPE,
-                    stdout=so_fd,
-                    stderr=subprocess.PIPE,
-                    cwd=self.cwd or workspace,
-                    env=_worker_env(self.env, family),
-                    start_new_session=True,
-                    text=True,
-                    encoding="utf-8",
-                    errors="replace",
-                )
+                popen_kwargs = {
+                    "stdin": subprocess.PIPE,
+                    "stdout": so_fd,
+                    "stderr": subprocess.PIPE,
+                    "cwd": self.cwd or workspace,
+                    "env": _worker_env(self.env, family),
+                    "start_new_session": True,
+                    "text": True,
+                    "encoding": "utf-8",
+                    "errors": "replace",
+                }
+                if execution_context is _AMBIENT_EXECUTION:
+                    proc = subprocess.Popen(argv, **popen_kwargs)
+                else:
+                    proc = self.participant_process_factory(
+                        execution_context, argv, popen_kwargs
+                    )
             except Exception as exc:
                 raise RunnerError("failed to spawn %r: %s" % (argv[0], exc))
 
@@ -801,9 +975,10 @@ class SubprocessRunner(object):
             try:
                 with open(stdout_path, "r", encoding="utf-8",
                           errors="replace") as fh:
-                    text = fh.read()
+                    stdout_text = fh.read()
             except OSError:
-                text = ""
+                stdout_text = ""
+            text = stdout_text
             if output_file:
                 try:
                     with open(output_file, "r", encoding="utf-8") as fh:
@@ -847,7 +1022,12 @@ class SubprocessRunner(object):
                     "family %s exited %d with no output; %sstderr tail: %s"
                     % (family, proc.returncode, lead, stderr_text[-500:])
                 )
-            return RunnerResult(text, proc.returncode, duration)
+            return RunnerResult(
+                text,
+                proc.returncode,
+                duration,
+                transport_text=stdout_text,
+            )
         finally:
             # Single cleanup site, reached on EVERY exit. Set wd_done, then
             # reap a spawned-but-not-yet-reaped worker under kill_lock (so the

@@ -1,8 +1,9 @@
 """Product-neutral brainstorming session contracts and durable state.
 
-This module deliberately stops at accepted configuration and lifecycle state.
-Participant execution, turns, target revisions, ballots, transcripts, service
-routes, and product adapters belong to later slices.
+This module owns accepted configuration, lifecycle state, and the durable
+logical-session reference for each participant. Ordered turns, target
+revisions, ballots, transcripts, service routes, and product adapters belong
+to later slices.
 """
 
 from __future__ import annotations
@@ -11,7 +12,7 @@ import copy
 import json
 from dataclasses import dataclass
 
-from orchestrator import kvstore
+from orchestrator import contracts, kvstore
 
 
 STATUSES = ("created", "running", "success", "failure")
@@ -28,7 +29,7 @@ _ALLOWED_TRANSITIONS = {
 _SESSION_KEY_PREFIX = "brainstorming/session:"
 
 
-class ContractError(ValueError):
+class ContractError(contracts.ContractError):
     """A request, configuration, state, or result violates its contract."""
 
 
@@ -203,6 +204,67 @@ def validate_run_config(run_config):
     return _json_copy(run_config, "run_config")
 
 
+def validate_participant_sessions(participant_sessions, run_config):
+    """Validate the write-once participant-to-provider-session projection."""
+    _object(participant_sessions, "participant_sessions")
+    checked_config = validate_run_config(run_config)
+    participants = {
+        participant["id"]: participant
+        for participant in checked_config["participants"]
+    }
+    unknown = sorted(set(participant_sessions) - set(participants))
+    if unknown:
+        raise ContractError(
+            "participant_sessions has unknown participant ids %s" % unknown
+        )
+
+    seen = set()
+    for participant_id, session_ref in participant_sessions.items():
+        _text(session_ref, "participant_sessions.%s" % participant_id)
+        executor_ref = participants[participant_id]["executor_ref"]
+        prefix = executor_ref + ":"
+        if (
+            not session_ref.startswith(prefix)
+            or not session_ref[len(prefix):].strip()
+        ):
+            raise ContractError(
+                "participant_sessions.%s must be namespaced by executor_ref"
+                % participant_id
+            )
+        if session_ref in seen:
+            raise ContractError(
+                "participant session references must be unique"
+            )
+        seen.add(session_ref)
+    return _json_copy(participant_sessions, "participant_sessions")
+
+
+def make_participant_session_ref(executor_ref, provider_session_ref):
+    """Namespace one opaque provider reference by its persisted executor."""
+    executor_ref = _text(executor_ref, "executor_ref")
+    provider_session_ref = _text(
+        provider_session_ref, "provider_session_ref"
+    )
+    return "%s:%s" % (executor_ref, provider_session_ref)
+
+
+def provider_session_ref(executor_ref, participant_session_ref):
+    """Recover the opaque provider reference after checking its namespace."""
+    executor_ref = _text(executor_ref, "executor_ref")
+    participant_session_ref = _text(
+        participant_session_ref, "participant_session_ref"
+    )
+    prefix = executor_ref + ":"
+    if (
+        not participant_session_ref.startswith(prefix)
+        or not participant_session_ref[len(prefix):].strip()
+    ):
+        raise ContractError(
+            "participant_session_ref does not match executor_ref"
+        )
+    return participant_session_ref[len(prefix):]
+
+
 def _validate_eligible_participants(eligible_participants):
     eligible = _json_copy(eligible_participants, "eligible_participants")
     if not isinstance(eligible, list) or not eligible:
@@ -342,9 +404,17 @@ def validate_session_state(state):
     required = {"request", "run_config", "status", "history"}
     if status in TERMINAL_STATUSES:
         required.add("result")
-    _exact_keys(state, required, (), "state")
+    _exact_keys(state, required, ("participant_sessions",), "state")
     request = validate_request(state["request"])
-    validate_run_config(state["run_config"])
+    run_config = validate_run_config(state["run_config"])
+    if "participant_sessions" in state:
+        participant_sessions = validate_participant_sessions(
+            state["participant_sessions"], run_config
+        )
+        if status == "created" and participant_sessions:
+            raise ContractError(
+                "created sessions cannot have participant session references"
+            )
     last_status = _validate_history(state["history"], request["target_path"])
     if last_status != status:
         raise ContractError("state.status must match the last history record")
@@ -362,6 +432,7 @@ def new_session_state(request, run_config):
         "run_config": validate_run_config(run_config),
         "status": "created",
         "history": [{"status": "created"}],
+        "participant_sessions": {},
     }
 
 
@@ -410,6 +481,35 @@ def assert_session_successor(old_state, new_state):
     expected = transition_session(old, appended["status"], appended.get("result"))
     if not _same_json_value(expected, new):
         raise HistoryRewriteError("state is not the exact next session revision")
+
+
+def assert_participant_session_successor(
+    old_state, new_state, participant_id, session_ref
+):
+    """Accept exactly one write-once participant-session binding."""
+    old = validate_session_state(old_state)
+    new = validate_session_state(new_state)
+    if old["status"] != "running" or new["status"] != "running":
+        raise IllegalTransition(
+            "participant sessions can only bind while running"
+        )
+    for field in ("request", "run_config", "status", "history", "result"):
+        if not _same_json_value(old.get(field), new.get(field)):
+            raise HistoryRewriteError(
+                "participant binding changed session field %s" % field
+            )
+
+    old_sessions = old.get("participant_sessions", {})
+    if participant_id in old_sessions:
+        raise HistoryRewriteError(
+            "participant session reference is already bound"
+        )
+    expected = copy.deepcopy(old_sessions)
+    expected[participant_id] = session_ref
+    if not _same_json_value(new.get("participant_sessions", {}), expected):
+        raise HistoryRewriteError(
+            "participant binding must add exactly one session reference"
+        )
 
 
 def _session_key(session_id):
@@ -485,3 +585,61 @@ class SessionStore:
             raise RevisionConflict(current)
         successor = transition_session(current.state, new_status, result)
         return self.save(session_id, expected_revision, successor)
+
+    def bind_participant_session(
+        self,
+        session_id,
+        expected_revision,
+        participant_id,
+        provider_ref,
+    ):
+        """CAS-add one participant's durable logical-session reference."""
+        if type(expected_revision) is not int or expected_revision <= 0:
+            raise ContractError("expected_revision must be a positive integer")
+        participant_id = _text(participant_id, "participant_id")
+        current = self.read(session_id)
+        if current is None:
+            raise SessionNotFound(session_id)
+        if current.revision != expected_revision:
+            raise RevisionConflict(current)
+        if current.state["status"] != "running":
+            raise IllegalTransition(
+                "participant sessions can only bind while running"
+            )
+
+        participant = next(
+            (
+                item
+                for item in current.state["run_config"]["participants"]
+                if item["id"] == participant_id
+            ),
+            None,
+        )
+        if participant is None:
+            raise ContractError(
+                "participant_id is not in the persisted roster"
+            )
+        session_ref = make_participant_session_ref(
+            participant["executor_ref"], provider_ref
+        )
+        candidate = copy.deepcopy(current.state)
+        candidate.setdefault("participant_sessions", {})
+        if participant_id in candidate["participant_sessions"]:
+            raise HistoryRewriteError(
+                "participant session reference is already bound"
+            )
+        candidate["participant_sessions"][participant_id] = session_ref
+        validate_session_state(candidate)
+        assert_participant_session_successor(
+            current.state, candidate, participant_id, session_ref
+        )
+
+        result = self._store.cas(
+            _session_key(session_id), expected_revision, candidate
+        )
+        if not result.ok:
+            latest = self._snapshot(result.record)
+            if latest is None:
+                raise SessionNotFound(session_id)
+            raise RevisionConflict(latest)
+        return self._snapshot(result.record)

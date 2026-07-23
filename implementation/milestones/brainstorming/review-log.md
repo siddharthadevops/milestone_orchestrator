@@ -71,3 +71,18 @@
 - `codex-F1` (raised codex, cleared codex): The strict running-only acceptance guarantee is checked only before provider invocation; no named gate orders an in-flight continuation or repair against concurrent terminalization. The operator/session is the concrete victim: a stop or failure can admit one bounded, traceable post-terminal turn. Damage is reversible but visible, and stopping an active session can trigger it. — The artifact pins running-only enforcement and its test only before invocation, plausibly steering implementation and coverage into the stated concurrency bug, while correction is bounded to an acceptance-versus-terminalization ordering gate and focused race test.
 - `claude-F1` (raised claude, cleared codex): slice-02.md line 26 states that later-slice responsibilities 'remain with the sealed later slices', but slices 3-8 have no notes yet and are not sealed; only the skeleton and slice 1 are sealed. The slice-boundary assignments actually derive from the sealed skeleton's slice table. — The false “sealed” adjective misstates chronology but not ownership—the sealed skeleton and this note’s boundary table correctly assign Slices 3–8—so it is unlikely to alter a capable builder’s work and correction is a one-word local edit.
 
+## slice_impl-02 (Persistent participant execution)
+
+- draft: kind `implement`, artifact `-` (raw: `implementation/milestones/brainstorming/.run/raw/slice_impl-02-draft.txt`)
+
+| Round | Kind | Family | Findings | Triage | Raw |
+|---|---|---|---|---|---|
+| slice_impl-02-codex-r1 | review_round | codex | 2 | 2 reported | `implementation/milestones/brainstorming/.run/raw/slice_impl-02-codex-r1.txt` |
+| slice_impl-02-codex-r2 | fix_findings | codex | 2 | 2 fixed | `implementation/milestones/brainstorming/.run/raw/slice_impl-02-fix1.txt` |
+| slice_impl-02-codex-r3 | delta_review | codex | 0 | clean | `implementation/milestones/brainstorming/.run/raw/slice_impl-02-delta1.txt` |
+| slice_impl-02-codex-r4 | review_round | codex | 0 | clean | `implementation/milestones/brainstorming/.run/raw/slice_impl-02-codex-r2.txt` |
+| slice_impl-02-claude-r1 | review_round | claude | 0 | clean | `implementation/milestones/brainstorming/.run/raw/slice_impl-02-claude-r1.txt` |
+
+### Seal attempt a1 — PASSED
+
+
