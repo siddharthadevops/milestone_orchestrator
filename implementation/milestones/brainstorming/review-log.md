@@ -55,3 +55,19 @@
 - `claude-F1` (raised claude, cleared codex): test_roster_and_policy_contract never re-reads the same-family-fallback session from durable storage: the fallback-true run_config is asserted only on the in-memory create() return (test_brainstorming_state.py:214-221), while the sealed pass condition 'order, assignments, and fallback fact survive reload' (slice-01.md:115) is proven by a reopened-store read only for the cross-family fallback-false fixture ('different', lines 209-212). — The sealed check claims the fallback fact survives reload but reopens only the false case, so a true-only persistence regression could pass silently, while correction is a local reload assertion plus at most a bounded serialization fix exposed on first fallback read.
 - `claude-F2` (raised claude, cleared codex): When a request (or context/run_config/participant object) carries both a non-string unknown key and a string unknown key, _exact_keys (brainstorming.py:79 sorted(set(value)-allowed)) raises TypeError ('<' not supported between int and str) instead of the module's declared ContractError; verified by direct probe. No state is created, but the strict-validation error contract the module itself declares (ContractError docstring, brainstorming.py:31-32) is not delivered for that input class. — The defect violates the declared ContractError behavior, but only for an already-invalid non-JSON key shape, rejects visibly before persistence, and needs one local validation/formatting fix once encountered, making silent drift unlikely and correction cheap.
 
+## slice_doc-02 (Persistent participant execution)
+
+- draft: kind `draft_slice_note`, artifact `implementation/milestones/brainstorming/slices/slice-02.md` (raw: `implementation/milestones/brainstorming/.run/raw/slice_doc-02-draft.txt`)
+
+| Round | Kind | Family | Findings | Triage | Raw |
+|---|---|---|---|---|---|
+| slice_doc-02-codex-r1 | review_round | codex | 1 | 1 reported | `implementation/milestones/brainstorming/.run/raw/slice_doc-02-codex-r1.txt` |
+| slice_doc-02-claude-r1 | review_round | claude | 1 | 1 reported | `implementation/milestones/brainstorming/.run/raw/slice_doc-02-claude-r1.txt` |
+
+### Seal attempt a1 — PASSED
+
+
+**Deferred debt (opposite-family verified):**
+- `codex-F1` (raised codex, cleared codex): The strict running-only acceptance guarantee is checked only before provider invocation; no named gate orders an in-flight continuation or repair against concurrent terminalization. The operator/session is the concrete victim: a stop or failure can admit one bounded, traceable post-terminal turn. Damage is reversible but visible, and stopping an active session can trigger it. — The artifact pins running-only enforcement and its test only before invocation, plausibly steering implementation and coverage into the stated concurrency bug, while correction is bounded to an acceptance-versus-terminalization ordering gate and focused race test.
+- `claude-F1` (raised claude, cleared codex): slice-02.md line 26 states that later-slice responsibilities 'remain with the sealed later slices', but slices 3-8 have no notes yet and are not sealed; only the skeleton and slice 1 are sealed. The slice-boundary assignments actually derive from the sealed skeleton's slice table. — The false “sealed” adjective misstates chronology but not ownership—the sealed skeleton and this note’s boundary table correctly assign Slices 3–8—so it is unlikely to alter a capable builder’s work and correction is a one-word local edit.
+
