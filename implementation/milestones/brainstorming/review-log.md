@@ -36,3 +36,22 @@
 **Deferred debt (opposite-family verified):**
 - `codex-F1` (raised codex, cleared codex): Participant resolution has no enforceable input or ownership seam — The note simultaneously treats the roster as caller-resolved and requires family-aware service resolution without an eligible-candidate input, so a capable builder should stop on the contradiction rather than drift silently, while any missed interpretation would require bounded contract, resolver, a
 
+## slice_impl-01 (Session contract and durable state)
+
+- draft: kind `implement`, artifact `-` (raw: `implementation/milestones/brainstorming/.run/raw/slice_impl-01-draft.txt`)
+
+| Round | Kind | Family | Findings | Triage | Raw |
+|---|---|---|---|---|---|
+| slice_impl-01-codex-r1 | review_round | codex | 2 | 2 reported | `implementation/milestones/brainstorming/.run/raw/slice_impl-01-codex-r1.txt` |
+| slice_impl-01-codex-r2 | fix_findings | codex | 2 | 2 fixed | `implementation/milestones/brainstorming/.run/raw/slice_impl-01-fix1.txt` |
+| slice_impl-01-codex-r3 | delta_review | codex | 0 | clean | `implementation/milestones/brainstorming/.run/raw/slice_impl-01-delta1.txt` |
+| slice_impl-01-codex-r4 | review_round | codex | 0 | clean | `implementation/milestones/brainstorming/.run/raw/slice_impl-01-codex-r2.txt` |
+| slice_impl-01-claude-r1 | review_round | claude | 2 | 2 reported | `implementation/milestones/brainstorming/.run/raw/slice_impl-01-claude-r1.txt` |
+
+### Seal attempt a1 — PASSED
+
+
+**Deferred debt (opposite-family verified):**
+- `claude-F1` (raised claude, cleared codex): test_roster_and_policy_contract never re-reads the same-family-fallback session from durable storage: the fallback-true run_config is asserted only on the in-memory create() return (test_brainstorming_state.py:214-221), while the sealed pass condition 'order, assignments, and fallback fact survive reload' (slice-01.md:115) is proven by a reopened-store read only for the cross-family fallback-false fixture ('different', lines 209-212). — The sealed check claims the fallback fact survives reload but reopens only the false case, so a true-only persistence regression could pass silently, while correction is a local reload assertion plus at most a bounded serialization fix exposed on first fallback read.
+- `claude-F2` (raised claude, cleared codex): When a request (or context/run_config/participant object) carries both a non-string unknown key and a string unknown key, _exact_keys (brainstorming.py:79 sorted(set(value)-allowed)) raises TypeError ('<' not supported between int and str) instead of the module's declared ContractError; verified by direct probe. No state is created, but the strict-validation error contract the module itself declares (ContractError docstring, brainstorming.py:31-32) is not delivered for that input class. — The defect violates the declared ContractError behavior, but only for an already-invalid non-JSON key shape, rejects visibly before persistence, and needs one local validation/formatting fix once encountered, making silent drift unlikely and correction cheap.
+

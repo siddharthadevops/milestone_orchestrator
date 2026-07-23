@@ -407,4 +407,5 @@ The goal is satisfied when:
 | Unit | Status | Rounds | Seal attempts | Gate commit |
 |---|---|---|---|---|
 | skeleton | sealed | 2 | a1:pass | abefb98 |
-| slice_doc-01 (Session contract and durable state) | sealed | 2 | a1:pass | - |
+| slice_doc-01 (Session contract and durable state) | sealed | 2 | a1:pass | da9c7c7 |
+| slice_impl-01 (Session contract and durable state) | sealed | 5 | a1:pass | - |
