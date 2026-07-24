@@ -363,4 +363,21 @@
 
 ## slice_doc-07 (Dedicated brainstorming visualization)
 
+- draft: kind `draft_slice_note`, artifact `implementation/milestones/brainstorming/slices/slice-07.md` (raw: `implementation/milestones/brainstorming/.run/raw/slice_doc-07-draft.txt`)
+
+| Round | Kind | Family | Findings | Triage | Raw |
+|---|---|---|---|---|---|
+| slice_doc-07-codex-r1 | review_round | codex | 0 | clean | `implementation/milestones/brainstorming/.run/raw/slice_doc-07-codex-r1.txt` |
+| slice_doc-07-claude-r1 | review_round | claude | 3 | 3 reported | `implementation/milestones/brainstorming/.run/raw/slice_doc-07-claude-r1.txt` |
+
+### Seal attempt a1 — PASSED
+
+
+**Deferred debt (opposite-family verified):**
+- `claude-F1` (raised claude, cleared codex): Two of the six named checks and two Enforceability Gate rows pin browser-runtime behaviour (poll cadence, out-of-order response rejection, stale-banner retention, hostile markup creating 'no element, handler, navigation, or script'), but the repository has no JavaScript or browser test tooling at all — the gate is `python3 -m unittest discover -s orchestrator/tests -t .`, there is no package.json, no selenium/playwright/puppeteer/jsdom anywhere, and the only existing test that touches a static page (test_brainstorming_closure.py:1015-1025) compares panel.html as raw bytes. The note's own strict guarantee 'Participant text is displayed as inert content, never executable page markup' and its eventual guarantee 'revision never decreases and stale state is explicit' therefore have no mechanism that can enforce them, contrary to the Enforceability Gate rows at slice-07.md:180-181 which assert such tests exist. — The note wrongly presents browser-runtime safety and ordering checks as enforceable despite the repository having only Python tests and no browser harness, so a capable builder could trust weak static checks and silently miss behavioural defects, while correction remains bounded to Slice 7 page and 
+- `claude-F2` (raised claude, cleared codex): The note claims at slice-07.md:74-76 that the slice 'is expected to stay under about 500 changed lines by reusing the existing projection, renderer, polling, access, and stop seams', and therefore records no reason for exceeding the target. That estimate is not credible for the work the note itself pins: a brand-new static page, a new server-side view projection, a new route, and a brand-new focused suite with six named checks. Comparable evidence in this same milestone: the focused suite for slice 6 (9 named checks) is 1435 lines and its implementation commit 227acc8 landed 3066 insertions; slice 4 made the same 'stay around 500' claim (slice-04.md:111) and its commit 41b70de landed 2457 insertions; slices 2, 3, 5 and 6 all explicitly recorded an overrun reason instead. — The implausible 500-line estimate is nonbinding accounting, while the six explicit checks and pinned behavior force a capable builder either to exceed it or stop, so silent drift is unlikely and correction requires only a local overrun-note edit.
+- `claude-F3` (raised claude, cleared codex): The note specifies only the successful stop path. slice-07.md:68-70 states 'After it returns, the page refreshes immediately and continued polling converges on the same terminal winner', and slice-07.md:112 and 182 repeat the same assumption ('After a successful stop response...', 'refreshes after its returned winner'). Sealed slice 6 documents a stop that does not terminalize: 'If those conditions cannot be confirmed, the service reports a retryable conflict and does not claim that the session stopped cleanly' (slice-06.md:92-94), returning HTTP 409 `brainstorming_stop_incomplete` (slice-06.md:130-131; brainstorming_lifecycle.py:1020-1023). No pinned fact, acceptance criterion or named check says what the page shows in that case, and the pinned error vocabulary at slice-07.md:109 covers only the view route. — Slice 07 omits rather than contradicts the inherited 409 behavior, so the mandatory repair exit makes silent drift unlikely, while any escaped UI/test defect needs only a local error display and focused test.
+
+## slice_impl-07 (Dedicated brainstorming visualization)
+
 
