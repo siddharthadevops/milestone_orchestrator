@@ -137,6 +137,7 @@
 
 ## slice_impl-03 (Ordered rounds and lead-owned target)
 
+- draft: kind `implement`, artifact `-` (raw: `implementation/milestones/brainstorming/.run/raw/slice_impl-03-draft.txt`)
 
 | Round | Kind | Family | Findings | Triage | Raw |
 |---|---|---|---|---|---|
@@ -144,4 +145,40 @@
 | slice_impl-03-codex-r2 | fix_findings | codex | 3 | 3 fixed | `implementation/milestones/brainstorming/.run/raw/slice_impl-03-fix1.txt` |
 | slice_impl-03-codex-r3 | delta_review | codex | 0 | clean | `implementation/milestones/brainstorming/.run/raw/slice_impl-03-delta1.txt` |
 | slice_impl-03-codex-r4 | review_round | codex | 2 | 2 reported | `implementation/milestones/brainstorming/.run/raw/slice_impl-03-codex-r2.txt` |
+| slice_impl-03-codex-r5 | review_round | codex | 2 | 2 reported | `implementation/milestones/brainstorming/.run/raw/slice_impl-03-codex-r3.txt` |
+| slice_impl-03-codex-r6 | fix_findings | codex | 2 | 2 fixed | `implementation/milestones/brainstorming/.run/raw/slice_impl-03-fix2.txt` |
+| slice_impl-03-codex-r7 | delta_review | codex | 4 | 4 reported | `implementation/milestones/brainstorming/.run/raw/slice_impl-03-delta2.txt` |
+| slice_impl-03-codex-r8 | fix_findings | codex | 4 | 4 fixed | `implementation/milestones/brainstorming/.run/raw/slice_impl-03-fix3.txt` |
+| slice_impl-03-codex-r9 | delta_review | codex | 2 | 2 reported | `implementation/milestones/brainstorming/.run/raw/slice_impl-03-delta3.txt` |
+| slice_impl-03-codex-r10 | fix_findings | codex | 2 | 2 fixed | `implementation/milestones/brainstorming/.run/raw/slice_impl-03-fix4.txt` |
+| slice_impl-03-codex-r11 | delta_review | codex | 1 | 1 reported | `implementation/milestones/brainstorming/.run/raw/slice_impl-03-delta4.txt` |
+| slice_impl-03-codex-r12 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/brainstorming/.run/raw/slice_impl-03-fix5.txt` |
+| slice_impl-03-codex-r13 | delta_review | codex | 1 | 1 reported | `implementation/milestones/brainstorming/.run/raw/slice_impl-03-delta5.txt` |
+| slice_impl-03-codex-r14 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/brainstorming/.run/raw/slice_impl-03-fix6.txt` |
+| slice_impl-03-codex-r15 | review_round | codex | 3 | 3 reported | `implementation/milestones/brainstorming/.run/raw/slice_impl-03-codex-r4.txt` |
+| slice_impl-03-codex-r16 | fix_findings | codex | 3 | 3 fixed | `implementation/milestones/brainstorming/.run/raw/slice_impl-03-fix7.txt` |
+| slice_impl-03-codex-r17 | delta_review | codex | 1 | 1 reported | `implementation/milestones/brainstorming/.run/raw/slice_impl-03-delta6.txt` |
+| slice_impl-03-codex-r18 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/brainstorming/.run/raw/slice_impl-03-fix8.txt` |
+| slice_impl-03-codex-r19 | delta_review | codex | 0 | clean | `implementation/milestones/brainstorming/.run/raw/slice_impl-03-delta7.txt` |
+| slice_impl-03-codex-r20 | review_round | codex | 2 | 2 reported | `implementation/milestones/brainstorming/.run/raw/slice_impl-03-codex-r5.txt` |
+| slice_impl-03-codex-r21 | fix_findings | codex | 2 | 2 fixed | `implementation/milestones/brainstorming/.run/raw/slice_impl-03-fix9.txt` |
+| slice_impl-03-codex-r22 | delta_review | codex | 1 | 1 reported | `implementation/milestones/brainstorming/.run/raw/slice_impl-03-delta8.txt` |
+| slice_impl-03-codex-r23 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/brainstorming/.run/raw/slice_impl-03-fix10.txt` |
+| slice_impl-03-codex-r24 | delta_review | codex | 1 | 1 reported | `implementation/milestones/brainstorming/.run/raw/slice_impl-03-delta9.txt` |
+| slice_impl-03-codex-r25 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/brainstorming/.run/raw/slice_impl-03-fix11.txt` |
+| slice_impl-03-codex-r26 | delta_review | codex | 1 | 1 reported | `implementation/milestones/brainstorming/.run/raw/slice_impl-03-delta10.txt` |
+| slice_impl-03-codex-r27 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/brainstorming/.run/raw/slice_impl-03-fix12.txt` |
+| slice_impl-03-codex-r28 | delta_review | codex | 0 | clean | `implementation/milestones/brainstorming/.run/raw/slice_impl-03-delta11.txt` |
+| slice_impl-03-codex-r29 | review_round | codex | 0 | clean | `implementation/milestones/brainstorming/.run/raw/slice_impl-03-codex-r6.txt` |
+| slice_impl-03-claude-r1 | review_round | claude | 2 | 2 reported | `implementation/milestones/brainstorming/.run/raw/slice_impl-03-claude-r1.txt` |
+
+### Seal attempt a1 — PASSED
+
+
+**Deferred debt (opposite-family verified):**
+- `claude-F1` (raised claude, cleared codex): Target recovery uses os.chmod with dir_fd plus follow_symlinks=False (orchestrator/brainstorming_coordination.py lines 287-295, 316-324, 395-413), a combination CPython <=3.12 rejects on Linux with glibc <2.39/kernel <6.6 (fchmodat lacks AT_SYMLINK_NOFOLLOW, raising ValueError, which also bypasses the except OSError wrapper), so every restore or directory-removal recovery path fails closed on such platforms even though the module declares the production service POSIX; the gate suite only runs on macOS where lchmod support hides this. — The unconditional platform-sensitive chmod calls and Mac-only portability coverage can silently validate a false POSIX recovery contract for later builders, but the first affected Linux recovery fails visibly and the correction is localized to the chmod strategy and its test.
+- `claude-F2` (raised claude, cleared codex): Every accepted target revision is retained as base64 content inside the single-file JSON KV store (orchestrator/brainstorming.py _write_target_revision; orchestrator/kvstore.py writes the whole kv.json on every put/cas and parses it on every read), with no pruning, so a session on a large target makes each turn's durable writes and reads O(total retained bytes) and grows the store without bound. — Small-target tests and downstream slices can silently accept the unbounded whole-store behavior, but correction is bounded to redesigning revision retention/storage and its focused tests without changing the downstream turn or revision contract.
+
+## slice_doc-04 (Plain-language session transcript)
+
 

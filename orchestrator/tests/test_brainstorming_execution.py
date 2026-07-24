@@ -198,11 +198,12 @@ class BrainstormingExecutionTest(unittest.TestCase):
                     "kind": "discussion_turn",
                     "markdown": family + ":" + "|".join(history),
                 })
-            if is_codex:
+            if is_codex and "missing-thread-id" not in prompt:
                 print(json.dumps({
                     "type": "thread.started",
                     "thread_id": session_ref,
                 }), flush=True)
+            if is_codex:
                 with open(output_path, "w", encoding="utf-8") as fh:
                     fh.write(answer)
             else:
@@ -554,6 +555,86 @@ class BrainstormingExecutionTest(unittest.TestCase):
             all(item is context for item in self.launched_contexts)
         )
 
+    def test_plain_runner_exchange_keeps_unmeasurable_quiescence_fail_open(self):
+        participants = cross_family_participants()
+        self._create_running(
+            "plain-unmeasurable", participants, workspace_path=self.root
+        )
+        self._create_running(
+            "ordered-unmeasurable", participants, workspace_path=self.root
+        )
+        provider_runner = self._provider_runner()
+        subject = execution.ParticipantExecution(
+            self.store, self._bindings(provider_runner, participants)
+        )
+
+        with mock.patch(
+            "orchestrator.runners._process_group_quiescent",
+            return_value=None,
+        ):
+            accepted, result = subject.exchange(
+                "plain-unmeasurable",
+                "editor",
+                "plain participant exchange",
+                {"caller": "context"},
+            )
+            with self.assertRaises(execution.ExecutionRejected):
+                subject.exchange_quiescent(
+                    "ordered-unmeasurable",
+                    "editor",
+                    "ordered participant turn",
+                    {"caller": "context"},
+                )
+
+        self.assertEqual(accepted["kind"], "discussion_turn")
+        self.assertFalse(hasattr(result, "worker_quiescent"))
+        plain = self.store.read("plain-unmeasurable")
+        self.assertIn("editor", plain.state["participant_sessions"])
+        ordered = self.store.read("ordered-unmeasurable")
+        self.assertNotIn("editor", ordered.state["participant_sessions"])
+
+    def test_quiescent_exchange_consumes_shared_runner_completion_evidence(self):
+        participants = cross_family_participants()
+        self._create_running(
+            "quiescent-runner", participants, workspace_path=self.root
+        )
+        provider_runner = self._provider_runner()
+        subject = execution.ParticipantExecution(
+            self.store, self._bindings(provider_runner, participants)
+        )
+        accepted, result = subject.exchange_quiescent(
+            "quiescent-runner",
+            "editor",
+            "one supervised turn",
+            {"caller": "context"},
+        )
+        self.assertEqual(accepted["kind"], "discussion_turn")
+        self.assertTrue(result.worker_quiescent)
+        with runners._ACTIVE_WORKERS_LOCK:
+            self.assertEqual(runners._ACTIVE_WORKERS, set())
+
+    def test_codex_session_ref_failure_preserves_quiescence_evidence(self):
+        participants = cross_family_participants()
+        self._create_running(
+            "missing-codex-ref", participants, workspace_path=self.root
+        )
+        provider_runner = self._provider_runner()
+        subject = execution.ParticipantExecution(
+            self.store, self._bindings(provider_runner, participants)
+        )
+
+        with self.assertRaises(runners.RunnerError) as failed:
+            subject.exchange_quiescent(
+                "missing-codex-ref",
+                "editor",
+                "missing-thread-id",
+                {"caller": "context"},
+            )
+
+        self.assertTrue(failed.exception.worker_quiescent)
+        with runners._ACTIVE_WORKERS_LOCK:
+            self.assertEqual(runners._ACTIVE_WORKERS, set())
+
     def test_unscoped_or_stdout_only_runner_is_rejected_before_spawn(self):
         spawned = []
 
@@ -774,10 +855,11 @@ class BrainstormingExecutionTest(unittest.TestCase):
             time.sleep(30)
             """,
         )
-        with self.assertRaises(runners.WorkerStalled):
+        with self.assertRaises(runners.WorkerStalled) as stalled_error:
             codex_executor(frozen, 0.5, 0.2).start(
                 "prompt", self.root, object()
             )
+        self.assertTrue(stalled_error.exception.worker_quiescent)
 
         active = self._write_executable(
             "active-codex",
@@ -853,10 +935,12 @@ class BrainstormingExecutionTest(unittest.TestCase):
         thread.join(timeout=5)
         self.assertFalse(thread.is_alive())
         self.assertIsInstance(stop_outcome.get("error"), runners.RunnerError)
+        self.assertTrue(stop_outcome["error"].worker_quiescent)
         with runners._ACTIVE_WORKERS_LOCK:
             self.assertEqual(runners._ACTIVE_WORKERS, set())
 
         child_pid_path = os.path.join(self.root, "participant-child.pid")
+        descendant_process = {}
         descendant = self._write_executable(
             "descendant-codex",
             """\
@@ -880,6 +964,12 @@ class BrainstormingExecutionTest(unittest.TestCase):
                 json.dump({"kind": "discussion_turn", "markdown": "done"}, fh)
             """,
         )
+
+        def spawn_descendant(execution_context, argv, popen_kwargs):
+            process = subprocess.Popen(argv, **popen_kwargs)
+            descendant_process["process"] = process
+            return process
+
         descendant_runner = runners.SubprocessRunner(
             {
                 "codex": [
@@ -892,26 +982,22 @@ class BrainstormingExecutionTest(unittest.TestCase):
                 ]
             },
             {},
-            participant_process_factory=(
-                lambda execution_context, argv, popen_kwargs:
-                subprocess.Popen(argv, **popen_kwargs)
-            ),
+            participant_process_factory=spawn_descendant,
         )
         descendant_result = execution.RunnerParticipantExecutor(
             "codex", descendant_runner
         ).start("prompt", self.root, object())
         self.assertEqual(descendant_result.session_ref, "descendant-ref")
+        self.assertTrue(descendant_result.worker_quiescent)
+        self.assertTrue(
+            runners._process_group_quiescent(
+                descendant_process["process"].pid
+            )
+        )
         with open(child_pid_path, "r", encoding="utf-8") as fh:
             child_pid = int(fh.read())
-        deadline = time.time() + 3
-        while time.time() < deadline:
-            try:
-                os.kill(child_pid, 0)
-            except OSError:
-                break
-            time.sleep(0.05)
-        else:
-            self.fail("participant call left a descendant process running")
+        with self.assertRaises(OSError):
+            os.kill(child_pid, 0)
 
     def test_legacy_runner_call_contract_is_unchanged(self):
         observed = os.path.join(self.root, "legacy-observed.json")

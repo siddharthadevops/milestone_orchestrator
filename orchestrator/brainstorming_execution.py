@@ -76,6 +76,11 @@ class RunnerParticipantExecutor:
             timeout_override=self.timeout_override,
         )
 
+    @staticmethod
+    def wait_for_quiescence(result):
+        """Confirm the shared runner reaped the supervised local process set."""
+        return getattr(result, "worker_quiescent", None) is True
+
 
 class ParticipantExecution:
     """Run validated exchanges for already-resolved durable participants."""
@@ -174,6 +179,42 @@ class ParticipantExecution:
             )
         return session_ref
 
+    @staticmethod
+    def _wait_for_quiescence(executor, result):
+        waiter = getattr(executor, "wait_for_quiescence", None)
+        if not callable(waiter):
+            raise ExecutionRejected(
+                "the executor binding exposes no worker-quiescence evidence"
+            )
+        if waiter(result) is not True:
+            # The result carries immutable completion evidence. Unknown keeps
+            # the ordered acceptance window open, but plain exchanges do not
+            # require this stronger proof.
+            raise ExecutionRejected(
+                "worker quiescence could not be confirmed"
+            )
+
+    def _invoke_executor(
+        self,
+        operation,
+        args,
+        executor,
+        require_quiescence,
+        evidence,
+    ):
+        evidence["quiescent"] = not require_quiescence
+        try:
+            result = operation(*args)
+        except BaseException as exc:
+            evidence["quiescent"] = (
+                getattr(exc, "worker_quiescent", None) is True
+            )
+            raise
+        if require_quiescence:
+            self._wait_for_quiescence(executor, result)
+            evidence["quiescent"] = True
+        return result
+
     def exchange(
         self,
         session_id,
@@ -182,18 +223,87 @@ class ParticipantExecution:
         execution_context,
     ):
         """Return one valid envelope plus its technical runner result."""
+        return self._exchange(
+            session_id,
+            participant_id,
+            prompt,
+            execution_context,
+            require_quiescence=False,
+        )
+
+    def exchange_quiescent(
+        self,
+        session_id,
+        participant_id,
+        prompt,
+        execution_context,
+    ):
+        """Return an envelope only after all supervised local work is quiet."""
+        return self._exchange(
+            session_id,
+            participant_id,
+            prompt,
+            execution_context,
+            require_quiescence=True,
+        )
+
+    def _exchange(
+        self,
+        session_id,
+        participant_id,
+        prompt,
+        execution_context,
+        require_quiescence,
+    ):
+        evidence = {"quiescent": True}
+        try:
+            return self._exchange_with_evidence(
+                session_id,
+                participant_id,
+                prompt,
+                execution_context,
+                require_quiescence,
+                evidence,
+            )
+        except BaseException as exc:
+            if require_quiescence and evidence["quiescent"]:
+                try:
+                    exc.worker_quiescent = True
+                except (AttributeError, TypeError):
+                    pass
+            raise
+
+    def _exchange_with_evidence(
+        self,
+        session_id,
+        participant_id,
+        prompt,
+        execution_context,
+        require_quiescence,
+        evidence,
+    ):
         brainstorming._text(participant_id, "participant_id")
         brainstorming._text(prompt, "prompt")
         snapshot = self.store.read(session_id)
         self._require_running(snapshot)
         participant = self._participant(snapshot, participant_id)
         executor = self._executor(participant)
+        if require_quiescence and not callable(
+            getattr(executor, "wait_for_quiescence", None)
+        ):
+            raise ExecutionRejected(
+                "the executor binding exposes no worker-quiescence evidence"
+            )
         workspace_path = snapshot.state["request"]["workspace_path"]
         provider_ref = self._durable_provider_ref(snapshot, participant)
 
         if provider_ref is None:
-            result = executor.start(
-                prompt, workspace_path, execution_context
+            result = self._invoke_executor(
+                executor.start,
+                (prompt, workspace_path, execution_context),
+                executor,
+                require_quiescence,
+                evidence,
             )
             provider_ref = self._result_session_ref(result)
             bound = self.store.bind_participant_session(
@@ -204,11 +314,17 @@ class ParticipantExecution:
             )
             provider_ref = self._durable_provider_ref(bound, participant)
         else:
-            result = executor.continue_session(
-                provider_ref,
-                prompt,
-                workspace_path,
-                execution_context,
+            result = self._invoke_executor(
+                executor.continue_session,
+                (
+                    provider_ref,
+                    prompt,
+                    workspace_path,
+                    execution_context,
+                ),
+                executor,
+                require_quiescence,
+                evidence,
             )
             self._result_session_ref(result, expected=provider_ref)
 
@@ -228,11 +344,17 @@ class ParticipantExecution:
             session_id, participant, provider_ref
         )
         repair_prompt = prompt + (runners.REPAIR_SUFFIX % first_error)
-        result2 = executor.continue_session(
-            provider_ref,
-            repair_prompt,
-            workspace_path,
-            execution_context,
+        result2 = self._invoke_executor(
+            executor.continue_session,
+            (
+                provider_ref,
+                repair_prompt,
+                workspace_path,
+                execution_context,
+            ),
+            executor,
+            require_quiescence,
+            evidence,
         )
         self._result_session_ref(result2, expected=provider_ref)
         try:

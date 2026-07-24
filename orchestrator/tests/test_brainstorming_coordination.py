@@ -1,0 +1,1257 @@
+"""Focused executable evidence for Brainstorming Slice 03."""
+
+import json
+import os
+import stat
+import subprocess
+import sys
+import threading
+import tempfile
+import unittest
+from concurrent.futures import ThreadPoolExecutor
+from unittest import mock
+
+from orchestrator import brainstorming as bs
+from orchestrator import brainstorming_coordination as coordination
+from orchestrator import brainstorming_execution as execution
+from orchestrator import runners
+
+
+MISSING = object()
+
+
+def participants(same_family=False):
+    roster = [
+        {
+            "id": "lead",
+            "role": "lead",
+            "executor_ref": "codex-lead",
+            "model_family": "codex",
+        },
+        {
+            "id": "critic",
+            "role": "interlocutor",
+            "executor_ref": "claude-critic",
+            "model_family": "claude",
+        },
+    ]
+    if same_family:
+        roster[1]["executor_ref"] = "codex-critic"
+        roster[1]["model_family"] = "codex"
+    return roster
+
+
+def run_config(roster):
+    return bs.resolve_run_config(roster, "unanimity", roster)
+
+
+def envelope(markdown):
+    return {"kind": "discussion_turn", "markdown": markdown}
+
+
+class ScriptedExecutor:
+    def __init__(self, model_family, responses):
+        self.model_family = model_family
+        self.responses = list(responses)
+        self.calls = []
+        self._lock = threading.Lock()
+        self._next_ref = 0
+
+    def supports_continuation(self):
+        return True
+
+    def _call(
+        self, mode, session_ref, prompt, workspace_path, execution_context
+    ):
+        with self._lock:
+            if not self.responses:
+                raise AssertionError("scripted participant responses exhausted")
+            response = self.responses.pop(0)
+            if mode == "start":
+                self._next_ref += 1
+                session_ref = "participant-%d" % self._next_ref
+            self.calls.append(
+                {
+                    "mode": mode,
+                    "session_ref": session_ref,
+                    "prompt": prompt,
+                    "workspace_path": workspace_path,
+                    "execution_context": execution_context,
+                }
+            )
+        if callable(response):
+            response = response(prompt, workspace_path, execution_context)
+        waiter = None
+        if (
+            isinstance(response, tuple)
+            and len(response) == 2
+            and callable(response[1])
+        ):
+            response, waiter = response
+        text = json.dumps(response) if isinstance(response, dict) else response
+        result = runners.RunnerResult(text, 0, 0.01)
+        result.session_ref = session_ref
+        result.quiescence_waiter = waiter
+        return result
+
+    def start(self, prompt, workspace_path, execution_context):
+        return self._call(
+            "start", None, prompt, workspace_path, execution_context
+        )
+
+    def continue_session(
+        self, session_ref, prompt, workspace_path, execution_context
+    ):
+        return self._call(
+            "continue",
+            session_ref,
+            prompt,
+            workspace_path,
+            execution_context,
+        )
+
+    @staticmethod
+    def wait_for_quiescence(result):
+        waiter = getattr(result, "quiescence_waiter", None)
+        if waiter is not None:
+            waiter()
+        return True
+
+
+class BrainstormingCoordinationTest(unittest.TestCase):
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory(
+            prefix="brainstorming-coordination-"
+        )
+        self.addCleanup(self._tmp.cleanup)
+        self.root = self._tmp.name
+        self.store = bs.SessionStore(os.path.join(self.root, "state"))
+
+    def _create_running(
+        self,
+        session_id,
+        *,
+        roster=None,
+        max_rounds=2,
+        initial=b"initial target",
+    ):
+        roster = roster or participants()
+        workspace = os.path.join(self.root, session_id)
+        docs = os.path.join(workspace, "docs")
+        os.makedirs(docs)
+        target = os.path.join(docs, "decision.md")
+        if initial is not MISSING:
+            with open(target, "wb") as handle:
+                handle.write(initial)
+        request = {
+            "workspace_path": workspace,
+            "target_path": "docs/decision.md",
+            "question": "Which compatible option should be adopted?",
+            "context": {
+                "brief": "Resolve one bounded design question.",
+                "references": ["requirements.md"],
+                "source_payload": {"opaque": True},
+            },
+            "max_rounds": max_rounds,
+        }
+        created = self.store.create(
+            session_id, request, run_config(roster), roster
+        )
+        self.store.transition(session_id, created.revision, "running")
+        return target
+
+    def _subject(self, roster, scripts, store=None):
+        store = store or self.store
+        executors = {
+            participant["executor_ref"]: ScriptedExecutor(
+                participant["model_family"],
+                scripts[participant["id"]],
+            )
+            for participant in roster
+        }
+        participant_execution = execution.ParticipantExecution(
+            store, executors
+        )
+        return (
+            coordination.BrainstormingCoordinator(
+                store, participant_execution
+            ),
+            executors,
+        )
+
+    @staticmethod
+    def _write_action(path, content, markdown):
+        def action(_prompt, _workspace, _context):
+            with open(path, "wb") as handle:
+                handle.write(content)
+            return envelope(markdown)
+
+        return action
+
+    @staticmethod
+    def _delete_action(path, markdown):
+        def action(_prompt, _workspace, _context):
+            os.unlink(path)
+            return envelope(markdown)
+
+        return action
+
+    def test_persisted_order_and_turn_view_survive_restart(self):
+        for same_family in (False, True):
+            with self.subTest(same_family=same_family):
+                suffix = "same" if same_family else "cross"
+                session_id = "ordered-" + suffix
+                roster = participants(same_family=same_family)
+                target = self._create_running(session_id, roster=roster)
+                subject, executors = self._subject(
+                    roster,
+                    {
+                        "lead": [
+                            self._write_action(
+                                target, b"lead revision one", "lead one"
+                            ),
+                            self._write_action(
+                                target, b"lead revision two", "lead two"
+                            ),
+                        ],
+                        "critic": [envelope("critic one")],
+                    },
+                )
+                first = subject.run_next_turn(
+                    session_id, {"caller": suffix}
+                )
+                first_revision = first.state["accepted_target_revision"]
+
+                reopened = bs.SessionStore(os.path.join(self.root, "state"))
+                resumed = coordination.BrainstormingCoordinator(
+                    reopened,
+                    execution.ParticipantExecution(reopened, executors),
+                )
+                second = resumed.run_next_turn(
+                    session_id, {"caller": suffix}
+                )
+                third = resumed.run_next_turn(
+                    session_id, {"caller": suffix}
+                )
+
+                self.assertEqual(
+                    [
+                        item["participant_id"]
+                        for item in third.state["completed_turns"]
+                    ],
+                    ["lead", "critic", "lead"],
+                )
+                critic_prompt = executors[
+                    roster[1]["executor_ref"]
+                ].calls[0]["prompt"]
+                self.assertIn("lead one", critic_prompt)
+                self.assertIn(first_revision, critic_prompt)
+                self.assertIn("Do not edit target_path", critic_prompt)
+                lead_prompt = executors[
+                    roster[0]["executor_ref"]
+                ].calls[1]["prompt"]
+                self.assertLess(
+                    lead_prompt.index("lead one"),
+                    lead_prompt.index("critic one"),
+                )
+                self.assertIn(
+                    second.state["accepted_target_revision"], lead_prompt
+                )
+                self.assertIn("prefer proportional", lead_prompt)
+                self.assertEqual(
+                    [call["mode"] for call in executors[
+                        roster[0]["executor_ref"]
+                    ].calls],
+                    ["start", "continue"],
+                )
+
+    def test_only_complete_passes_increment_rounds_used(self):
+        session_id = "rounds"
+        roster = participants()
+        self._create_running(
+            session_id, roster=roster, max_rounds=2
+        )
+        subject, _executors = self._subject(
+            roster,
+            {
+                "lead": [
+                    "not json",
+                    envelope("repaired lead turn"),
+                    envelope("second lead turn"),
+                ],
+                "critic": [
+                    envelope("first critic turn"),
+                    envelope("second critic turn"),
+                ],
+            },
+        )
+
+        expected = [
+            (1, 0),
+            (2, 1),
+            (3, 1),
+            (4, 2),
+        ]
+        for turn_count, rounds_used in expected:
+            snapshot = subject.run_next_turn(session_id, object())
+            self.assertEqual(len(snapshot.state["completed_turns"]), turn_count)
+            self.assertEqual(snapshot.state["rounds_used"], rounds_used)
+        with self.assertRaises(coordination.RoundLimitReached):
+            subject.run_next_turn(session_id, object())
+        final = self.store.read(session_id)
+        self.assertEqual(len(final.state["completed_turns"]), 4)
+        self.assertEqual(final.state["rounds_used"], 2)
+
+    def test_completed_lead_turn_advances_target_revision_atomically(self):
+        session_id = "lead-atomic"
+        roster = participants()
+        target = self._create_running(session_id, roster=roster)
+        subject, _executors = self._subject(
+            roster,
+            {
+                "lead": [
+                    self._write_action(
+                        target, b"accepted lead bytes", "lead changed target"
+                    )
+                ],
+                "critic": [envelope("critic kept target")],
+            },
+        )
+        prepared = subject.prepare(session_id)
+        initial_revision = prepared.state["accepted_target_revision"]
+        lead = subject.run_next_turn(session_id, object())
+        accepted_revision = lead.state["accepted_target_revision"]
+        self.assertNotEqual(initial_revision, accepted_revision)
+        retained = self.store.read_target_revision(
+            session_id, accepted_revision
+        )
+        self.assertEqual(
+            bs.target_revision_content(retained),
+            (True, b"accepted lead bytes"),
+        )
+        critic = subject.run_next_turn(session_id, object())
+        self.assertEqual(
+            critic.state["accepted_target_revision"], accepted_revision
+        )
+
+        failed_id = "lead-write-failure"
+        failed_target = self._create_running(failed_id, roster=roster)
+        failed, _ = self._subject(
+            roster,
+            {
+                "lead": [
+                    self._write_action(
+                        failed_target, b"must roll back", "not durable"
+                    )
+                ],
+                "critic": [],
+            },
+        )
+        before = failed.prepare(failed_id)
+        real_cas = self.store._store.cas
+
+        def fail_completed_turn(key, expected_revision, value):
+            if (
+                key.startswith("brainstorming/session:")
+                and isinstance(value, dict)
+                and len(value.get("completed_turns", [])) == 1
+            ):
+                raise OSError("simulated durable write failure")
+            return real_cas(key, expected_revision, value)
+
+        with mock.patch.object(
+            self.store._store, "cas", side_effect=fail_completed_turn
+        ):
+            with self.assertRaises(OSError):
+                failed.run_next_turn(failed_id, object())
+        after = self.store.read(failed_id)
+        self.assertEqual(after.state["completed_turns"], [])
+        self.assertEqual(
+            after.state["accepted_target_revision"],
+            before.state["accepted_target_revision"],
+        )
+        with open(failed_target, "rb") as handle:
+            self.assertEqual(handle.read(), b"initial target")
+
+    def test_worker_quiescence_precedes_target_validation_and_turn_acceptance(self):
+        session_id = "quiescence"
+        base_roster = participants()
+        roster = [base_roster[1], base_roster[0]]
+        target = self._create_running(session_id, roster=roster)
+        waiter_started = threading.Event()
+        allow_mutation = threading.Event()
+
+        def delayed_mutation(_prompt, _workspace, _context):
+            def mutate():
+                allow_mutation.wait()
+                with open(target, "wb") as handle:
+                    handle.write(b"late unauthorized bytes")
+
+            worker = threading.Thread(target=mutate)
+            worker.start()
+
+            def wait():
+                waiter_started.set()
+                worker.join()
+
+            return envelope("candidate before quiet"), wait
+
+        subject, _executors = self._subject(
+            roster,
+            {
+                "lead": [],
+                "critic": [
+                    delayed_mutation,
+                    envelope("accepted retry"),
+                ],
+            },
+        )
+        outcomes = {}
+
+        def run(name):
+            try:
+                outcomes[name] = subject.run_next_turn(
+                    session_id, {"attempt": name}
+                )
+            except BaseException as exc:
+                outcomes[name] = exc
+
+        first = threading.Thread(target=run, args=("first",))
+        first.start()
+        self.assertTrue(waiter_started.wait(timeout=2))
+        waiting = self.store.read(session_id)
+        self.assertEqual(waiting.state["completed_turns"], [])
+        self.assertEqual(waiting.state["rounds_used"], 0)
+
+        second = threading.Thread(target=run, args=("second",))
+        second.start()
+        second.join(timeout=0.1)
+        self.assertTrue(second.is_alive())
+        self.assertEqual(self.store.read(session_id).state["completed_turns"], [])
+
+        allow_mutation.set()
+        first.join(timeout=2)
+        second.join(timeout=2)
+        self.assertFalse(first.is_alive())
+        self.assertFalse(second.is_alive())
+        self.assertIsInstance(
+            outcomes["first"], coordination.InvalidTargetMutation
+        )
+        self.assertEqual(
+            outcomes["second"].state["completed_turns"][0]["markdown"],
+            "accepted retry",
+        )
+        with open(target, "rb") as handle:
+            self.assertEqual(handle.read(), b"initial target")
+
+        restart_id = "unknown-after-restart"
+        restart_target = self._create_running(restart_id, roster=roster)
+        restarted, restart_executors = self._subject(
+            roster,
+            {
+                "lead": [],
+                "critic": [envelope("must wait")],
+            },
+        )
+        restart_state = restarted.prepare(restart_id)
+        restart_attempt = {
+            "token": "crash-surviving-attempt",
+            "participant_id": "critic",
+            "completed_turn_count": 0,
+            "target_revision": restart_state.state[
+                "accepted_target_revision"
+            ],
+            "quiescent": False,
+        }
+        with coordination._open_target_parent(restart_target) as (
+            _descriptor,
+            _name,
+            parent_identity,
+        ):
+            restart_attempt["target_parent"] = parent_identity
+        self.store.begin_turn_attempt(restart_id, restart_attempt)
+        with open(restart_target, "wb") as handle:
+            handle.write(b"possibly still changing")
+        reopened = bs.SessionStore(os.path.join(self.root, "state"))
+        after_restart = coordination.BrainstormingCoordinator(
+            reopened,
+            execution.ParticipantExecution(reopened, restart_executors),
+        )
+        with self.assertRaises(coordination.CoordinationRejected):
+            after_restart.run_next_turn(restart_id, object())
+        self.assertEqual(
+            restart_executors["claude-critic"].calls, []
+        )
+        with open(restart_target, "rb") as handle:
+            self.assertEqual(handle.read(), b"possibly still changing")
+
+        reopened.mark_turn_attempt_quiescent(
+            restart_id, restart_attempt["token"]
+        )
+        after_restart.prepare(restart_id)
+        self.assertIsNone(reopened.read_turn_attempt(restart_id))
+        with open(restart_target, "rb") as handle:
+            self.assertEqual(handle.read(), b"initial target")
+
+    def test_interlocutor_target_mutation_is_rejected_and_restored(self):
+        session_id = "interlocutor-mutation"
+        roster = participants()
+        target = self._create_running(session_id, roster=roster)
+        os.chmod(target, 0o640)
+        sentinel = os.path.join(os.path.dirname(target), "sentinel.bin")
+        with open(sentinel, "wb") as handle:
+            handle.write(b"do not touch")
+
+        def change_mode_only(_prompt, _workspace, _context):
+            os.chmod(target, 0o755)
+            return envelope("critic claims success")
+
+        subject, _executors = self._subject(
+            roster,
+            {
+                "lead": [envelope("lead unchanged")],
+                "critic": [change_mode_only],
+            },
+        )
+        lead = subject.run_next_turn(session_id, object())
+        with self.assertRaises(coordination.InvalidTargetMutation):
+            subject.run_next_turn(session_id, object())
+        durable = self.store.read(session_id)
+        self.assertEqual(durable.state["completed_turns"], lead.state[
+            "completed_turns"
+        ])
+        self.assertEqual(durable.state["rounds_used"], 0)
+        with open(target, "rb") as handle:
+            self.assertEqual(handle.read(), b"initial target")
+        self.assertEqual(stat.S_IMODE(os.stat(target).st_mode), 0o640)
+        with open(sentinel, "rb") as handle:
+            self.assertEqual(handle.read(), b"do not touch")
+
+    def test_stable_symbolic_link_parent_is_accepted_and_recovered(self):
+        base_roster = participants()
+        roster = [base_roster[1], base_roster[0]]
+        session_id = "stable-linked-parent"
+        real_workspace = os.path.join(self.root, "real-workspace")
+        linked_workspace = os.path.join(self.root, "linked-workspace")
+        docs = os.path.join(real_workspace, "docs")
+        os.makedirs(docs)
+        os.symlink(real_workspace, linked_workspace)
+        target = os.path.join(linked_workspace, "docs", "decision.md")
+        with open(target, "wb") as handle:
+            handle.write(b"accepted through link")
+        request = {
+            "workspace_path": linked_workspace,
+            "target_path": "docs/decision.md",
+            "question": "Which compatible option should be adopted?",
+            "context": {"brief": "Resolve one bounded design question."},
+            "max_rounds": 2,
+        }
+        created = self.store.create(
+            session_id, request, run_config(roster), roster
+        )
+        self.store.transition(session_id, created.revision, "running")
+
+        subject, _executors = self._subject(
+            roster,
+            {
+                "critic": [
+                    self._write_action(
+                        target, b"invalid critic edit", "invalid"
+                    )
+                ],
+                "lead": [],
+            },
+        )
+        with self.assertRaises(coordination.InvalidTargetMutation):
+            subject.run_next_turn(session_id, object())
+
+        with open(target, "rb") as handle:
+            self.assertEqual(handle.read(), b"accepted through link")
+        self.assertIsNone(self.store.read_turn_attempt(session_id))
+
+    def test_directory_recovery_uses_portable_target_only_operations(self):
+        session_id = "portable-directory-recovery"
+        roster = participants()
+        target = self._create_running(session_id, roster=roster)
+        subject, _executors = self._subject(
+            roster, {"lead": [], "critic": []}
+        )
+        subject.prepare(session_id)
+        sentinel = os.path.join(os.path.dirname(target), "sentinel")
+        with open(sentinel, "wb") as handle:
+            handle.write(b"outside target")
+
+        os.unlink(target)
+        nested = os.path.join(target, "nested")
+        os.makedirs(nested)
+        os.symlink(
+            sentinel, os.path.join(nested, "sentinel-link")
+        )
+        with open(os.path.join(nested, "worker-file"), "wb") as handle:
+            handle.write(b"worker bytes")
+        os.chmod(nested, 0)
+        os.chmod(target, 0)
+        try:
+            subject.prepare(session_id)
+        finally:
+            if os.path.isdir(target):
+                os.chmod(target, 0o700)
+                if os.path.isdir(nested):
+                    os.chmod(nested, 0o700)
+
+        with open(target, "rb") as handle:
+            self.assertEqual(handle.read(), b"initial target")
+        with open(sentinel, "rb") as handle:
+            self.assertEqual(handle.read(), b"outside target")
+
+    def test_failed_lead_exchange_cannot_advance_target(self):
+        roster = participants()
+        failed_id = "lead-provider-failure"
+        target = self._create_running(failed_id, roster=roster)
+
+        def mutate_then_fail(_prompt, _workspace, _context):
+            with open(target, "wb") as handle:
+                handle.write(b"incomplete lead bytes")
+            error = runners.RunnerError("provider failed")
+            error.worker_quiescent = True
+            raise error
+
+        failed, _executors = self._subject(
+            roster,
+            {"lead": [mutate_then_fail], "critic": []},
+        )
+        prepared = failed.prepare(failed_id)
+        with self.assertRaises(runners.RunnerError):
+            failed.run_next_turn(failed_id, object())
+        durable = self.store.read(failed_id)
+        self.assertEqual(durable.state["completed_turns"], [])
+        self.assertEqual(
+            durable.state["accepted_target_revision"],
+            prepared.state["accepted_target_revision"],
+        )
+        with open(target, "rb") as handle:
+            self.assertEqual(handle.read(), b"initial target")
+
+        protocol_id = "lead-two-strikes"
+        target2 = self._create_running(protocol_id, roster=roster)
+
+        def malformed(content):
+            def action(_prompt, _workspace, _context):
+                with open(target2, "wb") as handle:
+                    handle.write(content)
+                return "malformed"
+
+            return action
+
+        protocol, _ = self._subject(
+            roster,
+            {
+                "lead": [malformed(b"first"), malformed(b"second")],
+                "critic": [],
+            },
+        )
+        protocol.prepare(protocol_id)
+        with self.assertRaises(runners.WorkerProtocolError):
+            protocol.run_next_turn(protocol_id, object())
+        self.assertEqual(
+            self.store.read(protocol_id).state["completed_turns"], []
+        )
+        with open(target2, "rb") as handle:
+            self.assertEqual(handle.read(), b"initial target")
+
+    def test_quiescent_interrupt_restores_target_and_allows_retry(self):
+        roster = participants()
+        for exception_type in (
+            KeyboardInterrupt,
+            SystemExit,
+            GeneratorExit,
+        ):
+            with self.subTest(exception_type=exception_type.__name__):
+                session_id = "interrupt-" + exception_type.__name__.lower()
+                target = self._create_running(session_id, roster=roster)
+
+                def interrupt(_prompt, _workspace, _context):
+                    with open(target, "wb") as handle:
+                        handle.write(b"unfinished interrupt bytes")
+                    error = exception_type()
+                    error.worker_quiescent = True
+                    raise error
+
+                subject, _executors = self._subject(
+                    roster,
+                    {
+                        "lead": [interrupt, envelope("accepted retry")],
+                        "critic": [],
+                    },
+                )
+                with self.assertRaises(exception_type):
+                    subject.run_next_turn(session_id, object())
+                with open(target, "rb") as handle:
+                    self.assertEqual(handle.read(), b"initial target")
+                self.assertIsNone(self.store.read_turn_attempt(session_id))
+
+                retried = subject.run_next_turn(session_id, object())
+                self.assertEqual(
+                    retried.state["completed_turns"][0]["markdown"],
+                    "accepted retry",
+                )
+
+    def test_unknown_worker_state_keeps_attempt_and_target_exclusive(self):
+        roster = participants()
+        for failure_point in ("execution", "quiescence"):
+            with self.subTest(failure_point=failure_point):
+                session_id = "unknown-" + failure_point
+                target = self._create_running(session_id, roster=roster)
+
+                def fail_execution(_prompt, _workspace, _context):
+                    with open(target, "wb") as handle:
+                        handle.write(b"possibly still changing")
+                    raise runners.RunnerError("worker state is unknown")
+
+                def fail_quiescence(_prompt, _workspace, _context):
+                    with open(target, "wb") as handle:
+                        handle.write(b"possibly still changing")
+
+                    def wait():
+                        raise RuntimeError("quiescence check failed")
+
+                    return envelope("candidate"), wait
+
+                action = (
+                    fail_execution
+                    if failure_point == "execution"
+                    else fail_quiescence
+                )
+                subject, executors = self._subject(
+                    roster,
+                    {
+                        "lead": [action, envelope("must not retry")],
+                        "critic": [],
+                    },
+                )
+                with self.assertRaises(
+                    (runners.RunnerError, RuntimeError)
+                ):
+                    subject.run_next_turn(session_id, object())
+
+                attempt = self.store.read_turn_attempt(session_id)
+                self.assertIsNotNone(attempt)
+                self.assertFalse(attempt["quiescent"])
+                self.assertEqual(
+                    self.store.read(session_id).state["completed_turns"], []
+                )
+                with open(target, "rb") as handle:
+                    self.assertEqual(
+                        handle.read(), b"possibly still changing"
+                    )
+
+                with self.assertRaises(
+                    coordination.CoordinationRejected
+                ):
+                    subject.run_next_turn(session_id, object())
+                self.assertEqual(len(executors["codex-lead"].calls), 1)
+
+    def test_redirected_parent_recovery_never_touches_external_entry(self):
+        base_roster = participants()
+        roster = [base_roster[1], base_roster[0]]
+        session_id = "redirected-parent"
+        target = self._create_running(
+            session_id, roster=roster, initial=MISSING
+        )
+        parent = os.path.dirname(target)
+        parked_parent = parent + "-parked"
+        external = os.path.join(self.root, "external")
+        os.mkdir(external)
+        victim = os.path.join(external, os.path.basename(target))
+        with open(victim, "wb") as handle:
+            handle.write(b"unrelated bytes")
+
+        def redirect_parent(_prompt, _workspace, _context):
+            os.rename(parent, parked_parent)
+            os.symlink(external, parent)
+            return envelope("redirected the parent")
+
+        subject, _executors = self._subject(
+            roster,
+            {
+                "lead": [],
+                "critic": [redirect_parent],
+            },
+        )
+        with self.assertRaises(coordination.TargetRecoveryError):
+            subject.run_next_turn(session_id, object())
+
+        with open(victim, "rb") as handle:
+            self.assertEqual(handle.read(), b"unrelated bytes")
+        durable = self.store.read(session_id)
+        self.assertEqual(durable.state["completed_turns"], [])
+        attempt = self.store.read_turn_attempt(session_id)
+        self.assertIsNotNone(attempt)
+        self.assertTrue(attempt["quiescent"])
+
+    def test_legacy_attempt_without_parent_stops_before_redirected_recovery(self):
+        session_id = "legacy-attempt-without-parent"
+        roster = participants()
+        target = self._create_running(session_id, roster=roster)
+        subject, _executors = self._subject(
+            roster, {"lead": [], "critic": []}
+        )
+        prepared = subject.prepare(session_id)
+        legacy_attempt = {
+            "token": "pre-parent-pinning-attempt",
+            "participant_id": "lead",
+            "completed_turn_count": 0,
+            "target_revision": prepared.state[
+                "accepted_target_revision"
+            ],
+            "quiescent": True,
+        }
+        self.store._store.put(
+            bs._turn_attempt_key(session_id), legacy_attempt
+        )
+
+        parent = os.path.dirname(target)
+        parked_parent = parent + "-parked"
+        external = os.path.join(self.root, "legacy-external")
+        os.mkdir(external)
+        victim = os.path.join(external, os.path.basename(target))
+        with open(victim, "wb") as handle:
+            handle.write(b"unrelated bytes")
+        os.rename(parent, parked_parent)
+        os.symlink(external, parent)
+
+        with self.assertRaises(coordination.TargetRecoveryError):
+            subject.prepare(session_id)
+
+        with open(victim, "rb") as handle:
+            self.assertEqual(handle.read(), b"unrelated bytes")
+        with open(
+            os.path.join(parked_parent, os.path.basename(target)), "rb"
+        ) as handle:
+            self.assertEqual(handle.read(), b"initial target")
+        self.assertIsNotNone(self.store.read_turn_attempt(session_id))
+
+    def test_runner_preflight_failure_clears_attempt_and_allows_retry(self):
+        session_id = "runner-preflight-retry"
+        roster = participants()
+        target = self._create_running(session_id, roster=roster)
+        spawned = []
+
+        def participant_process_factory(
+            execution_context, argv, popen_kwargs
+        ):
+            spawned.append((execution_context, argv, popen_kwargs))
+            raise AssertionError("preflight must not spawn a worker")
+
+        provider_runner = runners.SubprocessRunner(
+            {
+                "codex": [
+                    "codex",
+                    "exec",
+                    "--model",
+                    "{model}",
+                    "--output-last-message",
+                    "{output_file}",
+                ]
+            },
+            {},
+            participant_process_factory=participant_process_factory,
+        )
+        participant_execution = execution.ParticipantExecution(
+            self.store,
+            {
+                "codex-lead": execution.RunnerParticipantExecutor(
+                    "codex", provider_runner
+                )
+            },
+        )
+        subject = coordination.BrainstormingCoordinator(
+            self.store, participant_execution
+        )
+
+        with self.assertRaises(runners.RunnerError) as failed:
+            subject.run_next_turn(session_id, object())
+
+        self.assertTrue(failed.exception.worker_quiescent)
+        self.assertEqual(spawned, [])
+        self.assertIsNone(self.store.read_turn_attempt(session_id))
+        with open(target, "rb") as handle:
+            self.assertEqual(handle.read(), b"initial target")
+
+        participant_execution.executors["codex-lead"] = ScriptedExecutor(
+            "codex", [envelope("accepted after configuration fix")]
+        )
+        retried = subject.run_next_turn(session_id, object())
+        self.assertEqual(
+            retried.state["completed_turns"][0]["markdown"],
+            "accepted after configuration fix",
+        )
+
+    def test_factory_spawn_then_raise_keeps_attempt_open(self):
+        session_id = "runner-spawn-unknown"
+        roster = participants()
+        target = self._create_running(session_id, roster=roster)
+        spawned = []
+
+        def participant_process_factory(
+            execution_context, argv, popen_kwargs
+        ):
+            process = subprocess.Popen(
+                [sys.executable, "-c", "import time; time.sleep(30)"],
+                **popen_kwargs
+            )
+            spawned.append((execution_context, process))
+            raise RuntimeError("launcher failed after spawning")
+
+        provider_runner = runners.SubprocessRunner(
+            {
+                "codex": [
+                    "codex",
+                    "exec",
+                    "--output-last-message",
+                    "{output_file}",
+                ]
+            },
+            {},
+            participant_process_factory=participant_process_factory,
+        )
+        participant_execution = execution.ParticipantExecution(
+            self.store,
+            {
+                "codex-lead": execution.RunnerParticipantExecutor(
+                    "codex", provider_runner
+                )
+            },
+        )
+        subject = coordination.BrainstormingCoordinator(
+            self.store, participant_execution
+        )
+
+        try:
+            with self.assertRaises(runners.RunnerError) as failed:
+                subject.run_next_turn(session_id, {"caller": "context"})
+
+            self.assertFalse(
+                hasattr(failed.exception, "worker_quiescent")
+            )
+            self.assertEqual(len(spawned), 1)
+            self.assertEqual(spawned[0][0], {"caller": "context"})
+            self.assertIsNone(spawned[0][1].poll())
+            self.assertIsNotNone(self.store.read_turn_attempt(session_id))
+            with self.assertRaises(coordination.CoordinationRejected):
+                subject.run_next_turn(session_id, object())
+            self.assertEqual(len(spawned), 1)
+            with open(target, "rb") as handle:
+                self.assertEqual(handle.read(), b"initial target")
+            self.assertEqual(
+                self.store.read(session_id).state["completed_turns"], []
+            )
+        finally:
+            if spawned:
+                runners._kill_group(spawned[0][1])
+                spawned[0][1].communicate(timeout=5)
+
+    def test_target_cannot_alias_brainstorming_state_store(self):
+        session_id = "store-target-alias"
+        roster = participants()
+        workspace = os.path.join(self.root, session_id)
+        os.makedirs(workspace)
+        request = {
+            "workspace_path": workspace,
+            "target_path": self.store.path,
+            "question": "Should the target overwrite the session authority?",
+            "context": {"brief": "Keep target and session state independent."},
+            "max_rounds": 1,
+        }
+        created = self.store.create(
+            session_id, request, run_config(roster), roster
+        )
+        self.store.transition(
+            session_id, created.revision, "running"
+        )
+        self._create_running("unrelated-session", roster=roster)
+        with open(self.store.path, "rb") as handle:
+            before = handle.read()
+        subject, executors = self._subject(
+            roster, {"lead": [envelope("must not run")], "critic": []}
+        )
+
+        with self.assertRaises(coordination.CoordinationRejected):
+            subject.prepare(session_id)
+
+        with open(self.store.path, "rb") as handle:
+            self.assertEqual(handle.read(), before)
+        durable = self.store.read(session_id)
+        self.assertEqual(durable.state["status"], "running")
+        self.assertIsNone(bs.coordination_projection(durable.state))
+        self.assertIsNotNone(self.store.read("unrelated-session"))
+        self.assertEqual(executors["codex-lead"].calls, [])
+
+    def test_target_cannot_alias_brainstorming_state_store_lock(self):
+        session_id = "store-lock-target-alias"
+        roster = participants()
+        workspace = os.path.join(self.root, session_id)
+        os.makedirs(workspace)
+        lock_path = self.store.path + ".lock"
+        request = {
+            "workspace_path": workspace,
+            "target_path": lock_path,
+            "question": "Should the target replace the state lock?",
+            "context": {"brief": "Keep target and session locking independent."},
+            "max_rounds": 1,
+        }
+        created = self.store.create(
+            session_id, request, run_config(roster), roster
+        )
+        self.store.transition(
+            session_id, created.revision, "running"
+        )
+        before = os.stat(lock_path)
+        subject, executors = self._subject(
+            roster, {"lead": [envelope("must not run")], "critic": []}
+        )
+
+        with self.assertRaises(coordination.CoordinationRejected):
+            subject.prepare(session_id)
+
+        after = os.stat(lock_path)
+        self.assertEqual(
+            (after.st_dev, after.st_ino),
+            (before.st_dev, before.st_ino),
+        )
+        durable = self.store.read(session_id)
+        self.assertEqual(durable.state["status"], "running")
+        self.assertIsNone(bs.coordination_projection(durable.state))
+        self.assertEqual(executors["codex-lead"].calls, [])
+
+    def test_target_cannot_use_target_coordination_lock_namespace(self):
+        session_id = "target-lock-alias"
+        roster = participants()
+        workspace = os.path.join(self.root, session_id)
+        os.makedirs(workspace)
+        victim_target = os.path.join(self.root, "victim", "decision.md")
+        reserved_lock = coordination._target_lock_path(
+            self.store.path, victim_target
+        )
+        os.makedirs(os.path.dirname(reserved_lock), exist_ok=True)
+        with open(reserved_lock, "wb") as handle:
+            handle.write(b"coordination lock")
+        before = os.stat(reserved_lock)
+        request = {
+            "workspace_path": workspace,
+            "target_path": reserved_lock,
+            "question": "Should a target replace a coordination lock?",
+            "context": {
+                "brief": "Keep target artifacts separate from control locks."
+            },
+            "max_rounds": 1,
+        }
+        created = self.store.create(
+            session_id, request, run_config(roster), roster
+        )
+        self.store.transition(
+            session_id, created.revision, "running"
+        )
+        subject, executors = self._subject(
+            roster, {"lead": [envelope("must not run")], "critic": []}
+        )
+
+        with self.assertRaises(coordination.CoordinationRejected):
+            subject.prepare(session_id)
+
+        after = os.stat(reserved_lock)
+        self.assertEqual(
+            (after.st_dev, after.st_ino, after.st_size),
+            (before.st_dev, before.st_ino, before.st_size),
+        )
+        with open(reserved_lock, "rb") as handle:
+            self.assertEqual(handle.read(), b"coordination lock")
+        durable = self.store.read(session_id)
+        self.assertEqual(durable.state["status"], "running")
+        self.assertIsNone(bs.coordination_projection(durable.state))
+        self.assertEqual(executors["codex-lead"].calls, [])
+
+    def test_missing_target_and_restart_recover_last_accepted_revision(self):
+        roster = participants()
+        session_id = "missing-target"
+        target = self._create_running(
+            session_id, roster=roster, initial=MISSING
+        )
+        subject, executors = self._subject(
+            roster,
+            {
+                "lead": [
+                    self._write_action(
+                        target, b"created target", "created target"
+                    )
+                ],
+                "critic": [],
+            },
+        )
+        prepared = subject.prepare(session_id)
+        absent = self.store.read_target_revision(
+            session_id, prepared.state["accepted_target_revision"]
+        )
+        self.assertEqual(bs.target_revision_content(absent), (False, b""))
+        accepted = subject.run_next_turn(session_id, object())
+        accepted_revision = accepted.state["accepted_target_revision"]
+
+        with open(target, "wb") as handle:
+            handle.write(b"divergent after restart")
+        reopened = bs.SessionStore(os.path.join(self.root, "state"))
+        resumed = coordination.BrainstormingCoordinator(
+            reopened,
+            execution.ParticipantExecution(reopened, executors),
+        )
+        reconciled = resumed.prepare(session_id)
+        self.assertEqual(
+            reconciled.state["accepted_target_revision"], accepted_revision
+        )
+        with open(target, "rb") as handle:
+            self.assertEqual(handle.read(), b"created target")
+
+        sentinel = os.path.join(os.path.dirname(target), "sentinel")
+        with open(sentinel, "wb") as handle:
+            handle.write(b"stable")
+        os.unlink(target)
+        os.mkdir(target)
+        with open(os.path.join(target, "wrong"), "wb") as handle:
+            handle.write(b"wrong")
+        resumed.prepare(session_id)
+        with open(target, "rb") as handle:
+            self.assertEqual(handle.read(), b"created target")
+        with open(sentinel, "rb") as handle:
+            self.assertEqual(handle.read(), b"stable")
+
+        os.unlink(target)
+        os.symlink(sentinel, target)
+        resumed.prepare(session_id)
+        with open(target, "rb") as handle:
+            self.assertEqual(handle.read(), b"created target")
+        with open(sentinel, "rb") as handle:
+            self.assertEqual(handle.read(), b"stable")
+
+        delete_id = "accepted-deletion"
+        delete_target = self._create_running(delete_id, roster=roster)
+        deleting, _ = self._subject(
+            roster,
+            {
+                "lead": [
+                    self._delete_action(delete_target, "deleted target")
+                ],
+                "critic": [],
+            },
+        )
+        deleted = deleting.run_next_turn(delete_id, object())
+        deleted_record = self.store.read_target_revision(
+            delete_id, deleted.state["accepted_target_revision"]
+        )
+        self.assertEqual(
+            bs.target_revision_content(deleted_record), (False, b"")
+        )
+        with open(delete_target, "wb") as handle:
+            handle.write(b"must disappear")
+        deleting.prepare(delete_id)
+        self.assertFalse(os.path.lexists(delete_target))
+
+        hardlink_id = "hardlinked-start"
+        hardlink_target = self._create_running(
+            hardlink_id, roster=roster
+        )
+        other_name = os.path.join(
+            os.path.dirname(hardlink_target), "other-name.md"
+        )
+        os.link(hardlink_target, other_name)
+        hardlinked, hardlink_executors = self._subject(
+            roster,
+            {"lead": [envelope("must not run")], "critic": []},
+        )
+        with self.assertRaises(coordination.CoordinationRejected):
+            hardlinked.run_next_turn(hardlink_id, object())
+        self.assertEqual(
+            hardlink_executors["codex-lead"].calls, []
+        )
+        with open(other_name, "rb") as handle:
+            self.assertEqual(handle.read(), b"initial target")
+
+    def test_stale_coordinator_cannot_duplicate_or_reorder_turns(self):
+        session_id = "stale-coordinator"
+        roster = participants()
+        self._create_running(session_id, roster=roster)
+        waiter_started = threading.Event()
+        release = threading.Event()
+
+        def held_result(_prompt, _workspace, _context):
+            def wait():
+                waiter_started.set()
+                release.wait()
+
+            return envelope("sole accepted turn"), wait
+
+        subject, executors = self._subject(
+            roster,
+            {"lead": [held_result], "critic": []},
+        )
+
+        def run():
+            try:
+                return subject.run_next_turn(session_id, object())
+            except BaseException as exc:
+                return exc
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            first = pool.submit(run)
+            self.assertTrue(waiter_started.wait(timeout=2))
+            second = pool.submit(run)
+            release.set()
+            outcomes = [first.result(timeout=2), second.result(timeout=2)]
+
+        self.assertEqual(
+            sum(isinstance(item, bs.SessionSnapshot) for item in outcomes), 1
+        )
+        self.assertEqual(
+            sum(isinstance(item, bs.RevisionConflict) for item in outcomes), 1
+        )
+        durable = self.store.read(session_id)
+        self.assertEqual(len(durable.state["completed_turns"]), 1)
+        self.assertEqual(
+            durable.state["completed_turns"][0]["participant_id"], "lead"
+        )
+        self.assertEqual(len(executors["codex-lead"].calls), 1)
+
+    def test_coordination_reuses_execution_without_public_surface_changes(self):
+        session_id = "compatibility"
+        roster = participants()
+        target = self._create_running(session_id, roster=roster)
+
+        class LegacyExecutor(ScriptedExecutor):
+            wait_for_quiescence = None
+
+        legacy = LegacyExecutor(
+            "codex",
+            [envelope("ordinary exchange"), envelope("must not launch")],
+        )
+        participant_execution = execution.ParticipantExecution(
+            self.store, {"codex-lead": legacy}
+        )
+        accepted, _result = participant_execution.exchange(
+            session_id, "lead", "ordinary prompt", {"caller": "unchanged"}
+        )
+        self.assertEqual(accepted, envelope("ordinary exchange"))
+        self.assertEqual(len(legacy.calls), 1)
+
+        subject = coordination.BrainstormingCoordinator(
+            self.store, participant_execution
+        )
+        with self.assertRaises(execution.ExecutionRejected):
+            subject.run_next_turn(session_id, {"caller": "unchanged"})
+        self.assertEqual(len(legacy.calls), 1)
+        self.assertEqual(
+            self.store.read(session_id).state["completed_turns"], []
+        )
+        with open(target, "rb") as handle:
+            self.assertEqual(handle.read(), b"initial target")
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -148,6 +148,66 @@ def tree_cpu_seconds(root_pid):
 PS_SAMPLE_TIMEOUT = 10
 
 
+def _process_group_exists(pgid):
+    """Return whether ``pgid`` still exists, or None when that is unknown."""
+    try:
+        os.killpg(pgid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except OSError:
+        return None
+    return True
+
+
+def _process_group_quiescent(pgid):
+    """Return whether a worker group has no process capable of more work."""
+    exists = _process_group_exists(pgid)
+    if exists is not True:
+        return None if exists is None else True
+    try:
+        observed = subprocess.run(
+            ["ps", "-Ao", "pgid=,stat="],
+            capture_output=True,
+            text=True,
+            timeout=PS_SAMPLE_TIMEOUT,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if observed.returncode != 0:
+        return None
+    for line in observed.stdout.splitlines():
+        fields = line.split(None, 1)
+        if not fields:
+            continue
+        try:
+            member_pgid = int(fields[0])
+        except ValueError:
+            continue
+        if member_pgid != pgid:
+            continue
+        if len(fields) < 2:
+            return None
+        # A zombie has exited and cannot mutate the target; it may remain in
+        # the process table briefly until its new parent reaps it.
+        if not fields[1].startswith("Z"):
+            return False
+    return True
+
+
+def _wait_for_process_group_quiescence(pgid, timeout=PS_SAMPLE_TIMEOUT):
+    """Confirm that every member of a signalled worker group is quiet."""
+    deadline = time.monotonic() + timeout
+    while True:
+        quiescent = _process_group_quiescent(pgid)
+        if quiescent is True:
+            return True
+        if quiescent is None or time.monotonic() >= deadline:
+            return False
+        time.sleep(0.01)
+
+
 def _positive_float(value):
     """Coerce a config knob to a positive FINITE float, or None. A malformed
     value (string, negative, zero, inf/nan) disables the feature instead of
@@ -732,15 +792,31 @@ class SubprocessRunner(object):
         timeout_override=None,
     ):
         """Start one provider conversation and return its explicit reference."""
-        if not self.supports_session_continuation(family):
-            raise RunnerError(
-                "family %r has no explicit session continuation support"
-                % family
+        try:
+            if not self.supports_session_continuation(family):
+                raise RunnerError(
+                    "family %r has no explicit session continuation support"
+                    % family
+                )
+            template = apply_model_effort(
+                self.commands[family], model, effort
             )
-        template = apply_model_effort(self.commands[family], model, effort)
+            if family == "codex":
+                if "--json" not in template:
+                    template = list(template) + ["--json"]
+                session_ref = None
+            else:
+                session_ref = str(uuid.uuid4())
+                template = list(template) + ["--session-id", session_ref]
+        except BaseException as exc:
+            # No process factory has been called, so participant coordination
+            # can safely reject and clear its exclusive attempt.
+            try:
+                exc.worker_quiescent = True
+            except (AttributeError, TypeError):
+                pass
+            raise
         if family == "codex":
-            if "--json" not in template:
-                template = list(template) + ["--json"]
             result = self._call_template(
                 family,
                 prompt,
@@ -749,11 +825,19 @@ class SubprocessRunner(object):
                 timeout_override=timeout_override,
                 execution_context=execution_context,
             )
-            result.session_ref = _codex_session_ref(result.transport_text)
+            try:
+                result.session_ref = _codex_session_ref(
+                    result.transport_text
+                )
+            except BaseException as exc:
+                if getattr(result, "worker_quiescent", None) is True:
+                    try:
+                        exc.worker_quiescent = True
+                    except (AttributeError, TypeError):
+                        pass
+                raise
             return result
 
-        session_ref = str(uuid.uuid4())
-        template = list(template) + ["--session-id", session_ref]
         result = self._call_template(
             family,
             prompt,
@@ -777,23 +861,34 @@ class SubprocessRunner(object):
         timeout_override=None,
     ):
         """Continue exactly ``session_ref``; there is no recency fallback."""
-        if not isinstance(session_ref, str) or not session_ref.strip():
-            raise RunnerError("session_ref must be a non-empty string")
-        if not self.supports_session_continuation(family):
-            raise RunnerError(
-                "family %r has no explicit session continuation support"
-                % family
+        try:
+            if not isinstance(session_ref, str) or not session_ref.strip():
+                raise RunnerError("session_ref must be a non-empty string")
+            if not self.supports_session_continuation(family):
+                raise RunnerError(
+                    "family %r has no explicit session continuation support"
+                    % family
+                )
+            template = apply_model_effort(
+                self.commands[family], model, effort
             )
-        template = apply_model_effort(self.commands[family], model, effort)
-        if family == "codex":
-            template = list(template[:2]) + ["resume"] + list(template[2:])
-            if "--json" not in template:
-                template.append("--json")
-            # `-` makes stdin the prompt explicitly; omitting it would leave
-            # room for CLI recency/picker behavior in future versions.
-            template.extend([session_ref, "-"])
-        else:
-            template = list(template) + ["--resume", session_ref]
+            if family == "codex":
+                template = list(template[:2]) + ["resume"] + list(template[2:])
+                if "--json" not in template:
+                    template.append("--json")
+                # `-` makes stdin the prompt explicitly; omitting it would
+                # leave room for CLI recency/picker behavior in future versions.
+                template.extend([session_ref, "-"])
+            else:
+                template = list(template) + ["--resume", session_ref]
+        except BaseException as exc:
+            # Validation and argv construction above occur before any worker
+            # process can exist.
+            try:
+                exc.worker_quiescent = True
+            except (AttributeError, TypeError):
+                pass
+            raise
         result = self._call_template(
             family,
             prompt,
@@ -823,6 +918,8 @@ class SubprocessRunner(object):
         so_fd = stdout_path = None
         proc = None
         reaped = False
+        worker_quiescent = True
+        failure = None
         watchdog = None
         # OWNED here, before any thread starts, so an interrupt that lands
         # after the watchdog thread starts can still stop it (the finally sets
@@ -847,10 +944,12 @@ class SubprocessRunner(object):
             # an in-group helper that closed/redirected stderr and outlived the
             # leader (communicate() only waits on stderr-holding children) —
             # then WAIT (only if not already reaped) so the leader is not left
-            # a zombie. killpg targets the leader's original pgid; while ANY
-            # member is alive it reserves that pgid, so the signal reaches our
-            # group and only our group. Once every member has exited the pgid
-            # is free and killpg returns ESRCH, a no-op. The residual — the OS
+            # a zombie, and confirm that no group member can do more work
+            # before exposing quiescence evidence. killpg targets the leader's
+            # original pgid; while ANY member is alive it reserves that pgid,
+            # so the signal reaches our group and only our group. Once every
+            # member has exited the pgid is free and killpg returns ESRCH, a
+            # no-op. The residual — the OS
             # having RECYCLED that freed pgid to an unrelated group in the
             # window before this killpg — cannot occur here: Linux and macOS
             # allocate pids from a rotating counter, so a just-freed pid is not
@@ -870,7 +969,14 @@ class SubprocessRunner(object):
                         p.communicate(timeout=PS_SAMPLE_TIMEOUT)
                     except Exception:
                         pass
-            _untrack_worker(p)
+                # This registry forwards a stop only to workers whose call is
+                # still in flight. Once the final kill and leader wait have
+                # run, retire the numeric pgid before the potentially slow
+                # confirmation: retaining it could let a later stop signal an
+                # unrelated group after identifier reuse.
+                _untrack_worker(p)
+                quiescent = _wait_for_process_group_quiescence(p.pid)
+            return quiescent
 
         # ONE guard around the whole lifecycle. Any failure OR a
         # KeyboardInterrupt at ANY point — building argv (which may create
@@ -925,6 +1031,11 @@ class SubprocessRunner(object):
                     "encoding": "utf-8",
                     "errors": "replace",
                 }
+                # Crossing either launch boundary means a worker may exist.
+                # In particular, an opaque participant factory can spawn and
+                # then raise without returning the process handle, so no
+                # exception after entry may certify worker quiescence.
+                worker_quiescent = False
                 if execution_context is _AMBIENT_EXECUTION:
                     proc = subprocess.Popen(argv, **popen_kwargs)
                 else:
@@ -966,7 +1077,7 @@ class SubprocessRunner(object):
                 # stdout, or having closed stderr); join then confirms the
                 # daemon has exited.
                 wd_done.set()
-                _reap(proc)
+                worker_quiescent = _reap(proc)
                 reaped = True
                 if watchdog is not None:
                     watchdog.join(timeout=PS_SAMPLE_TIMEOUT)
@@ -1022,12 +1133,22 @@ class SubprocessRunner(object):
                     "family %s exited %d with no output; %sstderr tail: %s"
                     % (family, proc.returncode, lead, stderr_text[-500:])
                 )
-            return RunnerResult(
+            result = RunnerResult(
                 text,
                 proc.returncode,
                 duration,
                 transport_text=stdout_text,
             )
+            # Ordered Brainstorming coordination consumes this positive
+            # evidence before accepting a turn. Plain participant exchanges
+            # retain the existing fail-open delivery posture when process
+            # inspection is unavailable.
+            if worker_quiescent:
+                result.worker_quiescent = True
+            return result
+        except BaseException as exc:
+            failure = exc
+            raise
         finally:
             # Single cleanup site, reached on EVERY exit. Set wd_done, then
             # reap a spawned-but-not-yet-reaped worker under kill_lock (so the
@@ -1039,9 +1160,18 @@ class SubprocessRunner(object):
             # descriptor); then delete the temp files.
             wd_done.set()
             if proc is not None and not reaped:
-                _reap(proc)
+                worker_quiescent = _reap(proc)
             if watchdog is not None:
                 watchdog.join(timeout=PS_SAMPLE_TIMEOUT)
+            if failure is not None and worker_quiescent:
+                # The exception is visible only after the same supervised
+                # cleanup path has confirmed every admitted process quiet.
+                # Pre-spawn failures also carry this evidence because no
+                # worker process could exist.
+                try:
+                    failure.worker_quiescent = True
+                except (AttributeError, TypeError):
+                    pass
             for fd in (of_fd, so_fd):
                 if fd is not None:
                     try:

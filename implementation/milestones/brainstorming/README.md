@@ -406,10 +406,11 @@ The goal is satisfied when:
 
 | Unit | Status | Rounds | Seal attempts | Gate commit |
 |---|---|---|---|---|
-| skeleton | sealed | 4 | a1:pass, a2:pass | abefb98 |
-| slice_doc-01 (Session contract and durable state) | sealed | 2 | a1:pass, a2:pass (wave skeleton-a2) | da9c7c7 |
+| skeleton | sealed | 4 | a1:pass, a2:pass | e21ddee |
+| slice_doc-01 (Session contract and durable state) | sealed | 2 | a1:pass, a2:pass (wave skeleton-a2) | e21ddee |
 | slice_impl-01 (Session contract and durable state) | sealed | 5 | a1:pass | 88bd24d |
-| slice_doc-02 (Persistent participant execution) | sealed | 2 | a1:pass, a2:pass (wave skeleton-a2) | d692441 |
+| slice_doc-02 (Persistent participant execution) | sealed | 2 | a1:pass, a2:pass (wave skeleton-a2) | e21ddee |
 | slice_impl-02 (Persistent participant execution) | sealed | 5 | a1:pass | 9b5103f |
-| slice_doc-03 (Ordered rounds and lead-owned target) | sealed | 9 | a1:pass, a2:pass (wave skeleton-a2) | a07f7f0 |
-| slice_impl-03 (Ordered rounds and lead-owned target) | pending | 4 | - | - |
+| slice_doc-03 (Ordered rounds and lead-owned target) | sealed | 9 | a1:pass, a2:pass (wave skeleton-a2) | e21ddee |
+| slice_impl-03 (Ordered rounds and lead-owned target) | sealed | 30 | a1:pass | - |
+| slice_doc-04 (Plain-language session transcript) | pending | 0 | - | - |

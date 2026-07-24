@@ -1,15 +1,17 @@
 """Product-neutral brainstorming session contracts and durable state.
 
-This module owns accepted configuration, lifecycle state, and the durable
-logical-session reference for each participant. Ordered turns, target
-revisions, ballots, transcripts, service routes, and product adapters belong
-to later slices.
+This module owns accepted configuration, lifecycle state, durable participant
+session references, and the accepted ordered-discussion projection. Ballots,
+transcripts, service routes, and product adapters belong to later slices.
 """
 
 from __future__ import annotations
 
 import copy
+import base64
+import hashlib
 import json
+import re
 from dataclasses import dataclass
 
 from orchestrator import contracts, kvstore
@@ -27,6 +29,17 @@ _ALLOWED_TRANSITIONS = {
     "failure": (),
 }
 _SESSION_KEY_PREFIX = "brainstorming/session:"
+_TARGET_REVISION_KEY_PREFIX = "brainstorming/target_revision:"
+_TURN_ATTEMPT_KEY_PREFIX = "brainstorming/turn_attempt:"
+_TARGET_REVISION_ID_PREFIX = "brainstorming-sha256:"
+_TARGET_REVISION_ID_RE = re.compile(
+    r"^brainstorming-sha256:[0-9a-f]{64}$"
+)
+_COORDINATION_FIELDS = (
+    "completed_turns",
+    "rounds_used",
+    "accepted_target_revision",
+)
 
 
 class ContractError(contracts.ContractError):
@@ -103,6 +116,148 @@ def _same_json_value(left, right):
         "allow_nan": False,
     }
     return json.dumps(left, **options) == json.dumps(right, **options)
+
+
+def validate_target_revision_id(revision):
+    """Validate one Brainstorming-owned target revision identifier."""
+    _text(revision, "target revision")
+    if _TARGET_REVISION_ID_RE.fullmatch(revision) is None:
+        raise ContractError("target revision is not a Brainstorming revision")
+    return revision
+
+
+def make_target_revision(exists, content, mode):
+    """Retain exact target bytes and functional mode under a derived id."""
+    if type(exists) is not bool:
+        raise ContractError("target revision exists must be a boolean")
+    if not isinstance(content, bytes):
+        raise ContractError("target revision content must be bytes")
+    if not exists and content:
+        raise ContractError("an absent target revision cannot carry content")
+    if exists:
+        if type(mode) is not int or mode < 0 or mode > 0o7777:
+            raise ContractError(
+                "target revision mode must be POSIX permission bits"
+            )
+        mode_marker = mode.to_bytes(2, "big")
+    else:
+        if mode is not None:
+            raise ContractError("an absent target revision cannot carry a mode")
+        mode_marker = b""
+    marker = b"\x01" if exists else b"\x00"
+    revision = _TARGET_REVISION_ID_PREFIX + hashlib.sha256(
+        marker + mode_marker + content
+    ).hexdigest()
+    return {
+        "revision": revision,
+        "exists": exists,
+        "content_base64": base64.b64encode(content).decode("ascii"),
+        "mode": mode,
+    }
+
+
+def validate_target_revision(target_revision):
+    """Validate one exact, recoverable target revision record."""
+    _exact_keys(
+        target_revision,
+        ("revision", "exists", "content_base64", "mode"),
+        (),
+        "target_revision",
+    )
+    revision = validate_target_revision_id(target_revision["revision"])
+    exists = target_revision["exists"]
+    if type(exists) is not bool:
+        raise ContractError("target_revision.exists must be a boolean")
+    encoded = target_revision["content_base64"]
+    if not isinstance(encoded, str):
+        raise ContractError("target_revision.content_base64 must be a string")
+    try:
+        content = base64.b64decode(encoded.encode("ascii"), validate=True)
+    except (UnicodeEncodeError, ValueError) as exc:
+        raise ContractError(
+            "target_revision.content_base64 is invalid"
+        ) from exc
+    mode = target_revision["mode"]
+    expected = make_target_revision(exists, content, mode)
+    if revision != expected["revision"]:
+        raise ContractError("target_revision state does not match its id")
+    return expected
+
+
+def target_revision_content(target_revision):
+    """Return the exact existence bit and bytes from a checked revision."""
+    checked = validate_target_revision(target_revision)
+    return (
+        checked["exists"],
+        base64.b64decode(checked["content_base64"].encode("ascii")),
+    )
+
+
+def target_revision_mode(target_revision):
+    """Return the retained POSIX mode, or ``None`` for an absent target."""
+    return validate_target_revision(target_revision)["mode"]
+
+
+def validate_turn_attempt(turn_attempt):
+    """Validate crash-surviving control state for one exclusive turn."""
+    _exact_keys(
+        turn_attempt,
+        (
+            "token",
+            "participant_id",
+            "completed_turn_count",
+            "target_revision",
+            "quiescent",
+        ),
+        ("target_parent",),
+        "turn_attempt",
+    )
+    checked = {
+        "token": _text(turn_attempt["token"], "turn_attempt.token"),
+        "participant_id": _text(
+            turn_attempt["participant_id"], "turn_attempt.participant_id"
+        ),
+        "completed_turn_count": turn_attempt["completed_turn_count"],
+        "target_revision": validate_target_revision_id(
+            turn_attempt["target_revision"]
+        ),
+        "quiescent": turn_attempt["quiescent"],
+    }
+    if "target_parent" in turn_attempt:
+        parent = turn_attempt["target_parent"]
+        _exact_keys(
+            parent,
+            ("path", "device", "inode"),
+            (),
+            "turn_attempt.target_parent",
+        )
+        checked["target_parent"] = {
+            "path": _text(
+                parent["path"], "turn_attempt.target_parent.path"
+            ),
+            "device": parent["device"],
+            "inode": parent["inode"],
+        }
+        if (
+            type(checked["target_parent"]["device"]) is not int
+            or checked["target_parent"]["device"] < 0
+            or type(checked["target_parent"]["inode"]) is not int
+            or checked["target_parent"]["inode"] < 0
+        ):
+            raise ContractError(
+                "turn_attempt.target_parent device and inode must be "
+                "non-negative integers"
+            )
+    if (
+        type(checked["completed_turn_count"]) is not int
+        or checked["completed_turn_count"] < 0
+    ):
+        raise ContractError(
+            "turn_attempt.completed_turn_count must be a non-negative integer"
+        )
+    if type(checked["quiescent"]) is not bool:
+        raise ContractError("turn_attempt.quiescent must be a boolean")
+    return checked
 
 
 def _validate_participant(participant, ctx):
@@ -265,6 +420,92 @@ def provider_session_ref(executor_ref, participant_session_ref):
     return participant_session_ref[len(prefix):]
 
 
+def coordination_projection(state):
+    """Return the accepted ordered-discussion fields, or ``None``."""
+    present = {field for field in _COORDINATION_FIELDS if field in state}
+    if not present:
+        return None
+    if present != set(_COORDINATION_FIELDS):
+        raise ContractError(
+            "accepted coordination fields must be present together"
+        )
+    return {
+        field: copy.deepcopy(state[field]) for field in _COORDINATION_FIELDS
+    }
+
+
+def _validate_coordination(state, request, run_config, status):
+    projection = coordination_projection(state)
+    if projection is None:
+        return None
+    if status == "created":
+        raise ContractError(
+            "created sessions cannot have accepted coordination state"
+        )
+
+    turns = projection["completed_turns"]
+    if not isinstance(turns, list):
+        raise ContractError("state.completed_turns must be a list")
+    rounds_used = projection["rounds_used"]
+    if type(rounds_used) is not int or rounds_used < 0:
+        raise ContractError(
+            "state.rounds_used must be a non-negative integer"
+        )
+    accepted_revision = validate_target_revision_id(
+        projection["accepted_target_revision"]
+    )
+    participants = run_config["participants"]
+    turn_limit = request["max_rounds"] * len(participants)
+    if len(turns) > turn_limit:
+        raise ContractError("completed turns exceed request.max_rounds")
+
+    previous_revision = None
+    for index, turn in enumerate(turns):
+        ctx = "state.completed_turns[%d]" % index
+        _exact_keys(
+            turn,
+            ("round", "participant_id", "markdown", "target_revision"),
+            (),
+            ctx,
+        )
+        participant = participants[index % len(participants)]
+        expected_round = index // len(participants) + 1
+        if type(turn["round"]) is not int or turn["round"] != expected_round:
+            raise ContractError("%s.round does not follow roster order" % ctx)
+        if turn["participant_id"] != participant["id"]:
+            raise ContractError(
+                "%s.participant_id does not follow roster order" % ctx
+            )
+        _text(turn["markdown"], "%s.markdown" % ctx)
+        revision = validate_target_revision_id(turn["target_revision"])
+        if (
+            previous_revision is not None
+            and revision != previous_revision
+            and participant["role"] != "lead"
+        ):
+            raise ContractError(
+                "%s changes the target revision outside a lead turn" % ctx
+            )
+        previous_revision = revision
+
+    expected_rounds = len(turns) // len(participants)
+    if rounds_used != expected_rounds:
+        raise ContractError(
+            "state.rounds_used must count only complete roster passes"
+        )
+    if rounds_used > request["max_rounds"]:
+        raise ContractError("state.rounds_used exceeds request.max_rounds")
+    if turns and turns[-1]["target_revision"] != accepted_revision:
+        raise ContractError(
+            "accepted_target_revision must match the latest completed turn"
+        )
+    return {
+        "completed_turns": _json_copy(turns, "state.completed_turns"),
+        "rounds_used": rounds_used,
+        "accepted_target_revision": accepted_revision,
+    }
+
+
 def _validate_eligible_participants(eligible_participants):
     eligible = _json_copy(eligible_participants, "eligible_participants")
     if not isinstance(eligible, list) or not eligible:
@@ -404,7 +645,12 @@ def validate_session_state(state):
     required = {"request", "run_config", "status", "history"}
     if status in TERMINAL_STATUSES:
         required.add("result")
-    _exact_keys(state, required, ("participant_sessions",), "state")
+    _exact_keys(
+        state,
+        required,
+        ("participant_sessions",) + _COORDINATION_FIELDS,
+        "state",
+    )
     request = validate_request(state["request"])
     run_config = validate_run_config(state["run_config"])
     if "participant_sessions" in state:
@@ -415,6 +661,7 @@ def validate_session_state(state):
             raise ContractError(
                 "created sessions cannot have participant session references"
             )
+    _validate_coordination(state, request, run_config, status)
     last_status = _validate_history(state["history"], request["target_path"])
     if last_status != status:
         raise ContractError("state.status must match the last history record")
@@ -498,6 +745,12 @@ def assert_participant_session_successor(
             raise HistoryRewriteError(
                 "participant binding changed session field %s" % field
             )
+    if not _same_json_value(
+        coordination_projection(old), coordination_projection(new)
+    ):
+        raise HistoryRewriteError(
+            "participant binding changed accepted coordination state"
+        )
 
     old_sessions = old.get("participant_sessions", {})
     if participant_id in old_sessions:
@@ -512,8 +765,127 @@ def assert_participant_session_successor(
         )
 
 
+def initialize_coordination_state(state, target_revision):
+    """Add the empty accepted-discussion projection to a running session."""
+    current = validate_session_state(state)
+    if current["status"] != "running":
+        raise IllegalTransition(
+            "accepted coordination can only initialize while running"
+        )
+    if coordination_projection(current) is not None:
+        raise HistoryRewriteError("accepted coordination is already initialized")
+    checked_revision = validate_target_revision(target_revision)
+    successor = copy.deepcopy(current)
+    successor.update(
+        {
+            "completed_turns": [],
+            "rounds_used": 0,
+            "accepted_target_revision": checked_revision["revision"],
+        }
+    )
+    return validate_session_state(successor)
+
+
+def assert_coordination_initialization_successor(old_state, new_state):
+    """Accept exactly the first empty coordination projection."""
+    old = validate_session_state(old_state)
+    new = validate_session_state(new_state)
+    if coordination_projection(old) is not None:
+        raise HistoryRewriteError("accepted coordination is already initialized")
+    revision = new.get("accepted_target_revision")
+    expected = copy.deepcopy(old)
+    expected.update(
+        {
+            "completed_turns": [],
+            "rounds_used": 0,
+            "accepted_target_revision": revision,
+        }
+    )
+    validate_target_revision_id(revision)
+    if not _same_json_value(validate_session_state(expected), new):
+        raise HistoryRewriteError(
+            "coordination initialization changed unrelated session state"
+        )
+
+
+def completed_turn_successor(
+    state, participant_id, markdown, target_revision
+):
+    """Append exactly the next roster turn and complete a pass if applicable."""
+    current = validate_session_state(state)
+    if current["status"] != "running":
+        raise IllegalTransition("completed turns require a running session")
+    if coordination_projection(current) is None:
+        raise HistoryRewriteError("accepted coordination is not initialized")
+    participant_id = _text(participant_id, "participant_id")
+    markdown = _text(markdown, "discussion_turn.markdown")
+    target_revision = validate_target_revision_id(target_revision)
+    participants = current["run_config"]["participants"]
+    turn_index = len(current["completed_turns"])
+    if turn_index >= current["request"]["max_rounds"] * len(participants):
+        raise IllegalTransition("the configured round limit is exhausted")
+    participant = participants[turn_index % len(participants)]
+    if participant_id != participant["id"]:
+        raise HistoryRewriteError(
+            "completed turn does not match the next persisted participant"
+        )
+    if (
+        target_revision != current["accepted_target_revision"]
+        and participant["role"] != "lead"
+    ):
+        raise HistoryRewriteError(
+            "only a completed lead turn may advance the target revision"
+        )
+
+    successor = copy.deepcopy(current)
+    round_number = turn_index // len(participants) + 1
+    successor["completed_turns"].append(
+        {
+            "round": round_number,
+            "participant_id": participant_id,
+            "markdown": markdown,
+            "target_revision": target_revision,
+        }
+    )
+    successor["accepted_target_revision"] = target_revision
+    if (turn_index + 1) % len(participants) == 0:
+        successor["rounds_used"] += 1
+    return validate_session_state(successor)
+
+
+def assert_completed_turn_successor(
+    old_state, new_state, participant_id, markdown, target_revision
+):
+    """Accept one exact append-only ordered-turn successor."""
+    old = validate_session_state(old_state)
+    new = validate_session_state(new_state)
+    expected = completed_turn_successor(
+        old, participant_id, markdown, target_revision
+    )
+    if not _same_json_value(expected, new):
+        raise HistoryRewriteError(
+            "completed turn is not the exact next coordination revision"
+        )
+
+
 def _session_key(session_id):
     return _SESSION_KEY_PREFIX + kvstore.validate_fragment(
+        session_id, "session_id"
+    )
+
+
+def _target_revision_key(session_id, revision):
+    session_id = kvstore.validate_fragment(session_id, "session_id")
+    revision = validate_target_revision_id(revision)
+    return "%s%s:%s" % (
+        _TARGET_REVISION_KEY_PREFIX,
+        session_id,
+        revision,
+    )
+
+
+def _turn_attempt_key(session_id):
+    return _TURN_ATTEMPT_KEY_PREFIX + kvstore.validate_fragment(
         session_id, "session_id"
     )
 
@@ -541,6 +913,145 @@ class SessionStore:
 
     def read(self, session_id):
         return self._snapshot(self._store.read(_session_key(session_id)))
+
+    def _write_target_revision(self, session_id, target_revision):
+        checked = validate_target_revision(target_revision)
+        key = _target_revision_key(session_id, checked["revision"])
+        current = self._store.read(key)
+        if current["exists?"]:
+            retained = validate_target_revision(current["value"])
+            if not _same_json_value(retained, checked):
+                raise HistoryRewriteError(
+                    "a target revision id cannot identify different state"
+                )
+            return retained
+        result = self._store.cas(key, None, checked)
+        if not result.ok:
+            retained = validate_target_revision(result.record["value"])
+            if not _same_json_value(retained, checked):
+                raise HistoryRewriteError(
+                    "a target revision id cannot identify different state"
+                )
+            return retained
+        return checked
+
+    def read_target_revision(self, session_id, revision):
+        """Read one exact retained revision owned by this session."""
+        record = self._store.read(_target_revision_key(session_id, revision))
+        if not record["exists?"]:
+            raise HistoryRewriteError(
+                "accepted target revision content is unavailable"
+            )
+        checked = validate_target_revision(record["value"])
+        if checked["revision"] != revision:
+            raise HistoryRewriteError(
+                "retained target revision has the wrong identifier"
+            )
+        return checked
+
+    def read_turn_attempt(self, session_id):
+        """Read the exclusive in-flight control record, if one remains."""
+        record = self._store.read(_turn_attempt_key(session_id))
+        if not record["exists?"]:
+            return None
+        return validate_turn_attempt(record["value"])
+
+    def begin_turn_attempt(self, session_id, turn_attempt):
+        """Persist worker admission before invoking the scheduled participant."""
+        checked = validate_turn_attempt(turn_attempt)
+        if "target_parent" not in checked:
+            raise ContractError(
+                "new turn attempts require a pinned target_parent"
+            )
+        if checked["quiescent"]:
+            raise ContractError("a new turn attempt cannot start quiescent")
+        snapshot = self.read(session_id)
+        if snapshot is None:
+            raise SessionNotFound(session_id)
+        if snapshot.state["status"] != "running":
+            raise IllegalTransition("turn attempts require a running session")
+        projection = coordination_projection(snapshot.state)
+        if projection is None:
+            raise HistoryRewriteError(
+                "accepted coordination is not initialized"
+            )
+        turns = projection["completed_turns"]
+        participants = snapshot.state["run_config"]["participants"]
+        expected = participants[len(turns) % len(participants)]
+        if (
+            checked["participant_id"] != expected["id"]
+            or checked["completed_turn_count"] != len(turns)
+            or checked["target_revision"]
+            != projection["accepted_target_revision"]
+        ):
+            raise HistoryRewriteError(
+                "turn attempt does not match durable accepted progress"
+            )
+        key = _turn_attempt_key(session_id)
+        current = self._store.read(key)
+        if current["exists?"]:
+            raise HistoryRewriteError("a turn attempt is already active")
+        # Coordinators hold the cross-process target lock around this write.
+        self._store.put(key, checked)
+        return checked
+
+    def mark_turn_attempt_quiescent(self, session_id, token):
+        """Durably record that the admitted worker can no longer mutate."""
+        token = _text(token, "turn_attempt.token")
+        key = _turn_attempt_key(session_id)
+        current = self._store.read(key)
+        if not current["exists?"]:
+            raise HistoryRewriteError("the active turn attempt is missing")
+        attempt = validate_turn_attempt(current["value"])
+        if attempt["token"] != token:
+            raise HistoryRewriteError("the active turn attempt token changed")
+        if attempt["quiescent"]:
+            return attempt
+        attempt["quiescent"] = True
+        result = self._store.cas(key, current["revision"], attempt)
+        if not result.ok:
+            raise HistoryRewriteError(
+                "the active turn attempt changed before quiescence"
+            )
+        return attempt
+
+    def finish_turn_attempt(self, session_id, token):
+        """Clear one reconciled or durably accepted exclusive attempt."""
+        token = _text(token, "turn_attempt.token")
+        key = _turn_attempt_key(session_id)
+        current = self._store.read(key)
+        if not current["exists?"]:
+            return
+        attempt = validate_turn_attempt(current["value"])
+        if attempt["token"] != token:
+            raise HistoryRewriteError("the active turn attempt token changed")
+        result = self._store.delete(key, expected_revision=current["revision"])
+        if not result.ok:
+            raise HistoryRewriteError(
+                "the active turn attempt changed before completion"
+            )
+
+    def _cas_coordination(
+        self, session_id, expected_revision, candidate, assertion
+    ):
+        if type(expected_revision) is not int or expected_revision <= 0:
+            raise ContractError("expected_revision must be a positive integer")
+        current = self.read(session_id)
+        if current is None:
+            raise SessionNotFound(session_id)
+        if current.revision != expected_revision:
+            raise RevisionConflict(current)
+        candidate = validate_session_state(candidate)
+        assertion(current.state, candidate)
+        result = self._store.cas(
+            _session_key(session_id), expected_revision, candidate
+        )
+        if not result.ok:
+            latest = self._snapshot(result.record)
+            if latest is None:
+                raise SessionNotFound(session_id)
+            raise RevisionConflict(latest)
+        return self._snapshot(result.record)
 
     def create(self, session_id, request, run_config, eligible_participants):
         checked_config = validate_run_config(run_config)
@@ -585,6 +1096,65 @@ class SessionStore:
             raise RevisionConflict(current)
         successor = transition_session(current.state, new_status, result)
         return self.save(session_id, expected_revision, successor)
+
+    def initialize_coordination(
+        self, session_id, expected_revision, target_revision
+    ):
+        """Retain the starting target and atomically expose empty progress."""
+        checked_target = self._write_target_revision(
+            session_id, target_revision
+        )
+        current = self.read(session_id)
+        if current is None:
+            raise SessionNotFound(session_id)
+        if current.revision != expected_revision:
+            raise RevisionConflict(current)
+        candidate = initialize_coordination_state(
+            current.state, checked_target
+        )
+        return self._cas_coordination(
+            session_id,
+            expected_revision,
+            candidate,
+            assert_coordination_initialization_successor,
+        )
+
+    def record_completed_turn(
+        self,
+        session_id,
+        expected_revision,
+        participant_id,
+        markdown,
+        target_revision,
+    ):
+        """Retain target content and atomically append one accepted turn."""
+        checked_target = self._write_target_revision(
+            session_id, target_revision
+        )
+        current = self.read(session_id)
+        if current is None:
+            raise SessionNotFound(session_id)
+        if current.revision != expected_revision:
+            raise RevisionConflict(current)
+        candidate = completed_turn_successor(
+            current.state,
+            participant_id,
+            markdown,
+            checked_target["revision"],
+        )
+
+        def assertion(old, new):
+            assert_completed_turn_successor(
+                old,
+                new,
+                participant_id,
+                markdown,
+                checked_target["revision"],
+            )
+
+        return self._cas_coordination(
+            session_id, expected_revision, candidate, assertion
+        )
 
     def bind_participant_session(
         self,

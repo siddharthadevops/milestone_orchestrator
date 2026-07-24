@@ -19,6 +19,7 @@ import tempfile
 import textwrap
 import time
 import unittest
+from unittest import mock
 
 from orchestrator import contracts
 from orchestrator import runners
@@ -1489,6 +1490,81 @@ class TestStallWatchdog(unittest.TestCase):
         time.sleep(0.5)
         with self.assertRaises(OSError):   # ESRCH: the child was reaped
             os.kill(child_pid, 0)
+
+    def test_success_waits_for_process_group_quiescence_confirmation(self):
+        runner = self._runner(
+            [sys.executable, "-c", "print('done')"],
+            window=0, floor=0,
+        )
+        with mock.patch(
+            "orchestrator.runners._process_group_quiescent",
+            side_effect=[False, False, True],
+        ) as quiescence:
+            result = runner.call("fam", "", self.ws)
+
+        self.assertEqual(result.text.strip(), "done")
+        self.assertTrue(result.worker_quiescent)
+        self.assertEqual(quiescence.call_count, 3)
+
+    def test_unknown_process_group_state_keeps_legacy_call_fail_open(self):
+        runner = self._runner(
+            [sys.executable, "-c", "print('done')"],
+            window=0, floor=0,
+        )
+        with runners._ACTIVE_WORKERS_LOCK:
+            before = set(runners._ACTIVE_WORKERS)
+        self.assertEqual(before, set())
+        registry_during_confirmation = []
+
+        def unknown_group_state(_pgid):
+            with runners._ACTIVE_WORKERS_LOCK:
+                registry_during_confirmation.append(
+                    set(runners._ACTIVE_WORKERS)
+                )
+            return None
+
+        with mock.patch(
+            "orchestrator.runners._process_group_quiescent",
+            side_effect=unknown_group_state,
+        ):
+            result = runner.call("fam", "", self.ws)
+
+        self.assertEqual(result.text.strip(), "done")
+        self.assertFalse(hasattr(result, "worker_quiescent"))
+        self.assertEqual(registry_during_confirmation, [before])
+        with runners._ACTIVE_WORKERS_LOCK:
+            self.assertEqual(runners._ACTIVE_WORKERS, before)
+        with mock.patch("orchestrator.runners._kill_group") as late_signal:
+            runners.kill_active_worker_groups()
+        late_signal.assert_not_called()
+
+    def test_unknown_process_group_state_does_not_claim_participant_quiescence(
+        self,
+    ):
+        runner = self._runner(
+            [sys.executable, "-c", "print('done')"],
+            window=0, floor=0,
+        )
+        runner.participant_process_factory = (
+            lambda _context, argv, kwargs: runners.subprocess.Popen(
+                argv, **kwargs
+            )
+        )
+        template = [sys.executable, "-c", "print('done')"]
+        with mock.patch(
+            "orchestrator.runners._process_group_quiescent",
+            return_value=None,
+        ):
+            result = runner._call_template(
+                "fam",
+                "",
+                self.ws,
+                template,
+                execution_context=object(),
+            )
+
+        self.assertEqual(result.text.strip(), "done")
+        self.assertFalse(hasattr(result, "worker_quiescent"))
 
     def test_stall_after_leader_exits_zero_is_recoverable(self):
         # The leader exits 0 with NO stdout, but a frozen child inherits the
