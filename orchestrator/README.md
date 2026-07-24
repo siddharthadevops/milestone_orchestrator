@@ -130,6 +130,18 @@ live session leader — which a real driver always is and an OS-recycled pid
 almost never is — so stale pids neither wedge start/delete nor let stop
 signal an innocent process group.
 
+Standalone Brainstorming uses a separate service record and state store under
+`~/.impl_roadmap/brainstorming/`; it never creates a milestone run or registry
+entry. `POST /api/brainstorming/sessions` accepts the exact generic request,
+ordered `{id, role}` participants, and closure policy, with an optional
+`project`/`work_area` pair. `GET /api/brainstorming/sessions/<id>` is the
+polling/follow surface, and
+`POST /api/brainstorming/sessions/<id>/stop` accepts no fields. All three
+successes return `{"ok": true, "session": ...}`. Stop waits for local work to
+be quiet, restores only the accepted target artifact, and publishes a coherent
+failure; if that safety evidence is unavailable it returns
+`brainstorming_stop_incomplete` without inventing a result.
+
 Panel time is completed LLM work derived from the append-only ledger, not
 driver wall time: draft/implement calls, review/fix/delta rounds, every seal
 half, reported builder gaps, repaired first strikes, and reclassifications each

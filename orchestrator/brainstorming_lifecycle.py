@@ -1,0 +1,1265 @@
+"""Standalone service lifecycle for product-neutral Brainstorming sessions.
+
+This module deliberately owns no milestone state.  It binds an authenticated
+caller to one Brainstorming SessionStore record, launches one independent
+lifecycle process, projects durable progress for polling, and composes a
+target-safe terminal failure for an explicit caller stop.
+"""
+
+from __future__ import annotations
+
+import argparse
+import contextlib
+import copy
+import json
+import os
+import secrets
+import shutil
+import signal
+import subprocess
+import sys
+import tempfile
+import threading
+import time
+import traceback
+import unicodedata
+from dataclasses import dataclass
+
+from orchestrator import brainstorming
+from orchestrator import brainstorming_coordination as coordination
+from orchestrator import brainstorming_execution as execution
+from orchestrator import driver, kvstore, registry, runners
+
+try:
+    import fcntl
+except ImportError:  # pragma: no cover - the production service is POSIX
+    fcntl = None
+
+
+SCHEMA_VERSION = 1
+SERVICE_DIRNAME = "brainstorming"
+REGISTRY_FILENAME = "sessions.json"
+STATE_DIRNAME = "state"
+LOGS_DIRNAME = "logs"
+STOP_WAIT_S = 5.0
+
+INVALID_REQUEST = "invalid_brainstorming_request"
+UNKNOWN_SESSION = "unknown_brainstorming_session"
+TARGET_IN_USE = "brainstorming_target_in_use"
+STOP_INCOMPLETE = "brainstorming_stop_incomplete"
+UNAVAILABLE = "brainstorming_unavailable"
+_PROJECT_REQUEST_ERRORS = {
+    "invalid_project",
+    "invalid_name",
+    "unknown_work_area",
+    "malformed_work_area",
+    "work_area_not_ready",
+    "workspace_mismatch",
+    "missing_primary_path",
+}
+
+_REGISTRY_LOCKS = {}
+_REGISTRY_LOCKS_GUARD = threading.Lock()
+_CHILDREN = {}  # pid -> (home, session_id, Popen-compatible process)
+_CHILDREN_LOCK = threading.Lock()
+
+
+class PublicLifecycleError(RuntimeError):
+    """One intentionally small, non-diagnostic public lifecycle refusal."""
+
+    def __init__(self, status, code):
+        RuntimeError.__init__(self, code)
+        self.status = status
+        self.code = code
+
+
+class LifecycleStop(BaseException):
+    """Internal asynchronous stop delivered to the lifecycle process."""
+
+
+@dataclass
+class GatedLaunch:
+    process: object
+    release: object
+    abort: object
+
+
+def service_directory(home):
+    return os.path.join(os.path.abspath(home), SERVICE_DIRNAME)
+
+
+def state_directory(home):
+    return os.path.join(service_directory(home), STATE_DIRNAME)
+
+
+def registry_path(home):
+    return os.path.join(service_directory(home), REGISTRY_FILENAME)
+
+
+def _registry_lock_path(home):
+    return registry_path(home) + ".lock"
+
+
+def _registry_thread_lock(path):
+    with _REGISTRY_LOCKS_GUARD:
+        lock = _REGISTRY_LOCKS.get(path)
+        if lock is None:
+            lock = threading.RLock()
+            _REGISTRY_LOCKS[path] = lock
+        return lock
+
+
+@contextlib.contextmanager
+def _locked_registry(home):
+    path = _registry_lock_path(home)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with _registry_thread_lock(path):
+        handle = open(path, "a+", encoding="utf-8")
+        try:
+            if fcntl is not None:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+            yield
+        finally:
+            handle.close()
+
+
+def _new_registry():
+    return {"schema_version": SCHEMA_VERSION, "sessions": []}
+
+
+def _validate_target_identity(identity):
+    brainstorming._exact_keys(
+        identity, ("device", "inode", "tail"), (), "target_identity"
+    )
+    if (
+        type(identity["device"]) is not int
+        or identity["device"] < 0
+        or type(identity["inode"]) is not int
+        or identity["inode"] < 0
+        or not isinstance(identity["tail"], list)
+        or any(not isinstance(item, str) for item in identity["tail"])
+    ):
+        raise RuntimeError("invalid Brainstorming service registry")
+    return copy.deepcopy(identity)
+
+
+def _validate_record(record):
+    brainstorming._exact_keys(
+        record,
+        (
+            "id",
+            "caller",
+            "project",
+            "work_area",
+            "target_path",
+            "target_identity",
+            "pid",
+            "created_at",
+            "runtime",
+            "execution_context",
+        ),
+        (),
+        "service_record",
+    )
+    try:
+        kvstore.validate_fragment(record["id"], "session_id")
+        brainstorming._text(record["caller"], "service_record.caller")
+        brainstorming._text(
+            record["target_path"], "service_record.target_path"
+        )
+        brainstorming._text(
+            record["created_at"], "service_record.created_at"
+        )
+    except (ValueError, brainstorming.ContractError) as exc:
+        raise RuntimeError("invalid Brainstorming service registry") from exc
+    project = record["project"]
+    work_area = record["work_area"]
+    if (project is None) != (work_area is None):
+        raise RuntimeError("invalid Brainstorming service registry")
+    if project is not None:
+        try:
+            brainstorming._text(project, "service_record.project")
+            brainstorming._text(work_area, "service_record.work_area")
+        except brainstorming.ContractError as exc:
+            raise RuntimeError(
+                "invalid Brainstorming service registry"
+            ) from exc
+    pid = record["pid"]
+    if pid is not None and (type(pid) is not int or pid <= 0):
+        raise RuntimeError("invalid Brainstorming service registry")
+    _validate_target_identity(record["target_identity"])
+    try:
+        brainstorming._json_copy(record["runtime"], "service_record.runtime")
+        brainstorming._json_copy(
+            record["execution_context"],
+            "service_record.execution_context",
+        )
+    except brainstorming.ContractError as exc:
+        raise RuntimeError("invalid Brainstorming service registry") from exc
+    return copy.deepcopy(record)
+
+
+def _load_registry(home):
+    path = registry_path(home)
+    if not os.path.exists(path):
+        return _new_registry()
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            document = json.load(handle)
+    except (OSError, ValueError) as exc:
+        raise RuntimeError("invalid Brainstorming service registry") from exc
+    if (
+        not isinstance(document, dict)
+        or set(document) != {"schema_version", "sessions"}
+        or document["schema_version"] != SCHEMA_VERSION
+        or not isinstance(document["sessions"], list)
+    ):
+        raise RuntimeError("invalid Brainstorming service registry")
+    seen = set()
+    sessions = []
+    for record in document["sessions"]:
+        checked = _validate_record(record)
+        if checked["id"] in seen:
+            raise RuntimeError("invalid Brainstorming service registry")
+        seen.add(checked["id"])
+        sessions.append(checked)
+    return {"schema_version": SCHEMA_VERSION, "sessions": sessions}
+
+
+def _save_registry(home, document):
+    checked = _new_registry()
+    seen = set()
+    for record in document.get("sessions", []):
+        record = _validate_record(record)
+        if record["id"] in seen:
+            raise RuntimeError("invalid Brainstorming service registry")
+        seen.add(record["id"])
+        checked["sessions"].append(record)
+    directory = service_directory(home)
+    os.makedirs(directory, exist_ok=True)
+    descriptor, temporary = tempfile.mkstemp(
+        prefix=".brainstorming-sessions-", suffix=".json", dir=directory
+    )
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            json.dump(
+                checked,
+                handle,
+                ensure_ascii=False,
+                sort_keys=True,
+                indent=2,
+            )
+            handle.write("\n")
+        os.replace(temporary, registry_path(home))
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
+
+
+def _find_record(document, session_id):
+    for record in document["sessions"]:
+        if record["id"] == session_id:
+            return record
+    return None
+
+
+def _new_session_id():
+    return "bs-" + secrets.token_hex(16)
+
+
+def validate_create_body(body):
+    """Validate the exact caller-owned creation shape."""
+    try:
+        brainstorming._exact_keys(
+            body,
+            ("request", "participants", "closure_policy"),
+            ("project", "work_area"),
+            "brainstorming create body",
+        )
+        request = brainstorming.validate_request(body["request"])
+        for field in ("workspace_path", "target_path"):
+            if "\x00" in request[field]:
+                raise brainstorming.ContractError(
+                    "request.%s is not a valid filesystem path" % field
+                )
+        raw_participants = body["participants"]
+        if not isinstance(raw_participants, list):
+            raise brainstorming.ContractError(
+                "participants must be an ordered list"
+            )
+        participants = []
+        ids = set()
+        lead_count = 0
+        interlocutor_count = 0
+        for index, participant in enumerate(raw_participants):
+            context = "participants[%d]" % index
+            brainstorming._exact_keys(
+                participant, ("id", "role"), (), context
+            )
+            participant_id = brainstorming._text(
+                participant["id"], "%s.id" % context
+            )
+            if participant_id in ids:
+                raise brainstorming.ContractError(
+                    "participant ids must be unique"
+                )
+            if participant["role"] not in brainstorming.ROLES:
+                raise brainstorming.ContractError(
+                    "%s.role is invalid" % context
+                )
+            ids.add(participant_id)
+            lead_count += participant["role"] == "lead"
+            interlocutor_count += participant["role"] == "interlocutor"
+            participants.append(
+                {"id": participant_id, "role": participant["role"]}
+            )
+        if lead_count != 1 or interlocutor_count < 1:
+            raise brainstorming.ContractError(
+                "participants require exactly one lead and an interlocutor"
+            )
+        policy = body["closure_policy"]
+        if policy not in brainstorming.CLOSURE_POLICIES:
+            raise brainstorming.ContractError("closure_policy is invalid")
+        has_project = "project" in body
+        has_work_area = "work_area" in body
+        if has_project != has_work_area:
+            raise brainstorming.ContractError(
+                "project and work_area must be supplied together"
+            )
+        project = work_area = None
+        if has_project:
+            project = brainstorming._text(body["project"], "project")
+            work_area = brainstorming._text(body["work_area"], "work_area")
+        return {
+            "request": request,
+            "participants": participants,
+            "closure_policy": policy,
+            "project": project,
+            "work_area": work_area,
+        }
+    except (TypeError, ValueError, brainstorming.ContractError) as exc:
+        raise PublicLifecycleError(400, INVALID_REQUEST) from exc
+
+
+def _resolve_creation_context(home, checked, project_record):
+    request = checked["request"]
+    if checked["project"] is None:
+        workspace = os.path.abspath(request["workspace_path"])
+        if not os.path.isdir(workspace):
+            raise PublicLifecycleError(400, INVALID_REQUEST)
+        context = {
+            "workspace_path": workspace,
+            "project": None,
+            "work_area": None,
+            "primary": None,
+            "additional": [],
+        }
+        return context, driver.load_config(None)
+
+    if (
+        not isinstance(project_record, dict)
+        or project_record.get("slug") != checked["project"]
+    ):
+        raise PublicLifecycleError(404, "unknown_project")
+    binding = {
+        "directory": registry.projects_base(home),
+        "project": checked["project"],
+        "work_area": checked["work_area"],
+    }
+    if project_record.get("defaults") is not None:
+        binding["defaults"] = project_record["defaults"]
+    try:
+        workspace, project_block, config = driver._resolve_project_binding(
+            binding,
+            request["workspace_path"],
+            None,
+        )
+    except driver.ProjectResolutionError as exc:
+        if exc.cause in _PROJECT_REQUEST_ERRORS:
+            raise PublicLifecycleError(400, exc.cause) from exc
+        raise PublicLifecycleError(503, UNAVAILABLE) from exc
+    except (TypeError, ValueError) as exc:
+        raise PublicLifecycleError(400, INVALID_REQUEST) from exc
+    context = {
+        "workspace_path": workspace,
+        "project": project_block["project"],
+        "work_area": project_block["work_area"],
+        "primary": project_block["primary"],
+        "additional": project_block["additional"],
+    }
+    return context, config
+
+
+def _executable_available(argv, workspace):
+    if not argv or not isinstance(argv[0], str) or not argv[0].strip():
+        return False
+    executable = argv[0].replace("{workspace}", workspace)
+    if os.path.sep in executable:
+        candidate = executable
+        if not os.path.isabs(candidate):
+            candidate = os.path.join(workspace, candidate)
+        return os.path.isfile(candidate) and os.access(candidate, os.X_OK)
+    search_path = os.environ.get("PATH")
+    if search_path is not None:
+        search_path = os.pathsep.join(
+            item if os.path.isabs(item) else os.path.join(workspace, item)
+            for item in search_path.split(os.pathsep)
+        )
+    return shutil.which(executable, path=search_path) is not None
+
+
+def _runtime_and_roster(config, participants, closure_policy, workspace):
+    commands = config.get("commands")
+    order = config.get("families_order")
+    if not isinstance(commands, dict) or not isinstance(order, list):
+        raise PublicLifecycleError(503, UNAVAILABLE)
+    model_defaults = config.get("model_defaults") or {}
+    timeouts = config.get("timeouts") or {}
+    probe = runners.SubprocessRunner(
+        commands,
+        timeouts,
+        participant_process_factory=_spawn_participant,
+    )
+    families = []
+    for family in order:
+        if (
+            not isinstance(family, str)
+            or family in families
+            or not probe.supports_session_continuation(family)
+        ):
+            continue
+        defaults = model_defaults.get(family) or {}
+        model = defaults.get("model")
+        effort = defaults.get("effort")
+        try:
+            argv = runners.apply_model_effort(
+                commands[family], model, effort
+            )
+        except (TypeError, ValueError, runners.RunnerError):
+            continue
+        if _executable_available(argv, workspace):
+            families.append(family)
+    if not families:
+        raise PublicLifecycleError(503, UNAVAILABLE)
+
+    eligible = []
+    for participant in participants:
+        for family in families:
+            eligible.append(
+                {
+                    "id": participant["id"],
+                    "role": participant["role"],
+                    "executor_ref": "brainstorming-%s" % family,
+                    "model_family": family,
+                }
+            )
+    selected = []
+    for index, participant in enumerate(participants):
+        family = families[index % len(families)]
+        selected.append(
+            {
+                "id": participant["id"],
+                "role": participant["role"],
+                "executor_ref": "brainstorming-%s" % family,
+                "model_family": family,
+            }
+        )
+    try:
+        run_config = brainstorming.resolve_run_config(
+            selected, closure_policy, eligible
+        )
+    except brainstorming.ContractError as exc:
+        raise PublicLifecycleError(503, UNAVAILABLE) from exc
+    runtime = {
+        "families_order": families,
+        "commands": {
+            family: copy.deepcopy(commands[family]) for family in families
+        },
+        "timeouts": {
+            family: copy.deepcopy(timeouts.get(family))
+            for family in families
+            if family in timeouts
+        },
+        "model_defaults": {
+            family: copy.deepcopy(model_defaults.get(family) or {})
+            for family in families
+        },
+        "worker_stall_window_s": config.get("worker_stall_window_s"),
+        "worker_stall_min_cpu_s": config.get("worker_stall_min_cpu_s"),
+    }
+    try:
+        runtime = brainstorming._json_copy(runtime, "runtime")
+    except brainstorming.ContractError as exc:
+        raise PublicLifecycleError(503, UNAVAILABLE) from exc
+    return runtime, run_config, eligible
+
+
+def _resolved_target(request, execution_context):
+    path = coordination.resolve_target_path(request)
+    primary = execution_context.get("primary")
+    if primary is not None:
+        primary_path = primary.get("path") if isinstance(primary, dict) else None
+        if (
+            not isinstance(primary_path, str)
+            or not kvstore.path_is_inside_roots(path, [primary_path])
+        ):
+            raise PublicLifecycleError(400, INVALID_REQUEST)
+    try:
+        coordination.capture_target(path)
+    except coordination.CoordinationRejected as exc:
+        raise PublicLifecycleError(400, INVALID_REQUEST) from exc
+    return path
+
+
+def _target_identity(path):
+    chain = brainstorming._existing_ancestor_chain(path)
+    if not chain:
+        raise PublicLifecycleError(400, INVALID_REQUEST)
+    ancestor, tail = chain[0]
+    try:
+        observed = os.stat(ancestor)
+    except OSError as exc:
+        raise PublicLifecycleError(400, INVALID_REQUEST) from exc
+    normalized = [
+        unicodedata.normalize("NFC", component) for component in tail
+    ]
+    if brainstorming._filesystem_ignores_case(ancestor):
+        normalized = [component.casefold() for component in normalized]
+    return {
+        "device": observed.st_dev,
+        "inode": observed.st_ino,
+        "tail": normalized,
+    }
+
+
+def _target_overlaps_service_directory(authority_path, target_path):
+    """Protect the service tree without inventing a sibling lock authority."""
+    authority_path = os.path.abspath(authority_path)
+    target_path = os.path.abspath(target_path)
+    authority_real = os.path.realpath(authority_path)
+    target_real = os.path.realpath(target_path)
+    try:
+        common = os.path.commonpath((authority_real, target_real))
+    except ValueError:
+        common = None
+    if common in (authority_real, target_real):
+        return True
+    return brainstorming._paths_overlap_from_existing_ancestor(
+        authority_path, target_path
+    )
+
+
+def _reject_authority_overlap(home, store, target_path):
+    try:
+        if _target_overlaps_service_directory(
+            service_directory(home), target_path
+        ):
+            raise coordination.CoordinationRejected(
+                "target overlaps Brainstorming service authority"
+            )
+        for authority in (registry_path(home), store.path):
+            if brainstorming._target_overlaps_state_storage(
+                authority, target_path
+            ):
+                raise coordination.CoordinationRejected(
+                    "target overlaps Brainstorming service authority"
+                )
+        coordination._reject_store_target_alias(store.path, target_path)
+    except coordination.CoordinationRejected as exc:
+        raise PublicLifecycleError(400, INVALID_REQUEST) from exc
+
+
+def _same_target(record, target_path, identity):
+    recorded_path = record["target_path"]
+    if (
+        recorded_path == target_path
+        or os.path.realpath(recorded_path) == os.path.realpath(target_path)
+    ):
+        return True
+    try:
+        if os.path.samefile(recorded_path, target_path):
+            return True
+    except (FileNotFoundError, OSError):
+        pass
+    # A completed lead turn may replace the artifact and therefore change its
+    # inode.  Compare only the live name identity: the admission-time inode can
+    # later belong to an unrelated artifact and is no longer target authority.
+    try:
+        current_identity = _target_identity(recorded_path)
+    except PublicLifecycleError:
+        return False
+    return brainstorming._same_json_value(current_identity, identity)
+
+
+def _target_is_active(store, record):
+    try:
+        snapshot = store.read(record["id"])
+    except Exception as exc:
+        raise PublicLifecycleError(503, UNAVAILABLE) from exc
+    return (
+        snapshot is None
+        or snapshot.state["status"] not in brainstorming.TERMINAL_STATUSES
+    )
+
+
+def _spawn_participant(execution_context, argv, popen_kwargs):
+    """Use the caller-resolved context without narrowing inherited authority."""
+    if not isinstance(execution_context, dict):
+        raise RuntimeError("execution context is unavailable")
+    return subprocess.Popen(argv, **popen_kwargs)
+
+
+def _launch_lifecycle_process(home, session_id):
+    """Spawn one child blocked until its binding and session are durable."""
+    logs = os.path.join(service_directory(home), LOGS_DIRNAME)
+    os.makedirs(logs, exist_ok=True)
+    log_path = os.path.join(logs, "%s.log" % session_id)
+    read_fd, write_fd = os.pipe()
+    log_handle = open(log_path, "a", encoding="utf-8")
+    try:
+        process = subprocess.Popen(
+            [
+                sys.executable,
+                "-u",
+                "-m",
+                "orchestrator.brainstorming_lifecycle",
+                "run",
+                "--home",
+                os.path.abspath(home),
+                "--session",
+                session_id,
+                "--start-fd",
+                str(read_fd),
+            ],
+            cwd=os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            stdin=subprocess.DEVNULL,
+            stdout=log_handle,
+            stderr=subprocess.STDOUT,
+            start_new_session=True,
+            pass_fds=(read_fd,),
+        )
+    except BaseException:
+        os.close(read_fd)
+        os.close(write_fd)
+        log_handle.close()
+        try:
+            os.unlink(log_path)
+        except OSError:
+            pass
+        raise
+    finally:
+        if not log_handle.closed:
+            log_handle.close()
+    os.close(read_fd)
+
+    released = {"done": False}
+
+    def release():
+        if released["done"]:
+            return
+        released["done"] = True
+        try:
+            os.write(write_fd, b"1")
+        except OSError:
+            pass
+        finally:
+            os.close(write_fd)
+
+    def abort():
+        if not released["done"]:
+            released["done"] = True
+            try:
+                os.close(write_fd)
+            except OSError:
+                pass
+        if process.poll() is None:
+            try:
+                os.killpg(process.pid, signal.SIGTERM)
+            except OSError:
+                try:
+                    process.terminate()
+                except OSError:
+                    pass
+            try:
+                process.wait(timeout=STOP_WAIT_S)
+            except (OSError, subprocess.TimeoutExpired):
+                try:
+                    os.killpg(process.pid, signal.SIGKILL)
+                except OSError:
+                    pass
+                try:
+                    process.wait(timeout=1)
+                except (OSError, subprocess.TimeoutExpired):
+                    pass
+
+    return GatedLaunch(process, release, abort)
+
+
+def _track_child(home, session_id, process):
+    with _CHILDREN_LOCK:
+        _CHILDREN[process.pid] = (
+            os.path.abspath(home),
+            session_id,
+            process,
+        )
+
+
+def _tracked_child(pid):
+    with _CHILDREN_LOCK:
+        return _CHILDREN.get(pid)
+
+
+def _clear_pid(home, session_id, pid):
+    try:
+        with _locked_registry(home):
+            document = _load_registry(home)
+            record = _find_record(document, session_id)
+            if record is not None and record["pid"] == pid:
+                record["pid"] = None
+                _save_registry(home, document)
+    except Exception:
+        pass
+
+
+def reap_children(home):
+    home = os.path.abspath(home)
+    exited = []
+    with _CHILDREN_LOCK:
+        for pid, (child_home, session_id, process) in list(
+            _CHILDREN.items()
+        ):
+            if child_home == home and process.poll() is not None:
+                exited.append((pid, session_id))
+                del _CHILDREN[pid]
+    for pid, session_id in exited:
+        _clear_pid(home, session_id, pid)
+
+
+def _process_alive(record):
+    pid = record.get("pid")
+    if not pid:
+        return False
+    tracked = _tracked_child(pid)
+    if tracked is not None:
+        return tracked[2].poll() is None
+    return registry.session_leader_alive(pid)
+
+
+def _record_by_id(home, session_id):
+    try:
+        kvstore.validate_fragment(session_id, "session_id")
+    except ValueError as exc:
+        raise PublicLifecycleError(404, UNKNOWN_SESSION) from exc
+    reap_children(home)
+    try:
+        with _locked_registry(home):
+            record = _find_record(_load_registry(home), session_id)
+            if record is None:
+                raise PublicLifecycleError(404, UNKNOWN_SESSION)
+            return copy.deepcopy(record)
+    except PublicLifecycleError:
+        raise
+    except Exception as exc:
+        raise PublicLifecycleError(503, UNAVAILABLE) from exc
+
+
+def _authorize_record(record, authorize):
+    if not callable(authorize):
+        raise PublicLifecycleError(503, UNAVAILABLE)
+    authorize(copy.deepcopy(record))
+
+
+def _projection(home, record):
+    store = brainstorming.SessionStore(state_directory(home))
+    try:
+        snapshot = store.read(record["id"])
+    except Exception as exc:
+        raise PublicLifecycleError(503, UNAVAILABLE) from exc
+    if snapshot is None:
+        raise PublicLifecycleError(503, UNAVAILABLE)
+    return {
+        "id": record["id"],
+        "caller": record["caller"],
+        "project": record["project"],
+        "work_area": record["work_area"],
+        "process": "running" if _process_alive(record) else "stopped",
+        "revision": snapshot.revision,
+        "state": snapshot.state,
+    }
+
+
+def _rollback_unreleased_creation(home, store, session_id):
+    """Compensate a create fault while the lifecycle child is still gated."""
+    with _locked_registry(home):
+        document = _load_registry(home)
+        record = _find_record(document, session_id)
+        if record is not None:
+            document["sessions"].remove(record)
+            _save_registry(home, document)
+        store.discard_unlaunched(session_id)
+
+
+def create_session(
+    home,
+    body,
+    caller,
+    project_record=None,
+    launcher=None,
+):
+    """Expose only the sealed lifecycle vocabulary for every create fault."""
+    try:
+        return _create_session(
+            home,
+            body,
+            caller,
+            project_record=project_record,
+            launcher=launcher,
+        )
+    except PublicLifecycleError:
+        raise
+    except Exception as exc:
+        raise PublicLifecycleError(503, UNAVAILABLE) from exc
+
+
+def _create_session(
+    home,
+    body,
+    caller,
+    project_record=None,
+    launcher=None,
+):
+    """Validate, bind, durably create, and launch one standalone session."""
+    checked = validate_create_body(body)
+    try:
+        caller = brainstorming._text(caller, "caller")
+    except brainstorming.ContractError as exc:
+        raise PublicLifecycleError(503, UNAVAILABLE) from exc
+    context, config = _resolve_creation_context(
+        home, checked, project_record
+    )
+    checked["request"]["workspace_path"] = context["workspace_path"]
+    runtime, run_config, eligible = _runtime_and_roster(
+        config,
+        checked["participants"],
+        checked["closure_policy"],
+        context["workspace_path"],
+    )
+    store = brainstorming.SessionStore(state_directory(home))
+    target_path = _resolved_target(checked["request"], context)
+    _reject_authority_overlap(home, store, target_path)
+    identity = _target_identity(target_path)
+    launcher = launcher or _launch_lifecycle_process
+    launch = None
+    session_id = None
+    session_creation_attempted = False
+
+    try:
+        reap_children(home)
+        with _locked_registry(home):
+            document = _load_registry(home)
+            for record in document["sessions"]:
+                if (
+                    _same_target(record, target_path, identity)
+                    and _target_is_active(store, record)
+                ):
+                    raise PublicLifecycleError(409, TARGET_IN_USE)
+            session_id = _new_session_id()
+            while (
+                _find_record(document, session_id) is not None
+                or store.read(session_id) is not None
+            ):
+                session_id = _new_session_id()
+            try:
+                launch = launcher(home, session_id)
+            except Exception as exc:
+                raise PublicLifecycleError(503, UNAVAILABLE) from exc
+            if (
+                launch is None
+                or not hasattr(launch, "process")
+                or type(getattr(launch.process, "pid", None)) is not int
+                or launch.process.pid <= 0
+            ):
+                raise PublicLifecycleError(503, UNAVAILABLE)
+            session_creation_attempted = True
+            created = store.create(
+                session_id,
+                checked["request"],
+                run_config,
+                eligible,
+            )
+            store.transition(session_id, created.revision, "running")
+            record = {
+                "id": session_id,
+                "caller": caller,
+                "project": checked["project"],
+                "work_area": checked["work_area"],
+                "target_path": target_path,
+                "target_identity": identity,
+                "pid": launch.process.pid,
+                "created_at": registry.now_iso(),
+                "runtime": runtime,
+                "execution_context": context,
+            }
+            document["sessions"].append(record)
+            _save_registry(home, document)
+        projected = _projection(home, record)
+        _track_child(home, session_id, launch.process)
+        launch.release()
+        return projected
+    except PublicLifecycleError:
+        if launch is not None:
+            launch.abort()
+        if session_creation_attempted:
+            _rollback_unreleased_creation(home, store, session_id)
+        raise
+    except (brainstorming.ContractError, coordination.CoordinationRejected) as exc:
+        if launch is not None:
+            launch.abort()
+        if session_creation_attempted:
+            _rollback_unreleased_creation(home, store, session_id)
+        raise PublicLifecycleError(400, INVALID_REQUEST) from exc
+    except Exception as exc:
+        if launch is not None:
+            launch.abort()
+        if session_creation_attempted:
+            try:
+                _rollback_unreleased_creation(home, store, session_id)
+            except Exception as rollback_error:
+                raise PublicLifecycleError(503, UNAVAILABLE) from rollback_error
+        raise PublicLifecycleError(503, UNAVAILABLE) from exc
+
+
+def inspect_session(home, session_id, authorize):
+    """Authorize from immutable service metadata, then read durable state."""
+    record = _record_by_id(home, session_id)
+    _authorize_record(record, authorize)
+    return _projection(home, record)
+
+
+def _signal_lifecycle(record):
+    pid = record.get("pid")
+    if not pid or not _process_alive(record):
+        return True
+    try:
+        os.killpg(pid, signal.SIGTERM)
+    except OSError:
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except OSError:
+            return not _process_alive(record)
+    deadline = time.monotonic() + STOP_WAIT_S
+    while time.monotonic() < deadline:
+        if not _process_alive(record):
+            return True
+        time.sleep(0.05)
+    return not _process_alive(record)
+
+
+def _failure_result(state, reason):
+    projection = brainstorming.coordination_projection(state)
+    return {
+        "outcome": "failure",
+        "target_ref": state["request"]["target_path"],
+        "transcript_ref": state["transcript_ref"],
+        "rounds_used": 0 if projection is None else projection["rounds_used"],
+        "reason": reason,
+    }
+
+
+def _closing_summary(state, reason, proportionality):
+    projection = brainstorming.coordination_projection(state)
+    accepted_record_exists = bool(
+        projection
+        and (
+            projection["completed_turns"]
+            or state.get("transcript_events")
+        )
+    )
+    unresolved = []
+    if accepted_record_exists:
+        unresolved.append(
+            "The lifecycle ended before accepted discussion turns and ballots "
+            "were classified into a terminal objection account; consult those "
+            "records above."
+        )
+    return {
+        "reason": reason,
+        "unresolved_objections": unresolved,
+        "affected_parties": (
+            "No participant-authored terminal account established the affected "
+            "parties before the lifecycle ended."
+        ),
+        "damage_altitude": (
+            "No participant-authored terminal account established the realistic "
+            "damage altitude before the lifecycle ended."
+        ),
+        "proportionality": proportionality,
+        "escalation_evidence": (
+            "The lifecycle did not classify whether accepted discussion records "
+            "contain concrete escalation evidence; consult those records above."
+            if accepted_record_exists
+            else None
+        ),
+    }
+
+
+def _reconcile_for_terminal(store, session_id):
+    coordinator = coordination.BrainstormingCoordinator(store, None)
+    for _attempt in range(8):
+        snapshot = store.read(session_id)
+        if snapshot is None:
+            raise PublicLifecycleError(503, UNAVAILABLE)
+        if snapshot.state["status"] in brainstorming.TERMINAL_STATUSES:
+            return snapshot
+        try:
+            return coordinator.prepare(session_id)
+        except brainstorming.RevisionConflict:
+            continue
+        except (
+            brainstorming.HistoryRewriteError,
+            coordination.CoordinationRejected,
+        ) as exc:
+            raise PublicLifecycleError(409, STOP_INCOMPLETE) from exc
+    raise PublicLifecycleError(409, STOP_INCOMPLETE)
+
+
+def stop_session(home, session_id, authorize):
+    """Stop worker activity, reconcile only the target, and fail atomically."""
+    record = _record_by_id(home, session_id)
+    _authorize_record(record, authorize)
+    try:
+        return _stop_authorized(home, session_id, record)
+    except PublicLifecycleError:
+        raise
+    except Exception as exc:
+        raise PublicLifecycleError(503, UNAVAILABLE) from exc
+
+
+def _stop_authorized(home, session_id, record):
+    store = brainstorming.SessionStore(state_directory(home))
+    try:
+        snapshot = store.read(session_id)
+    except Exception as exc:
+        raise PublicLifecycleError(503, UNAVAILABLE) from exc
+    if snapshot is None:
+        raise PublicLifecycleError(503, UNAVAILABLE)
+    if snapshot.state["status"] in brainstorming.TERMINAL_STATUSES:
+        return _projection(home, record)
+
+    if not _signal_lifecycle(record):
+        raise PublicLifecycleError(409, STOP_INCOMPLETE)
+    if record.get("pid"):
+        _clear_pid(home, session_id, record["pid"])
+        record["pid"] = None
+
+    reason = "The caller stopped the discussion."
+    for _attempt in range(8):
+        snapshot = _reconcile_for_terminal(store, session_id)
+        if snapshot.state["status"] in brainstorming.TERMINAL_STATUSES:
+            return _projection(home, record)
+        projection = brainstorming.coordination_projection(snapshot.state)
+        if projection is None:
+            raise PublicLifecycleError(409, STOP_INCOMPLETE)
+        interruption = {
+            "after_completed_turns": len(projection["completed_turns"]),
+            "plain": reason,
+        }
+        result = _failure_result(snapshot.state, reason)
+        summary = _closing_summary(
+            snapshot.state,
+            reason,
+            "Stopping follows the caller's explicit request.",
+        )
+        try:
+            store.close_with_interruption(
+                session_id,
+                snapshot.revision,
+                interruption,
+                result,
+                summary,
+            )
+            current = _record_by_id(home, session_id)
+            return _projection(home, current)
+        except brainstorming.RevisionConflict as conflict:
+            if (
+                conflict.current.state["status"]
+                in brainstorming.TERMINAL_STATUSES
+            ):
+                current = _record_by_id(home, session_id)
+                return _projection(home, current)
+            continue
+        except (
+            brainstorming.ContractError,
+            brainstorming.HistoryRewriteError,
+            coordination.CoordinationRejected,
+        ) as exc:
+            raise PublicLifecycleError(409, STOP_INCOMPLETE) from exc
+    raise PublicLifecycleError(409, STOP_INCOMPLETE)
+
+
+def _participant_execution(store, record, participant_process_factory):
+    runtime = record["runtime"]
+    provider = runners.SubprocessRunner(
+        runtime["commands"],
+        runtime.get("timeouts") or {},
+        stall_window_s=runtime.get("worker_stall_window_s"),
+        stall_min_cpu_s=runtime.get("worker_stall_min_cpu_s"),
+        participant_process_factory=participant_process_factory,
+    )
+    snapshot = store.read(record["id"])
+    if snapshot is None:
+        raise brainstorming.SessionNotFound(record["id"])
+    bindings = {}
+    for participant in snapshot.state["run_config"]["participants"]:
+        family = participant["model_family"]
+        defaults = runtime.get("model_defaults", {}).get(family) or {}
+        bindings[participant["executor_ref"]] = (
+            execution.RunnerParticipantExecutor(
+                family,
+                provider,
+                model=defaults.get("model"),
+                effort=defaults.get("effort"),
+            )
+        )
+    return execution.ParticipantExecution(store, bindings)
+
+
+def _safe_operational_failure(store, coordinator, session_id):
+    """Record the stopped discussion and fail after exact target recovery."""
+    reason = "The discussion stopped because participant execution failed."
+    try:
+        for _attempt in range(8):
+            snapshot = store.read(session_id)
+            if snapshot is None:
+                return False
+            if snapshot.state["status"] in brainstorming.TERMINAL_STATUSES:
+                return True
+            try:
+                snapshot = coordinator.prepare(session_id)
+            except brainstorming.RevisionConflict:
+                continue
+            result = _failure_result(snapshot.state, reason)
+            summary = _closing_summary(
+                snapshot.state,
+                reason,
+                "Ending the failed discussion preserves its last accepted work.",
+            )
+            projection = brainstorming.coordination_projection(snapshot.state)
+            if projection is None:
+                return False
+            interruption = {
+                "after_completed_turns": len(projection["completed_turns"]),
+                "plain": reason,
+            }
+            try:
+                store.close_with_interruption(
+                    session_id,
+                    snapshot.revision,
+                    interruption,
+                    result,
+                    summary,
+                )
+                return True
+            except brainstorming.RevisionConflict:
+                continue
+        return False
+    except Exception:
+        return False
+
+
+def run_lifecycle(
+    home,
+    session_id,
+    participant_process_factory=None,
+    require_pid_claim=True,
+):
+    """Drive complete ordered rounds and closure until one terminal result."""
+    try:
+        with _locked_registry(home):
+            record = _find_record(_load_registry(home), session_id)
+            if record is None:
+                return 2
+            record = copy.deepcopy(record)
+        if require_pid_claim and record["pid"] != os.getpid():
+            return 2
+        store = brainstorming.SessionStore(state_directory(home))
+        participant_execution = _participant_execution(
+            store,
+            record,
+            participant_process_factory or _spawn_participant,
+        )
+        coordinator = coordination.BrainstormingCoordinator(
+            store, participant_execution
+        )
+        coordinator.prepare(session_id)
+        execution_context = record["execution_context"]
+
+        while True:
+            snapshot = store.read(session_id)
+            if snapshot is None:
+                return 2
+            if snapshot.state["status"] in brainstorming.TERMINAL_STATUSES:
+                return 0
+            starting_round = snapshot.state["rounds_used"]
+            while snapshot.state["rounds_used"] == starting_round:
+                try:
+                    snapshot = coordinator.run_next_turn(
+                        session_id, execution_context
+                    )
+                except brainstorming.RevisionConflict:
+                    snapshot = store.read(session_id)
+                    if (
+                        snapshot is not None
+                        and snapshot.state["status"]
+                        in brainstorming.TERMINAL_STATUSES
+                    ):
+                        return 0
+            try:
+                coordinator.run_closure(session_id, execution_context)
+            except brainstorming.RevisionConflict:
+                continue
+    except LifecycleStop:
+        return 3
+    except Exception:
+        traceback.print_exc(file=sys.stderr)
+        try:
+            store
+            coordinator
+        except UnboundLocalError:
+            return 3
+        return 4 if _safe_operational_failure(
+            store, coordinator, session_id
+        ) else 3
+
+
+def _install_stop_handler():
+    def stop(_signum, _frame):
+        runners.kill_active_worker_groups()
+        raise LifecycleStop()
+
+    signal.signal(signal.SIGTERM, stop)
+
+
+def _wait_for_start(fd):
+    try:
+        return os.read(fd, 1) == b"1"
+    finally:
+        os.close(fd)
+
+
+def main(argv=None):
+    parser = argparse.ArgumentParser()
+    subparsers = parser.add_subparsers(dest="command", required=True)
+    run = subparsers.add_parser("run")
+    run.add_argument("--home", required=True)
+    run.add_argument("--session", required=True)
+    run.add_argument("--start-fd", required=True, type=int)
+    args = parser.parse_args(argv)
+    if args.command != "run" or not _wait_for_start(args.start_fd):
+        return 2
+    _install_stop_handler()
+    return run_lifecycle(args.home, args.session)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

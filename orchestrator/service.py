@@ -35,6 +35,15 @@ run's live state) and a JSON API:
                                    ?purge=1 also removes the run's state file
                                    + lock so the workspace can launch fresh)
 
+Standalone Brainstorming (independent from milestone runs and chronology):
+
+    POST   /api/brainstorming/sessions
+                                   create and start one bounded discussion
+    GET    /api/brainstorming/sessions/<id>
+                                   poll one complete durable session snapshot
+    POST   /api/brainstorming/sessions/<id>/stop
+                                   stop participant work and publish failure
+
 Standing projects (the operator-declared ecosystem surface; every slug and
 work-area name rides as a URL-encoded path segment):
 
@@ -151,6 +160,7 @@ import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from . import access as panel_access
+from . import brainstorming_lifecycle
 from . import driver, errclass, gitops, kvstore, profiles, projects, registry
 from . import reuse_audit
 from . import state as st
@@ -2678,6 +2688,28 @@ def require_run_access(home, who, run_id):
     return entry
 
 
+def require_brainstorming_access(home, who, record):
+    """Authorize from the immutable service binding before session reads."""
+    if who.get("admin"):
+        return
+    slug = record.get("project")
+    if slug is None:
+        raise ApiError(403, FORBIDDEN)
+    require_brainstorming_project_access(home, who, slug)
+
+
+def require_brainstorming_project_access(home, who, slug):
+    """Keep Brainstorming refusals typed if standing access state is broken."""
+    try:
+        return require_project_access(home, who, slug)
+    except ApiError:
+        raise
+    except Exception as exc:
+        raise ApiError(
+            503, brainstorming_lifecycle.UNAVAILABLE
+        ) from exc
+
+
 def visible_runs(home, who):
     reap_exited_drivers(home)
     entries = registry.load(home)["runs"]
@@ -2734,6 +2766,7 @@ def make_handler(home):
 
         def do_GET(self):
             try:
+                brainstorming_lifecycle.reap_children(home)
                 route, query = self._route()
                 who = self._who()
                 if route in ("/", "/index.html"):
@@ -2781,6 +2814,23 @@ def make_handler(home):
                             home, "GET", segments, None
                         )
                     self._json(status, payload)
+                elif route.startswith("/api/brainstorming/sessions/"):
+                    parts = route.rstrip("/").split("/")
+                    if len(parts) == 5 and parts[4]:
+                        session = brainstorming_lifecycle.inspect_session(
+                            home,
+                            parts[4],
+                            lambda record: require_brainstorming_access(
+                                home, who, record
+                            ),
+                        )
+                        self._json(
+                            200, {"ok": True, "session": session}
+                        )
+                    else:
+                        self._json(
+                            404, {"ok": False, "error": "not found"}
+                        )
                 elif route.startswith("/api/runs/"):
                     parts = route.rstrip("/").split("/")
                     if len(parts) >= 4:
@@ -2814,14 +2864,67 @@ def make_handler(home):
                     self._json(404, {"ok": False, "error": "not found"})
             except ApiError as exc:
                 self._json(exc.status, {"ok": False, "error": str(exc)})
+            except brainstorming_lifecycle.PublicLifecycleError as exc:
+                self._json(
+                    exc.status, {"ok": False, "error": exc.code}
+                )
             except Exception as exc:  # panel must never crash the service
                 self._json(500, {"ok": False, "error": str(exc)})
 
         def do_POST(self):
             try:
+                brainstorming_lifecycle.reap_children(home)
                 route, _query = self._route()
                 who = self._who()
-                if route == "/api/runs":
+                if route == "/api/brainstorming/sessions":
+                    body = self._brainstorming_body()
+                    checked = brainstorming_lifecycle.validate_create_body(
+                        body
+                    )
+                    project = None
+                    if checked["project"] is None:
+                        self._require_admin(who)
+                    else:
+                        project = require_brainstorming_project_access(
+                            home, who, checked["project"]
+                        )
+                    session = brainstorming_lifecycle.create_session(
+                        home,
+                        body,
+                        who["email"],
+                        project_record=project,
+                    )
+                    self._json(
+                        201, {"ok": True, "session": session}
+                    )
+                elif route.startswith("/api/brainstorming/sessions/"):
+                    parts = route.rstrip("/").split("/")
+                    if (
+                        len(parts) == 6
+                        and parts[4]
+                        and parts[5] == "stop"
+                    ):
+                        body = self._brainstorming_body()
+                        if body:
+                            raise ApiError(
+                                400,
+                                brainstorming_lifecycle.INVALID_REQUEST,
+                            )
+                        session = brainstorming_lifecycle.stop_session(
+                            home,
+                            parts[4],
+                            lambda record: require_brainstorming_access(
+                                home, who, record
+                            ),
+                        )
+                        self._json(
+                            200, {"ok": True, "session": session}
+                        )
+                    else:
+                        self._json(
+                            404, {"ok": False, "error": "not found"}
+                        )
+                elif route == "/api/runs":
                     body = self._body()
                     if body.get("project") is None:
                         self._require_admin(who)
@@ -2887,11 +2990,16 @@ def make_handler(home):
                     self._json(404, {"ok": False, "error": "not found"})
             except ApiError as exc:
                 self._json(exc.status, {"ok": False, "error": str(exc)})
+            except brainstorming_lifecycle.PublicLifecycleError as exc:
+                self._json(
+                    exc.status, {"ok": False, "error": exc.code}
+                )
             except Exception as exc:
                 self._json(500, {"ok": False, "error": str(exc)})
 
         def do_DELETE(self):
             try:
+                brainstorming_lifecycle.reap_children(home)
                 route, query = self._route()
                 who = self._who()
                 parts = route.rstrip("/").split("/")
@@ -2942,6 +3050,16 @@ def make_handler(home):
             if not isinstance(payload, dict):
                 raise ApiError(400, "request body must be a JSON object")
             return payload
+
+        def _brainstorming_body(self):
+            try:
+                return self._body()
+            except ApiError as exc:
+                if exc.status in (400, 413):
+                    raise ApiError(
+                        400, brainstorming_lifecycle.INVALID_REQUEST
+                    ) from exc
+                raise
 
         def _json(self, status, payload):
             body = json.dumps(payload, ensure_ascii=False).encode("utf-8")

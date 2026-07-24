@@ -1644,6 +1644,24 @@ def terminal_closure_successor(state, ballot, result, closing_summary):
     return validate_session_state(successor)
 
 
+def terminal_interruption_successor(
+    state, interruption, result, closing_summary
+):
+    """Atomically append one interruption and terminal failure.
+
+    Standalone stop cannot publish the human interruption first and the
+    failure second: closure could win between those writes.  Compose the two
+    already-validated successors into one candidate so the session CAS chooses
+    exactly one terminal outcome.
+    """
+    interrupted = transcript_event_successor(
+        state, "material_interruption", interruption
+    )
+    return transition_session(
+        interrupted, "failure", result, closing_summary
+    )
+
+
 def assert_terminal_closure_successor(
     old_state, new_state, ballot, result, closing_summary
 ):
@@ -1656,6 +1674,21 @@ def assert_terminal_closure_successor(
     if not _same_json_value(expected, new):
         raise HistoryRewriteError(
             "terminal closure is not the exact next session revision"
+        )
+
+
+def assert_terminal_interruption_successor(
+    old_state, new_state, interruption, result, closing_summary
+):
+    """Accept only the exact combined interruption/failure successor."""
+    old = validate_session_state(old_state)
+    new = validate_session_state(new_state)
+    expected = terminal_interruption_successor(
+        old, interruption, result, closing_summary
+    )
+    if not _same_json_value(expected, new):
+        raise HistoryRewriteError(
+            "terminal interruption is not the exact next session revision"
         )
 
 
@@ -2180,6 +2213,65 @@ class SessionStore:
             raise SessionAlreadyExists("session already exists")
         return self._publish_current(session_id)
 
+    def discard_unlaunched(self, session_id):
+        """Remove only a create-time session that no worker could have used.
+
+        Standalone creation keeps its lifecycle child behind a launch gate
+        until the public binding, durable state, and response projection are
+        ready.  This narrow compensation seam lets that transaction leave no
+        hidden session when a later create step fails.  It deliberately
+        refuses any state that already contains participant or coordination
+        work.
+        """
+        key = _session_key(session_id)
+        current = self._store.read(key)
+        if not current["exists?"]:
+            return
+        state = validate_session_state(current["value"])
+        if (
+            state["status"] not in ("created", "running")
+            or state.get("participant_sessions")
+            or state.get("transcript_events")
+            or coordination_projection(state) is not None
+            or [item["status"] for item in state["history"]]
+            not in (["created"], ["created", "running"])
+        ):
+            raise HistoryRewriteError(
+                "only an unused create-time session may be discarded"
+            )
+
+        transcript = self.transcript_ref(session_id)
+        with _exclusive_transcript(transcript):
+            try:
+                os.unlink(transcript)
+            except FileNotFoundError:
+                pass
+
+            expected_revision = current["revision"]
+
+            def remove(document):
+                raw = self._store._raw_from_doc(document, key)
+                public = self._store._public_from_raw(raw)
+                if (
+                    not public["exists?"]
+                    or public["revision"] != expected_revision
+                ):
+                    return False, False
+                del document["entries"][key]
+                return True, True
+
+            if not self._store.client._mutate(remove):
+                self._publish_current(session_id)
+                raise HistoryRewriteError(
+                    "create-time session changed before compensation"
+                )
+
+        directory = os.path.dirname(transcript)
+        try:
+            os.rmdir(directory)
+        except OSError:
+            pass
+
     def save(self, session_id, expected_revision, state):
         if type(expected_revision) is not int or expected_revision <= 0:
             raise ContractError("expected_revision must be a positive integer")
@@ -2352,6 +2444,36 @@ class SessionStore:
         def assertion(old, new):
             assert_terminal_closure_successor(
                 old, new, ballot, result, closing_summary
+            )
+
+        return self._cas_coordination(
+            session_id,
+            expected_revision,
+            candidate,
+            assertion,
+        )
+
+    def close_with_interruption(
+        self,
+        session_id,
+        expected_revision,
+        interruption,
+        result,
+        closing_summary,
+    ):
+        """Atomically append a material interruption and terminal failure."""
+        current = self.read(session_id)
+        if current is None:
+            raise SessionNotFound(session_id)
+        if current.revision != expected_revision:
+            raise RevisionConflict(current)
+        candidate = terminal_interruption_successor(
+            current.state, interruption, result, closing_summary
+        )
+
+        def assertion(old, new):
+            assert_terminal_interruption_successor(
+                old, new, interruption, result, closing_summary
             )
 
         return self._cas_coordination(

@@ -327,4 +327,40 @@
 
 ## slice_impl-06 (Standalone lifecycle API)
 
+- draft: kind `implement`, artifact `-` (raw: `implementation/milestones/brainstorming/.run/raw/slice_impl-06-draft.txt`)
+
+| Round | Kind | Family | Findings | Triage | Raw |
+|---|---|---|---|---|---|
+| slice_impl-06-codex-r1 | review_round | codex | 3 | 3 reported | `implementation/milestones/brainstorming/.run/raw/slice_impl-06-codex-r1.txt` |
+| slice_impl-06-codex-r2 | fix_findings | codex | 3 | 3 fixed | `implementation/milestones/brainstorming/.run/raw/slice_impl-06-fix1.txt` |
+| slice_impl-06-codex-r3 | delta_review | codex | 2 | 2 reported | `implementation/milestones/brainstorming/.run/raw/slice_impl-06-delta1.txt` |
+| slice_impl-06-codex-r4 | fix_findings | codex | 2 | 2 fixed | `implementation/milestones/brainstorming/.run/raw/slice_impl-06-fix2.txt` |
+| slice_impl-06-codex-r5 | delta_review | codex | 1 | 1 reported | `implementation/milestones/brainstorming/.run/raw/slice_impl-06-delta2.txt` |
+| slice_impl-06-codex-r6 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/brainstorming/.run/raw/slice_impl-06-fix3.txt` |
+| slice_impl-06-codex-r7 | delta_review | codex | 0 | clean | `implementation/milestones/brainstorming/.run/raw/slice_impl-06-delta3.txt` |
+| slice_impl-06-codex-r8 | review_round | codex | 2 | 2 reported | `implementation/milestones/brainstorming/.run/raw/slice_impl-06-codex-r2.txt` |
+| slice_impl-06-codex-r9 | fix_findings | codex | 2 | 2 fixed | `implementation/milestones/brainstorming/.run/raw/slice_impl-06-fix4.txt` |
+| slice_impl-06-codex-r10 | delta_review | codex | 1 | 1 reported | `implementation/milestones/brainstorming/.run/raw/slice_impl-06-delta4.txt` |
+| slice_impl-06-codex-r11 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/brainstorming/.run/raw/slice_impl-06-fix5.txt` |
+| slice_impl-06-codex-r12 | delta_review | codex | 0 | clean | `implementation/milestones/brainstorming/.run/raw/slice_impl-06-delta5.txt` |
+| slice_impl-06-codex-r13 | review_round | codex | 6 | 6 reported | `implementation/milestones/brainstorming/.run/raw/slice_impl-06-codex-r3.txt` |
+| slice_impl-06-codex-r14 | fix_findings | codex | 4 | 4 fixed | `implementation/milestones/brainstorming/.run/raw/slice_impl-06-fix6.txt` |
+| slice_impl-06-codex-r15 | delta_review | codex | 0 | clean | `implementation/milestones/brainstorming/.run/raw/slice_impl-06-delta6.txt` |
+| slice_impl-06-codex-r16 | review_round | codex | 2 | 2 reported | `implementation/milestones/brainstorming/.run/raw/slice_impl-06-codex-r4.txt` |
+| slice_impl-06-codex-r17 | fix_findings | codex | 2 | 2 fixed | `implementation/milestones/brainstorming/.run/raw/slice_impl-06-fix7.txt` |
+| slice_impl-06-codex-r18 | delta_review | codex | 0 | clean | `implementation/milestones/brainstorming/.run/raw/slice_impl-06-delta7.txt` |
+| slice_impl-06-codex-r19 | review_round | codex | 0 | clean | `implementation/milestones/brainstorming/.run/raw/slice_impl-06-codex-r5.txt` |
+| slice_impl-06-claude-r1 | review_round | claude | 2 | 2 reported | `implementation/milestones/brainstorming/.run/raw/slice_impl-06-claude-r1.txt` |
+
+### Seal attempt a1 — PASSED
+
+
+**Deferred debt (opposite-family verified):**
+- `codex-F4` (raised codex, cleared codex): Compensated creation failures leave session-specific technical artifacts behind. — The artifact promises side-effect-free failed creation while its passing compensation test omits the real session log and chat-lock artifacts, so the behavioral and coverage defect can silently survive downstream trust, but correction is bounded to cleanup and focused assertions within this unit.
+- `codex-F6` (raised codex, cleared codex): The named stop-versus-completion race test does not exercise an active lifecycle or participant. — The named check materially overstates coverage because it removes the lifecycle worker before racing only durable transitions, so builders can silently trust an untested no-post-stop-participant guarantee, while correction remains bounded to an active-worker race test and any resulting Slice 6 lifec
+- `claude-F1` (raised claude, cleared codex): The sealed named check `test_create_refusals_are_typed_and_side_effect_free` omits two refusal classes its pass condition enumerates: roster/policy errors and missing/mismatched work areas, leaving the entire project-resolution error-mapping branch (`_resolve_creation_context`'s `except driver.ProjectResolutionError` -> `_PROJECT_REQUEST_ERRORS`) with no executable evidence. — The sealed pass condition falsely assures builders that roster/policy and project-resolution refusals have executable coverage, allowing typed-error regressions to pass silently, but correction is limited to focused test cases and at most a local error-mapping fix.
+- `claude-F2` (raised claude, cleared codex): No test exercises authorization on the stop route, and none exercises the administrative-only refusal for a session with no project binding, so two branches of `require_brainstorming_access` that the sealed Execution-context-and-access-binding fact pins ('creation and every later read/stop are administrative-only') have no executable evidence. — The shared authorization rule is correctly implemented on read and stop, so a capable builder is unlikely to misread the contract, but missing negative tests could silently permit a later access regression whose correction is a focused local test and, if needed, restoration of the route check.
+
+## slice_doc-07 (Dedicated brainstorming visualization)
+
 

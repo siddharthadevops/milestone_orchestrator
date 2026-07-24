@@ -489,7 +489,42 @@ def restore_target(path, target_revision):
         ) from exc
 
 
-def build_turn_prompt(state, participant, round_number, target_revision):
+def _execution_context_block(execution_context):
+    """Render inherited project roots as role instructions, not new policy."""
+    lines = [
+        "",
+        "Brainstorming role and target boundary (binding):",
+        "workspace_path is orientation, not a limit on legitimate reads. "
+        "For this Brainstorming session, modify no caller path other than "
+        "target_path.",
+    ]
+    if isinstance(execution_context, dict):
+        primary = execution_context.get("primary")
+        if isinstance(primary, dict) and isinstance(
+            primary.get("path"), str
+        ):
+            lines.append(
+                "- PRIMARY ROOT %s — the target must remain inside this "
+                "writable root." % primary["path"]
+            )
+        additional = execution_context.get("additional") or []
+        for root in additional:
+            if isinstance(root, dict) and isinstance(root.get("path"), str):
+                lines.append(
+                    "- ADDITIONAL ROOT %s — read-only evidence; never edit it."
+                    % root["path"]
+                )
+    lines.append("")
+    return "\n".join(lines)
+
+
+def build_turn_prompt(
+    state,
+    participant,
+    round_number,
+    target_revision,
+    execution_context=None,
+):
     """Compose the product-neutral view for one persisted participant turn."""
     checked = brainstorming.validate_session_state(state)
     checked_participant = brainstorming._validate_participant(
@@ -536,6 +571,7 @@ Turn:
 - accepted Brainstorming target revision: {target_revision}
 - accepted target state: {target_presence}
 
+{execution_context}
 The target on disk has been reconciled to that accepted revision. A relative
 target_path is resolved from workspace_path, matching the participant working
 directory. {ownership}
@@ -562,6 +598,7 @@ to that envelope.
         target_path=checked["request"]["target_path"],
         target_revision=target_revision["revision"],
         target_presence=target_presence,
+        execution_context=_execution_context_block(execution_context),
         ownership=ownership,
         prior=prior_text,
     )
@@ -608,7 +645,7 @@ def validate_closure_vote_envelope(envelope):
     return brainstorming._json_copy(envelope, "closure_vote")
 
 
-def _closure_common_prompt(state, target_revision):
+def _closure_common_prompt(state, target_revision, execution_context=None):
     checked = brainstorming.validate_session_state(state)
     revision = brainstorming.validate_target_revision(target_revision)
     return """\
@@ -622,6 +659,7 @@ Question:
 - target_path: {target_path}
 - accepted Brainstorming target revision: {target_revision}
 
+{execution_context}
 The target has been reconciled to that exact accepted revision. Do not edit,
 delete, recreate, rename, or replace target_path during closure. Closure control
 does not create a target revision or consume a discussion turn.
@@ -640,13 +678,18 @@ or exceptional preferences.
         workspace_path=checked["request"]["workspace_path"],
         target_path=checked["request"]["target_path"],
         target_revision=revision["revision"],
+        execution_context=_execution_context_block(execution_context),
         prior=brainstorming.render_transcript(checked).rstrip(),
     )
 
 
-def build_closure_proposal_prompt(state, target_revision):
+def build_closure_proposal_prompt(
+    state, target_revision, execution_context=None
+):
     """Ask the persisted lead whether to propose closure at this boundary."""
-    return _closure_common_prompt(state, target_revision) + """\
+    return _closure_common_prompt(
+        state, target_revision, execution_context
+    ) + """\
 
 You are the lead. Decide whether to propose closure against this exact revision.
 Your proposal is your `accept` vote. Supply the complete plain-language closing
@@ -665,12 +708,16 @@ other fields.
 """
 
 
-def build_closure_vote_prompt(state, participant, target_revision):
+def build_closure_vote_prompt(
+    state, participant, target_revision, execution_context=None
+):
     """Ask one persisted interlocutor to vote against the lead's proposal."""
     checked_participant = brainstorming._validate_participant(
         participant, "participant"
     )
-    return _closure_common_prompt(state, target_revision) + """\
+    return _closure_common_prompt(
+        state, target_revision, execution_context
+    ) + """\
 
 The lead has proposed closure against this exact revision. You are interlocutor
 {participant_id}. Return exactly one JSON object with kind "closure_vote" and
@@ -986,7 +1033,11 @@ class BrainstormingCoordinator:
         round_number = turn_index // len(participants) + 1
         accepted_target = self._accepted_record(session_id, starting)
         prompt = build_turn_prompt(
-            state, participant, round_number, accepted_target
+            state,
+            participant,
+            round_number,
+            accepted_target,
+            execution_context,
         )
         attempt = {
             "token": str(uuid.uuid4()),
@@ -1178,7 +1229,9 @@ class BrainstormingCoordinator:
             target,
             state,
             lead,
-            build_closure_proposal_prompt(state, accepted_target),
+            build_closure_proposal_prompt(
+                state, accepted_target, execution_context
+            ),
             validate_closure_proposal_envelope,
             accepted_target,
         )
@@ -1239,7 +1292,10 @@ class BrainstormingCoordinator:
                 state,
                 participant,
                 build_closure_vote_prompt(
-                    state, participant, accepted_target
+                    state,
+                    participant,
+                    accepted_target,
+                    execution_context,
                 ),
                 validate_closure_vote_envelope,
                 accepted_target,
