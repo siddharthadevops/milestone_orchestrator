@@ -1,4 +1,4 @@
-"""Ordered Brainstorming turns and target-only accepted revisions."""
+"""Ordered turns, target-only accepted revisions, and revision-bound closure."""
 
 from __future__ import annotations
 
@@ -24,6 +24,10 @@ class CoordinationRejected(RuntimeError):
 
 class RoundLimitReached(CoordinationRejected):
     """No participant turn remains inside the configured round bound."""
+
+
+class ClosureNotEligible(CoordinationRejected):
+    """The accepted discussion is not at a new complete-round boundary."""
 
 
 class InvalidTargetMutation(CoordinationRejected):
@@ -563,8 +567,120 @@ to that envelope.
     )
 
 
+def validate_closure_proposal_envelope(envelope):
+    """Validate the lead's control-only decision and possible closing account."""
+    brainstorming._exact_keys(
+        envelope,
+        ("kind", "propose", "closing_summary"),
+        (),
+        "closure_proposal",
+    )
+    if envelope["kind"] != "closure_proposal":
+        raise brainstorming.ContractError(
+            "closure_proposal.kind must be closure_proposal"
+        )
+    if type(envelope["propose"]) is not bool:
+        raise brainstorming.ContractError(
+            "closure_proposal.propose must be a boolean"
+        )
+    return {
+        "kind": "closure_proposal",
+        "propose": envelope["propose"],
+        "closing_summary": brainstorming.validate_closing_summary_shape(
+            envelope["closing_summary"]
+        ),
+    }
+
+
+def validate_closure_vote_envelope(envelope):
+    """Validate one interlocutor's vote without admitting extra rationale."""
+    brainstorming._exact_keys(
+        envelope, ("kind", "vote"), (), "closure_vote"
+    )
+    if envelope["kind"] != "closure_vote":
+        raise brainstorming.ContractError(
+            "closure_vote.kind must be closure_vote"
+        )
+    if envelope["vote"] not in ("accept", "object"):
+        raise brainstorming.ContractError(
+            "closure_vote.vote must be accept or object"
+        )
+    return brainstorming._json_copy(envelope, "closure_vote")
+
+
+def _closure_common_prompt(state, target_revision):
+    checked = brainstorming.validate_session_state(state)
+    revision = brainstorming.validate_target_revision(target_revision)
+    return """\
+You are performing closure control for one bounded, product-neutral
+Brainstorming session after completed round {round_number}.
+
+Question:
+{question}
+
+- workspace_path: {workspace_path}
+- target_path: {target_path}
+- accepted Brainstorming target revision: {target_revision}
+
+The target has been reconciled to that exact accepted revision. Do not edit,
+delete, recreate, rename, or replace target_path during closure. Closure control
+does not create a target revision or consume a discussion turn.
+
+Earlier accepted session transcript, in order:
+{prior}
+
+Apply the same compact common check used during discussion: keep the decision in
+scope; identify only real affected parties; judge realistic damage altitude;
+use comparable rigor; prefer proportional, simpler safeguards; and name concrete
+evidence required for escalation. Do not invent victims, guarantees, threats,
+or exceptional preferences.
+""".format(
+        round_number=checked["rounds_used"],
+        question=checked["request"]["question"],
+        workspace_path=checked["request"]["workspace_path"],
+        target_path=checked["request"]["target_path"],
+        target_revision=revision["revision"],
+        prior=brainstorming.render_transcript(checked).rstrip(),
+    )
+
+
+def build_closure_proposal_prompt(state, target_revision):
+    """Ask the persisted lead whether to propose closure at this boundary."""
+    return _closure_common_prompt(state, target_revision) + """\
+
+You are the lead. Decide whether to propose closure against this exact revision.
+Your proposal is your `accept` vote. Supply the complete plain-language closing
+account that will be used only if this attempt terminalizes. The coordinator
+will add a plain human-labeled record for every later `object` vote so the
+closing cannot contradict the accepted ballot. Return exactly one JSON object
+with:
+- kind: "closure_proposal"
+- propose: true or false
+- closing_summary: exactly reason, unresolved_objections, affected_parties,
+  damage_altitude, proportionality, and escalation_evidence
+
+The four prose fields are non-empty strings, unresolved_objections is a list of
+non-empty strings, and escalation_evidence is null or a non-empty string. Add no
+other fields.
+"""
+
+
+def build_closure_vote_prompt(state, participant, target_revision):
+    """Ask one persisted interlocutor to vote against the lead's proposal."""
+    checked_participant = brainstorming._validate_participant(
+        participant, "participant"
+    )
+    return _closure_common_prompt(state, target_revision) + """\
+
+The lead has proposed closure against this exact revision. You are interlocutor
+{participant_id}. Return exactly one JSON object with kind "closure_vote" and
+vote equal to "accept" or "object". Add no rationale or other fields to the
+control envelope, and do not edit target_path.
+""".format(participant_id=checked_participant["id"])
+
+
 class BrainstormingCoordinator:
-    """Admit exactly the next persisted participant turn."""
+    """Coordinate ordered turns and revision-bound closure."""
 
     def __init__(self, store, participant_execution):
         self.store = store
@@ -728,6 +844,103 @@ class BrainstormingCoordinator:
         if cause is not None:
             raise cause
 
+    @staticmethod
+    def _closure_fingerprint(state):
+        """Ignore only write-once provider bindings during one closure attempt."""
+        return {
+            "status": state["status"],
+            "history": state["history"],
+            "transcript_events": state["transcript_events"],
+            "coordination": brainstorming.coordination_projection(state),
+        }
+
+    def _closure_exchange(
+        self,
+        session_id,
+        execution_context,
+        target,
+        baseline_state,
+        participant,
+        prompt,
+        validator,
+        accepted_target,
+    ):
+        attempt = {
+            "token": str(uuid.uuid4()),
+            "participant_id": participant["id"],
+            "completed_turn_count": len(baseline_state["completed_turns"]),
+            "target_revision": baseline_state["accepted_target_revision"],
+            "quiescent": False,
+            "target_parent": target[3],
+            "kind": "closure",
+        }
+        self.store.begin_turn_attempt(session_id, attempt)
+        exchange = getattr(
+            self.participant_execution, "exchange_control_quiescent", None
+        )
+        if not callable(exchange):
+            self._recover_rejected(
+                session_id,
+                target,
+                attempt["token"],
+                CoordinationRejected(
+                    "participant execution exposes no quiescent control exchange"
+                ),
+            )
+        try:
+            envelope, _runner_result = exchange(
+                session_id,
+                participant["id"],
+                prompt,
+                execution_context,
+                validator,
+                before_repair=lambda: self._require_closure_target(
+                    target, accepted_target
+                ),
+            )
+        except BaseException as exc:
+            if getattr(exc, "worker_quiescent", None) is not True:
+                self._record_supervision_stop(
+                    session_id,
+                    "The discussion stopped because closure work could not be "
+                    "confirmed as finished.",
+                )
+                raise
+            try:
+                self.store.mark_turn_attempt_quiescent(
+                    session_id, attempt["token"]
+                )
+            except BaseException as mark_error:
+                self._recover_rejected(
+                    session_id, target, attempt["token"], mark_error
+                )
+            self._recover_rejected(
+                session_id, target, attempt["token"], exc
+            )
+        try:
+            self.store.mark_turn_attempt_quiescent(
+                session_id, attempt["token"]
+            )
+            current = self._require_running(self.store.read(session_id))
+            if not brainstorming._same_json_value(
+                self._closure_fingerprint(current.state),
+                self._closure_fingerprint(baseline_state),
+            ):
+                raise brainstorming.RevisionConflict(current)
+            if (
+                _capture_pinned_target(target) != accepted_target
+                or _capture_pinned_target(target) != accepted_target
+            ):
+                raise InvalidTargetMutation(
+                    "target_path changed during closure control"
+                )
+        except BaseException as exc:
+            self._recover_rejected(
+                session_id, target, attempt["token"], exc
+            )
+        self.store.finish_turn_attempt(session_id, attempt["token"])
+        return envelope
+
     def run_next_turn(self, session_id, execution_context):
         """Run and atomically accept exactly the next ordered turn."""
         claimed = self._require_running(self.store.read(session_id))
@@ -875,6 +1088,208 @@ class BrainstormingCoordinator:
         self._reconcile_snapshot(session_id, accepted, target)
         self.store.finish_turn_attempt(session_id, attempt["token"])
         return self.store.reconcile_transcript(session_id)
+
+    @staticmethod
+    def _closure_result(state, outcome, reason=None):
+        result = {
+            "outcome": outcome,
+            "target_ref": state["request"]["target_path"],
+            "transcript_ref": state["transcript_ref"],
+            "rounds_used": state["rounds_used"],
+        }
+        if outcome == "failure":
+            result["reason"] = brainstorming._text(
+                reason, "failure reason"
+            )
+        return result
+
+    @staticmethod
+    def _require_closure_target(target, accepted_target):
+        if (
+            _capture_pinned_target(target) != accepted_target
+            or _capture_pinned_target(target) != accepted_target
+        ):
+            raise InvalidTargetMutation(
+                "target_path changed during closure acceptance"
+            )
+
+    def run_closure(self, session_id, execution_context):
+        """Collect one revision-bound ballot or continue/fail at the boundary."""
+        claimed = self._require_running(self.store.read(session_id))
+        path = resolve_target_path(claimed.state["request"])
+        with _exclusive_target_turn(
+            self.store.path,
+            path,
+            self.store.transcript_ref(session_id),
+        ):
+            current = self._require_running(self.store.read(session_id))
+            if current.revision != claimed.revision:
+                raise brainstorming.RevisionConflict(current)
+            prior_attempt = self.store.read_turn_attempt(session_id)
+            expected = self._attempt_target_parent(prior_attempt)
+            with _open_target_parent(path, expected) as (
+                parent_descriptor,
+                name,
+                parent_identity,
+            ):
+                target = (
+                    path,
+                    parent_descriptor,
+                    name,
+                    parent_identity,
+                )
+                return self._run_closure_locked(
+                    session_id, execution_context, target
+                )
+
+    def _run_closure_locked(self, session_id, execution_context, target):
+        starting = self._prepare_locked(session_id, target)
+        state = starting.state
+        participants = state["run_config"]["participants"]
+        participant_count = len(participants)
+        if (
+            state["rounds_used"] <= 0
+            or len(state["completed_turns"])
+            != state["rounds_used"] * participant_count
+        ):
+            raise ClosureNotEligible(
+                "closure requires a complete discussion round"
+            )
+        if any(
+            event["kind"] == "closure_ballot"
+            and event["fact"]["after_completed_rounds"]
+            == state["rounds_used"]
+            for event in state["transcript_events"]
+        ):
+            raise ClosureNotEligible(
+                "another complete discussion round is required before a ballot"
+            )
+
+        accepted_target = self._accepted_record(session_id, starting)
+        self._require_closure_target(target, accepted_target)
+        lead = next(
+            participant
+            for participant in participants
+            if participant["role"] == "lead"
+        )
+        proposal = self._closure_exchange(
+            session_id,
+            execution_context,
+            target,
+            state,
+            lead,
+            build_closure_proposal_prompt(state, accepted_target),
+            validate_closure_proposal_envelope,
+            accepted_target,
+        )
+        summary = proposal["closing_summary"]
+
+        if proposal["propose"] and not accepted_target["exists"]:
+            if state["rounds_used"] < state["request"]["max_rounds"]:
+                return self.store.reconcile_transcript(session_id)
+            self._require_closure_target(target, accepted_target)
+            current = self._require_running(self.store.read(session_id))
+            if not brainstorming._same_json_value(
+                self._closure_fingerprint(current.state),
+                self._closure_fingerprint(state),
+            ):
+                raise brainstorming.RevisionConflict(current)
+            reason = "The requested target was not produced."
+            summary = dict(summary, reason=reason)
+            result = self._closure_result(
+                current.state, "failure", reason
+            )
+            return self.store.transition(
+                session_id,
+                current.revision,
+                "failure",
+                result,
+                summary,
+            )
+
+        if not proposal["propose"]:
+            if state["rounds_used"] < state["request"]["max_rounds"]:
+                return self.store.reconcile_transcript(session_id)
+            self._require_closure_target(target, accepted_target)
+            current = self._require_running(self.store.read(session_id))
+            if not brainstorming._same_json_value(
+                self._closure_fingerprint(current.state),
+                self._closure_fingerprint(state),
+            ):
+                raise brainstorming.RevisionConflict(current)
+            result = self._closure_result(
+                current.state, "failure", summary["reason"]
+            )
+            return self.store.transition(
+                session_id,
+                current.revision,
+                "failure",
+                result,
+                summary,
+            )
+
+        votes_by_id = {lead["id"]: "accept"}
+        for participant in participants:
+            if participant["role"] != "interlocutor":
+                continue
+            vote = self._closure_exchange(
+                session_id,
+                execution_context,
+                target,
+                state,
+                participant,
+                build_closure_vote_prompt(
+                    state, participant, accepted_target
+                ),
+                validate_closure_vote_envelope,
+                accepted_target,
+            )
+            votes_by_id[participant["id"]] = vote["vote"]
+
+        votes = [
+            {
+                "participant_id": participant["id"],
+                "vote": votes_by_id[participant["id"]],
+            }
+            for participant in participants
+        ]
+        ballot = {
+            "after_completed_rounds": state["rounds_used"],
+            "target_revision": state["accepted_target_revision"],
+            "votes": votes,
+            "approved": brainstorming.evaluate_closure(
+                state["run_config"], votes
+            ),
+        }
+        self._require_closure_target(target, accepted_target)
+        current = self._require_running(self.store.read(session_id))
+        if not brainstorming._same_json_value(
+            self._closure_fingerprint(current.state),
+            self._closure_fingerprint(state),
+        ):
+            raise brainstorming.RevisionConflict(current)
+
+        if (
+            not ballot["approved"]
+            and state["rounds_used"] < state["request"]["max_rounds"]
+        ):
+            return self.store.record_closure_ballot(
+                session_id, current.revision, ballot
+            )
+
+        outcome = "success" if ballot["approved"] else "failure"
+        result = self._closure_result(
+            current.state,
+            outcome,
+            summary["reason"] if outcome == "failure" else None,
+        )
+        return self.store.close_with_ballot(
+            session_id,
+            current.revision,
+            ballot,
+            result,
+            summary,
+        )
 
     def record_material_interruption(
         self, session_id, expected_revision, plain

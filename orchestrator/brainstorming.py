@@ -430,7 +430,7 @@ def target_revision_mode(target_revision):
 
 
 def validate_turn_attempt(turn_attempt):
-    """Validate crash-surviving control state for one exclusive turn."""
+    """Validate crash-surviving control state for one exclusive worker."""
     _exact_keys(
         turn_attempt,
         (
@@ -440,7 +440,7 @@ def validate_turn_attempt(turn_attempt):
             "target_revision",
             "quiescent",
         ),
-        ("target_parent",),
+        ("target_parent", "kind"),
         "turn_attempt",
     )
     checked = {
@@ -454,6 +454,12 @@ def validate_turn_attempt(turn_attempt):
         ),
         "quiescent": turn_attempt["quiescent"],
     }
+    if "kind" in turn_attempt:
+        if turn_attempt["kind"] not in ("discussion_turn", "closure"):
+            raise ContractError(
+                "turn_attempt.kind must be discussion_turn or closure"
+            )
+        checked["kind"] = turn_attempt["kind"]
     if "target_parent" in turn_attempt:
         parent = turn_attempt["target_parent"]
         _exact_keys(
@@ -833,6 +839,7 @@ def _validate_transcript_events(events, run_config, coordination):
     participants = run_config["participants"]
     turns = [] if coordination is None else coordination["completed_turns"]
     previous_boundary = -1
+    ballot_rounds = set()
     checked = []
     for index, event in enumerate(events):
         ctx = "state.transcript_events[%d]" % index
@@ -880,6 +887,12 @@ def _validate_transcript_events(events, run_config, coordination):
                 raise ContractError(
                     "closure ballot target revision does not match its round"
                 )
+            ballot_round = fact["after_completed_rounds"]
+            if ballot_round in ballot_rounds:
+                raise ContractError(
+                    "only one closure ballot may be accepted per completed round"
+                )
+            ballot_rounds.add(ballot_round)
         previous_boundary = boundary
         checked.append(candidate)
     return checked
@@ -913,8 +926,60 @@ def validate_material_interruption(interruption):
     return _json_copy(interruption, "material_interruption")
 
 
+def _validate_closure_votes(votes, run_config):
+    checked_config = validate_run_config(run_config)
+    participants = checked_config["participants"]
+    if not isinstance(votes, list) or len(votes) != len(participants):
+        raise ContractError(
+            "closure_ballot.votes must contain every participant once"
+        )
+    checked_votes = []
+    for index, (vote, participant) in enumerate(zip(votes, participants)):
+        ctx = "closure_ballot.votes[%d]" % index
+        _exact_keys(vote, ("participant_id", "vote"), (), ctx)
+        if vote["participant_id"] != participant["id"]:
+            raise ContractError(
+                "closure_ballot.votes must follow the persisted roster"
+            )
+        if vote["vote"] not in ("accept", "object"):
+            raise ContractError("%s.vote must be accept or object" % ctx)
+        if participant["role"] == "lead" and vote["vote"] != "accept":
+            raise ContractError(
+                "the lead closure proposal must be recorded as accept"
+            )
+        checked_votes.append(
+            {"participant_id": vote["participant_id"], "vote": vote["vote"]}
+        )
+    return checked_config, checked_votes
+
+
+def _closure_decision(checked_config, checked_votes):
+    accepts = sum(vote["vote"] == "accept" for vote in checked_votes)
+    objects = len(checked_votes) - accepts
+    if checked_config["closure_policy"] == "unanimity":
+        return accepts == len(checked_votes)
+    if accepts != objects:
+        return accepts > objects
+    lead_id = next(
+        participant["id"]
+        for participant in checked_config["participants"]
+        if participant["role"] == "lead"
+    )
+    return next(
+        vote["vote"] == "accept"
+        for vote in checked_votes
+        if vote["participant_id"] == lead_id
+    )
+
+
+def evaluate_closure(run_config, votes):
+    """Apply the persisted closure policy to one exact roster ballot."""
+    checked_config, checked_votes = _validate_closure_votes(votes, run_config)
+    return _closure_decision(checked_config, checked_votes)
+
+
 def validate_closure_ballot(ballot, run_config):
-    """Validate accepted closure facts without evaluating their decision."""
+    """Validate one complete ballot and derive its policy decision."""
     _exact_keys(
         ballot,
         ("after_completed_rounds", "target_revision", "votes", "approved"),
@@ -929,26 +994,22 @@ def validate_closure_ballot(ballot, run_config):
     validate_target_revision_id(ballot["target_revision"])
     if type(ballot["approved"]) is not bool:
         raise ContractError("closure_ballot.approved must be a boolean")
-    votes = ballot["votes"]
-    participants = validate_run_config(run_config)["participants"]
-    if not isinstance(votes, list) or len(votes) != len(participants):
+    checked_config, votes = _validate_closure_votes(
+        ballot["votes"], run_config
+    )
+    approved = _closure_decision(checked_config, votes)
+    if ballot["approved"] is not approved:
         raise ContractError(
-            "closure_ballot.votes must contain every participant once"
+            "closure_ballot.approved must equal the configured policy decision"
         )
-    for index, (vote, participant) in enumerate(zip(votes, participants)):
-        ctx = "closure_ballot.votes[%d]" % index
-        _exact_keys(vote, ("participant_id", "vote"), (), ctx)
-        if vote["participant_id"] != participant["id"]:
-            raise ContractError(
-                "closure_ballot.votes must follow the persisted roster"
-            )
-        if vote["vote"] not in ("accept", "object"):
-            raise ContractError("%s.vote must be accept or object" % ctx)
-    return _json_copy(ballot, "closure_ballot")
+    checked = _json_copy(ballot, "closure_ballot")
+    checked["votes"] = votes
+    checked["approved"] = approved
+    return checked
 
 
-def validate_closing_summary(summary, terminal_status, result):
-    """Validate the contextual human facts supplied by the terminal owner."""
+def validate_closing_summary_shape(summary):
+    """Validate the participant-authored fields shared by both outcomes."""
     _exact_keys(
         summary,
         (
@@ -982,11 +1043,33 @@ def validate_closing_summary(summary, terminal_status, result):
     evidence = summary["escalation_evidence"]
     if evidence is not None:
         _text(evidence, "closing_summary.escalation_evidence")
-    if terminal_status == "failure" and summary["reason"] != result["reason"]:
+    return _json_copy(summary, "closing_summary")
+
+
+def validate_closing_summary(summary, terminal_status, result):
+    """Validate contextual human facts against one terminal outcome."""
+    checked = validate_closing_summary_shape(summary)
+    if terminal_status == "failure" and checked["reason"] != result["reason"]:
         raise ContractError(
             "closing_summary.reason must equal the failure result reason"
         )
-    return _json_copy(summary, "closing_summary")
+    return checked
+
+
+def closing_summary_with_ballot_facts(summary, ballot, run_config):
+    """Add strict human objection records derived from one accepted ballot."""
+    checked = validate_closing_summary_shape(summary)
+    checked_ballot = validate_closure_ballot(ballot, run_config)
+    labels = _human_labels(run_config)
+    objections = list(checked["unresolved_objections"])
+    for item in checked_ballot["votes"]:
+        if item["vote"] != "object":
+            continue
+        record = "%s objected to closure." % labels[item["participant_id"]]
+        if record not in objections:
+            objections.append(record)
+    checked["unresolved_objections"] = objections
+    return validate_closing_summary_shape(checked)
 
 
 def validate_result(result, terminal_status, target_path, transcript_ref):
@@ -1017,6 +1100,74 @@ def validate_result(result, terminal_status, target_path, transcript_ref):
     if outcome == "failure":
         _text(result["reason"], "result.reason")
     return _json_copy(result, "result")
+
+
+def _validate_closure_lifecycle(status, request, coordination, events):
+    ballots = [
+        event["fact"]
+        for event in events
+        if event["kind"] == "closure_ballot"
+    ]
+    approved = [ballot for ballot in ballots if ballot["approved"]]
+    if status != "success" and approved:
+        raise ContractError(
+            "an approving closure ballot must become success atomically"
+        )
+    if status == "success":
+        if coordination is None or not ballots:
+            raise ContractError(
+                "success requires a current approving closure ballot"
+            )
+        ballot = ballots[-1]
+        if (
+            len(approved) != 1
+            or not ballot["approved"]
+            or ballot["after_completed_rounds"]
+            != coordination["rounds_used"]
+            or ballot["target_revision"]
+            != coordination["accepted_target_revision"]
+            or events[-1]["kind"] != "closure_ballot"
+        ):
+            raise ContractError(
+                "success requires the current accepted target ballot"
+            )
+    if (
+        status == "running"
+        and coordination is not None
+        and coordination["rounds_used"] == request["max_rounds"]
+        and ballots
+    ):
+        ballot = ballots[-1]
+        if (
+            ballot["after_completed_rounds"] == coordination["rounds_used"]
+            and ballot["target_revision"]
+            == coordination["accepted_target_revision"]
+        ):
+            raise ContractError(
+                "a final non-approving ballot must become failure atomically"
+            )
+
+
+def _current_closure_ballot(events, run_config, coordination):
+    if coordination is None:
+        return None
+    participant_count = len(run_config["participants"])
+    turns = coordination["completed_turns"]
+    for event in reversed(events):
+        if event["kind"] != "closure_ballot":
+            continue
+        ballot = event["fact"]
+        boundary = ballot["after_completed_rounds"] * participant_count
+        if (
+            ballot["target_revision"]
+            == coordination["accepted_target_revision"]
+            and all(
+                turn["target_revision"] == ballot["target_revision"]
+                for turn in turns[boundary:]
+            )
+        ):
+            return ballot
+    return None
 
 
 def _validate_history(history, target_path, transcript_ref):
@@ -1088,8 +1239,11 @@ def validate_session_state(state):
     coordination = _validate_coordination(
         state, request, run_config, status
     )
-    _validate_transcript_events(
+    transcript_events = _validate_transcript_events(
         state["transcript_events"], run_config, coordination
+    )
+    _validate_closure_lifecycle(
+        status, request, coordination, transcript_events
     )
     if state["transcript_format_version"] not in _TRANSCRIPT_RENDERERS:
         raise ContractError("state.transcript_format_version is unsupported")
@@ -1110,6 +1264,17 @@ def validate_session_state(state):
         summary = validate_closing_summary(
             state["closing_summary"], status, result
         )
+        terminal_ballot = _current_closure_ballot(
+            transcript_events, run_config, coordination
+        )
+        if terminal_ballot is not None:
+            ballot_summary = closing_summary_with_ballot_facts(
+                summary, terminal_ballot, run_config
+            )
+            if not _same_json_value(summary, ballot_summary):
+                raise ContractError(
+                    "closing_summary must record every terminal object vote"
+                )
         if not _same_json_value(
             summary, state["history"][-1]["closing_summary"]
         ):
@@ -1156,6 +1321,17 @@ def transition_session(
             current["request"]["target_path"],
             current["transcript_ref"],
         )
+        terminal_ballot = _current_closure_ballot(
+            current["transcript_events"],
+            current["run_config"],
+            coordination_projection(current),
+        )
+        if terminal_ballot is not None:
+            closing_summary = closing_summary_with_ballot_facts(
+                closing_summary,
+                terminal_ballot,
+                current["run_config"],
+            )
         checked_summary = validate_closing_summary(
             closing_summary, new_status, checked_result
         )
@@ -1356,6 +1532,38 @@ def assert_completed_turn_successor(
         )
 
 
+def _closure_ballot_at_current_boundary(state, fact):
+    coordination = coordination_projection(state)
+    if state["status"] != "running" or coordination is None:
+        raise IllegalTransition(
+            "closure ballots require accepted running discussion"
+        )
+    checked_fact = validate_closure_ballot(fact, state["run_config"])
+    participant_count = len(state["run_config"]["participants"])
+    if (
+        len(coordination["completed_turns"])
+        != coordination["rounds_used"] * participant_count
+        or checked_fact["after_completed_rounds"]
+        != coordination["rounds_used"]
+        or checked_fact["target_revision"]
+        != coordination["accepted_target_revision"]
+    ):
+        raise HistoryRewriteError(
+            "closure ballot must match the current completed round "
+            "and accepted target revision"
+        )
+    if any(
+        event["kind"] == "closure_ballot"
+        and event["fact"]["after_completed_rounds"]
+        == checked_fact["after_completed_rounds"]
+        for event in state["transcript_events"]
+    ):
+        raise HistoryRewriteError(
+            "another complete discussion round is required before a new ballot"
+        )
+    return checked_fact
+
+
 def transcript_event_successor(state, kind, fact):
     """Append one explicit human event at the current discussion boundary."""
     current = validate_session_state(state)
@@ -1374,25 +1582,14 @@ def transcript_event_successor(state, kind, fact):
                 "material interruption must follow current accepted turns"
             )
     elif kind == "closure_ballot":
-        if current["status"] != "running" or coordination is None:
+        checked_fact = _closure_ballot_at_current_boundary(current, fact)
+        if checked_fact["approved"]:
             raise IllegalTransition(
-                "closure ballots require accepted running discussion"
+                "an approving ballot must become success atomically"
             )
-        checked_fact = validate_closure_ballot(
-            fact, current["run_config"]
-        )
-        participant_count = len(current["run_config"]["participants"])
-        if (
-            len(completed_turns)
-            != coordination["rounds_used"] * participant_count
-            or checked_fact["after_completed_rounds"]
-            != coordination["rounds_used"]
-            or checked_fact["target_revision"]
-            != coordination["accepted_target_revision"]
-        ):
-            raise HistoryRewriteError(
-                "closure ballot must match the current completed round "
-                "and accepted target revision"
+        if coordination["rounds_used"] == current["request"]["max_rounds"]:
+            raise IllegalTransition(
+                "a final non-approving ballot must become failure atomically"
             )
     else:
         raise ContractError("transcript event kind is invalid")
@@ -1402,6 +1599,64 @@ def transcript_event_successor(state, kind, fact):
         {"kind": kind, "fact": checked_fact}
     )
     return validate_session_state(successor)
+
+
+def terminal_closure_successor(state, ballot, result, closing_summary):
+    """Accept one ballot and its derived terminal outcome in one state."""
+    current = validate_session_state(state)
+    checked_ballot = _closure_ballot_at_current_boundary(current, ballot)
+    outcome = "success" if checked_ballot["approved"] else "failure"
+    if (
+        outcome == "failure"
+        and current["rounds_used"] < current["request"]["max_rounds"]
+    ):
+        raise IllegalTransition(
+            "a rejected ballot resumes discussion while rounds remain"
+        )
+    checked_result = validate_result(
+        result,
+        outcome,
+        current["request"]["target_path"],
+        current["transcript_ref"],
+    )
+    checked_summary = validate_closing_summary(
+        closing_summary_with_ballot_facts(
+            closing_summary, checked_ballot, current["run_config"]
+        ),
+        outcome,
+        checked_result,
+    )
+
+    successor = copy.deepcopy(current)
+    successor["transcript_events"].append(
+        {"kind": "closure_ballot", "fact": checked_ballot}
+    )
+    successor["status"] = outcome
+    successor["result"] = checked_result
+    successor["closing_summary"] = checked_summary
+    successor["history"].append(
+        {
+            "status": outcome,
+            "result": copy.deepcopy(checked_result),
+            "closing_summary": copy.deepcopy(checked_summary),
+        }
+    )
+    return validate_session_state(successor)
+
+
+def assert_terminal_closure_successor(
+    old_state, new_state, ballot, result, closing_summary
+):
+    """Accept only the exact combined ballot/result/closing successor."""
+    old = validate_session_state(old_state)
+    new = validate_session_state(new_state)
+    expected = terminal_closure_successor(
+        old, ballot, result, closing_summary
+    )
+    if not _same_json_value(expected, new):
+        raise HistoryRewriteError(
+            "terminal closure is not the exact next session revision"
+        )
 
 
 def assert_transcript_event_successor(old_state, new_state, kind, fact):
@@ -1761,7 +2016,7 @@ class SessionStore:
         return validate_turn_attempt(record["value"])
 
     def begin_turn_attempt(self, session_id, turn_attempt):
-        """Persist worker admission before invoking the scheduled participant."""
+        """Persist worker admission before invoking one target-aware control."""
         checked = validate_turn_attempt(turn_attempt)
         if "target_parent" not in checked:
             raise ContractError(
@@ -1781,15 +2036,40 @@ class SessionStore:
             )
         turns = projection["completed_turns"]
         participants = snapshot.state["run_config"]["participants"]
-        expected = participants[len(turns) % len(participants)]
+        kind = checked.get("kind", "discussion_turn")
+        if kind == "discussion_turn":
+            expected = participants[len(turns) % len(participants)]
+            valid_participant = checked["participant_id"] == expected["id"]
+        else:
+            valid_participant = any(
+                checked["participant_id"] == participant["id"]
+                for participant in participants
+            )
+            if (
+                not turns
+                or len(turns)
+                != projection["rounds_used"] * len(participants)
+            ):
+                raise HistoryRewriteError(
+                    "closure control requires a complete discussion round"
+                )
+            if any(
+                event["kind"] == "closure_ballot"
+                and event["fact"]["after_completed_rounds"]
+                == projection["rounds_used"]
+                for event in snapshot.state["transcript_events"]
+            ):
+                raise HistoryRewriteError(
+                    "closure control requires another complete discussion round"
+                )
         if (
-            checked["participant_id"] != expected["id"]
+            not valid_participant
             or checked["completed_turn_count"] != len(turns)
             or checked["target_revision"]
             != projection["accepted_target_revision"]
         ):
             raise HistoryRewriteError(
-                "turn attempt does not match durable accepted progress"
+                "worker attempt does not match durable accepted progress"
             )
         key = _turn_attempt_key(session_id)
         current = self._store.read(key)
@@ -2037,9 +2317,48 @@ class SessionStore:
     def record_closure_ballot(
         self, session_id, expected_revision, ballot
     ):
-        """Append one accepted ballot supplied by the closure owner."""
+        """Append one rejected, non-final ballot before discussion resumes."""
         return self._record_transcript_event(
             session_id, expected_revision, "closure_ballot", ballot
+        )
+
+    def close_with_ballot(
+        self,
+        session_id,
+        expected_revision,
+        ballot,
+        result,
+        closing_summary,
+    ):
+        """Atomically accept a ballot and its derived terminal outcome."""
+        current = self.read(session_id)
+        if current is None:
+            raise SessionNotFound(session_id)
+        if current.revision != expected_revision:
+            raise RevisionConflict(current)
+        candidate = terminal_closure_successor(
+            current.state, ballot, result, closing_summary
+        )
+        if candidate["status"] == "success":
+            accepted_target = self.read_target_revision(
+                session_id,
+                candidate["accepted_target_revision"],
+            )
+            if not accepted_target["exists"]:
+                raise ContractError(
+                    "success requires the requested target to exist"
+                )
+
+        def assertion(old, new):
+            assert_terminal_closure_successor(
+                old, new, ballot, result, closing_summary
+            )
+
+        return self._cas_coordination(
+            session_id,
+            expected_revision,
+            candidate,
+            assertion,
         )
 
     def bind_participant_session(

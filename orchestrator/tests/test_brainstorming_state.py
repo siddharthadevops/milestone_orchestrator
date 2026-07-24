@@ -104,6 +104,37 @@ class BrainstormingStateTestCase(unittest.TestCase):
     def tearDown(self):
         self._tmp.cleanup()
 
+    def _successful_closure(self, session_id, running, reason):
+        target = bs.make_target_revision(True, b"accepted target", 0o644)
+        snapshot = self.store.initialize_coordination(
+            session_id, running.revision, target
+        )
+        for participant in snapshot.state["run_config"]["participants"]:
+            snapshot = self.store.record_completed_turn(
+                session_id,
+                snapshot.revision,
+                participant["id"],
+                "Accepted contribution.",
+                target,
+            )
+        votes = [
+            {"participant_id": participant["id"], "vote": "accept"}
+            for participant in snapshot.state["run_config"]["participants"]
+        ]
+        ballot = {
+            "after_completed_rounds": 1,
+            "target_revision": snapshot.state["accepted_target_revision"],
+            "votes": votes,
+            "approved": True,
+        }
+        return self.store.close_with_ballot(
+            session_id,
+            snapshot.revision,
+            ballot,
+            success_result(snapshot.state["transcript_ref"], rounds_used=1),
+            closing_summary(reason),
+        )
+
     def _assert_create_rejected(self, session_id, req=None, config=None):
         with self.assertRaises((bs.ContractError, ValueError)):
             self.store.create(
@@ -409,12 +440,10 @@ class BrainstormingStateTestCase(unittest.TestCase):
         running = self.store.transition(
             "terminal", created.revision, "running"
         )
-        terminal = self.store.transition(
+        terminal = self._successful_closure(
             "terminal",
-            running.revision,
-            "success",
-            success_result(running.state["transcript_ref"]),
-            closing_summary("The participants reached agreement."),
+            running,
+            "The participants reached agreement.",
         )
         durable = self.store.read("terminal")
 
@@ -568,12 +597,8 @@ class BrainstormingStateTestCase(unittest.TestCase):
                     closing_summary("Agreement was reached."),
                 )
 
-        success = self.store.transition(
-            "success",
-            running.revision,
-            "success",
-            success_result(running.state["transcript_ref"]),
-            closing_summary("Agreement was reached."),
+        success = self._successful_closure(
+            "success", running, "Agreement was reached."
         )
         self.assertEqual(success.state["status"], "success")
         self.assertEqual(success.state["result"]["outcome"], "success")
@@ -581,7 +606,7 @@ class BrainstormingStateTestCase(unittest.TestCase):
             success.state["result"]["target_ref"],
             success.state["request"]["target_path"],
         )
-        self.assertEqual(success.state["result"]["rounds_used"], 0)
+        self.assertEqual(success.state["result"]["rounds_used"], 1)
         self.assertNotIn("reason", success.state["result"])
 
         failed = self.store.create(

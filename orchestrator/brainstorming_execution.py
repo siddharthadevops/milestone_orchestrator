@@ -153,16 +153,16 @@ class ParticipantExecution:
         return current
 
     @staticmethod
-    def _parse(result):
+    def _parse(result, validator=validate_discussion_turn_envelope):
         envelope, closers = runners._extract_contract_output(
             result.text,
-            validate_discussion_turn_envelope,
+            validator,
         )
-        # Discussion envelopes are not eligible for punctuation recovery;
+        # Participant envelopes are not eligible for punctuation recovery;
         # keep this assertion explicit if the shared helper evolves.
         if closers is not None:
             raise brainstorming.ContractError(
-                "discussion_turn cannot use delimiter recovery"
+                "participant control envelopes cannot use delimiter recovery"
             )
         return envelope
 
@@ -229,6 +229,7 @@ class ParticipantExecution:
             prompt,
             execution_context,
             require_quiescence=False,
+            validator=validate_discussion_turn_envelope,
         )
 
     def exchange_quiescent(
@@ -245,6 +246,35 @@ class ParticipantExecution:
             prompt,
             execution_context,
             require_quiescence=True,
+            validator=validate_discussion_turn_envelope,
+        )
+
+    def exchange_control_quiescent(
+        self,
+        session_id,
+        participant_id,
+        prompt,
+        execution_context,
+        validator,
+        before_repair=None,
+    ):
+        """Continue one participant session with a supplied control contract."""
+        if not callable(validator):
+            raise brainstorming.ContractError(
+                "control envelope validator must be callable"
+            )
+        if before_repair is not None and not callable(before_repair):
+            raise brainstorming.ContractError(
+                "control before_repair check must be callable"
+            )
+        return self._exchange(
+            session_id,
+            participant_id,
+            prompt,
+            execution_context,
+            require_quiescence=True,
+            validator=validator,
+            before_repair=before_repair,
         )
 
     def _exchange(
@@ -254,6 +284,8 @@ class ParticipantExecution:
         prompt,
         execution_context,
         require_quiescence,
+        validator,
+        before_repair=None,
     ):
         evidence = {"quiescent": True}
         try:
@@ -263,7 +295,9 @@ class ParticipantExecution:
                 prompt,
                 execution_context,
                 require_quiescence,
+                validator,
                 evidence,
+                before_repair,
             )
         except BaseException as exc:
             if require_quiescence and evidence["quiescent"]:
@@ -280,7 +314,9 @@ class ParticipantExecution:
         prompt,
         execution_context,
         require_quiescence,
+        validator,
         evidence,
+        before_repair,
     ):
         brainstorming._text(participant_id, "participant_id")
         brainstorming._text(prompt, "prompt")
@@ -329,7 +365,7 @@ class ParticipantExecution:
             self._result_session_ref(result, expected=provider_ref)
 
         try:
-            envelope = self._parse(result)
+            envelope = self._parse(result, validator)
             self._require_current_binding(
                 session_id, participant, provider_ref
             )
@@ -340,6 +376,8 @@ class ParticipantExecution:
         # The first strike is repaired only after re-reading the exact durable
         # binding and lifecycle. A terminalized session receives no control
         # exchange, and the repair can never select a fresh/latest session.
+        if before_repair is not None:
+            before_repair()
         self._require_current_binding(
             session_id, participant, provider_ref
         )
@@ -358,7 +396,7 @@ class ParticipantExecution:
         )
         self._result_session_ref(result2, expected=provider_ref)
         try:
-            envelope = self._parse(result2)
+            envelope = self._parse(result2, validator)
             self._require_current_binding(
                 session_id, participant, provider_ref
             )
@@ -370,7 +408,7 @@ class ParticipantExecution:
             return envelope, result2
         except (ValueError, brainstorming.ContractError) as exc:
             raise runners.WorkerProtocolError(
-                "executor %s produced a contract-violating discussion turn "
+                "executor %s produced a contract-violating participant envelope "
                 "twice: first error: %s; second error: %s"
                 % (participant["executor_ref"], first_error, exc),
                 raw_texts=[result.text, result2.text],

@@ -271,4 +271,42 @@
 
 ## slice_impl-05 (Revision-bound closure and results)
 
+- draft: kind `implement`, artifact `-` (raw: `implementation/milestones/brainstorming/.run/raw/slice_impl-05-draft.txt`)
+
+| Round | Kind | Family | Findings | Triage | Raw |
+|---|---|---|---|---|---|
+| slice_impl-05-codex-r1 | review_round | codex | 2 | 2 reported | `implementation/milestones/brainstorming/.run/raw/slice_impl-05-codex-r1.txt` |
+| slice_impl-05-codex-r2 | fix_findings | codex | 2 | 2 fixed | `implementation/milestones/brainstorming/.run/raw/slice_impl-05-fix1.txt` |
+| slice_impl-05-codex-r3 | delta_review | codex | 1 | 1 reported | `implementation/milestones/brainstorming/.run/raw/slice_impl-05-delta1.txt` |
+| slice_impl-05-codex-r4 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/brainstorming/.run/raw/slice_impl-05-fix2.txt` |
+| slice_impl-05-codex-r5 | delta_review | codex | 1 | 1 reported | `implementation/milestones/brainstorming/.run/raw/slice_impl-05-delta2.txt` |
+| slice_impl-05-codex-r6 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/brainstorming/.run/raw/slice_impl-05-fix3.txt` |
+| slice_impl-05-codex-r7 | delta_review | codex | 0 | clean | `implementation/milestones/brainstorming/.run/raw/slice_impl-05-delta3.txt` |
+| slice_impl-05-codex-r8 | review_round | codex | 1 | 1 reported | `implementation/milestones/brainstorming/.run/raw/slice_impl-05-codex-r2.txt` |
+| slice_impl-05-codex-r9 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/brainstorming/.run/raw/slice_impl-05-fix4.txt` |
+| slice_impl-05-codex-r10 | delta_review | codex | 3 | 3 reported | `implementation/milestones/brainstorming/.run/raw/slice_impl-05-delta4.txt` |
+| slice_impl-05-codex-r11 | fix_findings | codex | 3 | 3 fixed | `implementation/milestones/brainstorming/.run/raw/slice_impl-05-fix5.txt` |
+| slice_impl-05-codex-r12 | delta_review | codex | 1 | 1 reported | `implementation/milestones/brainstorming/.run/raw/slice_impl-05-delta5.txt` |
+| slice_impl-05-codex-r13 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/brainstorming/.run/raw/slice_impl-05-fix6.txt` |
+| slice_impl-05-codex-r14 | delta_review | codex | 0 | clean | `implementation/milestones/brainstorming/.run/raw/slice_impl-05-delta6.txt` |
+| slice_impl-05-codex-r15 | review_round | codex | 2 | 2 reported | `implementation/milestones/brainstorming/.run/raw/slice_impl-05-codex-r3.txt` |
+| slice_impl-05-codex-r16 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/brainstorming/.run/raw/slice_impl-05-fix7.txt` |
+| slice_impl-05-codex-r17 | delta_review | codex | 1 | 1 reported | `implementation/milestones/brainstorming/.run/raw/slice_impl-05-delta7.txt` |
+| slice_impl-05-codex-r18 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/brainstorming/.run/raw/slice_impl-05-fix8.txt` |
+| slice_impl-05-codex-r19 | delta_review | codex | 0 | clean | `implementation/milestones/brainstorming/.run/raw/slice_impl-05-delta8.txt` |
+| slice_impl-05-codex-r20 | review_round | codex | 1 | 1 reported | `implementation/milestones/brainstorming/.run/raw/slice_impl-05-codex-r4.txt` |
+| slice_impl-05-codex-r21 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/brainstorming/.run/raw/slice_impl-05-fix9.txt` |
+| slice_impl-05-codex-r22 | delta_review | codex | 0 | clean | `implementation/milestones/brainstorming/.run/raw/slice_impl-05-delta9.txt` |
+| slice_impl-05-codex-r23 | review_round | codex | 0 | clean | `implementation/milestones/brainstorming/.run/raw/slice_impl-05-codex-r5.txt` |
+| slice_impl-05-claude-r1 | review_round | claude | 1 | 1 reported | `implementation/milestones/brainstorming/.run/raw/slice_impl-05-claude-r1.txt` |
+
+### Seal attempt a1 — PASSED
+
+
+**Deferred debt (opposite-family verified):**
+- `codex-F2` (raised codex, cleared codex): The required contention check bypasses the closure coordinator, leaving worker serialization and target recovery untested. — The falsely green contention test can silently preserve broken closure serialization or recovery, but the current mechanisms are separately exercised and correction is a focused coordinator-level regression test plus, if exposed, a local fix.
+- `claude-F1` (raised claude, cleared codex): The sealed note's enforceability gate promises publication-failure injection for success, failure, and interruption terminal publication ('Success/failure/interruption tests inject publication failure and prove no partial file', slice-05.md:225), but the slice removed the only success-path injection: test_brainstorming_transcript.py's restart-repair fixture, which previously transitioned to 'success' under a mocked _atomic_replace_utf8 failure, was rewritten to a 'failure' transition (orchestrator/tests/test_brainstorming_transcript.py:752-767), and no test injects publication failure through the new close_with_ballot/terminal-success path. — The sealed gate falsely states that success-path publication failure is tested, so a builder could silently trust missing correctness coverage, while correction is a local close_with_ballot failure-injection test using the existing shared publication-and-repair path without downstream contract rewor
+
+## slice_doc-06 (Standalone lifecycle API)
+
 

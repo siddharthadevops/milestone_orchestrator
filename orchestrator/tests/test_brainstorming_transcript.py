@@ -129,23 +129,46 @@ class BrainstormingTranscriptTest(unittest.TestCase):
         )
 
     def _ballot(self, session_id, snapshot, votes, approved):
+        ballot = self._ballot_fact(snapshot, votes, approved)
         return self.store.record_closure_ballot(
+            session_id, snapshot.revision, ballot
+        )
+
+    @staticmethod
+    def _ballot_fact(snapshot, votes, approved):
+        return {
+            "after_completed_rounds": snapshot.state["rounds_used"],
+            "target_revision": snapshot.state["accepted_target_revision"],
+            "votes": [
+                {
+                    "participant_id": participant["id"],
+                    "vote": vote,
+                }
+                for participant, vote in zip(
+                    snapshot.state["run_config"]["participants"], votes
+                )
+            ],
+            "approved": approved,
+        }
+
+    def _terminal_ballot(
+        self, session_id, snapshot, votes, approved, reason
+    ):
+        outcome = "success" if approved else "failure"
+        result = {
+            "outcome": outcome,
+            "target_ref": snapshot.state["request"]["target_path"],
+            "transcript_ref": snapshot.state["transcript_ref"],
+            "rounds_used": snapshot.state["rounds_used"],
+        }
+        if outcome == "failure":
+            result["reason"] = reason
+        return self.store.close_with_ballot(
             session_id,
             snapshot.revision,
-            {
-                "after_completed_rounds": snapshot.state["rounds_used"],
-                "target_revision": snapshot.state["accepted_target_revision"],
-                "votes": [
-                    {
-                        "participant_id": participant["id"],
-                        "vote": vote,
-                    }
-                    for participant, vote in zip(
-                        snapshot.state["run_config"]["participants"], votes
-                    )
-                ],
-                "approved": approved,
-            },
+            self._ballot_fact(snapshot, votes, approved),
+            result,
+            closing_summary(reason, ["One objection remains."]),
         )
 
     def _terminal(self, session_id, snapshot, outcome, reason):
@@ -157,6 +180,14 @@ class BrainstormingTranscriptTest(unittest.TestCase):
         }
         if outcome == "failure":
             result["reason"] = reason
+        if outcome == "success":
+            votes = tuple(
+                "accept"
+                for _participant in snapshot.state["run_config"]["participants"]
+            )
+            return self._terminal_ballot(
+                session_id, snapshot, votes, True, reason
+            )
         return self.store.transition(
             session_id,
             snapshot.revision,
@@ -370,9 +401,6 @@ class BrainstormingTranscriptTest(unittest.TestCase):
                 "plain": "Pause\n## Closing",
             },
         )
-        snapshot = self._ballot(
-            session_id, snapshot, ("accept", "accept"), True
-        )
         summary = closing_summary(
             "Resolved\n## Opening", ["Objection\n## Closing"]
         )
@@ -382,8 +410,14 @@ class BrainstormingTranscriptTest(unittest.TestCase):
             "transcript_ref": snapshot.state["transcript_ref"],
             "rounds_used": 1,
         }
-        snapshot = self.store.transition(
-            session_id, snapshot.revision, "success", result, summary
+        snapshot = self.store.close_with_ballot(
+            session_id,
+            snapshot.revision,
+            self._ballot_fact(
+                snapshot, ("accept", "accept"), True
+            ),
+            result,
+            summary,
         )
         markdown = self._read(snapshot)
 
@@ -451,9 +485,7 @@ class BrainstormingTranscriptTest(unittest.TestCase):
 
     def test_closure_ballots_render_every_vote_and_failed_attempt_in_order(self):
         session_id = "ballots"
-        snapshot = self._create(
-            session_id, policy="majority_with_lead_tiebreak"
-        )
+        snapshot = self._create(session_id)
         snapshot = self._initialize(session_id, snapshot)
         for participant_id, markdown in (
             ("lead-machine", "First proposal."),
@@ -467,7 +499,7 @@ class BrainstormingTranscriptTest(unittest.TestCase):
             session_id, snapshot, ("accept", "object"), False
         )
         accepted_ballot = snapshot.state["transcript_events"][-1]
-        with self.assertRaises(bs.ContractError):
+        with self.assertRaises((bs.ContractError, bs.HistoryRewriteError)):
             self.store.record_closure_ballot(
                 session_id,
                 snapshot.revision,
@@ -495,8 +527,12 @@ class BrainstormingTranscriptTest(unittest.TestCase):
                 session_id, snapshot, participant_id, markdown
             )
         second_revision = snapshot.state["accepted_target_revision"]
-        snapshot = self._ballot(
-            session_id, snapshot, ("accept", "accept"), True
+        snapshot = self._terminal_ballot(
+            session_id,
+            snapshot,
+            ("accept", "accept"),
+            True,
+            "Agreement was reached.",
         )
         markdown = self._read(snapshot)
 
@@ -520,7 +556,9 @@ class BrainstormingTranscriptTest(unittest.TestCase):
             ],
             "approved": True,
         }
-        with self.assertRaises(bs.ContractError):
+        with self.assertRaises(
+            (bs.ContractError, bs.IllegalTransition)
+        ):
             self.store.record_closure_ballot(
                 session_id, snapshot.revision, malformed
             )
@@ -579,8 +617,12 @@ class BrainstormingTranscriptTest(unittest.TestCase):
         snapshot = self._turn(
             session_id, snapshot, "critic-machine", "Final objection."
         )
-        snapshot = self._ballot(
-            session_id, snapshot, ("accept", "object"), False
+        snapshot = self._terminal_ballot(
+            session_id,
+            snapshot,
+            ("accept", "object"),
+            False,
+            "The final ballot did not reach agreement.",
         )
 
         markdown = self._read(snapshot)
@@ -682,7 +724,7 @@ class BrainstormingTranscriptTest(unittest.TestCase):
             },
         )
         snapshot = self._ballot(
-            session_id, snapshot, ("accept", "accept"), True
+            session_id, snapshot, ("accept", "object"), False
         )
         before = self._read(snapshot)
         with mock.patch(
@@ -711,14 +753,17 @@ class BrainstormingTranscriptTest(unittest.TestCase):
                 self.store.transition(
                     session_id,
                     snapshot.revision,
-                    "success",
+                    "failure",
                     {
-                        "outcome": "success",
+                        "outcome": "failure",
                         "target_ref": snapshot.state["request"]["target_path"],
                         "transcript_ref": snapshot.state["transcript_ref"],
                         "rounds_used": 1,
+                        "reason": "The discussion stopped after the ballot.",
                     },
-                    closing_summary("Agreement was reached."),
+                    closing_summary(
+                        "The discussion stopped after the ballot."
+                    ),
                 )
         with open(snapshot.state["transcript_ref"], encoding="utf-8") as handle:
             self.assertEqual(handle.read(), before)
