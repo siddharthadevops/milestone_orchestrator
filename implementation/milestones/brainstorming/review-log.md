@@ -380,4 +380,21 @@
 
 ## slice_impl-07 (Dedicated brainstorming visualization)
 
+- draft: kind `implement`, artifact `-` (raw: `implementation/milestones/brainstorming/.run/raw/slice_impl-07-draft.txt`)
+
+| Round | Kind | Family | Findings | Triage | Raw |
+|---|---|---|---|---|---|
+| slice_impl-07-codex-r1 | review_round | codex | 0 | clean | `implementation/milestones/brainstorming/.run/raw/slice_impl-07-codex-r1.txt` |
+| slice_impl-07-claude-r1 | review_round | claude | 3 | 3 reported | `implementation/milestones/brainstorming/.run/raw/slice_impl-07-claude-r1.txt` |
+
+### Seal attempt a1 — PASSED
+
+
+**Deferred debt (opposite-family verified):**
+- `claude-F1` (raised claude, cleared codex): The named check `test_page_poll_stop_and_stale_contract` verifies the page's polling, out-of-order, stale, and stop-race contract by grepping seven literal substrings out of brainstorming.html instead of exercising the behaviour the slice note's Enforceability Gate pins ("Page-contract tests deliver responses out of order and inject transient errors"; "cannot turn a stop/completion race into two terminal outcomes"). — The named test only checks source substrings, so a capable builder may trust a falsely claimed behavioral gate while ordering or race regressions pass silently, but correcting this requires bounded rework to add executable page-behavior coverage within this unit.
+- `claude-F2` (raised claude, cleared codex): Nothing in the focused suite ever asserts that `view.target.revision` equals the session's durable `accepted_target_revision`, and the note's gate "compare every projected field with one captured durable revision" is met for only 3 of the 14 projected fields; the "empty" target fixture named in the Enforceability Gate is also absent. — The focused suite passes despite never binding target.revision to accepted_target_revision or covering empty content, so its false test-coverage claim can silently preserve a stale-label correctness regression, while correction is a local projection assertion/fixture and at most one field fix.
+- `claude-F3` (raised claude, cleared codex): `orchestrator/README.md:133-143` still describes the standalone Brainstorming surface as create + detail + stop only; the dedicated page `/brainstorming.html?session=<id>` and the new `GET /api/brainstorming/sessions/<id>/view` route are documented nowhere outside the service.py module docstring, although the slice's only declared consumer is a human who must know that URL. — The README’s affirmative three-route inventory could make a README-only reader silently miss the browser view, though a capable builder can resolve it from the goal, Slice 7, implementation, and tests, while correction requires only a local README update with no code or downstream rework.
+
+## slice_doc-08 (Milestone need_rethink adapter)
+
 

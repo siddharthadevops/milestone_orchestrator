@@ -419,5 +419,6 @@ The goal is satisfied when:
 | slice_impl-05 (Revision-bound closure and results) | sealed | 24 | a1:pass | df08bc5 |
 | slice_doc-06 (Standalone lifecycle API) | sealed | 2 | a1:pass | f4753e1 |
 | slice_impl-06 (Standalone lifecycle API) | sealed | 20 | a1:pass | 227acc8 |
-| slice_doc-07 (Dedicated brainstorming visualization) | sealed | 2 | a1:pass | - |
-| slice_impl-07 (Dedicated brainstorming visualization) | pending | 0 | - | - |
+| slice_doc-07 (Dedicated brainstorming visualization) | sealed | 2 | a1:pass | ddd44d4 |
+| slice_impl-07 (Dedicated brainstorming visualization) | sealed | 2 | a1:pass | - |
+| slice_doc-08 (Milestone need_rethink adapter) | pending | 0 | - | - |

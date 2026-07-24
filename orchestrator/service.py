@@ -37,10 +37,14 @@ run's live state) and a JSON API:
 
 Standalone Brainstorming (independent from milestone runs and chronology):
 
+    GET    /brainstorming.html?session=<id>
+                                   dedicated view of one known discussion
     POST   /api/brainstorming/sessions
                                    create and start one bounded discussion
     GET    /api/brainstorming/sessions/<id>
                                    poll one complete durable session snapshot
+    GET    /api/brainstorming/sessions/<id>/view
+                                   render one coherent authorized view revision
     POST   /api/brainstorming/sessions/<id>/stop
                                    stop participant work and publish failure
 
@@ -2771,6 +2775,10 @@ def make_handler(home):
                 who = self._who()
                 if route in ("/", "/index.html"):
                     self._static("panel.html", "text/html; charset=utf-8")
+                elif route == "/brainstorming.html":
+                    self._static(
+                        "brainstorming.html", "text/html; charset=utf-8"
+                    )
                 elif route == "/api/access":
                     self._json(200, {"ok": True, **access_view(who)})
                 elif route == "/api/runs":
@@ -2816,7 +2824,21 @@ def make_handler(home):
                     self._json(status, payload)
                 elif route.startswith("/api/brainstorming/sessions/"):
                     parts = route.rstrip("/").split("/")
-                    if len(parts) == 5 and parts[4]:
+                    if (
+                        len(parts) == 6
+                        and parts[4]
+                        and parts[5] == "view"
+                    ):
+                        view = brainstorming_lifecycle.view_session(
+                            home,
+                            parts[4],
+                            lambda record: require_brainstorming_access(
+                                home, who, record
+                            ),
+                            ARTIFACT_MAX,
+                        )
+                        self._json(200, {"ok": True, "view": view})
+                    elif len(parts) == 5 and parts[4]:
                         session = brainstorming_lifecycle.inspect_session(
                             home,
                             parts[4],

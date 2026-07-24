@@ -936,6 +936,75 @@ def inspect_session(home, session_id, authorize):
     return _projection(home, record)
 
 
+def view_session(home, session_id, authorize, preview_limit):
+    """Project one authorized durable revision for the dedicated view."""
+    record = _record_by_id(home, session_id)
+    _authorize_record(record, authorize)
+    try:
+        store = brainstorming.SessionStore(state_directory(home))
+        snapshot = store.read(record["id"])
+        if snapshot is None:
+            raise RuntimeError("Brainstorming session state is unavailable")
+        state = snapshot.state
+        progress = brainstorming.coordination_projection(state)
+        target = {
+            "ref": state["request"]["target_path"],
+            "revision": None,
+            "exists": None,
+            "content": None,
+            "truncated": False,
+        }
+        if progress is not None:
+            accepted = store.read_target_revision(
+                record["id"], progress["accepted_target_revision"]
+            )
+            exists, content = brainstorming.target_revision_content(accepted)
+            target.update(
+                {"revision": accepted["revision"], "exists": exists}
+            )
+            if exists:
+                try:
+                    text = content.decode("utf-8")
+                except UnicodeDecodeError:
+                    pass
+                else:
+                    target["content"] = text[:preview_limit]
+                    target["truncated"] = len(text) > preview_limit
+        turns = [] if progress is None else progress["completed_turns"]
+        return {
+            "id": record["id"],
+            "caller": record["caller"],
+            "status": state["status"],
+            "question": state["request"]["question"],
+            "process": "running" if _process_alive(record) else "stopped",
+            "revision": snapshot.revision,
+            "target": target,
+            "participants": copy.deepcopy(
+                state["run_config"]["participants"]
+            ),
+            "same_family_fallback": state["run_config"][
+                "same_family_fallback"
+            ],
+            "closure_policy": state["run_config"]["closure_policy"],
+            "closure_ballots": [
+                copy.deepcopy(event["fact"])
+                for event in state["transcript_events"]
+                if event["kind"] == "closure_ballot"
+            ],
+            "round": {
+                "current": turns[-1]["round"] if turns else 0,
+                "completed": 0 if progress is None else progress["rounds_used"],
+                "maximum": state["request"]["max_rounds"],
+            },
+            "transcript_markdown": brainstorming.render_transcript(state),
+            "result": copy.deepcopy(state.get("result")),
+        }
+    except PublicLifecycleError:
+        raise
+    except Exception as exc:
+        raise PublicLifecycleError(503, UNAVAILABLE) from exc
+
+
 def _signal_lifecycle(record):
     pid = record.get("pid")
     if not pid or not _process_alive(record):
