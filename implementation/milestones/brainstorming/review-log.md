@@ -253,4 +253,22 @@
 
 ## slice_doc-05 (Revision-bound closure and results)
 
+- draft: kind `draft_slice_note`, artifact `implementation/milestones/brainstorming/slices/slice-05.md` (raw: `implementation/milestones/brainstorming/.run/raw/slice_doc-05-draft.txt`)
+
+| Round | Kind | Family | Findings | Triage | Raw |
+|---|---|---|---|---|---|
+| slice_doc-05-codex-r1 | review_round | codex | 3 | 3 reported | `implementation/milestones/brainstorming/.run/raw/slice_doc-05-codex-r1.txt` |
+| slice_doc-05-claude-r1 | review_round | claude | 1 | 1 reported | `implementation/milestones/brainstorming/.run/raw/slice_doc-05-claude-r1.txt` |
+
+### Seal attempt a1 — PASSED
+
+
+**Deferred debt (opposite-family verified):**
+- `codex-F1` (raised codex, cleared codex): The path-mutation non-goal contradicts mandatory state and transcript publication in every normal closure. — The literal path-only non-goal conflicts openly with the same note’s mandatory session-state and chat.md publication, so the capable builder must stop rather than drift silently, and correction is a local wording clarification exposed before or by the first closure test.
+- `codex-F2` (raised codex, cleared codex): The strict same-revision guarantee lacks a voter-view and vote-provenance contract, allowing ordinary closure to approve a version a participant never received. — The note pins votes to a revision but omits proof that each voter received that revision, an ambiguity a capable builder should notice or stop on, while silent implementation would require bounded closure-prompt, provenance-validation, and focused-test rework to correct.
+- `codex-F3` (raised codex, cleared codex): The note over-specifies internal storage and validation machinery instead of limiting itself to observable closure contracts and tests. — Repeated mandates to add a combined successor and extend named internal seams could silently steer the capable builder past an equivalent existing helper, while correction would remain bounded to refactoring this unit because its observable contracts and tests need not change.
+- `claude-F1` (raised claude, cleared codex): Sealed slice-04 (slice-04.md:143, 'Material interruption input and producers') assigns Slice 5 the production of the material_interruption transcript fact for a closure outcome that materially changes or stops discussion, with an explicit do-not-leave-production-to-an-unnamed-component clause; the slice-05 note never adopts that responsibility — its scope, pinned facts, acceptance criteria, nine-test verification matrix, and enforceability gate cover ballots, target-only recovery, and terminalization, but no closure-outcome interruption entry, and its target-mutation test (slice-05.md:148) enumerates the accepted effects of an invalidated closure attempt (target restored, sibling sentinels byte-identical) without any human-visible record. — Slice 5’s generic dependency on the existing interruption contract gives a careful builder a recovery path, but omitting its explicitly assigned producer responsibility from scope, acceptance, and tests could silently yield no human-visible record; correction is a small local closure-path append plu
+
+## slice_impl-05 (Revision-bound closure and results)
+
 
