@@ -744,6 +744,15 @@ class BrainstormingCoordinationTest(unittest.TestCase):
                     self.assertEqual(
                         handle.read(), b"possibly still changing"
                     )
+                transcript = self.store.read(session_id).state["transcript_ref"]
+                with open(transcript, encoding="utf-8") as handle:
+                    account = handle.read()
+                self.assertEqual(
+                    account.count("## Material interruption"), 1
+                )
+                self.assertIn(
+                    "could not be confirmed as finished", account
+                )
 
                 with self.assertRaises(
                     coordination.CoordinationRejected
@@ -788,6 +797,13 @@ class BrainstormingCoordinationTest(unittest.TestCase):
         attempt = self.store.read_turn_attempt(session_id)
         self.assertIsNotNone(attempt)
         self.assertTrue(attempt["quiescent"])
+        with open(durable.state["transcript_ref"], encoding="utf-8") as handle:
+            account = handle.read()
+        self.assertEqual(account.count("## Material interruption"), 1)
+        self.assertIn(
+            "could not be restored to the last accepted Brainstorming revision",
+            account,
+        )
 
     def test_legacy_attempt_without_parent_stops_before_redirected_recovery(self):
         session_id = "legacy-attempt-without-parent"
@@ -951,7 +967,9 @@ class BrainstormingCoordinationTest(unittest.TestCase):
                 runners._kill_group(spawned[0][1])
                 spawned[0][1].communicate(timeout=5)
 
-    def test_target_cannot_alias_brainstorming_state_store(self):
+    def test_creation_rejects_brainstorming_state_store_target_before_writing(
+        self,
+    ):
         session_id = "store-target-alias"
         roster = participants()
         workspace = os.path.join(self.root, session_id)
@@ -963,31 +981,20 @@ class BrainstormingCoordinationTest(unittest.TestCase):
             "context": {"brief": "Keep target and session state independent."},
             "max_rounds": 1,
         }
-        created = self.store.create(
-            session_id, request, run_config(roster), roster
-        )
-        self.store.transition(
-            session_id, created.revision, "running"
-        )
-        self._create_running("unrelated-session", roster=roster)
-        with open(self.store.path, "rb") as handle:
-            before = handle.read()
-        subject, executors = self._subject(
-            roster, {"lead": [envelope("must not run")], "critic": []}
-        )
+        transcript = self.store.transcript_ref(session_id)
 
-        with self.assertRaises(coordination.CoordinationRejected):
-            subject.prepare(session_id)
+        with self.assertRaises(bs.ContractError):
+            self.store.create(
+                session_id, request, run_config(roster), roster
+            )
 
-        with open(self.store.path, "rb") as handle:
-            self.assertEqual(handle.read(), before)
-        durable = self.store.read(session_id)
-        self.assertEqual(durable.state["status"], "running")
-        self.assertIsNone(bs.coordination_projection(durable.state))
-        self.assertIsNotNone(self.store.read("unrelated-session"))
-        self.assertEqual(executors["codex-lead"].calls, [])
+        self.assertFalse(os.path.exists(self.store.path))
+        self.assertFalse(os.path.exists(self.store.path + ".lock"))
+        self.assertFalse(os.path.exists(transcript))
 
-    def test_target_cannot_alias_brainstorming_state_store_lock(self):
+    def test_creation_rejects_brainstorming_state_lock_target_before_writing(
+        self,
+    ):
         session_id = "store-lock-target-alias"
         roster = participants()
         workspace = os.path.join(self.root, session_id)
@@ -1000,29 +1007,16 @@ class BrainstormingCoordinationTest(unittest.TestCase):
             "context": {"brief": "Keep target and session locking independent."},
             "max_rounds": 1,
         }
-        created = self.store.create(
-            session_id, request, run_config(roster), roster
-        )
-        self.store.transition(
-            session_id, created.revision, "running"
-        )
-        before = os.stat(lock_path)
-        subject, executors = self._subject(
-            roster, {"lead": [envelope("must not run")], "critic": []}
-        )
+        transcript = self.store.transcript_ref(session_id)
 
-        with self.assertRaises(coordination.CoordinationRejected):
-            subject.prepare(session_id)
+        with self.assertRaises(bs.ContractError):
+            self.store.create(
+                session_id, request, run_config(roster), roster
+            )
 
-        after = os.stat(lock_path)
-        self.assertEqual(
-            (after.st_dev, after.st_ino),
-            (before.st_dev, before.st_ino),
-        )
-        durable = self.store.read(session_id)
-        self.assertEqual(durable.state["status"], "running")
-        self.assertIsNone(bs.coordination_projection(durable.state))
-        self.assertEqual(executors["codex-lead"].calls, [])
+        self.assertFalse(os.path.exists(self.store.path))
+        self.assertFalse(os.path.exists(lock_path))
+        self.assertFalse(os.path.exists(transcript))
 
     def test_target_cannot_use_target_coordination_lock_namespace(self):
         session_id = "target-lock-alias"

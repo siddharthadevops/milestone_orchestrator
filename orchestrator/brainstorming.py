@@ -1,26 +1,38 @@
 """Product-neutral brainstorming session contracts and durable state.
 
 This module owns accepted configuration, lifecycle state, durable participant
-session references, and the accepted ordered-discussion projection. Ballots,
-transcripts, service routes, and product adapters belong to later slices.
+session references, the accepted ordered discussion, and its human transcript.
+Service routes and product adapters belong to later slices.
 """
 
 from __future__ import annotations
 
-import copy
 import base64
+import contextlib
+import copy
 import hashlib
 import json
+import os
 import re
+import tempfile
+import threading
+import unicodedata
 from dataclasses import dataclass
 
 from orchestrator import contracts, kvstore
+
+try:
+    import fcntl
+except ImportError:  # pragma: no cover - the production service is POSIX
+    fcntl = None
 
 
 STATUSES = ("created", "running", "success", "failure")
 TERMINAL_STATUSES = ("success", "failure")
 CLOSURE_POLICIES = ("unanimity", "majority_with_lead_tiebreak")
 ROLES = ("lead", "interlocutor")
+TRANSCRIPT_EVENT_KINDS = ("material_interruption", "closure_ballot")
+TRANSCRIPT_FORMAT_VERSION = 1
 
 _ALLOWED_TRANSITIONS = {
     "created": ("running", "failure"),
@@ -40,6 +52,8 @@ _COORDINATION_FIELDS = (
     "rounds_used",
     "accepted_target_revision",
 )
+_TRANSCRIPT_LOCKS = {}
+_TRANSCRIPT_LOCKS_GUARD = threading.Lock()
 
 
 class ContractError(contracts.ContractError):
@@ -74,6 +88,223 @@ class RevisionConflict(RuntimeError):
 class SessionSnapshot:
     revision: int
     state: dict
+
+
+def _thread_transcript_lock(path):
+    with _TRANSCRIPT_LOCKS_GUARD:
+        lock = _TRANSCRIPT_LOCKS.get(path)
+        if lock is None:
+            lock = threading.RLock()
+            _TRANSCRIPT_LOCKS[path] = lock
+        return lock
+
+
+@contextlib.contextmanager
+def _exclusive_transcript(path):
+    """Serialize complete transcript projections across threads and processes."""
+    parent = os.path.dirname(path)
+    os.makedirs(parent, exist_ok=True)
+    lock_path = path + ".lock"
+    with _thread_transcript_lock(lock_path):
+        handle = open(lock_path, "a+", encoding="utf-8")
+        try:
+            if fcntl is not None:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+            yield
+        finally:
+            handle.close()
+
+
+def _atomic_replace_utf8(path, content):
+    """Expose one complete UTF-8 file snapshot using the accepted KV pattern."""
+    encoded = content.encode("utf-8")
+    try:
+        with open(path, "rb") as handle:
+            if handle.read() == encoded:
+                return
+    except FileNotFoundError:
+        pass
+    fd, temporary = tempfile.mkstemp(
+        prefix=".chat-", suffix=".md", dir=os.path.dirname(path)
+    )
+    try:
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(encoded)
+        os.replace(temporary, path)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
+
+
+def _aliases_transcript_inode(transcript_root, target_path):
+    """Return whether a caller path hard-links any transcript artifact."""
+    try:
+        target_stat = os.stat(target_path)
+        session_directories = os.scandir(transcript_root)
+    except (FileNotFoundError, NotADirectoryError, OSError):
+        return False
+    with session_directories:
+        for session_directory in session_directories:
+            if not session_directory.is_dir(follow_symlinks=False):
+                continue
+            for name in ("chat.md", "chat.md.lock"):
+                try:
+                    artifact_stat = os.stat(
+                        os.path.join(session_directory.path, name)
+                    )
+                except (FileNotFoundError, OSError):
+                    continue
+                if (
+                    artifact_stat.st_dev,
+                    artifact_stat.st_ino,
+                ) == (target_stat.st_dev, target_stat.st_ino):
+                    return True
+    return False
+
+
+def _filesystem_ignores_case(path):
+    """Detect or conservatively assume case aliases without probe writes."""
+    existing = os.path.realpath(os.path.abspath(path))
+    while not os.path.lexists(existing):
+        parent = os.path.dirname(existing)
+        if parent == existing:
+            return False
+        existing = parent
+    while True:
+        if os.path.ismount(existing):
+            # The mount's parent cannot reveal the mounted filesystem's case
+            # behavior. Treat it as uncertain so admission stays read-only.
+            return True
+        parent = os.path.dirname(existing)
+        if parent == existing:
+            return False
+        name = os.path.basename(existing)
+        alias = name.swapcase()
+        if alias != name:
+            try:
+                return os.path.samefile(
+                    existing, os.path.join(parent, alias)
+                )
+            except (FileNotFoundError, OSError):
+                return False
+        existing = parent
+
+
+def _existing_ancestor_chain(path):
+    """Return existing ancestors with each path's unresolved component tail."""
+    existing = os.path.abspath(path)
+    tail = ()
+    while not os.path.lexists(existing):
+        parent, name = os.path.split(existing)
+        if parent == existing:
+            return ()
+        tail = (name,) + tail
+        existing = parent
+    chain = []
+    while True:
+        chain.append((existing, tail))
+        parent, name = os.path.split(existing)
+        if parent == existing:
+            return tuple(chain)
+        tail = (name,) + tail
+        existing = parent
+
+
+def _tails_overlap_on_filesystem(first, second, filesystem_path):
+    """Compare unresolved tails using their shared existing filesystem."""
+    ignores_case = _filesystem_ignores_case(filesystem_path)
+
+    def normalized(tail):
+        # Canonically equivalent unresolved names may become one path under
+        # directory-local filesystem policy. Refuse that ambiguity without
+        # probing or modifying the caller's directory.
+        tail = tuple(
+            unicodedata.normalize("NFC", component) for component in tail
+        )
+        if ignores_case:
+            tail = tuple(component.casefold() for component in tail)
+        return tail
+
+    first = normalized(first)
+    second = normalized(second)
+    shared_length = min(len(first), len(second))
+    return first[:shared_length] == second[:shared_length]
+
+
+def _paths_overlap_from_existing_ancestor(first, second):
+    """Resolve aliases before applying one filesystem's name behavior."""
+    first_chain = _existing_ancestor_chain(first)
+    second_chain = _existing_ancestor_chain(second)
+    for first_ancestor, first_tail in first_chain:
+        for second_ancestor, second_tail in second_chain:
+            try:
+                same_ancestor = os.path.samefile(
+                    first_ancestor, second_ancestor
+                )
+            except (FileNotFoundError, OSError):
+                same_ancestor = False
+            if same_ancestor:
+                return _tails_overlap_on_filesystem(
+                    first_tail, second_tail, first_ancestor
+                )
+    return False
+
+
+def _target_overlaps_state_storage(store_path, target_path):
+    """Return whether target names Brainstorming's durable state or lock."""
+    target_path = os.path.abspath(target_path)
+    for authority_path in (
+        os.path.abspath(store_path),
+        os.path.abspath(store_path) + ".lock",
+    ):
+        if os.path.realpath(target_path) == os.path.realpath(authority_path):
+            return True
+        if _paths_overlap_from_existing_ancestor(
+            authority_path, target_path
+        ):
+            return True
+        try:
+            if os.path.samefile(target_path, authority_path):
+                return True
+        except (FileNotFoundError, OSError):
+            pass
+    return False
+
+
+def _target_overlaps_transcript_storage(
+    transcript_root, target_path, transcript_path=None
+):
+    """Check transcript authority aliases without creating its directories."""
+    transcript_root = os.path.abspath(transcript_root)
+    target_path = os.path.abspath(target_path)
+    target_real = os.path.realpath(target_path)
+    transcript_root_real = os.path.realpath(transcript_root)
+    try:
+        common = os.path.commonpath((target_real, transcript_root_real))
+    except ValueError:
+        common = None
+    if common in (target_real, transcript_root_real):
+        return True
+    if _paths_overlap_from_existing_ancestor(
+        transcript_root, target_path
+    ):
+        return True
+    if _aliases_transcript_inode(transcript_root, target_path):
+        return True
+    if transcript_path is None:
+        return False
+    for authority_path in (
+        os.path.abspath(transcript_path),
+        os.path.abspath(transcript_path) + ".lock",
+    ):
+        if os.path.realpath(target_path) == os.path.realpath(authority_path):
+            return True
+        try:
+            if os.path.samefile(target_path, authority_path):
+                return True
+        except (FileNotFoundError, OSError):
+            pass
+    return False
 
 
 def _object(value, ctx):
@@ -589,7 +820,176 @@ def resolve_run_config(participants, closure_policy, eligible_participants):
     return checked
 
 
-def validate_result(result, terminal_status, target_path):
+def _transcript_event_boundary(event, participant_count):
+    fact = event["fact"]
+    if event["kind"] == "material_interruption":
+        return fact["after_completed_turns"]
+    return fact["after_completed_rounds"] * participant_count
+
+
+def _validate_transcript_events(events, run_config, coordination):
+    if not isinstance(events, list):
+        raise ContractError("state.transcript_events must be a list")
+    participants = run_config["participants"]
+    turns = [] if coordination is None else coordination["completed_turns"]
+    previous_boundary = -1
+    checked = []
+    for index, event in enumerate(events):
+        ctx = "state.transcript_events[%d]" % index
+        _exact_keys(event, ("kind", "fact"), (), ctx)
+        kind = event["kind"]
+        if kind not in TRANSCRIPT_EVENT_KINDS:
+            raise ContractError("%s.kind is invalid" % ctx)
+        if kind == "material_interruption":
+            fact = validate_material_interruption(event["fact"])
+        else:
+            fact = validate_closure_ballot(event["fact"], run_config)
+        candidate = {"kind": kind, "fact": fact}
+        if any(
+            _same_json_value(accepted, candidate)
+            for accepted in checked
+        ):
+            raise ContractError(
+                "state.transcript_events cannot repeat an accepted event"
+            )
+        boundary = _transcript_event_boundary(
+            candidate, len(participants)
+        )
+        if boundary < previous_boundary:
+            raise ContractError(
+                "state.transcript_events must retain accepted append order"
+            )
+        if boundary > len(turns):
+            raise ContractError(
+                "a transcript event cannot precede its accepted discussion"
+            )
+        if kind == "closure_ballot":
+            if coordination is None:
+                raise ContractError(
+                    "closure ballots require accepted coordination state"
+                )
+            if fact["after_completed_rounds"] > coordination["rounds_used"]:
+                raise ContractError(
+                    "closure ballot round exceeds durable completed rounds"
+                )
+            if (
+                not turns
+                or turns[boundary - 1]["target_revision"]
+                != fact["target_revision"]
+            ):
+                raise ContractError(
+                    "closure ballot target revision does not match its round"
+                )
+        previous_boundary = boundary
+        checked.append(candidate)
+    return checked
+
+
+def validate_transcript_ref(transcript_ref):
+    """Validate one stable reference to a Brainstorming-owned ``chat.md``."""
+    transcript_ref = _text(transcript_ref, "state.transcript_ref")
+    if not os.path.isabs(transcript_ref):
+        raise ContractError("state.transcript_ref must be an absolute path")
+    if os.path.basename(transcript_ref) != "chat.md":
+        raise ContractError("state.transcript_ref must end in chat.md")
+    return os.path.abspath(transcript_ref)
+
+
+def validate_material_interruption(interruption):
+    """Validate one explicitly classified, human-safe interruption fact."""
+    _exact_keys(
+        interruption,
+        ("after_completed_turns", "plain"),
+        (),
+        "material_interruption",
+    )
+    after = interruption["after_completed_turns"]
+    if type(after) is not int or after < 0:
+        raise ContractError(
+            "material_interruption.after_completed_turns must be a "
+            "non-negative integer"
+        )
+    _text(interruption["plain"], "material_interruption.plain")
+    return _json_copy(interruption, "material_interruption")
+
+
+def validate_closure_ballot(ballot, run_config):
+    """Validate accepted closure facts without evaluating their decision."""
+    _exact_keys(
+        ballot,
+        ("after_completed_rounds", "target_revision", "votes", "approved"),
+        (),
+        "closure_ballot",
+    )
+    after = ballot["after_completed_rounds"]
+    if type(after) is not int or after <= 0:
+        raise ContractError(
+            "closure_ballot.after_completed_rounds must be a positive integer"
+        )
+    validate_target_revision_id(ballot["target_revision"])
+    if type(ballot["approved"]) is not bool:
+        raise ContractError("closure_ballot.approved must be a boolean")
+    votes = ballot["votes"]
+    participants = validate_run_config(run_config)["participants"]
+    if not isinstance(votes, list) or len(votes) != len(participants):
+        raise ContractError(
+            "closure_ballot.votes must contain every participant once"
+        )
+    for index, (vote, participant) in enumerate(zip(votes, participants)):
+        ctx = "closure_ballot.votes[%d]" % index
+        _exact_keys(vote, ("participant_id", "vote"), (), ctx)
+        if vote["participant_id"] != participant["id"]:
+            raise ContractError(
+                "closure_ballot.votes must follow the persisted roster"
+            )
+        if vote["vote"] not in ("accept", "object"):
+            raise ContractError("%s.vote must be accept or object" % ctx)
+    return _json_copy(ballot, "closure_ballot")
+
+
+def validate_closing_summary(summary, terminal_status, result):
+    """Validate the contextual human facts supplied by the terminal owner."""
+    _exact_keys(
+        summary,
+        (
+            "reason",
+            "unresolved_objections",
+            "affected_parties",
+            "damage_altitude",
+            "proportionality",
+            "escalation_evidence",
+        ),
+        (),
+        "closing_summary",
+    )
+    for field in (
+        "reason",
+        "affected_parties",
+        "damage_altitude",
+        "proportionality",
+    ):
+        _text(summary[field], "closing_summary.%s" % field)
+    objections = summary["unresolved_objections"]
+    if not isinstance(objections, list):
+        raise ContractError(
+            "closing_summary.unresolved_objections must be a list"
+        )
+    for index, objection in enumerate(objections):
+        _text(
+            objection,
+            "closing_summary.unresolved_objections[%d]" % index,
+        )
+    evidence = summary["escalation_evidence"]
+    if evidence is not None:
+        _text(evidence, "closing_summary.escalation_evidence")
+    if terminal_status == "failure" and summary["reason"] != result["reason"]:
+        raise ContractError(
+            "closing_summary.reason must equal the failure result reason"
+        )
+    return _json_copy(summary, "closing_summary")
+
+
+def validate_result(result, terminal_status, target_path, transcript_ref):
     """Validate the retained representation of a terminal outcome."""
     _object(result, "result")
     outcome = result.get("outcome")
@@ -604,7 +1004,13 @@ def validate_result(result, terminal_status, target_path):
     target_ref = _text(result["target_ref"], "result.target_ref")
     if target_ref != target_path:
         raise ContractError("result.target_ref must equal request.target_path")
-    _text(result["transcript_ref"], "result.transcript_ref")
+    checked_transcript_ref = _text(
+        result["transcript_ref"], "result.transcript_ref"
+    )
+    if checked_transcript_ref != transcript_ref:
+        raise ContractError(
+            "result.transcript_ref must equal state.transcript_ref"
+        )
     rounds_used = result["rounds_used"]
     if type(rounds_used) is not int or rounds_used < 0:
         raise ContractError("result.rounds_used must be a non-negative integer")
@@ -613,7 +1019,7 @@ def validate_result(result, terminal_status, target_path):
     return _json_copy(result, "result")
 
 
-def _validate_history(history, target_path):
+def _validate_history(history, target_path, transcript_ref):
     if not isinstance(history, list) or not history:
         raise ContractError("state.history must be a non-empty list")
     previous = None
@@ -623,7 +1029,11 @@ def _validate_history(history, target_path):
         status = record.get("status")
         if status not in STATUSES:
             raise ContractError("%s.status is invalid" % ctx)
-        required = ("status", "result") if status in TERMINAL_STATUSES else ("status",)
+        required = (
+            ("status", "result", "closing_summary")
+            if status in TERMINAL_STATUSES
+            else ("status",)
+        )
         _exact_keys(record, required, (), ctx)
         if index == 0:
             if record != {"status": "created"}:
@@ -631,7 +1041,12 @@ def _validate_history(history, target_path):
         elif status not in _ALLOWED_TRANSITIONS[previous]:
             raise IllegalTransition("%s -> %s is not legal" % (previous, status))
         if status in TERMINAL_STATUSES:
-            validate_result(record["result"], status, target_path)
+            result = validate_result(
+                record["result"], status, target_path, transcript_ref
+            )
+            validate_closing_summary(
+                record["closing_summary"], status, result
+            )
         previous = status
     return previous
 
@@ -642,9 +1057,17 @@ def validate_session_state(state):
     status = state.get("status")
     if status not in STATUSES:
         raise ContractError("state.status is invalid")
-    required = {"request", "run_config", "status", "history"}
+    required = {
+        "request",
+        "run_config",
+        "status",
+        "history",
+        "transcript_ref",
+        "transcript_events",
+        "transcript_format_version",
+    }
     if status in TERMINAL_STATUSES:
-        required.add("result")
+        required.update(("result", "closing_summary"))
     _exact_keys(
         state,
         required,
@@ -653,6 +1076,7 @@ def validate_session_state(state):
     )
     request = validate_request(state["request"])
     run_config = validate_run_config(state["run_config"])
+    transcript_ref = validate_transcript_ref(state["transcript_ref"])
     if "participant_sessions" in state:
         participant_sessions = validate_participant_sessions(
             state["participant_sessions"], run_config
@@ -661,29 +1085,65 @@ def validate_session_state(state):
             raise ContractError(
                 "created sessions cannot have participant session references"
             )
-    _validate_coordination(state, request, run_config, status)
-    last_status = _validate_history(state["history"], request["target_path"])
+    coordination = _validate_coordination(
+        state, request, run_config, status
+    )
+    _validate_transcript_events(
+        state["transcript_events"], run_config, coordination
+    )
+    if state["transcript_format_version"] not in _TRANSCRIPT_RENDERERS:
+        raise ContractError("state.transcript_format_version is unsupported")
+    last_status = _validate_history(
+        state["history"], request["target_path"], transcript_ref
+    )
     if last_status != status:
         raise ContractError("state.status must match the last history record")
     if status in TERMINAL_STATUSES:
-        result = validate_result(state["result"], status, request["target_path"])
+        result = validate_result(
+            state["result"],
+            status,
+            request["target_path"],
+            transcript_ref,
+        )
         if not _same_json_value(result, state["history"][-1]["result"]):
             raise ContractError("state.result must match terminal history")
+        summary = validate_closing_summary(
+            state["closing_summary"], status, result
+        )
+        if not _same_json_value(
+            summary, state["history"][-1]["closing_summary"]
+        ):
+            raise ContractError(
+                "state.closing_summary must match terminal history"
+            )
+        durable_rounds = (
+            0 if coordination is None else coordination["rounds_used"]
+        )
+        if result["rounds_used"] != durable_rounds:
+            raise ContractError(
+                "result.rounds_used must equal durable completed rounds"
+            )
     return _json_copy(state, "state")
 
 
-def new_session_state(request, run_config):
+def new_session_state(request, run_config, transcript_ref):
     """Construct a valid, non-running session without performing I/O."""
-    return {
+    state = {
         "request": validate_request(request),
         "run_config": validate_run_config(run_config),
         "status": "created",
         "history": [{"status": "created"}],
         "participant_sessions": {},
+        "transcript_ref": validate_transcript_ref(transcript_ref),
+        "transcript_events": [],
+        "transcript_format_version": TRANSCRIPT_FORMAT_VERSION,
     }
+    return validate_session_state(state)
 
 
-def transition_session(state, new_status, result=None):
+def transition_session(
+    state, new_status, result=None, closing_summary=None
+):
     """Return one legal whole-state successor without mutating ``state``."""
     current = validate_session_state(state)
     old_status = current["status"]
@@ -691,19 +1151,32 @@ def transition_session(state, new_status, result=None):
         raise IllegalTransition("%s -> %s is not legal" % (old_status, new_status))
     if new_status in TERMINAL_STATUSES:
         checked_result = validate_result(
-            result, new_status, current["request"]["target_path"]
+            result,
+            new_status,
+            current["request"]["target_path"],
+            current["transcript_ref"],
+        )
+        checked_summary = validate_closing_summary(
+            closing_summary, new_status, checked_result
         )
     elif result is not None:
         raise ContractError("nonterminal transitions cannot carry a result")
+    elif closing_summary is not None:
+        raise ContractError(
+            "nonterminal transitions cannot carry a closing summary"
+        )
     else:
         checked_result = None
+        checked_summary = None
 
     successor = copy.deepcopy(current)
     successor["status"] = new_status
     record = {"status": new_status}
     if checked_result is not None:
         successor["result"] = checked_result
+        successor["closing_summary"] = checked_summary
         record["result"] = copy.deepcopy(checked_result)
+        record["closing_summary"] = copy.deepcopy(checked_summary)
     successor["history"].append(record)
     return validate_session_state(successor)
 
@@ -725,7 +1198,12 @@ def assert_session_successor(old_state, new_state):
     if len(new_history) != len(old_history) + 1:
         raise HistoryRewriteError("an update must append exactly one transition")
     appended = new_history[-1]
-    expected = transition_session(old, appended["status"], appended.get("result"))
+    expected = transition_session(
+        old,
+        appended["status"],
+        appended.get("result"),
+        appended.get("closing_summary"),
+    )
     if not _same_json_value(expected, new):
         raise HistoryRewriteError("state is not the exact next session revision")
 
@@ -740,7 +1218,17 @@ def assert_participant_session_successor(
         raise IllegalTransition(
             "participant sessions can only bind while running"
         )
-    for field in ("request", "run_config", "status", "history", "result"):
+    for field in (
+        "request",
+        "run_config",
+        "status",
+        "history",
+        "result",
+        "closing_summary",
+        "transcript_ref",
+        "transcript_events",
+        "transcript_format_version",
+    ):
         if not _same_json_value(old.get(field), new.get(field)):
             raise HistoryRewriteError(
                 "participant binding changed session field %s" % field
@@ -868,6 +1356,288 @@ def assert_completed_turn_successor(
         )
 
 
+def transcript_event_successor(state, kind, fact):
+    """Append one explicit human event at the current discussion boundary."""
+    current = validate_session_state(state)
+    if current["status"] in TERMINAL_STATUSES:
+        raise IllegalTransition(
+            "terminal sessions cannot append transcript events"
+        )
+    coordination = coordination_projection(current)
+    completed_turns = (
+        [] if coordination is None else coordination["completed_turns"]
+    )
+    if kind == "material_interruption":
+        checked_fact = validate_material_interruption(fact)
+        if checked_fact["after_completed_turns"] != len(completed_turns):
+            raise HistoryRewriteError(
+                "material interruption must follow current accepted turns"
+            )
+    elif kind == "closure_ballot":
+        if current["status"] != "running" or coordination is None:
+            raise IllegalTransition(
+                "closure ballots require accepted running discussion"
+            )
+        checked_fact = validate_closure_ballot(
+            fact, current["run_config"]
+        )
+        participant_count = len(current["run_config"]["participants"])
+        if (
+            len(completed_turns)
+            != coordination["rounds_used"] * participant_count
+            or checked_fact["after_completed_rounds"]
+            != coordination["rounds_used"]
+            or checked_fact["target_revision"]
+            != coordination["accepted_target_revision"]
+        ):
+            raise HistoryRewriteError(
+                "closure ballot must match the current completed round "
+                "and accepted target revision"
+            )
+    else:
+        raise ContractError("transcript event kind is invalid")
+
+    successor = copy.deepcopy(current)
+    successor["transcript_events"].append(
+        {"kind": kind, "fact": checked_fact}
+    )
+    return validate_session_state(successor)
+
+
+def assert_transcript_event_successor(old_state, new_state, kind, fact):
+    """Accept only the exact next explicit transcript event."""
+    old = validate_session_state(old_state)
+    new = validate_session_state(new_state)
+    expected = transcript_event_successor(old, kind, fact)
+    if not _same_json_value(expected, new):
+        raise HistoryRewriteError(
+            "transcript event is not the exact next session revision"
+        )
+
+
+def _human_labels(run_config):
+    labels = {}
+    interlocutor = 0
+    for participant in run_config["participants"]:
+        if participant["role"] == "lead":
+            labels[participant["id"]] = "Lead"
+        else:
+            interlocutor += 1
+            labels[participant["id"]] = "Interlocutor %d" % interlocutor
+    return labels
+
+
+def _quoted_markdown(value):
+    """Keep supplied Markdown readable without allowing top-level entries."""
+    lines = value.splitlines()
+    if not lines:
+        lines = [""]
+    return "\n".join(
+        "> " + line if line else ">" for line in lines
+    )
+
+
+def _closure_rule(policy):
+    if policy == "unanimity":
+        return "Everyone must agree before the session can close."
+    return (
+        "A majority decides; if the vote is tied exactly, the lead's vote "
+        "breaks the tie."
+    )
+
+
+def _entry(title, *parts):
+    return "## %s\n\n%s" % (title, "\n\n".join(parts))
+
+
+def _field(label, value):
+    return "**%s**\n\n%s" % (label, value)
+
+
+def _render_opening(state, labels):
+    roster = []
+    for participant in state["run_config"]["participants"]:
+        label = labels[participant["id"]]
+        role = (
+            "leads the session"
+            if participant["role"] == "lead"
+            else "participates as an interlocutor"
+        )
+        roster.append("- **%s** — %s." % (label, role))
+    rounds = state["request"]["max_rounds"]
+    return _entry(
+        "Opening",
+        _field(
+            "What is being discussed",
+            _quoted_markdown(state["request"]["question"]),
+        ),
+        _field(
+            "Why this discussion is needed",
+            _quoted_markdown(state["request"]["context"]["brief"]),
+        ),
+        _field(
+            "Target being worked on",
+            _quoted_markdown(state["request"]["target_path"]),
+        ),
+        _field("Participants", "\n".join(roster)),
+        _field(
+            "Agreement rule",
+            _closure_rule(state["run_config"]["closure_policy"]),
+        ),
+        _field(
+            "Round limit",
+            "The discussion may use at most %d round%s."
+            % (rounds, "" if rounds == 1 else "s"),
+        ),
+    )
+
+
+def _render_turn(turn, labels):
+    return _entry(
+        "Discussion turn — Round %d — %s"
+        % (turn["round"], labels[turn["participant_id"]]),
+        _quoted_markdown(turn["markdown"]),
+    )
+
+
+def _render_transcript_event(event, state, labels):
+    fact = event["fact"]
+    if event["kind"] == "material_interruption":
+        return _entry(
+            "Material interruption", _quoted_markdown(fact["plain"])
+        )
+
+    votes = [
+        "- **%s:** `%s`"
+        % (labels[vote["participant_id"]], vote["vote"])
+        for vote in fact["votes"]
+    ]
+    decision = (
+        "This ballot approved closure."
+        if fact["approved"]
+        else (
+            "This ballot did not approve closure, so discussion could continue."
+            if fact["after_completed_rounds"]
+            < state["request"]["max_rounds"]
+            else (
+                "This ballot did not approve closure. No complete discussion "
+                "round remained within the configured limit."
+            )
+        )
+    )
+    round_number = fact["after_completed_rounds"]
+    return _entry(
+        "Closure ballot — After round %d" % round_number,
+        "The target considered was the target completed after round %d."
+        % round_number,
+        _field("Votes", "\n".join(votes)),
+        _field(
+            "Applied agreement rule",
+            _closure_rule(state["run_config"]["closure_policy"]),
+        ),
+        _field("Result", decision),
+    )
+
+
+def _render_closing(state):
+    summary = state["closing_summary"]
+    result = state["result"]
+    agreement = (
+        "Agreement was reached."
+        if result["outcome"] == "success"
+        else "Agreement was not reached."
+    )
+    disposition = (
+        "The target was produced."
+        if result["outcome"] == "success"
+        else "The target was left unfinished."
+    )
+    objections = summary["unresolved_objections"]
+    if objections:
+        objection_lines = []
+        for index, objection in enumerate(objections, 1):
+            objection_lines.extend(
+                ("%d." % index, _quoted_markdown(objection))
+            )
+        objections_text = "\n\n".join(objection_lines)
+    else:
+        objections_text = "No unresolved objections were recorded."
+    evidence = summary["escalation_evidence"]
+    evidence_text = (
+        _quoted_markdown(evidence)
+        if evidence is not None
+        else "No concrete escalation evidence was recorded."
+    )
+    return _entry(
+        "Closing",
+        _field("Agreement", agreement),
+        _field("Reason", _quoted_markdown(summary["reason"])),
+        _field(
+            "Target outcome",
+            disposition + "\n\n" + _quoted_markdown(result["target_ref"]),
+        ),
+        _field("Completed rounds", str(result["rounds_used"])),
+        _field("Unresolved objections", objections_text),
+        _field(
+            "Affected parties",
+            _quoted_markdown(summary["affected_parties"]),
+        ),
+        _field(
+            "Realistic damage",
+            _quoted_markdown(summary["damage_altitude"]),
+        ),
+        _field(
+            "Proportionality",
+            _quoted_markdown(summary["proportionality"]),
+        ),
+        _field("Escalation evidence", evidence_text),
+    )
+
+
+def _render_transcript_v1(checked):
+    """Render the immutable first transcript format."""
+    labels = _human_labels(checked["run_config"])
+    entries = [_render_opening(checked, labels)]
+    events = checked["transcript_events"]
+    participant_count = len(checked["run_config"]["participants"])
+    event_index = 0
+
+    def append_boundary(boundary):
+        nonlocal event_index
+        while (
+            event_index < len(events)
+            and _transcript_event_boundary(
+                events[event_index], participant_count
+            )
+            == boundary
+        ):
+            entries.append(
+                _render_transcript_event(
+                    events[event_index], checked, labels
+                )
+            )
+            event_index += 1
+
+    append_boundary(0)
+    for index, turn in enumerate(checked.get("completed_turns", ()), 1):
+        entries.append(_render_turn(turn, labels))
+        append_boundary(index)
+    if checked["status"] in TERMINAL_STATUSES:
+        entries.append(_render_closing(checked))
+    return "# Brainstorming session\n\n" + "\n\n".join(entries) + "\n"
+
+
+_TRANSCRIPT_RENDERERS = {1: _render_transcript_v1}
+
+
+def render_transcript(state):
+    """Render with the format version accepted when the session was created."""
+    checked = validate_session_state(state)
+    return _TRANSCRIPT_RENDERERS[
+        checked["transcript_format_version"]
+    ](checked)
+
+
 def _session_key(session_id):
     return _SESSION_KEY_PREFIX + kvstore.validate_fragment(
         session_id, "session_id"
@@ -897,10 +1667,21 @@ class SessionStore:
         self._store = kvstore.RevisionEnvelopeStore(
             kvstore.LocalKVClient(directory, filename=filename)
         )
+        self._transcript_root = self.path + ".sessions"
 
     @property
     def path(self):
         return self._store.client.path
+
+    def transcript_ref(self, session_id):
+        """Return this session's stable Brainstorming-owned human artifact."""
+        session_id = kvstore.validate_fragment(session_id, "session_id")
+        directory = hashlib.sha256(
+            session_id.encode("utf-8", errors="surrogatepass")
+        ).hexdigest()
+        return os.path.abspath(
+            os.path.join(self._transcript_root, directory, "chat.md")
+        )
 
     @staticmethod
     def _snapshot(record):
@@ -911,8 +1692,31 @@ class SessionStore:
             state=validate_session_state(record["value"]),
         )
 
+    def _publish_current(self, session_id):
+        """Reconcile ``chat.md`` from the latest winning durable revision."""
+        key = _session_key(session_id)
+        if not self._store.read(key)["exists?"]:
+            return None
+        path = self.transcript_ref(session_id)
+        with _exclusive_transcript(path):
+            snapshot = self._snapshot(self._store.read(key))
+            if snapshot is None:
+                return None
+            if snapshot.state["transcript_ref"] != path:
+                raise HistoryRewriteError(
+                    "session transcript reference does not match its authority"
+                )
+            _atomic_replace_utf8(
+                path, render_transcript(snapshot.state)
+            )
+            return snapshot
+
     def read(self, session_id):
-        return self._snapshot(self._store.read(_session_key(session_id)))
+        return self._publish_current(session_id)
+
+    def reconcile_transcript(self, session_id):
+        """Repair and return the latest complete transcript projection."""
+        return self._publish_current(session_id)
 
     def _write_target_revision(self, session_id, target_revision):
         checked = validate_target_revision(target_revision)
@@ -1032,7 +1836,12 @@ class SessionStore:
             )
 
     def _cas_coordination(
-        self, session_id, expected_revision, candidate, assertion
+        self,
+        session_id,
+        expected_revision,
+        candidate,
+        assertion,
+        publish=True,
     ):
         if type(expected_revision) is not int or expected_revision <= 0:
             raise ContractError("expected_revision must be a positive integer")
@@ -1047,10 +1856,12 @@ class SessionStore:
             _session_key(session_id), expected_revision, candidate
         )
         if not result.ok:
-            latest = self._snapshot(result.record)
+            latest = self._publish_current(session_id)
             if latest is None:
                 raise SessionNotFound(session_id)
             raise RevisionConflict(latest)
+        if publish:
+            return self._publish_current(session_id)
         return self._snapshot(result.record)
 
     def create(self, session_id, request, run_config, eligible_participants):
@@ -1062,11 +1873,32 @@ class SessionStore:
         )
         if not _same_json_value(checked_config, resolved_config):
             raise ContractError("run_config does not match roster resolution")
-        state = new_session_state(request, resolved_config)
+        state = new_session_state(
+            request, resolved_config, self.transcript_ref(session_id)
+        )
+        target_path = state["request"]["target_path"]
+        if not os.path.isabs(target_path):
+            target_path = os.path.join(
+                state["request"]["workspace_path"], target_path
+            )
+        if _target_overlaps_state_storage(self.path, target_path):
+            raise ContractError(
+                "request.target_path must not overlap Brainstorming's "
+                "durable state store or lock"
+            )
+        if _target_overlaps_transcript_storage(
+            self._transcript_root,
+            target_path,
+            state["transcript_ref"],
+        ):
+            raise ContractError(
+                "request.target_path must not overlap Brainstorming-owned "
+                "transcript storage"
+            )
         result = self._store.cas(_session_key(session_id), None, state)
         if not result.ok:
             raise SessionAlreadyExists("session already exists")
-        return self._snapshot(result.record)
+        return self._publish_current(session_id)
 
     def save(self, session_id, expected_revision, state):
         if type(expected_revision) is not int or expected_revision <= 0:
@@ -1082,19 +1914,28 @@ class SessionStore:
             _session_key(session_id), expected_revision, candidate
         )
         if not result.ok:
-            latest = self._snapshot(result.record)
+            latest = self._publish_current(session_id)
             if latest is None:
                 raise SessionNotFound(session_id)
             raise RevisionConflict(latest)
-        return self._snapshot(result.record)
+        return self._publish_current(session_id)
 
-    def transition(self, session_id, expected_revision, new_status, result=None):
+    def transition(
+        self,
+        session_id,
+        expected_revision,
+        new_status,
+        result=None,
+        closing_summary=None,
+    ):
         current = self.read(session_id)
         if current is None:
             raise SessionNotFound(session_id)
         if current.revision != expected_revision:
             raise RevisionConflict(current)
-        successor = transition_session(current.state, new_status, result)
+        successor = transition_session(
+            current.state, new_status, result, closing_summary
+        )
         return self.save(session_id, expected_revision, successor)
 
     def initialize_coordination(
@@ -1126,6 +1967,7 @@ class SessionStore:
         participant_id,
         markdown,
         target_revision,
+        publish=True,
     ):
         """Retain target content and atomically append one accepted turn."""
         checked_target = self._write_target_revision(
@@ -1153,7 +1995,51 @@ class SessionStore:
             )
 
         return self._cas_coordination(
+            session_id,
+            expected_revision,
+            candidate,
+            assertion,
+            publish=publish,
+        )
+
+    def _record_transcript_event(
+        self, session_id, expected_revision, kind, fact
+    ):
+        current = self.read(session_id)
+        if current is None:
+            raise SessionNotFound(session_id)
+        if current.revision != expected_revision:
+            raise RevisionConflict(current)
+        candidate = transcript_event_successor(
+            current.state, kind, fact
+        )
+
+        def assertion(old, new):
+            assert_transcript_event_successor(
+                old, new, kind, fact
+            )
+
+        return self._cas_coordination(
             session_id, expected_revision, candidate, assertion
+        )
+
+    def record_material_interruption(
+        self, session_id, expected_revision, interruption
+    ):
+        """Append one explicitly material, human-safe interruption."""
+        return self._record_transcript_event(
+            session_id,
+            expected_revision,
+            "material_interruption",
+            interruption,
+        )
+
+    def record_closure_ballot(
+        self, session_id, expected_revision, ballot
+    ):
+        """Append one accepted ballot supplied by the closure owner."""
+        return self._record_transcript_event(
+            session_id, expected_revision, "closure_ballot", ballot
         )
 
     def bind_participant_session(
@@ -1208,8 +2094,8 @@ class SessionStore:
             _session_key(session_id), expected_revision, candidate
         )
         if not result.ok:
-            latest = self._snapshot(result.record)
+            latest = self._publish_current(session_id)
             if latest is None:
                 raise SessionNotFound(session_id)
             raise RevisionConflict(latest)
-        return self._snapshot(result.record)
+        return self._publish_current(session_id)

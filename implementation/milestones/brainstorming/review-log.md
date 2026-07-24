@@ -200,4 +200,57 @@
 
 ## slice_impl-04 (Plain-language session transcript)
 
+- draft: kind `implement`, artifact `-` (raw: `implementation/milestones/brainstorming/.run/raw/slice_impl-04-draft.txt`)
+
+| Round | Kind | Family | Findings | Triage | Raw |
+|---|---|---|---|---|---|
+| slice_impl-04-codex-r1 | review_round | codex | 3 | 3 reported | `implementation/milestones/brainstorming/.run/raw/slice_impl-04-codex-r1.txt` |
+| slice_impl-04-codex-r2 | fix_findings | codex | 3 | 3 fixed | `implementation/milestones/brainstorming/.run/raw/slice_impl-04-fix1.txt` |
+| slice_impl-04-codex-r3 | delta_review | codex | 0 | clean | `implementation/milestones/brainstorming/.run/raw/slice_impl-04-delta1.txt` |
+| slice_impl-04-codex-r4 | review_round | codex | 4 | 4 reported | `implementation/milestones/brainstorming/.run/raw/slice_impl-04-codex-r2.txt` |
+| slice_impl-04-codex-r5 | fix_findings | codex | 4 | 4 fixed | `implementation/milestones/brainstorming/.run/raw/slice_impl-04-fix2.txt` |
+| slice_impl-04-codex-r6 | delta_review | codex | 1 | 1 reported | `implementation/milestones/brainstorming/.run/raw/slice_impl-04-delta2.txt` |
+| slice_impl-04-codex-r7 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/brainstorming/.run/raw/slice_impl-04-fix3.txt` |
+| slice_impl-04-codex-r8 | delta_review | codex | 1 | 1 reported | `implementation/milestones/brainstorming/.run/raw/slice_impl-04-delta3.txt` |
+| slice_impl-04-codex-r9 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/brainstorming/.run/raw/slice_impl-04-fix4.txt` |
+| slice_impl-04-codex-r10 | delta_review | codex | 1 | 1 reported | `implementation/milestones/brainstorming/.run/raw/slice_impl-04-delta4.txt` |
+| slice_impl-04-codex-r11 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/brainstorming/.run/raw/slice_impl-04-fix5.txt` |
+| slice_impl-04-codex-r12 | delta_review | codex | 1 | 1 reported | `implementation/milestones/brainstorming/.run/raw/slice_impl-04-delta5.txt` |
+| slice_impl-04-codex-r13 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/brainstorming/.run/raw/slice_impl-04-fix6.txt` |
+| slice_impl-04-codex-r14 | review_round | codex | 2 | 2 reported | `implementation/milestones/brainstorming/.run/raw/slice_impl-04-codex-r3.txt` |
+| slice_impl-04-codex-r15 | fix_findings | codex | 2 | 2 fixed | `implementation/milestones/brainstorming/.run/raw/slice_impl-04-fix7.txt` |
+| slice_impl-04-codex-r16 | delta_review | codex | 1 | 1 reported | `implementation/milestones/brainstorming/.run/raw/slice_impl-04-delta6.txt` |
+| slice_impl-04-codex-r17 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/brainstorming/.run/raw/slice_impl-04-fix8.txt` |
+| slice_impl-04-codex-r18 | delta_review | codex | 1 | 1 reported | `implementation/milestones/brainstorming/.run/raw/slice_impl-04-delta7.txt` |
+| slice_impl-04-codex-r19 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/brainstorming/.run/raw/slice_impl-04-fix9.txt` |
+| slice_impl-04-codex-r20 | delta_review | codex | 0 | clean | `implementation/milestones/brainstorming/.run/raw/slice_impl-04-delta8.txt` |
+| slice_impl-04-codex-r21 | review_round | codex | 1 | 1 reported | `implementation/milestones/brainstorming/.run/raw/slice_impl-04-codex-r4.txt` |
+| slice_impl-04-codex-r22 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/brainstorming/.run/raw/slice_impl-04-fix10.txt` |
+| slice_impl-04-codex-r23 | delta_review | codex | 2 | 2 reported | `implementation/milestones/brainstorming/.run/raw/slice_impl-04-delta9.txt` |
+| slice_impl-04-codex-r24 | fix_findings | codex | 2 | 2 fixed | `implementation/milestones/brainstorming/.run/raw/slice_impl-04-fix11.txt` |
+| slice_impl-04-codex-r25 | delta_review | codex | 0 | clean | `implementation/milestones/brainstorming/.run/raw/slice_impl-04-delta10.txt` |
+| slice_impl-04-codex-r26 | review_round | codex | 1 | 1 reported | `implementation/milestones/brainstorming/.run/raw/slice_impl-04-codex-r5.txt` |
+| slice_impl-04-codex-r27 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/brainstorming/.run/raw/slice_impl-04-fix12.txt` |
+| slice_impl-04-codex-r28 | delta_review | codex | 1 | 1 reported | `implementation/milestones/brainstorming/.run/raw/slice_impl-04-delta11.txt` |
+| slice_impl-04-codex-r29 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/brainstorming/.run/raw/slice_impl-04-fix13.txt` |
+| slice_impl-04-codex-r30 | delta_review | codex | 2 | 2 reported | `implementation/milestones/brainstorming/.run/raw/slice_impl-04-delta12.txt` |
+| slice_impl-04-codex-r31 | fix_findings | codex | 2 | 2 fixed | `implementation/milestones/brainstorming/.run/raw/slice_impl-04-fix14.txt` |
+| slice_impl-04-codex-r32 | delta_review | codex | 0 | clean | `implementation/milestones/brainstorming/.run/raw/slice_impl-04-delta13.txt` |
+| slice_impl-04-codex-r33 | review_round | codex | 0 | clean | `implementation/milestones/brainstorming/.run/raw/slice_impl-04-codex-r6.txt` |
+| slice_impl-04-claude-r1 | review_round | claude | 4 | 4 reported | `implementation/milestones/brainstorming/.run/raw/slice_impl-04-claude-r1.txt` |
+| slice_impl-04-codex-r34 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/brainstorming/.run/raw/slice_impl-04-fix15.txt` |
+| slice_impl-04-codex-r35 | delta_review | codex | 0 | clean | `implementation/milestones/brainstorming/.run/raw/slice_impl-04-delta14.txt` |
+| slice_impl-04-claude-r2 | review_round | claude | 0 | clean | `implementation/milestones/brainstorming/.run/raw/slice_impl-04-claude-r2.txt` |
+
+### Seal attempt a1 — PASSED
+
+- codex half: 0 finding(s); workspace_modified=False; raw `implementation/milestones/brainstorming/.run/raw/slice_impl-04-seal-a1-codex.txt`
+
+**Deferred debt (opposite-family verified):**
+- `claude-F1` (raised claude, cleared codex): The non-test implementation is roughly double the sealed ~500 changed-line envelope, driven by ~350 lines of bespoke filesystem-name-policy analysis (case-insensitivity probing via swapcase siblings, Unicode NFC folding of unresolved path tails, mount-boundary conservatism, ancestor-chain comparison in _filesystem_ignores_case/_existing_ancestor_chain/_tails_overlap_on_filesystem/_paths_overlap_from_existing_ancestor at orchestrator/brainstorming.py:171-311) plus ~8 dedicated mock-heavy tests, where the sealed note pinned only 'extend the existing authority-alias guard' (realpath/samefile/inode pattern); _reject_store_target_alias additionally now runs the old realpath/samefile loop AND the new overlap machinery over the same authority paths, duplicating checks. — The explicit Unicode, case, and mount-alias behavior plus dedicated tests can silently become an unpinned contract for later builders, but correcting it requires only bounded simplification of this unit's local guard and tests.
+- `claude-F2` (raised claude, cleared codex): In the coordinator's failure paths, _record_supervision_stop is invoked inside exception handlers (orchestrator/brainstorming_coordination.py:715-727 and 807-817); if that interruption append itself raises (store I/O failure, or CoordinationRejected because the session was concurrently terminalized), the new exception replaces the contracted error — callers never receive the promised TargetRecoveryError or the original provider exception carrying the quiescence evidence. — Both recovery branches allow a secondary interruption-append failure to replace the contracted primary exception, and no focused test covers that double failure, so later work can silently preserve wrong failure precedence, while correction is a small local guard plus regression tests.
+- `claude-F3` (raised claude, cleared codex): SessionStore._publish_current (orchestrator/brainstorming.py:1688-1706) raises HistoryRewriteError whenever the transcript_ref persisted in session state differs from the path recomputed from the store's current location, and every read()/transition()/CAS-conflict path now goes through it — so opening the same durable store from any different absolute path (backup restored elsewhere, different container mount prefix, renamed parent directory) makes every session permanently unreadable with no recovery route. — The persisted absolute transcript_ref is enforced against the store-derived path on every read, so later work can preserve incorrect relocation behavior and omit restore coverage, while the failure is immediate after a move and correction is bounded to rebasing or migrating session/result references
+
+## slice_doc-05 (Revision-bound closure and results)
+
 

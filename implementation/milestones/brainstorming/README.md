@@ -413,5 +413,6 @@ The goal is satisfied when:
 | slice_impl-02 (Persistent participant execution) | sealed | 5 | a1:pass | 9b5103f |
 | slice_doc-03 (Ordered rounds and lead-owned target) | sealed | 9 | a1:pass, a2:pass (wave skeleton-a2) | e21ddee |
 | slice_impl-03 (Ordered rounds and lead-owned target) | sealed | 30 | a1:pass | 3749e79 |
-| slice_doc-04 (Plain-language session transcript) | sealed | 5 | a1:pass | - |
-| slice_impl-04 (Plain-language session transcript) | pending | 0 | - | - |
+| slice_doc-04 (Plain-language session transcript) | sealed | 5 | a1:pass | 663a57a |
+| slice_impl-04 (Plain-language session transcript) | sealed | 37 | a1:pass | - |
+| slice_doc-05 (Revision-bound closure and results) | pending | 0 | - | - |

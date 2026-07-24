@@ -60,13 +60,24 @@ def envelope(markdown):
     return {"kind": "discussion_turn", "markdown": markdown}
 
 
-def failure_result():
+def failure_result(transcript_ref):
     return {
         "outcome": "failure",
         "target_ref": "docs/decision.md",
-        "transcript_ref": "chat.md",
+        "transcript_ref": transcript_ref,
         "rounds_used": 0,
         "reason": "Stopped before agreement.",
+    }
+
+
+def closing_summary():
+    return {
+        "reason": "Stopped before agreement.",
+        "unresolved_objections": [],
+        "affected_parties": "The people using the requested target.",
+        "damage_altitude": "A bounded reversible consequence.",
+        "proportionality": "Stopping was proportionate to the failed run.",
+        "escalation_evidence": None,
     }
 
 
@@ -425,7 +436,11 @@ class BrainstormingExecutionTest(unittest.TestCase):
             participants,
         )
         terminal = self.store.transition(
-            "terminal", terminal.revision, "failure", failure_result()
+            "terminal",
+            terminal.revision,
+            "failure",
+            failure_result(terminal.state["transcript_ref"]),
+            closing_summary(),
         )
         with self.assertRaises(execution.ExecutionRejected):
             subject.exchange("terminal", participant["id"], "prompt", object())

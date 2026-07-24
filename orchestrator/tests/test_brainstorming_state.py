@@ -65,22 +65,33 @@ def run_config(participants=None, policy="unanimity",
     )
 
 
-def success_result(rounds_used=1):
+def success_result(transcript_ref, rounds_used=0):
     return {
         "outcome": "success",
         "target_ref": "docs/decision.md",
-        "transcript_ref": "chat.md",
+        "transcript_ref": transcript_ref,
         "rounds_used": rounds_used,
     }
 
 
-def failure_result(rounds_used=0):
+def failure_result(transcript_ref, rounds_used=0):
     return {
         "outcome": "failure",
         "target_ref": "docs/decision.md",
-        "transcript_ref": "chat.md",
+        "transcript_ref": transcript_ref,
         "rounds_used": rounds_used,
         "reason": "The bounded discussion did not reach agreement.",
+    }
+
+
+def closing_summary(reason="The bounded discussion did not reach agreement."):
+    return {
+        "reason": reason,
+        "unresolved_objections": [],
+        "affected_parties": "Only the people using the requested target.",
+        "damage_altitude": "A bounded and reversible design consequence.",
+        "proportionality": "The bounded discussion matched the decision.",
+        "escalation_evidence": None,
     }
 
 
@@ -185,13 +196,24 @@ class BrainstormingStateTestCase(unittest.TestCase):
         self.assertEqual(left.state["history"], right.state["history"])
 
         left_done = self.store.transition(
-            "opaque-a", left.revision, "failure", failure_result()
+            "opaque-a",
+            left.revision,
+            "failure",
+            failure_result(left.state["transcript_ref"]),
+            closing_summary(),
         )
         right_done = self.store.transition(
-            "opaque-b", right.revision, "failure", failure_result()
+            "opaque-b",
+            right.revision,
+            "failure",
+            failure_result(right.state["transcript_ref"]),
+            closing_summary(),
         )
         self.assertEqual(left_done.state["status"], right_done.state["status"])
-        self.assertEqual(left_done.state["result"], right_done.state["result"])
+        self.assertNotEqual(
+            left_done.state["result"]["transcript_ref"],
+            right_done.state["result"]["transcript_ref"],
+        )
         self.assertEqual(
             left_done.state["run_config"], right_done.state["run_config"]
         )
@@ -388,7 +410,11 @@ class BrainstormingStateTestCase(unittest.TestCase):
             "terminal", created.revision, "running"
         )
         terminal = self.store.transition(
-            "terminal", running.revision, "success", success_result()
+            "terminal",
+            running.revision,
+            "success",
+            success_result(running.state["transcript_ref"]),
+            closing_summary("The participants reached agreement."),
         )
         durable = self.store.read("terminal")
 
@@ -400,7 +426,9 @@ class BrainstormingStateTestCase(unittest.TestCase):
         rewrites.append(candidate)
         candidate = copy.deepcopy(terminal.state)
         candidate["history"][1]["status"] = "failure"
-        candidate["history"][1]["result"] = failure_result()
+        candidate["history"][1]["result"] = failure_result(
+            terminal.state["transcript_ref"]
+        )
         rewrites.append(candidate)
         candidate = copy.deepcopy(terminal.state)
         candidate["result"]["rounds_used"] = 9
@@ -417,7 +445,11 @@ class BrainstormingStateTestCase(unittest.TestCase):
 
         with self.assertRaises(bs.IllegalTransition):
             self.store.transition(
-                "terminal", terminal.revision, "failure", failure_result()
+                "terminal",
+                terminal.revision,
+                "failure",
+                failure_result(terminal.state["transcript_ref"]),
+                closing_summary(),
             )
         self.assertEqual(self.store.read("terminal"), durable)
 
@@ -427,7 +459,10 @@ class BrainstormingStateTestCase(unittest.TestCase):
         )
         running_candidate = bs.transition_session(created.state, "running")
         failure_candidate = bs.transition_session(
-            created.state, "failure", failure_result()
+            created.state,
+            "failure",
+            failure_result(created.state["transcript_ref"]),
+            closing_summary(),
         )
 
         with open(self.store.path, "rb") as fh:
@@ -477,11 +512,17 @@ class BrainstormingStateTestCase(unittest.TestCase):
         self.assertNotIn("result", created.state)
         with self.assertRaises(bs.IllegalTransition):
             self.store.transition(
-                "success", created.revision, "success", success_result()
+                "success",
+                created.revision,
+                "success",
+                success_result(created.state["transcript_ref"]),
+                closing_summary("Agreement was reached."),
             )
         with self.assertRaises(bs.ContractError):
             bs.transition_session(
-                created.state, "running", success_result()
+                created.state,
+                "running",
+                success_result(created.state["transcript_ref"]),
             )
 
         running = self.store.transition(
@@ -493,37 +534,46 @@ class BrainstormingStateTestCase(unittest.TestCase):
                 bs.transition_session(running.state, illegal)
 
         invalid_results = []
-        candidate = success_result()
+        candidate = success_result(running.state["transcript_ref"])
         candidate["outcome"] = "failure"
         invalid_results.append(candidate)
-        candidate = success_result()
+        candidate = success_result(running.state["transcript_ref"])
         candidate["target_ref"] = "docs/other.md"
         invalid_results.append(candidate)
-        candidate = success_result()
+        candidate = success_result(running.state["transcript_ref"])
         candidate["transcript_ref"] = ""
         invalid_results.append(candidate)
-        candidate = success_result()
+        candidate = success_result(running.state["transcript_ref"])
         candidate["rounds_used"] = -1
         invalid_results.append(candidate)
-        candidate = success_result()
+        candidate = success_result(running.state["transcript_ref"])
         candidate["rounds_used"] = True
         invalid_results.append(candidate)
-        candidate = success_result()
+        candidate = success_result(running.state["transcript_ref"])
         candidate["reason"] = "success does not carry a reason"
         invalid_results.append(candidate)
-        candidate = success_result()
+        candidate = success_result(running.state["transcript_ref"])
         candidate["caller_action"] = "continue"
         invalid_results.append(candidate)
-        candidate = success_result()
+        candidate = success_result(running.state["transcript_ref"])
         del candidate["transcript_ref"]
         invalid_results.append(candidate)
 
         for result in invalid_results:
             with self.assertRaises(bs.ContractError):
-                bs.transition_session(running.state, "success", result)
+                bs.transition_session(
+                    running.state,
+                    "success",
+                    result,
+                    closing_summary("Agreement was reached."),
+                )
 
         success = self.store.transition(
-            "success", running.revision, "success", success_result(2)
+            "success",
+            running.revision,
+            "success",
+            success_result(running.state["transcript_ref"]),
+            closing_summary("Agreement was reached."),
         )
         self.assertEqual(success.state["status"], "success")
         self.assertEqual(success.state["result"]["outcome"], "success")
@@ -531,22 +581,35 @@ class BrainstormingStateTestCase(unittest.TestCase):
             success.state["result"]["target_ref"],
             success.state["request"]["target_path"],
         )
-        self.assertEqual(success.state["result"]["rounds_used"], 2)
+        self.assertEqual(success.state["result"]["rounds_used"], 0)
         self.assertNotIn("reason", success.state["result"])
 
         failed = self.store.create(
             "failure", request(), run_config(), cross_family_participants()
         )
         for result in (
-            {key: value for key, value in failure_result().items()
+            {key: value for key, value in failure_result(
+                failed.state["transcript_ref"]
+            ).items()
              if key != "reason"},
-            dict(failure_result(), reason=""),
-            dict(failure_result(), extra="caller-action"),
+            dict(
+                failure_result(failed.state["transcript_ref"]), reason=""
+            ),
+            dict(
+                failure_result(failed.state["transcript_ref"]),
+                extra="caller-action",
+            ),
         ):
             with self.assertRaises(bs.ContractError):
-                bs.transition_session(failed.state, "failure", result)
+                bs.transition_session(
+                    failed.state, "failure", result, closing_summary()
+                )
         failed = self.store.transition(
-            "failure", failed.revision, "failure", failure_result()
+            "failure",
+            failed.revision,
+            "failure",
+            failure_result(failed.state["transcript_ref"]),
+            closing_summary(),
         )
         self.assertEqual(failed.state["status"], "failure")
         self.assertEqual(failed.state["result"]["outcome"], "failure")

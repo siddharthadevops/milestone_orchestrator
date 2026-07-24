@@ -80,7 +80,9 @@ def _is_target_lock_path(store_path, candidate_path):
     return False
 
 
-def _reject_store_target_alias(store_path, target_path):
+def _reject_store_target_alias(
+    store_path, target_path, transcript_path=None
+):
     """Keep target recovery independent from Brainstorming's state authority."""
     store_path = os.path.abspath(store_path)
     target_path = os.path.abspath(target_path)
@@ -89,7 +91,27 @@ def _reject_store_target_alias(store_path, target_path):
             "target_path must not use Brainstorming's target coordination "
             "lock namespace"
         )
-    for authority_path in (store_path, store_path + ".lock"):
+    if brainstorming._target_overlaps_state_storage(
+        store_path, target_path
+    ):
+        raise CoordinationRejected(
+            "target_path must not alias Brainstorming's durable state store "
+            "or lock"
+        )
+    authority_paths = [store_path, store_path + ".lock"]
+    if brainstorming._target_overlaps_transcript_storage(
+        store_path + ".sessions", target_path, transcript_path
+    ):
+        raise CoordinationRejected(
+            "target_path must not overlap Brainstorming-owned transcript "
+            "storage"
+        )
+    if transcript_path is not None:
+        transcript_path = os.path.abspath(transcript_path)
+        authority_paths.extend(
+            (transcript_path, transcript_path + ".lock")
+        )
+    for authority_path in authority_paths:
         aliases_authority = (
             os.path.realpath(target_path) == os.path.realpath(authority_path)
         )
@@ -101,16 +123,25 @@ def _reject_store_target_alias(store_path, target_path):
             except (FileNotFoundError, OSError):
                 aliases_authority = False
         if aliases_authority:
+            label = (
+                "transcript or lock"
+                if transcript_path is not None
+                and authority_path.startswith(transcript_path)
+                else "durable state store or lock"
+            )
             raise CoordinationRejected(
-                "target_path must not alias Brainstorming's durable state "
-                "store or lock"
+                "target_path must not alias Brainstorming's %s" % label
             )
 
 
 @contextlib.contextmanager
-def _exclusive_target_turn(store_path, target_path):
+def _exclusive_target_turn(
+    store_path, target_path, transcript_path=None
+):
     """Serialize one target's execution, reconciliation, and state decision."""
-    _reject_store_target_alias(store_path, target_path)
+    _reject_store_target_alias(
+        store_path, target_path, transcript_path
+    )
     lock_path = _target_lock_path(store_path, target_path)
     with _thread_lock_for(lock_path):
         handle = open(lock_path, "a+", encoding="utf-8")
@@ -470,12 +501,7 @@ def build_turn_prompt(state, participant, round_number, target_revision):
         sort_keys=True,
         indent=2,
     )
-    prior = [
-        "Round %d — %s:\n%s"
-        % (turn["round"], turn["participant_id"], turn["markdown"])
-        for turn in checked["completed_turns"]
-    ]
-    prior_text = "\n\n".join(prior) if prior else "(No accepted turns yet.)"
+    prior_text = brainstorming.render_transcript(checked).rstrip()
     if checked_participant["role"] == "lead":
         ownership = (
             "You are the lead. You may edit target_path during this turn. "
@@ -510,7 +536,7 @@ The target on disk has been reconciled to that accepted revision. A relative
 target_path is resolved from workspace_path, matching the participant working
 directory. {ownership}
 
-Earlier accepted discussion, in order:
+Earlier accepted session transcript, in order:
 {prior}
 
 Before proposing or accepting a next action, apply this compact common check:
@@ -633,7 +659,11 @@ class BrainstormingCoordinator:
         """Initialize target versioning and reconcile before any turn."""
         snapshot = self._require_running(self.store.read(session_id))
         path = resolve_target_path(snapshot.state["request"])
-        with _exclusive_target_turn(self.store.path, path):
+        with _exclusive_target_turn(
+            self.store.path,
+            path,
+            self.store.transcript_ref(session_id),
+        ):
             attempt = self.store.read_turn_attempt(session_id)
             expected = self._attempt_target_parent(attempt)
             with _open_target_parent(path, expected) as (
@@ -659,11 +689,39 @@ class BrainstormingCoordinator:
         accepted = self._accepted_record(session_id, latest)
         _restore_target_at(*target, accepted)
 
+    def _record_supervision_stop(self, session_id, plain):
+        """Append one human-safe reason when supervision stops discussion."""
+        while True:
+            snapshot = self._require_running(self.store.read(session_id))
+            projection = brainstorming.coordination_projection(snapshot.state)
+            if projection is None:
+                raise CoordinationRejected(
+                    "participant supervision has not started"
+                )
+            try:
+                return self.store.record_material_interruption(
+                    session_id,
+                    snapshot.revision,
+                    {
+                        "after_completed_turns": len(
+                            projection["completed_turns"]
+                        ),
+                        "plain": plain,
+                    },
+                )
+            except brainstorming.RevisionConflict:
+                continue
+
     def _recover_rejected(self, session_id, target, token, cause):
         try:
             self._recover_latest(session_id, target)
             self.store.finish_turn_attempt(session_id, token)
         except BaseException as recovery_error:
+            self._record_supervision_stop(
+                session_id,
+                "The discussion stopped because the target could not be "
+                "restored to the last accepted Brainstorming revision.",
+            )
             raise TargetRecoveryError(
                 "rejected work could not be reconciled to durable state"
             ) from recovery_error
@@ -674,7 +732,11 @@ class BrainstormingCoordinator:
         """Run and atomically accept exactly the next ordered turn."""
         claimed = self._require_running(self.store.read(session_id))
         path = resolve_target_path(claimed.state["request"])
-        with _exclusive_target_turn(self.store.path, path):
+        with _exclusive_target_turn(
+            self.store.path,
+            path,
+            self.store.transcript_ref(session_id),
+        ):
             current = self._require_running(self.store.read(session_id))
             if not brainstorming._same_json_value(
                 brainstorming.coordination_projection(claimed.state),
@@ -747,6 +809,11 @@ class BrainstormingCoordinator:
                 # An ordinary provider or evidence-check failure is not proof
                 # that its supervised worker can no longer mutate the target.
                 # Keep the durable attempt active and refuse every retry.
+                self._record_supervision_stop(
+                    session_id,
+                    "The discussion stopped because the participant's work "
+                    "could not be confirmed as finished.",
+                )
                 raise
             try:
                 self.store.mark_turn_attempt_quiescent(
@@ -798,6 +865,7 @@ class BrainstormingCoordinator:
                 participant["id"],
                 envelope["markdown"],
                 target_record,
+                publish=False,
             )
         except BaseException as exc:
             self._recover_rejected(
@@ -806,4 +874,27 @@ class BrainstormingCoordinator:
 
         self._reconcile_snapshot(session_id, accepted, target)
         self.store.finish_turn_attempt(session_id, attempt["token"])
-        return accepted
+        return self.store.reconcile_transcript(session_id)
+
+    def record_material_interruption(
+        self, session_id, expected_revision, plain
+    ):
+        """Record one supervision outcome already judged material."""
+        snapshot = self._require_running(self.store.read(session_id))
+        if snapshot.revision != expected_revision:
+            raise brainstorming.RevisionConflict(snapshot)
+        projection = brainstorming.coordination_projection(snapshot.state)
+        if projection is None:
+            raise CoordinationRejected(
+                "participant supervision has not started"
+            )
+        return self.store.record_material_interruption(
+            session_id,
+            expected_revision,
+            {
+                "after_completed_turns": len(
+                    projection["completed_turns"]
+                ),
+                "plain": plain,
+            },
+        )
