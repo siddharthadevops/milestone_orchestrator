@@ -415,6 +415,7 @@ The goal is satisfied when:
 | slice_impl-03 (Ordered rounds and lead-owned target) | sealed | 30 | a1:pass | 3749e79 |
 | slice_doc-04 (Plain-language session transcript) | sealed | 5 | a1:pass | 663a57a |
 | slice_impl-04 (Plain-language session transcript) | sealed | 37 | a1:pass | 41b70de |
-| slice_doc-05 (Revision-bound closure and results) | sealed | 2 | a1:pass | ab4fe3f |
-| slice_impl-05 (Revision-bound closure and results) | sealed | 24 | a1:pass | - |
-| slice_doc-06 (Standalone lifecycle API) | pending | 0 | - | - |
+| slice_doc-05 (Revision-bound closure and results) | sealed | 2 | a1:pass | df08bc5 |
+| slice_impl-05 (Revision-bound closure and results) | sealed | 24 | a1:pass | df08bc5 |
+| slice_doc-06 (Standalone lifecycle API) | sealed | 2 | a1:pass | - |
+| slice_impl-06 (Standalone lifecycle API) | pending | 0 | - | - |

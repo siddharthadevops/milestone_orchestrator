@@ -309,4 +309,22 @@
 
 ## slice_doc-06 (Standalone lifecycle API)
 
+- draft: kind `draft_slice_note`, artifact `implementation/milestones/brainstorming/slices/slice-06.md` (raw: `implementation/milestones/brainstorming/.run/raw/slice_doc-06-draft.txt`)
+
+| Round | Kind | Family | Findings | Triage | Raw |
+|---|---|---|---|---|---|
+| slice_doc-06-codex-r1 | review_round | codex | 3 | 3 reported | `implementation/milestones/brainstorming/.run/raw/slice_doc-06-codex-r1.txt` |
+| slice_doc-06-claude-r1 | review_round | claude | 1 | 1 reported | `implementation/milestones/brainstorming/.run/raw/slice_doc-06-claude-r1.txt` |
+
+### Seal attempt a1 — PASSED
+
+
+**Deferred debt (opposite-family verified):**
+- `codex-F1` (raised codex, cleared codex): Stop authorization lacks an executable check. The strict access design protects another project's operator from a bounded but visible session interruption; the normal stop path remains unverified when an opaque session id becomes known. — The artifact correctly requires authorization for every stop but tests foreign access only on GET, so the builder could silently omit the negative stop case, while correction is a local test and route-authorization fix within Slice 6.
+- `codex-F2` (raised codex, cleared codex): Service-restart persistence is promised but untested. The victim is the session operator, who can lose bounded control and visibility during ordinary service maintenance; the deviation appears whenever the new service record is not truly durable. — The artifact repeatedly requires a durable service record and inspectable nonterminal state, so the capable builder should either implement persistence or stop on the missing restart check rather than drift silently, while an escaped defect would require bounded storage and lifecycle-test rework wit
+- `codex-F3` (raised codex, cleared codex): Acceptance is anchored to internal process topology. This is a design-altitude defect affecting implementers and maintainers with bounded, reversible complexity on every implementation; the prescribed mechanism is not a public or cross-slice contract. — The note explicitly makes a lifecycle process, locked registry record, and descendant reaping acceptance requirements, so a capable builder would likely implement and test that unnecessary topology without stopping, while correction remains bounded to redesigning this unit's supervision and acceptan
+- `claude-F1` (raised claude, cleared codex): The pinned public error vocabulary declares HTTP 503 `brainstorming_unavailable` but no statement in the note binds that code to any condition; the refusal scenarios in fact 2, the Acceptance section, and `test_create_refusals_are_typed_and_side_effect_free` (which requires each refusal to 'return the pinned code') leave 'unavailable participant assignment' mappable by elimination only, so an implementation could map it to 400 `invalid_brainstorming_request` (or reserve 503 for store trouble) while still satisfying the note. — The missing trigger creates a real but minor API-behavior ambiguity that a capable builder will likely resolve from the semantically named 503 code or stop to repair, while any silent misimplementation is corrected locally by pinning one refusal mapping and its test expectation.
+
+## slice_impl-06 (Standalone lifecycle API)
+
 
