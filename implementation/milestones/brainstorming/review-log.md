@@ -181,4 +181,23 @@
 
 ## slice_doc-04 (Plain-language session transcript)
 
+- draft: kind `draft_slice_note`, artifact `implementation/milestones/brainstorming/slices/slice-04.md` (raw: `implementation/milestones/brainstorming/.run/raw/slice_doc-04-draft.txt`)
+
+| Round | Kind | Family | Findings | Triage | Raw |
+|---|---|---|---|---|---|
+| slice_doc-04-codex-r1 | review_round | codex | 1 | 1 reported | `implementation/milestones/brainstorming/.run/raw/slice_doc-04-codex-r1.txt` |
+| slice_doc-04-claude-r1 | review_round | claude | 2 | 2 reported | `implementation/milestones/brainstorming/.run/raw/slice_doc-04-claude-r1.txt` |
+| slice_doc-04-codex-r2 | fix_findings | codex | 2 | 2 fixed | `implementation/milestones/brainstorming/.run/raw/slice_doc-04-fix1.txt` |
+| slice_doc-04-codex-r3 | delta_review | codex | 0 | clean | `implementation/milestones/brainstorming/.run/raw/slice_doc-04-delta1.txt` |
+| slice_doc-04-claude-r2 | review_round | claude | 0 | clean | `implementation/milestones/brainstorming/.run/raw/slice_doc-04-claude-r2.txt` |
+
+### Seal attempt a1 — PASSED
+
+- codex half: 0 finding(s); workspace_modified=False; raw `implementation/milestones/brainstorming/.run/raw/slice_doc-04-seal-a1-codex.txt`
+
+**Deferred debt (opposite-family verified):**
+- `codex-F1` (raised codex, cleared codex): The strict publication guarantee misses consecutive winning revisions: revision checks plus atomic replacement reject same-base losers but do not prevent an older successful writer from publishing after a newer successful writer. The operator can temporarily lose visible accepted progress; durable state preserves recovery, so damage is bounded, reversible, and timing-dependent. — The artifact repeatedly and wrongly pins CAS plus atomic replacement as preventing losing publication while testing only same-base losers, so a builder would likely preserve the consecutive-winner race, but correction is bounded to transcript publication ordering and one focused concurrency test wit
+
+## slice_impl-04 (Plain-language session transcript)
+
 
