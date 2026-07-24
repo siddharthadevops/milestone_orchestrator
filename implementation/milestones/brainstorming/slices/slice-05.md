@@ -32,17 +32,19 @@ work-area, or provider policy.
 - **Strict:** an accepted ballot is complete, ordered, policy-correct, and bound
   to the current accepted target version and completed round; a target mutation
   invalidates the ballot; success exists only with the current approving
-  ballot; exhaustion is failure; and every durable terminal snapshot has one
-  coherent result and closing account.
+  ballot; exhaustion is failure; every terminal `object` vote is recorded as an
+  unresolved ballot objection under the participant's human label; and every
+  durable terminal snapshot has one coherent result and closing account.
 - **Optimistic:** competing closure attempts contend on accepted session state.
   A stale attempt loses without duplicating a ballot or replacing the winner.
 - **Eventual:** none in this slice. The later visualization may lag, but durable
   closure state, the target reference, and `chat.md` are the authorities it
   projects.
 - **Best-effort:** participant-call delivery, provider liveness, and the
-  subjective quality of participant-authored closing prose retain their
-  existing posture. Rejected control work may remain in provider conversation
-  history, but never becomes accepted closure state.
+  subjective quality of participant-authored closing prose beyond the derived
+  ballot-objection records retain their existing posture. Rejected control work
+  may remain in provider conversation history, but never becomes accepted
+  closure state.
 
 ### Dependencies and consumers
 
@@ -94,9 +96,12 @@ completed turn, with zero rounds and a non-empty plain reason.
 
 Both outcomes retain the target, inspectable state, target and transcript
 references, exact completed-round count, and one complete closing account.
-Success has no failure reason; failure has one. No partial target is promoted to
-success, no terminal state can change, and a stale closure writer can publish
-neither a losing ballot nor a losing closing.
+Every terminal `object` vote contributes a human-labeled unresolved objection
+to that account, in addition to any participant-authored objection text, so a
+closing cannot claim that no objection was recorded while its accepted ballot
+contains one. Success has no failure reason; failure has one. No partial target
+is promoted to success, no terminal state can change, and a stale closure writer
+can publish neither a losing ballot nor a losing closing.
 
 The production seam should stay small, but the slice is expected to exceed the
 roughly 500 changed-line target once the required policy, revision-invalidation,
@@ -117,7 +122,8 @@ guarantees; generated and mechanical changes remain excluded.
 - Repeating ballots at one round could bypass the discussion bound. A failed
   ballot requires another complete pass before another ballot.
 - Treating participant prose as machine truth would overstate the guarantee.
-  Result and ballot facts are strict; prose meaning and delivery remain
+  Result and ballot facts are strict, so terminal object votes are derived into
+  the unresolved-objections account; other prose meaning and delivery remain
   best-effort.
 
 ## Register 2 — Pinned facts and executable evidence
@@ -132,7 +138,7 @@ guarantees; generated and mechanical changes remain excluded.
 | Policy decisions | `unanimity` approves only when every vote is `accept`. `majority_with_lead_tiebreak` gives each participant one vote: more `accept` than `object` approves, more `object` rejects, and an exact tie has the lead's decision. The coordinator counts only; it never judges objection substance. | `implementation/milestones/brainstorming/skeleton.md:25-28,77,100,105`; `implementation/milestones/brainstorming/goal.md:250-264`; `orchestrator/brainstorming.py:545-590` | touch one deterministic evaluator used by ballot validation; do-not-add a default, threshold, veto, weight, abstention, or third policy |
 | Failed ballot and exhaustion | A non-approving accepted ballot remains append-only. While `rounds_used < max_rounds`, status stays `running` and another ballot requires the next complete roster pass. When no complete round remains, absence of a current approving ballot terminalizes as `failure`; the final failed ballot, when present, and failure are one coherent durable outcome. Ballots do not change `rounds_used`. | `implementation/milestones/brainstorming/skeleton.md:25-28,77,103,105`; `implementation/milestones/brainstorming/goal.md:230-241,256-259,266-276`; `orchestrator/brainstorming.py:668-737,1359-1404` | touch explicit ballot/result successors; do-not-loop ballots at one boundary or leave an exhausted session running |
 | Success eligibility | `success` is legal only with a current accepted `closure_ballot` whose `approved` is true and whose round and target revision equal durable `rounds_used` and `accepted_target_revision`. The ballot, terminal status, `result`, and `closing_summary` become one winning durable session outcome; no durable snapshot exposes success without its ballot or an approved ballot still running. | `implementation/milestones/brainstorming/skeleton.md:25-28,77,92,105`; `implementation/milestones/brainstorming/goal.md:243-276`; `orchestrator/brainstorming.py:992-1126,1144-1208,1838-1865` | touch terminal eligibility and a combined closure successor; do-not-trust caller-declared success or publish partial terminal state |
-| Result and closing | Terminal outcomes remain exactly `success` or `failure`. `result` remains exactly `outcome`, `target_ref`, `transcript_ref`, `rounds_used`, plus failure-only non-empty `reason`; outcome equals status, references match session authority, and rounds equal durable completed rounds. Both outcomes retain target/state/references and use Slice 4's exact `closing_summary`; failure reason matches its closing reason. Failure may occur before a completed turn without a ballot. A terminal operation is not reported complete until `chat.md` reflects its winning state. | `implementation/milestones/brainstorming/skeleton.md:25-28,77,104-105`; `implementation/milestones/brainstorming/goal.md:218-221,266-279,336-370`; `implementation/milestones/brainstorming/slices/slice-01.md:101-102`; `implementation/milestones/brainstorming/slices/slice-04.md:145-146`; `orchestrator/brainstorming.py:950-1019,1054-1126,1695-1719` | touch closure-owned terminalization and closing publication; do-not-add caller routing, result variants, public error codes, or semantic prose validation |
+| Result and closing | Terminal outcomes remain exactly `success` or `failure`. `result` remains exactly `outcome`, `target_ref`, `transcript_ref`, `rounds_used`, plus failure-only non-empty `reason`; outcome equals status, references match session authority, and rounds equal durable completed rounds. Both outcomes retain target/state/references and use Slice 4's exact `closing_summary`; failure reason matches its closing reason, and each terminal `object` vote is derived into `unresolved_objections` under the persisted human label without removing authored objection text. Failure may occur before a completed turn without a ballot. A terminal operation is not reported complete until `chat.md` reflects its winning state. | `implementation/milestones/brainstorming/skeleton.md:25-28,77,104-105`; `implementation/milestones/brainstorming/goal.md:218-221,243-279,336-370`; `implementation/milestones/brainstorming/slices/slice-01.md:101-102`; `implementation/milestones/brainstorming/slices/slice-04.md:145-146`; `orchestrator/brainstorming.py:950-1019,1054-1126,1695-1719` | touch closure-owned terminalization and closing publication; do-not-add caller routing, result variants, public error codes, or semantic prose validation |
 | Slice boundary | Slice 5 adds no public HTTP route or error vocabulary, visualization, milestone transition, product adapter, permission/access rule, target-version scheme, or independent transcript/state store. Existing `discussion_turn`, completed-turn, target-revision, `material_interruption`, `closing_summary`, and result shapes remain compatible. | `implementation/milestones/brainstorming/skeleton.md:36-47,73-80,98-108`; `orchestrator/brainstorming_execution.py:12-27`; `orchestrator/service.py:2735-2887` | touch closure/result enforcement plus focused tests; do-not-touch service routes, panel, milestone flow, external roots, or later-slice contracts |
 
 ### Verification Contract
@@ -148,7 +154,7 @@ Focused command:
 | Votes stay on one accepted target | `test_target_mutation_invalidates_ballot_and_restores_only_target` | Lead/interlocutor mutation, deletion, recreation, or late mutation during closure accepts no vote, ballot, result, turn, revision, or round change; the last accepted target is restored and sibling sentinels are byte-identical. | strict accepted state; best-effort participant delivery |
 | A failed ballot resumes real discussion | `test_failed_ballot_requires_another_complete_round` | A failed ballot remains once in order; a second ballot at that boundary is rejected; the persisted next roster pass sees it, and only that complete pass permits another ballot. | strict |
 | Exhaustion is explicit failure | `test_round_exhaustion_without_approval_is_failure` | At `max_rounds`, a failed ballot or no lead proposal yields terminal `failure`, the exact durable round count, non-empty reason, unfinished-target closing, and no later turn or ballot. | strict |
-| Success is revision-bound and atomic | `test_success_requires_current_approved_ballot_and_is_atomic` | Success without a ballot, with a failed/stale ballot, wrong round/revision, incomplete summary, or mismatched references is rejected; a current approving ballot exposes ballot, success result, closing, and transcript together. | strict |
+| Success is revision-bound and atomic | `test_success_requires_current_approved_ballot_and_is_atomic` | Success without a ballot, with a failed/stale ballot, wrong round/revision, incomplete summary, or mismatched references is rejected; a current approving ballot exposes ballot, success result, closing, and transcript together, with every terminal object vote present in unresolved objections. | strict |
 | Non-closure failure remains coherent | `test_failure_before_first_turn_retains_complete_evidence` | A zero-turn operational failure has no ballot, reports zero rounds and a non-empty matching reason, keeps target/state/references inspectable, publishes one complete closing, and is immutable. | strict structure; best-effort authored prose |
 | Competing attempts cannot fork closure | `test_stale_closure_attempt_cannot_publish_losing_state` | Two closure attempts from one session revision produce one accepted ballot/result path; stale or interrupted candidates publish no duplicate ballot, contradictory result, or losing closing and recover the accepted target. | strict accepted state; optimistic conflict detection |
 | Existing consumers remain compatible | `test_closure_reuses_sessions_and_changes_no_public_surface` | Votes use the persisted participant sessions and unchanged execution context; Slice 1-4 focused suites stay green after their provisional ballot/result fixtures adopt enforced truth; no service route/error, panel behavior, milestone state, or external-root sentinel changes. | strict compatibility; best-effort provider delivery |
@@ -216,7 +222,7 @@ for the facts this note pins.
 | One ballot per complete round | Existing roster-prefix/round validation (`orchestrator/brainstorming.py:654-737`) and ordered transcript-event successor (`orchestrator/brainstorming.py:830-885,1359-1415`) provide the extension seam for a per-round ballot guard | Repeat-at-boundary and failed-ballot fixtures require another full roster pass before another accepted ballot; ballots never change `rounds_used`. |
 | Success and final exhaustion are one coherent durable outcome | Add the skeleton-required combined closure successor over current lifecycle/result/closing validation (`orchestrator/brainstorming.py:950-1019,1054-1208`) and the existing revisioned whole-state CAS (`orchestrator/brainstorming.py:1838-1865`; `orchestrator/kvstore.py:343-359,391-457`) | No intermediate durable snapshot has approved-running, success-without-ballot, or final-failed-running state; stale/failing CAS exposes the old whole state or one exact winner. |
 | Explicit non-closure failure and retained evidence | Existing `created`/`running` to `failure` transitions, exact result/closing validators, immutable terminal history, and target/transcript references (`orchestrator/brainstorming.py:30-42,950-1208`) | Zero-turn and operational-failure matrices require matching non-empty reason, exact zero/current rounds, complete closing, retained references, and no post-terminal write. |
-| Closing publication agrees with terminal state | Winning-state transcript rendering and read-time reconciliation (`orchestrator/brainstorming.py:1503-1638,1695-1719`) plus atomic replacement (`orchestrator/brainstorming.py:118-136`) | Success/failure/interruption tests inject publication failure and prove no partial file; the next read repairs one ballot/closing from winning state before return. |
+| Closing publication agrees with terminal state | Winning-state transcript rendering and read-time reconciliation (`orchestrator/brainstorming.py:1503-1638,1695-1719`) plus atomic replacement (`orchestrator/brainstorming.py:118-136`) | Success/failure/interruption tests inject publication failure and prove no partial file; every terminal object vote is derived into the closing's unresolved objections, and the next read repairs one ballot/closing from winning state before return. |
 | Optimistic contention cannot fork closure | Existing session revision comparison and CAS (`orchestrator/brainstorming.py:1838-1865`) combined with target exclusivity | Two-attempt tests observe one ballot/result successor and no duplicate participant control overlap or losing target/transcript publication. |
 | Best-effort delivery is not promoted | Existing explicit-session participant execution, single repair, and quiescence evidence (`orchestrator/brainstorming_execution.py:85-180,197-377`) retain provider delivery limits while accepted-state gates stay strict | Provider failure may advance opaque provider history but cannot create accepted votes or closure; tests claim neither exactly-once delivery nor semantic prose correctness. |
 | No public or product expansion | Current HTTP dispatch contains no Brainstorming route (`orchestrator/service.py:2735-2887`); later Brainstorming surfaces remain assigned to Slices 6-8 (`implementation/milestones/brainstorming/skeleton.md:78-80`) | Compatibility check observes no new route/error, panel behavior, milestone state, or external-root write. |
