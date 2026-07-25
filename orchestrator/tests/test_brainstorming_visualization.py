@@ -171,15 +171,25 @@ class BrainstormingVisualizationTest(unittest.TestCase):
         self.assertEqual(view["closure_ballots"], [rejected, accepted])
         self.assertEqual(view["result"], terminal.state["result"])
         self.assertEqual(view["round"], {"current": 2, "completed": 2, "maximum": 2})
-    def test_absent_binary_and_large_target_previews_are_honest(self):
-        session_id, store = self._create("missing.md", content=None, rounds=3)
+    def test_coordination_without_lead_acceptance_is_not_yet_accepted(self):
+        session_id, store = self._create("missing.md", content=None, rounds=4)
         self.assertEqual(
             self._view(session_id)["target"],
             {"ref": "docs/missing.md",
              "revision": None, "exists": None, "content": None, "truncated": False},
         )
         snapshot = coordination.BrainstormingCoordinator(store, None).prepare(session_id)
+        self.assertIsNone(self._view(session_id)["target"]["exists"])
+        absent = store.read_target_revision(
+            session_id, snapshot.state["recovery_baseline_revision"]
+        )
+        snapshot = self._turn(
+            store, session_id, snapshot, "lead", "Absent.", absent
+        )
         self.assertEqual(self._view(session_id)["target"]["exists"], False)
+        snapshot = self._turn(
+            store, session_id, snapshot, "critic", "Observed.", absent
+        )
         binary = self._revision(b"\xff\x00")
         snapshot = self._turn(store, session_id, snapshot, "lead", "Binary.", binary)
         self.assertIsNone(self._view(session_id)["target"]["content"])

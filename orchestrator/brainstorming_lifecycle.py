@@ -494,7 +494,7 @@ def _runtime_and_roster(config, participants, closure_policy, workspace):
     return runtime, run_config, eligible
 
 
-def _resolved_target(request, execution_context):
+def _resolved_target(request, execution_context, owned_target_path=None):
     path = coordination.resolve_target_path(request)
     primary = execution_context.get("primary")
     if primary is not None:
@@ -503,7 +503,11 @@ def _resolved_target(request, execution_context):
             not isinstance(primary_path, str)
             or not kvstore.path_is_inside_roots(path, [primary_path])
         ):
-            raise PublicLifecycleError(400, INVALID_REQUEST)
+            if (
+                owned_target_path is None
+                or os.path.abspath(owned_target_path) != path
+            ):
+                raise PublicLifecycleError(400, INVALID_REQUEST)
     try:
         coordination.capture_target(path)
     except coordination.CoordinationRejected as exc:
@@ -788,7 +792,9 @@ def _projection(home, record):
     }
 
 
-def _rollback_unreleased_creation(home, store, session_id):
+def _rollback_unreleased_creation(
+    home, store, session_id, recovery_revision=None
+):
     """Compensate a create fault while the lifecycle child is still gated."""
     with _locked_registry(home):
         document = _load_registry(home)
@@ -796,7 +802,7 @@ def _rollback_unreleased_creation(home, store, session_id):
         if record is not None:
             document["sessions"].remove(record)
             _save_registry(home, document)
-        store.discard_unlaunched(session_id)
+        store.discard_unlaunched(session_id, recovery_revision)
 
 
 def create_session(
@@ -838,6 +844,98 @@ def _create_session(
         home, checked, project_record
     )
     checked["request"]["workspace_path"] = context["workspace_path"]
+    return _create_session_with_context(
+        home, checked, caller, context, config, launcher
+    )
+
+
+def create_resolved_session(
+    home,
+    body,
+    caller,
+    execution_context,
+    config,
+    launcher=None,
+    owned_target_path=None,
+):
+    """Create for an already-resolved milestone without resolving roots again."""
+    try:
+        checked = validate_create_body(body)
+        caller = brainstorming._text(caller, "caller")
+        context = brainstorming._json_copy(
+            execution_context, "execution_context"
+        )
+        brainstorming._exact_keys(
+            context,
+            (
+                "workspace_path",
+                "project",
+                "work_area",
+                "primary",
+                "additional",
+            ),
+            (),
+            "execution_context",
+        )
+        workspace = brainstorming._text(
+            context["workspace_path"], "execution_context.workspace_path"
+        )
+        if os.path.abspath(workspace) != workspace or not os.path.isdir(
+            workspace
+        ):
+            raise brainstorming.ContractError(
+                "execution_context.workspace_path must be an existing "
+                "absolute directory"
+            )
+        if checked["request"]["workspace_path"] != workspace:
+            raise brainstorming.ContractError(
+                "request workspace does not match resolved execution context"
+            )
+        if (
+            checked["project"] != context["project"]
+            or checked["work_area"] != context["work_area"]
+        ):
+            raise brainstorming.ContractError(
+                "request binding does not match resolved execution context"
+            )
+        if not isinstance(config, dict):
+            raise brainstorming.ContractError(
+                "resolved config must be an object"
+            )
+        if owned_target_path is not None:
+            owned_target_path = brainstorming._text(
+                owned_target_path, "owned_target_path"
+            )
+            if os.path.abspath(owned_target_path) != owned_target_path:
+                raise brainstorming.ContractError(
+                    "owned_target_path must be absolute"
+                )
+        return _create_session_with_context(
+            home,
+            checked,
+            caller,
+            context,
+            config,
+            launcher,
+            owned_target_path=owned_target_path,
+        )
+    except PublicLifecycleError:
+        raise
+    except (TypeError, ValueError, brainstorming.ContractError) as exc:
+        raise PublicLifecycleError(400, INVALID_REQUEST) from exc
+    except Exception as exc:
+        raise PublicLifecycleError(503, UNAVAILABLE) from exc
+
+
+def _create_session_with_context(
+    home,
+    checked,
+    caller,
+    context,
+    config,
+    launcher,
+    owned_target_path=None,
+):
     runtime, run_config, eligible = _runtime_and_roster(
         config,
         checked["participants"],
@@ -845,13 +943,16 @@ def _create_session(
         context["workspace_path"],
     )
     store = brainstorming.SessionStore(state_directory(home))
-    target_path = _resolved_target(checked["request"], context)
+    target_path = _resolved_target(
+        checked["request"], context, owned_target_path=owned_target_path
+    )
     _reject_authority_overlap(home, store, target_path)
     identity = _target_identity(target_path)
     launcher = launcher or _launch_lifecycle_process
     launch = None
     session_id = None
     session_creation_attempted = False
+    recovery_baseline = None
 
     try:
         reap_children(home)
@@ -881,13 +982,21 @@ def _create_session(
             ):
                 raise PublicLifecycleError(503, UNAVAILABLE)
             session_creation_attempted = True
+            recovery_baseline = coordination.capture_target(target_path)
             created = store.create(
                 session_id,
                 checked["request"],
                 run_config,
                 eligible,
             )
-            store.transition(session_id, created.revision, "running")
+            running = store.transition(
+                session_id, created.revision, "running"
+            )
+            store.initialize_coordination(
+                session_id,
+                running.revision,
+                recovery_baseline,
+            )
             record = {
                 "id": session_id,
                 "caller": caller,
@@ -910,20 +1019,47 @@ def _create_session(
         if launch is not None:
             launch.abort()
         if session_creation_attempted:
-            _rollback_unreleased_creation(home, store, session_id)
+            _rollback_unreleased_creation(
+                home,
+                store,
+                session_id,
+                (
+                    None
+                    if recovery_baseline is None
+                    else recovery_baseline["revision"]
+                ),
+            )
         raise
     except (brainstorming.ContractError, coordination.CoordinationRejected) as exc:
         if launch is not None:
             launch.abort()
         if session_creation_attempted:
-            _rollback_unreleased_creation(home, store, session_id)
+            _rollback_unreleased_creation(
+                home,
+                store,
+                session_id,
+                (
+                    None
+                    if recovery_baseline is None
+                    else recovery_baseline["revision"]
+                ),
+            )
         raise PublicLifecycleError(400, INVALID_REQUEST) from exc
     except Exception as exc:
         if launch is not None:
             launch.abort()
         if session_creation_attempted:
             try:
-                _rollback_unreleased_creation(home, store, session_id)
+                _rollback_unreleased_creation(
+                    home,
+                    store,
+                    session_id,
+                    (
+                        None
+                        if recovery_baseline is None
+                        else recovery_baseline["revision"]
+                    ),
+                )
             except Exception as rollback_error:
                 raise PublicLifecycleError(503, UNAVAILABLE) from rollback_error
         raise PublicLifecycleError(503, UNAVAILABLE) from exc
@@ -954,7 +1090,10 @@ def view_session(home, session_id, authorize, preview_limit):
             "content": None,
             "truncated": False,
         }
-        if progress is not None:
+        if (
+            progress is not None
+            and progress["accepted_target_revision"] is not None
+        ):
             accepted = store.read_target_revision(
                 record["id"], progress["accepted_target_revision"]
             )
@@ -1227,6 +1366,7 @@ def _safe_operational_failure(store, coordinator, session_id):
                     interruption,
                     result,
                     summary,
+                    failure_origin="operational",
                 )
                 return True
             except brainstorming.RevisionConflict:
@@ -1260,7 +1400,9 @@ def run_lifecycle(
         coordinator = coordination.BrainstormingCoordinator(
             store, participant_execution
         )
-        coordinator.prepare(session_id)
+        prepared = coordinator.prepare(session_id)
+        if prepared.state["status"] in brainstorming.TERMINAL_STATUSES:
+            return 0
         execution_context = record["execution_context"]
 
         while True:
@@ -1269,6 +1411,18 @@ def run_lifecycle(
                 return 2
             if snapshot.state["status"] in brainstorming.TERMINAL_STATUSES:
                 return 0
+            pending_attempt = store.read_turn_attempt(session_id)
+            if (
+                pending_attempt is not None
+                and pending_attempt.get("kind", "discussion_turn")
+                == "closure"
+            ):
+                snapshot = coordinator.run_closure(
+                    session_id, execution_context
+                )
+                if snapshot.state["status"] in brainstorming.TERMINAL_STATUSES:
+                    return 0
+                continue
             starting_round = snapshot.state["rounds_used"]
             while snapshot.state["rounds_used"] == starting_round:
                 try:
@@ -1283,10 +1437,24 @@ def run_lifecycle(
                         in brainstorming.TERMINAL_STATUSES
                     ):
                         return 0
+                if (
+                    snapshot is not None
+                    and snapshot.state["status"]
+                    in brainstorming.TERMINAL_STATUSES
+                ):
+                    return 0
             try:
-                coordinator.run_closure(session_id, execution_context)
+                snapshot = coordinator.run_closure(
+                    session_id, execution_context
+                )
             except brainstorming.RevisionConflict:
                 continue
+            if (
+                snapshot is not None
+                and snapshot.state["status"]
+                in brainstorming.TERMINAL_STATUSES
+            ):
+                return 0
     except LifecycleStop:
         return 3
     except Exception:

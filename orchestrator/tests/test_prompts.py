@@ -21,6 +21,7 @@ every one of the 7 prompt builders inherits. These tests pin:
       protocol block appears only in fix prompts.
 """
 
+import json
 import unittest
 
 from orchestrator import contracts, prompts
@@ -869,6 +870,56 @@ class TestPortedCanonContentRules(unittest.TestCase):
             FAMILY, WORKSPACE, GOAL, UNIT, FINDINGS, [], "claude",
             ["claude", "-p"])
         self.assertNotIn("KILLED-CALL NOTICE", clean)
+
+    def test_fixer_prompt_preserves_exact_finding_for_rethink_echo(self):
+        multiline = "first line\n" + ("detail " * 80) + "\nlast line"
+        finding = {
+            "id": "F-exact",
+            "severity": "P1",
+            "summary": multiline,
+            "validity": {
+                "permitted_baseline": multiline,
+                "actual_outcome": multiline,
+                "incremental_harm": multiline,
+                "exceeds_baseline": True,
+            },
+            "plain": "A valid finding must remain selectable without data loss.",
+            "example": "A long review finding is copied into a rethink request.",
+            "contests": {
+                "rejection_id": "prior/rejection",
+                "new_evidence": multiline,
+            },
+        }
+        contracts.validate_worker_output(
+            {
+                "status": "ok",
+                "kind": contracts.KIND_REVIEW_ROUND,
+                "findings": [finding],
+            },
+            contracts.KIND_REVIEW_ROUND,
+        )
+        prompt = prompts.build_fix_findings(
+            FAMILY,
+            WORKSPACE,
+            GOAL,
+            UNIT,
+            [finding],
+            [],
+            "claude",
+            ["claude", "-p"],
+        )
+        exact = json.dumps(
+            [finding],
+            ensure_ascii=False,
+            sort_keys=True,
+            indent=2,
+        )
+        self.assertIn(exact, prompt)
+        self.assertIn(
+            "copy exactly one complete object into\n"
+            "`finding` without shortening, normalizing, or dropping fields",
+            prompt,
+        )
 
     def test_phantom_retry_explains_suite_state_fix_exception(self):
         prompt = normalized(prompts.build_fix_findings(

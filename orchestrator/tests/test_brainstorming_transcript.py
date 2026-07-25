@@ -115,8 +115,12 @@ class BrainstormingTranscriptTest(unittest.TestCase):
 
     def _turn(self, session_id, snapshot, participant_id, markdown, content=None):
         if content is None:
+            revision = (
+                snapshot.state["accepted_target_revision"]
+                or snapshot.state["recovery_baseline_revision"]
+            )
             target = self.store.read_target_revision(
-                session_id, snapshot.state["accepted_target_revision"]
+                session_id, revision
             )
         else:
             target = bs.make_target_revision(True, content, 0o644)
@@ -343,7 +347,7 @@ class BrainstormingTranscriptTest(unittest.TestCase):
             "provider-session-sentinel",
         )
         snapshot = self._initialize(session_id, snapshot)
-        revision_sentinel = snapshot.state["accepted_target_revision"]
+        revision_sentinel = snapshot.state["recovery_baseline_revision"]
         before = self._read(snapshot)
         with self.assertRaises(bs.ContractError):
             execution.validate_discussion_turn_envelope(

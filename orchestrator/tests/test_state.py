@@ -614,9 +614,11 @@ EXPECTED_ALLOWED = {
         st.U_PRE_SEAL_VERIFY, st.U_FAILED,
     },
     st.U_PRE_SEAL_VERIFY: {st.U_SEALING, st.U_FIXING, st.U_FAILED},
-    # U_SEALING stays U_SEALING on an invalidated attempt (workspace
-    # restored, attempt retried): no self-loop transition is needed.
-    st.U_SEALING: {st.U_SEALED, st.U_FIXING, st.U_FAILED},
+    # An invalidated seal request returns through fresh verification before
+    # starting a new seal attempt.
+    st.U_SEALING: {
+        st.U_SEALED, st.U_FIXING, st.U_PRE_SEAL_VERIFY, st.U_FAILED,
+    },
     # Sealed is terminal EXCEPT reopen_for_repair (reform §3): sealed ->
     # repairing -> fixing (the repair) -> ... -> resealed. repairing ->
     # sealed is the re-documentation wave's close: a co-reopened slice
@@ -668,7 +670,6 @@ class TestTransitionTable(TempWorkspaceCase):
             (st.U_PRE_SEAL_VERIFY, st.U_ROUNDS),
             (st.U_PRE_SEAL_VERIFY, st.U_DELTA_REVIEW),
             (st.U_SEALING, st.U_ROUNDS),
-            (st.U_SEALING, st.U_PRE_SEAL_VERIFY),  # invalidated attempts stay
             (st.U_SEALING, st.U_DELTA_REVIEW),
             (st.U_SEALED, st.U_ROUNDS),
             (st.U_SEALED, st.U_PENDING),

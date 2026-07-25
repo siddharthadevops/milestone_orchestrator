@@ -10,7 +10,7 @@ import stat
 import threading
 import uuid
 
-from orchestrator import brainstorming
+from orchestrator import brainstorming, runners
 
 try:
     import fcntl
@@ -32,6 +32,20 @@ class ClosureNotEligible(CoordinationRejected):
 
 class InvalidTargetMutation(CoordinationRejected):
     """A non-lead or incomplete turn changed the target."""
+
+
+class TargetMutationCorrected(CoordinationRejected):
+    """The pending action was recovered and must be attempted once more."""
+
+
+class TargetMutationFailed(CoordinationRejected):
+    """The corrected pending action mutated the target again and failed."""
+
+    def __init__(self, snapshot):
+        super().__init__(
+            "the corrected pending worker action changed target_path again"
+        )
+        self.snapshot = snapshot
 
 
 class TargetRecoveryError(CoordinationRejected):
@@ -226,7 +240,9 @@ def _open_target_parent(path, expected=None):
         os.close(descriptor)
 
 
-def _capture_target_at(parent_descriptor, name):
+def _capture_target_at(
+    parent_descriptor, name, *, require_single_link=True
+):
     try:
         before = os.stat(
             name, dir_fd=parent_descriptor, follow_symlinks=False
@@ -246,7 +262,7 @@ def _capture_target_at(parent_descriptor, name):
         raise CoordinationRejected(
             "target_path must identify one regular artifact"
         )
-    if before.st_nlink != 1:
+    if require_single_link and before.st_nlink != 1:
         raise CoordinationRejected(
             "target_path must not share a hard-linked artifact"
         )
@@ -284,8 +300,8 @@ def _capture_target_at(parent_descriptor, name):
         or identity != (after.st_dev, after.st_ino)
         or not stat.S_ISREG(opened.st_mode)
         or not stat.S_ISREG(after.st_mode)
-        or opened.st_nlink != 1
-        or after.st_nlink != 1
+        or (require_single_link and opened.st_nlink != 1)
+        or (require_single_link and after.st_nlink != 1)
         or before.st_size != opened.st_size
         or opened.st_size != after.st_size
         or before.st_mtime_ns != after.st_mtime_ns
@@ -302,6 +318,16 @@ def capture_target(path):
     """Capture exact bytes or absence without following alternate path forms."""
     with _open_target_parent(path) as (parent_descriptor, name, _identity):
         return _capture_target_at(parent_descriptor, name)
+
+
+def capture_materialization_source(path):
+    """Capture source bytes without imposing live-target link custody."""
+    with _open_target_parent(path) as (parent_descriptor, name, _identity):
+        return _capture_target_at(
+            parent_descriptor,
+            name,
+            require_single_link=False,
+        )
 
 
 def _capture_pinned_target(target):
@@ -504,8 +530,10 @@ def _execution_context_block(execution_context):
             primary.get("path"), str
         ):
             lines.append(
-                "- PRIMARY ROOT %s — the target must remain inside this "
-                "writable root." % primary["path"]
+                "- PRIMARY ROOT %s — caller context. It does not constrain "
+                "target_path location; do not edit it except when target_path "
+                "itself is inside it and your role permits that target edit."
+                % primary["path"]
             )
         additional = execution_context.get("additional") or []
         for root in additional:
@@ -531,9 +559,14 @@ def build_turn_prompt(
         participant, "participant"
     )
     target_revision = brainstorming.validate_target_revision(target_revision)
-    target_presence = (
-        "present" if target_revision["exists"] else "absent"
-    )
+    target_presence = "present" if target_revision["exists"] else "absent"
+    accepted_revision = checked["accepted_target_revision"]
+    if accepted_revision is None:
+        revision_label = "not yet accepted"
+        authority_label = "unaccepted recovery baseline"
+    else:
+        revision_label = accepted_revision
+        authority_label = "accepted revision"
     context_json = json.dumps(
         checked["request"]["context"],
         ensure_ascii=False,
@@ -568,13 +601,15 @@ Turn:
 - round: {round_number}
 - workspace_path: {workspace_path}
 - target_path: {target_path}
-- accepted Brainstorming target revision: {target_revision}
-- accepted target state: {target_presence}
+- accepted Brainstorming target revision: {accepted_revision}
+- current target authority: {authority_label} {target_revision}
+- current target state: {target_presence}
 
 {execution_context}
-The target on disk has been reconciled to that accepted revision. A relative
-target_path is resolved from workspace_path, matching the participant working
-directory. {ownership}
+The target on disk has been reconciled to that Brainstorming authority. The
+recovery baseline is not accepted work; only a completed lead turn creates the
+first accepted revision. A relative target_path is resolved from workspace_path,
+matching the participant working directory. {ownership}
 
 Earlier accepted session transcript, in order:
 {prior}
@@ -596,6 +631,8 @@ to that envelope.
         round_number=round_number,
         workspace_path=checked["request"]["workspace_path"],
         target_path=checked["request"]["target_path"],
+        accepted_revision=revision_label,
+        authority_label=authority_label,
         target_revision=target_revision["revision"],
         target_presence=target_presence,
         execution_context=_execution_context_block(execution_context),
@@ -743,9 +780,12 @@ class BrainstormingCoordinator:
             )
         return snapshot
 
-    def _accepted_record(self, session_id, snapshot):
+    def _authority_record(self, session_id, snapshot):
+        revision = snapshot.state["accepted_target_revision"]
+        if revision is None:
+            revision = snapshot.state["recovery_baseline_revision"]
         return self.store.read_target_revision(
-            session_id, snapshot.state["accepted_target_revision"]
+            session_id, revision
         )
 
     @staticmethod
@@ -762,7 +802,7 @@ class BrainstormingCoordinator:
 
     def _reconcile_snapshot(self, session_id, snapshot, target):
         snapshot = self._require_running(snapshot)
-        accepted = self._accepted_record(session_id, snapshot)
+        accepted = self._authority_record(session_id, snapshot)
         try:
             observed = _capture_pinned_target(target)
         except CoordinationRejected:
@@ -791,6 +831,51 @@ class BrainstormingCoordinator:
             raise CoordinationRejected(
                 "the prior participant worker's quiescence is unknown"
             )
+        if completed == expected and attempt.get(
+            "target_mutation_failure_pending", False
+        ):
+            authority = self._authority_record(session_id, snapshot)
+            try:
+                _restore_target_at(*target, authority)
+            except BaseException as recovery_error:
+                raise TargetRecoveryError(
+                    "the repeated invalid target mutation could not be "
+                    "recovered"
+                ) from recovery_error
+            failed = self._terminal_target_mutation_failure(
+                session_id, attempt["token"]
+            )
+            raise TargetMutationFailed(failed)
+        if completed == expected and attempt.get("retry_pending", False):
+            return self._reconcile_snapshot(session_id, snapshot, target)
+        if completed == expected:
+            authority = self._authority_record(session_id, snapshot)
+            try:
+                observed = _capture_pinned_target(target)
+            except CoordinationRejected:
+                observed = None
+            if observed != authority:
+                repeated = self.store.mark_turn_attempt_target_mutation(
+                    session_id, attempt["token"]
+                )
+                try:
+                    _restore_target_at(*target, authority)
+                except BaseException as recovery_error:
+                    raise TargetRecoveryError(
+                        "an incomplete worker's target mutation could not be "
+                        "recovered"
+                    ) from recovery_error
+                if repeated:
+                    failed = self._terminal_target_mutation_failure(
+                        session_id, attempt["token"]
+                    )
+                    raise TargetMutationFailed(failed)
+                return self._require_running(self.store.read(session_id))
+            if attempt.get("target_mutation_corrections", 0) == 1:
+                self.store.preserve_corrected_turn_retry(
+                    session_id, attempt["token"]
+                )
+                return snapshot
         reconciled = self._reconcile_snapshot(session_id, snapshot, target)
         self.store.finish_turn_attempt(session_id, attempt["token"])
         return reconciled
@@ -822,25 +907,28 @@ class BrainstormingCoordinator:
         """Initialize target versioning and reconcile before any turn."""
         snapshot = self._require_running(self.store.read(session_id))
         path = resolve_target_path(snapshot.state["request"])
-        with _exclusive_target_turn(
-            self.store.path,
-            path,
-            self.store.transcript_ref(session_id),
-        ):
-            attempt = self.store.read_turn_attempt(session_id)
-            expected = self._attempt_target_parent(attempt)
-            with _open_target_parent(path, expected) as (
-                parent_descriptor,
-                name,
-                parent_identity,
+        try:
+            with _exclusive_target_turn(
+                self.store.path,
+                path,
+                self.store.transcript_ref(session_id),
             ):
-                target = (
-                    path,
+                attempt = self.store.read_turn_attempt(session_id)
+                expected = self._attempt_target_parent(attempt)
+                with _open_target_parent(path, expected) as (
                     parent_descriptor,
                     name,
                     parent_identity,
-                )
-                return self._prepare_locked(session_id, target)
+                ):
+                    target = (
+                        path,
+                        parent_descriptor,
+                        name,
+                        parent_identity,
+                    )
+                    return self._prepare_locked(session_id, target)
+        except TargetMutationFailed as failed:
+            return failed.snapshot
 
     def _recover_latest(self, session_id, target):
         latest = self.store.read(session_id)
@@ -849,7 +937,7 @@ class BrainstormingCoordinator:
             or brainstorming.coordination_projection(latest.state) is None
         ):
             return
-        accepted = self._accepted_record(session_id, latest)
+        accepted = self._authority_record(session_id, latest)
         _restore_target_at(*target, accepted)
 
     def _record_supervision_stop(self, session_id, plain):
@@ -876,6 +964,46 @@ class BrainstormingCoordinator:
                 continue
 
     def _recover_rejected(self, session_id, target, token, cause):
+        target_mutated = isinstance(cause, InvalidTargetMutation)
+        if not target_mutated and isinstance(cause, Exception):
+            attempt = self.store.read_turn_attempt(session_id)
+            if (
+                attempt is not None
+                and attempt["token"] == token
+                and attempt["quiescent"]
+            ):
+                authority = self._authority_record(
+                    session_id,
+                    self._require_running(self.store.read(session_id)),
+                )
+                try:
+                    observed = _capture_pinned_target(target)
+                except CoordinationRejected:
+                    observed = None
+                target_mutated = observed != authority
+        if target_mutated:
+            repeated = self.store.mark_turn_attempt_target_mutation(
+                session_id, token
+            )
+            try:
+                self._recover_latest(session_id, target)
+            except BaseException as recovery_error:
+                self._record_supervision_stop(
+                    session_id,
+                    "The discussion stopped because the target could not be "
+                    "restored to the last accepted Brainstorming revision.",
+                )
+                raise TargetRecoveryError(
+                    "invalid target mutation could not be reconciled"
+                ) from recovery_error
+            if repeated:
+                failed = self._terminal_target_mutation_failure(
+                    session_id, token
+                )
+                raise TargetMutationFailed(failed)
+            raise TargetMutationCorrected(
+                "target_path was recovered; retry the same pending action"
+            )
         try:
             self._recover_latest(session_id, target)
             self.store.finish_turn_attempt(session_id, token)
@@ -890,6 +1018,68 @@ class BrainstormingCoordinator:
             ) from recovery_error
         if cause is not None:
             raise cause
+
+    def _terminal_target_mutation_failure(self, session_id, token):
+        reason = (
+            "The same pending worker action changed the target again after "
+            "its one correction."
+        )
+        snapshot = self._require_running(self.store.read(session_id))
+        projection = brainstorming.coordination_projection(snapshot.state)
+        result = self._closure_result(snapshot.state, "failure", reason)
+        summary = {
+            "reason": reason,
+            "unresolved_objections": [
+                "The repeated invalid target mutation prevented this worker "
+                "action from being accepted."
+            ],
+            "affected_parties": (
+                "The caller and participants waiting for a coherent target "
+                "are affected."
+            ),
+            "damage_altitude": (
+                "The bounded discussion failed without promoting the rejected "
+                "worker outcome."
+            ),
+            "proportionality": (
+                "Ending after one corrected retry preserves the last accepted "
+                "Brainstorming target authority."
+            ),
+            "escalation_evidence": (
+                "The same pending action mutated target_path twice."
+            ),
+        }
+        failed = self.store.close_with_interruption(
+            session_id,
+            snapshot.revision,
+            {
+                "after_completed_turns": len(
+                    projection["completed_turns"]
+                ),
+                "plain": reason,
+            },
+            result,
+            summary,
+        )
+        self.store.finish_turn_attempt(session_id, token)
+        return failed
+
+    def _begin_or_retry_attempt(self, session_id, attempt):
+        prior = self.store.read_turn_attempt(session_id)
+        if prior is not None and prior.get("retry_pending", False):
+            return self.store.restart_turn_attempt(session_id, attempt)
+        return self.store.begin_turn_attempt(session_id, attempt)
+
+    def _before_envelope_repair(
+        self, session_id, token, target, accepted_target
+    ):
+        """Keep one envelope repair attached to the same pending action."""
+        self._require_closure_target(target, accepted_target)
+        if not self.store.mark_turn_attempt_envelope_repair(session_id, token):
+            raise runners.WorkerProtocolError(
+                "the pending worker action already used its one "
+                "discussion-envelope repair"
+            )
 
     @staticmethod
     def _closure_fingerprint(state):
@@ -911,6 +1101,35 @@ class BrainstormingCoordinator:
         prompt,
         validator,
         accepted_target,
+        action_context,
+    ):
+        while True:
+            try:
+                return self._closure_exchange_once(
+                    session_id,
+                    execution_context,
+                    target,
+                    baseline_state,
+                    participant,
+                    prompt,
+                    validator,
+                    accepted_target,
+                    action_context,
+                )
+            except TargetMutationCorrected:
+                continue
+
+    def _closure_exchange_once(
+        self,
+        session_id,
+        execution_context,
+        target,
+        baseline_state,
+        participant,
+        prompt,
+        validator,
+        accepted_target,
+        action_context,
     ):
         attempt = {
             "token": str(uuid.uuid4()),
@@ -920,8 +1139,9 @@ class BrainstormingCoordinator:
             "quiescent": False,
             "target_parent": target[3],
             "kind": "closure",
+            "action_context": action_context,
         }
-        self.store.begin_turn_attempt(session_id, attempt)
+        self._begin_or_retry_attempt(session_id, attempt)
         exchange = getattr(
             self.participant_execution, "exchange_control_quiescent", None
         )
@@ -941,8 +1161,11 @@ class BrainstormingCoordinator:
                 prompt,
                 execution_context,
                 validator,
-                before_repair=lambda: self._require_closure_target(
-                    target, accepted_target
+                before_repair=lambda: self._before_envelope_repair(
+                    session_id,
+                    attempt["token"],
+                    target,
+                    accepted_target,
                 ),
             )
         except BaseException as exc:
@@ -990,35 +1213,43 @@ class BrainstormingCoordinator:
 
     def run_next_turn(self, session_id, execution_context):
         """Run and atomically accept exactly the next ordered turn."""
-        claimed = self._require_running(self.store.read(session_id))
-        path = resolve_target_path(claimed.state["request"])
-        with _exclusive_target_turn(
-            self.store.path,
-            path,
-            self.store.transcript_ref(session_id),
-        ):
-            current = self._require_running(self.store.read(session_id))
-            if not brainstorming._same_json_value(
-                brainstorming.coordination_projection(claimed.state),
-                brainstorming.coordination_projection(current.state),
-            ):
-                raise brainstorming.RevisionConflict(current)
-            prior_attempt = self.store.read_turn_attempt(session_id)
-            expected = self._attempt_target_parent(prior_attempt)
-            with _open_target_parent(path, expected) as (
-                parent_descriptor,
-                name,
-                parent_identity,
-            ):
-                target = (
+        while True:
+            claimed = self._require_running(self.store.read(session_id))
+            path = resolve_target_path(claimed.state["request"])
+            try:
+                with _exclusive_target_turn(
+                    self.store.path,
                     path,
-                    parent_descriptor,
-                    name,
-                    parent_identity,
-                )
-                return self._run_next_turn_locked(
-                    session_id, execution_context, target
-                )
+                    self.store.transcript_ref(session_id),
+                ):
+                    current = self._require_running(
+                        self.store.read(session_id)
+                    )
+                    if not brainstorming._same_json_value(
+                        brainstorming.coordination_projection(claimed.state),
+                        brainstorming.coordination_projection(current.state),
+                    ):
+                        raise brainstorming.RevisionConflict(current)
+                    prior_attempt = self.store.read_turn_attempt(session_id)
+                    expected = self._attempt_target_parent(prior_attempt)
+                    with _open_target_parent(path, expected) as (
+                        parent_descriptor,
+                        name,
+                        parent_identity,
+                    ):
+                        target = (
+                            path,
+                            parent_descriptor,
+                            name,
+                            parent_identity,
+                        )
+                        return self._run_next_turn_locked(
+                            session_id, execution_context, target
+                        )
+            except TargetMutationCorrected:
+                continue
+            except TargetMutationFailed as failed:
+                return failed.snapshot
 
     def _run_next_turn_locked(self, session_id, execution_context, target):
         starting = self._prepare_locked(session_id, target)
@@ -1031,7 +1262,7 @@ class BrainstormingCoordinator:
             )
         participant = participants[turn_index % len(participants)]
         round_number = turn_index // len(participants) + 1
-        accepted_target = self._accepted_record(session_id, starting)
+        accepted_target = self._authority_record(session_id, starting)
         prompt = build_turn_prompt(
             state,
             participant,
@@ -1047,7 +1278,7 @@ class BrainstormingCoordinator:
             "quiescent": False,
             "target_parent": target[3],
         }
-        self.store.begin_turn_attempt(session_id, attempt)
+        self._begin_or_retry_attempt(session_id, attempt)
 
         exchange = getattr(
             self.participant_execution, "exchange_quiescent", None
@@ -1067,6 +1298,12 @@ class BrainstormingCoordinator:
                 participant["id"],
                 prompt,
                 execution_context,
+                before_repair=lambda: self._before_envelope_repair(
+                    session_id,
+                    attempt["token"],
+                    target,
+                    accepted_target,
+                ),
             )
         except BaseException as exc:
             if getattr(exc, "worker_quiescent", None) is not True:
@@ -1117,9 +1354,20 @@ class BrainstormingCoordinator:
                 raise InvalidTargetMutation(
                     "an interlocutor changed target_path"
                 )
-            target_record = observed_target if changed else accepted_target
+            target_record = (
+                observed_target
+                if participant["role"] == "lead"
+                else (
+                    None
+                    if state["accepted_target_revision"] is None
+                    else accepted_target
+                )
+            )
 
-            if _capture_pinned_target(target) != target_record:
+            authority_after = (
+                accepted_target if target_record is None else target_record
+            )
+            if _capture_pinned_target(target) != authority_after:
                 raise InvalidTargetMutation(
                     "target_path changed outside the completed exchange"
                 )
@@ -1168,30 +1416,33 @@ class BrainstormingCoordinator:
         """Collect one revision-bound ballot or continue/fail at the boundary."""
         claimed = self._require_running(self.store.read(session_id))
         path = resolve_target_path(claimed.state["request"])
-        with _exclusive_target_turn(
-            self.store.path,
-            path,
-            self.store.transcript_ref(session_id),
-        ):
-            current = self._require_running(self.store.read(session_id))
-            if current.revision != claimed.revision:
-                raise brainstorming.RevisionConflict(current)
-            prior_attempt = self.store.read_turn_attempt(session_id)
-            expected = self._attempt_target_parent(prior_attempt)
-            with _open_target_parent(path, expected) as (
-                parent_descriptor,
-                name,
-                parent_identity,
+        try:
+            with _exclusive_target_turn(
+                self.store.path,
+                path,
+                self.store.transcript_ref(session_id),
             ):
-                target = (
-                    path,
+                current = self._require_running(self.store.read(session_id))
+                if current.revision != claimed.revision:
+                    raise brainstorming.RevisionConflict(current)
+                prior_attempt = self.store.read_turn_attempt(session_id)
+                expected = self._attempt_target_parent(prior_attempt)
+                with _open_target_parent(path, expected) as (
                     parent_descriptor,
                     name,
                     parent_identity,
-                )
-                return self._run_closure_locked(
-                    session_id, execution_context, target
-                )
+                ):
+                    target = (
+                        path,
+                        parent_descriptor,
+                        name,
+                        parent_identity,
+                    )
+                    return self._run_closure_locked(
+                        session_id, execution_context, target
+                    )
+        except TargetMutationFailed as failed:
+            return failed.snapshot
 
     def _run_closure_locked(self, session_id, execution_context, target):
         starting = self._prepare_locked(session_id, target)
@@ -1216,26 +1467,71 @@ class BrainstormingCoordinator:
                 "another complete discussion round is required before a ballot"
             )
 
-        accepted_target = self._accepted_record(session_id, starting)
+        if state["accepted_target_revision"] is None:
+            raise ClosureNotEligible(
+                "closure requires completed lead target acceptance"
+            )
+        accepted_target = self._authority_record(session_id, starting)
         self._require_closure_target(target, accepted_target)
         lead = next(
             participant
             for participant in participants
             if participant["role"] == "lead"
         )
-        proposal = self._closure_exchange(
-            session_id,
-            execution_context,
-            target,
-            state,
-            lead,
-            build_closure_proposal_prompt(
-                state, accepted_target, execution_context
-            ),
-            validate_closure_proposal_envelope,
-            accepted_target,
+        pending = self.store.read_turn_attempt(session_id)
+        action_context = (
+            pending.get("action_context")
+            if pending is not None
+            and pending.get("retry_pending", False)
+            and pending.get("kind", "discussion_turn") == "closure"
+            else None
         )
-        summary = proposal["closing_summary"]
+        stage = (
+            action_context.get("stage")
+            if isinstance(action_context, dict)
+            else None
+        )
+        if stage not in (None, "proposal", "vote"):
+            raise CoordinationRejected(
+                "the pending closure action has an unknown stage"
+            )
+
+        if stage == "vote":
+            summary = brainstorming.validate_closing_summary_shape(
+                action_context.get("closing_summary")
+            )
+            votes_by_id = action_context.get("votes_by_id")
+            if not isinstance(votes_by_id, dict):
+                raise CoordinationRejected(
+                    "the pending closure vote has no prior vote context"
+                )
+            votes_by_id = dict(votes_by_id)
+            if votes_by_id.get(lead["id"]) != "accept" or any(
+                participant_id
+                not in {item["id"] for item in participants}
+                or vote not in ("accept", "object")
+                for participant_id, vote in votes_by_id.items()
+            ):
+                raise CoordinationRejected(
+                    "the pending closure vote context is invalid"
+                )
+            proposal = {"propose": True, "closing_summary": summary}
+        else:
+            proposal = self._closure_exchange(
+                session_id,
+                execution_context,
+                target,
+                state,
+                lead,
+                build_closure_proposal_prompt(
+                    state, accepted_target, execution_context
+                ),
+                validate_closure_proposal_envelope,
+                accepted_target,
+                {"stage": "proposal"},
+            )
+            summary = proposal["closing_summary"]
+            votes_by_id = {lead["id"]: "accept"}
 
         if proposal["propose"] and not accepted_target["exists"]:
             if state["rounds_used"] < state["request"]["max_rounds"]:
@@ -1281,10 +1577,17 @@ class BrainstormingCoordinator:
                 summary,
             )
 
-        votes_by_id = {lead["id"]: "accept"}
+        pending_participant = (
+            pending["participant_id"] if stage == "vote" else None
+        )
+        reached_pending = pending_participant is None
         for participant in participants:
             if participant["role"] != "interlocutor":
                 continue
+            if not reached_pending:
+                if participant["id"] != pending_participant:
+                    continue
+                reached_pending = True
             vote = self._closure_exchange(
                 session_id,
                 execution_context,
@@ -1299,8 +1602,17 @@ class BrainstormingCoordinator:
                 ),
                 validate_closure_vote_envelope,
                 accepted_target,
+                {
+                    "stage": "vote",
+                    "closing_summary": summary,
+                    "votes_by_id": votes_by_id,
+                },
             )
             votes_by_id[participant["id"]] = vote["vote"]
+        if not reached_pending:
+            raise CoordinationRejected(
+                "the pending closure voter is not an interlocutor"
+            )
 
         votes = [
             {

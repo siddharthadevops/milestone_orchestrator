@@ -50,6 +50,7 @@ _TARGET_REVISION_ID_RE = re.compile(
 _COORDINATION_FIELDS = (
     "completed_turns",
     "rounds_used",
+    "recovery_baseline_revision",
     "accepted_target_revision",
 )
 _TRANSCRIPT_LOCKS = {}
@@ -440,7 +441,15 @@ def validate_turn_attempt(turn_attempt):
             "target_revision",
             "quiescent",
         ),
-        ("target_parent", "kind"),
+        (
+            "target_parent",
+            "kind",
+            "target_mutation_corrections",
+            "envelope_repair_used",
+            "retry_pending",
+            "target_mutation_failure_pending",
+            "action_context",
+        ),
         "turn_attempt",
     )
     checked = {
@@ -449,8 +458,10 @@ def validate_turn_attempt(turn_attempt):
             turn_attempt["participant_id"], "turn_attempt.participant_id"
         ),
         "completed_turn_count": turn_attempt["completed_turn_count"],
-        "target_revision": validate_target_revision_id(
-            turn_attempt["target_revision"]
+        "target_revision": (
+            None
+            if turn_attempt["target_revision"] is None
+            else validate_target_revision_id(turn_attempt["target_revision"])
         ),
         "quiescent": turn_attempt["quiescent"],
     }
@@ -494,6 +505,63 @@ def validate_turn_attempt(turn_attempt):
         )
     if type(checked["quiescent"]) is not bool:
         raise ContractError("turn_attempt.quiescent must be a boolean")
+    corrections = turn_attempt.get("target_mutation_corrections", 0)
+    if type(corrections) is not int or corrections not in (0, 1):
+        raise ContractError(
+            "turn_attempt.target_mutation_corrections must be 0 or 1"
+        )
+    retry_pending = turn_attempt.get("retry_pending", False)
+    if type(retry_pending) is not bool:
+        raise ContractError("turn_attempt.retry_pending must be a boolean")
+    if retry_pending and (
+        not checked["quiescent"] or corrections != 1
+    ):
+        raise ContractError(
+            "a retry-pending turn attempt must be quiescent with its one "
+            "target-mutation correction already used"
+        )
+    failure_pending = turn_attempt.get(
+        "target_mutation_failure_pending", False
+    )
+    if type(failure_pending) is not bool:
+        raise ContractError(
+            "turn_attempt.target_mutation_failure_pending must be a boolean"
+        )
+    if failure_pending and (
+        not checked["quiescent"]
+        or corrections != 1
+        or retry_pending
+    ):
+        raise ContractError(
+            "a target-mutation failure must be quiescent, corrected once, "
+            "and no longer retryable"
+        )
+    if "target_mutation_corrections" in turn_attempt:
+        checked["target_mutation_corrections"] = corrections
+    envelope_repair_used = turn_attempt.get("envelope_repair_used", False)
+    if type(envelope_repair_used) is not bool:
+        raise ContractError(
+            "turn_attempt.envelope_repair_used must be a boolean"
+        )
+    if "envelope_repair_used" in turn_attempt:
+        checked["envelope_repair_used"] = envelope_repair_used
+    if "retry_pending" in turn_attempt:
+        checked["retry_pending"] = retry_pending
+    if "target_mutation_failure_pending" in turn_attempt:
+        checked["target_mutation_failure_pending"] = failure_pending
+    action_context = turn_attempt.get("action_context")
+    if action_context is not None:
+        if checked.get("kind", "discussion_turn") != "closure":
+            raise ContractError(
+                "turn_attempt.action_context is closure-only"
+            )
+        if not isinstance(action_context, dict):
+            raise ContractError(
+                "turn_attempt.action_context must be an object"
+            )
+        checked["action_context"] = _json_copy(
+            action_context, "turn_attempt.action_context"
+        )
     return checked
 
 
@@ -688,15 +756,19 @@ def _validate_coordination(state, request, run_config, status):
         raise ContractError(
             "state.rounds_used must be a non-negative integer"
         )
-    accepted_revision = validate_target_revision_id(
-        projection["accepted_target_revision"]
+    recovery_baseline = validate_target_revision_id(
+        projection["recovery_baseline_revision"]
     )
+    accepted_revision = projection["accepted_target_revision"]
+    if accepted_revision is not None:
+        accepted_revision = validate_target_revision_id(accepted_revision)
     participants = run_config["participants"]
     turn_limit = request["max_rounds"] * len(participants)
     if len(turns) > turn_limit:
         raise ContractError("completed turns exceed request.max_rounds")
 
     previous_revision = None
+    completed_lead_turn = False
     for index, turn in enumerate(turns):
         ctx = "state.completed_turns[%d]" % index
         _exact_keys(
@@ -714,12 +786,17 @@ def _validate_coordination(state, request, run_config, status):
                 "%s.participant_id does not follow roster order" % ctx
             )
         _text(turn["markdown"], "%s.markdown" % ctx)
-        revision = validate_target_revision_id(turn["target_revision"])
-        if (
-            previous_revision is not None
-            and revision != previous_revision
-            and participant["role"] != "lead"
-        ):
+        revision = turn["target_revision"]
+        if revision is not None:
+            revision = validate_target_revision_id(revision)
+        if participant["role"] == "lead":
+            if revision is None:
+                raise ContractError(
+                    "%s completed lead turn must accept a target revision"
+                    % ctx
+                )
+            completed_lead_turn = True
+        elif revision != previous_revision:
             raise ContractError(
                 "%s changes the target revision outside a lead turn" % ctx
             )
@@ -732,13 +809,19 @@ def _validate_coordination(state, request, run_config, status):
         )
     if rounds_used > request["max_rounds"]:
         raise ContractError("state.rounds_used exceeds request.max_rounds")
-    if turns and turns[-1]["target_revision"] != accepted_revision:
+    if accepted_revision != previous_revision:
         raise ContractError(
             "accepted_target_revision must match the latest completed turn"
+        )
+    if completed_lead_turn is not (accepted_revision is not None):
+        raise ContractError(
+            "accepted_target_revision must exist exactly after completed lead "
+            "work"
         )
     return {
         "completed_turns": _json_copy(turns, "state.completed_turns"),
         "rounds_used": rounds_used,
+        "recovery_baseline_revision": recovery_baseline,
         "accepted_target_revision": accepted_revision,
     }
 
@@ -1185,7 +1268,12 @@ def _validate_history(history, target_path, transcript_ref):
             if status in TERMINAL_STATUSES
             else ("status",)
         )
-        _exact_keys(record, required, (), ctx)
+        optional = (
+            ("failure_origin",)
+            if status == "failure"
+            else ()
+        )
+        _exact_keys(record, required, optional, ctx)
         if index == 0:
             if record != {"status": "created"}:
                 raise ContractError("state.history must begin with created")
@@ -1198,6 +1286,13 @@ def _validate_history(history, target_path, transcript_ref):
             validate_closing_summary(
                 record["closing_summary"], status, result
             )
+            if (
+                "failure_origin" in record
+                and record["failure_origin"] != "operational"
+            ):
+                raise ContractError(
+                    "%s.failure_origin must be operational" % ctx
+                )
         previous = status
     return previous
 
@@ -1222,7 +1317,10 @@ def validate_session_state(state):
     _exact_keys(
         state,
         required,
-        ("participant_sessions",) + _COORDINATION_FIELDS,
+        (
+            "participant_sessions",
+            "failure_origin",
+        ) + _COORDINATION_FIELDS,
         "state",
     )
     request = validate_request(state["request"])
@@ -1288,6 +1386,20 @@ def validate_session_state(state):
             raise ContractError(
                 "result.rounds_used must equal durable completed rounds"
             )
+    failure_origin = state.get("failure_origin")
+    if failure_origin is not None:
+        if status != "failure" or failure_origin != "operational":
+            raise ContractError(
+                "state.failure_origin is only operational on failure"
+            )
+        if state["history"][-1].get("failure_origin") != failure_origin:
+            raise ContractError(
+                "state.failure_origin must match terminal history"
+            )
+    elif status == "failure" and "failure_origin" in state["history"][-1]:
+        raise ContractError(
+            "terminal history failure_origin requires the state marker"
+        )
     return _json_copy(state, "state")
 
 
@@ -1307,7 +1419,11 @@ def new_session_state(request, run_config, transcript_ref):
 
 
 def transition_session(
-    state, new_status, result=None, closing_summary=None
+    state,
+    new_status,
+    result=None,
+    closing_summary=None,
+    failure_origin=None,
 ):
     """Return one legal whole-state successor without mutating ``state``."""
     current = validate_session_state(state)
@@ -1335,11 +1451,21 @@ def transition_session(
         checked_summary = validate_closing_summary(
             closing_summary, new_status, checked_result
         )
+        if failure_origin is not None and (
+            new_status != "failure" or failure_origin != "operational"
+        ):
+            raise ContractError(
+                "failure_origin is only operational on failure"
+            )
     elif result is not None:
         raise ContractError("nonterminal transitions cannot carry a result")
     elif closing_summary is not None:
         raise ContractError(
             "nonterminal transitions cannot carry a closing summary"
+        )
+    elif failure_origin is not None:
+        raise ContractError(
+            "nonterminal transitions cannot carry a failure origin"
         )
     else:
         checked_result = None
@@ -1353,6 +1479,9 @@ def transition_session(
         successor["closing_summary"] = checked_summary
         record["result"] = copy.deepcopy(checked_result)
         record["closing_summary"] = copy.deepcopy(checked_summary)
+        if failure_origin is not None:
+            successor["failure_origin"] = failure_origin
+            record["failure_origin"] = failure_origin
     successor["history"].append(record)
     return validate_session_state(successor)
 
@@ -1379,6 +1508,7 @@ def assert_session_successor(old_state, new_state):
         appended["status"],
         appended.get("result"),
         appended.get("closing_summary"),
+        appended.get("failure_origin"),
     )
     if not _same_json_value(expected, new):
         raise HistoryRewriteError("state is not the exact next session revision")
@@ -1430,7 +1560,7 @@ def assert_participant_session_successor(
 
 
 def initialize_coordination_state(state, target_revision):
-    """Add the empty accepted-discussion projection to a running session."""
+    """Retain recovery state without accepting target work at setup."""
     current = validate_session_state(state)
     if current["status"] != "running":
         raise IllegalTransition(
@@ -1444,7 +1574,8 @@ def initialize_coordination_state(state, target_revision):
         {
             "completed_turns": [],
             "rounds_used": 0,
-            "accepted_target_revision": checked_revision["revision"],
+            "recovery_baseline_revision": checked_revision["revision"],
+            "accepted_target_revision": None,
         }
     )
     return validate_session_state(successor)
@@ -1456,16 +1587,17 @@ def assert_coordination_initialization_successor(old_state, new_state):
     new = validate_session_state(new_state)
     if coordination_projection(old) is not None:
         raise HistoryRewriteError("accepted coordination is already initialized")
-    revision = new.get("accepted_target_revision")
+    baseline = new.get("recovery_baseline_revision")
     expected = copy.deepcopy(old)
     expected.update(
         {
             "completed_turns": [],
             "rounds_used": 0,
-            "accepted_target_revision": revision,
+            "recovery_baseline_revision": baseline,
+            "accepted_target_revision": None,
         }
     )
-    validate_target_revision_id(revision)
+    validate_target_revision_id(baseline)
     if not _same_json_value(validate_session_state(expected), new):
         raise HistoryRewriteError(
             "coordination initialization changed unrelated session state"
@@ -1483,7 +1615,8 @@ def completed_turn_successor(
         raise HistoryRewriteError("accepted coordination is not initialized")
     participant_id = _text(participant_id, "participant_id")
     markdown = _text(markdown, "discussion_turn.markdown")
-    target_revision = validate_target_revision_id(target_revision)
+    if target_revision is not None:
+        target_revision = validate_target_revision_id(target_revision)
     participants = current["run_config"]["participants"]
     turn_index = len(current["completed_turns"])
     if turn_index >= current["request"]["max_rounds"] * len(participants):
@@ -1493,9 +1626,13 @@ def completed_turn_successor(
         raise HistoryRewriteError(
             "completed turn does not match the next persisted participant"
         )
+    if participant["role"] == "lead" and target_revision is None:
+        raise HistoryRewriteError(
+            "a completed lead turn must accept the target revision"
+        )
     if (
-        target_revision != current["accepted_target_revision"]
-        and participant["role"] != "lead"
+        participant["role"] != "lead"
+        and target_revision != current["accepted_target_revision"]
     ):
         raise HistoryRewriteError(
             "only a completed lead turn may advance the target revision"
@@ -1645,7 +1782,11 @@ def terminal_closure_successor(state, ballot, result, closing_summary):
 
 
 def terminal_interruption_successor(
-    state, interruption, result, closing_summary
+    state,
+    interruption,
+    result,
+    closing_summary,
+    failure_origin=None,
 ):
     """Atomically append one interruption and terminal failure.
 
@@ -1658,7 +1799,11 @@ def terminal_interruption_successor(
         state, "material_interruption", interruption
     )
     return transition_session(
-        interrupted, "failure", result, closing_summary
+        interrupted,
+        "failure",
+        result,
+        closing_summary,
+        failure_origin=failure_origin,
     )
 
 
@@ -1678,13 +1823,22 @@ def assert_terminal_closure_successor(
 
 
 def assert_terminal_interruption_successor(
-    old_state, new_state, interruption, result, closing_summary
+    old_state,
+    new_state,
+    interruption,
+    result,
+    closing_summary,
+    failure_origin=None,
 ):
     """Accept only the exact combined interruption/failure successor."""
     old = validate_session_state(old_state)
     new = validate_session_state(new_state)
     expected = terminal_interruption_successor(
-        old, interruption, result, closing_summary
+        old,
+        interruption,
+        result,
+        closing_summary,
+        failure_origin=failure_origin,
     )
     if not _same_json_value(expected, new):
         raise HistoryRewriteError(
@@ -2057,6 +2211,10 @@ class SessionStore:
             )
         if checked["quiescent"]:
             raise ContractError("a new turn attempt cannot start quiescent")
+        if checked.get("envelope_repair_used", False):
+            raise ContractError(
+                "a new turn attempt cannot start with envelope repair used"
+            )
         snapshot = self.read(session_id)
         if snapshot is None:
             raise SessionNotFound(session_id)
@@ -2112,6 +2270,53 @@ class SessionStore:
         self._store.put(key, checked)
         return checked
 
+    @staticmethod
+    def _turn_attempt_action(attempt):
+        return {
+            "participant_id": attempt["participant_id"],
+            "completed_turn_count": attempt["completed_turn_count"],
+            "target_revision": attempt["target_revision"],
+            "target_parent": attempt.get("target_parent"),
+            "kind": attempt.get("kind", "discussion_turn"),
+            "action_context": attempt.get("action_context"),
+        }
+
+    def restart_turn_attempt(self, session_id, turn_attempt):
+        """Retry exactly one corrected pending action under a fresh token."""
+        checked = validate_turn_attempt(turn_attempt)
+        if checked["quiescent"] or checked.get("retry_pending"):
+            raise ContractError(
+                "a restarted turn attempt must begin active"
+            )
+        key = _turn_attempt_key(session_id)
+        current = self._store.read(key)
+        if not current["exists?"]:
+            raise HistoryRewriteError(
+                "the corrected pending turn attempt is missing"
+            )
+        prior = validate_turn_attempt(current["value"])
+        if (
+            not prior.get("retry_pending", False)
+            or prior.get("target_mutation_corrections", 0) != 1
+            or not _same_json_value(
+                self._turn_attempt_action(prior),
+                self._turn_attempt_action(checked),
+            )
+        ):
+            raise HistoryRewriteError(
+                "the corrected retry does not match the pending worker action"
+            )
+        checked["target_mutation_corrections"] = 1
+        if prior.get("envelope_repair_used", False):
+            checked["envelope_repair_used"] = True
+        checked["retry_pending"] = False
+        result = self._store.cas(key, current["revision"], checked)
+        if not result.ok:
+            raise HistoryRewriteError(
+                "the pending worker action changed before its corrected retry"
+            )
+        return checked
+
     def mark_turn_attempt_quiescent(self, session_id, token):
         """Durably record that the admitted worker can no longer mutate."""
         token = _text(token, "turn_attempt.token")
@@ -2129,6 +2334,87 @@ class SessionStore:
         if not result.ok:
             raise HistoryRewriteError(
                 "the active turn attempt changed before quiescence"
+            )
+        return attempt
+
+    def mark_turn_attempt_target_mutation(self, session_id, token):
+        """Spend the action's sole correction, or report a repetition."""
+        token = _text(token, "turn_attempt.token")
+        key = _turn_attempt_key(session_id)
+        current = self._store.read(key)
+        if not current["exists?"]:
+            raise HistoryRewriteError("the active turn attempt is missing")
+        attempt = validate_turn_attempt(current["value"])
+        if attempt["token"] != token:
+            raise HistoryRewriteError("the active turn attempt token changed")
+        if not attempt["quiescent"]:
+            raise HistoryRewriteError(
+                "target mutation cannot be classified before quiescence"
+            )
+        if attempt.get("target_mutation_corrections", 0) == 1:
+            if attempt.get("target_mutation_failure_pending", False):
+                return True
+            attempt["target_mutation_failure_pending"] = True
+            result = self._store.cas(key, current["revision"], attempt)
+            if not result.ok:
+                raise HistoryRewriteError(
+                    "the repeated target mutation changed before failure "
+                    "was retained"
+                )
+            return True
+        attempt["target_mutation_corrections"] = 1
+        attempt["retry_pending"] = True
+        result = self._store.cas(key, current["revision"], attempt)
+        if not result.ok:
+            raise HistoryRewriteError(
+                "the active turn attempt changed before correction"
+            )
+        return False
+
+    def mark_turn_attempt_envelope_repair(self, session_id, token):
+        """Spend the pending action's sole discussion-envelope repair."""
+        token = _text(token, "turn_attempt.token")
+        key = _turn_attempt_key(session_id)
+        current = self._store.read(key)
+        if not current["exists?"]:
+            raise HistoryRewriteError("the active turn attempt is missing")
+        attempt = validate_turn_attempt(current["value"])
+        if attempt["token"] != token:
+            raise HistoryRewriteError("the active turn attempt token changed")
+        if attempt.get("envelope_repair_used", False):
+            return False
+        attempt["envelope_repair_used"] = True
+        result = self._store.cas(key, current["revision"], attempt)
+        if not result.ok:
+            raise HistoryRewriteError(
+                "the active turn attempt changed before envelope repair"
+            )
+        return True
+
+    def preserve_corrected_turn_retry(self, session_id, token):
+        """Keep a previously spent correction attached after a crash."""
+        token = _text(token, "turn_attempt.token")
+        key = _turn_attempt_key(session_id)
+        current = self._store.read(key)
+        if not current["exists?"]:
+            raise HistoryRewriteError("the active turn attempt is missing")
+        attempt = validate_turn_attempt(current["value"])
+        if attempt["token"] != token:
+            raise HistoryRewriteError("the active turn attempt token changed")
+        if (
+            not attempt["quiescent"]
+            or attempt.get("target_mutation_corrections", 0) != 1
+        ):
+            raise HistoryRewriteError(
+                "only a quiescent corrected action can remain pending"
+            )
+        if attempt.get("retry_pending", False):
+            return attempt
+        attempt["retry_pending"] = True
+        result = self._store.cas(key, current["revision"], attempt)
+        if not result.ok:
+            raise HistoryRewriteError(
+                "the active turn attempt changed before retry preservation"
             )
         return attempt
 
@@ -2213,7 +2499,7 @@ class SessionStore:
             raise SessionAlreadyExists("session already exists")
         return self._publish_current(session_id)
 
-    def discard_unlaunched(self, session_id):
+    def discard_unlaunched(self, session_id, recovery_revision=None):
         """Remove only a create-time session that no worker could have used.
 
         Standalone creation keeps its lifecycle child behind a launch gate
@@ -2224,15 +2510,35 @@ class SessionStore:
         work.
         """
         key = _session_key(session_id)
+        supplied_baseline_key = None
+        if recovery_revision is not None:
+            supplied_baseline_key = _target_revision_key(
+                session_id, recovery_revision
+            )
         current = self._store.read(key)
         if not current["exists?"]:
+            if supplied_baseline_key is not None:
+                def remove_orphan(document):
+                    document["entries"].pop(supplied_baseline_key, None)
+                    return True, True
+
+                self._store.client._mutate(remove_orphan)
             return
         state = validate_session_state(current["value"])
+        progress = coordination_projection(state)
+        unused_progress = (
+            progress is None
+            or (
+                progress["completed_turns"] == []
+                and progress["rounds_used"] == 0
+                and progress["accepted_target_revision"] is None
+            )
+        )
         if (
             state["status"] not in ("created", "running")
             or state.get("participant_sessions")
             or state.get("transcript_events")
-            or coordination_projection(state) is not None
+            or not unused_progress
             or [item["status"] for item in state["history"]]
             not in (["created"], ["created", "running"])
         ):
@@ -2248,6 +2554,16 @@ class SessionStore:
                 pass
 
             expected_revision = current["revision"]
+            baseline_key = (
+                supplied_baseline_key
+                or (
+                    None
+                    if progress is None
+                    else _target_revision_key(
+                        session_id, progress["recovery_baseline_revision"]
+                    )
+                )
+            )
 
             def remove(document):
                 raw = self._store._raw_from_doc(document, key)
@@ -2258,6 +2574,8 @@ class SessionStore:
                 ):
                     return False, False
                 del document["entries"][key]
+                if baseline_key is not None:
+                    document["entries"].pop(baseline_key, None)
                 return True, True
 
             if not self._store.client._mutate(remove):
@@ -2313,7 +2631,7 @@ class SessionStore:
     def initialize_coordination(
         self, session_id, expected_revision, target_revision
     ):
-        """Retain the starting target and atomically expose empty progress."""
+        """Retain the recovery baseline and expose null accepted progress."""
         checked_target = self._write_target_revision(
             session_id, target_revision
         )
@@ -2342,8 +2660,10 @@ class SessionStore:
         publish=True,
     ):
         """Retain target content and atomically append one accepted turn."""
-        checked_target = self._write_target_revision(
-            session_id, target_revision
+        checked_target = (
+            None
+            if target_revision is None
+            else self._write_target_revision(session_id, target_revision)
         )
         current = self.read(session_id)
         if current is None:
@@ -2354,7 +2674,7 @@ class SessionStore:
             current.state,
             participant_id,
             markdown,
-            checked_target["revision"],
+            None if checked_target is None else checked_target["revision"],
         )
 
         def assertion(old, new):
@@ -2363,7 +2683,7 @@ class SessionStore:
                 new,
                 participant_id,
                 markdown,
-                checked_target["revision"],
+                None if checked_target is None else checked_target["revision"],
             )
 
         return self._cas_coordination(
@@ -2460,6 +2780,7 @@ class SessionStore:
         interruption,
         result,
         closing_summary,
+        failure_origin=None,
     ):
         """Atomically append a material interruption and terminal failure."""
         current = self.read(session_id)
@@ -2468,12 +2789,21 @@ class SessionStore:
         if current.revision != expected_revision:
             raise RevisionConflict(current)
         candidate = terminal_interruption_successor(
-            current.state, interruption, result, closing_summary
+            current.state,
+            interruption,
+            result,
+            closing_summary,
+            failure_origin=failure_origin,
         )
 
         def assertion(old, new):
             assert_terminal_interruption_successor(
-                old, new, interruption, result, closing_summary
+                old,
+                new,
+                interruption,
+                result,
+                closing_summary,
+                failure_origin=failure_origin,
             )
 
         return self._cas_coordination(

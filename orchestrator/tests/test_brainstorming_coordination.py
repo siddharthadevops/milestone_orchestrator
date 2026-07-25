@@ -1,5 +1,6 @@
 """Focused executable evidence for Brainstorming Slice 03."""
 
+import copy
 import json
 import os
 import stat
@@ -265,6 +266,43 @@ class BrainstormingCoordinationTest(unittest.TestCase):
                     ["start", "continue"],
                 )
 
+    def test_coordination_without_exact_launch_baseline_is_rejected(self):
+        session_id = "missing-launch-baseline"
+        roster = participants()
+        target = self._create_running(session_id, roster=roster)
+        subject, _executors = self._subject(
+            roster,
+            {
+                "lead": [
+                    self._write_action(
+                        target, b"lead revision", "lead completed"
+                    )
+                ],
+                "critic": [envelope("critic pending")],
+            },
+        )
+        prepared = subject.prepare(session_id)
+        baseline = prepared.state["recovery_baseline_revision"]
+        completed = subject.run_next_turn(session_id, object())
+        accepted = completed.state["accepted_target_revision"]
+        self.assertNotEqual(accepted, baseline)
+
+        key = bs._session_key(session_id)
+        unsupported = copy.deepcopy(self.store._store.read(key)["value"])
+        unsupported.pop("recovery_baseline_revision")
+        self.store._store.put(key, unsupported)
+
+        reopened = bs.SessionStore(os.path.join(self.root, "state"))
+        with self.assertRaisesRegex(
+            bs.ContractError,
+            "accepted coordination fields must be present together",
+        ):
+            reopened.read(session_id)
+
+        persisted = reopened._store.read(key)["value"]
+        self.assertNotIn("recovery_baseline_revision", persisted)
+        self.assertEqual(persisted["accepted_target_revision"], accepted)
+
     def test_only_complete_passes_increment_rounds_used(self):
         session_id = "rounds"
         roster = participants()
@@ -302,7 +340,9 @@ class BrainstormingCoordinationTest(unittest.TestCase):
         self.assertEqual(len(final.state["completed_turns"]), 4)
         self.assertEqual(final.state["rounds_used"], 2)
 
-    def test_completed_lead_turn_advances_target_revision_atomically(self):
+    def test_completed_lead_turn_creates_or_advances_target_revision_atomically(
+        self,
+    ):
         session_id = "lead-atomic"
         roster = participants()
         target = self._create_running(session_id, roster=roster)
@@ -310,28 +350,35 @@ class BrainstormingCoordinationTest(unittest.TestCase):
             roster,
             {
                 "lead": [
+                    envelope("lead accepted unchanged target"),
                     self._write_action(
                         target, b"accepted lead bytes", "lead changed target"
-                    )
+                    ),
                 ],
                 "critic": [envelope("critic kept target")],
             },
         )
         prepared = subject.prepare(session_id)
-        initial_revision = prepared.state["accepted_target_revision"]
-        lead = subject.run_next_turn(session_id, object())
-        accepted_revision = lead.state["accepted_target_revision"]
-        self.assertNotEqual(initial_revision, accepted_revision)
+        self.assertIsNone(prepared.state["accepted_target_revision"])
+        baseline_revision = prepared.state["recovery_baseline_revision"]
+        first_lead = subject.run_next_turn(session_id, object())
+        self.assertEqual(
+            first_lead.state["accepted_target_revision"],
+            baseline_revision,
+        )
+        critic = subject.run_next_turn(session_id, object())
+        self.assertEqual(
+            critic.state["accepted_target_revision"], baseline_revision
+        )
+        later_lead = subject.run_next_turn(session_id, object())
+        accepted_revision = later_lead.state["accepted_target_revision"]
+        self.assertNotEqual(baseline_revision, accepted_revision)
         retained = self.store.read_target_revision(
             session_id, accepted_revision
         )
         self.assertEqual(
             bs.target_revision_content(retained),
             (True, b"accepted lead bytes"),
-        )
-        critic = subject.run_next_turn(session_id, object())
-        self.assertEqual(
-            critic.state["accepted_target_revision"], accepted_revision
         )
 
         failed_id = "lead-write-failure"
@@ -342,7 +389,8 @@ class BrainstormingCoordinationTest(unittest.TestCase):
                 "lead": [
                     self._write_action(
                         failed_target, b"must roll back", "not durable"
-                    )
+                    ),
+                    envelope("retry also not durable"),
                 ],
                 "critic": [],
             },
@@ -434,11 +482,21 @@ class BrainstormingCoordinationTest(unittest.TestCase):
         second.join(timeout=2)
         self.assertFalse(first.is_alive())
         self.assertFalse(second.is_alive())
-        self.assertIsInstance(
-            outcomes["first"], coordination.InvalidTargetMutation
-        )
+        snapshots = [
+            outcome
+            for outcome in outcomes.values()
+            if not isinstance(outcome, BaseException)
+            and hasattr(outcome, "state")
+        ]
+        conflicts = [
+            outcome
+            for outcome in outcomes.values()
+            if isinstance(outcome, bs.RevisionConflict)
+        ]
+        self.assertEqual(len(snapshots), 1)
+        self.assertEqual(len(conflicts), 1)
         self.assertEqual(
-            outcomes["second"].state["completed_turns"][0]["markdown"],
+            snapshots[0].state["completed_turns"][0]["markdown"],
             "accepted retry",
         )
         with open(target, "rb") as handle:
@@ -489,9 +547,21 @@ class BrainstormingCoordinationTest(unittest.TestCase):
             restart_id, restart_attempt["token"]
         )
         after_restart.prepare(restart_id)
-        self.assertIsNone(reopened.read_turn_attempt(restart_id))
+        corrected_attempt = reopened.read_turn_attempt(restart_id)
+        self.assertEqual(
+            corrected_attempt["target_mutation_corrections"], 1
+        )
+        self.assertTrue(corrected_attempt["retry_pending"])
         with open(restart_target, "rb") as handle:
             self.assertEqual(handle.read(), b"initial target")
+        accepted_after_restart = after_restart.run_next_turn(
+            restart_id, object()
+        )
+        self.assertEqual(
+            accepted_after_restart.state["completed_turns"][0]["markdown"],
+            "must wait",
+        )
+        self.assertIsNone(reopened.read_turn_attempt(restart_id))
 
     def test_interlocutor_target_mutation_is_rejected_and_restored(self):
         session_id = "interlocutor-mutation"
@@ -510,22 +580,74 @@ class BrainstormingCoordinationTest(unittest.TestCase):
             roster,
             {
                 "lead": [envelope("lead unchanged")],
-                "critic": [change_mode_only],
+                "critic": [
+                    change_mode_only,
+                    envelope("critic accepted after correction"),
+                ],
             },
         )
         lead = subject.run_next_turn(session_id, object())
-        with self.assertRaises(coordination.InvalidTargetMutation):
-            subject.run_next_turn(session_id, object())
+        corrected = subject.run_next_turn(session_id, object())
         durable = self.store.read(session_id)
-        self.assertEqual(durable.state["completed_turns"], lead.state[
-            "completed_turns"
-        ])
-        self.assertEqual(durable.state["rounds_used"], 0)
+        self.assertEqual(
+            durable.state["completed_turns"],
+            corrected.state["completed_turns"],
+        )
+        self.assertEqual(
+            durable.state["completed_turns"][:1],
+            lead.state["completed_turns"],
+        )
+        self.assertEqual(durable.state["rounds_used"], 1)
         with open(target, "rb") as handle:
             self.assertEqual(handle.read(), b"initial target")
         self.assertEqual(stat.S_IMODE(os.stat(target).st_mode), 0o640)
         with open(sentinel, "rb") as handle:
             self.assertEqual(handle.read(), b"do not touch")
+
+    def test_envelope_repair_allowance_survives_target_mutation_retry(self):
+        session_id = "independent-repair-bounds"
+        base_roster = participants()
+        roster = [base_roster[1], base_roster[0]]
+        target = self._create_running(session_id, roster=roster)
+
+        def repaired_but_mutating(_prompt, _workspace, _context):
+            with open(target, "wb") as handle:
+                handle.write(b"invalid repaired mutation")
+            return envelope("repaired envelope with invalid target mutation")
+
+        subject, executors = self._subject(
+            roster,
+            {
+                "critic": [
+                    "first malformed envelope",
+                    repaired_but_mutating,
+                    "second malformed envelope",
+                    envelope("must not receive a second repair"),
+                ],
+                "lead": [],
+            },
+        )
+
+        with self.assertRaises(runners.WorkerProtocolError):
+            subject.run_next_turn(session_id, object())
+
+        calls = executors["claude-critic"].calls
+        self.assertEqual(
+            [call["mode"] for call in calls],
+            ["start", "continue", "continue"],
+        )
+        self.assertIn("REPAIR:", calls[1]["prompt"])
+        self.assertNotIn("REPAIR:", calls[2]["prompt"])
+        self.assertEqual(
+            executors["claude-critic"].responses,
+            [envelope("must not receive a second repair")],
+        )
+        self.assertEqual(
+            self.store.read(session_id).state["completed_turns"], []
+        )
+        self.assertIsNone(self.store.read_turn_attempt(session_id))
+        with open(target, "rb") as handle:
+            self.assertEqual(handle.read(), b"initial target")
 
     def test_stable_symbolic_link_parent_is_accepted_and_recovered(self):
         base_roster = participants()
@@ -557,16 +679,20 @@ class BrainstormingCoordinationTest(unittest.TestCase):
                 "critic": [
                     self._write_action(
                         target, b"invalid critic edit", "invalid"
-                    )
+                    ),
+                    envelope("valid after correction"),
                 ],
                 "lead": [],
             },
         )
-        with self.assertRaises(coordination.InvalidTargetMutation):
-            subject.run_next_turn(session_id, object())
+        accepted = subject.run_next_turn(session_id, object())
 
         with open(target, "rb") as handle:
             self.assertEqual(handle.read(), b"accepted through link")
+        self.assertEqual(
+            accepted.state["completed_turns"][0]["markdown"],
+            "valid after correction",
+        )
         self.assertIsNone(self.store.read_turn_attempt(session_id))
 
     def test_directory_recovery_uses_portable_target_only_operations(self):
@@ -604,7 +730,7 @@ class BrainstormingCoordinationTest(unittest.TestCase):
         with open(sentinel, "rb") as handle:
             self.assertEqual(handle.read(), b"outside target")
 
-    def test_failed_lead_exchange_cannot_advance_target(self):
+    def test_quiescent_failed_lead_exchange_uses_target_mutation_retry(self):
         roster = participants()
         failed_id = "lead-provider-failure"
         target = self._create_running(failed_id, roster=roster)
@@ -618,18 +744,100 @@ class BrainstormingCoordinationTest(unittest.TestCase):
 
         failed, _executors = self._subject(
             roster,
-            {"lead": [mutate_then_fail], "critic": []},
+            {
+                "lead": [
+                    mutate_then_fail,
+                    envelope("accepted corrected retry"),
+                ],
+                "critic": [],
+            },
         )
         prepared = failed.prepare(failed_id)
-        with self.assertRaises(runners.RunnerError):
-            failed.run_next_turn(failed_id, object())
+        accepted = failed.run_next_turn(failed_id, object())
         durable = self.store.read(failed_id)
-        self.assertEqual(durable.state["completed_turns"], [])
+        self.assertEqual(
+            durable.state["completed_turns"][0]["markdown"],
+            "accepted corrected retry",
+        )
         self.assertEqual(
             durable.state["accepted_target_revision"],
-            prepared.state["accepted_target_revision"],
+            prepared.state["recovery_baseline_revision"],
         )
+        self.assertEqual(
+            accepted.state["completed_turns"],
+            durable.state["completed_turns"],
+        )
+        self.assertIsNone(self.store.read_turn_attempt(failed_id))
         with open(target, "rb") as handle:
+            self.assertEqual(handle.read(), b"initial target")
+
+        raised_protocol_id = "lead-protocol-failure"
+        raised_protocol_target = self._create_running(
+            raised_protocol_id, roster=roster
+        )
+
+        def mutate_then_protocol_error(_prompt, _workspace, _context):
+            with open(raised_protocol_target, "wb") as handle:
+                handle.write(b"incomplete protocol bytes")
+            error = runners.WorkerProtocolError("invalid provider envelope")
+            error.worker_quiescent = True
+            raise error
+
+        raised_protocol, _ = self._subject(
+            roster,
+            {
+                "lead": [
+                    mutate_then_protocol_error,
+                    envelope("accepted after protocol correction"),
+                ],
+                "critic": [],
+            },
+        )
+        protocol_accepted = raised_protocol.run_next_turn(
+            raised_protocol_id, object()
+        )
+        self.assertEqual(
+            protocol_accepted.state["completed_turns"][0]["markdown"],
+            "accepted after protocol correction",
+        )
+        with open(raised_protocol_target, "rb") as handle:
+            self.assertEqual(handle.read(), b"initial target")
+
+        repeated_id = "lead-provider-failure-twice"
+        repeated_target = self._create_running(
+            repeated_id, roster=roster
+        )
+
+        def provider_failure(content):
+            def action(_prompt, _workspace, _context):
+                with open(repeated_target, "wb") as handle:
+                    handle.write(content)
+                error = runners.RunnerError("provider failed")
+                error.worker_quiescent = True
+                raise error
+
+            return action
+
+        repeated, _ = self._subject(
+            roster,
+            {
+                "lead": [
+                    provider_failure(b"first rejected bytes"),
+                    provider_failure(b"second rejected bytes"),
+                ],
+                "critic": [],
+            },
+        )
+        repeated.prepare(repeated_id)
+        repeated_terminal = repeated.run_next_turn(
+            repeated_id, object()
+        )
+        self.assertEqual(repeated_terminal.state["status"], "failure")
+        self.assertEqual(
+            repeated_terminal.state["result"]["outcome"], "failure"
+        )
+        self.assertEqual(repeated_terminal.state["completed_turns"], [])
+        with open(repeated_target, "rb") as handle:
             self.assertEqual(handle.read(), b"initial target")
 
         protocol_id = "lead-two-strikes"
@@ -651,15 +859,18 @@ class BrainstormingCoordinationTest(unittest.TestCase):
             },
         )
         protocol.prepare(protocol_id)
-        with self.assertRaises(runners.WorkerProtocolError):
-            protocol.run_next_turn(protocol_id, object())
+        terminal = protocol.run_next_turn(protocol_id, object())
+        self.assertEqual(terminal.state["status"], "failure")
+        self.assertEqual(terminal.state["result"]["outcome"], "failure")
         self.assertEqual(
             self.store.read(protocol_id).state["completed_turns"], []
         )
         with open(target2, "rb") as handle:
             self.assertEqual(handle.read(), b"initial target")
 
-    def test_quiescent_interrupt_restores_target_and_allows_retry(self):
+    def test_quiescent_control_interrupt_restores_target_without_inline_retry(
+        self,
+    ):
         roster = participants()
         for exception_type in (
             KeyboardInterrupt,
@@ -695,6 +906,36 @@ class BrainstormingCoordinationTest(unittest.TestCase):
                     retried.state["completed_turns"][0]["markdown"],
                     "accepted retry",
                 )
+
+    def test_other_quiescent_failure_uses_one_target_mutation_retry(self):
+        roster = participants()
+        repeated_id = "other-quiescent-failure-twice"
+        repeated_target = self._create_running(
+            repeated_id, roster=roster
+        )
+
+        def other_failure(_prompt, _workspace, _context):
+            with open(repeated_target, "wb") as handle:
+                handle.write(b"unfinished other-failure bytes")
+            error = RuntimeError("other quiescent worker failure")
+            error.worker_quiescent = True
+            raise error
+
+        repeated, executors = self._subject(
+            roster,
+            {
+                "lead": [other_failure, other_failure],
+                "critic": [],
+            },
+        )
+        terminal = repeated.run_next_turn(repeated_id, object())
+        self.assertEqual(terminal.state["status"], "failure")
+        self.assertEqual(terminal.state["result"]["outcome"], "failure")
+        self.assertEqual(terminal.state["completed_turns"], [])
+        self.assertEqual(len(executors["codex-lead"].calls), 2)
+        self.assertIsNone(self.store.read_turn_attempt(repeated_id))
+        with open(repeated_target, "rb") as handle:
+            self.assertEqual(handle.read(), b"initial target")
 
     def test_unknown_worker_state_keeps_attempt_and_target_exclusive(self):
         roster = participants()
@@ -1083,8 +1324,9 @@ class BrainstormingCoordinationTest(unittest.TestCase):
             },
         )
         prepared = subject.prepare(session_id)
+        self.assertIsNone(prepared.state["accepted_target_revision"])
         absent = self.store.read_target_revision(
-            session_id, prepared.state["accepted_target_revision"]
+            session_id, prepared.state["recovery_baseline_revision"]
         )
         self.assertEqual(bs.target_revision_content(absent), (False, b""))
         accepted = subject.run_next_turn(session_id, object())

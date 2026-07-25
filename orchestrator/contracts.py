@@ -33,6 +33,8 @@ A worker that cannot produce contract JSON (after one repair retry) fails
 the run with the explanation recorded.
 """
 
+import os
+
 SEVERITIES = ("P0", "P1", "P2", "P3")
 
 # The finding lay-mirror bound: the PROMPT asks for ~500 chars, the
@@ -41,6 +43,7 @@ SEVERITIES = ("P0", "P1", "P2", "P3")
 # repair retries (seen live: an opus `example` slightly past 500 cost a
 # 13-minute strike). The doubled bound still stops runaway prose.
 FINDING_TEXT_MAX = 1000
+FINDING_ID_MAX = 200
 DISPOSITIONS = ("fixed", "rejected", "rejected_adjudicated", "blocked")
 RETRY_CONSULTATION_UNAVAILABLE = "consultation_unavailable"
 
@@ -75,6 +78,13 @@ KINDS = (
 
 # Reviewers report; they never edit (enforced via snapshots/git restore).
 REPORT_KINDS = (KIND_REVIEW_ROUND, KIND_DELTA_REVIEW, KIND_SEAL_HALF)
+RETHINK_KINDS = (
+    KIND_IMPLEMENT,
+    KIND_FIX_FINDINGS,
+    KIND_REVIEW_ROUND,
+    KIND_DELTA_REVIEW,
+    KIND_SEAL_HALF,
+)
 
 # Kinds whose worker gets full edit permissions inside the workspace.
 EDIT_KINDS = (
@@ -122,10 +132,26 @@ def _validate_finding_validity(finding, ctx, expected_exceeds_baseline):
     """
     validity = _require(finding, "validity", dict, ctx)
     vctx = "%s.validity" % ctx
+    expected = {
+        "permitted_baseline",
+        "actual_outcome",
+        "incremental_harm",
+        "exceeds_baseline",
+    }
+    if set(validity) != expected:
+        raise ContractError(
+            "%s: validity must contain exactly %s"
+            % (vctx, sorted(expected))
+        )
     for key in ("permitted_baseline", "actual_outcome", "incremental_harm"):
         value = _require(validity, key, str, vctx)
         if not value.strip():
             raise ContractError("%s: key %r must be non-empty" % (vctx, key))
+        if len(value) > FINDING_TEXT_MAX:
+            raise ContractError(
+                "%s: key %r must be <=%d chars"
+                % (vctx, key, FINDING_TEXT_MAX)
+            )
     exceeds = _require(validity, "exceeds_baseline", bool, vctx)
     if exceeds is not expected_exceeds_baseline:
         raise ContractError(
@@ -170,8 +196,16 @@ def validate_report_finding(finding, ctx, require_plain=False):
     optional (workers spawned before they existed must keep validating)."""
     if not isinstance(finding, dict):
         raise ContractError("%s: finding must be an object" % ctx)
-    _require(finding, "id", str, ctx)
-    _require(finding, "summary", str, ctx)
+    finding_id = _require(finding, "id", str, ctx)
+    if len(finding_id) > FINDING_ID_MAX:
+        raise ContractError(
+            "%s: id must be <=%d chars" % (ctx, FINDING_ID_MAX)
+        )
+    summary = _require(finding, "summary", str, ctx)
+    if len(summary) > FINDING_TEXT_MAX:
+        raise ContractError(
+            "%s: summary must be <=%d chars" % (ctx, FINDING_TEXT_MAX)
+        )
     sev = _require(finding, "severity", str, ctx)
     if sev not in SEVERITIES:
         raise ContractError("%s: severity %r not in %s" % (ctx, sev, SEVERITIES))
@@ -209,6 +243,12 @@ def validate_report_finding(finding, ctx, require_plain=False):
             )
     contests = _optional(finding, "contests", dict, ctx)
     if contests is not None:
+        expected = {"rejection_id", "new_evidence"}
+        if set(contests) != expected:
+            raise ContractError(
+                "%s.contests must contain exactly %s"
+                % (ctx, sorted(expected))
+            )
         rid = contests.get("rejection_id")
         evidence = contests.get("new_evidence")
         if not rid or not isinstance(rid, str):
@@ -220,6 +260,25 @@ def validate_report_finding(finding, ctx, require_plain=False):
                 "%s: contesting an adjudicated rejection requires "
                 "non-empty new_evidence" % ctx
             )
+        if len(rid) > FINDING_ID_MAX:
+            raise ContractError(
+                "%s.contests.rejection_id must be <=%d chars"
+                % (ctx, FINDING_ID_MAX)
+            )
+        if len(evidence) > FINDING_TEXT_MAX:
+            raise ContractError(
+                "%s.contests.new_evidence must be <=%d chars"
+                % (ctx, FINDING_TEXT_MAX)
+            )
+    allowed = {
+        "id", "severity", "summary", "validity", "plain", "example",
+        "contests",
+    }
+    extras = sorted(set(finding) - allowed)
+    if extras:
+        raise ContractError(
+            "%s: reviewer finding has unexpected keys %s" % (ctx, extras)
+        )
     return finding
 
 
@@ -228,8 +287,16 @@ def validate_fix_finding(finding, ctx):
     disposition and its per-disposition obligations."""
     if not isinstance(finding, dict):
         raise ContractError("%s: finding must be an object" % ctx)
-    _require(finding, "id", str, ctx)
-    _require(finding, "summary", str, ctx)
+    finding_id = _require(finding, "id", str, ctx)
+    if len(finding_id) > FINDING_ID_MAX:
+        raise ContractError(
+            "%s: id must be <=%d chars" % (ctx, FINDING_ID_MAX)
+        )
+    summary = _require(finding, "summary", str, ctx)
+    if len(summary) > FINDING_TEXT_MAX:
+        raise ContractError(
+            "%s: summary must be <=%d chars" % (ctx, FINDING_TEXT_MAX)
+        )
     sev = _require(finding, "severity", str, ctx)
     if sev not in SEVERITIES:
         raise ContractError("%s: severity %r not in %s" % (ctx, sev, SEVERITIES))
@@ -380,15 +447,62 @@ def validate_design_correction(value, ctx):
     """A fixer's one-shot proposal to correct its own sealed slice note."""
     if not isinstance(value, dict):
         raise ContractError("%s.design_correction must be an object" % ctx)
-    for field in (
-        "artifact", "authority_artifact", "contradiction", "resolution",
-    ):
+    for field in ("artifact", "contradiction", "resolution"):
         item = value.get(field)
         if not isinstance(item, str) or not item.strip():
             raise ContractError(
                 "%s.design_correction.%s must be a non-empty string"
                 % (ctx, field)
             )
+    artifact_authority = value.get("authority_artifact")
+    brainstorming_authority = value.get("brainstorming_authority")
+    if (artifact_authority is None) == (brainstorming_authority is None):
+        raise ContractError(
+            "%s.design_correction requires exactly one authority_artifact "
+            "or brainstorming_authority" % ctx
+        )
+    if artifact_authority is not None:
+        if (
+            set(value)
+            != {
+                "artifact",
+                "authority_artifact",
+                "contradiction",
+                "resolution",
+            }
+            or not isinstance(artifact_authority, str)
+            or not artifact_authority.strip()
+        ):
+            raise ContractError(
+                "%s.design_correction.authority_artifact must be the one "
+                "non-empty authority" % ctx
+            )
+    else:
+        if set(value) != {
+            "artifact",
+            "brainstorming_authority",
+            "contradiction",
+            "resolution",
+        } or not isinstance(brainstorming_authority, dict):
+            raise ContractError(
+                "%s.design_correction.brainstorming_authority is invalid"
+                % ctx
+            )
+        if set(brainstorming_authority) != {
+            "session_id",
+            "accepted_target_revision",
+        }:
+            raise ContractError(
+                "%s.design_correction.brainstorming_authority must contain "
+                "exactly session_id and accepted_target_revision" % ctx
+            )
+        for field in ("session_id", "accepted_target_revision"):
+            item = brainstorming_authority.get(field)
+            if not isinstance(item, str) or not item.strip():
+                raise ContractError(
+                    "%s.design_correction.brainstorming_authority.%s must "
+                    "be non-empty" % (ctx, field)
+                )
     return value
 
 
@@ -535,6 +649,66 @@ def validate_suite_command(command, ctx):
         )
 
 
+def validate_need_rethink(obj, kind, ctx, require_plain=False):
+    """Validate the closed, non-completing milestone adapter signal."""
+    if kind not in RETHINK_KINDS:
+        raise ContractError(
+            "%s: need_rethink is not allowed for kind %r" % (ctx, kind)
+        )
+    required = {
+        "status",
+        "kind",
+        "question",
+        "finding",
+        "target_path",
+        "max_rounds",
+    }
+    if kind in (KIND_IMPLEMENT, KIND_FIX_FINDINGS):
+        required.add("failure_gap")
+    if set(obj) != required:
+        raise ContractError(
+            "%s: need_rethink must contain exactly %s"
+            % (ctx, sorted(required))
+        )
+    question = obj["question"]
+    if not isinstance(question, str) or not question.strip():
+        raise ContractError(
+            "%s: need_rethink.question must be non-empty" % ctx
+        )
+    finding = obj["finding"]
+    if not isinstance(finding, dict) or not finding:
+        raise ContractError(
+            "%s: need_rethink.finding must be one non-empty object" % ctx
+        )
+    if kind in REPORT_KINDS:
+        validate_report_finding(
+            finding, "%s.finding" % ctx, require_plain=require_plain
+        )
+    target = obj["target_path"]
+    if not isinstance(target, str) or not target.strip():
+        raise ContractError(
+            "%s: need_rethink.target_path must be non-empty" % ctx
+        )
+    if (
+        os.path.isabs(target)
+        or "\x00" in target
+        or os.path.normpath(target) != target
+        or target in (".", "..")
+        or target.startswith(".." + os.sep)
+    ):
+        raise ContractError(
+            "%s: need_rethink.target_path must be normalized and "
+            "workspace-relative" % ctx
+        )
+    if type(obj["max_rounds"]) is not int or obj["max_rounds"] <= 0:
+        raise ContractError(
+            "%s: need_rethink.max_rounds must be a positive integer" % ctx
+        )
+    if kind in (KIND_IMPLEMENT, KIND_FIX_FINDINGS):
+        validate_gap(obj["failure_gap"], "%s.failure_gap" % ctx)
+    return obj
+
+
 def validate_worker_output(obj, kind, require_plain=False,
                            battery_questions=None,
                            require_drift_damage=False,
@@ -557,9 +731,10 @@ def validate_worker_output(obj, kind, require_plain=False,
         raise ContractError("%s: output must be a JSON object" % ctx)
 
     status = _require(obj, "status", str, ctx)
-    if status not in ("ok", "blocked", "retry", "gap"):
+    if status not in ("ok", "blocked", "retry", "gap", "need_rethink"):
         raise ContractError(
-            "%s: status %r not in ('ok','blocked','retry','gap')"
+            "%s: status %r not in "
+            "('ok','blocked','retry','gap','need_rethink')"
             % (ctx, status)
         )
     echoed = _require(obj, "kind", str, ctx)
@@ -567,6 +742,10 @@ def validate_worker_output(obj, kind, require_plain=False,
         raise ContractError(
             "%s: echoed kind %r does not match requested kind %r"
             % (ctx, echoed, kind)
+        )
+    if status == "need_rethink":
+        return validate_need_rethink(
+            obj, kind, ctx, require_plain=require_plain
         )
     # gaps ride ONLY with a gap status — an `ok` carrying a non-empty gaps
     # array is a contract violation (nothing was finished, or nothing was
@@ -748,7 +927,18 @@ def validate_worker_output(obj, kind, require_plain=False,
 # extension would shadow a key the validator or driver already reads
 # (verifiers.py derives collisions from here; it never re-lists them).
 COMMON_OUTPUT_KEYS = frozenset(
-    {"status", "kind", "blocked_reason", "notes", "gaps"})
+    {
+        "status",
+        "kind",
+        "blocked_reason",
+        "notes",
+        "gaps",
+        "question",
+        "finding",
+        "target_path",
+        "max_rounds",
+        "failure_gap",
+    })
 
 KIND_OUTPUT_KEYS = {
     # Doc drafts reserve "battery" even though only reform runs require
@@ -837,7 +1027,7 @@ Respond with EXACTLY ONE JSON object and nothing else: no prose before or
 after it, no markdown fences. The object must satisfy:
 
 Common fields (all kinds):
-  "status": "ok" | "blocked" | "retry"
+  "status": "ok" | "blocked" | "retry" | "need_rethink"
   "kind": "<echo the KIND header of this prompt>"
   "blocked_reason": string    (required when status is "blocked": explain
                                precisely what stops you; the run will end
@@ -849,6 +1039,28 @@ opposite-family consultation could not run or ended without a clear result:
   "retry_reason": "consultation_unavailable"
 Return no findings or work claims with it. The driver records a transient
 failure and the process guard retries the same fix episode after 15 minutes.
+
+`status: "need_rethink"` is allowed ONLY for implement, fix_findings,
+review_round, delta_review, and seal_half when one focused design question
+should be resolved by the independent Brainstorming process before this worker
+can finish its current judgment. It is help-seeking, not completion. Return
+EXACTLY:
+  "status": "need_rethink"
+  "kind": "<echo the current eligible kind>"
+  "question": "<one non-empty focused question>"
+  "finding": {<the one current finding, preserved as source evidence>}
+  "target_path": "<normalized workspace-relative source artifact to isolate>"
+  "max_rounds": <any positive integer chosen for this discussion>
+For implement and fix_findings, ALSO return exactly one `"failure_gap"` using
+the normal gap-entry shape; it is the already-declared route used only if the
+discussion itself returns failure. Review kinds MUST NOT include failure_gap.
+Do not mix need_rethink with notes, ordinary findings/results, work/file claims,
+retry, disposition, verdict, gap arrays, or slice plans. A fixer must put
+exactly one currently queued finding in `finding`; its queued siblings remain
+pending. Any materializable workspace artifact may be selected as the source,
+including one also named in context, a sealed/generated milestone record, or
+the artifact currently under judgment; the adapter supplies isolation by
+copying it into the Brainstorming-owned work area.
 
 Kind draft_skeleton adds:
   "artifact": "<workspace-relative path of the skeleton document you wrote>"

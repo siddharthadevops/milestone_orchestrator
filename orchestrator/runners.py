@@ -748,13 +748,16 @@ class SubprocessRunner(object):
             timeout_override=timeout_override,
         )
 
-    def supports_session_continuation(self, family):
+    def supports_session_continuation(self, family, ambient=False):
         """Whether the configured family has an explicit-reference CLI seam."""
         template = self.commands.get(family)
         if (
             not isinstance(template, list)
             or not template
-            or not callable(self.participant_process_factory)
+            or (
+                not ambient
+                and not callable(self.participant_process_factory)
+            )
         ):
             return False
         if family == "codex":
@@ -786,14 +789,16 @@ class SubprocessRunner(object):
         family,
         prompt,
         workspace,
-        execution_context,
+        execution_context=_AMBIENT_EXECUTION,
         model=None,
         effort=None,
         timeout_override=None,
     ):
         """Start one provider conversation and return its explicit reference."""
         try:
-            if not self.supports_session_continuation(family):
+            if not self.supports_session_continuation(
+                family, ambient=execution_context is _AMBIENT_EXECUTION
+            ):
                 raise RunnerError(
                     "family %r has no explicit session continuation support"
                     % family
@@ -855,7 +860,7 @@ class SubprocessRunner(object):
         session_ref,
         prompt,
         workspace,
-        execution_context,
+        execution_context=_AMBIENT_EXECUTION,
         model=None,
         effort=None,
         timeout_override=None,
@@ -864,7 +869,9 @@ class SubprocessRunner(object):
         try:
             if not isinstance(session_ref, str) or not session_ref.strip():
                 raise RunnerError("session_ref must be a non-empty string")
-            if not self.supports_session_continuation(family):
+            if not self.supports_session_continuation(
+                family, ambient=execution_context is _AMBIENT_EXECUTION
+            ):
                 raise RunnerError(
                     "family %r has no explicit session continuation support"
                     % family
@@ -1220,6 +1227,8 @@ class MockRunner(object):
         self.script = list(script)
         self.calls = []  # (family, kind, prompt)
         self.call_meta = []  # {"family","kind","model","effort"} per call
+        self.session_calls = []
+        self._session_seq = 0
 
     def call(self, family, prompt, workspace, model=None, effort=None,
              timeout_override=None):
@@ -1256,6 +1265,55 @@ class MockRunner(object):
         else:
             text = response
         return RunnerResult(text, 0, 0.01)
+
+    def start_session(
+        self,
+        family,
+        prompt,
+        workspace,
+        execution_context=_AMBIENT_EXECUTION,
+        model=None,
+        effort=None,
+        timeout_override=None,
+    ):
+        self._session_seq += 1
+        session_ref = "mock-session-%d" % self._session_seq
+        self.session_calls.append(("start", family, session_ref))
+        result = self.call(
+            family,
+            prompt,
+            workspace,
+            model=model,
+            effort=effort,
+            timeout_override=timeout_override,
+        )
+        result.session_ref = session_ref
+        return result
+
+    def continue_session(
+        self,
+        family,
+        session_ref,
+        prompt,
+        workspace,
+        execution_context=_AMBIENT_EXECUTION,
+        model=None,
+        effort=None,
+        timeout_override=None,
+    ):
+        if not isinstance(session_ref, str) or not session_ref.strip():
+            raise RunnerError("session_ref must be a non-empty string")
+        self.session_calls.append(("continue", family, session_ref))
+        result = self.call(
+            family,
+            prompt,
+            workspace,
+            model=model,
+            effort=effort,
+            timeout_override=timeout_override,
+        )
+        result.session_ref = session_ref
+        return result
 
 
 def prompt_kind(prompt):
@@ -1295,7 +1353,8 @@ def _note_recovery(result, closers):
 
 def call_worker(runner, family, prompt, kind, workspace,
                 model=None, effort=None, extensions=None, roots=None,
-                validate_opts=None):
+                validate_opts=None, start_session=False, session_ref=None,
+                execution_context=_AMBIENT_EXECUTION):
     """Run the CLI and return (validated_output, RunnerResult).
 
     Exactly one repair retry on contract violation; then
@@ -1318,6 +1377,10 @@ def call_worker(runner, family, prompt, kind, workspace,
     exactly like a malformed base contract.
     """
     opts = dict(validate_opts or {})
+    if start_session and session_ref is not None:
+        raise RunnerError(
+            "a worker call cannot both start and continue a session"
+        )
     if extensions:
         from . import verifiers
 
@@ -1329,7 +1392,52 @@ def call_worker(runner, family, prompt, kind, workspace,
         def _validate(obj):
             return contracts.validate_worker_output(obj, kind, **opts)
 
-    result = runner.call(family, prompt, workspace, model=model, effort=effort)
+    def invoke(call_prompt, continuation_ref=None):
+        if continuation_ref is not None:
+            continuation = getattr(runner, "continue_session", None)
+            if not callable(continuation):
+                raise RunnerError(
+                    "the runner cannot continue an explicit provider session"
+                )
+            return continuation(
+                family,
+                continuation_ref,
+                call_prompt,
+                workspace,
+                execution_context,
+                model=model,
+                effort=effort,
+            )
+        if start_session:
+            starter = getattr(runner, "start_session", None)
+            support = getattr(runner, "supports_session_continuation", None)
+            if callable(support):
+                try:
+                    supported = support(family, ambient=True)
+                except TypeError:
+                    supported = support(family)
+                if not supported:
+                    return runner.call(
+                        family,
+                        call_prompt,
+                        workspace,
+                        model=model,
+                        effort=effort,
+                    )
+            if callable(starter):
+                return starter(
+                    family,
+                    call_prompt,
+                    workspace,
+                    execution_context,
+                    model=model,
+                    effort=effort,
+                )
+        return runner.call(
+            family, call_prompt, workspace, model=model, effort=effort
+        )
+
+    result = invoke(prompt, continuation_ref=session_ref)
     try:
         validated, closers = _extract_contract_output(
             result.text, _validate, kind
@@ -1339,7 +1447,8 @@ def call_worker(runner, family, prompt, kind, workspace,
     except (ValueError, contracts.ContractError) as exc:
         first_error = str(exc)
     repair_prompt = prompt + (REPAIR_SUFFIX % first_error)
-    result2 = runner.call(family, repair_prompt, workspace, model=model, effort=effort)
+    repair_ref = getattr(result, "session_ref", None) or session_ref
+    result2 = invoke(repair_prompt, continuation_ref=repair_ref)
     try:
         validated, closers = _extract_contract_output(
             result2.text, _validate, kind

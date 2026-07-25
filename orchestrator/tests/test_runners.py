@@ -259,6 +259,68 @@ class TestValidateWorkerOutputHappy(unittest.TestCase):
                         contracts.KIND_REVIEW_ROUND,
                     )
 
+    def test_report_finding_fields_are_bounded_before_later_rendering(self):
+        cases = []
+
+        finding = report_finding()
+        finding["summary"] = "x" * (contracts.FINDING_TEXT_MAX + 1)
+        cases.append((finding, "summary"))
+
+        for key in (
+            "permitted_baseline", "actual_outcome", "incremental_harm"
+        ):
+            finding = report_finding()
+            finding["validity"][key] = (
+                "x" * (contracts.FINDING_TEXT_MAX + 1)
+            )
+            cases.append((finding, key))
+
+        finding = report_finding(contests={
+            "rejection_id": "prior/F1",
+            "new_evidence": "x" * (contracts.FINDING_TEXT_MAX + 1),
+        })
+        cases.append((finding, "new_evidence"))
+
+        for finding, field in cases:
+            with self.subTest(field=field):
+                with self.assertRaisesRegex(contracts.ContractError, field):
+                    contracts.validate_worker_output(
+                        ok_output(
+                            contracts.KIND_REVIEW_ROUND,
+                            findings=[finding],
+                        ),
+                        contracts.KIND_REVIEW_ROUND,
+                    )
+
+    def test_report_finding_rejects_unbounded_extension_fields(self):
+        cases = []
+
+        finding = report_finding()
+        finding["extra"] = "x" * 250000
+        cases.append((finding, "reviewer finding"))
+
+        finding = report_finding()
+        finding["validity"]["extra"] = "x" * 250000
+        cases.append((finding, "validity"))
+
+        finding = report_finding(contests={
+            "rejection_id": "prior/F1",
+            "new_evidence": "new fact",
+            "extra": "x" * 250000,
+        })
+        cases.append((finding, "contests"))
+
+        for finding, field in cases:
+            with self.subTest(field=field):
+                with self.assertRaisesRegex(contracts.ContractError, field):
+                    contracts.validate_worker_output(
+                        ok_output(
+                            contracts.KIND_REVIEW_ROUND,
+                            findings=[finding],
+                        ),
+                        contracts.KIND_REVIEW_ROUND,
+                    )
+
     def test_fixer_disposition_must_match_the_baseline_delta(self):
         cases = (
             full_finding("fixed", validity=finding_validity(False)),

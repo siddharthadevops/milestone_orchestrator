@@ -238,6 +238,7 @@ class ParticipantExecution:
         participant_id,
         prompt,
         execution_context,
+        before_repair=None,
     ):
         """Return an envelope only after all supervised local work is quiet."""
         return self._exchange(
@@ -247,6 +248,7 @@ class ParticipantExecution:
             execution_context,
             require_quiescence=True,
             validator=validate_discussion_turn_envelope,
+            before_repair=before_repair,
         )
 
     def exchange_control_quiescent(

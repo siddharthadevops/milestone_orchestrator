@@ -377,7 +377,7 @@ class BrainstormingClosureTest(unittest.TestCase):
         ]
         self.assertTrue(bs.evaluate_closure(majority_four, exact_tie))
 
-    def test_target_mutation_invalidates_ballot_and_restores_only_target(self):
+    def test_target_mutation_retries_closure_once_and_restores_only_target(self):
         def mutate(path, operation, response):
             def action(_prompt, _workspace, _context):
                 if operation == "write":
@@ -434,23 +434,31 @@ class BrainstormingClosureTest(unittest.TestCase):
                     if actor == "lead"
                     else lead_response
                 )
+                if actor == "lead":
+                    lead_executor.responses.append(lead_response)
                 critic_executor.responses.append(
                     mutate(target, operation, critic_response)
                     if actor == "critic"
                     else critic_response
                 )
+                if actor == "critic":
+                    critic_executor.responses.append(critic_response)
 
-                with self.assertRaises(coordination.InvalidTargetMutation):
-                    subject.run_closure(session_id, object())
-                after = self.store.read(session_id)
+                after = subject.run_closure(session_id, object())
                 for field in (
                     "completed_turns",
                     "rounds_used",
                     "accepted_target_revision",
-                    "transcript_events",
                 ):
                     self.assertEqual(after.state[field], before.state[field])
-                self.assertNotIn("result", after.state)
+                self.assertEqual(after.state["status"], "success")
+                self.assertEqual(after.state["result"]["outcome"], "success")
+                ballots = [
+                    event
+                    for event in after.state["transcript_events"]
+                    if event["kind"] == "closure_ballot"
+                ]
+                self.assertEqual(len(ballots), 1)
                 self.assertIsNone(self.store.read_turn_attempt(session_id))
                 with open(target, "rb") as handle:
                     self.assertEqual(handle.read(), b"initial target")
@@ -469,38 +477,39 @@ class BrainstormingClosureTest(unittest.TestCase):
         before = self._complete_round(
             subject, "mutation-before-repair", roster
         )
-        repair_ran = []
+        retry_prompts = []
 
         def malformed_after_mutation(_prompt, _workspace, _context):
             with open(target, "wb") as handle:
                 handle.write(b"invalid mutation")
             return "not a control envelope"
 
-        def repair_that_conceals_mutation(_prompt, _workspace, _context):
-            repair_ran.append(True)
-            with open(target, "wb") as handle:
-                handle.write(b"initial target")
+        def malformed_retry(prompt, _workspace, _context):
+            retry_prompts.append(prompt)
+            return "still not a control envelope"
+
+        def repaired_retry(prompt, _workspace, _context):
+            retry_prompts.append(prompt)
             return proposal()
 
         lead_executor = executors["codex-lead"]
         lead_executor.responses.extend(
-            [malformed_after_mutation, repair_that_conceals_mutation]
+            [malformed_after_mutation, malformed_retry, repaired_retry]
         )
+        executors["claude-critic-1"].responses.append(vote("accept"))
 
-        with self.assertRaises(coordination.InvalidTargetMutation):
-            subject.run_closure("mutation-before-repair", object())
+        after = subject.run_closure("mutation-before-repair", object())
 
-        after = self.store.read("mutation-before-repair")
-        self.assertEqual(repair_ran, [])
-        self.assertEqual(len(lead_executor.responses), 1)
+        self.assertNotIn("REPAIR:", retry_prompts[0])
+        self.assertIn("REPAIR:", retry_prompts[1])
+        self.assertEqual(lead_executor.responses, [])
         for field in (
             "completed_turns",
             "rounds_used",
             "accepted_target_revision",
-            "transcript_events",
         ):
             self.assertEqual(after.state[field], before.state[field])
-        self.assertNotIn("result", after.state)
+        self.assertEqual(after.state["result"]["outcome"], "success")
         self.assertIsNone(
             self.store.read_turn_attempt("mutation-before-repair")
         )
@@ -508,6 +517,70 @@ class BrainstormingClosureTest(unittest.TestCase):
             self.assertEqual(handle.read(), b"initial target")
         with open(sibling, "rb") as handle:
             self.assertEqual(handle.read(), b"untouched sibling")
+
+    def test_corrected_closure_vote_resumes_same_vote_after_restart(self):
+        roster = participants()
+        scripts = {
+            "lead": [discussion("lead discussion")],
+            "critic-1": [
+                discussion("critic discussion"),
+                vote("accept"),
+            ],
+        }
+        subject, roster, executors, target, _sibling = self._make(
+            "closure-vote-restart", scripts, roster=roster
+        )
+        completed = self._complete_round(
+            subject, "closure-vote-restart", roster
+        )
+        with coordination._open_target_parent(target) as (
+            _descriptor,
+            _name,
+            parent_identity,
+        ):
+            attempt = {
+                "token": "corrected-vote",
+                "participant_id": "critic-1",
+                "completed_turn_count": len(
+                    completed.state["completed_turns"]
+                ),
+                "target_revision": completed.state[
+                    "accepted_target_revision"
+                ],
+                "quiescent": False,
+                "target_parent": parent_identity,
+                "kind": "closure",
+                "action_context": {
+                    "stage": "vote",
+                    "closing_summary": summary(),
+                    "votes_by_id": {"lead": "accept"},
+                },
+            }
+        self.store.begin_turn_attempt("closure-vote-restart", attempt)
+        self.store.mark_turn_attempt_quiescent(
+            "closure-vote-restart", attempt["token"]
+        )
+        self.assertFalse(
+            self.store.mark_turn_attempt_target_mutation(
+                "closure-vote-restart", attempt["token"]
+            )
+        )
+        lead_calls = len(executors["codex-lead"].calls)
+        restarted = coordination.BrainstormingCoordinator(
+            bs.SessionStore(os.path.join(self.root, "state")),
+            subject.participant_execution,
+        )
+        terminal = restarted.run_closure(
+            "closure-vote-restart", object()
+        )
+        self.assertEqual(terminal.state["status"], "success")
+        self.assertEqual(len(executors["codex-lead"].calls), lead_calls)
+        self.assertEqual(
+            executors["claude-critic-1"].calls[-1]["mode"], "continue"
+        )
+        self.assertIsNone(
+            self.store.read_turn_attempt("closure-vote-restart")
+        )
 
     def test_failed_ballot_requires_another_complete_round(self):
         roster = participants()

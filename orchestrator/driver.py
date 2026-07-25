@@ -16,6 +16,7 @@ Usage:
 """
 
 import argparse
+import base64
 import contextlib
 import copy
 import hashlib
@@ -33,6 +34,7 @@ try:
 except ImportError:  # pragma: no cover - non-POSIX: flock degrades to the
     fcntl = None     # staleness check in step(); documented in the README
 
+from . import brainstorming, brainstorming_milestone
 from . import contracts, errclass, gitops, interpreter, kvstore, ledgers
 from . import projects, prompts, runners, verifiers, workareas
 from . import state as st
@@ -260,6 +262,7 @@ A_REVIEW_ROUND = "review_round"
 A_FIX = "fix_findings"
 A_DELTA_REVIEW = "delta_review"
 A_SEAL_ATTEMPT = "seal_attempt"
+A_BRAINSTORM_WAIT = "brainstorming_wait"
 A_DONE = "done"
 A_FAILED = "failed"
 
@@ -273,6 +276,8 @@ def decide(state):
     unit = st.current_unit(state)
     if unit is None:
         return Action(A_DONE)  # run() closes the milestone
+    if unit.get("brainstorming_wait"):
+        return Action(A_BRAINSTORM_WAIT, unit=st.unit_key(unit))
     status = unit["status"]
     if status == st.U_PENDING:
         return Action(A_DRAFT, unit=st.unit_key(unit))
@@ -986,7 +991,8 @@ class Driver(object):
             pass
 
     def _call(self, family, prompt, kind, raw_name, model=None, effort=None,
-              extensions=None, roots=None, validate_opts=None):
+              extensions=None, roots=None, validate_opts=None,
+              start_session=False, session_ref=None):
         """Validated worker call; on protocol/runner failure, fail the run
         with the explanation recorded, then re-raise as StopStep.
 
@@ -1012,6 +1018,8 @@ class Driver(object):
                     model=model, effort=effort,
                     extensions=extensions, roots=roots,
                     validate_opts=validate_opts,
+                    start_session=start_session,
+                    session_ref=session_ref,
                 )
             except verifiers.VerifierError as exc:
                 # Slice 4's non-repairable family (the operator's policy or
@@ -1294,6 +1302,7 @@ class Driver(object):
     def _start_design_correction(
         self, unit, declaration, files_changed, offer,
         pre_refs, pre_sym, pre_head, pre_tree, pre_worktree_tree, pre_stash,
+        brainstorming_handoff=None,
     ):
         """Validate the mechanical envelope; semantic judgment is next."""
         baseline = {
@@ -1318,14 +1327,11 @@ class Driver(object):
         )):
             return candidate, "the normal pre-fix Git snapshot is unavailable"
         artifact = self._safe_design_path(declaration.get("artifact"))
-        authority = self._safe_design_path(
-            declaration.get("authority_artifact")
-        )
+        authority = self._safe_design_path(declaration.get("authority_artifact"))
+        brainstorming_authority = declaration.get("brainstorming_authority")
         expected = self._safe_design_path(offer.get("artifact"))
         if artifact != expected:
             return candidate, "only the implementation's own slice note is editable"
-        if authority is None or authority == artifact:
-            return candidate, "authority must be one different pre-existing artifact"
         changed = {
             self._safe_design_path(path) for path in (files_changed or [])
         }
@@ -1335,18 +1341,64 @@ class Driver(object):
         note_after = self._workspace_bytes(artifact)
         if note_before is None or note_after is None or note_before == note_after:
             return candidate, "the proposed correction did not change its note"
-        authority_gate = offer.get("authority_gate")
-        authority_before = gitops.show_file(
-            self.workspace, authority_gate, authority
-        )
-        if authority_before is None:
-            return candidate, "the cited authority did not predate the sealed note"
-        if (
-            gitops.show_file(self.workspace, pre_head, authority)
-            != authority_before
-            or self._workspace_bytes(authority) != authority_before
-        ):
-            return candidate, "the cited authority is not unchanged and pre-existing"
+
+        if brainstorming_authority is not None:
+            handoff = brainstorming_handoff or {}
+            expected_authority = {
+                "session_id": handoff.get("session_id"),
+                "accepted_target_revision": handoff.get(
+                    "accepted_target_revision"
+                ),
+            }
+            if not brainstorming._same_json_value(
+                brainstorming_authority, expected_authority
+            ):
+                return candidate, (
+                    "Brainstorming authority does not match the recorded handoff"
+                )
+            try:
+                authority_record = brainstorming_milestone.retained_revision(
+                    self.state,
+                    brainstorming_authority["session_id"],
+                    brainstorming_authority["accepted_target_revision"],
+                )
+                checked_record = brainstorming.validate_target_revision(
+                    authority_record
+                )
+                authority_exists, authority_before = (
+                    brainstorming.target_revision_content(checked_record)
+                )
+            except Exception:
+                authority_exists, authority_before = False, None
+            if not authority_exists or authority_before is None:
+                return candidate, (
+                    "the recorded Brainstorming authority has no proposal content"
+                )
+            authority = (handoff.get("result") or {}).get("target_ref")
+            candidate["brainstorming_authority"] = copy.deepcopy(
+                brainstorming_authority
+            )
+        else:
+            if authority is None or authority == artifact:
+                return candidate, (
+                    "authority must be one different pre-existing artifact"
+                )
+            authority_gate = offer.get("authority_gate")
+            authority_before = gitops.show_file(
+                self.workspace, authority_gate, authority
+            )
+            if authority_before is None:
+                return candidate, (
+                    "the cited authority did not predate the sealed note"
+                )
+            if (
+                gitops.show_file(self.workspace, pre_head, authority)
+                != authority_before
+                or self._workspace_bytes(authority) != authority_before
+            ):
+                return candidate, (
+                    "the cited authority is not unchanged and pre-existing"
+                )
         candidate.update({
             "artifact": artifact,
             "note_unit": offer["note_unit"],
@@ -1368,6 +1420,32 @@ class Driver(object):
         return candidate, None
 
     def _design_correction_integrity_error(self, correction):
+        brainstorming_authority = (correction or {}).get(
+            "brainstorming_authority"
+        )
+        if brainstorming_authority is not None:
+            try:
+                authority_record = brainstorming_milestone.retained_revision(
+                    self.state,
+                    brainstorming_authority["session_id"],
+                    brainstorming_authority["accepted_target_revision"],
+                )
+                exists, content = brainstorming.target_revision_content(
+                    authority_record
+                )
+            except Exception:
+                exists, content = False, None
+            if (
+                not exists
+                or content is None
+                or hashlib.sha256(content).hexdigest()
+                != (correction or {}).get("authority_sha256")
+            ):
+                return (
+                    "the retained Brainstorming authority changed or became "
+                    "unavailable while the correction was provisional"
+                )
+            return None
         authority = self._safe_design_path(
             (correction or {}).get("authority_artifact")
         )
@@ -1377,6 +1455,32 @@ class Driver(object):
         ).get("authority_sha256"):
             return "the cited authority changed while the correction was provisional"
         return None
+
+    def _design_correction_review_context(self, correction):
+        """Expose retained Brainstorming authority only to the review prompt."""
+        context = copy.deepcopy(correction)
+        authority = context.get("brainstorming_authority")
+        if authority is None:
+            return context
+        record = brainstorming_milestone.retained_revision(
+            self.state,
+            authority["session_id"],
+            authority["accepted_target_revision"],
+        )
+        exists, content = brainstorming.target_revision_content(record)
+        if not exists:
+            raise brainstorming_milestone.AdapterError(
+                "the retained Brainstorming authority is absent"
+            )
+        try:
+            context["retained_authority_content"] = content.decode("utf-8")
+            context["retained_authority_encoding"] = "utf-8"
+        except UnicodeDecodeError:
+            context["retained_authority_content"] = base64.b64encode(
+                content
+            ).decode("ascii")
+            context["retained_authority_encoding"] = "base64"
+        return context
 
     def _rollback_design_correction(self, unit, reason, correction=None):
         """Discard the provisional fixer delta and retry without authority."""
@@ -1516,6 +1620,449 @@ class Driver(object):
                 slices=self.state["milestone"]["slices"],
             )
 
+    def _brainstorming_references(self, unit, signal):
+        return brainstorming_milestone.stable_references(
+            self.state,
+            [
+                self._skeleton_artifact(),
+                self._governing(unit),
+                unit.get("artifact"),
+            ],
+            signal["target_path"],
+        )
+
+    def _start_rethink(
+        self,
+        unit,
+        kind,
+        family,
+        model,
+        effort,
+        signal,
+        result,
+        raw_path,
+        raw_name,
+        pre_snapshot=None,
+    ):
+        """Attach one non-completing worker signal to an independent session."""
+        try:
+            checked = brainstorming_milestone.validate_origin_signal(
+                signal,
+                kind,
+                queued_findings=unit.get("fix_queue") or [],
+            )
+            if kind in contracts.REPORT_KINDS:
+                self._validate_contests(
+                    unit,
+                    {"findings": [copy.deepcopy(checked["finding"])]},
+                    kind,
+                )
+            provider_ref = getattr(result, "session_ref", None)
+            if (
+                kind
+                in (contracts.KIND_IMPLEMENT, contracts.KIND_FIX_FINDINGS)
+                and (
+                    not isinstance(provider_ref, str)
+                    or not provider_ref.strip()
+                )
+            ):
+                raise brainstorming_milestone.AdapterError(
+                    "the origin provider exposed no explicit session reference"
+                )
+            references = self._brainstorming_references(unit, checked)
+            created = brainstorming_milestone.create_session(
+                self.state,
+                self.config,
+                st.unit_key(unit),
+                checked,
+                references,
+            )
+            progress = brainstorming.coordination_projection(created["state"])
+            if (
+                progress is None
+                or progress["accepted_target_revision"] is not None
+                or not progress["recovery_baseline_revision"]
+            ):
+                raise brainstorming_milestone.AdapterError(
+                    "Brainstorming creation did not expose an unaccepted "
+                    "recovery baseline"
+                )
+        except StopStep:
+            raise
+        except Exception as exc:
+            st.fail_run(
+                self.state,
+                "need_rethink could not create its independent session: %s"
+                % exc,
+                unit=unit,
+                type_="brainstorming_operational",
+            )
+            self._save()
+            raise StopStep("Brainstorming session creation failed")
+
+        unit["brainstorming_wait"] = {
+            "session_id": created["id"],
+            "signal": copy.deepcopy(checked),
+            "references": list(references),
+            "origin": {
+                "unit": st.unit_key(unit),
+                "kind": kind,
+                "family": family,
+                "model": model,
+                "effort": effort,
+                "provider_session_ref": provider_ref,
+                "raw_path": raw_path,
+                "raw_name": raw_name,
+                "duration_s": result.duration_s,
+                "pre_snapshot": copy.deepcopy(pre_snapshot),
+            },
+        }
+        st.append_event(
+            self.state,
+            "brainstorming_wait_started",
+            unit=st.unit_key(unit),
+            kind=kind,
+            family=family,
+            session_id=created["id"],
+            target_path=checked["target_path"],
+        )
+        return "paused for Brainstorming session %s" % created["id"]
+
+    @staticmethod
+    def _resume_result(record):
+        result = runners.RunnerResult(
+            record.get("text", ""),
+            0,
+            record.get("duration_s", 0),
+        )
+        result.session_ref = record.get("provider_session_ref")
+        result.brainstorming_handoff = copy.deepcopy(record.get("handoff"))
+        result.origin_family = record.get("family")
+        result.origin_model = record.get("model")
+        result.origin_effort = record.get("effort")
+        result.origin_pre_snapshot = copy.deepcopy(record.get("pre_snapshot"))
+        return result
+
+    def _take_brainstorming_resume(self, unit, kind):
+        record = unit.get("brainstorming_resume")
+        if not record:
+            return None
+        if record.get("kind") != kind:
+            raise st.IllegalTransition(
+                "Brainstorming continuation kind does not match current action"
+            )
+        unit.pop("brainstorming_resume", None)
+        return (
+            copy.deepcopy(record["output"]),
+            self._resume_result(record),
+            record["raw_path"],
+        )
+
+    @staticmethod
+    def _is_intermediate_preseal_delta(unit, pending_kind, kind):
+        source = unit.get("fix_source") or {}
+        return (
+            pending_kind == contracts.KIND_SEAL_HALF
+            and kind == contracts.KIND_DELTA_REVIEW
+            and source.get("return_to") == st.U_PRE_SEAL_VERIFY
+        )
+
+    def _brainstorming_review_handoff(self, unit, kind):
+        record = unit.get("brainstorming_review_handoff")
+        if not record:
+            return None
+        if record.get("kind") != kind:
+            if self._is_intermediate_preseal_delta(
+                unit, record.get("kind"), kind
+            ):
+                # A successful seal rethink deliberately returns through
+                # pre-seal verification. If that gate finds a real defect,
+                # its ordinary fixer/delta loop is intermediate: it neither
+                # consumes nor receives the seal review's retained proposal.
+                # Keep the handoff for the fresh seal after convergence.
+                return None
+            raise st.IllegalTransition(
+                "Brainstorming review handoff kind does not match current action"
+            )
+        handoff = brainstorming_milestone.prompt_handoff(
+            self.state, record["handoff"]
+        )
+        handoff["source_finding"] = copy.deepcopy(
+            record["source_finding"]
+        )
+        return handoff
+
+    @staticmethod
+    def _consume_brainstorming_review_handoff(unit, kind):
+        record = unit.get("brainstorming_review_handoff")
+        if not record or record.get("kind") != kind:
+            raise st.IllegalTransition(
+                "Brainstorming review handoff kind does not match consumption"
+            )
+        reserved = record.get("reserved_handoff")
+        if reserved is None:
+            unit.pop("brainstorming_review_handoff", None)
+        else:
+            unit["brainstorming_review_handoff"] = copy.deepcopy(reserved)
+
+    def _fixer_gap_enabled(self, unit):
+        """One shared eligibility gate for advertised and routed fixer gaps."""
+        return (
+            interpreter.gap_semantics(self.state)
+            and gitops.enabled(self.config)
+            and not unit.get("under_repair")
+            and unit["kind"] != st.UNIT_SKELETON
+        )
+
+    @staticmethod
+    def _rethink_finding_for_fix(finding):
+        return copy.deepcopy(finding)
+
+    def _route_rethink_report_failure(self, unit, wait):
+        kind = wait["origin"]["kind"]
+        old_source = copy.deepcopy(unit.get("fix_source") or {})
+        source_type = {
+            contracts.KIND_REVIEW_ROUND: "round",
+            contracts.KIND_DELTA_REVIEW: "delta",
+            contracts.KIND_SEAL_HALF: "seal",
+        }[kind]
+        return_to = {
+            contracts.KIND_REVIEW_ROUND: st.U_ROUNDS,
+            contracts.KIND_DELTA_REVIEW: (
+                old_source.get("return_to") or st.U_PRE_REVIEW_VERIFY
+            ),
+            contracts.KIND_SEAL_HALF: st.U_PRE_SEAL_VERIFY,
+        }[kind]
+        st.enter_fix_episode(
+            self.state,
+            unit,
+            [self._rethink_finding_for_fix(wait["signal"]["finding"])],
+            source_type,
+            wait["origin"]["family"],
+            "brainstorming:%s" % wait["session_id"],
+            return_to,
+        )
+        if kind == contracts.KIND_DELTA_REVIEW and old_source:
+            unit["fix_source"]["origin_type"] = old_source.get(
+                "origin_type", old_source.get("type", "delta")
+            )
+
+    def _do_brainstorming_wait(self):
+        unit = st.current_unit(self.state)
+        wait = copy.deepcopy(unit.get("brainstorming_wait") or {})
+        session_id = wait.get("session_id")
+        if not session_id:
+            raise st.IllegalTransition(
+                "brainstorming wait action has no recorded session"
+            )
+        if (wait.get("origin") or {}).get("unit") != st.unit_key(unit):
+            raise st.IllegalTransition(
+                "brainstorming wait origin does not match its attached unit"
+            )
+        try:
+            handoff = brainstorming_milestone.terminal_handoff(
+                self.state, session_id
+            )
+        except brainstorming_milestone.OperationalTerminalError as exc:
+            # The terminal session remains retained evidence, but it must no
+            # longer monopolize the unit's next action. Operator resume now
+            # retries the unchanged originating milestone call.
+            unit.pop("brainstorming_wait", None)
+            st.append_event(
+                self.state,
+                "brainstorming_operational_detached",
+                unit=st.unit_key(unit),
+                kind=(wait.get("origin") or {}).get("kind"),
+                session_id=session_id,
+            )
+            st.fail_run(
+                self.state,
+                "recorded Brainstorming session ended operationally: %s" % exc,
+                unit=unit,
+                type_="brainstorming_operational",
+            )
+            self._save()
+            raise StopStep("Brainstorming execution failed")
+        except Exception as exc:
+            st.fail_run(
+                self.state,
+                "recorded Brainstorming session could not be inspected: %s"
+                % exc,
+                unit=unit,
+                type_="brainstorming_operational",
+            )
+            self._save()
+            raise StopStep("Brainstorming inspection failed")
+        if handoff is None:
+            return "waiting for Brainstorming session %s" % session_id
+
+        origin = wait["origin"]
+        kind = origin["kind"]
+        if handoff["result"]["outcome"] == "failure":
+            if (
+                kind == contracts.KIND_FIX_FINDINGS
+                and not self._fixer_gap_enabled(unit)
+            ):
+                # A discussion failure cannot broaden the ordinary fixer-gap
+                # route. Preserve the fix episode and stop before any unwind.
+                unit.pop("brainstorming_wait", None)
+                st.fail_run(
+                    self.state,
+                    "Brainstorming failed for a fixer outside the supported "
+                    "gap envelope; the existing fix episode is preserved for "
+                    "operator intervention",
+                    unit=unit,
+                    type_="worker_blocked",
+                )
+                self._save()
+                raise StopStep(
+                    "Brainstorming fixer failure outside gap envelope"
+                )
+            unit.pop("brainstorming_wait", None)
+            st.append_event(
+                self.state,
+                "brainstorming_failure_routed",
+                unit=st.unit_key(unit),
+                kind=kind,
+                session_id=session_id,
+            )
+            if kind in (
+                contracts.KIND_IMPLEMENT,
+                contracts.KIND_FIX_FINDINGS,
+            ):
+                pre = origin.get("pre_snapshot") or {}
+                return self._handle_gap(
+                    unit,
+                    {"gaps": [copy.deepcopy(wait["signal"]["failure_gap"])]},
+                    origin.get("duration_s"),
+                    pre_tree=pre.get("tree"),
+                    pre_head=pre.get("head"),
+                    pre_sym=pre.get("sym"),
+                    pre_refs=pre.get("refs"),
+                    pre_stash=pre.get("stash"),
+                    from_fixer=kind == contracts.KIND_FIX_FINDINGS,
+                )
+            self._route_rethink_report_failure(unit, wait)
+            return "Brainstorming failed; source finding queued for fixing"
+
+        if kind in (
+            contracts.KIND_IMPLEMENT,
+            contracts.KIND_FIX_FINDINGS,
+        ):
+            family = origin["family"]
+            design_context = (
+                self._design_correction_context(unit)
+                if kind == contracts.KIND_FIX_FINDINGS
+                else None
+            )
+            amendments = self._amendments()
+            project_context, extensions, roots = (
+                self._project_prompt_inputs(unit, kind)
+            )
+            prompt = prompts.build_rethink_continuation(
+                kind,
+                family,
+                self.workspace,
+                brainstorming_milestone.prompt_handoff(
+                    self.state, handoff
+                ),
+                allow_design_correction=bool(
+                    design_context
+                    and design_context.get("mode") == "offer"
+                ),
+                amendments=amendments,
+                project_context=project_context,
+            )
+            raw_name = "%s-rethink-return" % origin["raw_name"]
+            output, result, raw_path = self._call(
+                family,
+                prompt,
+                kind,
+                raw_name,
+                model=origin.get("model"),
+                effort=origin.get("effort"),
+                extensions=extensions,
+                roots=roots,
+                validate_opts=(
+                    {"allow_design_correction": True}
+                    if design_context
+                    and design_context.get("mode") == "offer"
+                    else None
+                ),
+                session_ref=origin["provider_session_ref"],
+            )
+            unit.pop("brainstorming_wait", None)
+            if output.get("status") == "need_rethink":
+                return self._start_rethink(
+                    unit,
+                    kind,
+                    family,
+                    origin.get("model"),
+                    origin.get("effort"),
+                    output,
+                    result,
+                    raw_path,
+                    raw_name,
+                    pre_snapshot=origin.get("pre_snapshot"),
+                )
+            unit["brainstorming_resume"] = {
+                "kind": kind,
+                "output": copy.deepcopy(output),
+                "raw_path": raw_path,
+                "duration_s": result.duration_s,
+                "text": result.text,
+                "provider_session_ref": origin["provider_session_ref"],
+                "handoff": copy.deepcopy(handoff),
+                "family": family,
+                "model": origin.get("model"),
+                "effort": origin.get("effort"),
+                "pre_snapshot": copy.deepcopy(origin.get("pre_snapshot")),
+            }
+            st.append_event(
+                self.state,
+                "brainstorming_builder_continued",
+                unit=st.unit_key(unit),
+                kind=kind,
+                session_id=session_id,
+                accepted_target_revision=handoff[
+                    "accepted_target_revision"
+                ],
+            )
+            return "Brainstorming succeeded; origin conversation continued"
+
+        unit.pop("brainstorming_wait", None)
+        review_handoff = {
+            "kind": kind,
+            "handoff": copy.deepcopy(handoff),
+            "source_finding": copy.deepcopy(wait["signal"]["finding"]),
+        }
+        pending = unit.get("brainstorming_review_handoff")
+        if pending is not None:
+            if not self._is_intermediate_preseal_delta(
+                unit, pending.get("kind"), kind
+            ):
+                raise st.IllegalTransition(
+                    "Brainstorming review handoff would replace pending context"
+                )
+            review_handoff["reserved_handoff"] = copy.deepcopy(pending)
+        unit["brainstorming_review_handoff"] = review_handoff
+        st.append_event(
+            self.state,
+            "brainstorming_review_restarted",
+            unit=st.unit_key(unit),
+            kind=kind,
+            session_id=session_id,
+            accepted_target_revision=handoff["accepted_target_revision"],
+        )
+        if kind == contracts.KIND_SEAL_HALF:
+            st.transition_unit(
+                self.state,
+                unit,
+                st.U_PRE_SEAL_VERIFY,
+                reason="Brainstorming proposal accepted; fresh seal required",
+            )
+        return "Brainstorming succeeded; fresh reviewer call required"
+
     def _check_worker_blocked(self, unit, output, kind):
         if output["status"] == "retry":
             # A fixer could not complete its mandatory opposite-family
@@ -1587,6 +2134,7 @@ class Driver(object):
             A_FIX: self._do_fix,
             A_DELTA_REVIEW: self._do_delta_review,
             A_SEAL_ATTEMPT: self._do_seal_attempt,
+            A_BRAINSTORM_WAIT: self._do_brainstorming_wait,
         }[action.type]
         with self._exclusive():
             self._assert_not_stale()
@@ -1613,6 +2161,13 @@ class Driver(object):
             sealed_before = self._sealed_keys()
             self.step()
             steps += 1
+            if (
+                action.type == A_BRAINSTORM_WAIT
+                and (st.current_unit(self.state) or {}).get(
+                    "brainstorming_wait"
+                )
+            ):
+                return 4
             newly_sealed = self._sealed_keys() - sealed_before
             if newly_sealed and self._control().get("stop_after_seal"):
                 # Operator-ordered safe pause: a seal is the one point
@@ -1792,13 +2347,48 @@ class Driver(object):
                 pre_stash = gitops.snapshot_stash(self.workspace)
             except gitops.GitError:
                 pre_refs = pre_sym = pre_head = pre_tree = pre_stash = None
-        output, result, raw_path = self._call(
-            family, prompt, kind, "%s-draft" % st.unit_key(unit),
-            model=model, effort=effort, extensions=extensions, roots=roots,
-            validate_opts=(
-                {"battery_questions": battery} if battery else None
-            ),
-        )
+        raw_name = "%s-draft" % st.unit_key(unit)
+        resumed = self._take_brainstorming_resume(unit, kind)
+        if resumed is not None:
+            output, result, raw_path = resumed
+            family = result.origin_family or family
+            model = result.origin_model or model
+            effort = result.origin_effort or effort
+            original_pre = result.origin_pre_snapshot or {}
+            pre_refs = original_pre.get("refs")
+            pre_sym = original_pre.get("sym")
+            pre_head = original_pre.get("head")
+            pre_tree = original_pre.get("tree")
+            pre_stash = original_pre.get("stash")
+        else:
+            output, result, raw_path = self._call(
+                family, prompt, kind, raw_name,
+                model=model, effort=effort, extensions=extensions, roots=roots,
+                validate_opts=(
+                    {"battery_questions": battery} if battery else None
+                ),
+                start_session=kind == contracts.KIND_IMPLEMENT,
+            )
+        if output.get("status") == "need_rethink":
+            self._enforce_sealed_artifacts(raw_name)
+            return self._start_rethink(
+                unit,
+                kind,
+                family,
+                model,
+                effort,
+                output,
+                result,
+                raw_path,
+                raw_name,
+                pre_snapshot={
+                    "refs": pre_refs,
+                    "sym": pre_sym,
+                    "head": pre_head,
+                    "tree": pre_tree,
+                    "stash": pre_stash,
+                },
+            )
         if output.get("status") == "gap":
             # The builder met a build-changing hole/conflict and stopped
             # (reform §3). Route it upstream (repair) or to the operator
@@ -1808,7 +2398,7 @@ class Driver(object):
                                     pre_tree=pre_tree, pre_head=pre_head,
                                     pre_sym=pre_sym, pre_refs=pre_refs,
                                     pre_stash=pre_stash)
-        self._enforce_sealed_artifacts("%s-draft" % st.unit_key(unit))
+        self._enforce_sealed_artifacts(raw_name)
         self._check_worker_blocked(unit, output, kind)
         st.record_draft(self.state, unit, kind, output, raw_path,
                         family=family, duration=result.duration_s,
@@ -2734,6 +3324,29 @@ class Driver(object):
             unit, contracts.KIND_FIX_FINDINGS
         )
         design_context = self._design_correction_context(unit)
+        if (
+            design_context
+            and design_context.get("mode") == "active"
+            and design_context.get("brainstorming_authority") is not None
+        ):
+            correction_error = self._design_correction_integrity_error(
+                design_context
+            )
+            if correction_error:
+                return self._rollback_design_correction(
+                    unit, correction_error, design_context
+                )
+            try:
+                design_context = self._design_correction_review_context(
+                    design_context
+                )
+            except Exception as exc:
+                return self._rollback_design_correction(
+                    unit,
+                    "the retained Brainstorming authority could not be read: "
+                    "%s" % exc,
+                    design_context,
+                )
         prompt = prompts.build_fix_findings(
             family,
             self.workspace,
@@ -2781,10 +3394,7 @@ class Driver(object):
             #  - the SKELETON: it cannot remodel itself, and it is not a slice
             #    to unwind to a predecessor gate.
             gap_enabled=(
-                interpreter.gap_semantics(self.state)
-                and gitops.enabled(self.config)
-                and not unit.get("under_repair")
-                and unit["kind"] != st.UNIT_SKELETON
+                self._fixer_gap_enabled(unit)
             ),
             design_correction=design_context,
         )
@@ -2815,22 +3425,40 @@ class Driver(object):
             except gitops.GitError:
                 pre_refs = pre_sym = pre_head = pre_tree = None
                 pre_worktree_tree = pre_stash = None
-        output, result, raw_path = self._call(
-            family,
-            prompt,
-            contracts.KIND_FIX_FINDINGS,
-            "%s-fix%d" % (st.unit_key(unit), n_fix),
-            model=fix_model,
-            effort=fix_effort,
-            extensions=extensions,
-            roots=roots,
-            validate_opts=(
-                {"allow_design_correction": True}
-                if design_context
-                and design_context.get("mode") == "offer"
-                else None
-            ),
+        raw_name = "%s-fix%d" % (st.unit_key(unit), n_fix)
+        resumed = self._take_brainstorming_resume(
+            unit, contracts.KIND_FIX_FINDINGS
         )
+        if resumed is not None:
+            output, result, raw_path = resumed
+            family = result.origin_family or family
+            fix_model = result.origin_model or fix_model
+            fix_effort = result.origin_effort or fix_effort
+            original_pre = result.origin_pre_snapshot or {}
+            pre_refs = original_pre.get("refs")
+            pre_sym = original_pre.get("sym")
+            pre_head = original_pre.get("head")
+            pre_tree = original_pre.get("tree")
+            pre_worktree_tree = original_pre.get("worktree_tree")
+            pre_stash = original_pre.get("stash")
+        else:
+            output, result, raw_path = self._call(
+                family,
+                prompt,
+                contracts.KIND_FIX_FINDINGS,
+                raw_name,
+                model=fix_model,
+                effort=fix_effort,
+                extensions=extensions,
+                roots=roots,
+                validate_opts=(
+                    {"allow_design_correction": True}
+                    if design_context
+                    and design_context.get("mode") == "offer"
+                    else None
+                ),
+                start_session=True,
+            )
         # The sealed-artifact guard runs on EVERY outcome (gap or not, in
         # envelope or not) BEFORE any branch returns: a fixer that tampered with
         # a sealed doc and then gapped must still be caught and restored — the
@@ -2843,9 +3471,39 @@ class Driver(object):
         elif declaration is not None and design_context:
             editable_note = design_context.get("artifact")
         restored = self._enforce_sealed_artifacts(
-            "%s-fix%d" % (st.unit_key(unit), n_fix),
+            raw_name,
             editable_sealed=([editable_note] if editable_note else None),
         )
+        if output.get("status") == "need_rethink":
+            if restored:
+                st.fail_run(
+                    self.state,
+                    "fixer requested Brainstorming after modifying sealed "
+                    "artifacts: %s" % ", ".join(restored),
+                    unit=unit,
+                    type_="worker_blocked",
+                )
+                self._save()
+                raise StopStep("rethink requester modified sealed artifacts")
+            return self._start_rethink(
+                unit,
+                contracts.KIND_FIX_FINDINGS,
+                family,
+                fix_model,
+                fix_effort,
+                output,
+                result,
+                raw_path,
+                raw_name,
+                pre_snapshot={
+                    "refs": pre_refs,
+                    "sym": pre_sym,
+                    "head": pre_head,
+                    "tree": pre_tree,
+                    "worktree_tree": pre_worktree_tree,
+                    "stash": pre_stash,
+                },
+            )
         if output.get("status") == "gap":
             # The fixer met an insoluble-in-scope contradiction: a queued
             # finding is valid, but the only repair rewrites a sealed doc this
@@ -2865,10 +3523,7 @@ class Driver(object):
             # cannot be safely unwound, so it is a `blocked` operator stop, not
             # routed. Keeping this in lockstep with gap_enabled prevents the
             # prompt (no GAP EXIT) and the router (would route) from disagreeing.
-            if not (interpreter.gap_semantics(self.state)
-                    and gitops.enabled(self.config)
-                    and not unit.get("under_repair")
-                    and unit["kind"] != st.UNIT_SKELETON):
+            if not self._fixer_gap_enabled(unit):
                 st.fail_run(
                     self.state,
                     "%s returned a contradiction gap outside the supported "
@@ -2928,6 +3583,9 @@ class Driver(object):
                 pre_tree,
                 pre_worktree_tree,
                 pre_stash,
+                brainstorming_handoff=getattr(
+                    result, "brainstorming_handoff", None
+                ),
             )
             if restored:
                 correction_error = (
@@ -3075,6 +3733,26 @@ class Driver(object):
         provisional = (
             correction if correction.get("phase") == "proposed" else None
         )
+        review_correction = provisional
+        if provisional:
+            correction_error = self._design_correction_integrity_error(
+                provisional
+            )
+            if correction_error:
+                return self._rollback_design_correction(
+                    unit, correction_error, provisional
+                )
+            try:
+                review_correction = self._design_correction_review_context(
+                    provisional
+                )
+            except Exception as exc:
+                return self._rollback_design_correction(
+                    unit,
+                    "the retained Brainstorming authority could not be read: "
+                    "%s" % exc,
+                    provisional,
+                )
         source = unit.get("fix_source") or {}
         # The delta convergence checkpoint (delta_full_review_after_fixes)
         # escalates a fix loop to a full re-review after N fixes: a REVIEW
@@ -3261,8 +3939,15 @@ class Driver(object):
             debt=self._debt(unit),
             wave_docs=self._wave_doc_paths(unit),
             gap_enabled=interpreter.gap_semantics(self.state),
-            design_correction=provisional,
+            design_correction=review_correction,
         )
+        rethink_handoff = self._brainstorming_review_handoff(
+            unit, contracts.KIND_DELTA_REVIEW
+        )
+        if rethink_handoff is not None:
+            prompt = prompts.attach_rethink_review_handoff(
+                prompt, rethink_handoff
+            )
         n_delta = 1 + len(
             [r for r in unit["rounds"] if r["kind"] == contracts.KIND_DELTA_REVIEW]
         )
@@ -3302,6 +3987,22 @@ class Driver(object):
             )
             self._save()
             raise StopStep("delta reviewer tampered")
+        if rethink_handoff is not None:
+            self._consume_brainstorming_review_handoff(
+                unit, contracts.KIND_DELTA_REVIEW
+            )
+        if output.get("status") == "need_rethink":
+            return self._start_rethink(
+                unit,
+                contracts.KIND_DELTA_REVIEW,
+                family,
+                delta_model,
+                delta_effort,
+                output,
+                result,
+                raw_path,
+                "%s-delta%d" % (st.unit_key(unit), n_delta),
+            )
         self._check_worker_blocked(unit, output, contracts.KIND_DELTA_REVIEW)
         self._validate_contests(unit, output, contracts.KIND_DELTA_REVIEW)
         st.record_round(
@@ -3722,6 +4423,13 @@ class Driver(object):
             debt=self._debt(unit),
             gap_enabled=interpreter.gap_semantics(self.state),
         )
+        rethink_handoff = self._brainstorming_review_handoff(
+            unit, contracts.KIND_REVIEW_ROUND
+        )
+        if rethink_handoff is not None:
+            prompt = prompts.attach_rethink_review_handoff(
+                prompt, rethink_handoff
+            )
         # Raw/label numbering counts ALL history (like fix/delta and the
         # ledger round ids): the amnesty-relative `done` must never make a
         # new raw file reuse — and overwrite — a historical round's name.
@@ -3770,6 +4478,22 @@ class Driver(object):
                 },
             )
             return "%s round INVALID (reviewer edited); restored and retrying" % family
+        if rethink_handoff is not None:
+            self._consume_brainstorming_review_handoff(
+                unit, contracts.KIND_REVIEW_ROUND
+            )
+        if output.get("status") == "need_rethink":
+            return self._start_rethink(
+                unit,
+                contracts.KIND_REVIEW_ROUND,
+                family,
+                review_model,
+                review_effort,
+                output,
+                result,
+                raw_path,
+                "%s-%s-r%d" % (st.unit_key(unit), family, label_no),
+            )
         self._check_worker_blocked(unit, output, contracts.KIND_REVIEW_ROUND)
         self._validate_contests(unit, output, contracts.KIND_REVIEW_ROUND)
         findings = output.get("findings", [])
@@ -3858,6 +4582,9 @@ class Driver(object):
 
     def _do_seal_attempt(self):
         unit = st.current_unit(self.state)
+        rethink_handoff = self._brainstorming_review_handoff(
+            unit, contracts.KIND_SEAL_HALF
+        )
         # The cap counts from the amnesty marker (moved at each resume);
         # attempt numbering below stays global over the full history.
         seals_done = len(unit["seals"]) - (unit.get("seals_amnesty") or 0)
@@ -3883,7 +4610,7 @@ class Driver(object):
         # exactly that family its fresh look. Legacy and profile-less runs
         # never take this path (bit-identical).
         stale_only = None
-        if interpreter.seal_predicate(self.state):
+        if rethink_handoff is None and interpreter.seal_predicate(self.state):
             cite = st.seal_predicate_reviews(unit, all_families)
             if cite is not None:
                 st.record_seal_attempt(self.state, unit, {}, True)
@@ -3979,6 +4706,10 @@ class Driver(object):
                 debt=debt, wave_docs=wave_docs,
                 gap_enabled=gap_enabled_seal,
             )
+            if rethink_handoff is not None:
+                prompt = prompts.attach_rethink_review_handoff(
+                    prompt, rethink_handoff
+                )
             raw_name = "%s-seal-a%d-%s" % (st.unit_key(unit), attempt_no, family)
             try:
                 review_model, review_effort = review_profiles[family]
@@ -4208,6 +4939,43 @@ class Driver(object):
         # (stashed thread-safely in run_half_pure); popped so the seal
         # record itself stays exactly its historical shape.
         flush_half_strikes()
+        if rethink_handoff is not None and invalidated is None:
+            self._consume_brainstorming_review_handoff(
+                unit, contracts.KIND_SEAL_HALF
+            )
+        rethink_families = [
+            family
+            for family in families
+            if halves[family]["result"].get("status") == "need_rethink"
+        ]
+        if rethink_families and invalidated is None:
+            selected = next(
+                family for family in families if family in rethink_families
+            )
+            half = halves[selected]
+            synthetic_result = runners.RunnerResult(
+                "", 0, half["duration_s"]
+            )
+            st.append_event(
+                self.state,
+                "brainstorming_seal_request_selected",
+                unit=st.unit_key(unit),
+                attempt=attempt_no,
+                selected_family=selected,
+                requesting_families=list(rethink_families),
+            )
+            return self._start_rethink(
+                unit,
+                contracts.KIND_SEAL_HALF,
+                selected,
+                half.get("model"),
+                half.get("effort"),
+                half["result"],
+                synthetic_result,
+                half["raw_path"],
+                "%s-seal-a%d-%s"
+                % (st.unit_key(unit), attempt_no, selected),
+            )
         clean = all(
             contracts.findings_clean(halves[fam]["result"]) for fam in families
         )
@@ -4864,8 +5632,15 @@ def cmd_run(args):
     elif code == 2:
         print("RUN FAILED: %s" % (summ["failure"] or {}).get("reason"))
     elif code == 4:
-        print("paused after seal (operator-ordered safe stop); "
-              "start again to resume")
+        current = st.current_unit(driver.state)
+        if current is not None and current.get("brainstorming_wait"):
+            print(
+                "paused for Brainstorming session %s; start again to check"
+                % current["brainstorming_wait"]["session_id"]
+            )
+        else:
+            print("paused after seal (operator-ordered safe stop); "
+                  "start again to resume")
     else:
         print("stopped after --max-steps")
     return code

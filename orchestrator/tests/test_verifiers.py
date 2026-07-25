@@ -288,7 +288,8 @@ class TestFieldCollisions(unittest.TestCase):
         self.assertEqual(
             contracts.reserved_output_keys("implement"),
             {"status", "kind", "blocked_reason", "notes", "gaps",
-             "files_changed", "suite_command"},
+             "question", "finding", "target_path", "max_rounds",
+             "failure_gap", "files_changed", "suite_command"},
         )
         self.assertIn(
             "suite_command_finding_id",
@@ -764,6 +765,73 @@ class TestMergedOutputValidation(FilesystemCase):
         )
         self.assertIs(out, obj)
 
+    def test_project_extensions_forward_design_correction_options(self):
+        ext = verifiers.compile_policy(
+            make_policy(kinds=["fix_findings", "delta_review"])
+        )
+        validity = {
+            "permitted_baseline": "the correction route remains available",
+            "actual_outcome": "the correction is ready for independent review",
+            "incremental_harm": "none after this repair",
+            "exceeds_baseline": True,
+        }
+        fix = {
+            "status": "ok",
+            "kind": "fix_findings",
+            "findings": [{
+                "id": "F1",
+                "severity": "P1",
+                "summary": "Apply the accepted correction.",
+                "validity": validity,
+                "disposition": "fixed",
+                "consultation": None,
+                "prevention": None,
+                "adjudication_ref": None,
+            }],
+            "files_changed": ["implementation.py"],
+            "design_correction": {
+                "artifact": "docs/slice-01.md",
+                "brainstorming_authority": {
+                    "session_id": "session-1",
+                    "accepted_target_revision": "revision-1",
+                },
+                "contradiction": "The sealed note selects the wrong behavior.",
+                "resolution": "Select the behavior fixed by the accepted proposal.",
+            },
+            "reuse_audit": self.ok_entries(),
+        }
+        self.assertIs(
+            verifiers.validate_merged_output(
+                fix,
+                "fix_findings",
+                [ext],
+                self.roots,
+                allow_design_correction=True,
+            ),
+            fix,
+        )
+
+        delta = {
+            "status": "ok",
+            "kind": "delta_review",
+            "findings": [],
+            "design_correction_verdict": {
+                "decision": "ratify",
+                "reason": "The retained proposal uniquely resolves the conflict.",
+            },
+            "reuse_audit": self.ok_entries(),
+        }
+        self.assertIs(
+            verifiers.validate_merged_output(
+                delta,
+                "delta_review",
+                [ext],
+                self.roots,
+                require_design_correction_verdict=True,
+            ),
+            delta,
+        )
+
     def test_blocked_output_is_exempt(self):
         obj = {"status": "blocked", "kind": "implement",
                "blocked_reason": "missing dependency"}
@@ -780,6 +848,36 @@ class TestMergedOutputValidation(FilesystemCase):
                 [{"kind": "dir_listing_matches", "root": root,
                   "match_field": "package"}]
             )
+            out = verifiers.validate_merged_output(
+                obj, "implement", [ext], self.roots
+            )
+            self.assertIs(out, obj)
+
+    def test_need_rethink_output_is_exempt_from_extension_audit(self):
+        obj = {
+            "status": "need_rethink",
+            "kind": "implement",
+            "question": "Which compatible behavior should the design select?",
+            "finding": {"id": "BUILD", "summary": "choice is unsettled"},
+            "target_path": "proposals/rethink.md",
+            "max_rounds": 3,
+            "failure_gap": {
+                "classification": "fits_remodel",
+                "missing_or_conflict": "the design leaves one choice open",
+                "where": "docs/slice-01.md:12",
+                "forced_decision": "select one behavior",
+                "proposal": None,
+                "plain": "The builder needs one design choice.",
+                "example": "The builder must choose A or B without guidance.",
+            },
+        }
+        for root in (None, self.outside, "nope"):
+            ext = self.ext
+            if root is not None:
+                ext = self.string_ext(
+                    [{"kind": "dir_listing_matches", "root": root,
+                      "match_field": "package"}]
+                )
             out = verifiers.validate_merged_output(
                 obj, "implement", [ext], self.roots
             )

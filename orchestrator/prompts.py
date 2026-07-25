@@ -12,6 +12,8 @@ Report-only reviewers edit nothing at all; violations are detected
 mechanically and their output discarded.
 """
 
+import json
+
 from . import contracts
 
 # Bounds for worker-authored text re-rendered into later prompts. The
@@ -1231,6 +1233,99 @@ def build_implement(family, workspace, goal, slice_info, note_path, verification
     )
 
 
+def build_rethink_continuation(
+    kind,
+    family,
+    workspace,
+    handoff,
+    allow_design_correction=False,
+    amendments=None,
+    project_context=None,
+):
+    authority = {
+        "session_id": handoff["session_id"],
+        "accepted_target_revision": handoff[
+            "accepted_target_revision"
+        ],
+    }
+    correction = ""
+    if allow_design_correction:
+        correction = (
+            "If this accepted proposal uniquely resolves a contradiction in\n"
+            "your own sealed slice note and the existing one-shot correction\n"
+            "offer applies, use `design_correction.brainstorming_authority`\n"
+            "equal to the authority object below. Do not substitute a live\n"
+            "file or VCS fact for that retained Brainstorming authority.\n\n"
+        )
+    return (
+        _header(kind, family, workspace)
+        + "\n"
+        + _amendments_block(amendments)
+        + _project_context_block(project_context)
+        + "The independent Brainstorming session requested by your previous\n"
+        "turn has completed successfully. Continue the SAME original worker\n"
+        "task in this provider conversation. The handoff supplies the retained\n"
+        "lead-accepted Brainstorming revision and its exact content. Use the\n"
+        "retained_target content below as the proposal; do not substitute bytes\n"
+        "currently present at target_ref.\n"
+        "It is a proposal, not approval: ordinary verification, review,\n"
+        "delta review, and sealing still apply.\n\n"
+        "BRAINSTORMING HANDOFF\n"
+        + json.dumps(
+            {
+                "authority": authority,
+                "result": handoff["result"],
+                "retained_target": handoff["retained_target"],
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+            indent=2,
+        )
+        + "\n\n"
+        + correction
+        + "Finish the original task now and return its ordinary output under\n"
+        "the exact OUTPUT CONTRACT below. Only that ordinary envelope may\n"
+        "advance milestone state.\n\n"
+        + contracts.CONTRACT_TEXT
+    )
+
+
+def attach_rethink_review_handoff(prompt, handoff):
+    """Give a fresh reviewer the accepted proposal without resuming its call."""
+    return (
+        "BRAINSTORMING RETURN (FRESH REVIEW REQUIRED)\n"
+        "A previous reviewer paused this same judgment for one independent\n"
+        "Brainstorming discussion. This is a fresh provider call: assess the\n"
+        "ordinary review task yourself. This handoff does not change the\n"
+        "ordinary prompt's review subject or scope: judge exactly that task,\n"
+        "including its delta-only boundary when this is a delta review. The\n"
+        "source finding and retained proposal are evidence for that judgment,\n"
+        "not approval or additional review subjects. Report only defects within\n"
+        "the ordinary task's scope. A clean response means there are no such\n"
+        "in-scope defects; it never adopts retained proposal content. Do not\n"
+        "replace retained_target with live bytes at target_ref. All normal\n"
+        "review rules still apply.\n\n"
+        + json.dumps(
+            {
+                "authority": {
+                    "session_id": handoff["session_id"],
+                    "accepted_target_revision": handoff[
+                        "accepted_target_revision"
+                    ],
+                },
+                "result": handoff["result"],
+                "source_finding": handoff["source_finding"],
+                "retained_target": handoff["retained_target"],
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+            indent=2,
+        )
+        + "\n\n"
+        + prompt
+    )
+
+
 # ---------------------------------------------------------------------------
 # Review kinds (report-only)
 
@@ -1291,6 +1386,35 @@ def build_delta_review(family, workspace, goal, unit_desc, diff_text, registry,
         )
     correction_block = ""
     if design_correction:
+        authority = design_correction.get("brainstorming_authority")
+        if authority is None:
+            authority_block = "- authority artifact: %s\n" % _oneline(
+                design_correction.get("authority_artifact"), 300
+            )
+        else:
+            authority_block = (
+                "- authority: retained Brainstorming session %s, revision %s\n"
+                "- target ref (informational only): %s\n"
+                "- exact retained authority content (%s, JSON quoted):\n%s\n"
+                % (
+                    _oneline(authority.get("session_id"), 300),
+                    _oneline(
+                        authority.get("accepted_target_revision"), 300
+                    ),
+                    _oneline(
+                        design_correction.get("authority_artifact"), 300
+                    ),
+                    design_correction.get(
+                        "retained_authority_encoding", "unknown"
+                    ),
+                    json.dumps(
+                        design_correction.get(
+                            "retained_authority_content", ""
+                        ),
+                        ensure_ascii=False,
+                    ),
+                )
+            )
         correction_block = (
             "PROVISIONAL OWN-NOTE DESIGN CORRECTION\n"
             "The implementation fixer used its one-shot permission to amend\n"
@@ -1304,14 +1428,14 @@ def build_delta_review(family, workspace, goal, unit_desc, diff_text, registry,
             "machinery changes. Otherwise choose remodel (still in goal) or\n"
             "needs_operator (goal decision). Use retry only for ordinary\n"
             "actionable defects in this delta.\n"
-            "- note: %s\n- authority artifact: %s\n"
+            "- note: %s\n%s"
             "- contradiction: %s\n- proposed resolution: %s\n"
             "Return design_correction_verdict={decision, reason}, where\n"
             "decision is ratify|retry|remodel|needs_operator. Ratify requires\n"
             "no findings; retry requires findings.\n\n"
             % (
                 _oneline(design_correction.get("artifact"), 300),
-                _oneline(design_correction.get("authority_artifact"), 300),
+                authority_block,
                 _oneline(design_correction.get("contradiction"), 600),
                 _oneline(design_correction.get("resolution"), 600),
             )
@@ -1583,40 +1707,16 @@ def build_fix_findings(
     gap_enabled=False,
     design_correction=None,
 ):
-    lines = []
-    for f in findings:
-        contests = ""
-        if f.get("contests"):
-            contests = " [CONTESTS %s with new evidence: %s]" % (
-                _oneline(f["contests"].get("rejection_id"), ID_CLIP),
-                _oneline(f["contests"].get("new_evidence"), EVIDENCE_CLIP),
-            )
-        lines.append(
-            "- %s [%s] %s%s"
-            % (
-                _oneline(f["id"], ID_CLIP),
-                f.get("severity"),
-                _oneline(f["summary"], SUMMARY_CLIP),
-                contests,
-            )
+    findings_text = (
+        json.dumps(
+            list(findings),
+            ensure_ascii=False,
+            sort_keys=True,
+            indent=2,
         )
-        validity = f.get("validity") or {}
-        if validity:
-            lines.extend([
-                "  permitted_baseline: %s" % _oneline(
-                    validity.get("permitted_baseline"), SUMMARY_CLIP
-                ),
-                "  actual_outcome: %s" % _oneline(
-                    validity.get("actual_outcome"), SUMMARY_CLIP
-                ),
-                "  incremental_harm: %s" % _oneline(
-                    validity.get("incremental_harm"), SUMMARY_CLIP
-                ),
-                "  exceeds_baseline: %s" % str(
-                    validity.get("exceeds_baseline")
-                ).lower(),
-            ])
-    findings_text = "\n".join(lines) or "(none)"
+        if findings
+        else "[]"
+    )
     verification_block = ""
     if verification_output:
         verification_block = (
@@ -1671,15 +1771,38 @@ def build_fix_findings(
             % design_correction.get("artifact")
         )
     elif design_correction and design_correction.get("mode") == "active":
+        authority = design_correction.get("brainstorming_authority")
+        if authority is None:
+            authority_text = (
+                "The cited authority %s is fixed and read-only."
+                % design_correction.get("authority_artifact")
+            )
+        else:
+            authority_text = (
+                "Authority is retained Brainstorming session %s, revision "
+                "%s. The live target ref %s is informational, not the "
+                "authority source. Exact retained content (%s, JSON quoted): "
+                "%s"
+                % (
+                    authority.get("session_id"),
+                    authority.get("accepted_target_revision"),
+                    design_correction.get("authority_artifact"),
+                    design_correction.get(
+                        "retained_authority_encoding", "unknown"
+                    ),
+                    json.dumps(
+                        design_correction.get(
+                            "retained_authority_content", ""
+                        ),
+                        ensure_ascii=False,
+                    ),
+                )
+            )
         correction_block = (
             "PROVISIONAL OWN-NOTE CORRECTION IN PROGRESS\n"
             "The note %s remains editable only to resolve the CURRENT delta\n"
-            "findings. The cited authority %s is fixed and read-only. Do not\n"
-            "declare another design_correction.\n\n"
-            % (
-                design_correction.get("artifact"),
-                design_correction.get("authority_artifact"),
-            )
+            "findings. %s Do not declare another design_correction.\n\n"
+            % (design_correction.get("artifact"), authority_text)
         )
     correction_line = ""
     if design_correction and design_correction.get("mode") == "offer":
@@ -1809,7 +1932,9 @@ def build_fix_findings(
         + _amendments_block(amendments)
         + _project_context_block(project_context)
         + "QUEUED FINDINGS (claims, not facts — verify each against the\n"
-        "real code/doc before deciding):\n"
+        "real code/doc before deciding). These are the exact stored objects;\n"
+        "if you request `need_rethink`, copy exactly one complete object into\n"
+        "`finding` without shortening, normalizing, or dropping fields:\n"
         + findings_text
         + "\n\n"
         + verification_block

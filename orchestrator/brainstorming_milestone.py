@@ -1,0 +1,318 @@
+"""Milestone adapter for the independent Brainstorming lifecycle."""
+
+from __future__ import annotations
+
+import base64
+import copy
+import hashlib
+import os
+import shutil
+import tempfile
+
+from orchestrator import brainstorming, brainstorming_coordination
+from orchestrator import brainstorming_lifecycle
+from orchestrator import contracts, registry
+
+
+class AdapterError(RuntimeError):
+    """A milestone signal cannot safely enter or consume Brainstorming."""
+
+
+class OperationalTerminalError(AdapterError):
+    """The attached discussion ended because its execution failed."""
+
+
+def service_home(state):
+    """Use the bound service home, or the ordinary default for local runs."""
+    project = state.get("project")
+    if isinstance(project, dict):
+        directory = project.get("directory")
+        if isinstance(directory, str) and directory.strip():
+            return os.path.dirname(os.path.abspath(directory))
+    return os.path.abspath(registry.DEFAULT_HOME)
+
+
+def execution_context(state):
+    project = state.get("project")
+    if isinstance(project, dict):
+        return {
+            "workspace_path": state["workspace"],
+            "project": project["project"],
+            "work_area": project["work_area"],
+            "primary": copy.deepcopy(project["primary"]),
+            "additional": copy.deepcopy(project["additional"]),
+        }
+    return {
+        "workspace_path": state["workspace"],
+        "project": None,
+        "work_area": None,
+        "primary": None,
+        "additional": [],
+    }
+
+
+def _path_overlap(first, second):
+    first = os.path.abspath(first)
+    second = os.path.abspath(second)
+    try:
+        common = os.path.commonpath(
+            (os.path.realpath(first), os.path.realpath(second))
+        )
+    except ValueError:
+        common = None
+    if common in (os.path.realpath(first), os.path.realpath(second)):
+        return True
+    return brainstorming._paths_overlap_from_existing_ancestor(first, second)
+
+
+def _candidate_reference(workspace, value):
+    if not isinstance(value, str) or not value.strip():
+        return None
+    value = value.strip()
+    if value.startswith(("http://", "https://")):
+        return None
+    path = value if os.path.isabs(value) else os.path.join(workspace, value)
+    return os.path.abspath(path)
+
+
+def validate_target(state, signal, references):
+    """Resolve the requested source artifact inside the milestone checkout."""
+    workspace = os.path.abspath(state["workspace"])
+    target = os.path.abspath(os.path.join(workspace, signal["target_path"]))
+    workspace_real = os.path.realpath(workspace)
+    target_real = os.path.realpath(target)
+    try:
+        if (
+            os.path.commonpath((workspace, target)) != workspace
+            or os.path.commonpath((workspace_real, target_real))
+            != workspace_real
+        ):
+            raise AdapterError(
+                "the Brainstorming proposal target leaves the workspace"
+            )
+    except ValueError as exc:
+        raise AdapterError(
+            "the Brainstorming proposal target leaves the workspace"
+        ) from exc
+    try:
+        brainstorming_coordination.capture_materialization_source(target)
+    except brainstorming_coordination.CoordinationRejected as exc:
+        raise AdapterError(
+            "the requested Brainstorming source target is not materializable"
+        ) from exc
+    return target
+
+
+def stable_references(state, candidates, target_path):
+    """Keep stable, unique present caller references in declared order."""
+    workspace = os.path.abspath(state["workspace"])
+    references = []
+    seen = set()
+    for candidate in candidates:
+        path = _candidate_reference(workspace, candidate)
+        if path is None or not os.path.lexists(path):
+            continue
+        try:
+            rel = os.path.relpath(path, workspace)
+        except ValueError:
+            rel = path
+        value = rel if not rel.startswith(".." + os.sep) else path
+        if value not in seen:
+            references.append(value)
+            seen.add(value)
+    return references
+
+
+def validate_origin_signal(signal, kind, queued_findings=None):
+    """Apply caller-state checks that the common schema cannot know."""
+    contracts.validate_need_rethink(
+        signal,
+        kind,
+        "milestone need_rethink",
+        require_plain=kind in contracts.REPORT_KINDS,
+    )
+    if kind == contracts.KIND_FIX_FINDINGS:
+        matches = [
+            finding
+            for finding in list(queued_findings or [])
+            if brainstorming._same_json_value(finding, signal["finding"])
+        ]
+        if len(matches) != 1:
+            raise AdapterError(
+                "a fixer rethink must name exactly one currently queued finding"
+            )
+    return copy.deepcopy(signal)
+
+
+def _owned_work_areas_root(state):
+    """Keep adapter proposals outside the milestone checkout."""
+    workspace = os.path.abspath(state["workspace"])
+    candidates = [
+        os.path.join(
+            os.path.abspath(service_home(state)),
+            "brainstorming-work-areas",
+        ),
+        os.path.join(
+            tempfile.gettempdir(),
+            "impl-roadmap-brainstorming-work-areas",
+        ),
+    ]
+    digest = hashlib.sha256(
+        workspace.encode("utf-8", errors="surrogatepass")
+    ).hexdigest()[:16]
+    parent = os.path.dirname(workspace)
+    if parent != workspace:
+        candidates.append(
+            os.path.join(
+                parent,
+                ".impl-roadmap-brainstorming-work-areas-%s" % digest,
+            )
+        )
+    for root in candidates:
+        if not _path_overlap(root, workspace):
+            return root
+    raise AdapterError(
+        "no Brainstorming-owned work area can be placed outside the workspace"
+    )
+
+
+def _materialize_target(state, signal, references):
+    """Copy one requested target into a retained Brainstorming-owned area."""
+    source = validate_target(state, signal, references)
+    root = _owned_work_areas_root(state)
+    os.makedirs(root, exist_ok=True)
+    work_area = tempfile.mkdtemp(prefix="milestone-", dir=root)
+    target_parent = os.path.join(work_area, "target")
+    os.makedirs(target_parent)
+    target = os.path.join(target_parent, os.path.basename(source))
+    try:
+        source_revision = (
+            brainstorming_coordination.capture_materialization_source(source)
+        )
+        brainstorming_coordination.restore_target(target, source_revision)
+    except Exception:
+        shutil.rmtree(work_area)
+        raise
+    return work_area, target
+
+
+def create_session(
+    state,
+    config,
+    unit_key,
+    signal,
+    references,
+):
+    """Translate one valid signal into the existing standalone lifecycle."""
+    work_area, target = _materialize_target(state, signal, references)
+    context = execution_context(state)
+    body = {
+        "request": {
+            "workspace_path": state["workspace"],
+            "target_path": target,
+            "question": signal["question"],
+            "context": {
+                "brief": (
+                    "A milestone worker paused on one focused design question. "
+                    "The source finding below is preserved unchanged."
+                ),
+                "references": list(references),
+                "source_payload": copy.deepcopy(signal["finding"]),
+            },
+            "max_rounds": signal["max_rounds"],
+        },
+        "participants": [
+            {"id": "lead", "role": "lead"},
+            {"id": "interlocutor", "role": "interlocutor"},
+        ],
+        "closure_policy": "unanimity",
+    }
+    if context["project"] is not None:
+        body["project"] = context["project"]
+        body["work_area"] = context["work_area"]
+    caller = "milestone:%s:%s" % (
+        state.get("name") or "run",
+        unit_key,
+    )
+    try:
+        return brainstorming_lifecycle.create_resolved_session(
+            service_home(state),
+            body,
+            caller,
+            context,
+            config,
+            owned_target_path=target,
+        )
+    except Exception:
+        shutil.rmtree(work_area)
+        raise
+
+
+def inspect_session(state, session_id):
+    return brainstorming_lifecycle.inspect_session(
+        service_home(state), session_id, lambda _record: None
+    )
+
+
+def retained_revision(state, session_id, revision):
+    store = brainstorming.SessionStore(
+        brainstorming_lifecycle.state_directory(service_home(state))
+    )
+    return store.read_target_revision(session_id, revision)
+
+
+def prompt_handoff(state, handoff):
+    """Attach exact retained proposal bytes for one worker prompt only."""
+    expanded = copy.deepcopy(handoff)
+    if "retained_target" in expanded:
+        return expanded
+    record = retained_revision(
+        state,
+        expanded["session_id"],
+        expanded["accepted_target_revision"],
+    )
+    exists, content = brainstorming.target_revision_content(record)
+    try:
+        rendered = content.decode("utf-8")
+        encoding = "utf-8"
+    except UnicodeDecodeError:
+        rendered = base64.b64encode(content).decode("ascii")
+        encoding = "base64"
+    expanded["retained_target"] = {
+        "exists": exists,
+        "encoding": encoding,
+        "content": rendered,
+    }
+    return expanded
+
+
+def terminal_handoff(state, session_id):
+    """Return one retained terminal result and its lead-accepted authority."""
+    projected = inspect_session(state, session_id)
+    session_state = projected["state"]
+    if session_state["status"] not in brainstorming.TERMINAL_STATUSES:
+        if projected["process"] != "running":
+            raise OperationalTerminalError(
+                "the Brainstorming lifecycle stopped before a terminal result"
+            )
+        return None
+    if session_state.get("failure_origin") == "operational":
+        raise OperationalTerminalError(
+            "the Brainstorming lifecycle ended because execution failed"
+        )
+    handoff = {
+        "session_id": session_id,
+        "result": copy.deepcopy(session_state["result"]),
+        "accepted_target_revision": session_state[
+            "accepted_target_revision"
+        ],
+    }
+    if session_state["status"] == "success":
+        revision = handoff["accepted_target_revision"]
+        if revision is None:
+            raise AdapterError(
+                "a successful Brainstorming session has no lead-accepted target"
+            )
+        retained_revision(state, session_id, revision)
+        return prompt_handoff(state, handoff)
+    return handoff

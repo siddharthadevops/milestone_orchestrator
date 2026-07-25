@@ -1129,7 +1129,7 @@ class StandaloneBrainstormingApiTest(unittest.TestCase):
             store, None
         ).prepare(session_id)
         accepted = store.read_target_revision(
-            session_id, prepared.state["accepted_target_revision"]
+            session_id, prepared.state["recovery_baseline_revision"]
         )
         recorded = store.record_completed_turn(
             session_id,

@@ -481,19 +481,21 @@ def _run_check(check, entries, ext, roots, ctx):
 
 def validate_merged_output(obj, kind, extensions, roots,
                            require_plain=False, battery_questions=None,
-                           require_drift_damage=False):
+                           require_drift_damage=False,
+                           allow_design_correction=False,
+                           require_design_correction_verdict=False):
     """Validate a worker output against the base kind contract PLUS the
     in-scope compiled extensions.
 
     Returns the object unchanged on success. Worker-authored violations
     raise contracts.ContractError at the same point as the base validation,
     so call_worker's single repair retry applies unchanged. A validly
-    blocked, retry, OR gap output is exempt from extension enforcement (it
-    produced no artifact to audit); with no extensions the validation is
-    exactly the base one. require_plain/battery_questions (the reform's plain/example
-    hard-require and question battery) ride through to every base
-    validation call — including the blocked early path, harmless there,
-    keeping one shape.
+    blocked, retry, gap, OR need_rethink output is exempt from extension
+    enforcement (it produced no artifact to audit); with no extensions the
+    validation is exactly the base one. Base-contract options ride through to
+    every validation call — including the early path, harmless there — so a
+    project extension can coexist with the same correction and reform
+    envelopes as the unextended validator.
     """
     extensions = list(extensions or [])
     # Output-independent config sanity first: a broken merge is the
@@ -507,7 +509,7 @@ def validate_merged_output(obj, kind, extensions, roots,
             )
     _require_distinct_fields(extensions)
     if isinstance(obj, dict) and obj.get("status") in (
-        "blocked", "retry", "gap"
+        "blocked", "retry", "gap", "need_rethink"
     ):
         # These statuses FINISH NOTHING — no artifact to audit, so they are
         # exempt from extension/root enforcement. Base validation still
@@ -517,6 +519,10 @@ def validate_merged_output(obj, kind, extensions, roots,
             obj, kind, require_plain=require_plain,
             battery_questions=battery_questions,
             require_drift_damage=require_drift_damage,
+            allow_design_correction=allow_design_correction,
+            require_design_correction_verdict=(
+                require_design_correction_verdict
+            ),
         )
         if obj.get("status") == "retry":
             ctx = "worker[%s]" % kind
@@ -534,6 +540,8 @@ def validate_merged_output(obj, kind, extensions, roots,
         obj, kind, require_plain=require_plain,
         battery_questions=battery_questions,
         require_drift_damage=require_drift_damage,
+        allow_design_correction=allow_design_correction,
+        require_design_correction_verdict=require_design_correction_verdict,
     )
     if not extensions:
         return obj

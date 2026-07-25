@@ -407,7 +407,7 @@ def transition_unit(state, unit, new_status, reason=None):
         U_PRE_SEAL_VERIFY: (U_SEALING, U_FIXING, U_FAILED),
         # U_SEALING stays on an invalidated attempt (the workspace is
         # restored to the sealed candidate commit and the attempt retries).
-        U_SEALING: (U_SEALED, U_FIXING, U_FAILED),
+        U_SEALING: (U_SEALED, U_FIXING, U_PRE_SEAL_VERIFY, U_FAILED),
         # A sealed unit is terminal EXCEPT for reopen_for_repair, which
         # reopens it to resolve a downstream builder's gap (reform §3). The
         # repair immediately enters a fix episode (U_REPAIRING -> U_FIXING)
