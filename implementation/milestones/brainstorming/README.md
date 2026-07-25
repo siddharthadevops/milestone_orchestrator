@@ -406,20 +406,20 @@ The goal is satisfied when:
 
 | Unit | Status | Rounds | Seal attempts | Gate commit |
 |---|---|---|---|---|
-| skeleton | sealed | 31 | a1:pass, a2:pass, a3:findings, a4:findings, a5:pass | e21ddee |
-| slice_doc-01 (Session contract and durable state) | sealed | 2 | a1:pass, a2:pass (wave skeleton-a2), a3:pass (wave skeleton-a5) | e21ddee |
+| skeleton | sealed | 33 | a1:pass, a2:pass, a3:findings, a4:findings, a5:pass, a6:pass | 76fa65c |
+| slice_doc-01 (Session contract and durable state) | sealed | 2 | a1:pass, a2:pass (wave skeleton-a2), a3:pass (wave skeleton-a5), a4:pass (wave skeleton-a6) | 76fa65c |
 | slice_impl-01 (Session contract and durable state) | sealed | 5 | a1:pass | 88bd24d |
-| slice_doc-02 (Persistent participant execution) | sealed | 2 | a1:pass, a2:pass (wave skeleton-a2), a3:pass (wave skeleton-a5) | e21ddee |
+| slice_doc-02 (Persistent participant execution) | sealed | 2 | a1:pass, a2:pass (wave skeleton-a2), a3:pass (wave skeleton-a5), a4:pass (wave skeleton-a6) | 76fa65c |
 | slice_impl-02 (Persistent participant execution) | sealed | 5 | a1:pass | 9b5103f |
-| slice_doc-03 (Ordered rounds and lead-owned target) | sealed | 9 | a1:pass, a2:pass (wave skeleton-a2), a3:pass (wave skeleton-a5) | e21ddee |
+| slice_doc-03 (Ordered rounds and lead-owned target) | sealed | 9 | a1:pass, a2:pass (wave skeleton-a2), a3:pass (wave skeleton-a5), a4:pass (wave skeleton-a6) | 76fa65c |
 | slice_impl-03 (Ordered rounds and lead-owned target) | sealed | 30 | a1:pass | 3749e79 |
-| slice_doc-04 (Plain-language session transcript) | sealed | 5 | a1:pass, a2:pass (wave skeleton-a5) | 663a57a |
+| slice_doc-04 (Plain-language session transcript) | sealed | 5 | a1:pass, a2:pass (wave skeleton-a5), a3:pass (wave skeleton-a6) | 76fa65c |
 | slice_impl-04 (Plain-language session transcript) | sealed | 37 | a1:pass | 41b70de |
-| slice_doc-05 (Revision-bound closure and results) | sealed | 2 | a1:pass, a2:pass (wave skeleton-a5) | df08bc5 |
+| slice_doc-05 (Revision-bound closure and results) | sealed | 2 | a1:pass, a2:pass (wave skeleton-a5), a3:pass (wave skeleton-a6) | 76fa65c |
 | slice_impl-05 (Revision-bound closure and results) | sealed | 24 | a1:pass | df08bc5 |
-| slice_doc-06 (Standalone lifecycle API) | sealed | 2 | a1:pass, a2:pass (wave skeleton-a5) | f4753e1 |
+| slice_doc-06 (Standalone lifecycle API) | sealed | 2 | a1:pass, a2:pass (wave skeleton-a5), a3:pass (wave skeleton-a6) | 76fa65c |
 | slice_impl-06 (Standalone lifecycle API) | sealed | 20 | a1:pass | 227acc8 |
-| slice_doc-07 (Dedicated brainstorming visualization) | sealed | 2 | a1:pass, a2:pass (wave skeleton-a5) | ddd44d4 |
+| slice_doc-07 (Dedicated brainstorming visualization) | sealed | 2 | a1:pass, a2:pass (wave skeleton-a5), a3:pass (wave skeleton-a6) | 76fa65c |
 | slice_impl-07 (Dedicated brainstorming visualization) | sealed | 2 | a1:pass | 7721ad8 |
-| slice_doc-08 (Milestone `need_rethink` adapter) | sealed | 5 | a1:pass, a2:pass (wave skeleton-a5) | be32bdc |
-| slice_impl-08 (Milestone `need_rethink` adapter) | pending | 1 | - | - |
+| slice_doc-08 (Milestone `need_rethink` adapter) | sealed | 5 | a1:pass, a2:pass (wave skeleton-a5), a3:pass (wave skeleton-a6) | 76fa65c |
+| slice_impl-08 (Milestone `need_rethink` adapter) | pending | 44 | - | - |

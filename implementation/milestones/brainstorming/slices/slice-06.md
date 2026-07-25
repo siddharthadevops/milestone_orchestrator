@@ -38,7 +38,9 @@ repository.
 - **Strict admission:** `max_rounds` is any positive caller-supplied integer.
   This API adds no fixed round maximum, artifact-size ceiling, retained-history
   allowance, or global active-session count. A target already owned by another
-  nonterminal Brainstorming session remains unavailable.
+  nonterminal Brainstorming session remains unavailable. An absent target is
+  admitted only when its parent directory already exists; a missing parent is
+  rejected without creating an ancestor, session state, or participant process.
 - **Optimistic:** competing creation, completion, and stop operations contend
   on durable revisions. One outcome wins; stale work cannot append a second
   turn, result, or closing.
@@ -70,12 +72,13 @@ Slice 8 owns the corrective implementation that makes session creation retain
 an unaccepted `recovery_baseline_revision` while leaving
 `accepted_target_revision` null until completed lead work. It updates the
 affected state, lifecycle, stop, and view checks without changing these public
-routes or error vocabulary. The same correction carries one target-mutation
-correction for the pending worker action and coherent failure on repetition
-through the background lifecycle. It also adds regression coverage proving the
-discarded numeric thresholds are not admission policy and that target-version
-selection and recovery never probe repository/VCS state. The historical Slice
-6 unit is not rerun.
+routes or error vocabulary, and pins side-effect-free rejection when an absent
+target's parent does not exist. The same correction carries
+one target-mutation correction for the pending worker action and coherent
+failure on repetition through the background lifecycle. It also adds
+regression coverage proving the discarded numeric thresholds are not admission
+policy and that target-version selection and recovery never probe
+repository/VCS state. The historical Slice 6 unit is not rerun.
 
 ### Non-goals
 
@@ -103,9 +106,11 @@ mutation.
 
 Malformed input, a non-positive round bound, an unauthorized caller, an
 unresolved work area, unavailable participant assignments or actual runtime
-resources, an authority-overlapping target, or an already-active session for
-the same target starts no participant and changes neither target nor durable
-session state. A valid request is not refused solely because `max_rounds`
+resources, an absent target with a missing parent, an authority-overlapping
+target, or an already-active session for the same target starts no participant
+and changes neither target nor durable session state. No ancestor is created.
+An absent target within an existing parent remains valid. A valid request is
+not refused solely because `max_rounds`
 exceeds 16, the target exceeds 8 MiB, or eight other distinct-target sessions
 are active.
 
@@ -153,9 +158,9 @@ excluded.
 | Creation input and roster resolution | The body has required `request`, `participants`, and `closure_policy`, plus optional `project` and `work_area` supplied together. `request` is Slice 1's contract. Participant input is an ordered list of exact `{id, role}` objects with exactly one lead and at least one interlocutor. Before start, the service resolves immutable executor/model-family assignments, prefers multiple families, and otherwise records independent same-family fallback. Caller identity is derived. | skeleton, Request and context and Resolved roster | touch one API adapter into existing request/run config; do-not-add request fields, caller commands, taxonomy, or re-resolution |
 | Execution context and access binding | With no project/work-area pair, create/read/stop are administrative-only and `workspace_path` is an existing directory. With a pair, existing project membership and READY work-area resolution apply; `workspace_path` equals the resolved primary path and additional roots/access rules pass through unchanged. Immutable service metadata authorizes before session state is read. No repository check applies. | skeleton, Execution context; frozen mandate, Inherited execution context | touch pass-through resolution and independent access/process record; do-not-add roots, narrow tools, trust request identity, or require Git |
 | Standalone lifecycle and follow | Accepted creation writes no milestone state, transitions the Brainstorming session to running, and starts at most one lifecycle process. That process uses ordered turns and closure until durable success or failure. Repeated GETs return the latest complete state plus process observation; observed revision never decreases. A normal operational error becomes coherent failure only after safe reconciliation; an unclean death that cannot be reconciled stays visibly nonterminal/stopped. | skeleton, Process ownership and Closure/result | touch one Brainstorming lifecycle loop; do-not-use milestone units, add resume semantics, expose candidates, or promise push/exactly-once |
-| Target admission and revision boundary | Creation rejects overlap with Brainstorming state/transcript authority and an equal or aliased target owned by another nonterminal session. It accepts every positive `max_rounds` and imposes no artifact/history/global-session threshold. Creation retains the exact target baseline but leaves accepted revision null. During the run, only completed lead work creates or advances accepted state; any other-turn mutation accepts no progress and recovers only the target. The same pending worker action may be corrected once; repetition restores the target and returns coherent `failure`, independently of the one envelope repair. External writes are outside contract. Target-version selection and recovery inspect no repository state or VCS object and change no other path; participant contextual access is unchanged. | skeleton, Roles, rounds, revisions, Invalid target mutation, and Execution context; Resource posture; Amendment A1 | touch Slice 8's baseline/null, bounded-failure, and no-VCS verification correction while reusing target-exclusive coordination; do-not-promote setup bytes, add quota policy, attribute external writes, or recover another path |
+| Target admission and revision boundary | Creation rejects overlap with Brainstorming state/transcript authority and an equal or aliased target owned by another nonterminal session. An absent target is admitted only within an existing parent; a missing parent is invalid before session state or participant work and no ancestor is created. Creation accepts every positive `max_rounds` and imposes no artifact/history/global-session threshold. It retains the exact target baseline but leaves accepted revision null. During the run, only completed lead work creates or advances accepted state; any other-turn mutation accepts no progress and recovers only the target. The same pending worker action may be corrected once; repetition restores the target and returns coherent `failure`, independently of the one envelope repair. External writes are outside contract. Target-version selection and recovery inspect no repository state or VCS object and change no other path; participant contextual access is unchanged. | skeleton, Target admission, Roles, rounds, revisions, Invalid target mutation, and Execution context; Resource posture; Amendment A1 | touch Slice 8's existing-parent admission, baseline/null, bounded-failure, and no-VCS verification correction while reusing target-exclusive coordination; do-not-create ancestors, promote setup bytes, add quota policy, attribute external writes, or recover another path |
 | Explicit stop | Stop accepts no body fields. On a nonterminal session it stops the lifecycle/participant processes, establishes quiescence, reconciles only the target to the accepted revision or baseline, appends the material interruption, and atomically terminalizes as failure. `rounds_used` does not increase and attempted work, votes, and target revisions are not accepted. Terminal stop is unchanged; concurrent stop/completion has one winner. Unconfirmed quiescence or recovery returns `brainstorming_stop_incomplete`. | skeleton, Guarantee Posture; Amendment A1 | touch lifecycle stop/failure composition; do-not-add a stopped durable result, terminalize before safety evidence, count stop as a turn, or promote the baseline |
-| Error vocabulary | Errors retain `{"ok": false, "error": code}`. New codes are HTTP 400 `invalid_brainstorming_request`, HTTP 404 `unknown_brainstorming_session`, HTTP 409 `brainstorming_target_in_use` or `brainstorming_stop_incomplete`, and HTTP 503 `brainstorming_unavailable`. Non-positive/non-integer round bounds are invalid. Missing executors or actual admission unavailability may use unavailable. Existing identity/project refusals pass through unchanged. No error exposes raw output, command, environment, or provider reference. | existing service contract; skeleton, Resource posture | touch explicit public mapping; do-not-add a quota error, second envelope, or diagnostics |
+| Error vocabulary | Errors retain `{"ok": false, "error": code}`. New codes are HTTP 400 `invalid_brainstorming_request`, HTTP 404 `unknown_brainstorming_session`, HTTP 409 `brainstorming_target_in_use` or `brainstorming_stop_incomplete`, and HTTP 503 `brainstorming_unavailable`. Non-positive/non-integer round bounds and a missing target parent are invalid. Missing executors or actual admission unavailability may use unavailable. Existing identity/project refusals pass through unchanged. No error exposes raw output, command, environment, or provider reference. | existing service contract; skeleton, Target admission and Resource posture | touch explicit public mapping; do-not-add a quota error, second envelope, or diagnostics |
 | Slice boundary | Slice 6 exposes and drives product-neutral state/result shapes. Slice 8 corrects baseline-versus-acceptance facts and affected consumers without changing route envelopes or lifecycle result shapes. No panel markup, milestone signal, Agent99 code, target schema, permission model, or public deletion/listing is added here. | skeleton, Planned Slices | touch standalone API/runtime plus declared correction; do-not-touch milestone flow, external roots, or later adapters |
 
 ### Verification Contract
@@ -168,6 +173,7 @@ Focused command:
 |---|---|---|---|
 | Standalone creation is independent | `test_create_runs_without_a_milestone_and_resolves_roster` | Authorized requests return the 201 projection, retain order, resolve cross-family or valid fallback assignments, start one lifecycle process, and leave milestone state unchanged. | strict |
 | Refused creation has no effects | `test_create_refusals_are_typed_and_side_effect_free` | Invalid shapes, non-positive round bounds, roster/policy errors, unavailable executors/resources, work-area failures, authority overlap, and an active equal/aliased target return the pinned code with no session/process/target/revision/transcript write. | strict |
+| Absent-target admission stays within the target | `test_target_admission_requires_existing_parent_without_creating_it` | An absent target within an existing parent is accepted for lead construction. A missing parent returns the invalid-request outcome before session state or participant work and creates no ancestor. | strict |
 | No document-invented numeric admission policy | `test_request_and_target_admission_has_no_fixed_global_quota` | A request above 16 rounds, a regular target above 8 MiB, and a ninth concurrent distinct-target session are accepted when ordinary authorization and resources are available; none is refused solely by the discarded threshold. | strict |
 | Follow is stable, polling, and authorized | `test_detail_poll_is_authorized_before_state_read_and_revision_monotonic` | Foreign/unknown reads are refused before content access; repeated reads never regress, return valid state and reconciled `chat.md`, and expose no stream or raw diagnostic. | strict snapshot/access; eventual observation |
 | Background lifecycle reaches both results | `test_fake_provider_lifecycle_reaches_success_and_failure` | Real fake-CLI sessions run turns/closure to coherent success; round exhaustion and safe operational failure produce coherent failure; target/result/transcript references agree and no milestone artifact appears. | strict accepted state; best-effort delivery |
@@ -188,7 +194,7 @@ The skeleton's Question Battery is inherited. Slice-specific answers:
 |---|---|---|
 | consumers_touched | Local service dispatch, identity/project authorization, work-area resolution, process registry/stop convention, Brainstorming lifecycle, dedicated view, and focused API tests. | Dependencies and consumers |
 | pinned_facts | Three routes, one success envelope, exact creation input, durable access binding, polling lifecycle, active-target isolation, caller-selected positive rounds, one bounded target-mutation correction with coherent failure, side-effect-free actual unavailability, target-safe stop, and exact errors. | Pinned-Facts Table |
-| verification | Focused checks plus Slice 8's corrective regression pin creation, refusals, absence of fixed numeric quotas, authorization/follow, both outcomes including repeated-mutation failure, inherited context, fail-on-access detection of repository/VCS dependencies, stop/races, honest failures, and compatibility. | Verification Contract |
+| verification | Focused checks plus Slice 8's corrective regression pin creation, existing-parent admission for an absent target, side-effect-free missing-parent refusal, absence of fixed numeric quotas, authorization/follow, both outcomes including repeated-mutation failure, inherited context, fail-on-access detection of repository/VCS dependencies, stop/races, honest failures, and compatibility. | Verification Contract |
 | reuse_posture | Existing HTTP envelopes, authorization, work-area resolution, process bookkeeping, stop/reap, Brainstorming state/transcript/coordination/closure, and polling are adopted. A separate Brainstorming lifecycle record/loop is the only necessary extension. | Reuse Posture |
 | enforceability | Exact validators and route tests enforce shape; immutable pre-read binding enforces access; process registry and target lock enforce one lifecycle/target; SessionStore snapshots enforce follow; quiescence plus target-only reconciliation enforce stop. | Enforceability Gate |
 
@@ -212,6 +218,7 @@ The skeleton's Question Battery is inherited. Slice-specific answers:
 | invariant | enforcing seam | implementation gate |
 |---|---|---|
 | Exact schemas and codes | Existing response envelope plus exact request/config validation | Route matrix accepts only pinned shapes/statuses and maps refusals without diagnostics. |
+| Target creation stays within its path | Existing-parent admission before durable creation or participant start | Existing-parent and missing-parent fixtures prove an absent target remains constructible without creating any ancestor or session on refusal. |
 | No fixed numeric quota | Positive-integer request validation and no target-size/history/global-count threshold in admission | Regression accepts values above all discarded thresholds when ordinary resources are available. |
 | Side-effect-free actual unavailability | Admission completes before session/process/transcript creation | Missing-executor and injected resource-unavailable fixtures return 503 with no target or durable effect. |
 | Authorized inherited context | Existing identity/project membership and READY root resolution | Tests authorize before state access and pass the same resolved context to every participant call. |

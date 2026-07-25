@@ -14,6 +14,9 @@ round bound. Only then does the adapter create a Brainstorming session for that
 target. Creation retains its exact existing-or-absent state as
 `recovery_baseline_revision`, but that baseline is not accepted target state.
 `accepted_target_revision` remains null until a completed lead turn creates it.
+An absent target is valid only when its parent directory already exists. A
+missing parent is rejected before session state or participant work begins,
+and Brainstorming never creates an ancestor.
 
 This slice also delivers that acceptance-provenance correction to the existing
 Brainstorming state, coordination, lifecycle, stop, and dedicated-view
@@ -62,14 +65,16 @@ generated records; its target is a separate proposal artifact.
   failures, retry, and cleanup behavior remain unchanged and no target is
   observed or reserved by Brainstorming.
 - **Strict target authority:** creation captures an unaccepted target baseline
-  and leaves accepted state null. Only completed lead work creates or advances
-  accepted target state. Interlocutor, control, and incomplete-lead mutations
-  accept no turn, round, or revision and recover only the target. One corrected
-  attempt of the same pending worker action is allowed; another invalid target
-  mutation restores the target and returns coherent `failure`. The independent
-  envelope-repair allowance cannot reset this bound. The handoff names a
-  retained lead-accepted Brainstorming revision, never the baseline or live
-  drift.
+  and leaves accepted state null. An absent target requires an existing parent;
+  otherwise creation is rejected without session state, participant work, or
+  ancestor creation. Only completed lead work creates or advances accepted
+  target state. Interlocutor, control, and incomplete-lead
+  mutations accept no turn, round, or revision and recover only the target. One
+  corrected attempt of the same pending worker action is allowed; another
+  invalid target mutation restores the target and returns coherent `failure`.
+  The independent envelope-repair allowance cannot reset this bound. The
+  handoff names a retained lead-accepted Brainstorming revision, never the
+  baseline or live drift.
 - **Strict caller bound:** `max_rounds` is any positive integer. No fixed
   numeric round, artifact, history, or global-session admission policy is added.
 - **Optimistic:** durable state and existing locking decide which competing
@@ -94,13 +99,14 @@ participant conversations, ordered target revisions, transcript, closure,
 standalone lifecycle, and dedicated view.
 
 It owns the corrective implementation that separates the recovery baseline
-from accepted state and updates every affected current consumer. It also owns
-focused regression coverage proving that the discarded 16-round, 8-MiB-target,
-32-MiB-history, 17-revision, and eight-active-session values are not product
-admission thresholds. No quota state, reservation, migration, legacy
-stop-only branch, or quota-specific retry is implemented. The same corrective
-coverage makes repository/VCS reads by target-version selection and recovery
-observable and fail-fast.
+from accepted state, requires an existing parent for an absent target, and
+updates every affected current consumer. It also owns focused regression
+coverage proving that missing-parent refusal creates no ancestor or session and
+that the discarded 16-round, 8-MiB-target, 32-MiB-history, 17-revision, and
+eight-active-session values are not product admission thresholds. No quota
+state, reservation, migration, legacy stop-only branch, or quota-specific retry
+is implemented. The same corrective coverage makes repository/VCS reads by
+target-version selection and recovery observable and fail-fast.
 
 The adapter reuses the milestone's existing result/finding/gap validation,
 provider-session continuation, atomic transition, design-correction
@@ -121,6 +127,9 @@ is changed. The standalone view keeps its route, envelope, and page.
   `max_rounds`, including values above 16.
 - Session creation captures the target's exact existing-or-absent state as an
   unaccepted recovery baseline and initializes accepted target state to null.
+- An absent target within an existing parent remains constructible. A missing
+  parent is rejected as an invalid request before session state or participant
+  work, and no ancestor is created.
 - A valid target is not refused solely because it exceeds 8 MiB, retained
   revisions would exceed 17 or 32 MiB, or eight other distinct-target sessions
   are active.
@@ -179,6 +188,7 @@ mechanical changes remain excluded.
   generated milestone artifacts.
 - No workspace snapshot, sibling capture, repository rollback, or recovery
   outside `target_path`.
+- No creation of a missing target parent or ancestor.
 - No target monitoring around an ordinary milestone call before a valid rethink
   request creates a session.
 
@@ -206,7 +216,7 @@ mechanical changes remain excluded.
 |---|---|---|---|
 | Milestone worker signal | The exact status is `need_rethink`, eligible only for `implement`, `fix_findings`, `review_round`, `delta_review`, and `seal_half`. Its object has exactly non-empty `question`, one current `finding`, normalized workspace-relative non-empty `target_path`, and positive-integer `max_rounds`. `implement` and `fix_findings` also require exactly one current `failure_gap`; report kinds forbid it. A fixer finding equals one queued finding and siblings remain pending. No ordinary result, work claim, retry, finding list, disposition, verdict, or slice plan may be mixed in. | frozen mandate, Milestone integration; skeleton, Milestone adapter | touch common worker output validation, eligible prompts, and focused tests; do-not-enable other kinds, preassign targets, drop sibling findings, or treat signal as completion |
 | Ordinary origin outcomes | Without a valid signal, all five eligible paths retain ordinary result, validation, provider-failure, retry, and cleanup behavior. No Brainstorming target reservation, baseline, mutation observation, recovery, or outcome rejection occurs. | skeleton, Milestone adapter; Amendment A1 | touch only the alternative signal branch; do-not-add pre-session custody |
-| Session-creation target boundary | After signal and target validation, the adapter creates a session naming the target, captures its exact existing-or-absent state as `recovery_baseline_revision`, and initializes `accepted_target_revision` to null. Only a completed lead turn creates or advances accepted state. Any mutation during another turn rejects that outcome and recovers only `target_path` from the accepted revision or baseline. The same pending worker action has one target-mutation correction; repetition restores the target and returns coherent `failure`. Its independent envelope-repair allowance cannot reset that bound. Pre-session writes are not attributed or merged. | skeleton, Roles, rounds, revisions, and Invalid target mutation; Amendment A1 | touch create adapter, bounded correction/failure, and target-only revision/recovery seam; do-not-monitor origin calls, promote baseline, inspect VCS, or recover another path |
+| Session-creation target boundary | After signal and target validation, the adapter creates a session naming the target, captures its exact existing-or-absent state as `recovery_baseline_revision`, and initializes `accepted_target_revision` to null. An absent target is admissible only within an existing parent; a missing parent is invalid before session state or participant work and no ancestor is created. Only a completed lead turn creates or advances accepted state. Any mutation during another turn rejects that outcome and recovers only `target_path` from the accepted revision or baseline. The same pending worker action has one target-mutation correction; repetition restores the target and returns coherent `failure`. Its independent envelope-repair allowance cannot reset that bound. Pre-session writes are not attributed or merged. | skeleton, Target admission, Roles, rounds, revisions, and Invalid target mutation; Amendment A1 | touch create adapter, existing-parent admission, bounded correction/failure, and target-only revision/recovery seam; do-not-create ancestors, monitor origin calls, promote baseline, inspect VCS, or recover another path |
 | Resource posture | `max_rounds` is any positive integer. No fixed target bytes, revision count, retained-history bytes, or global active-session count is an admission rule. Actual inability to create may return the existing unavailable outcome without effects. It is operational and consumes no finding/gap fallback. | skeleton, Resource posture; frozen mandate, Request contract | touch focused regression and existing unavailable route; do-not-add quota state, reservation, migration, legacy branch, or quota-triggered correction |
 | Generic request and run policy | `workspace_path` is the milestone's resolved workspace; question, target, and positive `max_rounds` equal the signal. `context.source_payload` equals the finding; `brief` is non-empty; references are the stable unique current skeleton/governing/unit artifacts, omitting absent/placeholders and the target. The adapter supplies exactly lead then interlocutor and selects unanimity; existing resolution prefers cross-family and records same-family fallback. Current execution context passes unchanged, so participants may inspect and reason about references and legitimate neighbouring material. | frozen mandate, Request contract and Inherited execution context | touch translation into existing create contract; do-not-interpret finding, add taxonomy, narrow contextual access, or re-resolve work area |
 | Durable suspension and attachment | The valid signal records origin unit/kind/family/model/effort, explicit origin provider reference where return needs it, and exact signal. After create returns, the session id is recorded before transition. While active, origin status and review/fix/seal counters do not move and no later worker runs. Recovery follows only the recorded session; stale/concurrent consumers cannot apply two returns. Unacknowledged creation has no exactly-once claim. | frozen mandate, Milestone integration | touch additive adapter state and deterministic step; do-not-store discussion in milestone rounds or advance while waiting |
@@ -227,6 +237,7 @@ Focused command:
 | Ordinary paths do not enter Brainstorming | `test_ordinary_results_and_provider_failures_create_no_brainstorming_target_state` | Valid ordinary results, validation failures, and provider failures retain existing behavior with no target observation, reservation, baseline, recovery, or new rejection. | strict compatibility |
 | No fixed numeric admission policy | `test_request_and_target_admission_has_no_fixed_global_quota` | A request above 16 rounds, a target above 8 MiB, a session whose retained revisions cross the discarded 17/32-MiB values, and a ninth concurrent distinct-target session are not refused solely by those numbers. Actual injected unavailability remains a side-effect-free 503. | strict |
 | Creation captures an unaccepted baseline | `test_rethink_session_creation_captures_unaccepted_target_baseline` | Existing, absent, and pre-session-changed targets are captured exactly at creation; accepted revision stays null and non-lead/incomplete-lead mutation restores only the target. | strict |
+| Absent-target admission stays within the target | `test_target_admission_requires_existing_parent_without_creating_it` | Existing-parent absence is accepted for lead construction. A missing parent returns invalid request before session state or participant work and creates no ancestor. | strict |
 | Completed lead work owns acceptance | `test_completed_lead_turn_creates_or_advances_target_revision_atomically` | Setup creates no accepted state. First completed lead work creates it even unchanged; later completed lead work alone advances it; failed durable acceptance records neither turn nor revision. | strict accepted state; optimistic conflict detection |
 | Target versions never depend on a repository | `test_target_revision_and_recovery_never_probe_vcs_or_repository_metadata` | Creation, completed-lead acceptance, invalid-mutation recovery, and restart reconciliation run with fail-on-access observation of their process-launch and filesystem-read seams. Any Git/VCS command or repository-metadata read fails the check; unrelated repository-state changes leave revision identities and recovery outcomes unchanged. | strict |
 | Invalid target mutation has one bounded disposition | `test_invalid_target_mutation_allows_one_correction_then_fails_coherently` | For a discussion or closure worker action, the first invalid target mutation restores only the target and accepts no turn, round, revision, vote, or result; a second before that action completes restores the target and publishes one failure, closing, and result. The one envelope repair and one target-mutation correction remain independent across restart and neither resets the other. | strict |
@@ -249,8 +260,8 @@ The skeleton's Question Battery is inherited. Slice-specific answers:
 | question | answer | evidence |
 |---|---|---|
 | consumers_touched | Five eligible worker-result paths, atomic milestone state, provider continuation, standalone Brainstorming create/result/target revisions, dedicated view, and existing correction/review/seal routes. | Dependencies and consumers |
-| pinned_facts | Exact signal and fallback schema; ordinary-path compatibility; unaccepted baseline and lead-only accepted revision; one bounded target-mutation correction independent of envelope repair; no fixed quota; suspension; builder/fresh-review returns; correction ratification; domain/operational split; no VCS or sealed target. | Pinned-Facts Table |
-| verification | Focused modules pin signal, ordinary behavior, no fixed threshold, baseline/acceptance, fail-on-access detection of repository/VCS dependencies, bounded invalid-mutation failure, pre-lead view, translation, target protection, restart, exact continuation, fresh review, routing, and ratification. | Verification Contract |
+| pinned_facts | Exact signal and fallback schema; ordinary-path compatibility; existing-parent admission for an absent target; unaccepted baseline and lead-only accepted revision; one bounded target-mutation correction independent of envelope repair; no fixed quota; suspension; builder/fresh-review returns; correction ratification; domain/operational split; no VCS or sealed target. | Pinned-Facts Table |
+| verification | Focused modules pin signal, ordinary behavior, side-effect-free missing-parent refusal, no fixed threshold, baseline/acceptance, fail-on-access detection of repository/VCS dependencies, bounded invalid-mutation failure, pre-lead view, translation, target protection, restart, exact continuation, fresh review, routing, and ratification. | Verification Contract |
 | reuse_posture | Existing result/finding/gap validators, driver state/locks, explicit provider sessions, standalone Brainstorming lifecycle, target-only recovery, view, gap routing, and design-correction delta gate are adopted. New work is one alternative result, recorded association, acceptance-provenance correction, and correction authority variant. | Reuse Posture |
 | enforceability | Closed validators isolate the signal; create captures baseline; role/quiescence/CAS enforce lead-only acceptance; fail-on-access observation detects repository/VCS probes; atomic milestone state serializes waiting/return; explicit provider references enforce routing; retained revision identity gates handoff and correction. | Enforceability Gate |
 
@@ -263,9 +274,10 @@ The skeleton's Question Battery is inherited. Slice-specific answers:
   design-correction integrity, rollback, delta verdict, and note gate.
 - **Extended:** one alternative `need_rethink` result, one recorded
   origin/session association, a distinct unaccepted recovery-baseline fact,
-  nullable accepted target state, one bounded target-mutation correction
-  composed with the existing envelope repair and failure result, and one
-  Brainstorming revision authority variant for own-note correction.
+  nullable accepted target state, an existing-parent admission rule for absent
+  targets, one bounded target-mutation correction composed with the existing
+  envelope repair and failure result, and one Brainstorming revision authority
+  variant for own-note correction.
 - **Why new:** ordinary results cannot suspend on an independent session, setup
   cannot satisfy lead-only acceptance, and the correction gate needs immutable
   accepted proposal authority rather than a drifting live target.
@@ -279,6 +291,7 @@ The skeleton's Question Battery is inherited. Slice-specific answers:
 |---|---|---|
 | Exact non-completion signal | Existing closed status/kind, finding, gap, and reserved-key validation | Contract matrices reject malformed, ineligible, or mixed claims before adapter progress. |
 | Ordinary boundary unchanged | Alternative branch starts only after valid `need_rethink` | Five-kind compatibility matrix observes no Brainstorming state or target operation on ordinary paths. |
+| Target creation stays within its path | Existing-parent admission before durable creation or participant start | Existing-parent and missing-parent fixtures prove an absent target remains constructible without creating any ancestor or session on refusal. |
 | Exact unaccepted baseline | Existing create plus target-only revision seam | Existing/absent/pre-session-change fixtures prove capture-at-create and null accepted state. |
 | No fixed numeric quota | Positive-integer request validation and absence of artifact/history/global-count thresholds | Regression crosses every discarded value without threshold-only refusal and separately injects actual unavailability. |
 | Lead-only accepted provenance | Persisted role, exclusive quiescent turn acceptance, final target observation, exact state validation, and CAS | Setup/interlocutor/failure/lead matrices prove only completed lead work creates or advances acceptance. |

@@ -14,7 +14,9 @@ Session creation records the target's exact existing-or-absent state as
 `recovery_baseline_revision`; that state is recoverable but not accepted.
 `accepted_target_revision` starts null. The first completed lead turn creates
 accepted target state, even when the target bytes are unchanged. Only a later
-completed lead turn may advance it.
+completed lead turn may advance it. An absent target is valid only within an
+existing parent directory. A missing parent is rejected before session state
+or participant work begins, and no ancestor is created.
 
 Interlocutors are explicitly instructed not to edit `target_path`. A mutation
 during an interlocutor turn, control work, or a lead attempt that does not
@@ -127,12 +129,14 @@ valid interlocutor turn retain it. If an interlocutor changes the target, or a
 lead changes it without completing a valid turn, the whole worker outcome is
 rejected and the exact last accepted target is restored—or the launch baseline
 if no lead turn has completed. The same rule covers a target that started
-absent. Recovery changes only `target_path`; sibling sentinels remain
-byte-identical. The same pending worker action may be attempted once after that
-recovery. A second invalid target mutation before it completes restores the
-target again and ends the session as coherent `failure`, with no rejected turn,
-round, or revision accepted. This target-mutation allowance and Slice 2's
-envelope-repair allowance are independent and neither resets the other.
+absent within an existing parent. A missing parent is an invalid request: it
+starts no session or participant and creates no ancestor. Recovery
+changes only `target_path`; sibling sentinels remain byte-identical. The same
+pending worker action may be attempted once after that recovery. A second
+invalid target mutation before it completes restores the target again and ends
+the session as coherent `failure`, with no rejected turn, round, or revision
+accepted. This target-mutation allowance and Slice 2's envelope-repair
+allowance are independent and neither resets the other.
 
 Target-version selection and recovery inspect no Git/VCS state or repository
 metadata. Supplied references and neighbouring material remain available to
@@ -178,10 +182,10 @@ excluded.
 | Coordination projection | Accepted discussion state has `completed_turns`, `rounds_used`, `recovery_baseline_revision`, and nullable `accepted_target_revision`. `rounds_used` starts at 0; accepted revision starts null. Completed turns are append-only and determine the next scheduled participant. The exclusive attempt window is control state and never appears as completed progress. | skeleton, Roles, rounds, and revisions; Amendment A1 | touch one additive accepted-state projection; do-not-promote the baseline or add transcript, ballot, result, route, or caller-action fields |
 | Turn view | Every participant receives the question and context, `target_path`, the current Brainstorming revision and its baseline-or-accepted provenance, all earlier accepted turn Markdown in order, its persisted role, the round number, and the lead-only target rule. Participants may inspect and reason about supplied references and legitimate neighbouring material through the inherited context; interlocutors are explicitly told not to edit the target. | frozen mandate, Request contract, Inherited execution context, and Participants and discussion; Amendment A1 | touch the product-neutral discussion prompt; do-not-present rejected output as prior discussion, narrow contextual access, or add domain taxonomy |
 | Exclusive acceptance window | At most one scheduled attempt is admitted per session. Its window begins before invocation and stays exclusive through worker quiescence, final target observation, and durable acceptance or target-reconciled rejection. Restart admits nothing until prior supervised work is quiescent and the target matches the accepted revision or recovery baseline. | skeleton, Participant supervision; Amendment A1 | touch coordination and narrow execution completion evidence; do-not-add a new permission, sandbox, custody, or liveness system |
-| Brainstorming target revisions | `recovery_baseline_revision` identifies the exact existing-or-absent launch state but grants no acceptance. `accepted_target_revision` is null until the first completed lead turn creates it. Only later completed lead turns may advance it. Identifiers or hashes are Brainstorming-owned, independent of state-store CAS and any VCS. Recorded identities remain auditable and the content needed for active recovery and final target inspection remains available. Storage organization is not a cross-slice contract. | skeleton, Roles, rounds, and revisions; Amendment A1 | touch a Brainstorming-owned target-only revision seam; do-not-conflate recovery with acceptance or assign repository meaning |
+| Brainstorming target revisions | `recovery_baseline_revision` identifies the exact existing-or-absent launch state but grants no acceptance. Absence is admissible only within an existing parent; a missing parent is rejected before session state or participant work and no ancestor is created. `accepted_target_revision` is null until the first completed lead turn creates it. Only later completed lead turns may advance it. Identifiers or hashes are Brainstorming-owned, independent of state-store CAS and any VCS. Recorded identities remain auditable and the content needed for active recovery and final target inspection remains available. Storage organization is not a cross-slice contract. | skeleton, Target admission and Roles, rounds, and revisions; Amendment A1 | touch a Brainstorming-owned target-only revision seam and Slice 8 creation validation; do-not-create another path, conflate recovery with acceptance, or assign repository meaning |
 | Invalid target mutation | Any mutation during an interlocutor turn, control work, or a lead attempt that does not yield one valid completed turn invalidates that outcome. It appends no turn, consumes no round, advances no accepted revision, and restores only `target_path` from the last accepted Brainstorming revision or the baseline before one exists. Each pending worker action has one target-mutation correction allowance; a second invalid mutation before that action completes restores the target and terminalizes coherent `failure`. This allowance is independent of the one envelope repair and neither resets the other. | Amendment A1; skeleton, Invalid target mutation | touch target observation, bounded correction, rejection, coherent failure, and exact target-only recovery; do-not-let target-version selection or recovery inspect commits, refs, branches, HEAD, repository history, merges, or repository metadata, and do-not-recover another path |
 | Resource posture | The caller's positive `max_rounds` is the only product round bound. No fixed target bytes, revision/history budget, or global active-session count is introduced here. | skeleton, Resource posture | touch regression coverage only; do-not-build quota reservation, migration, or quota-specific failure machinery |
-| Slice boundary | Slice 3 adds ordered coordination and target-revision acceptance only. Slice 8 corrects baseline-versus-acceptance state and affected consumers. It adds no public route, transcript, ballot, result, UI, milestone transition, or external-root change. | skeleton, Planned Slices | touch coordination plus the declared Slice 8 correction; do-not-pull later surfaces forward |
+| Slice boundary | Slice 3 adds ordered coordination and target-revision acceptance only. Slice 8 corrects baseline-versus-acceptance state, pins existing-parent admission for an absent target, and updates affected consumers. It adds no public route, transcript, ballot, result, UI, milestone transition, or external-root change. | skeleton, Planned Slices | touch coordination plus the declared Slice 8 correction; do-not-pull later surfaces forward |
 
 ### Verification Contract
 
@@ -197,7 +201,7 @@ Focused command:
 | Worker quiescence precedes acceptance | `test_worker_quiescence_precedes_target_validation_and_turn_acceptance` | A valid envelope while supervised work can still mutate the target creates no completed turn or round and admits no later attempt. Its final mutation is judged only after quiescence. | strict accepted state; best-effort participant delivery |
 | Interlocutor mutation is invalid | `test_interlocutor_target_mutation_is_rejected_and_restored` | Even with a valid envelope, an interlocutor edit accepts no turn, revision, cursor movement, or round and restores only the target; sibling paths are unchanged. | strict |
 | Incomplete lead mutation is invalid | `test_failed_lead_exchange_cannot_advance_target` | Provider failure or interruption after a lead edit leaves no accepted progress and restores the last accepted target, or the baseline before one exists. | strict accepted state; best-effort provider delivery |
-| Initial absence and restart recovery are exact | `test_missing_target_and_restart_recover_last_accepted_revision` | Existing, absent, revised, and deleted targets retain stable Brainstorming identities; reopen restores the accepted revision when present and otherwise the baseline before another call. | strict |
+| Initial absence and restart recovery are exact | `test_missing_target_and_restart_recover_last_accepted_revision` | Existing, absent-with-existing-parent, revised, and deleted targets retain stable Brainstorming identities; reopen restores the accepted revision when present and otherwise the baseline before another call. Slice 8 separately pins side-effect-free refusal when the parent is absent. | strict |
 | Target versions are repository-independent | `test_target_revision_and_recovery_never_probe_vcs_or_repository_metadata` | Creation, completed-lead acceptance, invalid-mutation recovery, and restart reconciliation run with fail-on-access observation of their process-launch and filesystem-read seams. Any Git/VCS command or repository-metadata read fails the check; unrelated repository-state changes leave revision identities and recovery outcomes unchanged. | strict |
 | Concurrent coordinators cannot overlap | `test_stale_coordinator_cannot_duplicate_or_reorder_turns` | Two coordinators from one state never invoke overlapping workers; durable turns remain a valid roster prefix with one accepted successor. | strict worker admission; optimistic conflict detection |
 | Existing execution and service consumers do not change | `test_coordination_reuses_execution_without_public_surface_changes` | Slice 2 execution remains compatible, no route/error contract is introduced, and recovery changes only the configured target. | strict compatibility |

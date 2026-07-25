@@ -26,6 +26,9 @@ milestone does not build that adapter.
   are fixed; and the caller supplies a positive `max_rounds`, which is the
   discussion's round bound. Session creation retains the target's exact
   existing-or-absent state as an unaccepted Brainstorming recovery baseline.
+  An absent target is admissible only when its parent directory already
+  exists. A missing parent is rejected before session state or participant
+  work begins, and Brainstorming never creates ancestor directories.
   `accepted_target_revision` remains null until a completed lead turn creates
   it, and only a later completed lead turn may advance it. Interlocutors are
   instructed not to edit the target. A mutation during an interlocutor turn,
@@ -135,6 +138,7 @@ neighbouring material; only target mutation and recovery are narrowed.
 |---|---|---|---|
 | Process ownership | Brainstorming owns its lifecycle, sessions, state, transcript, result, API, visualization, and target revision identifiers. It is product-neutral and independent of milestone phases or ledger chronology. | frozen mandate, Goal and Process boundary | touch Brainstorming surfaces and adapters; do-not-put milestone vocabulary in the core |
 | Request and context | Required request names are `workspace_path`, `target_path`, `question`, `context`, and `max_rounds`. `max_rounds` is any positive integer supplied by the caller; this milestone adds no fixed upper bound. `context.brief` is non-empty; ordered `references` is optional; JSON-compatible `source_payload` is optional, preserved unchanged, and never drives core workflow. `target_path` is the output; consulted material stays context. | frozen mandate, Request contract | touch generic validation; do-not-add taxonomy, answer options, or a fixed global round policy |
+| Target admission | `target_path` may name an existing artifact or an absent artifact in an existing parent directory. A missing parent is an invalid request, rejected before session state or participant work begins and without creating any ancestor. | frozen mandate, target construction; Amendment A1 | touch standalone and adapter creation validation; do-not-create or recover a path outside `target_path` |
 | Resolved roster | Before execution, persist each participant's stable id, role, executor reference, model family, and turn order; require exactly one lead and at least one interlocutor. Prefer different families, but permit and record independent same-family fallback. | frozen mandate, Request contract | touch session resolution; do-not-leave roles as process-global defaults |
 | Execution context | `workspace_path` is orientation, not confinement. Inherit the caller's tools, environment, primary/additional roots, sibling access, and access rules; define no new permission or work-area policy. Participants may inspect and reason about supplied references and legitimate neighbouring material. | frozen mandate, Request contract and Inherited execution context | touch pass-through only; do-not-resolve or narrow roots again |
 | Participant supervision | Each participant retains one logical CLI session. A candidate turn is not accepted until its supervised local process set is quiescent and target ownership has been checked. Reuse current liveness and stop propagation without a new idempotency or provider-internal claim. | frozen mandate, Participants and discussion; this skeleton, Guarantee Posture | touch coordination and existing execution seam only as needed; do-not-create parallel supervision |
@@ -162,11 +166,13 @@ only when the repository's full suite
 (`python3 -m unittest discover -s orchestrator/tests -t .`) covers standalone
 operation, participant/family resolution, persistent logical sessions,
 worker-quiescent turn acceptance, complete-pass accounting, transcript
-boundaries and order, lead-only target construction, both closure policies and
-vote invalidation, unresolved closure at the caller's round limit, both terminal
-results including failure before a completed turn, opaque context and
-multi-root pass-through, liveness/stop behavior, the unaccepted recovery
-baseline and first lead acceptance, exact target-only recovery,
+boundaries and order, lead-only target construction within an existing parent,
+side-effect-free rejection when that parent is missing, both
+closure policies and vote invalidation, unresolved closure at the caller's
+round limit, both terminal results including failure before a completed turn,
+opaque context and multi-root pass-through, liveness/stop behavior, the
+unaccepted recovery baseline and first lead acceptance, exact target-only
+recovery,
 repository-independent target versioning whose focused probe fails on any
 Git/VCS command or repository-metadata read, one bounded target-mutation
 correction followed by coherent failure on repetition, the independent
