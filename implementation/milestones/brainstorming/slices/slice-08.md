@@ -4,227 +4,302 @@
 
 ### What this slice builds
 
-This slice lets a milestone worker pause on one focused design doubt and ask the
-independent Brainstorming process to produce a small amendment or proposal.
+This slice lets a milestone worker pause on one focused design doubt and ask
+the independent Brainstorming process to produce a small amendment or proposal.
 The discussion keeps its own record and result; it is not disguised as another
 milestone review.
 
-If the discussion succeeds, an implementer or fixer continues the exact
-conversation that asked for help. A reviewer instead takes a fresh look at the
-result. If it fails, the milestone returns to its existing design-gap or
-operator route. Asking for help never counts as completed work or approval.
+A `need_rethink` request names the proposal target and a positive caller-chosen
+round bound. Only then does the adapter create a Brainstorming session for that
+target. Creation retains its exact existing-or-absent state as
+`recovery_baseline_revision`, but that baseline is not accepted target state.
+`accepted_target_revision` remains null until a completed lead turn creates it.
+
+This slice also delivers that acceptance-provenance correction to the existing
+Brainstorming state, coordination, lifecycle, stop, and dedicated-view
+consumers. Target versions are Brainstorming revision identifiers or hashes,
+independent of Git or any VCS. Only completed lead work may create or advance an
+accepted revision. A mutation during any other turn is rejected without
+accepted progress or round consumption, and only `target_path` is recovered
+from the last accepted Brainstorming revision or the launch baseline. The same
+pending worker action may then be attempted once more; a second invalid target
+mutation before it completes restores the target again and ends the session as
+coherent `failure`. This allowance and the one discussion-envelope repair are
+independent and neither resets the other.
+
+The adapter introduces no fixed maximum round count, artifact-size ceiling,
+target-history allowance, or global active-session quota. Actual inability to
+create a session may use the existing unavailable outcome without creating
+state or starting participants; it remains an operational fault, not a
+discussion result.
+
+If Brainstorming succeeds, an implementer or fixer continues the exact
+conversation that asked for help. A reviewer instead takes a fresh look. A
+failed discussion returns through the already-declared caller-specific route.
+Asking for help never counts as completed work, review evidence, or approval.
 
 ### Ownership and boundary
 
-This slice owns the bridge: it records which milestone call is waiting, starts
-the independent discussion with the caller's existing working context, and
-returns its result to the right milestone path.
+This slice owns the bridge: validation of the rethink signal, durable
+association with the waiting milestone call, creation of the independent
+session using the named target and inherited context, and deterministic
+consumption of its result.
 
-Brainstorming remains the sole owner of its discussion, accepted target
-versions, transcript, and result. The milestone remains the sole owner of unit
-progress, findings, review, sealing, and escalation. A successful discussion
-does not approve its own proposal.
+Brainstorming remains sole owner of its discussion, recovery baseline, accepted
+target revisions, transcript, and result. The milestone remains sole owner of
+unit progress, findings, review, sealing, and escalation. A successful proposal
+cannot approve itself.
 
-If the proposal requires a sealed slice note to change, the milestone reuses
-its narrow, independently reviewed correction path. The discussion itself
-cannot edit sealed milestone documents or generated records. Its target is a
-separate artifact.
+If adopting a proposal requires a fixer's own sealed slice note to change, the
+milestone reuses its existing provisional correction and independent delta
+ratification path. Brainstorming cannot edit sealed milestone documents or
+generated records; its target is a separate proposal artifact.
 
 ### Guarantee posture
 
-- **Strict:** a valid request is help-seeking, not work completion. Once the
-  milestone records the discussion, it stays on the same work item and accepts
-  only that discussion's retained result. A proposal cannot approve itself.
-- **Optimistic:** existing durable state and locking decide which of two
-  competing milestone actions wins; a stale action cannot apply the return
-  twice.
-- **Eventual:** the milestone may notice completion on its next check. Until
-  then, the same work item remains visibly paused.
-- **Best-effort:** discussion creation, provider delivery, and liveness are not
+- **Strict signal boundary:** a valid `need_rethink` is help-seeking, not work
+  completion. Without it, ordinary results, validation failures, provider
+  failures, retry, and cleanup behavior remain unchanged and no target is
+  observed or reserved by Brainstorming.
+- **Strict target authority:** creation captures an unaccepted target baseline
+  and leaves accepted state null. Only completed lead work creates or advances
+  accepted target state. Interlocutor, control, and incomplete-lead mutations
+  accept no turn, round, or revision and recover only the target. One corrected
+  attempt of the same pending worker action is allowed; another invalid target
+  mutation restores the target and returns coherent `failure`. The independent
+  envelope-repair allowance cannot reset this bound. The handoff names a
+  retained lead-accepted Brainstorming revision, never the baseline or live
+  drift.
+- **Strict caller bound:** `max_rounds` is any positive integer. No fixed
+  numeric round, artifact, history, or global-session admission policy is added.
+- **Optimistic:** durable state and existing locking decide which competing
+  milestone action wins; stale work cannot apply a return twice.
+- **Eventual:** the milestone may observe Brainstorming completion on its next
+  check. Until then the same work item remains visibly paused.
+- **Best-effort:** session creation, provider delivery, and liveness are not
   exactly-once across an unacknowledged crash. Uncertain work is never promoted
   to a result.
 
+Callers that mutate `target_path` while a session is active are outside the run
+contract. Brainstorming neither attributes nor merges those writes. The full
+inherited tools and execution context remain unchanged: participants may
+inspect and reason about supplied references and legitimate neighbouring
+material. Target-version selection and recovery never derive authority from
+repository or VCS state.
+
 ### Dependencies and consumers
 
-This slice depends on the discussion contracts, durable participant
-conversations, lead-owned target history, transcript, closure, and standalone
-lifecycle delivered by Slices 1–6. It also reuses the milestone's existing
-one-shot design-correction lane. It needs no new visualization from Slice 7.
+This slice depends on Slices 1–7: generic state and roster, persistent
+participant conversations, ordered target revisions, transcript, closure,
+standalone lifecycle, and dedicated view.
 
-Its consumers are implementation, fixing, full review, change review, and final
-seal review. The current project and work-area binding remains authoritative.
+It owns the corrective implementation that separates the recovery baseline
+from accepted state and updates every affected current consumer. It also owns
+focused regression coverage proving that the discarded 16-round, 8-MiB-target,
+32-MiB-history, 17-revision, and eight-active-session values are not product
+admission thresholds. No quota state, reservation, migration, legacy
+stop-only branch, or quota-specific retry is implemented. The same corrective
+coverage makes repository/VCS reads by target-version selection and recovery
+observable and fail-fast.
 
-No Agent99, Life, LPC, Tutor, external repository, standalone API caller, or
-milestone browser surface is changed.
+The adapter reuses the milestone's existing result/finding/gap validation,
+provider-session continuation, atomic transition, design-correction
+ratification, and review/seal routes. Consumers are implementation, fixing,
+full review, change review, final seal review, and the dedicated Brainstorming
+view.
+
+No Agent99, Life, LPC, Tutor, external repository, or milestone browser surface
+is changed. The standalone view keeps its route, envelope, and page.
 
 ### Acceptance
 
-- A valid request pauses the current work without recording a completion,
-  review judgment, fix, or seal.
-- The discussion receives the current working context, the focused question,
-  the source finding unchanged, a separate output target, and a finite round
-  limit.
-- A recorded active discussion survives process restart without changing the
-  milestone's place. An unacknowledged creation advances nothing.
-- Success returns the retained accepted proposal from the recorded discussion.
-  Builders continue their original conversation; reviewers start afresh.
-- A proposal that changes the builder's own sealed note uses the existing
-  provisional correction, rollback, and independent change-review path. A
-  rejected correction leaves neither the note change nor dependent work behind.
-- Discussion failure uses the predeclared normal escalation unchanged.
-  Lifecycle or provider faults remain operational faults.
+- A valid signal pauses current work without recording completion, review
+  judgment, fix, or seal.
+- Without `need_rethink`, ordinary outcomes create no Brainstorming session,
+  target baseline, reservation, mutation check, recovery step, or new rejection.
+- A valid signal names a separate proposal target and any positive
+  `max_rounds`, including values above 16.
+- Session creation captures the target's exact existing-or-absent state as an
+  unaccepted recovery baseline and initializes accepted target state to null.
+- A valid target is not refused solely because it exceeds 8 MiB, retained
+  revisions would exceed 17 or 32 MiB, or eight other distinct-target sessions
+  are active.
+- Interlocutor or incomplete-lead mutation rejects the worker outcome, advances
+  no accepted state, consumes no round, and restores only the target.
+- The same pending worker action receives one target-mutation correction after
+  recovery. A second invalid mutation restores only the target and publishes
+  one coherent failure; its independent envelope-repair allowance cannot reset
+  that bound, including across restart.
+- The first completed lead turn creates accepted target state even if bytes are
+  unchanged; only later completed lead work may advance it.
+- Target-version creation, acceptance, recovery, and restart reconciliation
+  inspect no Git/VCS state or repository metadata. A focused fail-on-access
+  check observes those reads separately from unchanged-path checks, while
+  participant access to contextual references remains intact.
+- Before lead acceptance, the dedicated view remains readable and identifies
+  the target as not yet accepted without previewing the baseline as accepted.
+- A recorded active discussion survives restart without changing the
+  milestone's place. Unacknowledged creation advances nothing.
+- Success returns the recorded lead-accepted proposal. Builders continue their
+  exact origin conversation; reviewers start a fresh provider session.
+- A fixer's own-note adoption reuses the existing provisional correction,
+  integrity/rollback, independent delta verdict, and note gate.
+- A genuine discussion failure uses the predeclared caller route. Access,
+  lifecycle, provider, stop-incomplete, target-in-use, and actual resource
+  unavailability remain operational faults and consume no domain fallback.
 - The motivating fixer flow produces a small amendment, resumes the same fixer,
-  receives independent change review, and continues without reopening all
-  milestone documentation.
+  receives normal delta review, and continues without reopening all milestone
+  documentation.
 
-The production adapter should remain compact. Total changes are expected to
-exceed about 500 lines because the executable matrix must cover five originating
-worker kinds, concurrent final reviews, restart attachment, both escalation
-classes, and exact conversation continuation. Generated and mechanical changes
-remain excluded.
+This slice is expected to exceed the roughly 500 changed-line target. It joins
+five worker-result paths with restart-safe suspension and return routing, while
+also correcting acceptance provenance and its state, coordination, lifecycle,
+stop, and view consumers. The focused restart, routing, correction, and
+compatibility matrices are necessary to prove that those surfaces move as one
+observable contract; splitting them would leave an intermediate state in which
+the adapter and the accepted-target consumers disagree. Generated and
+mechanical changes remain excluded.
 
 ### Non-goals
 
-- No change to the independent discussion's public request, state, transcript,
-  closure, result, API, or visualization.
-- No new milestone phase or substitute for ordinary verification, review,
-  sealing, correction, or escalation.
+- No redesign of transcript, closure, result, standalone routes, or page.
+- No fixed round maximum, target-size ceiling, retained-history limit,
+  active-session quota, quota version, migration, retirement regime, or
+  quota-specific correction loop.
+- No new milestone phase or substitute for verification, review, sealing,
+  correction, or escalation.
 - No use by documentation drafters, classifiers, verification commands, or
   external products.
-- No new page, route, launch form, notification, event feed, or push transport.
-- No repository requirement or version-control meaning for the discussion
-  target.
+- No new route, launch form, notification, event feed, or push transport.
+- No repository requirement, VCS meaning, or repository/VCS inspection by
+  target-version selection or recovery.
 - No new identity, permission, sandbox, work-area, custody, idempotency,
   provider, or threat model.
-- No participant edit outside the requested target; no discussion edit to a
-  sealed or generated milestone artifact.
+- No edit outside the requested target and no discussion edit to sealed or
+  generated milestone artifacts.
+- No workspace snapshot, sibling capture, repository rollback, or recovery
+  outside `target_path`.
+- No target monitoring around an ordinary milestone call before a valid rethink
+  request creates a session.
 
 ### Risks
 
-- Mistaking a help request for finished work could skip required review.
-- Guessing which conversation or target version to resume could return the
-  wrong proposal.
-- Treating a coherent proposal as self-approving could silently rewrite sealed
-  design.
-- Concurrent final reviewers may ask different questions; the attempt must be
-  discarded and restarted deterministically after one discussion.
-- A service outage can look like disagreement; operational faults and a genuine
-  unsuccessful discussion must remain distinct.
+- Mistaking help-seeking for completed work could skip review.
+- Treating the origin worker as a participant before session creation would add
+  a custody model that the amendment rejects.
+- Calling the launch baseline accepted would erase lead-turn provenance.
+- Reading the live target instead of the retained accepted revision could hand
+  off drift.
+- Treating a proposal as self-approving could rewrite sealed design.
+- Concurrent final reviewers may ask different questions; one deterministic
+  request wins and the review attempt restarts fresh.
+- A service outage can look like disagreement; operational and domain failure
+  remain distinct.
+- Fixed cross-project quotas would let callers deny valid sessions and add
+  unsupported migration machinery. This slice explicitly excludes them.
 
 ## Register 2 — Pinned facts and executable evidence
 
 ### Pinned-Facts Table
 
-| fact | value | authority (file:line) | touch / do-not-touch |
+| fact | value | authority | touch / do-not-touch |
 |---|---|---|---|
-| Milestone worker signal | The exact control status is `need_rethink`. It is accepted only for `implement`, `fix_findings`, `review_round`, `delta_review`, and `seal_half`. Every `need_rethink` object has exactly `question` (non-empty string), `finding` (one current report-finding object), `target_path` (normalized workspace-relative non-empty path), and `max_rounds` (positive integer); `implement` and `fix_findings` additionally require exactly `failure_gap` (one current gap object), while report kinds forbid it. For `fix_findings`, `finding` must equal one currently queued finding as a JSON value and every other queued finding remains pending. The top level may carry common optional `notes`, but no ordinary result, gap array, retry field, artifact/files/suite claim, finding list, disposition, battery, correction verdict, or slice plan. The finding and builder fallback gap are preserved as JSON values. | `implementation/milestones/brainstorming/skeleton.md:77-80,107`; `implementation/milestones/brainstorming/goal.md:281-298`; `orchestrator/contracts.py:47-171,300-371,538-646,745-800`; `orchestrator/driver.py:2706-2905`; `orchestrator/brainstorming_lifecycle.py:497-591` | touch the common worker output contract, eligible prompt builders, and focused tests; do-not-enable drafters/reclassifiers, let report-only workers route a gap, drop sibling fix findings, or treat the signal as completed work |
-| Generic request and adapter run policy | `workspace_path` is the milestone's resolved workspace; `question`, `target_path`, and `max_rounds` equal the signal; `context.source_payload` equals `finding` as a JSON value; `context.brief` is non-empty. `context.references` is the stable unique list, in order, of current skeleton artifact, applicable governing artifact, and current unit artifact, omitting absent values and the implementation placeholder `(workspace)`; no reference may be the target. Before launch the adapter supplies participants exactly `[{"id":"lead","role":"lead"},{"id":"interlocutor","role":"interlocutor"}]` and selects `unanimity`; existing resolver behavior chooses eligible assignments, prefers cross-family resolution, and records same-family fallback. The current project/work-area execution context is inherited unchanged. | `implementation/milestones/brainstorming/skeleton.md:25-28,42-43,73-80,99-103,107`; `implementation/milestones/brainstorming/goal.md:47-48,65-115,148-160,281-287`; `orchestrator/brainstorming.py:522-596,786-826`; `orchestrator/brainstorming_lifecycle.py:270-390,411-494`; `orchestrator/driver.py:570-584,642-650,2471-2483` | touch adapter translation into the existing create contract; do-not-interpret the finding, add a domain taxonomy, or re-resolve a different work area |
-| Durable suspension and attachment | A valid signal records the origin unit, worker kind, family, model/effort, explicit origin provider-session reference when return requires it, and the exact signal. After standalone creation returns, it records that session id before any milestone transition. Until the recorded session is terminal, the originating milestone status and every review/fix/seal counter remain unchanged and no later milestone worker runs. Recovery follows a recorded session id; a stale or concurrent consumer cannot apply a second terminal return. An unacknowledged create has no exactly-once guarantee and cannot be treated as a recorded result. | `implementation/milestones/brainstorming/skeleton.md:23-34,42-43,65-67,80,107`; `implementation/milestones/brainstorming/goal.md:283-298`; `orchestrator/state.py:208-315,393-440,471-508,614-646`; `orchestrator/driver.py:487-509`; `orchestrator/brainstorming_lifecycle.py:802-936` | touch additive milestone adapter state and its deterministic step; do-not-store discussion state in milestone rounds, advance while waiting, or claim exactly-once create/provider delivery |
-| Successful return routes | A terminal `success` is accepted only from the recorded Brainstorming session. The handoff has exactly `session_id`, the exact core `result`, and `accepted_target_revision`; the adapter reads the retained revision and requires it to exist. `implement` and `fix_findings` continue the exact recorded origin provider session—never a recent-session fallback—and their next accepted envelope is the ordinary result for that kind. Any report kind starts a fresh provider session; the requesting output is no review evidence. A seal waits for all sibling halves, selects the first valid request in configured family order, invalidates the attempt, re-verifies the candidate, and begins a fresh seal attempt. | `implementation/milestones/brainstorming/skeleton.md:23-34,77-80,103-108`; `implementation/milestones/brainstorming/goal.md:289-298,362-365`; `orchestrator/brainstorming.py:1075-1102,1983-2042,2417-2442`; `orchestrator/runners.py:751-901`; `orchestrator/driver.py:1703-1835,2706-3011,3072-3388,3676-3835,3859-4265` | touch session-aware milestone calls and existing return gates; do-not-resume reviewers, count the request, accept a live unversioned target, or bypass verification/review/seal |
-| Amendment adoption | The accepted Brainstorming target is a proposal and cannot itself override a sealed goal, skeleton, or slice note. When a fixer must change its own sealed slice note to adopt it, the existing one-shot `design_correction` object retains `artifact`, `authority_artifact`, `contradiction`, and `resolution` and adds exactly `brainstorming_authority: {session_id, accepted_target_revision}`. The pair must equal the recorded handoff; authority bytes come from that retained Brainstorming revision, never the live target or VCS. Existing single-note scope, provisional rollback, independent delta verdict (`ratify`, `retry`, `remodel`, or `needs_operator`), and note-gate update remain authoritative. No parallel correction path is added. | `implementation/milestones/brainstorming/skeleton.md:36-47,49-67,80,107`; `implementation/milestones/brainstorming/goal.md:30-48,289-298,362-365`; `orchestrator/driver.py:1257-1501,2706-3011,3072-3351`; `orchestrator/prompts.py:1266-1321,1657-1701`; `orchestrator/contracts.py:374-421,651-719` | touch the correction authority variant and handoff context; do-not-make Brainstorming success self-ratifying, edit another sealed artifact, or create a second correction lane |
-| Failure and operational split | Only a validated terminal Brainstorming result with `outcome: failure` invokes a domain route. For `implement` or `fix_findings`, the unchanged `failure_gap` enters its existing `fits_remodel` or `needs_operator` route. For a report kind, the unchanged `finding` becomes that report's sole finding and enters the normal fixer checkpoint; the reviewer does not classify or route a gap. No origin session resumes and no fresh review starts. Invalid request/access, target-in-use, unavailable lifecycle state, stop-incomplete, uncertain creation, and provider/continuation faults remain operational and consume neither fallback. | `implementation/milestones/brainstorming/skeleton.md:23-34,77-80,105-108`; `implementation/milestones/brainstorming/goal.md:270-298`; `orchestrator/contracts.py:94-171,300-371,360-371,651-673`; `orchestrator/brainstorming.py:1075-1102,1205-1291`; `orchestrator/brainstorming_lifecycle.py:39-73,802-936,1026-1035`; `orchestrator/driver.py:1941-2205,2662-2704,3269-3388,3676-3835,4109-4265` | touch deterministic result consumption and existing routes; do-not invent adapter result codes, let a report-only worker reopen design, synthesize a gap/finding after failure, classify infrastructure as disagreement, or erase terminal evidence |
-| Target and compatibility boundary | The target resolves inside the current primary workspace from the signal's normalized relative path and is the caller-selected amendment/proposal artifact, versioned only by Brainstorming. It must not equal/overlap any context reference, sealed milestone artifact, generated milestone ledger, Brainstorming state/transcript path, or another active session's target. Brainstorming participant content mutation is confined to `target_path`; no Git/VCS fact selects, validates, restores, or merges a target revision. Existing standalone routes, milestone API/panel, ordinary worker outputs, project contracts, and external roots retain their behavior when no signal is returned. | `implementation/milestones/brainstorming/skeleton.md:36-47,65-67,80,98,101-108`; Operator Amendment A1, **Target versioning clarification**; `orchestrator/brainstorming.py:234-283,2009-2042,2180-2214`; `orchestrator/brainstorming_coordination.py:160-168`; `orchestrator/brainstorming_lifecycle.py:497-591,802-908`; `orchestrator/service.py:2773-2938` | touch only the Milestone adapter, non-VCS target eligibility checks, and declared correction authority variant; do-not-touch core semantics, HTTP/UI surfaces, generated artifacts, external roots, or—during Brainstorming—any path outside the target |
+| Milestone worker signal | The exact status is `need_rethink`, eligible only for `implement`, `fix_findings`, `review_round`, `delta_review`, and `seal_half`. Its object has exactly non-empty `question`, one current `finding`, normalized workspace-relative non-empty `target_path`, and positive-integer `max_rounds`. `implement` and `fix_findings` also require exactly one current `failure_gap`; report kinds forbid it. A fixer finding equals one queued finding and siblings remain pending. No ordinary result, work claim, retry, finding list, disposition, verdict, or slice plan may be mixed in. | frozen mandate, Milestone integration; skeleton, Milestone adapter | touch common worker output validation, eligible prompts, and focused tests; do-not-enable other kinds, preassign targets, drop sibling findings, or treat signal as completion |
+| Ordinary origin outcomes | Without a valid signal, all five eligible paths retain ordinary result, validation, provider-failure, retry, and cleanup behavior. No Brainstorming target reservation, baseline, mutation observation, recovery, or outcome rejection occurs. | skeleton, Milestone adapter; Amendment A1 | touch only the alternative signal branch; do-not-add pre-session custody |
+| Session-creation target boundary | After signal and target validation, the adapter creates a session naming the target, captures its exact existing-or-absent state as `recovery_baseline_revision`, and initializes `accepted_target_revision` to null. Only a completed lead turn creates or advances accepted state. Any mutation during another turn rejects that outcome and recovers only `target_path` from the accepted revision or baseline. The same pending worker action has one target-mutation correction; repetition restores the target and returns coherent `failure`. Its independent envelope-repair allowance cannot reset that bound. Pre-session writes are not attributed or merged. | skeleton, Roles, rounds, revisions, and Invalid target mutation; Amendment A1 | touch create adapter, bounded correction/failure, and target-only revision/recovery seam; do-not-monitor origin calls, promote baseline, inspect VCS, or recover another path |
+| Resource posture | `max_rounds` is any positive integer. No fixed target bytes, revision count, retained-history bytes, or global active-session count is an admission rule. Actual inability to create may return the existing unavailable outcome without effects. It is operational and consumes no finding/gap fallback. | skeleton, Resource posture; frozen mandate, Request contract | touch focused regression and existing unavailable route; do-not-add quota state, reservation, migration, legacy branch, or quota-triggered correction |
+| Generic request and run policy | `workspace_path` is the milestone's resolved workspace; question, target, and positive `max_rounds` equal the signal. `context.source_payload` equals the finding; `brief` is non-empty; references are the stable unique current skeleton/governing/unit artifacts, omitting absent/placeholders and the target. The adapter supplies exactly lead then interlocutor and selects unanimity; existing resolution prefers cross-family and records same-family fallback. Current execution context passes unchanged, so participants may inspect and reason about references and legitimate neighbouring material. | frozen mandate, Request contract and Inherited execution context | touch translation into existing create contract; do-not-interpret finding, add taxonomy, narrow contextual access, or re-resolve work area |
+| Durable suspension and attachment | The valid signal records origin unit/kind/family/model/effort, explicit origin provider reference where return needs it, and exact signal. After create returns, the session id is recorded before transition. While active, origin status and review/fix/seal counters do not move and no later worker runs. Recovery follows only the recorded session; stale/concurrent consumers cannot apply two returns. Unacknowledged creation has no exactly-once claim. | frozen mandate, Milestone integration | touch additive adapter state and deterministic step; do-not-store discussion in milestone rounds or advance while waiting |
+| Successful return routes | Success is accepted only from the recorded session. Handoff contains its session id, exact result, and a non-null retained accepted target revision created by completed lead work. Implement/fix continue the exact origin provider session; report kinds start fresh. A seal request waits for sibling halves, selects deterministically, invalidates the attempt, re-verifies, and starts a fresh seal attempt. | frozen mandate, Milestone integration; Amendment A1 | touch session-aware calls and existing return gates; do-not-resume reviewers, count the request, hand off baseline/live drift, or bypass review |
+| Amendment adoption | A Brainstorming target is a proposal. A fixer's own-note correction reuses the existing `design_correction` contract and adds `brainstorming_authority: {session_id, accepted_target_revision}` bound to the recorded handoff. Authority content comes from that retained revision. Existing single-note scope, provisional rollback, independent delta verdict, and note-gate update remain authoritative. | frozen mandate, Motivating case and Milestone integration | touch the correction authority variant; do-not-self-ratify, edit another sealed artifact, or add a parallel lane |
+| Failure and operational split | A validated terminal failure to produce or agree on the target, including repetition after the one target-mutation correction, invokes the predeclared domain route. Implement/fix use their unchanged `failure_gap`. A report kind sends the unchanged source finding to its ordinary fixer checkpoint. No origin session resumes and no fresh review starts. Invalid request/access, target-in-use, unavailable lifecycle/resources, stop-incomplete, uncertain creation, and provider/continuation faults remain operational and consume neither fallback. | frozen mandate, Result contract and Milestone integration; skeleton, Invalid target mutation | touch deterministic result consumption and existing routes; do-not-invent adapter results, synthesize domain evidence, or erase terminal evidence |
+| Target and compatibility boundary | The normalized proposal target resolves inside the current primary workspace and must not equal, overlap, or alias a context reference, sealed/generated milestone artifact, Brainstorming authority, or another nonterminal session target. From creation through handoff, only Brainstorming revisions version it and recovery is confined to that path. The dedicated view preserves its public shape for null pre-lead and accepted-revision states. No Git/VCS fact or repository metadata selects, validates, restores, or merges a target revision. | skeleton, Invalid target mutation and Standalone projection; Amendment A1 | touch adapter admission, revision correction, no-VCS verification, view projection, and tests; do-not-change ordinary behavior, public routes/page, generated artifacts, external roots, or another path |
 
 ### Verification Contract
 
 Focused command:
 
-`python3 -m unittest orchestrator.tests.test_brainstorming_milestone_adapter`
+`python3 -m unittest orchestrator.tests.test_brainstorming_state orchestrator.tests.test_brainstorming_milestone_adapter orchestrator.tests.test_brainstorming_coordination orchestrator.tests.test_brainstorming_api orchestrator.tests.test_brainstorming_visualization`
 
 | observable claim | named check | pass condition | posture |
 |---|---|---|---|
-| The control result is exact and exclusive | `test_need_rethink_signal_is_closed_eligible_and_non_completing` | All five eligible kinds accept only their exact object; ineligible kinds, missing/extra builder fallback gaps, any report fallback gap, malformed findings, and mixed completion/gap/retry claims are rejected without state or target change. | strict |
-| Translation preserves caller facts and policy | `test_adapter_builds_exact_request_roster_and_execution_context` | Across skeleton, slice-note, and implementation units, the request copies question/target/round bound, preserves the finding as `source_payload`, produces the exact ordered/de-duplicated reference list, supplies the exact two participant ids/roles under unanimity, resolves with cross-family preference/same-family fallback, and retains the current primary/additional-root context. | strict |
-| Adapter target admission isolates protected artifacts | `test_adapter_rejects_protected_and_aliased_targets_before_creation` | Targets equal to, overlapping, or resolving as aliases of any context reference, sealed milestone artifact, generated milestone ledger, Brainstorming state/transcript authority, or another active target are rejected before any session, target, or milestone mutation; a distinct proposal target remains admissible. | strict |
-| A recorded wait is restart-safe | `test_rethink_pause_recovery_uses_recorded_session_without_advancing` | Recovery after association, a second driver, and repeated terminal inspection cannot consume twice, advance the unit, or count a worker/review/seal result while active. An uncertain create advances nothing and is surfaced operationally; the test makes no exactly-once creation claim. | strict recorded state; optimistic contention; best-effort create; eventual terminal observation |
-| Builders return to the exact conversation | `test_implementer_and_fixer_continue_exact_origin_session` | A fake provider proves the handoff uses the recorded session reference with accepted target revision/result context; no recency fallback or fresh builder session is used; the resumed ordinary envelope alone advances, and the fixer still enters delta review. | strict routing; best-effort provider delivery |
-| Reviewers always take a fresh look | `test_review_delta_and_concurrent_seal_restart_fresh` | Full and delta review requests create no review record and rerun in new provider sessions. Concurrent seal halves quiesce, configured order selects one request, siblings count as no evidence, and verification precedes a fresh attempt. | strict routing; optimistic concurrent winner |
-| Domain failure and operational faults stay distinct | `test_failure_reuses_builder_gap_or_reviewer_finding_without_false_result` | Durable Brainstorming failure feeds each builder gap unchanged to its route or records the report kind's source finding as its sole finding for the normal fixer checkpoint. Every lifecycle/access/provider fault stays operational and consumes neither. | strict |
-| The motivating amendment reuses correction ratification | `test_fixer_amendment_reuses_brainstorming_revision_and_design_correction` | A focused contradiction produces only its target amendment, resumes the same fixer, binds any own-note change to the accepted Brainstorming revision, and exercises clean ratification, retry rollback, remodel, and operator verdicts through the existing delta lane without a documentation reset or parallel correction path. | strict |
+| Control result is exact and non-completing | `test_need_rethink_signal_is_closed_eligible_and_non_completing` | Five eligible kinds accept only the exact kind-specific object with valid target and positive round bound, including a value above 16; malformed or mixed work claims accept no progress. | strict |
+| Ordinary paths do not enter Brainstorming | `test_ordinary_results_and_provider_failures_create_no_brainstorming_target_state` | Valid ordinary results, validation failures, and provider failures retain existing behavior with no target observation, reservation, baseline, recovery, or new rejection. | strict compatibility |
+| No fixed numeric admission policy | `test_request_and_target_admission_has_no_fixed_global_quota` | A request above 16 rounds, a target above 8 MiB, a session whose retained revisions cross the discarded 17/32-MiB values, and a ninth concurrent distinct-target session are not refused solely by those numbers. Actual injected unavailability remains a side-effect-free 503. | strict |
+| Creation captures an unaccepted baseline | `test_rethink_session_creation_captures_unaccepted_target_baseline` | Existing, absent, and pre-session-changed targets are captured exactly at creation; accepted revision stays null and non-lead/incomplete-lead mutation restores only the target. | strict |
+| Completed lead work owns acceptance | `test_completed_lead_turn_creates_or_advances_target_revision_atomically` | Setup creates no accepted state. First completed lead work creates it even unchanged; later completed lead work alone advances it; failed durable acceptance records neither turn nor revision. | strict accepted state; optimistic conflict detection |
+| Target versions never depend on a repository | `test_target_revision_and_recovery_never_probe_vcs_or_repository_metadata` | Creation, completed-lead acceptance, invalid-mutation recovery, and restart reconciliation run with fail-on-access observation of their process-launch and filesystem-read seams. Any Git/VCS command or repository-metadata read fails the check; unrelated repository-state changes leave revision identities and recovery outcomes unchanged. | strict |
+| Invalid target mutation has one bounded disposition | `test_invalid_target_mutation_allows_one_correction_then_fails_coherently` | For a discussion or closure worker action, the first invalid target mutation restores only the target and accepts no turn, round, revision, vote, or result; a second before that action completes restores the target and publishes one failure, closing, and result. The one envelope repair and one target-mutation correction remain independent across restart and neither resets the other. | strict |
+| Existing view accepts pre-lead state | `test_coordination_without_lead_acceptance_is_not_yet_accepted` | With accepted revision null, the authorized view returns target ref plus null revision/existence/content and `truncated: false`; after lead acceptance it reads only that revision. | strict |
+| Translation preserves caller facts | `test_adapter_builds_exact_request_roster_and_execution_context` | Request copies question/target/positive round bound, preserves finding as source payload, builds exact references and two-person unanimity roster, and passes primary/additional roots and fallback fact unchanged. | strict |
+| Protected targets are refused before create | `test_adapter_rejects_protected_and_aliased_targets_before_creation` | Direct/aliased context, sealed/generated, Brainstorming-authority, and active-session targets are refused without session, target, or milestone mutation; a separate proposal target is accepted. | strict |
+| Recorded wait is restart-safe | `test_rethink_pause_recovery_uses_recorded_session_without_advancing` | Recovery, a second driver, and repeated terminal inspection cannot consume twice or advance while active; uncertain creation advances nothing. | strict state; optimistic contention; best-effort create |
+| Builders return to exact conversation | `test_implementer_and_fixer_continue_exact_origin_session` | Handoff uses the recorded provider reference and non-null lead-accepted revision, never baseline/live drift; only the resumed ordinary envelope advances and fixer still enters delta review. | strict routing; best-effort delivery |
+| Reviewers take a fresh look | `test_review_delta_and_concurrent_seal_restart_fresh` | Full/delta review creates no judgment from the request and reruns fresh. Concurrent seal halves quiesce, one request wins deterministically, verification precedes the fresh attempt. | strict routing; optimistic winner |
+| Domain and operational failures stay distinct | `test_failure_reuses_builder_gap_or_reviewer_finding_without_false_result` | Genuine discussion failure uses the exact predeclared builder gap or report finding; lifecycle/access/provider/actual-unavailability faults consume neither. | strict |
+| Motivating amendment reuses ratification | `test_fixer_amendment_reuses_brainstorming_revision_and_design_correction` | The focused proposal resumes the same fixer, binds own-note correction to its retained accepted revision, and exercises existing ratify/retry/remodel/operator outcomes without a documentation reset or parallel lane. | strict |
 
 The repository gate remains
-`python3 -m unittest discover -s orchestrator/tests -t .`
-(`orchestrator/README.md:321-329`).
+`python3 -m unittest discover -s orchestrator/tests -t .`.
 
 ### Question Battery
 
-The skeleton's Question Battery is **INHERITED**, not re-answered here. These
-are the slice-scoped remainder; enforceability is intentionally answered again
-for every guarantee this note pins.
+The skeleton's Question Battery is inherited. Slice-specific answers:
 
 | question | answer | evidence |
 |---|---|---|
-| consumers_touched | **verified current consumers:** the shared worker-output validator and five prompt/result paths (`implement`, `fix_findings`, `review_round`, `delta_review`, `seal_half`); the driver's atomic unit/fix/review/seal state; explicit provider-session continuation; and existing Brainstorming create/inspect/result/target-revision surfaces. **not touched:** draft/reclassify workers, standalone routes/view, milestone panel, or external roots. | `orchestrator/contracts.py:47-85,538-742`; `orchestrator/prompts.py:1163-1406,1565-1830`; `orchestrator/driver.py:1703-1835,2662-3011,3072-3388,3676-4265`; `orchestrator/runners.py:751-901`; `orchestrator/brainstorming_lifecycle.py:270-494,748-1005` |
-| pinned_facts | **closed facts:** eligible signal and kind-specific fallback schema; exact request/context and two-person unanimity policy; recorded-session suspension; same-session builder versus fresh-review returns; proposal-only amendment plus existing correction ratification; builder-gap versus reviewer-finding failure routing; accepted Brainstorming target version and no-VCS/no-sealed-target boundary. | `implementation/milestones/brainstorming/slices/slice-08.md:118-126`; `implementation/milestones/brainstorming/skeleton.md:23-47,77-80,94-108`; Operator Amendment A1, **Target versioning clarification** |
-| verification | **focused:** eight named checks pin schema/eligibility, translation/context, protected-target admission, recorded-session recovery, exact builder continuation, all reviewer routes including concurrent seal, builder-gap/reviewer-finding failure routing, and correction-lane amendment ratification. **full:** repository unittest discovery remains the milestone gate. | `implementation/milestones/brainstorming/slices/slice-08.md:128-147`; `implementation/milestones/brainstorming/skeleton.md:124-137`; `orchestrator/README.md:321-329` |
-| reuse_posture | **checked:** common result/finding/gap validation and prompts; driver lock, state and five origin paths; explicit provider sessions; standalone Brainstorming create/inspect and immutable target revisions; gap/operator routing; the one-shot design-correction integrity/rollback/delta gate; and concurrent seal handling. **adopted:** all of those contracts at their existing guarantee levels. **new-with-why:** one alternative control result, one recorded origin/session association, and one Brainstorming-revision authority variant are needed because ordinary results cannot suspend on an independent session and the existing correction gate accepts only an older file authority. | `orchestrator/contracts.py:94-171,300-421,538-782`; `orchestrator/state.py:208-315,393-440`; `orchestrator/runners.py:751-901`; `orchestrator/brainstorming.py:1075-1102,1983-2042`; `orchestrator/brainstorming_lifecycle.py:270-494,748-936`; `orchestrator/driver.py:1257-1501,1703-2205,2662-3388,3676-4265`; `implementation/milestones/brainstorming/skeleton.md:49-67,80,107` |
-| enforceability | **signal/fallback:** existing closed output, report-finding, gap, and reserved-key validators. **target admission:** existing Brainstorming authority/active-target refusal plus adapter-owned context and milestone-artifact checks. **pause:** atomic append-only milestone state plus one-step driver lock; unacknowledged creation is explicitly best-effort. **same session:** explicit-reference start/continue with no recency fallback. **request/result:** exact generic validators and immutable accepted target revisions. **adoption:** existing one-shot correction scope, authority integrity, rollback, delta verdict, and note-gate update. **routing:** current gap/operator, review/delta/seal gates, and concurrent-half join. | `implementation/milestones/brainstorming/slices/slice-08.md:196-208`; `orchestrator/contracts.py:94-171,300-421,538-782`; `orchestrator/state.py:208-315,393-440`; `orchestrator/driver.py:487-509,1257-1501,1941-2205,3072-3388,4109-4265`; `orchestrator/runners.py:751-901`; `orchestrator/brainstorming.py:522-596,1075-1102,1983-2042` |
+| consumers_touched | Five eligible worker-result paths, atomic milestone state, provider continuation, standalone Brainstorming create/result/target revisions, dedicated view, and existing correction/review/seal routes. | Dependencies and consumers |
+| pinned_facts | Exact signal and fallback schema; ordinary-path compatibility; unaccepted baseline and lead-only accepted revision; one bounded target-mutation correction independent of envelope repair; no fixed quota; suspension; builder/fresh-review returns; correction ratification; domain/operational split; no VCS or sealed target. | Pinned-Facts Table |
+| verification | Focused modules pin signal, ordinary behavior, no fixed threshold, baseline/acceptance, fail-on-access detection of repository/VCS dependencies, bounded invalid-mutation failure, pre-lead view, translation, target protection, restart, exact continuation, fresh review, routing, and ratification. | Verification Contract |
+| reuse_posture | Existing result/finding/gap validators, driver state/locks, explicit provider sessions, standalone Brainstorming lifecycle, target-only recovery, view, gap routing, and design-correction delta gate are adopted. New work is one alternative result, recorded association, acceptance-provenance correction, and correction authority variant. | Reuse Posture |
+| enforceability | Closed validators isolate the signal; create captures baseline; role/quiescence/CAS enforce lead-only acceptance; fail-on-access observation detects repository/VCS probes; atomic milestone state serializes waiting/return; explicit provider references enforce routing; retained revision identity gates handoff and correction. | Enforceability Gate |
 
 ### Reuse Posture
 
-- **Checked:** the common worker status/kind validator and output-key registry;
-  all five eligible prompt and result consumers; atomic milestone state and
-  exclusive step lock; exact provider-session creation/continuation; the
-  standalone Brainstorming creation, inspection, request, result, transcript,
-  and retained target-version contracts; current gap/operator routing; and the
-  one-shot design-correction integrity, rollback, independent delta verdict,
-  note-gate update, and concurrent-seal paths.
-- **Adopted:** the existing exact JSON repair gate, current project/work-area
-  resolution, two-role Brainstorming roster resolution, unanimity closure,
-  standalone session lifecycle, immutable target revisions, explicit provider
-  session references, exact report-finding and gap contracts, goal-fit routing,
-  and the complete design-correction/delta lane.
-- **New-with-why:** one alternative `need_rethink` control result and one
-  durable association between its origin and a Brainstorming session, plus an
-  authority variant that binds an own-note correction to an immutable accepted
-  Brainstorming revision. The sealed design requires the adapter and
-  caller-specific returns, while current results cannot wait on an independent
-  session and the correction gate accepts only an older workspace artifact.
-- **Compatibility:** without `need_rethink`, every existing worker envelope,
-  transition, route, API, panel projection, and project extension behaves as
-  before. The adapter consumes the stable Brainstorming contract and extends,
-  rather than duplicates, the existing correction lane.
-
-Authorities:
-`implementation/milestones/brainstorming/skeleton.md:23-47,49-67,77-80,94-108`;
-`implementation/milestones/brainstorming/goal.md:281-298`;
-`orchestrator/contracts.py:94-171,300-421,538-782`;
-`orchestrator/runners.py:751-901`;
-`orchestrator/brainstorming_lifecycle.py:270-494,748-936`;
-`orchestrator/driver.py:1257-1501,1703-2205,2662-3388,3676-4265`.
+- **Checked and adopted:** common worker output validation; all five origin
+  consumers; atomic milestone state and lock; explicit provider start/continue;
+  standalone Brainstorming create/inspect/stop; immutable target revisions and
+  target-only recovery; dedicated view; gap/operator routing; and existing
+  design-correction integrity, rollback, delta verdict, and note gate.
+- **Extended:** one alternative `need_rethink` result, one recorded
+  origin/session association, a distinct unaccepted recovery-baseline fact,
+  nullable accepted target state, one bounded target-mutation correction
+  composed with the existing envelope repair and failure result, and one
+  Brainstorming revision authority variant for own-note correction.
+- **Why new:** ordinary results cannot suspend on an independent session, setup
+  cannot satisfy lead-only acceptance, and the correction gate needs immutable
+  accepted proposal authority rather than a drifting live target.
+- **Compatibility:** ordinary worker outputs, lifecycle transitions, public
+  Brainstorming routes/view schema/page, milestone panel, and external projects
+  retain behavior. No quota or migration contract is added.
 
 ### Enforceability Gate
 
-| invariant asserted here | mechanism that can enforce it | implementation gate |
+| invariant | enforcing seam | implementation gate |
 |---|---|---|
-| Exact eligible non-completion signal | The common status/kind validator, report-finding and gap validators, report-only boundary, and single reserved-key registry already reject malformed and colliding worker results (`orchestrator/contracts.py:47-171,300-371,538-782`) | Contract matrices require the exact kind-specific object only for the five eligible kinds, require builder fallback gaps, forbid reviewer fallback gaps, and reject every mixed work claim before adapter state changes. |
-| One recorded wait and one terminal consumer | Atomic append-only milestone saves and the nonblocking one-step driver lock serialize recorded adapter state (`orchestrator/state.py:208-315`; `orchestrator/driver.py:487-509`); standalone create is durable but does not offer a caller idempotency key (`orchestrator/brainstorming_lifecycle.py:802-936`) | Recovery and concurrent-driver tests prove one winning return for a recorded session and unchanged origin counters while active. Uncertain creation is tested as operational, not exactly-once. |
-| Exact builder conversation versus fresh reviewer | Provider sessions are created and continued by explicit reference, and continuation has no recency fallback (`orchestrator/runners.py:751-901`); current report paths already start independent calls (`orchestrator/driver.py:2662-2676,3269-3291,3735-3746,3970-4052`) | Fake providers expose every started/resumed reference; implement/fix must match the origin, while every report return must use a different reference. |
-| Exact opaque request and inherited context | The generic request/context validator preserves JSON `source_payload`, the standalone creation contract fixes participants/policy before launch, and project binding resolves the existing work area (`orchestrator/brainstorming.py:522-596,786-826`; `orchestrator/brainstorming_lifecycle.py:270-494`) | Translation tests compare the whole request and resolved context, including reference order, primary/additional roots, assignments, policy, and fallback. |
-| Protected targets are refused before mutation | Existing Brainstorming authority and active-target admission combine with adapter knowledge of context references and protected milestone artifacts (`orchestrator/brainstorming.py:234-283,2180-2214`; `orchestrator/brainstorming_lifecycle.py:497-591,802-908`) | Adapter admission tests exercise direct and aliased overlaps with context, sealed/generated milestone artifacts, Brainstorming authority, and active targets, and observe no session, target, or milestone mutation. |
-| Handoff names only an accepted Brainstorming version | Terminal result validation binds target/transcript refs; immutable target revision reads reject missing or mismatched identifiers; success requires the accepted target to exist (`orchestrator/brainstorming.py:1075-1102,1983-2042,2417-2442`) | Tests mutate the live path after retained revision capture and require the handoff/check to use the recorded accepted revision or fail operationally—never infer from Git or accept the drift. |
-| An amendment cannot self-ratify | The existing correction contract limits the edit to a fixer's own note, snapshots its authority and baseline, rolls back rejection, requires an independent delta verdict, and updates the note gate only on ratification (`orchestrator/contracts.py:374-421,651-719`; `orchestrator/driver.py:1257-1501,2706-3011,3072-3351`) | The amendment matrix substitutes only the recorded Brainstorming revision as authority and proves clean ratification, retry rollback, remodel/operator routing, single-note scope, and no parallel correction state. |
-| Failure routing cannot swallow infrastructure or reviewer authority | Existing builder gap values feed the gap/operator router; report findings feed the ordinary fixer checkpoint; lifecycle/API faults have distinct typed codes (`orchestrator/contracts.py:94-171,300-371,651-673`; `orchestrator/driver.py:1941-2205,2662-2704,3269-3388,3676-3835,4109-4265`; `orchestrator/brainstorming_lifecycle.py:39-73`) | A result matrix passes builder gaps and reviewer findings through unchanged, proves the fixer remains the reviewer-confirmation checkpoint, and keeps every typed lifecycle/provider fault on its mutually exclusive operational route. |
-| Existing review dosage remains authoritative | Fix completion already enters delta review; review rounds only advance on clean findings; seal halves join before judgment and seal only on accepted evidence (`orchestrator/driver.py:2973-3011,3072-3388,3676-3835,4109-4265`) | The motivating flow and review-kind matrix prove the signal counts as no evidence, fixer changes receive delta review, reviewer returns are fresh, and a changed seal candidate is verified again. |
+| Exact non-completion signal | Existing closed status/kind, finding, gap, and reserved-key validation | Contract matrices reject malformed, ineligible, or mixed claims before adapter progress. |
+| Ordinary boundary unchanged | Alternative branch starts only after valid `need_rethink` | Five-kind compatibility matrix observes no Brainstorming state or target operation on ordinary paths. |
+| Exact unaccepted baseline | Existing create plus target-only revision seam | Existing/absent/pre-session-change fixtures prove capture-at-create and null accepted state. |
+| No fixed numeric quota | Positive-integer request validation and absence of artifact/history/global-count thresholds | Regression crosses every discarded value without threshold-only refusal and separately injects actual unavailability. |
+| Lead-only accepted provenance | Persisted role, exclusive quiescent turn acceptance, final target observation, exact state validation, and CAS | Setup/interlocutor/failure/lead matrices prove only completed lead work creates or advances acceptance. |
+| Bounded invalid target mutation | Exact target observation and recovery, one persisted correction allowance for the pending worker action, and existing failure/closing terminalization | Restart matrices prove the first invalid mutation accepts no progress and permits one corrected attempt; repetition restores only the target and publishes one coherent failure, while envelope repair neither resets nor is reset by this allowance. |
+| Nullable view remains coherent | Exact not-yet-accepted projection and immutable accepted-revision read | Pre-lead and post-lead fixtures return the pinned public target shape without reading live unaccepted content. |
+| One recorded wait/return | Atomic milestone state and step lock plus recorded Brainstorming session id | Recovery/concurrency tests produce one terminal consumer and unchanged origin counters while active. |
+| Exact builder versus fresh reviewer | Explicit provider references with no recency fallback | Fake provider records prove builder continuation and new reviewer sessions. |
+| Handoff uses accepted revision | Result validation and immutable retained revision lookup | Live-path drift cannot replace the recorded lead-accepted revision or baseline. |
+| Proposal cannot self-ratify | Existing provisional correction, rollback, independent delta verdict, and note gate | Correction matrix proves single-note scope and all existing verdict routes. |
+| Operational failure cannot consume domain fallback | Existing typed lifecycle/API errors versus recorded result | Result matrix keeps genuine failure and infrastructure faults mutually exclusive. |
+| Target-only recovery writes | Amendment A1 target-only authority | Target identity and unchanged-path checks prove recovery changes only `target_path`; they make no claim about read-only dependencies. |
+| No repository/VCS dependency | Amendment A1 plus `test_target_revision_and_recovery_never_probe_vcs_or_repository_metadata` | Fail-on-access observation of process-launch and filesystem-read seams detects every Git/VCS command or repository-metadata probe during target-version creation, acceptance, recovery, and restart; unrelated repository state cannot affect the result. |
 
-No available mechanism promises exactly-once provider delivery, perfect provider
-liveness, or immediately current UI observation. Those remain best-effort or
-eventual and are not acceptance claims.
+No mechanism promises exactly-once provider delivery, perfect liveness, or
+immediately current UI observation. Those remain best-effort or eventual.
 
 ### Planning Material Disposition
 
-- **Adopt:** the sealed skeleton as the operative boundary and the generated
-  goal snapshot only for the caller-specific return and motivating amendment
-  intent that Slice 8 must realize.
-- **Revise:** the non-canonical live goal's arrow sketch into the exact closed
-  signal, durable suspension, accepted-version handoff, and existing-route
-  returns pinned here.
-- **Reject:** non-canonical machine/Persona projection proposals as authority
-  for this slice, including event cursors, replacement error envelopes, bearer
-  tokens, push transport, digests, and Agent99 projection.
-
-Authority:
-`implementation/milestones/brainstorming/skeleton.md:3-5,36-47,77-80,94-122`;
-`implementation/milestones/brainstorming/goal.md:28-48,281-298`;
-`implementation/brainstorming/README.md:3-8,12-17`;
-`implementation/brainstorming/machine-api-and-persona-projection.md:31-55,57-113`.
+- **Adopt:** the skeleton, frozen mandate, and Operator Amendment A1.
+- **Revise:** the motivating arrow into the exact signal, recorded suspension,
+  Brainstorming-revision handoff, and existing-route returns pinned here.
+- **Reject:** machine/Persona projection proposals, event cursors, replacement
+  errors, bearer tokens, push transport, fixed quotas, quota migration, and all
+  Git/VCS target-version or restoration designs.

@@ -12,6 +12,33 @@
 | skeleton-claude-r1 | review_round | claude | 1 | 1 reported | `implementation/milestones/brainstorming/.run/raw/skeleton-claude-r1.txt` |
 | skeleton-codex-r2 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/brainstorming/.run/raw/skeleton-fix1.txt` |
 | skeleton-codex-r3 | delta_review | codex | 0 | clean | `implementation/milestones/brainstorming/.run/raw/skeleton-delta1.txt` |
+| skeleton-codex-r4 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/brainstorming/.run/raw/skeleton-fix2.txt` |
+| skeleton-codex-r5 | delta_review | codex | 1 | 1 reported | `implementation/milestones/brainstorming/.run/raw/skeleton-delta2.txt` |
+| skeleton-codex-r6 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/brainstorming/.run/raw/skeleton-fix3.txt` |
+| skeleton-codex-r7 | delta_review | codex | 1 | 1 reported | `implementation/milestones/brainstorming/.run/raw/skeleton-delta3.txt` |
+| skeleton-codex-r8 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/brainstorming/.run/raw/skeleton-fix4.txt` |
+| skeleton-codex-r9 | delta_review | codex | 1 | 1 reported | `implementation/milestones/brainstorming/.run/raw/skeleton-delta4.txt` |
+| skeleton-codex-r10 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/brainstorming/.run/raw/skeleton-fix5.txt` |
+| skeleton-codex-r11 | delta_review | codex | 2 | 2 reported | `implementation/milestones/brainstorming/.run/raw/skeleton-delta5.txt` |
+| skeleton-codex-r12 | fix_findings | codex | 2 | 2 fixed | `implementation/milestones/brainstorming/.run/raw/skeleton-fix6.txt` |
+| skeleton-codex-r13 | delta_review | codex | 0 | clean | `implementation/milestones/brainstorming/.run/raw/skeleton-delta6.txt` |
+| skeleton-codex-r14 | fix_findings | codex | 2 | 2 fixed | `implementation/milestones/brainstorming/.run/raw/skeleton-fix7.txt` |
+| skeleton-codex-r15 | delta_review | codex | 1 | 1 reported | `implementation/milestones/brainstorming/.run/raw/skeleton-delta7.txt` |
+| skeleton-codex-r16 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/brainstorming/.run/raw/skeleton-fix8.txt` |
+| skeleton-codex-r17 | delta_review | codex | 4 | 4 reported | `implementation/milestones/brainstorming/.run/raw/skeleton-delta8.txt` |
+| skeleton-codex-r18 | fix_findings | codex | 4 | 4 fixed | `implementation/milestones/brainstorming/.run/raw/skeleton-fix9.txt` |
+| skeleton-codex-r19 | delta_review | codex | 2 | 2 reported | `implementation/milestones/brainstorming/.run/raw/skeleton-delta9.txt` |
+| skeleton-codex-r20 | fix_findings | codex | 2 | 2 fixed | `implementation/milestones/brainstorming/.run/raw/skeleton-fix10.txt` |
+| skeleton-codex-r21 | delta_review | codex | 2 | 2 reported | `implementation/milestones/brainstorming/.run/raw/skeleton-delta10.txt` |
+| skeleton-codex-r22 | fix_findings | codex | 2 | 2 fixed | `implementation/milestones/brainstorming/.run/raw/skeleton-fix11.txt` |
+| skeleton-codex-r23 | fix_findings | codex | 2 | 2 fixed | `implementation/milestones/brainstorming/.run/raw/skeleton-fix12.txt` |
+| skeleton-codex-r24 | delta_review | codex | 3 | 3 reported | `implementation/milestones/brainstorming/.run/raw/skeleton-delta11.txt` |
+| skeleton-codex-r25 | fix_findings | codex | 3 | 3 fixed | `implementation/milestones/brainstorming/.run/raw/skeleton-fix13.txt` |
+| skeleton-codex-r26 | delta_review | codex | 1 | 1 reported | `implementation/milestones/brainstorming/.run/raw/skeleton-delta12.txt` |
+| skeleton-codex-r27 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/brainstorming/.run/raw/skeleton-fix14.txt` |
+| skeleton-codex-r28 | delta_review | codex | 2 | 2 reported | `implementation/milestones/brainstorming/.run/raw/skeleton-delta13.txt` |
+| skeleton-codex-r29 | fix_findings | codex | 2 | 2 fixed | `implementation/milestones/brainstorming/.run/raw/skeleton-fix15.txt` |
+| skeleton-codex-r30 | delta_review | codex | 0 | clean | `implementation/milestones/brainstorming/.run/raw/skeleton-delta14.txt` |
 
 ### Seal attempt a1 — PASSED
 
@@ -23,6 +50,41 @@
   - [P2] Slice 3 omits the mandatory contextualization check from its turn-view and verification contracts. This breaks a required prompt contract on every turn; the operator and target quality are affected, while damage remains bounded and reversible through later review.
   - [P3] Slice 1's size posture contradicts its delivered scope and records no permitted overrun rationale.
 
+### Seal attempt a3 — findings
+
+- claude half: 5 finding(s); workspace_modified=False; raw `implementation/milestones/brainstorming/.run/raw/skeleton-seal-a3-claude.txt`
+  - [P3] The skeleton and Slice 8 state that a failed brainstorming returns through the milestone's existing gap/operator route, while Slice 8's own routing fact excludes reviewer-originated requests from that route and sends the finding to the ordinary fixer checkpoint instead.
+  - [P3] This wave added five lines to the skeleton's Guarantee Posture, shifting every table row below it, but none of the eight slice notes' `skeleton.md:<line>` authority citations were re-anchored, so each now names a different pinned fact than the one it invokes.
+  - [P3] Slice 3's redrafted verification contract names a focused check, `test_completed_lead_turn_creates_or_advances_target_revision_atomically`, that exists in no test suite, and no other note's focused command or named check claims to produce it.
+  - [P3] The skeleton and slices 1-6 cite `orchestrator/README.md:309-319` as the authority for the repository test-suite gate, but that range now holds the access-model and demo text; the command lives at 321-329, which slices 7 and 8 cite correctly, so the set contradicts itself about its own gate authority.
+  - [P3] Three rows of the skeleton's Question Battery (machinery, threat_model, enforceability) back their answers with `orchestrator/runners.py` line ranges that moved during Slices 1-7 and now hold unrelated code.
+- codex half: 2 finding(s); workspace_modified=False; raw `implementation/milestones/brainstorming/.run/raw/skeleton-seal-a3-codex.txt`
+  - [P1] Target snapshots have no size bound; any authorized caller can trigger host memory or disk exhaustion, affecting the operator and every active session.
+  - [P2] Strict browser guarantees are anchored to source-string assertions rather than observable browser behavior; the operator is exposed to unsafe rendering or stale-state regressions that the stated gate cannot detect.
+
+### Seal attempt a4 — findings
+
+- claude half: 4 finding(s); workspace_modified=False; raw `implementation/milestones/brainstorming/.run/raw/skeleton-seal-a4-claude.txt`
+  - [P2] The bounded-history contract admits a target of exactly 8 MiB and a round bound up to 16, but caps one nonterminal session at 32 MiB of retained revision content (skeleton.md:35-38; slice-03.md:28-39; slice-06.md:161; slice-08.md:142-149,266). Baseline + three accepted lead revisions of that size reach the cap exactly, so from the fourth lead edit onward every candidate is an over-session-budget target-policy rejection that terminalizes as explicit `failure` after one correction — and slice-08.md:272 routes that failure as a DOMAIN failure consuming the builder's `failure_gap` or the reviewer's finding. No document records the reachable target-size/round envelope or the trade-off.
+  - [P3] The skeleton states two incompatible admission rules in the same Guarantee Posture bullet: 'at most eight sessions are nonterminal at once, bounding their combined reserved target-revision allowance at 256 MiB' (skeleton.md:37-38) and, thirty lines later, 'Such stop-only sessions do not consume one of the eight bounded active allowances' for pre-bounds nonterminal sessions (skeleton.md:68-69). Slice-03.md:31 and slice-08.md:142-145 repeat the unqualified 'at most eight nonterminal sessions', while slice-06.md:161 and slice-08.md:88,267 qualify it to bounded-contract sessions only. The set therefore does not determine whether legacy nonterminal sessions count toward the cap.
+  - [P3] The skeleton's Reuse Posture (skeleton.md:94-111) never mentions the largest machinery this wave added: a retained target-revision content store with per-revision and per-session byte/count budgets, an eight-session active-capacity accounting with terminal reclamation, and durable contract versioning for pre-bounds sessions. 'Extended' lists only the discussion machinery and 'Why new machinery' justifies only that the existing workers and fixer consultation are one-shot. No authority outside this plan is traced for the resource machinery (the goal states no resource requirement and A1 disclaims a new threat model), and the same service accepts run artifacts with no per-run byte budget or active-run cap — only a 1 MiB HTTP body cap and a 1 MiB doc-view fetch cap exist (service.py:176,2445).
+  - [P3] The set declares a strict 'target-revision body-content bound' (skeleton.md:51-56; slice-03.md:322; slice-06.md:178,244; slice-08.md:292,385) about how many bytes an internal component may process, while the same text forbids the named check `test_target_revision_body_content_obeys_resource_bounds` from asserting storage layout or the containing operation's resource use. The claim is falsifiable only by reading the implementation, so the strict posture has no enforcing mechanism — the condition the notes themselves say means 'that guarantee is not delivered' — and internal-component accounting is carried in the skeleton's shared posture and four slice notes' acceptance criteria.
+- codex half: 3 finding(s); workspace_modified=False; raw `implementation/milestones/brainstorming/.run/raw/skeleton-seal-a4-codex.txt`
+  - [P2] Design/reuse defect: the plan invents fixed global capacity, size, and round limits without goal, amendment, or comparable-platform authority. Operators are the victims; refusal is reversible but visible and can be triggered at will.
+  - [P2] Strict-contract defect: the failure handoff does not compose Brainstorming target retention with the milestone's restart-safe cleanup. The operator and workspace are victims; target loss or abandoned edits are reversible but visible after a normal restart/failure sequence.
+  - [P2] Routing-contract defect: need_rethink eligibility is broader than the existing failure route it promises to reuse. The operator is the victim; the deviation is bounded but visible and directly triggerable in unsupported fixer contexts.
+
+### Seal attempt a5 — PASSED
+
+- claude half: 2 finding(s); workspace_modified=False; raw `implementation/milestones/brainstorming/.run/raw/skeleton-seal-a5-claude.txt`
+  - [P2] Slice 3's pinned Turn view enumerates what every participant receives and omits every non-turn transcript entry plus the run's closure policy and round cap, so the set delivers a narrower turn view than the goal's Round definition guarantees and than slice-05's own acceptance check asserts.
+  - [P3] Intra-set line citations of the form slice-0N.md:<line> — both slice-to-slice and slice-to-self — no longer point at the text they invoke after this wave's rewrites, so a reader following the authority column lands on unrelated prose.
+- codex half: 4 finding(s); workspace_modified=False; raw `implementation/milestones/brainstorming/.run/raw/skeleton-seal-a5-codex.txt`
+  - [P2] Strict transcript-attribution defect: every normal session replaces participant identities with role counters; the operator or replacement agent loses attribution on every turn, although structured state makes the damage bounded and reversible.
+  - [P3] Reuse defect: the set invents a persisted one-retry target-mutation policy, including restart and closure composition, although the mandate requires only rejection and target-only recovery and no independent authority requires the extra retry machinery.
+  - [P3] Delivered-size posture is false: the transcript slice claims roughly 500 changed lines, while its implementation commit changed about 2,514 relevant production and test lines and records no overrun rationale.
+  - [P2] Slice-scope defect: Slice 8 combines a cross-core target-version correction with the independent five-path milestone adapter; implementers and reviewers suffer bounded but normal-use review coupling, and the claimed need to keep them together is false because the core correction can close first.
+
 **Deferred debt (opposite-family verified):**
 - `codex-F1` (raised codex, cleared codex): Standalone authorization is under-specified. The cited access check authorizes milestone registry entries, but brainstorming state lives outside that ledger and the skeleton defines no equivalent session-to-caller/project binding. This breaks the inherited-access guarantee in normal standalone use; exposure is not yet implemented, so P2 rather than P1. — This is an authorization-correctness omission, but a capable builder must confront access control when defining the standalone API and should infer the durable project binding from the explicitly reused service conventions or stop for repair, while any miss requires bounded state, endpoint, and test
 - `codex-F2` (raised codex, cleared codex): The creation contract does not expose or assign authority for the required per-run participant configuration. The goal forbids implicit process-global roles and requires an explicit closure-policy choice, while the skeleton describes only the five-field request and the resolved output. A normal caller can therefore receive the wrong decision authority. — The skeleton leaves caller authority unstated but explicitly requires a per-run non-global roster, selectable policies, and tests for both, so a capable builder should stop at the creation seam; if missed, correction is bounded contract, resolution, API, and test rework within the milestone.
@@ -31,6 +93,22 @@
 - `claude-F1` (raised claude, cleared codex): The Verification Contract's milestone-close coverage list (skeleton.md:126-134) omits 'unresolved closure at the round limit', one of the sixteen test topics mandated by goal acceptance item 14 (goal.md:368-374); the other fifteen topics are all represented, so the skeleton's stated close condition is strictly weaker than the mandate on exactly this scenario, and 'both terminal results including failure before a completed turn' names a different failure trigger, not round exhaustion. — The explicitly exhaustive close checklist omits a mandated test and can therefore silently authorize incomplete coverage despite the correct behavior being pinned elsewhere, but correction is only a focused round-exhaustion test and any small local closure fix it exposes.
 - `codex-F1` (raised codex, cleared codex): Slice 3 omits the mandatory contextualization check from its turn-view and verification contracts. This breaks a required prompt contract on every turn; the operator and target quality are affected, while damage remains bounded and reversible through later review. — The skeleton pins the six-part check for every participant prompt but omits it from Slice 3 and the verification list, so a capable builder should recover or stop on the inconsistency, while any silent drift needs only localized prompt and test fixes.
 - `codex-F2` (raised codex, cleared codex): Slice 1's size posture contradicts its delivered scope and records no permitted overrun rationale. — The skeleton only calls the eight planned slices “narrow” and contains neither a sub-500-line target nor the claimed “comfortably below” certification, so this historical size-accounting issue cannot plausibly steer later implementation and would require only a local wording or rationale correction.
+- `codex-F2` (raised codex, cleared codex): Strict browser guarantees are anchored to source-string assertions rather than observable browser behavior; the operator is exposed to unsafe rendering or stale-state regressions that the stated gate cannot detect. — The skeleton’s strict rendering/state guarantees and full-suite gate omit executable browser-behavior coverage, so source-only assertions can silently certify unsafe or stale behavior, while correction remains bounded to Slice 7’s browser tests and any local renderer fix.
+- `claude-F1` (raised claude, cleared codex): The skeleton and Slice 8 state that a failed brainstorming returns through the milestone's existing gap/operator route, while Slice 8's own routing fact excludes reviewer-originated requests from that route and sends the finding to the ordinary fixer checkpoint instead. — Slice 8 explicitly directs and tests reviewer failures through the fixer checkpoint despite the skeleton’s unconditional gap/operator mandate, making wrong routing likely to be implemented silently, while correction remains bounded to Slice 8’s routing contract and tests before seal.
+- `claude-F2` (raised claude, cleared codex): This wave added five lines to the skeleton's Guarantee Posture, shifting every table row below it, but none of the eight slice notes' `skeleton.md:<line>` authority citations were re-anchored, so each now names a different pinned fact than the one it invokes. — The stale offsets visibly conflict with their labels—for example, Slice 8 cites line 107, now Participant supervision, instead of Milestone adapter at line 112—while explicit slice facts and other authorities preserve the contract, making silent drift unlikely and correction a mechanical citation re
+- `claude-F4` (raised claude, cleared codex): The skeleton and slices 1-6 cite `orchestrator/README.md:309-319` as the authority for the repository test-suite gate, but that range now holds the access-model and demo text; the command lives at 321-329, which slices 7 and 8 cite correctly, so the set contradicts itself about its own gate authority. — The skeleton states the correct full-suite command explicitly, so the stale authority range is immediately self-revealing and unlikely to mislead this builder, while correction is only a local citation-line update.
+- `claude-F5` (raised claude, cleared codex): Three rows of the skeleton's Question Battery (machinery, threat_model, enforceability) back their answers with `orchestrator/runners.py` line ranges that moved during Slices 1-7 and now hold unrelated code. — The cited ranges are visibly stale on inspection, but the rows’ behavioural claims remain explicit and corroborated elsewhere, so a capable builder will detect the mismatch rather than silently drift, and correction is only a local evidence-pointer update.
+- `codex-F2` (raised codex, cleared codex): Strict-contract defect: the failure handoff does not compose Brainstorming target retention with the milestone's restart-safe cleanup. The operator and workspace are victims; target loss or abandoned edits are reversible but visible after a normal restart/failure sequence. — The skeleton’s target-retention guarantees visibly conflict with its unqualified existing-gap routing, so the capable builder should stop on this correctness hole, but if missed, correction requires bounded Slice 8 restart-safe cleanup sequencing and tests.
+- `codex-F3` (raised codex, cleared codex): Routing-contract defect: need_rethink eligibility is broader than the existing failure route it promises to reuse. The operator is the victim; the deviation is bounded but visible and directly triggerable in unsupported fixer contexts. — The skeleton wrongly admits every fixer while pinning failures to a route that rejects some fixer envelopes, plausibly producing incorrect behavior and tests, but the first failure-path test or use exposes it and correction is a small adapter eligibility/routing fix.
+- `claude-F2` (raised claude, cleared codex): The skeleton states two incompatible admission rules in the same Guarantee Posture bullet: 'at most eight sessions are nonterminal at once, bounding their combined reserved target-revision allowance at 256 MiB' (skeleton.md:37-38) and, thirty lines later, 'Such stop-only sessions do not consume one of the eight bounded active allowances' for pre-bounds nonterminal sessions (skeleton.md:68-69). Slice-03.md:31 and slice-08.md:142-145 repeat the unqualified 'at most eight nonterminal sessions', while slice-06.md:161 and slice-08.md:88,267 qualify it to bounded-contract sessions only. The set therefore does not determine whether legacy nonterminal sessions count toward the cap. — The contradictory explicit admission rules could silently steer even a capable builder toward the wrong legacy-session counting behavior and tests, but correction is a local admission predicate and migration-case test exposed by the first eight-legacy-plus-one-new scenario.
+- `claude-F3` (raised claude, cleared codex): The skeleton's Reuse Posture (skeleton.md:94-111) never mentions the largest machinery this wave added: a retained target-revision content store with per-revision and per-session byte/count budgets, an eight-session active-capacity accounting with terminal reclamation, and durable contract versioning for pre-bounds sessions. 'Extended' lists only the discussion machinery and 'Why new machinery' justifies only that the existing workers and fixer consultation are one-shot. No authority outside this plan is traced for the resource machinery (the goal states no resource requirement and A1 disclaims a new threat model), and the same service accepts run artifacts with no per-run byte budget or active-run cap — only a 1 MiB HTTP body cap and a 1 MiB doc-view fetch cap exist (service.py:176,2445). — The omission is explanatory rather than contractual because the limits, legacy mode, Slice 8 ownership, and focused tests are pinned elsewhere, so silent misdirection is unlikely, while any rare omission would be caught within Slice 8 and require bounded unit rework.
+- `claude-F4` (raised claude, cleared codex): The set declares a strict 'target-revision body-content bound' (skeleton.md:51-56; slice-03.md:322; slice-06.md:178,244; slice-08.md:292,385) about how many bytes an internal component may process, while the same text forbids the named check `test_target_revision_body_content_obeys_resource_bounds` from asserting storage layout or the containing operation's resource use. The claim is falsifiable only by reading the implementation, so the strict posture has no enforcing mechanism — the condition the notes themselves say means 'that guarantee is not delivered' — and internal-component accounting is carried in the skeleton's shared posture and four slice notes' acceptance criteria. — The artifact explicitly bounds target-body bytes processed rather than peak memory or storage layout, so the raised streaming-versus-loading example is conforming and unlikely to mislead a capable builder, while any genuine enforcement gap would require bounded component instrumentation and tests wi
+- `codex-F1` (raised codex, cleared codex): Strict transcript-attribution defect: every normal session replaces participant identities with role counters; the operator or replacement agent loses attribution on every turn, although structured state makes the damage bounded and reversible. — The skeleton explicitly requires every completed turn to record the participant’s human-facing name and persists stable identity data, so a capable builder is unlikely to infer role-only labels, and any lapse would be immediately visible and corrected locally in transcript projection and tests.
+- `codex-F2` (raised codex, cleared codex): Reuse defect: the set invents a persisted one-retry target-mutation policy, including restart and closure composition, although the mandate requires only rejection and target-only recovery and no independent authority requires the extra retry machinery. — The skeleton falsely pins A1 as requiring a persisted retry, second-violation failure, and matching tests, so the builder would likely implement that wrong behavior without stopping, but removing the counter, branch, and focused tests is bounded milestone rework.
+- `codex-F3` (raised codex, cleared codex): Delivered-size posture is false: the transcript slice claims roughly 500 changed lines, while its implementation commit changed about 2,514 relevant production and test lines and records no overrun rationale. — The skeleton pins Slice 4 behavior but states no 500-line estimate, while the historical note's inaccurate size posture is accounting rather than a behavioral contract, so it cannot plausibly misdirect implementation and correction is only a local rationale update.
+- `codex-F4` (raised codex, cleared codex): Slice-scope defect: Slice 8 combines a cross-core target-version correction with the independent five-path milestone adapter; implementers and reviewers suffer bounded but normal-use review coupling, and the claimed need to keep them together is false because the core correction can close first. — Slice 8 explicitly directs the capable builder to combine the core target-state correction with the adapter, so it will likely follow that coupling without stopping, while correcting it later requires only bounded rework within the unit at review or seal.
+- `claude-F1` (raised claude, cleared codex): Slice 3's pinned Turn view enumerates what every participant receives and omits every non-turn transcript entry plus the run's closure policy and round cap, so the set delivers a narrower turn view than the goal's Round definition guarantees and than slice-05's own acceptance check asserts. — The explicit Turn view states the wrong behavioral and test contract and could silently produce prompts missing policy, round-cap, and failed-ballot context, but Slice 5’s named failed-ballot check should expose it and correction is bounded to the turn-context projection and its focused tests.
+- `claude-F2` (raised claude, cleared codex): Intra-set line citations of the form slice-0N.md:<line> — both slice-to-slice and slice-to-self — no longer point at the text they invoke after this wave's rewrites, so a reader following the authority column lands on unrelated prose. — The stale citations visibly land on unrelated prose while the invoking rows state the exact endpoint contract, so a capable builder should detect rather than silently follow them, and correction is a local citation re-pin.
 
 ## slice_doc-01 (Session contract and durable state)
 
@@ -47,6 +125,10 @@
 ### Seal attempt a2 — PASSED (re-documentation wave skeleton-a2)
 
 - resealed by the anchor's wave seal (skeleton-a2): the wave certified the whole documentation set; this unit ran no seal episode of its own
+
+### Seal attempt a3 — PASSED (re-documentation wave skeleton-a5)
+
+- resealed by the anchor's wave seal (skeleton-a5): the wave certified the whole documentation set; this unit ran no seal episode of its own
 
 **Deferred debt (opposite-family verified):**
 - `codex-F1` (raised codex, cleared codex): Participant resolution has no enforceable input or ownership seam — The note simultaneously treats the roster as caller-resolved and requires family-aware service resolution without an eligible-candidate input, so a capable builder should stop on the contradiction rather than drift silently, while any missed interpretation would require bounded contract, resolver, a
@@ -85,6 +167,10 @@
 ### Seal attempt a2 — PASSED (re-documentation wave skeleton-a2)
 
 - resealed by the anchor's wave seal (skeleton-a2): the wave certified the whole documentation set; this unit ran no seal episode of its own
+
+### Seal attempt a3 — PASSED (re-documentation wave skeleton-a5)
+
+- resealed by the anchor's wave seal (skeleton-a5): the wave certified the whole documentation set; this unit ran no seal episode of its own
 
 **Deferred debt (opposite-family verified):**
 - `codex-F1` (raised codex, cleared codex): The strict running-only acceptance guarantee is checked only before provider invocation; no named gate orders an in-flight continuation or repair against concurrent terminalization. The operator/session is the concrete victim: a stop or failure can admit one bounded, traceable post-terminal turn. Damage is reversible but visible, and stopping an active session can trigger it. — The artifact pins running-only enforcement and its test only before invocation, plausibly steering implementation and coverage into the stated concurrency bug, while correction is bounded to an acceptance-versus-terminalization ordering gate and focused race test.
@@ -127,6 +213,10 @@
 ### Seal attempt a2 — PASSED (re-documentation wave skeleton-a2)
 
 - resealed by the anchor's wave seal (skeleton-a2): the wave certified the whole documentation set; this unit ran no seal episode of its own
+
+### Seal attempt a3 — PASSED (re-documentation wave skeleton-a5)
+
+- resealed by the anchor's wave seal (skeleton-a5): the wave certified the whole documentation set; this unit ran no seal episode of its own
 
 **Deferred debt (opposite-family verified):**
 - `codex-F3` (raised codex, cleared codex): The slice-owned discussion prompt omits the sealed proportionality check required for every participant in normal use. — Because Slice 03’s concrete prompt contract and named prompt test omit the sealed proportionality baseline, a capable builder could silently implement and validate wrong behavior, but correction is a local prompt-and-focused-test amendment.
@@ -194,6 +284,10 @@
 ### Seal attempt a1 — PASSED
 
 - codex half: 0 finding(s); workspace_modified=False; raw `implementation/milestones/brainstorming/.run/raw/slice_doc-04-seal-a1-codex.txt`
+
+### Seal attempt a2 — PASSED (re-documentation wave skeleton-a5)
+
+- resealed by the anchor's wave seal (skeleton-a5): the wave certified the whole documentation set; this unit ran no seal episode of its own
 
 **Deferred debt (opposite-family verified):**
 - `codex-F1` (raised codex, cleared codex): The strict publication guarantee misses consecutive winning revisions: revision checks plus atomic replacement reject same-base losers but do not prevent an older successful writer from publishing after a newer successful writer. The operator can temporarily lose visible accepted progress; durable state preserves recovery, so damage is bounded, reversible, and timing-dependent. — The artifact repeatedly and wrongly pins CAS plus atomic replacement as preventing losing publication while testing only same-base losers, so a builder would likely preserve the consecutive-winner race, but correction is bounded to transcript publication ordering and one focused concurrency test wit
@@ -263,6 +357,10 @@
 ### Seal attempt a1 — PASSED
 
 
+### Seal attempt a2 — PASSED (re-documentation wave skeleton-a5)
+
+- resealed by the anchor's wave seal (skeleton-a5): the wave certified the whole documentation set; this unit ran no seal episode of its own
+
 **Deferred debt (opposite-family verified):**
 - `codex-F1` (raised codex, cleared codex): The path-mutation non-goal contradicts mandatory state and transcript publication in every normal closure. — The literal path-only non-goal conflicts openly with the same note’s mandatory session-state and chat.md publication, so the capable builder must stop rather than drift silently, and correction is a local wording clarification exposed before or by the first closure test.
 - `codex-F2` (raised codex, cleared codex): The strict same-revision guarantee lacks a voter-view and vote-provenance contract, allowing ordinary closure to approve a version a participant never received. — The note pins votes to a revision but omits proof that each voter received that revision, an ambiguity a capable builder should notice or stop on, while silent implementation would require bounded closure-prompt, provenance-validation, and focused-test rework to correct.
@@ -319,6 +417,10 @@
 ### Seal attempt a1 — PASSED
 
 
+### Seal attempt a2 — PASSED (re-documentation wave skeleton-a5)
+
+- resealed by the anchor's wave seal (skeleton-a5): the wave certified the whole documentation set; this unit ran no seal episode of its own
+
 **Deferred debt (opposite-family verified):**
 - `codex-F1` (raised codex, cleared codex): Stop authorization lacks an executable check. The strict access design protects another project's operator from a bounded but visible session interruption; the normal stop path remains unverified when an opaque session id becomes known. — The artifact correctly requires authorization for every stop but tests foreign access only on GET, so the builder could silently omit the negative stop case, while correction is a local test and route-authorization fix within Slice 6.
 - `codex-F2` (raised codex, cleared codex): Service-restart persistence is promised but untested. The victim is the session operator, who can lose bounded control and visibility during ordinary service maintenance; the deviation appears whenever the new service record is not truly durable. — The artifact repeatedly requires a durable service record and inspectable nonterminal state, so the capable builder should either implement persistence or stop on the missing restart check rather than drift silently, while an escaped defect would require bounded storage and lifecycle-test rework wit
@@ -373,6 +475,10 @@
 ### Seal attempt a1 — PASSED
 
 
+### Seal attempt a2 — PASSED (re-documentation wave skeleton-a5)
+
+- resealed by the anchor's wave seal (skeleton-a5): the wave certified the whole documentation set; this unit ran no seal episode of its own
+
 **Deferred debt (opposite-family verified):**
 - `claude-F1` (raised claude, cleared codex): Two of the six named checks and two Enforceability Gate rows pin browser-runtime behaviour (poll cadence, out-of-order response rejection, stale-banner retention, hostile markup creating 'no element, handler, navigation, or script'), but the repository has no JavaScript or browser test tooling at all — the gate is `python3 -m unittest discover -s orchestrator/tests -t .`, there is no package.json, no selenium/playwright/puppeteer/jsdom anywhere, and the only existing test that touches a static page (test_brainstorming_closure.py:1015-1025) compares panel.html as raw bytes. The note's own strict guarantee 'Participant text is displayed as inert content, never executable page markup' and its eventual guarantee 'revision never decreases and stale state is explicit' therefore have no mechanism that can enforce them, contrary to the Enforceability Gate rows at slice-07.md:180-181 which assert such tests exist. — The note wrongly presents browser-runtime safety and ordering checks as enforceable despite the repository having only Python tests and no browser harness, so a capable builder could trust weak static checks and silently miss behavioural defects, while correction remains bounded to Slice 7 page and 
 - `claude-F2` (raised claude, cleared codex): The note claims at slice-07.md:74-76 that the slice 'is expected to stay under about 500 changed lines by reusing the existing projection, renderer, polling, access, and stop seams', and therefore records no reason for exceeding the target. That estimate is not credible for the work the note itself pins: a brand-new static page, a new server-side view projection, a new route, and a brand-new focused suite with six named checks. Comparable evidence in this same milestone: the focused suite for slice 6 (9 named checks) is 1435 lines and its implementation commit 227acc8 landed 3066 insertions; slice 4 made the same 'stay around 500' claim (slice-04.md:111) and its commit 41b70de landed 2457 insertions; slices 2, 3, 5 and 6 all explicitly recorded an overrun reason instead. — The implausible 500-line estimate is nonbinding accounting, while the six explicit checks and pinned behavior force a capable builder either to exceed it or stop, so silent drift is unlikely and correction requires only a local overrun-note edit.
@@ -395,7 +501,7 @@
 - `claude-F2` (raised claude, cleared codex): Nothing in the focused suite ever asserts that `view.target.revision` equals the session's durable `accepted_target_revision`, and the note's gate "compare every projected field with one captured durable revision" is met for only 3 of the 14 projected fields; the "empty" target fixture named in the Enforceability Gate is also absent. — The focused suite passes despite never binding target.revision to accepted_target_revision or covering empty content, so its false test-coverage claim can silently preserve a stale-label correctness regression, while correction is a local projection assertion/fixture and at most one field fix.
 - `claude-F3` (raised claude, cleared codex): `orchestrator/README.md:133-143` still describes the standalone Brainstorming surface as create + detail + stop only; the dedicated page `/brainstorming.html?session=<id>` and the new `GET /api/brainstorming/sessions/<id>/view` route are documented nowhere outside the service.py module docstring, although the slice's only declared consumer is a human who must know that URL. — The README’s affirmative three-route inventory could make a README-only reader silently miss the browser view, though a capable builder can resolve it from the goal, Slice 7, implementation, and tests, while correction requires only a local README update with no code or downstream rework.
 
-## slice_doc-08 (Milestone need_rethink adapter)
+## slice_doc-08 (Milestone `need_rethink` adapter)
 
 - draft: kind `draft_slice_note`, artifact `implementation/milestones/brainstorming/slices/slice-08.md` (raw: `implementation/milestones/brainstorming/.run/raw/slice_doc-08-draft.txt`)
 
@@ -409,6 +515,10 @@
 
 ### Seal attempt a1 — PASSED
 
+
+### Seal attempt a2 — PASSED (re-documentation wave skeleton-a5)
+
+- resealed by the anchor's wave seal (skeleton-a5): the wave certified the whole documentation set; this unit ran no seal episode of its own
 
 **Deferred debt (opposite-family verified):**
 - `codex-F2` (raised codex, cleared codex): P2 battery: the eventual-return contract lacks run-loop coverage; the operator faces a bounded, reversible but normal automatic-continuation failure for multi-minute discussions. — The note promises eventual return but tests only repeated immediate inspections, so a capable builder may miss fixed-step exhaustion, while the failure is obvious on first multi-minute use and correction remains bounded to this unit's wait loop and coverage.
@@ -424,6 +534,10 @@
 - `claude-F6` (raised claude, cleared codex): P3 battery (undocumented posture): the note asserts "Brainstorming participant content mutation is confined to `target_path`" as a pinned boundary fact (slice-08.md:126), repeats it as a non-goal (slice-08.md:99-100) and in its do-not-touch column, but the Enforceability Gate names no mechanism for it. Amendment A1 explicitly refuses a sandbox or custody model, and sealed slice 3 states the opposite posture for the same rule: interlocutors are "explicitly instructed not to edit the target" and "prompt compliance is never the enforcement mechanism" (slice-03.md:143,227). No nameable product victim and no behavior change, so it scores low despite the unease that slice 8 is the first slice to place that discussion inside the milestone's own tracked tree. — The confinement wording could briefly mislead a builder, but A1, the explicit no-sandbox boundary, and Slice 3 make the instruction-only posture discoverable, while correction is a small local clarification rather than propagated implementation rework.
 - `claude-F7` (raised claude, cleared codex): P3 battery: the note never names the top-level output key that carries the need_rethink object's four required values — it pins only the status value and "Every `need_rethink` object has exactly ..." (slice-08.md:120) — and it cites the "single reserved-key registry" as the enforcing mechanism (slice-08.md:200) without pinning that the new key joins COMMON_OUTPUT_KEYS (contracts.py:740-780), which verifiers.py:182-189 reads to reject colliding project-contract extension fields. No nameable victim and no behavior change today. — The slice identifies `need_rethink` as the exact control-status value and describes its payload plus top-level exclusions, so a capable builder is unlikely to invent a same-named wrapper key, and any contrary interpretation would require only a local schema, registry, and test correction.
 
-## slice_impl-08 (Milestone need_rethink adapter)
+## slice_impl-08 (Milestone `need_rethink` adapter)
 
+
+| Round | Kind | Family | Findings | Triage | Raw |
+|---|---|---|---|---|---|
+| slice_impl-08-codex-r1 | review_round | codex | 3 | 3 reported | `implementation/milestones/brainstorming/.run/raw/slice_impl-08-codex-r1.txt` |
 

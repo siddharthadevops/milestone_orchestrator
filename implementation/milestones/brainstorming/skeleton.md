@@ -1,31 +1,54 @@
 # Generic Brainstorming Orchestrator — Milestone Skeleton
 
 Mandate: `implementation/milestones/brainstorming/goal.md`. This is a thin
-planning contract. Slice notes will pin their own public seams and focused
-acceptance checks just in time.
+planning contract. Slice notes pin their public seams and focused acceptance
+checks just in time.
 
 ## Register 1 — Intent
 
 ### Goal Restatement
 
 Build a standalone way for a lead agent and one or more interlocutors to work
-through one bounded question while the lead constructs the requested result.
-The human record should read like a discussion, while the service keeps the
+through one caller-bounded question while the lead constructs the requested
+result. The human record reads like a discussion, while the service keeps the
 machine state needed to order turns, supervise participants, and decide whether
 the group closed successfully.
 
 The first user is the Milestone Orchestrator: a focused design doubt can pause
-its normal work, run this independent discussion, and then return by the route
-appropriate to the worker that asked. The core belongs to brainstorming, not
-to milestones. It stays neutral enough for a later Agent99 adapter, but this
+normal work, run this independent discussion, and return by the route
+appropriate to the worker that asked. The core belongs to Brainstorming, not
+milestones. It stays neutral enough for a later Agent99 adapter, but this
 milestone does not build that adapter.
 
 ### Guarantee Posture
 
 - **Strict:** accepted requests and rosters are validated; roles and turn order
-  are fixed; only the lead changes the target; a turn is accepted only after
-  worker quiescence and a target-ownership check; rounds, revisions, votes,
-  results, and the ordered human transcript agree with durable state.
+  are fixed; and the caller supplies a positive `max_rounds`, which is the
+  discussion's round bound. Session creation retains the target's exact
+  existing-or-absent state as an unaccepted Brainstorming recovery baseline.
+  `accepted_target_revision` remains null until a completed lead turn creates
+  it, and only a later completed lead turn may advance it. Interlocutors are
+  instructed not to edit the target. A mutation during an interlocutor turn,
+  control work, or a lead attempt that does not complete is an invalid worker
+  outcome: it accepts no turn, round, or target revision and recovers only
+  `target_path` from the last accepted Brainstorming revision, or from the
+  recovery baseline before one exists. Each pending worker action has one
+  target-mutation correction allowance: after recovery, that same action may be
+  attempted once more. A second invalid target mutation before it completes
+  restores the target again and ends the session as coherent `failure`, without
+  accepting the rejected work or consuming a round. This allowance and the
+  discussion-envelope repair allowance are independent and neither resets the
+  other. Target revision identifiers or hashes are owned by Brainstorming and
+  have no VCS meaning. Rounds, revisions, votes, results, and the ordered human
+  transcript agree with durable state.
+- **Operational availability:** this milestone introduces no fixed
+  process-global session quota, artifact-size ceiling, target-history byte
+  allowance, revision-count allowance, or fixed upper bound on
+  `max_rounds`. If the service cannot admit a session because required runtime
+  resources are actually unavailable, creation may return the existing
+  unavailable outcome without creating session state or starting participants.
+  That is an operational refusal, not a caller-triggerable contractual quota or
+  a discussion failure.
 - **Best-effort:** frozen-process detection inherits the existing measurable
   CPU, process-set, and output-progress watchdog. An unmeasurable interval is
   treated as live; this milestone does not claim perfect provider liveness or
@@ -33,10 +56,18 @@ milestone does not build that adapter.
 - **Eventual:** the visualization may lag durable state by its normal refresh
   interval. It is a projection, never process authority.
 
+These guarantees assume callers do not mutate `target_path` while a
+Brainstorming session is active. Concurrent external writes are outside the run
+contract and are neither attributed nor merged. Participants retain the
+caller's complete inherited tools and execution context; target ownership is a
+turn-acceptance rule, not a new permission, sandbox, custody, or threat model.
+They may inspect and reason about supplied references and legitimate
+neighbouring material; only target mutation and recovery are narrowed.
+
 ### Boundary and Non-Goals
 
 - No milestone units, slices, seals, review families, or milestone chronology
-  inside the brainstorming core; the milestone side is an adapter.
+  inside the Brainstorming core; the milestone side is an adapter.
 - No Agent99, Life Documents, cloud-drive, legal, or other target-specific
   adapter; no domain taxonomy or answer-options field.
 - No new permission, sandbox, root, work-area, idempotency, or provider-policy
@@ -45,24 +76,31 @@ milestone does not build that adapter.
   no raw diagnostics in the human transcript.
 - No replacement or bypass of ordinary review, delta review, sealing,
   consultation, or gap/operator routing.
+- Target-version selection and recovery have no repository requirement and
+  inspect no Git/VCS state or repository metadata. Recovery mutates only
+  `target_path`; this does not restrict participant inspection or reasoning
+  through the inherited execution context.
+- No milestone-invented resource policy. A caller chooses the positive round
+  bound; deployment-level availability remains an operational concern.
 
 ### Reuse Posture
 
 - **Checked:** current structured-output validation, append-only state,
-  one-shot CLI calls, process-group supervision, edit detection, resolved
-  multi-root context, local API/access controls, panel projection, current
-  fixer consultation, and Agent99's named work-area admission seam.
+  one-shot CLI calls, process-group supervision, resolved multi-root context,
+  local API/access controls, panel projection, current fixer consultation, and
+  the existing target-only revision seam.
 - **Reused:** validation and atomic-history patterns; process tracking,
-  liveness and stop propagation; workspace-change detection; inherited root
-  context; and the service's lifecycle, access, and projection conventions.
-- **Extended:** a separate brainstorming lifecycle, durable discussion state,
+  liveness and stop propagation; inherited root context; target-only recovery;
+  and the service's lifecycle, access, and projection conventions.
+- **Extended:** a separate Brainstorming lifecycle, durable discussion state,
   persistent participant sessions, exclusive quiescent turn acceptance,
-  revision-bound closure, transcript, standalone interface, and one adapter.
+  Brainstorming-owned target revisions, revision-bound closure, transcript,
+  standalone interface, and one adapter.
 - **Why new machinery:** today's workers and fixer consultation are bounded
   one-shot calls. They neither maintain a multi-party discussion nor let one
   designated lead progressively revise a target, and milestone rounds cannot
   be repurposed without violating the independent-process boundary.
-- **Compatibility:** brainstorming state stays outside the milestone ledger;
+- **Compatibility:** Brainstorming state stays outside the milestone ledger;
   the adapter passes caller context through unchanged; existing milestone and
   Agent99 work-area ownership remain where they are.
 
@@ -72,66 +110,72 @@ milestone does not build that adapter.
 |---:|---|---|
 | 1 | Session contract and durable state | Add the product-neutral request, resolved roster, closure-policy, lifecycle, and result contracts, with atomic auditable state and no milestone vocabulary. |
 | 2 | Persistent participant execution | Keep one logical CLI session per participant across turns, validate each control envelope, inherit the caller's execution context, and reuse existing liveness and stop supervision. |
-| 3 | Ordered rounds and lead-owned target | Run complete passes through the persisted order, expose prior discussion and the current target to each turn, count only completed passes, and mechanically confine target changes to the lead. |
+| 3 | Ordered rounds and lead-owned target | Run complete passes through the persisted order, expose prior discussion and the current target to each turn, count only completed passes, and enforce Brainstorming-owned, lead-only accepted target revisions. |
 | 4 | Plain-language session transcript | Produce ordered Markdown opening, turn, material-interruption, and closing entries in `chat.md`, while keeping identifiers and diagnostics in structured state and technical logs. |
 | 5 | Revision-bound closure and results | Record closure votes against one target revision, invalidate votes after edits, apply the selected policy deterministically, and return only coherent `success` or explicit `failure`. |
-| 6 | Standalone lifecycle API | Let a caller create, inspect, follow, and stop brainstorming without creating a milestone, using stable product-neutral request, state, and result shapes. |
+| 6 | Standalone lifecycle API | Let a caller create, inspect, follow, and stop Brainstorming without creating a milestone, using stable product-neutral request, state, and result shapes. |
 | 7 | Dedicated brainstorming visualization | Show the required session, roster, policy, round, process, transcript, target, and result projection without embedding it in milestone chronology. |
-| 8 | Milestone `need_rethink` adapter | Accept focused rethink requests from implementers, fixers, and reviewers; suspend the normal transition; invoke brainstorming; and test same-session continuation, fresh-review return, failure routing, and the motivating amendment flow. |
+| 8 | Milestone `need_rethink` adapter | Accept focused rethink requests from implementers, fixers, and reviewers; correct recovery-baseline versus lead-accepted target state; suspend the normal transition; invoke Brainstorming; and test same-session continuation, fresh-review return, failure routing, and the motivating amendment flow. |
 
 ### Question Battery
 
 | question | answer | evidence |
 |---|---|---|
-| victim | The immediate victims are the milestone operator and the active implementation/review agents: a small resolvable contradiction currently forces a full documentation reset, review, and reseal instead of one bounded decision. | `implementation/milestones/brainstorming/goal.md:17-21,30-48` |
-| machinery | The milestone adds an independent session lifecycle and state, persistent participant discussions, an ordered coordinator, lead-owned target revisions, transcript, closure, standalone interface, visualization, and a milestone adapter. It must exist because the mandate forbids synthetic milestone rounds and the current runner and consultation are explicitly one-shot. | `implementation/milestones/brainstorming/goal.md:50-63,177-183`; `orchestrator/runners.py:465-476,519-528`; `orchestrator/prompts.py:211-238` |
-| consumers | The verified immediate consumers are the Milestone Orchestrator's implementer, fixer, and reviewer call paths plus standalone service operators. Agent99 is a future compatibility consumer, not part of this delivery; its real Body code already resolves a named primary-plus-additional-root work area before admitting a run. | `orchestrator/driver.py:1703-1817,2706-2833,3676-3835`; `orchestrator/service.py:2735-2885`; `../life_prod/agent_99/apps/agent_99/lib/agent_99/body/work_area.ex:1-57`; `../life_prod/agent_99/apps/agent_99/lib/agent_99/body/admission.ex:1-16,21-41,61-74` |
-| cheaper_alternative | Doing nothing preserves the full-reset cost. Extending today's fixer consultation is cheaper but rejected: it exists only to decide a finding rejection, permits at most two dialogue rounds, and has no target-construction lifecycle. Reusing milestone review rounds is rejected by the independent-process mandate; the low-level validation, state, process, context, access, and projection machinery is reused instead. | `implementation/milestones/brainstorming/goal.md:30-54`; `orchestrator/prompts.py:211-238`; `orchestrator/runners.py:1-14` |
-| cost | Build: eight narrow slices across contracts/state, participant execution, coordination, transcript, closure, standalone API/view, and the milestone adapter. Migration: additive brainstorming state plus an additive Milestone worker-result/transition path; no milestone-ledger, target-data, or Agent99 migration. Maintenance: provider continuation compatibility, lifecycle schemas, transcript/closure conformance, and one additional service projection. | this skeleton, Planned Slices; `implementation/milestones/brainstorming/goal.md:336-374`; `orchestrator/contracts.py:538-645` |
-| threat_model | No new remote attacker or permission model is introduced. Trusted inputs are operator/product configuration and the caller-resolved execution context. Untrusted inputs are participant-produced control envelopes and claims or content found in supplied context/references; envelopes are validated, context is examined rather than obeyed as authority, and only the lead may change the target. Existing service identity and project/run access remain the external boundary. | `implementation/milestones/brainstorming/goal.md:85-89,137-160,164-183`; `orchestrator/runners.py:986-1053`; `orchestrator/access.py:41-58`; `orchestrator/service.py:2668-2695` |
-| enforceability | Existing mechanisms can enforce structured envelopes, atomic append-only history, legal transitions, inherited roots, process-group supervision, stop propagation, and eventual UI projection. Three extensions are required: Slice 2 pins provider-neutral logical-session continuation; Slice 3 owns exclusive worker admission, quiescence, and final target observation before append-only turn acceptance; Slice 5 adds explicit revision/vote transitions. No dependent slice may claim persistent sessions, strict lead-only accepted state, or deterministic closure before its gate exists. | `orchestrator/contracts.py:454-517,538-645`; `orchestrator/state.py:221-317,393-440`; `orchestrator/runners.py:30-58,548-642,739-783,1121-1191`; `orchestrator/driver.py:911-958,2662-2676`; `orchestrator/service.py:1815-1886`; `orchestrator/static/panel.html:1263-1270,1749-1759,3178-3193`; this skeleton, Planned Slices 2, 3, and 5; Operator Amendment A1, **Target versioning clarification** |
+| victim | The immediate victims are the milestone operator and active workers: a small resolvable contradiction currently forces a full documentation reset, review, and reseal instead of one bounded decision. | frozen mandate, Motivating case |
+| machinery | The milestone adds an independent session lifecycle, persistent participant discussions, ordered coordination, lead-owned target revisions, transcript, closure, standalone interface, visualization, and a milestone adapter. | frozen mandate, Process boundary and Participants |
+| consumers | Immediate consumers are Milestone implementer, fixer, and reviewer paths plus standalone operators. Agent99 is a future compatibility consumer, not part of this delivery. | frozen mandate, Milestone integration and Standalone use |
+| cheaper_alternative | Doing nothing preserves the full-reset cost. Extending fixer consultation is insufficient because it decides only finding rejection and has no target-construction lifecycle. Reusing milestone review rounds violates the independent-process mandate. | frozen mandate, Goal and Process boundary |
+| cost | Eight slices add contracts/state, participant execution, coordination, transcript, closure, standalone API/view, and the adapter. The target-version correction is confined to Brainstorming-owned revisions and existing consumers; no quota, VCS, milestone-ledger, or Agent99 migration is introduced. | this skeleton, Planned Slices |
+| threat_model | No new remote attacker or permission model is introduced. Worker control envelopes are validated, supplied context is examined rather than obeyed, only completed lead work advances accepted target state, and recovery changes only the target. | frozen mandate, Contextual altitude and Inherited execution context; Amendment A1 |
+| enforceability | Existing validation, atomic state, process-group supervision, stop propagation, and projection seams are reused. Slices 3 and 8 establish the unaccepted baseline, nullable accepted revision, exclusive quiescent acceptance, lead-only advancement, and target-only recovery; Slice 5 binds votes to that revision. Slice 8's fail-on-access regression separately detects repository/VCS probes without narrowing participant tools or context. | Planned Slices 3, 5, and 8; Amendment A1 |
 
 ## Register 2 — Pinned Facts
 
-| fact | value | authority (file:line) | touch / do-not-touch |
+| fact | value | authority | touch / do-not-touch |
 |---|---|---|---|
-| Process ownership | Brainstorming owns its own lifecycle, sessions, state, transcript, result, API, and visualization. It is product-neutral and independent of milestone phases or ledger chronology. | `implementation/milestones/brainstorming/goal.md:17-26,50-63,278-279` | touch new brainstorming surfaces and adapters; do-not-touch core with milestone vocabulary |
-| Request and context | Required request names are `workspace_path`, `target_path`, `question`, `context`, and `max_rounds`. `context.brief` is non-empty; ordered `references` is optional; JSON-compatible `source_payload` is optional, preserved unchanged, and never drives core workflow. `target_path` is always the output; consulted material stays context. Caller/session/timestamp metadata may not alter the request or resolved roster. There is no answer-options field or problem/domain type. | `implementation/milestones/brainstorming/goal.md:65-115` | touch generic contract; do-not-add taxonomy or interpret `source_payload` |
-| Resolved roster | Before execution, persist each participant's stable id, role, executor reference, model family, and turn order; require exactly one lead and at least one interlocutor. Prefer different families, but permit and record independent same-family fallback. | `implementation/milestones/brainstorming/goal.md:91-104` | touch session resolution; do-not-leave roles as process-global defaults |
-| Execution context | `workspace_path` is orientation, not confinement. Inherit the caller's tools, environment, primary/additional roots, sibling access, and access rules; define no new permission or work-area policy. | `implementation/milestones/brainstorming/goal.md:148-160`; `orchestrator/driver.py:911-958`; `orchestrator/prompts.py:584-619` | touch pass-through only; do-not-resolve or narrow roots again |
-| Participant supervision | Each participant retains one logical CLI session across the discussion. Slice 3 owns an exclusive turn-acceptance window: before an outcome may become a completed turn, every supervised local process from that attempt must be quiescent; the provider-side logical session may persist. Reuse current process-group CPU/process-set/output liveness and stop propagation. Liveness detection is best-effort; no new idempotency or provider-internal assumption. | `implementation/milestones/brainstorming/goal.md:177-183`; `orchestrator/runners.py:30-58,548-642,739-783` | touch Slice 3 coordination and the existing execution seam only as needed to establish quiescence; do-not-create parallel supervision |
-| Roles and rounds | Only the lead edits `target_path`; interlocutors analyze and the coordinator only orders/validates. A valid envelope becomes a completed turn only after the exclusive acceptance window has reached worker quiescence and the final target-ownership check. No competing or later attempt may overlap that window. A round is one completed turn per persisted participant in order; only a complete pass increments `rounds_used`; control and ballot events consume no round. | `implementation/milestones/brainstorming/goal.md:162-179,230-241`; Operator Amendment A1, **Target versioning clarification** | touch Slice 3 coordinator, edit guard, and focused tests; do-not-allow overlapping writers or partial-round counts |
-| Human transcript | The append-only transcript is named `chat.md`. Before any turn, its plain opening names the question/reason, target, participants/lead, closure rule, and round cap. Every completed turn records the human-facing name and round; only material interruptions appear. Its closing always records agreement/result reason, produced or unfinished target, completed rounds, and unresolved objections, even when no turn completes. Machine identifiers, telemetry, and raw diagnostics stay elsewhere. | `implementation/milestones/brainstorming/goal.md:185-228`; `orchestrator/state.py:221-317` | touch transcript projection; do-not-turn it into a process log |
-| Closure and result | Votes are exactly `accept` or `object` against one identifiable target revision; edits invalidate prior votes. `unanimity` requires every participant; `majority_with_lead_tiebreak` uses one vote each, strict majority, and the lead on an exact tie. A failed vote resumes discussion while rounds remain. Terminal results are exactly `success` or `failure`; round exhaustion is `failure`, partial work is never promoted, and the inspectable target/state plus target/transcript references, `rounds_used`, and failure reason remain available. | `implementation/milestones/brainstorming/goal.md:243-279` | touch closure/result state; do-not-add core caller actions |
-| Contextual closing record | Every participant uses the same scope, real-affected-parties, damage-altitude, comparable-rigor, proportionality, and escalation-evidence check. The closing account records affected parties, damage altitude, proportionality, and concrete escalation evidence without inventing victims, guarantees, threats, or preferences. | `implementation/milestones/brainstorming/goal.md:117-146,351-357` | touch common participant prompt and closing projection; do-not-add domain taxonomy |
-| Milestone adapter | The exact signal name is `need_rethink`. It carries the question, existing finding, target, and round bound; the finding reaches generic `source_payload` unchanged. On `success`, implementer/fixer returns through `continue` to the same provider session and reviewer starts a fresh review; on `failure`, use the existing gap/operator route. Normal delta review remains mandatory. | `implementation/milestones/brainstorming/goal.md:281-298`; `orchestrator/driver.py:1703-1817,2706-2833,3676-3835` | touch Milestone contract/adapter only; do-not-bypass existing review routes |
-| Standalone projection | Standalone sessions are creatable, inspectable, followable, and stoppable. The dedicated eventual view shows session/caller/status/question/target, resolved roster and fallback, closure policy/votes, current/max round, process state, ordered transcript, final target, and result. A milestone UI may link, never embed the conversation as chronology. | `implementation/milestones/brainstorming/goal.md:300-334`; `orchestrator/static/panel.html:1263-1270,1749-1759,3178-3193` | touch standalone API/view and optional link; do-not-embed in milestone ledger/view |
+| Process ownership | Brainstorming owns its lifecycle, sessions, state, transcript, result, API, visualization, and target revision identifiers. It is product-neutral and independent of milestone phases or ledger chronology. | frozen mandate, Goal and Process boundary | touch Brainstorming surfaces and adapters; do-not-put milestone vocabulary in the core |
+| Request and context | Required request names are `workspace_path`, `target_path`, `question`, `context`, and `max_rounds`. `max_rounds` is any positive integer supplied by the caller; this milestone adds no fixed upper bound. `context.brief` is non-empty; ordered `references` is optional; JSON-compatible `source_payload` is optional, preserved unchanged, and never drives core workflow. `target_path` is the output; consulted material stays context. | frozen mandate, Request contract | touch generic validation; do-not-add taxonomy, answer options, or a fixed global round policy |
+| Resolved roster | Before execution, persist each participant's stable id, role, executor reference, model family, and turn order; require exactly one lead and at least one interlocutor. Prefer different families, but permit and record independent same-family fallback. | frozen mandate, Request contract | touch session resolution; do-not-leave roles as process-global defaults |
+| Execution context | `workspace_path` is orientation, not confinement. Inherit the caller's tools, environment, primary/additional roots, sibling access, and access rules; define no new permission or work-area policy. Participants may inspect and reason about supplied references and legitimate neighbouring material. | frozen mandate, Request contract and Inherited execution context | touch pass-through only; do-not-resolve or narrow roots again |
+| Participant supervision | Each participant retains one logical CLI session. A candidate turn is not accepted until its supervised local process set is quiescent and target ownership has been checked. Reuse current liveness and stop propagation without a new idempotency or provider-internal claim. | frozen mandate, Participants and discussion; this skeleton, Guarantee Posture | touch coordination and existing execution seam only as needed; do-not-create parallel supervision |
+| Roles, rounds, and revisions | A round is one completed turn per persisted participant in order; only a complete pass increments `rounds_used`. Session creation records `recovery_baseline_revision` and leaves `accepted_target_revision` null. Only a completed lead turn may create or advance accepted target state. Both identifiers are Brainstorming revision identifiers or hashes, independent of Git or any VCS. | frozen mandate, Participants and Round definition; Amendment A1 | touch Brainstorming target-only revision state; do-not-promote setup state, count rejected work, or assign repository meaning |
+| Invalid target mutation | A mutation during any non-lead turn, control activity, or incomplete lead attempt invalidates that worker outcome. It appends no completed turn, consumes no round, and advances no accepted revision. Recover only `target_path` from the last accepted Brainstorming revision, or from the launch baseline before one exists. The same pending worker action may then be attempted once more; a second invalid target mutation before it completes restores the target and terminalizes coherent `failure`. The target-mutation allowance and the one discussion-envelope repair are independent and neither resets the other. Interlocutors are explicitly told not to edit the target. | Amendment A1; frozen mandate, bounded lifecycle and result contract | touch target observation, bounded correction, failure, and exact target-only recovery; do-not-let target-version selection or recovery inspect commits, refs, branches, HEAD, history, merges, or repository metadata, and do-not-mutate another path |
+| Resource posture | No fixed global active-session count, target byte ceiling, retained-history byte/count budget, or fixed `max_rounds` ceiling is part of the product contract. Actual inability to admit a new session may use the existing unavailable outcome and must be side-effect free. | frozen mandate, Request contract and Non-goals; queued findings resolved by this wave | touch focused regression coverage and ordinary operational refusal; do-not-add quota reservation, legacy migration, or quota-specific retry machinery |
+| Human transcript | The append-only transcript is `chat.md`. Its opening names the question/reason, target, participants/lead, closure rule, and caller-supplied round cap. Every completed turn records the human-facing name and round; only material interruptions appear. Its closing always records agreement/result reason, produced or unfinished target, completed rounds, and unresolved objections. | frozen mandate, Target and transcript | touch transcript projection; do-not-turn it into a process log |
+| Closure and result | Votes are exactly `accept` or `object` against one identifiable accepted target revision; edits invalidate prior votes. The selected unanimity or majority-with-lead-tiebreak policy decides closure. Terminal results are exactly `success` or `failure`; round exhaustion is failure and partial work is never promoted. | frozen mandate, Deterministic closure and Result contract | touch closure/result state; do-not-add core caller actions |
+| Contextual closing record | Every participant receives the common contextualization check. The closing account records affected parties, damage altitude, proportionality, and concrete escalation evidence without inventing victims, guarantees, threats, or preferences. | frozen mandate, Contextual altitude | touch common prompts and closing projection; do-not-add domain taxonomy |
+| Milestone adapter | `need_rethink` carries the question, existing finding, caller-selected target, and positive round bound. The adapter creates the independent session only after that signal. On success, implementer/fixer returns to the same provider session and reviewer starts fresh; on failure, the caller uses its existing route. Normal review remains mandatory. | frozen mandate, Milestone integration; Amendment A1 | touch Slice 8 adapter; do-not-monitor ordinary calls, promote the recovery baseline, or bypass review |
+| Standalone projection | Standalone sessions are creatable, inspectable, followable, and stoppable. The view shows required session, roster, policy, round, process, transcript, accepted target, and result facts. Before completed lead work it identifies the target as not yet accepted and never presents the recovery baseline as accepted content. | frozen mandate, Separate visualization; Amendment A1 | touch standalone API/view; do-not-embed discussion in milestone chronology |
 
 ### Planning Material Disposition
 
-- **Adopt:** the live brainstorming goal only through the frozen mandate; its
-  substantive text matched the snapshot when checked.
-- **Revise:** the older machine-API/persona note only as a reuse hint for
-  service projections. Its bearer-token, event-cursor, and Persona-digest
-  proposals are not part of this goal.
-- **Reject:** all brainstorming material as independent authority and any
-  future drift of the live goal.
-
-Authority: `implementation/brainstorming/README.md:3-8,12-17`;
-`implementation/brainstorming/machine-api-and-persona-projection.md:31-55,81-113`;
-`implementation/milestones/brainstorming/goal.md:1-9,150-160,300-316`.
+- **Adopt:** the live goal only through the frozen mandate.
+- **Revise:** older machine-API/persona notes only as reuse hints for service
+  projections.
+- **Reject:** all brainstorming material as independent authority, any future
+  drift of the live goal, and the discarded Git-based restoration design.
 
 ### Verification Contract
 
-Each slice adds focused contract and lifecycle checks for the surface it owns.
-The milestone closes only when the repository's full suite
+Each slice adds focused behavioral checks for its surface. The milestone closes
+only when the repository's full suite
 (`python3 -m unittest discover -s orchestrator/tests -t .`) covers standalone
 operation, participant/family resolution, persistent logical sessions,
 worker-quiescent turn acceptance, complete-pass accounting, transcript
 boundaries and order, lead-only target construction, both closure policies and
-vote invalidation, both terminal results including failure before a completed
-turn, opaque context and multi-root pass-through, liveness/stop behavior, both
-milestone return routes, and the motivating amendment flow.
+vote invalidation, unresolved closure at the caller's round limit, both terminal
+results including failure before a completed turn, opaque context and
+multi-root pass-through, liveness/stop behavior, the unaccepted recovery
+baseline and first lead acceptance, exact target-only recovery,
+repository-independent target versioning whose focused probe fails on any
+Git/VCS command or repository-metadata read, one bounded target-mutation
+correction followed by coherent failure on repetition, the independent
+envelope-repair allowance, the pre-lead standalone view, ordinary-origin
+compatibility, both milestone return routes, and the motivating amendment flow.
 
-Authority: `implementation/milestones/brainstorming/goal.md:336-374`;
-`orchestrator/README.md:309-319`.
+Focused regression coverage also proves that values above the discarded
+16-round, 8-MiB-target, and eight-active-session thresholds are not refused
+solely because of those numbers. Genuine runtime unavailability remains
+side-effect free and operationally distinct from discussion failure.
+
+Authority: frozen mandate, Acceptance; Operator Amendment A1.
