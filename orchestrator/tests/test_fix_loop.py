@@ -1076,7 +1076,7 @@ class TestActsResolution(DriverTestCase):
         # the skeleton's default CLAUDE family at max effort, never fall
         # back to the codex fix-family (which cannot run a claude model) or
         # to claude's family effort.
-        acts = {"skeletoner": {"model": "claude-opus-4-8"}}
+        acts = {"skeletoner": {"model": "claude-opus-5"}}
         with tempfile.TemporaryDirectory(prefix="orch-mock-") as ws:
             mock = self._run_skeleton(ws, acts, draft_family="claude",
                                       script_tail=[
@@ -1099,13 +1099,13 @@ class TestActsResolution(DriverTestCase):
             self.assertEqual(
                 (mock.call_meta[0]["family"], mock.call_meta[0]["model"],
                  mock.call_meta[0]["effort"]),
-                ("claude", "claude-opus-4-8", "max"),
+                ("claude", "claude-opus-5", "max"),
             )
             fix_meta = [m for c, m in zip(mock.calls, mock.call_meta)
                         if c[1] == "fix_findings"][0]
             self.assertEqual(
                 (fix_meta["family"], fix_meta["model"], fix_meta["effort"]),
-                ("claude", "claude-opus-4-8", "max"),
+                ("claude", "claude-opus-5", "max"),
             )
 
 

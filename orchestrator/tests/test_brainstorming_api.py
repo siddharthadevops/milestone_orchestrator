@@ -1,5 +1,6 @@
 """Focused executable evidence for Brainstorming Slice 06."""
 
+import contextlib
 import copy
 import json
 import os
@@ -486,6 +487,501 @@ class StandaloneBrainstormingApiTest(unittest.TestCase):
         self.assertEqual(registry.load(self.home)["runs"], [])
         self.assertFalse(os.path.exists(registry.registry_path(self.home)))
         self.assertFalse(os.path.exists(os.path.join(self.workspace, ".git")))
+
+    def test_create_honors_pinned_seats_and_records_per_seat_executors(self):
+        """Panel-configured seats: pinned family/model/effort per seat."""
+        self._target("pinned.md")
+        self._target("mono.md")
+        payload = self._payload("pinned.md")
+        payload["participants"] = [
+            {
+                "id": "lead",
+                "role": "lead",
+                "model_family": "claude",
+                # Deliberately NOT the claude family default (opus-5), so
+                # the pinned seat stays distinguishable from a default one.
+                "model": "claude-fable-5",
+                "effort": "max",
+            },
+            {"id": "critic-1", "role": "interlocutor", "model_family": "claude"},
+            {"id": "critic-2", "role": "interlocutor"},
+        ]
+        with mock.patch.object(
+            lifecycle,
+            "_launch_lifecycle_process",
+            side_effect=self._sleeper_launcher,
+        ):
+            status, body = self._request(
+                "POST", "/api/brainstorming/sessions", payload
+            )
+            self.assertEqual(status, 201, body)
+            roster = body["session"]["state"]["run_config"]["participants"]
+            by_id = {item["id"]: item for item in roster}
+            self.assertEqual(by_id["lead"]["model_family"], "claude")
+            self.assertEqual(by_id["critic-1"]["model_family"], "claude")
+            # The unpinned seat keeps the historical rotation: it is the
+            # first unpinned seat, so it takes the first available family.
+            self.assertEqual(by_id["critic-2"]["model_family"], "codex")
+            # Executor refs are per SEAT so two same-family seats can run
+            # different models; the recorded runtime carries each seat's
+            # resolved model/effort (pin wins, family default otherwise).
+            record = lifecycle._record_by_id(
+                self.home, body["session"]["id"]
+            )
+            executors = record["runtime"]["executors"]
+            self.assertEqual(
+                set(executors),
+                {item["executor_ref"] for item in roster},
+            )
+            lead_seat = executors[by_id["lead"]["executor_ref"]]
+            self.assertEqual(
+                lead_seat,
+                {
+                    "model_family": "claude",
+                    "model": "claude-fable-5",
+                    "effort": "max",
+                },
+            )
+            critic1 = executors[by_id["critic-1"]["executor_ref"]]
+            self.assertEqual(critic1["model"], "claude-opus-5")
+            self.assertEqual(critic1["effort"], "high")
+
+            # Every seat pinned to ONE family while another is available
+            # is a deliberate roster, not an invalid fallback.
+            mono = self._payload("mono.md")
+            mono["participants"] = [
+                {"id": "lead", "role": "lead", "model_family": "claude"},
+                {
+                    "id": "critic",
+                    "role": "interlocutor",
+                    "model_family": "claude",
+                },
+            ]
+            status, mono_body = self._request(
+                "POST", "/api/brainstorming/sessions", mono
+            )
+            self.assertEqual(status, 201, mono_body)
+            self.assertTrue(
+                mono_body["session"]["state"]["run_config"][
+                    "same_family_fallback"
+                ]
+            )
+
+        # A family this host cannot staff is a request fault — typed and
+        # side-effect free.
+        bad = self._payload("pinned.md")
+        bad["participants"] = [
+            {"id": "lead", "role": "lead", "model_family": "gemini"},
+            {"id": "critic", "role": "interlocutor"},
+        ]
+        status, refusal = self._request(
+            "POST", "/api/brainstorming/sessions", bad
+        )
+        self.assertEqual(status, 400, refusal)
+        self.assertEqual(refusal["error"], lifecycle.INVALID_REQUEST)
+
+    def test_pinning_the_rotation_family_never_herds_default_seats(self):
+        """A pin on families[0] must not drag a default seat onto it.
+
+        The pin-blind rotation would staff both seats codex and the
+        sealed cross-family rule would refuse a fully satisfiable
+        request; the default seat has to diversify instead — in either
+        seat order.
+        """
+        for index, (name, roster) in enumerate((
+            ("codex-lead.md", [
+                {"id": "lead", "role": "lead", "model_family": "codex"},
+                {"id": "critic", "role": "interlocutor"},
+            ]),
+            ("codex-critic.md", [
+                {"id": "lead", "role": "lead"},
+                {"id": "critic", "role": "interlocutor",
+                 "model_family": "codex"},
+            ]),
+        )):
+            self._target(name)
+            payload = self._payload(name)
+            payload["participants"] = roster
+            with mock.patch.object(
+                lifecycle,
+                "_launch_lifecycle_process",
+                side_effect=self._sleeper_launcher,
+            ):
+                status, body = self._request(
+                    "POST", "/api/brainstorming/sessions", payload
+                )
+            self.assertEqual(status, 201, body)
+            resolved = {
+                item["id"]: item["model_family"]
+                for item in body["session"]["state"]["run_config"][
+                    "participants"
+                ]
+            }
+            pinned_id = "lead" if index == 0 else "critic"
+            free_id = "critic" if index == 0 else "lead"
+            self.assertEqual(resolved[pinned_id], "codex")
+            self.assertEqual(resolved[free_id], "claude")
+            self.assertFalse(
+                body["session"]["state"]["run_config"][
+                    "same_family_fallback"
+                ]
+            )
+
+    def test_discard_created_dirs_spares_any_adopting_sibling(self):
+        """Compensation never removes folders a live session lives in."""
+        fresh = os.path.join(self.workspace, "shared", "notes")
+        payload = self._payload("unused.md")
+        payload["request"]["target_path"] = "shared/notes/OTHER.md"
+        payload["create_target_parents"] = True
+        with mock.patch.object(
+            lifecycle,
+            "_launch_lifecycle_process",
+            side_effect=self._sleeper_launcher,
+        ):
+            status, body = self._request(
+                "POST", "/api/brainstorming/sessions", payload
+            )
+        self.assertEqual(status, 201, body)
+        self.assertTrue(os.path.isdir(fresh))
+
+        # A failed sibling create (same fresh folders, DIFFERENT target
+        # file) must leave the adopted folders alone...
+        lifecycle._discard_created_dirs(
+            self.home,
+            os.path.join(fresh, "DECISION.md"),
+            [fresh, os.path.dirname(fresh)],
+        )
+        self.assertTrue(os.path.isdir(fresh))
+
+        # ...and once no registered session lives under them, the same
+        # compensation removes exactly those (empty) folders.
+        self._stop_sleeper_record(body["session"]["id"])
+        lifecycle._save_registry(self.home, lifecycle._new_registry())
+        lifecycle._discard_created_dirs(
+            self.home,
+            os.path.join(fresh, "DECISION.md"),
+            [fresh, os.path.dirname(fresh)],
+        )
+        self.assertFalse(
+            os.path.exists(os.path.join(self.workspace, "shared"))
+        )
+
+    def test_delete_session_forgets_frees_target_and_optionally_purges(self):
+        """Operator deletion: forget, free the target, purge on request."""
+        target = self._target("deletable.md", b"kept bytes")
+        store = lifecycle.brainstorming.SessionStore(
+            lifecycle.state_directory(self.home)
+        )
+
+        status, unknown = self._request(
+            "DELETE", "/api/brainstorming/sessions/bs-missing"
+        )
+        self.assertEqual(status, 404, unknown)
+        self.assertEqual(unknown["error"], lifecycle.UNKNOWN_SESSION)
+
+        with mock.patch.object(
+            lifecycle,
+            "_launch_lifecycle_process",
+            side_effect=self._sleeper_launcher,
+        ):
+            status, first = self._request(
+                "POST",
+                "/api/brainstorming/sessions",
+                self._payload("deletable.md"),
+            )
+            self.assertEqual(status, 201, first)
+            first_id = first["session"]["id"]
+
+            # Running refuses; nothing is forgotten.
+            status, refused = self._request(
+                "DELETE", "/api/brainstorming/sessions/%s" % first_id
+            )
+            self.assertEqual(status, 409, refused)
+            self.assertEqual(refused["error"], lifecycle.SESSION_RUNNING)
+            self._stop_sleeper_record(first_id)
+
+            # Forget WITHOUT purge: the record is gone (the list no longer
+            # shows it, the target is free again) but durable state stays
+            # readable — a milestone replaying a retained revision keeps
+            # its evidence.
+            status, forgotten = self._request(
+                "DELETE", "/api/brainstorming/sessions/%s" % first_id
+            )
+            self.assertEqual(status, 200, forgotten)
+            self.assertEqual(
+                (forgotten["deleted"], forgotten["purged"]),
+                (first_id, False),
+            )
+            status, listed = self._request(
+                "GET", "/api/brainstorming/sessions"
+            )
+            self.assertEqual(listed["sessions"], [])
+            self.assertIsNotNone(store.read(first_id))
+            status, gone = self._request(
+                "GET", "/api/brainstorming/sessions/%s" % first_id
+            )
+            self.assertEqual(status, 404, gone)
+
+            # The freed target admits a NEW session; purge deletion then
+            # removes the whole durable footprint.
+            status, second = self._request(
+                "POST",
+                "/api/brainstorming/sessions",
+                self._payload("deletable.md"),
+            )
+            self.assertEqual(status, 201, second)
+            second_id = second["session"]["id"]
+            self._stop_sleeper_record(second_id)
+            transcript = store.transcript_ref(second_id)
+            status, purged = self._request(
+                "DELETE",
+                "/api/brainstorming/sessions/%s?purge=1" % second_id,
+            )
+            self.assertEqual(status, 200, purged)
+            self.assertTrue(purged["purged"])
+            self.assertIsNone(store.read(second_id))
+            self.assertFalse(os.path.exists(os.path.dirname(transcript)))
+
+        # The target artifact was never touched by any of it.
+        with open(target, "rb") as handle:
+            self.assertEqual(handle.read(), b"kept bytes")
+
+    def test_delete_refuses_while_a_stop_is_reconciling(self):
+        """A stop mid-reconcile owns the target; deletion must wait."""
+        self._target("stopping.md")
+        with mock.patch.object(
+            lifecycle,
+            "_launch_lifecycle_process",
+            side_effect=self._sleeper_launcher,
+        ):
+            status, body = self._request(
+                "POST",
+                "/api/brainstorming/sessions",
+                self._payload("stopping.md"),
+            )
+        self.assertEqual(status, 201, body)
+        session_id = body["session"]["id"]
+        self._stop_sleeper_record(session_id)
+
+        token = (os.path.abspath(self.home), session_id)
+        with lifecycle._STOPS_GUARD:
+            lifecycle._STOPS_IN_FLIGHT.add(token)
+        try:
+            status, refused = self._request(
+                "DELETE", "/api/brainstorming/sessions/%s" % session_id
+            )
+        finally:
+            with lifecycle._STOPS_GUARD:
+                lifecycle._STOPS_IN_FLIGHT.discard(token)
+        self.assertEqual(status, 409, refused)
+        self.assertEqual(refused["error"], lifecycle.SESSION_RUNNING)
+
+        # A completed stop always clears its announcement — even one that
+        # refused — so deletion works right after.
+        status, stopped = self._request(
+            "POST", "/api/brainstorming/sessions/%s/stop" % session_id
+        )
+        self.assertEqual(status, 200, stopped)
+        with lifecycle._STOPS_GUARD:
+            self.assertNotIn(token, lifecycle._STOPS_IN_FLIGHT)
+        status, deleted = self._request(
+            "DELETE",
+            "/api/brainstorming/sessions/%s?purge=1" % session_id,
+        )
+        self.assertEqual(status, 200, deleted)
+
+    def test_projection_racing_a_purge_tidies_its_own_recreation(self):
+        """A reader past its pre-check must not strand the purged folder."""
+        self._target("raced.md")
+        with mock.patch.object(
+            lifecycle,
+            "_launch_lifecycle_process",
+            side_effect=self._sleeper_launcher,
+        ):
+            status, body = self._request(
+                "POST",
+                "/api/brainstorming/sessions",
+                self._payload("raced.md"),
+            )
+        self.assertEqual(status, 201, body)
+        session_id = body["session"]["id"]
+        self._stop_sleeper_record(session_id)
+        store = lifecycle.brainstorming.SessionStore(
+            lifecycle.state_directory(self.home)
+        )
+        transcript = store.transcript_ref(session_id)
+        bs_module = lifecycle.brainstorming
+        real_exclusive = bs_module._exclusive_transcript
+        raced = []
+
+        @contextlib.contextmanager
+        def racing(path):
+            # The discard lands exactly between the reader's pre-check
+            # and its lock acquisition — the reviewed race, made
+            # deterministic. Taking the real lock below recreates the
+            # folder; the reader's absent-under-lock branch must tidy it.
+            if os.path.abspath(path) == transcript and not raced:
+                raced.append(1)
+                store.discard_session(session_id)
+            with real_exclusive(path):
+                yield
+
+        with mock.patch.object(bs_module, "_exclusive_transcript", racing):
+            self.assertIsNone(store.read(session_id))
+        self.assertTrue(raced)
+        self.assertFalse(os.path.exists(os.path.dirname(transcript)))
+
+    def test_delete_session_is_authorized_like_the_other_routes(self):
+        self._target("guarded.md")
+        self._ready_project(users=["jdcf1710@gmail.com"])
+        with mock.patch.object(
+            lifecycle,
+            "_launch_lifecycle_process",
+            side_effect=self._sleeper_launcher,
+        ):
+            status, body = self._request(
+                "POST",
+                "/api/brainstorming/sessions",
+                self._payload(
+                    "guarded.md", project="project", work_area="main"
+                ),
+            )
+        self.assertEqual(status, 201, body)
+        session_id = body["session"]["id"]
+        self._stop_sleeper_record(session_id)
+
+        # An unassigned user cannot delete; the assigned member can.
+        status, refused = self._request(
+            "DELETE",
+            "/api/brainstorming/sessions/%s" % session_id,
+            headers=self._remote_headers("isabelmariaandresruiz@gmail.com"),
+        )
+        self.assertEqual(status, 403, refused)
+        status, deleted = self._request(
+            "DELETE",
+            "/api/brainstorming/sessions/%s?purge=1" % session_id,
+            headers=self._remote_headers("jdcf1710@gmail.com"),
+        )
+        self.assertEqual(status, 200, deleted)
+
+    def test_list_route_surfaces_broken_standing_access_as_503(self):
+        """A standing-access fault must never render as "no sessions"."""
+        self._target("visible.md")
+        self._ready_project(users=["jdcf1710@gmail.com"])
+        with mock.patch.object(
+            lifecycle,
+            "_launch_lifecycle_process",
+            side_effect=self._sleeper_launcher,
+        ):
+            status, body = self._request(
+                "POST",
+                "/api/brainstorming/sessions",
+                self._payload(
+                    "visible.md", project="project", work_area="main"
+                ),
+            )
+        self.assertEqual(status, 201, body)
+        with mock.patch.object(
+            service.registry,
+            "load_projects_record",
+            side_effect=RuntimeError("standing access state unreadable"),
+        ):
+            status, refused = self._request(
+                "GET",
+                "/api/brainstorming/sessions",
+                headers=self._remote_headers("jdcf1710@gmail.com"),
+            )
+        self.assertEqual(status, 503, refused)
+        self.assertEqual(refused["error"], lifecycle.UNAVAILABLE)
+
+    def test_create_target_parents_makes_and_compensates_folders(self):
+        """The panel's New… flow: fresh session folders, made at launch."""
+        deep = os.path.join(
+            self.workspace, "brainstorming", "bs-20260726", "DECISION.md"
+        )
+        payload = self._payload("unused.md")
+        payload["request"]["target_path"] = (
+            "brainstorming/bs-20260726/DECISION.md"
+        )
+
+        # Without the opt-in, the historical refusal stands and nothing
+        # is created.
+        status, refusal = self._request(
+            "POST", "/api/brainstorming/sessions", payload
+        )
+        self.assertEqual(status, 400, refusal)
+        self.assertEqual(refusal["error"], lifecycle.INVALID_REQUEST)
+        self.assertFalse(
+            os.path.exists(os.path.join(self.workspace, "brainstorming"))
+        )
+
+        # A non-boolean flag is a typed request fault.
+        payload["create_target_parents"] = "yes"
+        status, refusal = self._request(
+            "POST", "/api/brainstorming/sessions", payload
+        )
+        self.assertEqual(status, 400, refusal)
+        self.assertEqual(refusal["error"], lifecycle.INVALID_REQUEST)
+
+        # A launch failure after mkdir compensates: the folders this
+        # create added are removed again.
+        payload["create_target_parents"] = True
+        with mock.patch.object(
+            lifecycle,
+            "_launch_lifecycle_process",
+            side_effect=RuntimeError("no launcher"),
+        ):
+            status, refusal = self._request(
+                "POST", "/api/brainstorming/sessions", payload
+            )
+        self.assertEqual(status, 503, refusal)
+        self.assertFalse(
+            os.path.exists(os.path.join(self.workspace, "brainstorming"))
+        )
+
+        # The successful create makes the folders and pins the target.
+        with mock.patch.object(
+            lifecycle,
+            "_launch_lifecycle_process",
+            side_effect=self._sleeper_launcher,
+        ):
+            status, body = self._request(
+                "POST", "/api/brainstorming/sessions", payload
+            )
+            self.assertEqual(status, 201, body)
+            self.assertTrue(os.path.isdir(os.path.dirname(deep)))
+            record = lifecycle._record_by_id(
+                self.home, body["session"]["id"]
+            )
+            self.assertEqual(record["target_path"], deep)
+
+            # A second create against the same fresh folder finds the
+            # target in use — and must NOT remove the live session's
+            # folder on its way out.
+            status, clash = self._request(
+                "POST", "/api/brainstorming/sessions", payload
+            )
+        self.assertEqual(status, 409, clash)
+        self.assertEqual(clash["error"], lifecycle.TARGET_IN_USE)
+        self.assertTrue(os.path.isdir(os.path.dirname(deep)))
+
+    def test_create_target_parents_stays_inside_bound_root(self):
+        """Containment is judged before any folder is made."""
+        self._ready_project()
+        outside = os.path.join(self.tmp.name, "escape", "DECISION.md")
+        payload = self._payload(
+            "unused.md", project="project", work_area="main"
+        )
+        payload["request"]["target_path"] = outside
+        payload["create_target_parents"] = True
+        status, refusal = self._request(
+            "POST", "/api/brainstorming/sessions", payload
+        )
+        self.assertEqual(status, 400, refusal)
+        self.assertEqual(refusal["error"], lifecycle.INVALID_REQUEST)
+        self.assertFalse(
+            os.path.exists(os.path.join(self.tmp.name, "escape"))
+        )
 
     def test_create_refusals_are_typed_and_side_effect_free(self):
         target = self._target("refusal.md")
@@ -1436,15 +1932,118 @@ class StandaloneBrainstormingApiTest(unittest.TestCase):
         status, projects = self._request("GET", "/api/projects")
         self.assertEqual(projects, {"ok": True, "projects": []})
 
-        status, no_list = self._request(
+        # Listing is a read-only projection added for the panel's unified
+        # sidebar; deleting a RUNNING session refuses — stop it first.
+        status, listed = self._request(
             "GET", "/api/brainstorming/sessions"
         )
-        self.assertEqual(status, 404, no_list)
-        status, no_delete = self._request(
+        self.assertEqual(status, 200, listed)
+        self.assertEqual(
+            [row["id"] for row in listed["sessions"]],
+            [body["session"]["id"]],
+        )
+        status, refused = self._request(
             "DELETE",
             "/api/brainstorming/sessions/%s" % body["session"]["id"],
         )
-        self.assertEqual(status, 404, no_delete)
+        self.assertEqual(status, 409, refused)
+        self.assertEqual(refused["error"], lifecycle.SESSION_RUNNING)
+
+    def test_list_projects_authorized_rows_and_survives_broken_state(self):
+        """The panel's list route: authorized, tolerant, newest first."""
+        self._target("listed.md")
+        self._target("other.md")
+        self._ready_project(users=["jdcf1710@gmail.com"])
+
+        status, empty = self._request("GET", "/api/brainstorming/sessions")
+        self.assertEqual(status, 200, empty)
+        self.assertEqual(empty, {"ok": True, "sessions": []})
+
+        with mock.patch.object(
+            lifecycle,
+            "_launch_lifecycle_process",
+            side_effect=self._sleeper_launcher,
+        ):
+            status, bound = self._request(
+                "POST",
+                "/api/brainstorming/sessions",
+                self._payload(
+                    "listed.md", project="project", work_area="main"
+                ),
+            )
+            self.assertEqual(status, 201, bound)
+            status, unbound = self._request(
+                "POST",
+                "/api/brainstorming/sessions",
+                self._payload("other.md"),
+            )
+            self.assertEqual(status, 201, unbound)
+
+        status, all_rows = self._request("GET", "/api/brainstorming/sessions")
+        self.assertEqual(status, 200, all_rows)
+        rows = all_rows["sessions"]
+        self.assertEqual(len(rows), 2)
+        # Newest creation first, both visible to the administrator.
+        self.assertEqual(
+            {row["id"] for row in rows},
+            {bound["session"]["id"], unbound["session"]["id"]},
+        )
+        self.assertGreaterEqual(
+            rows[0]["created_at"], rows[1]["created_at"]
+        )
+        listed_bound = next(
+            row for row in rows if row["id"] == bound["session"]["id"]
+        )
+        self.assertEqual(listed_bound["project"], "project")
+        self.assertEqual(listed_bound["work_area"], "main")
+        self.assertEqual(listed_bound["process"], "running")
+        self.assertEqual(listed_bound["status"], "running")
+        self.assertEqual(
+            listed_bound["question"],
+            "Which bounded result should be accepted?",
+        )
+        self.assertEqual(listed_bound["max_rounds"], 1)
+        self.assertIsNone(listed_bound["state_error"])
+        self.assertTrue(listed_bound["target_path"].endswith("listed.md"))
+
+        # An ordinary assigned user sees the project-bound session only:
+        # the administrator's project-less session is never listed.
+        status, mine = self._request(
+            "GET",
+            "/api/brainstorming/sessions",
+            headers=self._remote_headers("jdcf1710@gmail.com"),
+        )
+        self.assertEqual(status, 200, mine)
+        self.assertEqual(
+            [row["id"] for row in mine["sessions"]],
+            [bound["session"]["id"]],
+        )
+        status, none = self._request(
+            "GET",
+            "/api/brainstorming/sessions",
+            headers=self._remote_headers("isabelmariaandresruiz@gmail.com"),
+        )
+        self.assertEqual(status, 200, none)
+        self.assertEqual(none["sessions"], [])
+
+        # One unreadable session degrades to a named fault; the rest of
+        # the list is unaffected.
+        with mock.patch.object(
+            lifecycle.brainstorming.SessionStore,
+            "read",
+            side_effect=RuntimeError("state store is unavailable"),
+        ):
+            status, broken = self._request(
+                "GET", "/api/brainstorming/sessions"
+            )
+        self.assertEqual(status, 200, broken)
+        self.assertEqual(len(broken["sessions"]), 2)
+        for row in broken["sessions"]:
+            self.assertIsNone(row["status"])
+            self.assertIsNone(row["question"])
+            self.assertEqual(
+                row["state_error"], "state store is unavailable"
+            )
 
 
 if __name__ == "__main__":

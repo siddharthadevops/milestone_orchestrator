@@ -37,12 +37,14 @@ import os
 
 SEVERITIES = ("P0", "P1", "P2", "P3")
 
-# The finding lay-mirror bound: the PROMPT asks for ~500 chars, the
-# VALIDATOR accepts double. An LLM cannot count characters reliably, so
-# a hard gate at the asked length turns honest near-misses into burned
-# repair retries (seen live: an opus `example` slightly past 500 cost a
-# 13-minute strike). The doubled bound still stops runaway prose.
-FINDING_TEXT_MAX = 1000
+# The finding lay-mirror bound: the PROMPT still asks for ~500 chars;
+# the VALIDATOR tolerates 10x. An LLM cannot count characters reliably,
+# so a hard gate near the asked length turns honest overruns into burned
+# repair retries — the doubled bound (1000) proved far too tight live:
+# opus reviews kept failing on wordy-but-valid findings (operator order
+# 2026-07-27 raised it to 5000). The gate now only stops true runaway
+# prose; brevity stays a prompt ask, not a validity condition.
+FINDING_TEXT_MAX = 5000
 FINDING_ID_MAX = 200
 DISPOSITIONS = ("fixed", "rejected", "rejected_adjudicated", "blocked")
 RETRY_CONSULTATION_UNAVAILABLE = "consultation_unavailable"

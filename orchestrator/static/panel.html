@@ -39,13 +39,22 @@
   .btn.danger { color: var(--bad); border-color: #f3c1c1; }
   .btn:disabled { opacity: .45; cursor: default; }
   #runs { overflow-y: auto; flex: 1; }
-  .run { padding: 8px 14px 8px 33px; cursor: pointer; }
+  /* One sidebar row for BOTH kinds of work a project holds: milestones and
+     brainstorming sessions. The leading icon is the only thing that tells
+     them apart at a glance, so it always occupies the same 33px gutter the
+     group's other rows ("no runs yet", "show more") indent to. */
+  .run { display: flex; align-items: flex-start; gap: 7px;
+    padding: 8px 14px 8px 12px; cursor: pointer; }
   /* Unfinished milestones get a lighter card than the #f7f7f7 sidebar so
      the live work stands out; closed rows keep the sidebar tone. The
      selected row's rule below still wins (same specificity, later). */
   .run:not(.closed) { background: #ffffff; }
-  .run.sel { border-left: 3px solid var(--accent); padding-left: 30px;
+  .run.sel { border-left: 3px solid var(--accent); padding-left: 9px;
     background: var(--accent-soft); }
+  .run-icon { flex: none; margin-top: 2px; color: #a1a1aa; }
+  .run-icon .ui-icon { width: 14px; height: 14px; }
+  .run:not(.closed) .run-icon { color: #52525b; }
+  .run.brainstorm:not(.closed) .run-icon { color: var(--accent); }
   .run-copy { flex: 1; min-width: 0; }
   .run-name-row, .run-info-row { display: flex; align-items: center;
     min-width: 0; gap: 8px; }
@@ -109,6 +118,7 @@
     text-align: left; cursor: pointer; }
   .grpmenu-item:hover { background: var(--accent-soft); color: var(--accent); }
   .grpmenu-item .ui-icon { width: 15px; height: 15px; }
+  .grpmenu-sep { height: 1px; margin: 4px 2px; background: var(--line); }
   .grp-empty { padding: 4px 14px 6px 33px; font-size: 11px; color: var(--dim);
     font-style: italic; }
   /* "show more/less" toggle under a project's first milestones */
@@ -181,6 +191,12 @@
   .amend-hint { font-size: 11px; color: #71717a; margin-top: 4px; }
   .chip.clicky { cursor: pointer; }
   .chip.clicky:hover { filter: brightness(0.92); }
+  /* A unit that stopped to ask a Brainstorming session gets its own chip
+     in the unit's chronology; the chip links to that session's page. */
+  .chip.brainstorm { color: #7c3aed; border-color: #ddd0fb;
+    background: #f8f5ff; }
+  .chip.brainstorm.fail { color: var(--bad); border-color: #f3c1c1;
+    background: #fef2f2; }
   .storybody { max-height: 60vh; overflow-y: auto; font-size: 12.5px;
     min-width: 480px; max-width: 640px; }
   #eventsdialog { width: min(900px, 92vw); }
@@ -213,6 +229,24 @@
   .actgrid select, .actgrid input { font: inherit; font-size: 12px;
     padding: 4px 6px; border: 1px solid var(--line); border-radius: 6px; }
   .unit-title { color: #71717a; font-size: 11px; margin-left: 6px; }
+  /* Brainstorming roster: one row per AI seat, configured like a
+     milestone act (agent / model / effort) plus a remove control. */
+  .rosterrow { display: grid; grid-template-columns: 90px 1fr 1fr 1fr 22px;
+    gap: 6px; align-items: center; margin-bottom: 6px; }
+  .rosterrow label { font-size: 12px; color: #3f3f46; }
+  .rosterrow select, .rosterrow input { font: inherit; font-size: 12px;
+    padding: 4px 6px; border: 1px solid var(--line); border-radius: 6px;
+    min-width: 0; }
+  .roster-x { border: none; background: none; color: #a1a1aa;
+    cursor: pointer; font-size: 14px; line-height: 1; padding: 0 2px; }
+  .roster-x:hover { color: var(--bad); }
+  .roster-x:disabled { visibility: hidden; }
+  .rosterops { margin-top: 2px; }
+  .refrow { display: flex; align-items: center; gap: 6px;
+    padding: 3px 0; font-size: 12px; border-bottom: 1px dashed var(--line); }
+  .refrow .refpath { flex: 1; min-width: 0; overflow: hidden;
+    text-overflow: ellipsis; white-space: nowrap; }
+  #b_refs_list:not(:empty) { margin-bottom: 6px; }
   .chip.working { color: var(--accent); border-color: #c3d4fb;
                   background: var(--accent-soft); display: inline-flex;
                   align-items: center; gap: 6px; }
@@ -360,6 +394,11 @@
                            text-align: left; vertical-align: top; }
   .mdbody th { background: var(--panel); }
   pre.mdraw { white-space: pre-wrap; font-size: 12px; }
+  /* In-pane session content flows with the page — ONE scroll (the
+     detail pane's own, which survives the 2s re-render) instead of a
+     nested scrollbox that would reset to the top on every poll. */
+  .mdbody.flow { max-height: none; overflow-y: visible; }
+  pre.log.flow { max-height: none; }
 
   /* file/dir picker */
   #picker { width: 640px; }
@@ -447,15 +486,18 @@
 </header>
 <main>
   <aside>
-    <div class="actions">
-      <button class="btn primary" onclick="openForm()">+ New milestone</button>
+    <!-- Launching is a PROJECT act: both "New milestone" and "New
+         brainstorming" live in each project's ⋯ menu, so nothing can be
+         started without first naming where it runs. Only declaring a
+         project itself stays a standing sidebar button. -->
+    <div class="actions" id="sidebarActions" style="display:none">
       <button class="btn" id="newProjectBtn" style="display:none"
         onclick="openProjectCreate()" title="Declare a project">+ Project</button>
     </div>
     <div id="runs"></div>
   </aside>
-  <section id="detail"><div class="empty">No milestone selected.<br>
-    Launch one with “New milestone”.</div></section>
+  <section id="detail"><div class="empty">Nothing selected.<br>
+    Start work from a project’s ⋯ menu.</div></section>
 </main>
 
 <dialog id="form">
@@ -477,7 +519,7 @@
       <b>light</b> set the doc-review threshold (what a finding must exceed
       to open a fix cycle vs record as tracked debt). No seed is
       pre-selected on purpose — the choice is explicit.</p>
-    <p><b>Acts</b> — empty = family default (claude: fable-5/high, codex:
+    <p><b>Acts</b> — empty = family default (claude: opus-5/high, codex:
       gpt-5.6-sol/xhigh); model options adapt to the agent; editable mid-run
       from the run view. The Skeleton row drives all skeleton content work —
       its draft, re-drafts and fixes (default: claude fable-5/max); only
@@ -500,7 +542,7 @@
   <div class="field"><label>…or description doc path (.md)</label>
     <div class="pathrow">
       <input id="f_doc" class="mono" list="dl_doc" placeholder="/path/to/DESCRIPTION.md">
-      <button class="btn" type="button" onclick="openPicker('file','f_doc')">Browse…</button>
+      <button class="btn" type="button" onclick="browseGoalDoc()">Browse…</button>
     </div>
     <datalist id="dl_doc"></datalist></div>
   <div class="field"><label>Strategy profile *</label>
@@ -594,6 +636,91 @@
       start now</label>
     <button class="btn" onclick="document.getElementById('form').close()">Cancel</button>
     <button class="btn primary" onclick="submitForm()">Launch</button>
+  </div>
+</dialog>
+
+<dialog id="bsform">
+  <h2 class="dlgtitle">New brainstorming
+    <button class="infobtn" type="button" onclick="toggleDlgInfo('bsform')"
+      title="Field notes">i</button></h2>
+  <div class="dlg-info" id="bsform_info">
+    <p><b>Project</b> — the session runs in the project's work directory,
+      exactly like a milestone. The target document must live inside that
+      directory: it is the ONE artifact the discussion may write, and the
+      only thing a stop restores.</p>
+    <p><b>Question</b> — the single bounded decision the participants must
+      settle. <b>Brief</b> is the standing context every turn receives.</p>
+    <p><b>Target document</b> — path relative to the work directory (an
+      absolute path inside it also works). The file itself may not exist
+      yet; the lead writes it. <b>Browse…</b> picks an existing document;
+      <b>New…</b> picks an existing directory and proposes a fresh session
+      folder inside it (<span class="mono">bs-&lt;stamp&gt;/DECISION.md</span>,
+      editable) — the missing folders are created at launch, so no
+      directory ever has to be made by hand. Without New…, the target's
+      parent folder must already exist.</p>
+    <p><b>Participants</b> — exactly one lead plus at least one
+      interlocutor, every seat an AI worker configured like a milestone
+      act: agent family, model, effort. Anything left at default is
+      resolved by the service — family by rotation over what this host
+      offers, model/effort from the family's defaults. Pinning every seat
+      to one family is honored as a deliberate choice.</p>
+    <p><b>Closure</b> — <b>unanimity</b> needs every participant to accept
+      the lead's closing proposal; <b>majority with lead tiebreak</b>
+      closes on a majority and lets the lead break a tie.</p>
+    <p><b>Rounds</b> — the hard ceiling on discussion rounds; the session
+      fails rather than exceed it.</p>
+  </div>
+  <div class="field"><label>Project *</label>
+    <div class="pathrow">
+      <select id="b_project" onchange="onBsProject()"></select>
+      <select id="b_area" onchange="onBsArea()" style="display:none"></select>
+    </div>
+    <div class="hint" id="b_resolved"></div></div>
+  <div class="field"><label>Question *</label>
+    <textarea id="b_question" placeholder="Which bounded result should be accepted…"></textarea></div>
+  <div class="field"><label>Brief (standing context) *</label>
+    <textarea id="b_brief" placeholder="What the participants need to know to settle it…"></textarea></div>
+  <div class="field"><label>Target document *</label>
+    <div class="pathrow">
+      <input id="b_target" class="mono" placeholder="docs/DECISION.md">
+      <button class="btn" type="button" id="b_browse"
+        onclick="browseBsTarget()">Browse…</button>
+      <button class="btn" type="button" id="b_new"
+        title="Start a fresh document in a new session folder"
+        onclick="newBsTarget()">New…</button>
+    </div>
+    <div class="hint" id="b_target_hint"></div></div>
+  <div class="field"><label>Participants *</label>
+    <div id="b_roster"></div>
+    <div class="rosterops">
+      <button class="btn sm" type="button" onclick="addBsSeat()">+ Add interlocutor</button>
+    </div>
+    <div class="hint">opens pre-staffed: lead claude-fable-5/max,
+      interlocutor gpt-5.6-sol/max — edit any seat; anything set back to
+      default is resolved by the service (family by rotation over this
+      host's available agents, model/effort from the family's
+      defaults)</div></div>
+  <div class="field"><label>Closure policy *</label>
+    <select id="b_policy">
+      <option value="unanimity">unanimity</option>
+      <option value="majority_with_lead_tiebreak">majority with lead tiebreak</option>
+    </select></div>
+  <div class="field"><label>Maximum rounds *</label>
+    <input id="b_rounds" type="number" min="1" step="1" value="3"></div>
+  <div class="field"><label>Reference documents (optional)</label>
+    <div id="b_refs_list"></div>
+    <div class="pathrow">
+      <input id="b_ref_input" class="mono" placeholder="docs/SKELETON.md">
+      <button class="btn" type="button" id="b_ref_browse"
+        onclick="browseBsRef()">Browse…</button>
+      <button class="btn" type="button" onclick="addBsRef()">Add</button>
+    </div>
+    <div class="hint">read-only context for the discussion, relative to the
+      work directory</div></div>
+  <div class="formrow">
+    <span id="bsError" style="color:var(--bad);font-size:12px;margin-right:auto"></span>
+    <button class="btn" onclick="document.getElementById('bsform').close()">Cancel</button>
+    <button class="btn primary" id="b_submit" onclick="submitBrainstorming()">Start session</button>
   </div>
 </dialog>
 
@@ -851,6 +978,10 @@ function toggleGoal() { goalOpen = !goalOpen; refreshDetail(); }
    Recents precedent) fetched once at boot and mutated on click, never on
    the 2s poll. ---- */
 let lastRuns = [];
+// Brainstorming sessions share the sidebar with runs but never the run
+// registry: they arrive from their own list route and are merged only at
+// render time, exactly like the project grouping above.
+let lastSessions = [];
 let uiState = {project_order: [], collapsed: []};
 // A slash can never appear in an operator-typed project slug
 // (kvstore._validate_segment rejects "/"), so this key can never
@@ -868,6 +999,10 @@ const ICONS = {
   settings: `<svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.09a2 2 0 0 1 1 1.74v.5a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.38a2 2 0 0 0-.73-2.73l-.15-.09a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2Z"/><circle cx="12" cy="12" r="3"/></svg>`,
   pencil: `<svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>`,
   users: `<svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>`,
+  // The two kinds of work a project holds. A flag marks the staged climb
+  // of a milestone; a lamp marks a bounded discussion.
+  milestone: `<svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V4s-1 1-4 1-5-2-8-2-4 1-4 1Z"/><path d="M4 22v-7"/></svg>`,
+  brainstorm: `<svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 18h6"/><path d="M10 22h4"/><path d="M15.1 14a5 5 0 1 0-6.2 0c.6.5 1.1 1.2 1.1 2h4c0-.8.5-1.5 1.1-2Z"/></svg>`,
 };
 // Interpolating a value into a single-quoted onclick="...('VALUE')"
 // argument needs its OWN escaping layer, independent of esc()'s
@@ -901,6 +1036,15 @@ async function loadAccess() {
   };
   document.getElementById("newProjectBtn").style.display =
     appAccess.admin ? "" : "none";
+  // The row exists only for "+ Project"; without it there is nothing to
+  // reserve sidebar height for.
+  document.getElementById("sidebarActions").style.display =
+    appAccess.admin ? "" : "none";
+  // The picker is an admin-only endpoint (/api/fs); offering the buttons
+  // to anyone else only buys them a refusal.
+  for (const id of ["b_browse", "b_new", "b_ref_browse"])
+    document.getElementById(id).style.display =
+      appAccess.admin ? "" : "none";
 }
 function runRow(r) {
   // The headline carries the milestone's accumulated work time. Context and
@@ -910,6 +1054,7 @@ function runRow(r) {
   const indicator = runStatusIndicator(r);
   return `
       <div class="run ${r.milestone_status === "closed" ? "closed " : ""}${r.id === selected ? "sel" : ""}" onclick="select('${esc(r.id)}')">
+        <span class="run-icon" title="milestone">${ICONS.milestone}</span>
         <div class="run-copy">
           <div class="run-name-row">
             <span class="name">${esc(r.name)}</span>
@@ -919,6 +1064,322 @@ function runRow(r) {
         </div>
       </div>`;
 }
+/* ---- brainstorming sessions in the same sidebar list. They are NOT runs:
+   no registry entry, no driver, no pipeline — so they carry their own row
+   and open their own page. What they share with milestones is the project
+   they belong to and the in-progress-first ordering. ---- */
+const BS_TERMINAL = new Set(["success", "failure"]);
+function sessionOrigin(s) {
+  // create_session stamps a milestone caller as "milestone:<run>:<unit>".
+  const caller = String(s.caller || "");
+  if (!caller.startsWith("milestone:")) return "";
+  const parts = caller.split(":");
+  return parts.slice(1).filter(Boolean).join(" · ");
+}
+function sessionLabel(s) {
+  return s.question || s.target_path || s.id;
+}
+function sessionRow(s) {
+  const terminal = BS_TERMINAL.has(s.status);
+  const running = s.process === "running";
+  const bits = [];
+  if (s.state_error) bits.push("state unreadable");
+  else if (running && s.max_rounds != null)
+    // rounds_used counts COMPLETED rounds, so the one under way is the
+    // next — never past the ceiling the session may not exceed.
+    bits.push(`round ${Math.min(Number(s.rounds_used || 0) + 1,
+      s.max_rounds)}/${s.max_rounds}`);
+  else if (s.status) bits.push(s.status);
+  const origin = sessionOrigin(s);
+  if (origin) bits.push(origin);
+  const line = bits.join(" · ");
+  const indicator = sessionStatusIndicator(s);
+  const info = (line || indicator)
+    ? `<div class="run-info-row">${line
+        ? `<div class="activity-line sidebar">${running ? spinEl() : ""}<span>${esc(line)}</span></div>`
+        : ""}${indicator}</div>`
+    : "";
+  return `
+      <div class="run brainstorm ${terminal ? "closed " : ""}${s.id === selectedSession ? "sel" : ""}"
+        title="${esc(sessionLabel(s))}"
+        onclick="openSession('${esc(escJsSq(s.id))}')">
+        <span class="run-icon" title="brainstorming">${ICONS.brainstorm}</span>
+        <div class="run-copy">
+          <div class="run-name-row">
+            <span class="name">${esc(sessionLabel(s))}</span>
+          </div>
+          ${info}
+        </div>
+      </div>`;
+}
+function sessionStatusIndicator(s) {
+  if (s.process === "running")
+    return `<span class="dot running" title="running"></span>`;
+  if (s.status === "failure")
+    return `<span class="dot err" title="failed"></span>`;
+  if (s.status === "success") return "";
+  return `<span class="dot" title="stopped"></span>`;
+}
+/* ---- brainstorming session detail: rendered in the panel's right pane,
+   exactly like a milestone, polling the session's dedicated view route
+   on the shared 2s tick. The monitoring page leads with live chips, the
+   discussion Markdown and the result; session metadata, participants and
+   the accepted target live on a secondary Info page (the run view's
+   Edit… precedent). ---- */
+let selectedSession = null;
+let sessionSeq = 0;
+let sessionStopping = false;
+let sessionDiscarding = false;
+let lastSessionView = null;
+let sessionView = "main";  // "main" | "info"
+function openSession(id) {
+  selectedSession = id;
+  selected = null;
+  runView = "main";
+  sessionView = "main";
+  goalOpen = false;
+  sessionStopping = false;
+  sessionDiscarding = false;
+  lastSessionView = null;
+  document.body.classList.add("m-detail");  // mobile: swap to detail page
+  renderRunsTree_paint();
+  refreshSessionDetail();
+}
+function openSessionInfo() {
+  sessionView = "info";
+  if (lastSessionView) renderSessionDetail(lastSessionView);
+}
+function closeSessionInfo() {
+  sessionView = "main";
+  if (lastSessionView) renderSessionDetail(lastSessionView);
+}
+async function refreshSessionDetail() {
+  if (!selectedSession) return;
+  // Same race guard as the run detail: a slow response must never
+  // overwrite a newer selection's render.
+  const seq = ++sessionSeq, id = selectedSession;
+  try {
+    const data = await api(
+      "/api/brainstorming/sessions/" + encodeURIComponent(id) + "/view"
+    );
+    if (seq !== sessionSeq || id !== selectedSession) return;
+    lastSessionView = data.view;
+    renderSessionDetail(data.view);
+  } catch (e) {
+    if (seq !== sessionSeq || id !== selectedSession) return;
+    const det = document.getElementById("detail");
+    if (!lastSessionView) {
+      // No view at all (typically broken durable state, 503). These are
+      // exactly the sessions discard exists for, so the escape hatch
+      // renders right here: the DELETE route needs only the service
+      // record, not a readable state.
+      det.innerHTML =
+        `<div class="failure">session unavailable: ${esc(e.message)}</div>` +
+        `<div class="card danger-zone"><h3>Danger zone</h3>
+          <div class="danger-copy">The session view cannot be loaded (its
+            stored state may be broken), but the session can still be
+            discarded: this removes it from the panel and deletes whatever
+            stored discussion state remains. The target document and
+            repository files are untouched.</div>
+          <button class="btn danger" ${sessionDiscarding ? "disabled" : ""}
+            onclick="discardSelectedSession()">${
+            sessionDiscarding ? "Discarding…" : "Discard session…"}</button>
+          </div>`;
+      return;
+    }
+    // Keep the last good render on a transient fault; just flag it.
+    let banner = document.getElementById("sessionStale");
+    if (!banner) {
+      banner = document.createElement("div");
+      banner.id = "sessionStale";
+      banner.className = "failure";
+      det.prepend(banner);
+    }
+    banner.textContent =
+      `refresh failed: ${e.message} — showing last known revision, retrying`;
+  }
+}
+function sessionTargetState(target) {
+  if (target.revision === null)
+    return "No target version has been accepted yet.";
+  if (!target.exists) return "Absent at this accepted version.";
+  if (target.content === null)
+    return "Binary or non-UTF-8 content; no text preview.";
+  return target.truncated
+    ? "Text preview truncated at the display limit."
+    : "Complete accepted text.";
+}
+function sessionChips(view) {
+  // The same chip vocabulary as a milestone unit's history: one chip per
+  // completed round, one per closure ballot, the live spinner chip for
+  // the round under way, and the terminal outcome. Chronology is exact:
+  // each ballot follows the round it was cast after.
+  const running = view.process === "running";
+  const terminal = BS_TERMINAL.has(view.status);
+  const ballotsAfter = {};
+  for (const b of view.closure_ballots || [])
+    ballotsAfter[b.after_completed_rounds] = b;
+  const chips = [];
+  for (let r = 1; r <= (view.round.completed || 0); r += 1) {
+    chips.push(`<span class="chip clean">Round ${r} &#10003;</span>`);
+    const ballot = ballotsAfter[r];
+    if (ballot) {
+      const votes = Object.entries(ballot.votes || {})
+        .map(([who, vote]) => `${who}: ${vote}`).join(" · ");
+      chips.push(`<span class="chip ${ballot.approved ? "pass" : "sev23"}"
+        title="${esc(votes)}">Ballot · ${ballot.approved ? "approved &#10003;" : "not approved"}</span>`);
+    }
+  }
+  if (view.target.revision !== null)
+    chips.push(`<span class="chip doc clicky"
+      title="${esc(view.target.ref)} — open Info" onclick="openSessionInfo()">&#128196; accepted target</span>`);
+  if (running && !terminal)
+    chips.push(`<span class="chip working">${spinEl()}round ${
+      Math.max(view.round.current || 0, (view.round.completed || 0) + 1)
+      }/${view.round.maximum} · discussing</span>`);
+  else if (view.status === "success")
+    chips.push(`<span class="chip pass">closed &#10003; success</span>`);
+  else if (view.status === "failure")
+    chips.push(`<span class="chip fail">failure</span>`);
+  else if (!running)
+    chips.push(`<span class="chip">stopped</span>`);
+  return `<div class="history-chips">${chips.join("")}</div>`;
+}
+function paintSessionDetail(html) {
+  // The pane's own scroll survives an innerHTML swap, but preserve it
+  // explicitly anyway: reading a long discussion must never be yanked
+  // back to the top by the 2s poll.
+  const det = document.getElementById("detail");
+  const top = det.scrollTop;
+  det.innerHTML = html;
+  det.scrollTop = top;
+  requestAnimationFrame(updateBottomJump);
+}
+function renderSessionDetail(view) {
+  const terminal = BS_TERMINAL.has(view.status);
+  const running = view.process === "running";
+  const listed = lastSessions.find(s => s.id === view.id);
+  const statusCls = view.status === "success" ? "closed"
+    : view.status === "failure" ? "failed" : "open";
+  let html = "";
+  if (sessionView === "info") {
+    // The info page: everything static about the session, off the
+    // monitoring screen (the run view's Edit… precedent).
+    html += `<div class="toolbar">
+      <button class="btn" onclick="closeSessionInfo()">&#8592; back</button>
+      <h2 style="margin:0">${esc(view.question)} <span class="st">· session info</span></h2></div>`;
+    html += `<div class="card"><h3>Session</h3>
+      <div class="amend-hint mono">session: ${esc(view.id)} · revision ${esc(String(view.revision))}</div>
+      <div class="amend-hint mono">caller: ${esc(view.caller)}</div>
+      <div class="amend-hint mono">target: ${esc(view.target.ref)}</div>
+      <div class="amend-hint mono">closure: ${esc(view.closure_policy)} · ${
+        view.same_family_fallback ? "same-family fallback" : "cross-family"}</div>
+      <div class="amend-hint mono">rounds: ${view.round.completed} complete · ${view.round.maximum} maximum</div></div>`;
+    html += `<div class="card"><h3>Participants</h3>` +
+      view.participants.map(p =>
+        `<div class="amend-hint mono">${esc(p.role)}: ${esc(p.id)} · ${esc(p.model_family)}</div>`
+      ).join("") + `</div>`;
+    html += `<div class="card"><h3>Accepted target</h3>
+      <div class="amend-hint mono">version: ${esc(view.target.revision || "—")}</div>
+      <div class="amend-hint">${esc(sessionTargetState(view.target))}</div>` +
+      (view.target.content !== null
+        ? `<div class="mdbody flow" style="margin-top:8px">${mdRender(view.target.content)}</div>`
+        : "") + `</div>`;
+    html += `<div class="card danger-zone"><h3>Danger zone</h3>
+      <div class="danger-copy">Discarding removes this session from the
+        panel and deletes its stored discussion state. The target document
+        and repository files are untouched.${
+        String(view.caller || "").startsWith("milestone:")
+          ? " A milestone still waiting on this session will fail its resume."
+          : ""}</div>
+      <button class="btn danger" ${running || sessionDiscarding ? "disabled" : ""}
+        onclick="discardSelectedSession()">${
+        sessionDiscarding ? "Discarding…" : "Discard session…"}</button>
+      ${running ? `<span class="amend-hint"> Stop the session first.</span>` : ""}
+      </div>`;
+    paintSessionDetail(html);
+    return;
+  }
+  // The monitoring page: chips, the discussion, the result.
+  html += `<div class="run-sticky-head">`;
+  if (listed && listed.project)
+    html += `<div class="proj-title">${esc(listed.project)}</div>`;
+  html += `<div class="run-title-row"><h2>${esc(view.question)}<span class="title-sep">·</span><span class="chip ${statusCls}">${esc(view.status)}</span></h2></div>`;
+  const bits = [
+    `round ${view.round.current || 0}/${view.round.maximum}` +
+      ` · ${view.round.completed} complete`,
+    view.closure_policy,
+  ];
+  html += `<div class="activity-line detail">` +
+    (running ? spinEl() : "") +
+    `<span>${esc(bits.join(" · "))}</span></div>`;
+  html += `</div>`;
+  html += `<div class="toolbar">
+    <button class="btn danger" ${terminal || sessionStopping ? "disabled" : ""}
+      onclick="stopSelectedSession()">${sessionStopping ? "Stopping…" : "Stop session"}</button>
+    <button class="btn" style="margin-left:auto"
+      onclick="openSessionInfo()">Info&#8230;</button>
+  </div>`;
+  html += `<div class="card"><h3>Activity</h3>${sessionChips(view)}</div>`;
+  html += `<div class="card"><h3>Discussion</h3>` +
+    (view.transcript_markdown
+      ? `<div class="mdbody flow">${mdRender(view.transcript_markdown)}</div>`
+      : `<div class="amend-hint">no accepted turns yet</div>`) + `</div>`;
+  html += `<div class="card"><h3>Result</h3>` +
+    (view.result === null
+      ? `<div class="amend-hint">pending</div>`
+      : `<pre class="log mono flow">${esc(JSON.stringify(view.result, null, 2))}</pre>`) +
+    `</div>`;
+  paintSessionDetail(html);
+}
+async function discardSelectedSession() {
+  // The latch survives the 2s repaints (both render sites disable the
+  // button while it is set), so a slow DELETE cannot be double-fired
+  // into a spurious unknown-session refusal.
+  if (!selectedSession || sessionDiscarding) return;
+  const label = lastSessionView
+    ? lastSessionView.question : selectedSession;
+  if (!confirm(`Discard brainstorming “${label}”? This removes it from the `
+      + "panel and deletes its stored discussion state; the target "
+      + "document is untouched.")) return;
+  sessionDiscarding = true;
+  if (lastSessionView) renderSessionDetail(lastSessionView);
+  try {
+    await api("/api/brainstorming/sessions/" +
+      encodeURIComponent(selectedSession) + "?purge=1", {method: "DELETE"});
+  } catch (e) {
+    sessionDiscarding = false;
+    if (lastSessionView) renderSessionDetail(lastSessionView);
+    alert(e.message);  // sealed refusal token, verbatim
+    return;
+  }
+  sessionDiscarding = false;
+  selectedSession = null;
+  lastSessionView = null;
+  sessionView = "main";
+  document.body.classList.remove("m-detail");
+  document.getElementById("detail").innerHTML =
+    '<div class="empty">Nothing selected.</div>';
+  refreshRuns();
+}
+async function stopSelectedSession() {
+  if (!selectedSession || sessionStopping) return;
+  if (lastSessionView && BS_TERMINAL.has(lastSessionView.status)) return;
+  sessionStopping = true;
+  if (lastSessionView) renderSessionDetail(lastSessionView);
+  try {
+    await api(
+      "/api/brainstorming/sessions/" +
+        encodeURIComponent(selectedSession) + "/stop",
+      {method: "POST"}
+    );
+  } catch (e) {
+    alert(e.message);  // sealed refusal token, verbatim
+  } finally {
+    sessionStopping = false;
+    refreshSessionDetail();
+  }
+}
 function runStatusIndicator(r) {
   if (r.process === "running")
     return `<span class="dot running" title="running"></span>`;
@@ -927,34 +1388,62 @@ function runStatusIndicator(r) {
     return `<span class="dot err" title="error"></span>`;
   return `<span class="dot" title="stopped"></span>`;
 }
-function groupRuns(runs) {
+/* One flat sidebar item model over BOTH sources. Grouping, ordering and
+   the per-project limit are computed on items, so a brainstorming session
+   in progress competes for the top of its project on exactly the same
+   terms as a milestone in progress. */
+function sidebarItems(runs, sessions) {
+  const items = (runs || []).map(r => ({
+    kind: "run",
+    project: r.project || null,
+    created_at: r.created_at,
+    running: r.process === "running",
+    closed: r.milestone_status === "closed",
+    data: r,
+  }));
+  for (const s of sessions || [])
+    items.push({
+      kind: "brainstorm",
+      project: s.project || null,
+      created_at: s.created_at,
+      running: s.process === "running",
+      closed: BS_TERMINAL.has(s.status),
+      data: s,
+    });
+  return items;
+}
+function groupItems(items) {
   const byProject = new Map();
-  for (const r of runs) {
-    const key = r.project || null;
+  for (const item of items) {
+    const key = item.project;
     if (!byProject.has(key)) byProject.set(key, []);
-    byProject.get(key).push(r);
+    byProject.get(key).push(item);
   }
   return byProject;
 }
-function runStateRank(r) {
+function itemStateRank(item) {
   // Active work first, then paused/open work, then completed history.
-  if (r.process === "running") return 0;
-  if (r.milestone_status === "closed") return 2;
+  if (item.running) return 0;
+  if (item.closed) return 2;
   return 1;
 }
-function runEpoch(r) {
+function itemEpoch(item) {
   // created_at is ISO-8601 with an offset; Date.parse honors the offset.
-  const t = Date.parse(r.created_at);
+  const t = Date.parse(item.created_at);
   return Number.isNaN(t) ? 0 : t;
 }
-function compareRunsForSidebar(a, b) {
-  // The running milestone leads; the rest follow newest-first.
-  const ra = a.process === "running" ? 0 : 1;
-  const rb = b.process === "running" ? 0 : 1;
+function compareItemsForSidebar(a, b) {
+  // Whatever is running leads — milestone or discussion alike; the rest
+  // follow newest-first.
+  const ra = a.running ? 0 : 1;
+  const rb = b.running ? 0 : 1;
   if (ra !== rb) return ra - rb;
-  return runEpoch(b) - runEpoch(a);
+  return itemEpoch(b) - itemEpoch(a);
 }
-// How many milestones each project shows before "show more" (per project,
+function itemRow(item) {
+  return item.kind === "run" ? runRow(item.data) : sessionRow(item.data);
+}
+// How many items each project shows before "show more" (per project,
 // in-memory: it survives the 2s sidebar repaint like projectMenuOpen and
 // resets on reload — a view preference, not persisted state).
 const SIDEBAR_RUN_LIMIT = 2;
@@ -966,16 +1455,16 @@ function toggleProjectExpand(event, key) {
   renderRunsTree_paint();
 }
 function projectStateRank(key, byProject) {
-  const runs = byProject.get(key) || [];
-  return runs.length ? Math.min(...runs.map(runStateRank)) : 2;
+  const items = byProject.get(key) || [];
+  return items.length ? Math.min(...items.map(itemStateRank)) : 2;
 }
-function presentProjectKeys() {
+function presentProjectKeys(byProject) {
   // Every project the sidebar must show: all DECLARED projects (even
-  // with zero runs — configuration is a first-class sidebar citizen)
-  // plus any project tag still carried by a run whose project was
-  // since deleted (its runs must not vanish into thin air).
+  // with zero items — configuration is a first-class sidebar citizen)
+  // plus any project tag still carried by a run or session whose project
+  // was since deleted (its work must not vanish into thin air).
   const keys = projState.list.map(p => p.slug).filter(Boolean);
-  for (const k of groupRuns(lastRuns).keys())
+  for (const k of byProject.keys())
     if (k !== null && !keys.includes(k)) keys.push(k);
   return keys;
 }
@@ -987,26 +1476,33 @@ function orderedProjectKeys(present, byProject) {
     (a, b) => projectStateRank(a, byProject) - projectStateRank(b, byProject)
   );
 }
-function groupHeader(key, label, count, editable) {
+function groupHeader(key, label) {
   // The whole row toggles collapse. The folder identifies the project;
   // the chevron follows its name, and the overflow menu stays at the
   // far edge. Its open key survives the sidebar's two-second repaint.
+  // The menu is where BOTH kinds of work start, so every user who can
+  // see the project gets it; only the configuration items — whose writes
+  // the service refuses to non-administrators — stay administrative.
   const collapsed = uiState.collapsed.includes(key);
   const safeKey = esc(escJsSq(key));
   const menuOpen = projectMenuOpen === key;
-  const menu = editable
-    ? `<div class="grpmenu ${menuOpen ? "open" : ""}">
+  const admin = appAccess.admin;
+  const menu = `<div class="grpmenu ${menuOpen ? "open" : ""}">
          <button class="grpmenu-btn" type="button" title="Project menu"
            aria-label="Project menu" aria-haspopup="menu" aria-expanded="${menuOpen}"
            onclick="toggleProjectMenu(event, '${safeKey}')">${ICONS.ellipsis}</button>
          ${menuOpen ? `<div class="grpmenu-popover" role="menu" onclick="event.stopPropagation()">
            <button class="grpmenu-item" type="button" role="menuitem"
+             onclick="newMilestone(event, '${safeKey}')">${ICONS.milestone}<span>New milestone</span></button>
+           <button class="grpmenu-item" type="button" role="menuitem"
+             onclick="newBrainstorming(event, '${safeKey}')">${ICONS.brainstorm}<span>New brainstorming</span></button>
+           ${admin ? `<div class="grpmenu-sep"></div>
+           <button class="grpmenu-item" type="button" role="menuitem"
              onclick="configureProject(event, '${safeKey}')">${ICONS.settings}<span>Configure</span></button>
-           ${appAccess.admin ? `<button class="grpmenu-item" type="button" role="menuitem"
+           <button class="grpmenu-item" type="button" role="menuitem"
              onclick="openAdminUsers(event, '${safeKey}')">${ICONS.users}<span>Admin users</span></button>` : ""}
          </div>` : ""}
-       </div>`
-    : "";
+       </div>`;
   return `<div class="proj-group-header" onclick="toggleGroupCollapse('${safeKey}')">
       <span class="grpfolder">${ICONS.folder}</span>
       <span class="grpname">${esc(label)}</span>
@@ -1014,31 +1510,31 @@ function groupHeader(key, label, count, editable) {
       ${menu}
     </div>`;
 }
-function renderRunsTree(runs) {
-  const byProject = groupRuns(runs);
-  const realKeys = presentProjectKeys();
+function renderRunsTree(runs, sessions) {
+  const byProject = groupItems(sidebarItems(runs, sessions));
+  const realKeys = presentProjectKeys(byProject);
   if (realKeys.length === 0) return "";
   const ordered = orderedProjectKeys(realKeys, byProject);
   return ordered.map((key) => {
-    const runsInGroup = [...(byProject.get(key) || [])].sort(
-      compareRunsForSidebar
+    const itemsInGroup = [...(byProject.get(key) || [])].sort(
+      compareItemsForSidebar
     );
-    const header = groupHeader(key, key, runsInGroup.length, appAccess.admin);
+    const header = groupHeader(key, key);
     if (uiState.collapsed.includes(key)) return header;
-    if (!runsInGroup.length)
-      return header + '<div class="grp-empty">no runs yet</div>';
+    if (!itemsInGroup.length)
+      return header + '<div class="grp-empty">nothing started yet</div>';
     const expanded = expandedProjects.has(key);
     const shown = expanded
-      ? runsInGroup
-      : runsInGroup.slice(0, SIDEBAR_RUN_LIMIT);
-    const hidden = runsInGroup.length - shown.length;
+      ? itemsInGroup
+      : itemsInGroup.slice(0, SIDEBAR_RUN_LIMIT);
+    const hidden = itemsInGroup.length - shown.length;
     const safeKey = esc(escJsSq(key));
     let more = "";
     if (hidden > 0)
       more = `<div class="grp-more" onclick="toggleProjectExpand(event, '${safeKey}')">Show ${hidden} more</div>`;
-    else if (expanded && runsInGroup.length > SIDEBAR_RUN_LIMIT)
+    else if (expanded && itemsInGroup.length > SIDEBAR_RUN_LIMIT)
       more = `<div class="grp-more" onclick="toggleProjectExpand(event, '${safeKey}')">Show less</div>`;
-    return header + shown.map(runRow).join("") + more;
+    return header + shown.map(itemRow).join("") + more;
   }).join("");
 }
 // Each click posts the operator's FULL current arrangement, fire-
@@ -1075,6 +1571,16 @@ function configureProject(event, key) {
   event.stopPropagation();
   closeProjectMenu();
   openProjectEditor(key);
+}
+function newMilestone(event, key) {
+  event.stopPropagation();
+  closeProjectMenu();
+  openForm(key);
+}
+function newBrainstorming(event, key) {
+  event.stopPropagation();
+  closeProjectMenu();
+  openBrainstormingForm(key);
 }
 let adminUsersProject = null;
 async function openAdminUsers(event, key) {
@@ -1121,7 +1627,8 @@ document.addEventListener("keydown", event => {
 });
 function renderRunsTree_paint() {
   document.getElementById("runs").innerHTML =
-    renderRunsTree(lastRuns) || '<div class="empty">No milestones yet.</div>';
+    renderRunsTree(lastRuns, lastSessions) ||
+    '<div class="empty">No projects yet.</div>';
 }
 function esc(s) {
   return String(s == null ? "" : s).replace(/[&<>"]/g,
@@ -1197,7 +1704,7 @@ const MODEL_LABELS = Object.freeze({
   "gpt-5.6-luna": "luna",
   "gpt-5.5": "5.5",
   "fable-5": "fable",
-  "opus-4-8": "opus",
+  "opus-5": "opus",
   "sonnet-5": "sonnet",
 });
 const EFFORT_LABELS = Object.freeze({
@@ -1261,16 +1768,24 @@ function workingChip(r) {
          `${esc(who)}${esc(label)}</span>`;
 }
 async function refreshRuns() {
-  try {
-    const data = await api("/api/runs");
-    const runs = data.runs || [];
-    lastRuns = runs;
-    renderRunsTree_paint();
-    if (selected) refreshDetail();
-  } catch (e) { /* keep last render */ }
+  // Two independent sources, one paint. Either can fail on its own tick
+  // (a broken session store must not blank the milestones, and vice
+  // versa): a failed source simply keeps its last known list.
+  const [runs, sessions] = await Promise.all([
+    api("/api/runs").then(d => d.runs || []).catch(() => null),
+    api("/api/brainstorming/sessions").then(d => d.sessions || [])
+      .catch(() => null),
+  ]);
+  if (runs === null && sessions === null) return;  // keep last render
+  if (runs !== null) lastRuns = runs;
+  if (sessions !== null) lastSessions = sessions;
+  renderRunsTree_paint();
+  if (selected) refreshDetail();
+  if (selectedSession) refreshSessionDetail();
 }
 function select(id) {
   selected = id; goalOpen = false; runView = "main";
+  selectedSession = null; lastSessionView = null;
   document.body.classList.add("m-detail");  // mobile: swap to the detail page
   refreshRuns(); refreshDetail();
 }
@@ -1326,7 +1841,8 @@ function updateBottomJump() {
   const button = document.getElementById("jumpBottom");
   if (!button) return;
   const remaining = detail.scrollHeight - detail.scrollTop - detail.clientHeight;
-  button.classList.toggle("gone", !selected || runView === "edit" || remaining < 48);
+  button.classList.toggle("gone",
+    (!selected && !selectedSession) || runView === "edit" || remaining < 48);
 }
 function jumpToBottom() {
   const detail = document.getElementById("detail");
@@ -1336,8 +1852,10 @@ function mobileBack() {
   runView = "main";
   document.body.classList.remove("m-detail");
   selected = null;
+  selectedSession = null;
+  lastSessionView = null;
   document.getElementById("detail").innerHTML =
-    '<div class="empty">No milestone selected.</div>';
+    '<div class="empty">Nothing selected.</div>';
   updateBottomJump();
   refreshRuns();
 }
@@ -1418,6 +1936,27 @@ function repairChip(repair, unitKey) {
   return `<span class="chip sev23 clicky" title="${esc(title)}"
     onclick="showStory('repair:${esc(unitKey)}:${esc(repair.seq)}')">Triggered by ${esc(source)}${fmtDur(repair.duration_s)}</span>`;
 }
+// How each attached session's result came back to the unit. "waiting" is
+// the live state: the unit is paused on the discussion right now.
+const BRAINSTORM_OUTCOME = {
+  waiting: "in session",
+  continued: "resolved",
+  restarted: "resolved",
+  failed: "failed",
+  detached: "detached",
+};
+function brainstormChip(b) {
+  const outcome = BRAINSTORM_OUTCOME[b.outcome] || b.outcome || "";
+  const bad = b.outcome === "failed" || b.outcome === "detached";
+  const title = [
+    `session ${b.session_id || "?"}`,
+    b.target_path ? `target ${b.target_path}` : "",
+    `raised by ${shortKind(b.kind) || "a worker"}`,
+    "click to open the discussion",
+  ].filter(Boolean).join(" · ");
+  return `<span class="chip brainstorm clicky ${bad ? "fail" : ""}"
+    title="${esc(title)}" onclick="openSession('${esc(escJsSq(b.session_id))}')">&#128161; brainstorming · ${esc(outcome)}</span>`;
+}
 function unitHistory(u, activity, running) {
   const drafts = Array.isArray(u.drafts) && u.drafts.length
     ? u.drafts : (u.draft ? [u.draft] : []);
@@ -1434,6 +1973,11 @@ function unitHistory(u, activity, running) {
       .map(r => ({at: r.at || "", type: "round", item: r})),
     (u.seals || []).filter(s => !repairSealAttempts.has(s.attempt))
       .map(s => ({at: s.at || "", type: "seal", item: s})),
+    // A brainstorming detour is placed by the moment the unit stopped to
+    // ask, so it reads in the same chronology as the work around it;
+    // those raised inside a repair episode render with that episode.
+    (u.brainstormings || []).filter(b => !withinRepair(b.at || ""))
+      .map(b => ({at: b.at || "", type: "brainstorm", item: b})),
     repairs.map(repair => ({at: repair.at || "", type: "repair", item: repair}))
   ).sort((a, b) => a.at < b.at ? -1 : a.at > b.at ? 1 : 0);
   // Reclassification is recorded immediately before its origin round/seal.
@@ -1492,15 +2036,18 @@ function unitHistory(u, activity, running) {
         (u.seals || []).filter(s => sealAttempts.has(s.attempt))
           .map(s => ({at: s.at || "", chip: sealChip(s, u.unit)})),
         (u.reclassify || []).filter(item => inEpisode(item.at || ""))
-          .map(item => ({at: item.at || "", chip: reclassifyChip(item, u.unit)}))
+          .map(item => ({at: item.at || "", chip: reclassifyChip(item, u.unit)})),
+        (u.brainstormings || []).filter(b => inEpisode(b.at || ""))
+          .map(b => ({at: b.at || "", chip: brainstormChip(b)}))
       ).sort((a, b) => a.at < b.at ? -1 : a.at > b.at ? 1 : 0);
       current = {type: "repair", number: repairCount,
                  chips: [repairChip(repair, u.unit)]
                    .concat(work.map(w => w.chip))};
       groups.push(current);
     } else {
-      const chip = event.type === "round"
-        ? roundChip(event.item) : reclassifyChip(event.item, u.unit);
+      const chip = event.type === "round" ? roundChip(event.item)
+        : event.type === "brainstorm" ? brainstormChip(event.item)
+        : reclassifyChip(event.item, u.unit);
       if (current) current.chips.push(chip);
       else lead.push(chip);
     }
@@ -2295,10 +2842,10 @@ async function confirmDiscardRun() {
   document.getElementById("detail").innerHTML =
     '<div class="empty">No milestone selected.</div>';
 }
-function openForm() {
+function openForm(preselect) {
   document.getElementById("formError").textContent = "";
   loadRecents();
-  loadLaunchProjects();
+  loadLaunchProjects(preselect);
   loadProfiles();
   for (const act of ACT_NAMES) onAgentChange("a_", act);
   document.getElementById("form").showModal();
@@ -2397,6 +2944,13 @@ async function applyProfileSwap() {
   }
   refreshDetail();
 }
+function browseGoalDoc() {
+  // Start listing at the bound work area's directory when the launch has
+  // one; the goal doc keeps its absolute-path convention.
+  const w = boundArea();
+  openPicker("file", "f_doc", false,
+             w ? w.record.primary.path : undefined);
+}
 async function loadRecents() {
   try {
     const data = await api("/api/recents");
@@ -2408,10 +2962,14 @@ async function loadRecents() {
 /* ---- directory / file picker ---- */
 const picker = { mode: "dir", target: null, path: null, parent: null, sep: "/" };
 let pkSeq = 0;  // request sequence: stale /api/fs responses must not win
-function openPicker(mode, targetId, append) {
+function openPicker(mode, targetId, append, startPath, transform) {
   picker.append = !!append;
   picker.mode = mode;
   picker.target = targetId;
+  // Optional caller-supplied rewrite of the picked path before it lands
+  // in the target field (relativize to a work area, compose a fresh
+  // session folder, …). Null = the picked path verbatim, as always.
+  picker.transform = transform || null;
   picker.path = null;    // no listing loaded yet: "Use this directory" and
   picker.parent = null;  // row clicks stay inert until a load succeeds
   document.getElementById("pk_title").textContent =
@@ -2428,9 +2986,18 @@ function openPicker(mode, targetId, append) {
   // ("created if missing"): nearest=1 makes the server walk up to the
   // closest existing directory — the server, not us, knows the host's
   // path separator and existence, so no client-side path parsing here.
+  // startPath only seeds where the LISTING opens (a bound work directory,
+  // say); it never writes the field, so cancelling leaves it untouched.
+  // The standing fallback is the operator's source tree, not ~ — nearest=1
+  // degrades it to the closest existing ancestor on any other host. A
+  // relative field value is resolved against startPath (the server would
+  // otherwise resolve it against its own cwd).
   const current = document.getElementById(picker.target).value.trim();
+  let seed = current || startPath || "~/Development/source";
+  if (current && startPath && !current.startsWith("/") && !current.startsWith("~"))
+    seed = startPath + "/" + current;
   document.getElementById("picker").showModal();
-  loadPicker(current || "~", true);
+  loadPicker(seed, true);
 }
 async function loadPicker(path, nearest) {
   const seq = ++pkSeq;
@@ -2471,11 +3038,12 @@ function pickerJoin(name) {
 function pickerUseDir() {
   if (!picker.path) return;  // nothing successfully listed yet
   const el = document.getElementById(picker.target);
+  const value = picker.transform ? picker.transform(picker.path) : picker.path;
   if (picker.append) {
     // Multi-root targets (one absolute path per line): picking APPENDS.
-    el.value = (el.value.trim() ? el.value.trim() + "\n" : "") + picker.path;
+    el.value = (el.value.trim() ? el.value.trim() + "\n" : "") + value;
   } else {
-    el.value = picker.path;
+    el.value = value;
   }
   document.getElementById("picker").close();
 }
@@ -2484,7 +3052,9 @@ document.getElementById("pk_list").addEventListener("click", (ev) => {
   if (!row || !row.dataset.name) return;
   if (row.dataset.kind === "dir") loadPicker(pickerJoin(row.dataset.name));
   else if (row.dataset.kind === "file" && picker.mode === "file") {
-    document.getElementById(picker.target).value = pickerJoin(row.dataset.name);
+    const picked = pickerJoin(row.dataset.name);
+    document.getElementById(picker.target).value =
+      picker.transform ? picker.transform(picked) : picked;
     document.getElementById("picker").close();
   }
 });
@@ -2495,7 +3065,7 @@ const FIXED_ACT_AGENTS = {
   review_claude: "claude",
 };
 const MODEL_OPTS = {
-  claude: ["claude-fable-5", "claude-opus-4-8", "claude-sonnet-5"],
+  claude: ["claude-fable-5", "claude-opus-5", "claude-sonnet-5"],
   codex: ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"],
 };
 const EFFORT_OPTS = {
@@ -2617,7 +3187,21 @@ async function submitForm() {
        bare workspace path. Choices load when the form opens; the panel
        only DISPLAYS what the sealed handle-driven seam resolves. ---- */
 let launchProjects = [];
-async function loadLaunchProjects() {
+// The list loads asynchronously, so a launch opened from a project's menu
+// carries its slug through and selects it once the options exist.
+function projectOptions(list, emptyLabel) {
+  const usable = list.some(p => !p.error);
+  return `<option value="" disabled selected>${usable
+      ? "— choose project —" : emptyLabel}</option>` +
+    list.map((p, i) => p.error
+      ? `<option value="" disabled>${esc(p.slug)} — ${esc(p.error.reason)}</option>`
+      : `<option value="${i}">${esc(p.slug)}</option>`).join("");
+}
+function selectProjectSlug(sel, list, slug) {
+  const index = list.findIndex(p => !p.error && p.slug === slug);
+  sel.value = index === -1 ? "" : String(index);
+}
+async function loadLaunchProjects(preselect) {
   launchProjects = [];
   let fault = "";
   try {
@@ -2629,15 +3213,10 @@ async function loadLaunchProjects() {
     fault = "projects unavailable: " + e.message;
   }
   const sel = document.getElementById("f_project");
-  const usable = launchProjects.some(p => !p.error);
-  sel.innerHTML =
-    `<option value="" disabled selected>${usable
-      ? "— choose project —"
-      : "— no projects declared — use “+ Project” first —"}</option>` +
-    launchProjects.map((p, i) => p.error
-      ? `<option value="" disabled>${esc(p.slug)} — ${esc(p.error.reason)}</option>`
-      : `<option value="${i}">${esc(p.slug)}</option>`).join("");
-  sel.value = "";
+  sel.innerHTML = projectOptions(
+    launchProjects, "— no projects declared — use “+ Project” first —"
+  );
+  selectProjectSlug(sel, launchProjects, preselect);
   onLaunchProject();
   if (fault) document.getElementById("f_resolved").textContent = fault;
 }
@@ -2693,6 +3272,315 @@ function launchBinding() {
   const w = boundArea();
   if (!w) return undefined;
   return {project: launchProjects[+pi].slug, work_area: w.record.name};
+}
+
+/* ---- new brainstorming: the standalone session create body, assembled
+       from the panel. Unlike a milestone launch this posts a workspace
+       PATH — the sealed create contract requires request.workspace_path —
+       but the panel never invents it: it posts the bound work area's own
+       primary root, which is exactly what the project seam resolves to
+       (a caller-supplied workspace must equal it, so any other value
+       would simply be refused). The panel validates nothing else; the
+       service's refusal tokens surface verbatim. ---- */
+let bsProjects = [];
+/* The roster is a small state array rendered on structural changes only
+   (add/remove/family change) — the dialog is outside the 2s polled
+   containers, so typed model text is never clobbered mid-edit. Seat ids
+   are machinery, assigned automatically at submit. */
+let bsRoster = [];
+let bsRefs = [];
+function defaultBsRoster() {
+  // The standing roster the dialog opens with — visible, armed, and
+  // editable in place (an operator decision, not a hidden resolution):
+  // lead claude-fable-5/max against a codex gpt-5.6-sol/max interlocutor.
+  return [
+    {role: "lead", agent: "claude", model: "claude-fable-5", effort: "max"},
+    {role: "interlocutor", agent: "codex", model: "gpt-5.6-sol",
+     effort: "max"},
+  ];
+}
+function snapshotBsRoster() {
+  bsRoster.forEach((seat, i) => {
+    const agent = document.getElementById(`b_p${i}_agent`);
+    const model = document.getElementById(`b_p${i}_model`);
+    const effort = document.getElementById(`b_p${i}_effort`);
+    if (agent) seat.agent = agent.value;
+    if (model) seat.model = model.value.trim();
+    if (effort) seat.effort = effort.value;
+  });
+}
+function bsSeatLabel(seat, index) {
+  if (seat.role === "lead") return "Lead";
+  const nth = bsRoster.slice(0, index)
+    .filter(s => s.role === "interlocutor").length + 1;
+  return `Interlocutor ${nth}`;
+}
+function renderBsRoster() {
+  const interlocutors = bsRoster.filter(s => s.role === "interlocutor").length;
+  document.getElementById("b_roster").innerHTML =
+    `<div class="rosterrow"><span></span><span class="acthead">agent</span>
+       <span class="acthead">model</span><span class="acthead">effort</span><span></span></div>` +
+    bsRoster.map((seat, i) => `
+    <div class="rosterrow">
+      <label>${esc(bsSeatLabel(seat, i))}</label>
+      <select id="b_p${i}_agent" onchange="onBsAgentChange(${i})">
+        <option value=""${seat.agent === "" ? " selected" : ""}>default</option>
+        <option${seat.agent === "codex" ? " selected" : ""}>codex</option>
+        <option${seat.agent === "claude" ? " selected" : ""}>claude</option>
+      </select>
+      <input id="b_p${i}_model" list="dl_b_p${i}" placeholder="default"
+        value="${esc(seat.model)}">
+      <select id="b_p${i}_effort"><option value="">default</option></select>
+      <datalist id="dl_b_p${i}"></datalist>
+      <button class="roster-x" type="button" title="Remove participant"
+        onclick="removeBsSeat(${i})"
+        ${seat.role === "lead" || interlocutors <= 1 ? "disabled" : ""}>×</button>
+    </div>`).join("");
+  // Populate each seat's datalist and effort options for its family —
+  // the exact machinery the milestone acts grid uses (prefix "b_p",
+  // act = the row index).
+  bsRoster.forEach((seat, i) => {
+    const effort = document.getElementById(`b_p${i}_effort`);
+    effort.value = seat.effort;
+    onAgentChange("b_p", String(i));
+    effort.value = seat.effort || "";
+  });
+}
+function onBsAgentChange(i) {
+  snapshotBsRoster();
+  onAgentChange("b_p", String(i), true);
+  snapshotBsRoster();
+}
+function addBsSeat() {
+  snapshotBsRoster();
+  bsRoster.push({role: "interlocutor", agent: "", model: "", effort: ""});
+  renderBsRoster();
+}
+function removeBsSeat(i) {
+  snapshotBsRoster();
+  if (bsRoster[i].role === "lead") return;
+  bsRoster.splice(i, 1);
+  renderBsRoster();
+}
+function renderBsRefs() {
+  document.getElementById("b_refs_list").innerHTML = bsRefs.map((ref, i) => `
+    <div class="refrow"><span class="refpath mono" title="${esc(ref)}">${esc(ref)}</span>
+      <button class="roster-x" type="button" title="Remove reference"
+        onclick="removeBsRef(${i})">×</button></div>`).join("");
+}
+function addBsRef() {
+  const input = document.getElementById("b_ref_input");
+  const value = input.value.trim();
+  if (!value) return;
+  if (!bsRefs.includes(value)) bsRefs.push(value);
+  input.value = "";
+  renderBsRefs();
+}
+function removeBsRef(i) {
+  bsRefs.splice(i, 1);
+  renderBsRefs();
+}
+function browseBsRef() {
+  openPicker("file", "b_ref_input", false, bsAreaRoot() || undefined,
+             bsRelative);
+}
+function openBrainstormingForm(preselect) {
+  document.getElementById("bsError").textContent = "";
+  bsRoster = defaultBsRoster();
+  bsRefs = [];
+  bsCreateParents = false;
+  document.getElementById("b_ref_input").value = "";
+  renderBsRoster();
+  renderBsRefs();
+  loadBsProjects(preselect);
+  document.getElementById("bsform").showModal();
+}
+async function loadBsProjects(preselect) {
+  bsProjects = [];
+  let fault = "";
+  try {
+    const data = await api("/api/projects");
+    bsProjects = data.projects || [];
+  } catch (e) {
+    fault = "projects unavailable: " + e.message;
+  }
+  const sel = document.getElementById("b_project");
+  sel.innerHTML = projectOptions(
+    bsProjects, "— no projects declared — use “+ Project” first —"
+  );
+  selectProjectSlug(sel, bsProjects, preselect);
+  onBsProject();
+  if (fault) document.getElementById("b_resolved").textContent = fault;
+}
+function onBsProject() {
+  const idx = document.getElementById("b_project").value;
+  const area = document.getElementById("b_area");
+  const p = idx === "" ? null : bsProjects[+idx];
+  const several = p && p.work_areas.length > 1;
+  area.innerHTML = !several ? "" :
+    `<option value="">— work area —</option>` +
+    p.work_areas.map((w, j) =>
+      `<option value="${j}">${esc(w.record.name)} — ${esc(w.record.status)} v${w.record.version}</option>`
+    ).join("");
+  area.style.display = several ? "" : "none";
+  area.value = "";
+  onBsArea();
+}
+function bsBoundArea() {
+  const pi = document.getElementById("b_project").value;
+  if (pi === "") return null;
+  const p = bsProjects[+pi];
+  if (p.work_areas.length === 1) return p.work_areas[0];
+  const ai = document.getElementById("b_area").value;
+  return ai === "" ? null : p.work_areas[+ai];
+}
+function onBsArea() {
+  const pi = document.getElementById("b_project").value;
+  const out = document.getElementById("b_resolved");
+  updateBsTargetHint();
+  if (pi === "") { out.textContent = ""; return; }
+  const p = bsProjects[+pi];
+  if (!p.work_areas.length) {
+    out.textContent = `project “${p.slug}” has no work area yet — add one `
+      + "from its ⋯ menu (Configure)";
+    return;
+  }
+  const w = bsBoundArea();
+  if (!w) {
+    out.textContent =
+      "this project declares several work areas — pick the one to discuss in";
+    return;
+  }
+  out.textContent = `will run in ${w.record.primary.path} — project ` +
+    `“${p.slug}” / work area “${w.record.name}” (${w.record.status})`;
+}
+// True while the typed target reaches into folders that do not exist yet
+// (the "New…" flow): the create body then asks the service to make them.
+let bsCreateParents = false;
+function bsAreaRoot() {
+  const area = bsBoundArea();
+  return area ? area.record.primary.path : null;
+}
+function bsRelative(path) {
+  // Field values stay relative to the work directory when they can — the
+  // form's own convention (and what the hint under the field promises).
+  const root = bsAreaRoot();
+  if (root && path.startsWith(root + "/")) return path.slice(root.length + 1);
+  return path;
+}
+function updateBsTargetHint() {
+  const hint = document.getElementById("b_target_hint");
+  const root = bsAreaRoot();
+  const bits = [];
+  if (root) bits.push(`relative to ${root}`);
+  if (bsCreateParents)
+    bits.push("missing folders will be created at launch");
+  hint.textContent = bits.join(" · ");
+}
+function browseBsTarget() {
+  // The target must live inside the bound work directory, so that is
+  // where browsing starts once a project is chosen. Picking an existing
+  // file disarms any pending folder creation.
+  openPicker("file", "b_target", false, bsAreaRoot() || undefined, p => {
+    bsCreateParents = false;
+    updateBsTargetHint();
+    return bsRelative(p);
+  });
+}
+function newBsTarget() {
+  // "New…": pick an EXISTING directory; the session gets its own fresh
+  // folder inside it (created by the service at launch), so no
+  // directory-creation UI is ever needed. The proposed path stays fully
+  // editable in the field.
+  const err = document.getElementById("bsError");
+  const root = bsAreaRoot();
+  if (!root) {
+    err.textContent = "choose a project first — the new document lives "
+      + "inside its work directory";
+    return;
+  }
+  err.textContent = "";
+  openPicker("dir", "b_target", false, root, dir => {
+    bsCreateParents = true;
+    updateBsTargetHint();
+    const stamp = new Date().toISOString()
+      .slice(0, 19).replace(/[-T:]/g, "");
+    return bsRelative(`${dir}/bs-${stamp}/DECISION.md`);
+  });
+}
+async function submitBrainstorming() {
+  const err = document.getElementById("bsError");
+  err.textContent = "";
+  const area = bsBoundArea();
+  if (!area) {
+    err.textContent = "choose a project (and its work area) — the session "
+      + "runs in that work directory";
+    return;
+  }
+  const project = bsProjects[+document.getElementById("b_project").value];
+  const question = document.getElementById("b_question").value.trim();
+  const brief = document.getElementById("b_brief").value.trim();
+  const target = document.getElementById("b_target").value.trim();
+  if (!question || !brief || !target) {
+    err.textContent = "question, brief and target document are all required";
+    return;
+  }
+  const rounds = Number(document.getElementById("b_rounds").value);
+  if (!Number.isInteger(rounds) || rounds <= 0) {
+    err.textContent = "maximum rounds must be a positive whole number";
+    return;
+  }
+  snapshotBsRoster();
+  // Seat ids are generated, never typed: the operator's decision is what
+  // staffs the seat, not what it is called. Defaults are omitted so the
+  // service resolves them exactly as an unconfigured launch.
+  let critics = 0;
+  const participants = bsRoster.map(seat => {
+    const entry = {
+      id: seat.role === "lead" ? "lead" : `critic-${++critics}`,
+      role: seat.role,
+    };
+    if (seat.agent) entry.model_family = seat.agent;
+    if (seat.model) entry.model = seat.model;
+    if (seat.effort) entry.effort = seat.effort;
+    return entry;
+  });
+  const context = {brief};
+  if (bsRefs.length) context.references = bsRefs.slice();
+  const payload = {
+    request: {
+      workspace_path: area.record.primary.path,
+      target_path: target,
+      question,
+      context,
+      max_rounds: rounds,
+    },
+    participants,
+    closure_policy: document.getElementById("b_policy").value,
+    project: project.slug,
+    work_area: area.record.name,
+  };
+  // Armed by "New…": the service creates the target's missing folders at
+  // launch (and removes them again if the create fails).
+  if (bsCreateParents) payload.create_target_parents = true;
+  const button = document.getElementById("b_submit");
+  button.disabled = true;
+  try {
+    await api("/api/brainstorming/sessions", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify(payload),
+    });
+  } catch (e) {
+    err.textContent = e.message;  // sealed refusal token, verbatim
+    return;
+  } finally {
+    button.disabled = false;
+  }
+  document.getElementById("bsform").close();
+  document.getElementById("b_question").value = "";
+  document.getElementById("b_target").value = "";
+  refreshRuns();
 }
 
 /* ---- standing projects surface (slice 8): projects, work areas, and

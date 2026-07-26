@@ -1955,7 +1955,7 @@ class TestSummary(TempWorkspaceCase):
             set(skel_view.keys()),
             {"unit", "status", "artifact", "gate_sha", "wip_sha", "draft", "drafts",
              "rounds", "seals", "opened_epoch", "closed_epoch", "debt",
-             "reclassify", "repairs", "work_duration_s"},
+             "reclassify", "repairs", "brainstormings", "work_duration_s"},
         )
         # The draft chip data: write-once record surfaced for the panel.
         self.assertEqual(
@@ -1993,6 +1993,56 @@ class TestSummary(TempWorkspaceCase):
         # doc view carries the dirty round's finding count
         self.assertEqual(doc_view["rounds"][0]["findings"], 2)
         self.assertEqual(doc_view["seals"], [])
+
+    def test_brainstormings_keep_every_detour_with_its_routed_outcome(self):
+        state = make_state(self.workspace)
+        seal_current_unit(state, skeleton_draft(1))
+        doc = st.ensure_next_unit(state)
+        st.append_event(
+            state, "brainstorming_wait_started", unit="skeleton",
+            kind=contracts.KIND_REVIEW_ROUND, family="codex",
+            session_id="bs-one", target_path="docs/one.md",
+        )
+        st.append_event(
+            state, "brainstorming_review_restarted", unit="skeleton",
+            kind=contracts.KIND_REVIEW_ROUND, session_id="bs-one",
+            accepted_target_revision="brainstorming-sha256:" + "a" * 64,
+        )
+        st.append_event(
+            state, "brainstorming_wait_started", unit="skeleton",
+            kind=contracts.KIND_IMPLEMENT, family="claude",
+            session_id="bs-two", target_path="docs/two.md",
+        )
+        # An outcome for a session this unit never opened invents nothing;
+        # the genuinely open detour keeps reading "waiting".
+        st.append_event(
+            state, "brainstorming_failure_routed", unit="skeleton",
+            kind=contracts.KIND_IMPLEMENT, session_id="bs-missing",
+        )
+        st.append_event(
+            state, "brainstorming_wait_started", unit=st.unit_key(doc),
+            kind=contracts.KIND_SEAL_HALF, family="codex",
+            session_id="bs-three", target_path="docs/three.md",
+        )
+
+        views = {view["unit"]: view for view in st.summary(state)["units"]}
+        detours = views["skeleton"]["brainstormings"]
+        self.assertEqual(
+            [(d["session_id"], d["kind"], d["outcome"]) for d in detours],
+            [
+                ("bs-one", contracts.KIND_REVIEW_ROUND, "restarted"),
+                ("bs-two", contracts.KIND_IMPLEMENT, "waiting"),
+            ],
+        )
+        self.assertEqual(detours[0]["family"], "codex")
+        self.assertEqual(detours[0]["target_path"], "docs/one.md")
+        self.assertIsNotNone(detours[0]["outcome_at"])
+        self.assertIsNone(detours[1]["outcome_at"])
+        # Each detour is filed against the unit that raised it.
+        self.assertEqual(
+            [d["session_id"] for d in views[st.unit_key(doc)]["brainstormings"]],
+            ["bs-three"],
+        )
 
     def test_work_duration_sums_completed_llm_calls_once(self):
         state = make_state(self.workspace)

@@ -1564,6 +1564,17 @@ def _repair_episodes(state):
     return by_unit
 
 
+# Every terminal routing of one attached Brainstorming session, keyed by the
+# event the driver appends when the session's result comes back. The wait
+# itself opens the entry ("waiting"); these close it.
+_BRAINSTORMING_OUTCOMES = {
+    "brainstorming_builder_continued": "continued",
+    "brainstorming_review_restarted": "restarted",
+    "brainstorming_failure_routed": "failed",
+    "brainstorming_operational_detached": "detached",
+}
+
+
 def summary(state):
     unit = current_unit(state)
     model_defaults = state["config"].get("model_defaults") or {}
@@ -1581,10 +1592,32 @@ def summary(state):
     closed_at = {}
     wip_sha = {}
     reclassify_by_unit = {}
+    # Attached Brainstorming sessions, in ledger order per unit. The full
+    # trail is derived here (not from the 30-event tail the panel receives)
+    # so an old detour keeps its chip for the life of the run.
+    brainstorming_by_unit = {}
+    brainstorming_index = {}
     for e in state["events"]:
         uk = e.get("unit")
         if not uk:
             continue
+        if e.get("type") == "brainstorming_wait_started":
+            entry = {
+                "session_id": e.get("session_id"),
+                "kind": e.get("kind"),
+                "family": e.get("family"),
+                "target_path": e.get("target_path"),
+                "at": e.get("at"),
+                "outcome": "waiting",
+                "outcome_at": None,
+            }
+            brainstorming_by_unit.setdefault(uk, []).append(entry)
+            brainstorming_index[(uk, e.get("session_id"))] = entry
+        elif e.get("type") in _BRAINSTORMING_OUTCOMES:
+            entry = brainstorming_index.get((uk, e.get("session_id")))
+            if entry is not None:
+                entry["outcome"] = _BRAINSTORMING_OUTCOMES[e.get("type")]
+                entry["outcome_at"] = e.get("at")
         if e.get("type") == "unit_opened" and uk not in opened_at:
             opened_at[uk] = _epoch(e.get("at"))
         if e.get("type") == "unit_transition" and e.get("to_status") == U_SEALED:
@@ -1742,6 +1775,10 @@ def summary(state):
                 # Full immutable rounds/seals stay in their normal fields;
                 # the panel uses these ids to collapse the detour.
                 "repairs": repairs_by_unit.get(unit_key(u), []),
+                # Every Brainstorming session this unit opened to resolve a
+                # design question, with how its result was routed back. The
+                # panel chips these and links each to the session's page.
+                "brainstormings": brainstorming_by_unit.get(unit_key(u), []),
             }
         )
     families = state["config"].get("families_order", [])

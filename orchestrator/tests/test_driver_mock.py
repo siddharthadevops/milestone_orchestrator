@@ -1310,7 +1310,7 @@ class TestActProfiles(DriverTestCase):
             cfg = make_config()
             cfg["model_defaults"] = {
                 "codex": {"model": "gpt-5.5", "effort": "xhigh"},
-                "claude": {"model": "claude-opus-4-8", "effort": "max"},
+                "claude": {"model": "claude-opus-5", "effort": "max"},
             }
             path = init_state(ws, cfg)
             mock = runners.MockRunner(skeleton_script()[:4])

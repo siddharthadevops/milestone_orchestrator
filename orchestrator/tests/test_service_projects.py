@@ -2273,7 +2273,7 @@ class TestPolicyAuthoring(ProjectsServiceTestCase):
             ("gpt-5.6-luna", "luna"),
             ("gpt-5.5", "5.5"),
             ("fable-5", "fable"),
-            ("opus-4-8", "opus"),
+            ("opus-5", "opus"),
             ("sonnet-5", "sonnet"),
         ):
             self.assertIn('"%s": "%s"' % (model_id, visible), text)

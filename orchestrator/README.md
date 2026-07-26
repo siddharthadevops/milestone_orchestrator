@@ -81,10 +81,36 @@ only assigned projects and their runs. Project creation/deletion, membership,
 filesystem browsing, recents, and global profile writes remain admin-only.
 Direct loopback access is the trusted administrator recovery path.
 
-Left pane: launched milestones (process dot, milestone status). Right pane:
-the selected run — pipeline, rounds, seals, failure banner, event log,
-driver log — with Start / Stop / Forget. "New milestone" takes a workspace
-path plus a goal text **or a work-description doc path** (its content
+Left pane: one list per project of everything that project holds —
+milestones (flag icon) and brainstorming sessions (lamp icon) together,
+whatever is in progress first, then the rest newest-first. Both kinds open
+in the right pane. For a milestone that is the run view — pipeline,
+rounds, seals, failure banner, event log, driver log — with Start / Stop /
+Forget. For a session it is the polled session view: status and round
+line, Stop session, an activity chip row (one chip per completed round
+and ballot, a live spinner chip for the round under way, the accepted
+target when one exists), the discussion transcript rendered as Markdown,
+and the result below. Session metadata, participants and the accepted
+target's content live behind its **Info…** button, along with a danger
+zone: **Discard session…** removes a stopped session from the panel and
+purges its stored discussion state (`DELETE
+/api/brainstorming/sessions/<id>?purge=1`; without `purge` only the
+service record is forgotten and the durable state stays as evidence — a
+milestone replaying a retained revision keeps working). A running
+session refuses deletion (`brainstorming_session_running`, 409 — the
+same refusal covers a stop still reconciling, so a freed target can
+never be rewritten by a stale stop) — stop it first; the target document
+is never touched either way, and deleting frees its target for a new
+discussion. A session whose stored state cannot even be read still
+offers Discard from its failure screen — deletion needs only the
+service record. There is no separate session
+page — the panel is the only viewer.
+
+Work starts from a project's **⋯ menu**, never from a standing button:
+"New milestone" and "New brainstorming" are the first two items (every user
+who can see the project gets them; Configure and Admin users stay
+administrative). "New milestone" preselects that project and takes a goal
+text **or a work-description doc path** (its content
 becomes the goal, snapshotted at launch), an optional verification command,
 and an optional advanced config JSON merged over defaults. Verification
 is zero-config by default: the implement worker reports the repo's
@@ -141,6 +167,58 @@ successes return `{"ok": true, "session": ...}`. Stop waits for local work to
 be quiet, restores only the accepted target artifact, and publishes a coherent
 failure; if that safety evidence is unavailable it returns
 `brainstorming_stop_incomplete` without inventing a result.
+
+`GET /api/brainstorming/sessions` lists every session the caller may see
+(`{"ok": true, "sessions": [...]}`), newest creation first — the sidebar's
+source. Authorization is decided from the immutable service record before
+any durable state is read, so a session in a project you are not assigned
+to is simply absent rather than refused; a project-less session is
+administrative. Each row carries the service metadata plus a cheap state
+projection (`status`, `question`, `rounds_used`/`max_rounds`, `revision`);
+a session whose state store cannot be read still lists, with those fields
+null and the fault in `state_error`, because one broken session must never
+hide the others.
+
+The panel's **New brainstorming** dialog assembles exactly that create body:
+project and work area (the posted `workspace_path` is the bound area's own
+primary root — the seam refuses any other value), question, brief, target
+document (relative to the work directory), a managed reference-document
+list (add/remove, Browse for the administrator), closure policy, and the
+round ceiling. Beside the target's Browse, **New…** picks an existing
+directory and proposes `bs-<stamp>/DECISION.md` inside it (editable): the
+create body then carries the optional `create_target_parents: true`, and
+the service makes the target's missing parent folders at creation — under
+the registry lock, after containment and authority-overlap validation —
+and removes exactly what it created if the create fails (a folder a
+concurrent create adopted is never removed). Absent or false keeps the
+historical refusal for a missing parent. Panel pickers open at the bound
+work area's directory when one is chosen and fall back to
+`~/Development/source` (walked up to the nearest existing ancestor on
+other hosts). Participants are AI seats configured like milestone acts —
+one lead plus one or more interlocutors, each with agent family, model and
+effort, rows added and removed in place; seat ids are generated, never
+typed. Every dial left at default is resolved by the service exactly as
+before: family by rotation over what this host offers, model/effort from
+the family's defaults — and when pins would herd every seat onto one
+family while another is available, the last default seat takes the other
+family instead, so a partially pinned roster is never refused for a shape
+the service's own rotation produced. A pin travels in the create body (`model_family` /
+`model` / `effort`, all optional per participant): a pinned family narrows
+that seat's eligibility — so a roster pinned entirely to one family is a
+deliberate choice, not an invalid same-family fallback — an unavailable
+family refuses with `invalid_brainstorming_request`, and each seat's
+resolved model/effort is recorded once in the service record's
+`runtime.executors` (keyed by per-seat `executor_ref`), which the
+lifecycle child replays without re-deriving. Records created before seats
+carried their own settings keep family-default behavior byte-identical.
+Refusal tokens surface verbatim; the panel validates only form
+completeness.
+
+A milestone that stops to ask a session chips it in the unit's chronology
+(the `brainstormings` array of each unit in the run summary, derived from
+the ledger's `brainstorming_wait_started` event and whichever event routed
+its result back — `continued`, `restarted`, `failed`, `detached`, or still
+`waiting`). The chip opens that session's page.
 
 Panel time is completed LLM work derived from the append-only ledger, not
 driver wall time: draft/implement calls, review/fix/delta rounds, every seal

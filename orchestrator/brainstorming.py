@@ -2140,18 +2140,37 @@ class SessionStore:
         if not self._store.read(key)["exists?"]:
             return None
         path = self.transcript_ref(session_id)
+        discarded_underfoot = False
         with _exclusive_transcript(path):
             snapshot = self._snapshot(self._store.read(key))
             if snapshot is None:
-                return None
-            if snapshot.state["transcript_ref"] != path:
-                raise HistoryRewriteError(
-                    "session transcript reference does not match its authority"
+                # The session was discarded between the pre-check above
+                # and taking the lock — and taking the lock recreated the
+                # session's folder and lock file, which the discarder can
+                # no longer see. Tidy this projection's own recreation;
+                # any later reader fails the pre-check and never re-enters.
+                discarded_underfoot = True
+                for leftover in (path, path + ".lock"):
+                    try:
+                        os.unlink(leftover)
+                    except OSError:
+                        pass
+            else:
+                if snapshot.state["transcript_ref"] != path:
+                    raise HistoryRewriteError(
+                        "session transcript reference does not match its "
+                        "authority"
+                    )
+                _atomic_replace_utf8(
+                    path, render_transcript(snapshot.state)
                 )
-            _atomic_replace_utf8(
-                path, render_transcript(snapshot.state)
-            )
-            return snapshot
+                return snapshot
+        if discarded_underfoot:
+            try:
+                os.rmdir(os.path.dirname(path))
+            except OSError:
+                pass
+        return None
 
     def read(self, session_id):
         return self._publish_current(session_id)
@@ -2585,6 +2604,59 @@ class SessionStore:
                 )
 
         directory = os.path.dirname(transcript)
+        try:
+            os.rmdir(directory)
+        except OSError:
+            pass
+
+    def discard_session(self, session_id):
+        """Remove one session's whole durable footprint, deliberately.
+
+        The service's delete route calls this after its own authorization
+        and process-liveness gates. Unlike discard_unlaunched it does not
+        care how far the discussion got — the operator has ordered the
+        session gone. Exactly this session's keys (its record, its target
+        revisions, its turn attempt) and its transcript are removed; the
+        target artifact on disk is never touched.
+        """
+        session_id = kvstore.validate_fragment(session_id, "session_id")
+        key = _session_key(session_id)
+        attempt_key = _turn_attempt_key(session_id)
+        revision_prefix = "%s%s:" % (
+            _TARGET_REVISION_KEY_PREFIX, session_id
+        )
+        transcript = self.transcript_ref(session_id)
+        with _exclusive_transcript(transcript):
+            try:
+                os.unlink(transcript)
+            except FileNotFoundError:
+                pass
+
+            def remove(document):
+                doomed = [
+                    stored
+                    for stored in document["entries"]
+                    if stored == key
+                    or stored == attempt_key
+                    or stored.startswith(revision_prefix)
+                ]
+                for stored in doomed:
+                    del document["entries"][stored]
+                return True, bool(doomed)
+
+            self._store.client._mutate(remove)
+        # Best-effort tidy of the transcript's folder and lock file (the
+        # lock above creates the latter). This does NOT hold exclusivity
+        # against projections: a reader that raced past its pre-check may
+        # recreate both right after this — that reader then discovers the
+        # discarded key under the lock and tidies its own recreation
+        # (_publish_current), so the footprint still converges to gone.
+        directory = os.path.dirname(transcript)
+        for leftover in (transcript + ".lock",):
+            try:
+                os.unlink(leftover)
+            except OSError:
+                pass
         try:
             os.rmdir(directory)
         except OSError:

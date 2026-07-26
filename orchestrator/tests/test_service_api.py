@@ -146,8 +146,86 @@ class ServiceApiTest(unittest.TestCase):
         self.assertIn(".activity-line { display: flex", text)
         self.assertIn(".dot.running { background:", text)
         self.assertIn("function currentWorkplace", text)
-        self.assertIn("function runStateRank", text)
+        self.assertIn("function itemStateRank", text)
         self.assertIn("function projectStateRank", text)
+        # Launching is a project act: the standing "+ New milestone"
+        # button is gone and both starts live in the project ⋯ menu,
+        # which every user who can see the project now gets.
+        self.assertNotIn("+ New milestone", text)
+        self.assertIn('onclick="newMilestone(event,', text)
+        self.assertIn('onclick="newBrainstorming(event,', text)
+        self.assertIn("<span>New milestone</span>", text)
+        self.assertIn("<span>New brainstorming</span>", text)
+        self.assertIn("function openForm(preselect)", text)
+        self.assertIn("function selectProjectSlug", text)
+        # Brainstorming sessions share the sidebar list with milestones,
+        # each kind carrying its own icon, and open their own page.
+        self.assertIn('id="bsform"', text)
+        self.assertIn("function submitBrainstorming", text)
+        self.assertIn('api("/api/brainstorming/sessions"', text)
+        # Seats are configured like milestone acts (agent/model/effort per
+        # row, add/remove), never as typed ids; references are a managed
+        # list with add/remove, not a free textarea.
+        self.assertIn("function renderBsRoster", text)
+        self.assertIn("function addBsSeat", text)
+        self.assertIn("function removeBsSeat", text)
+        # The dialog opens pre-staffed with the standing roster; the
+        # retired claude id is gone from every option list.
+        self.assertIn(
+            '{role: "lead", agent: "claude", model: "claude-fable-5", '
+            'effort: "max"}', text)
+        self.assertIn('"claude-opus-5"', text)
+        self.assertNotIn("opus-4-8", text)
+        self.assertIn(".rosterrow { display: grid", text)
+        self.assertIn("function addBsRef", text)
+        self.assertIn("function removeBsRef", text)
+        self.assertNotIn('id="b_interlocutors"', text)
+        # New… proposes a fresh session folder (created at launch via the
+        # opt-in create body flag); pickers seed from the bound work area
+        # and fall back to the operator's source tree.
+        self.assertIn('onclick="newBsTarget()"', text)
+        self.assertIn("function newBsTarget", text)
+        self.assertIn("create_target_parents", text)
+        self.assertIn("function browseGoalDoc", text)
+        self.assertIn('"~/Development/source"', text)
+        self.assertIn("picker.transform", text)
+        self.assertIn("function sidebarItems", text)
+        self.assertIn("function sessionRow", text)
+        self.assertIn("function openSession", text)
+        # A session opens IN the right pane: the monitoring page leads
+        # with live chips, the discussion Markdown and the result;
+        # metadata/participants/accepted target live behind Info…. The
+        # standalone page is gone entirely.
+        self.assertIn("function refreshSessionDetail", text)
+        self.assertIn("function renderSessionDetail", text)
+        self.assertIn("function stopSelectedSession", text)
+        self.assertIn("function sessionChips", text)
+        self.assertIn('onclick="openSessionInfo()">Info', text)
+        self.assertIn("function closeSessionInfo", text)
+        # Session content flows with the page — one scroll, preserved
+        # across the 2s repaint — never a nested scrollbox that resets.
+        self.assertIn(".mdbody.flow { max-height: none", text)
+        self.assertIn('class="mdbody flow"', text)
+        self.assertIn("function paintSessionDetail", text)
+        self.assertIn("det.scrollTop = top", text)
+        # Sessions are discardable from the Info page's danger zone
+        # (running ones refuse — the button disables, stop first). A
+        # broken-state session keeps a discard escape hatch on its
+        # failure screen, and an in-flight discard latches the button.
+        self.assertIn("function discardSelectedSession", text)
+        self.assertIn("?purge=1", text)
+        self.assertIn("sessionDiscarding", text)
+        self.assertIn("if (!selectedSession || sessionDiscarding) return", text)
+        self.assertIn("The session view cannot be loaded", text)
+        self.assertNotIn("window.open", text)
+        self.assertNotIn("brainstorming.html", text)
+        self.assertIn("ICONS.milestone", text)
+        self.assertIn("ICONS.brainstorm", text)
+        self.assertIn(".run-icon { flex: none", text)
+        # ...and a milestone that stopped to ask one chips it in place.
+        self.assertIn("function brainstormChip", text)
+        self.assertIn(".chip.brainstorm { color:", text)
+        self.assertIn('type: "brainstorm", item: b', text)
         self.assertIn(".unit-history { margin-top: 7px", text)
         self.assertIn("function unitHistory", text)
         self.assertIn("const drafts = Array.isArray(u.drafts)", text)

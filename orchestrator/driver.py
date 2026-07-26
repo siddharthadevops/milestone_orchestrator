@@ -69,8 +69,9 @@ DEFAULT_CONFIG = {
     # {model}/{effort} placeholders in the command template are filled per
     # call; templates without placeholders (codex: its model lives in its
     # own CLI config) ignore overrides.
-    # Verified against the installed CLIs (2026-07-09): claude accepts
-    # explicit ids (claude-fable-5 / claude-opus-4-8 / claude-sonnet-5)
+    # Verified against the installed CLIs (2026-07-09, claude ids
+    # re-verified 2026-07-26): claude accepts explicit ids
+    # (claude-fable-5 / claude-opus-5 / claude-sonnet-5)
     # and efforts low|medium|high|xhigh|max; codex models come from its
     # live catalog (gpt-5.6-sol / gpt-5.6-terra / gpt-5.6-luna) with
     # reasoning efforts low|medium|high|xhigh|max set via
@@ -80,7 +81,7 @@ DEFAULT_CONFIG = {
     # (runners.WORKFLOW_DISABLED_ENV): the async workflow model is
     # incompatible with the one-shot call contract.
     "model_defaults": {
-        "claude": {"model": "claude-fable-5", "effort": "high"},
+        "claude": {"model": "claude-opus-5", "effort": "high"},
         "codex": {"model": "gpt-5.6-sol", "effort": "xhigh"},
     },
     # No hard wall-clock timeout: worker calls run as long as the work needs

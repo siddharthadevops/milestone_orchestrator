@@ -35,18 +35,26 @@ run's live state) and a JSON API:
                                    ?purge=1 also removes the run's state file
                                    + lock so the workspace can launch fresh)
 
-Standalone Brainstorming (independent from milestone runs and chronology):
+Standalone Brainstorming (independent from milestone runs and chronology;
+sessions render in the panel's right pane — there is no separate page):
 
-    GET    /brainstorming.html?session=<id>
-                                   dedicated view of one known discussion
     POST   /api/brainstorming/sessions
                                    create and start one bounded discussion
+    GET    /api/brainstorming/sessions
+                                   {"sessions": [...]} every session the
+                                   caller may see, newest creation first —
+                                   the panel's unified sidebar listing
     GET    /api/brainstorming/sessions/<id>
                                    poll one complete durable session snapshot
     GET    /api/brainstorming/sessions/<id>/view
                                    render one coherent authorized view revision
     POST   /api/brainstorming/sessions/<id>/stop
                                    stop participant work and publish failure
+    DELETE /api/brainstorming/sessions/<id>
+                                   forget a stopped session (running: 409;
+                                   ?purge=1 also removes its durable state
+                                   + transcript; the target artifact is
+                                   never touched)
 
 Standing projects (the operator-declared ecosystem surface; every slug and
 work-area name rides as a URL-encoded path segment):
@@ -2702,6 +2710,33 @@ def require_brainstorming_access(home, who, record):
     require_brainstorming_project_access(home, who, slug)
 
 
+def brainstorming_visibility(home, who):
+    """A record-level predicate for the Brainstorming list route.
+
+    Refusals filter (a session the caller may not see simply is not
+    listed); a broken standing-access state still raises, exactly as it
+    does on the single-session routes — a fault must never render as the
+    healthy "no sessions" answer.
+    """
+
+    def visible(record):
+        if who.get("admin"):
+            return True
+        slug = record.get("project")
+        if slug is None:
+            # A project-less session belongs to the administrator alone.
+            return False
+        try:
+            require_brainstorming_project_access(home, who, slug)
+        except ApiError as exc:
+            if exc.status >= 500:
+                raise
+            return False
+        return True
+
+    return visible
+
+
 def require_brainstorming_project_access(home, who, slug):
     """Keep Brainstorming refusals typed if standing access state is broken."""
     try:
@@ -2775,10 +2810,6 @@ def make_handler(home):
                 who = self._who()
                 if route in ("/", "/index.html"):
                     self._static("panel.html", "text/html; charset=utf-8")
-                elif route == "/brainstorming.html":
-                    self._static(
-                        "brainstorming.html", "text/html; charset=utf-8"
-                    )
                 elif route == "/api/access":
                     self._json(200, {"ok": True, **access_view(who)})
                 elif route == "/api/runs":
@@ -2822,6 +2853,16 @@ def make_handler(home):
                             home, "GET", segments, None
                         )
                     self._json(status, payload)
+                elif route == "/api/brainstorming/sessions":
+                    self._json(
+                        200,
+                        {
+                            "ok": True,
+                            "sessions": brainstorming_lifecycle.list_sessions(
+                                home, brainstorming_visibility(home, who)
+                            ),
+                        },
+                    )
                 elif route.startswith("/api/brainstorming/sessions/"):
                     parts = route.rstrip("/").split("/")
                     if (
@@ -3034,6 +3075,20 @@ def make_handler(home):
                     require_run_access(home, who, parts[3])
                     self._json(200, {"ok": True, **delete_run(
                         home, parts[3], purge=query.get("purge") == "1")})
+                elif (
+                    len(parts) == 5
+                    and route.startswith("/api/brainstorming/sessions/")
+                    and parts[4]
+                ):
+                    result = brainstorming_lifecycle.delete_session(
+                        home,
+                        parts[4],
+                        lambda record: require_brainstorming_access(
+                            home, who, record
+                        ),
+                        purge=query.get("purge") == "1",
+                    )
+                    self._json(200, {"ok": True, **result})
                 elif route == "/api/projects" or route.startswith("/api/projects/"):
                     segments = project_route_segments(route)
                     self._authorize_project_route(who, "DELETE", segments)
@@ -3046,6 +3101,10 @@ def make_handler(home):
                     self._json(404, {"ok": False, "error": "not found"})
             except ApiError as exc:
                 self._json(exc.status, {"ok": False, "error": str(exc)})
+            except brainstorming_lifecycle.PublicLifecycleError as exc:
+                self._json(
+                    exc.status, {"ok": False, "error": exc.code}
+                )
             except Exception as exc:
                 self._json(500, {"ok": False, "error": str(exc)})
 

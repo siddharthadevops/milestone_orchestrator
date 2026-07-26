@@ -1,6 +1,5 @@
 """Focused executable evidence for Brainstorming Slice 07."""
 import os
-import re
 import unittest
 from unittest import mock
 from orchestrator import access
@@ -84,17 +83,17 @@ class BrainstormingVisualizationTest(unittest.TestCase):
             }
         )
     def test_dedicated_page_and_routes_are_brainstorming_only(self):
-        status, page = self.api._request("GET", "/brainstorming.html?session=x")
-        self.assertEqual(status, 200)
-        html = page.decode("utf-8")
-        self.assertIn("/api/brainstorming/sessions/", html)
-        self.assertIn("textContent", html)
-        self.assertIn("clearSensitive();", html)
-        self.assertIn("li { overflow-wrap: anywhere; }", html)
-        self.assertNotIn("innerHTML", html)
-        self.assertIsNone(re.search(
-            r"\b(?:milestone|slice|review|seal|chronology)\b", html.lower()
-        ))
+        # The standalone page is retired: the panel's right pane is the
+        # only session viewer, and the old route is gone entirely.
+        status, gone = self.api._request(
+            "GET", "/brainstorming.html?session=x"
+        )
+        self.assertEqual(status, 404, gone)
+        self.assertFalse(
+            os.path.exists(
+                os.path.join(service.STATIC_DIR, "brainstorming.html")
+            )
+        )
         session_id, _store = self._create("route.md")
         view = self._view(session_id)
         self.assertEqual(set(view["target"]), {
@@ -208,15 +207,18 @@ class BrainstormingVisualizationTest(unittest.TestCase):
         self._turn(store, session_id, snapshot, "lead", "Text.", exact)
         self.assertEqual(self._view(session_id)["target"]["content"], "Café")
     def test_page_poll_stop_and_stale_contract(self):
+        # The polling/stale/stop contract now lives in the panel's
+        # in-pane session view: a request-sequence guard, a stale banner
+        # that keeps the last good render, and the bodiless stop POST.
         with open(
-            os.path.join(service.STATIC_DIR, "brainstorming.html"),
+            os.path.join(service.STATIC_DIR, "panel.html"),
             encoding="utf-8",
         ) as handle:
             html = handle.read()
         for contract in (
-            "sequence !== requestSequence", "view.revision < renderedRevision",
-            "Showing the last known revision", "return ngrok ? 30000 : 2000",
-            '{method: "POST"}', "await refreshView()", "setTimeout(poll",
+            "seq !== sessionSeq", "showing last known revision, retrying",
+            "function refreshSessionDetail", "function stopSelectedSession",
+            '{method: "POST"}',
         ):
             self.assertIn(contract, html)
         session_id, _store = self._create("stop.md", live=True)
@@ -237,6 +239,10 @@ class BrainstormingVisualizationTest(unittest.TestCase):
         status, runs_after = self.api._request("GET", "/api/runs")
         self.assertEqual(runs_after, runs_before)
         self.assertEqual(registry.load(self.api.home)["runs"], [])
-        self.assertNotIn(b"transcript_markdown", panel_after)
+        # The panel now renders sessions in its right pane, so its static
+        # code references the view's fields — but session STATE still
+        # never leaks into the served bytes (panel_after == panel_before
+        # above holds across a session create).
+        self.assertIn(b"transcript_markdown", panel_after)
 if __name__ == "__main__":
     unittest.main()

@@ -47,6 +47,7 @@ INVALID_REQUEST = "invalid_brainstorming_request"
 UNKNOWN_SESSION = "unknown_brainstorming_session"
 TARGET_IN_USE = "brainstorming_target_in_use"
 STOP_INCOMPLETE = "brainstorming_stop_incomplete"
+SESSION_RUNNING = "brainstorming_session_running"
 UNAVAILABLE = "brainstorming_unavailable"
 _PROJECT_REQUEST_ERRORS = {
     "invalid_project",
@@ -273,7 +274,7 @@ def validate_create_body(body):
         brainstorming._exact_keys(
             body,
             ("request", "participants", "closure_policy"),
-            ("project", "work_area"),
+            ("project", "work_area", "create_target_parents"),
             "brainstorming create body",
         )
         request = brainstorming.validate_request(body["request"])
@@ -293,8 +294,15 @@ def validate_create_body(body):
         interlocutor_count = 0
         for index, participant in enumerate(raw_participants):
             context = "participants[%d]" % index
+            # A caller may pin what a seat is staffed with — its model
+            # family, and the model/effort that seat runs at. All three
+            # stay OPTIONAL: omitted, the service resolves the family by
+            # rotation and the family's own defaults, exactly as before.
             brainstorming._exact_keys(
-                participant, ("id", "role"), (), context
+                participant,
+                ("id", "role"),
+                ("model_family", "model", "effort"),
+                context,
             )
             participant_id = brainstorming._text(
                 participant["id"], "%s.id" % context
@@ -310,9 +318,15 @@ def validate_create_body(body):
             ids.add(participant_id)
             lead_count += participant["role"] == "lead"
             interlocutor_count += participant["role"] == "interlocutor"
-            participants.append(
-                {"id": participant_id, "role": participant["role"]}
-            )
+            checked_participant = {
+                "id": participant_id, "role": participant["role"]
+            }
+            for field in ("model_family", "model", "effort"):
+                if field in participant:
+                    checked_participant[field] = brainstorming._text(
+                        participant[field], "%s.%s" % (context, field)
+                    )
+            participants.append(checked_participant)
         if lead_count != 1 or interlocutor_count < 1:
             raise brainstorming.ContractError(
                 "participants require exactly one lead and an interlocutor"
@@ -330,12 +344,22 @@ def validate_create_body(body):
         if has_project:
             project = brainstorming._text(body["project"], "project")
             work_area = brainstorming._text(body["work_area"], "work_area")
+        # Opt-in mkdir of the target's missing parent folders at creation
+        # (the panel's "New" flow: a fresh session folder under an existing
+        # directory). Absent or false keeps the historical refusal: a
+        # target whose parent does not exist is an invalid request.
+        create_parents = body.get("create_target_parents", False)
+        if type(create_parents) is not bool:
+            raise brainstorming.ContractError(
+                "create_target_parents must be a boolean"
+            )
         return {
             "request": request,
             "participants": participants,
             "closure_policy": policy,
             "project": project,
             "work_area": work_area,
+            "create_target_parents": create_parents,
         }
     except (TypeError, ValueError, brainstorming.ContractError) as exc:
         raise PublicLifecycleError(400, INVALID_REQUEST) from exc
@@ -442,34 +466,104 @@ def _runtime_and_roster(config, participants, closure_policy, workspace):
     if not families:
         raise PublicLifecycleError(503, UNAVAILABLE)
 
+    # One executor binding per SEAT, not per family: two seats on the same
+    # family may legitimately run different models, and the roster's
+    # executor_ref is the only key the sealed execution seam looks a
+    # binding up by.
+    def seat_ref(family, participant_id):
+        return "brainstorming-%s-%s" % (family, participant_id)
+
+    # Eligibility is what the caller ALLOWS a seat to be staffed with: an
+    # unpinned seat may take any available family, a pinned seat only its
+    # pin. The sealed cross-family rule then judges the roster against the
+    # caller's real degrees of freedom — an all-one-family roster the
+    # operator pinned on purpose is legitimate, not a fallback.
     eligible = []
     for participant in participants:
-        for family in families:
+        seat_families = (
+            [participant["model_family"]]
+            if participant.get("model_family") is not None
+            else families
+        )
+        for family in seat_families:
+            if family not in families:
+                raise PublicLifecycleError(400, INVALID_REQUEST)
             eligible.append(
                 {
                     "id": participant["id"],
                     "role": participant["role"],
-                    "executor_ref": "brainstorming-%s" % family,
+                    "executor_ref": seat_ref(family, participant["id"]),
                     "model_family": family,
                 }
             )
     selected = []
-    for index, participant in enumerate(participants):
-        family = families[index % len(families)]
+    rotation = 0
+    for participant in participants:
+        pinned = participant.get("model_family")
+        if pinned is None:
+            # Unpinned seats keep the historical rotation over available
+            # families; a roster with no pins resolves exactly as before.
+            family = families[rotation % len(families)]
+            rotation += 1
+        elif pinned in families:
+            family = pinned
+        else:
+            # The caller asked for a family this host cannot staff. That
+            # is a request fault, not a service fault.
+            raise PublicLifecycleError(400, INVALID_REQUEST)
         selected.append(
             {
                 "id": participant["id"],
                 "role": participant["role"],
-                "executor_ref": "brainstorming-%s" % family,
+                "executor_ref": seat_ref(family, participant["id"]),
                 "model_family": family,
             }
         )
+    # The rotation is pin-blind, so pins can herd every seat onto one
+    # family (lead pinned codex + a default seat: rotation hands the
+    # default seat codex too) — a shape the sealed cross-family rule then
+    # rightly refuses, blaming the caller for the service's own choice.
+    # While an unpinned seat can still diversify, flip the last one to
+    # the first other available family; a roster with no pins is never
+    # herded (indexes 0 and 1 already differ), so this changes nothing
+    # for the historical path.
+    if len(families) > 1 and len(
+        {entry["model_family"] for entry in selected}
+    ) == 1:
+        mono = selected[0]["model_family"]
+        for participant, entry in zip(
+            reversed(participants), reversed(selected)
+        ):
+            if participant.get("model_family") is None:
+                family = next(f for f in families if f != mono)
+                entry["model_family"] = family
+                entry["executor_ref"] = seat_ref(family, entry["id"])
+                break
     try:
         run_config = brainstorming.resolve_run_config(
             selected, closure_policy, eligible
         )
     except brainstorming.ContractError as exc:
+        # A roster the caller pinned into a shape the sealed rules refuse
+        # (notably same-family while a cross-family one is eligible) is a
+        # bad request; only an unpinned roster failing here is a fault of
+        # the service's own rotation.
+        if any(
+            participant.get("model_family") is not None
+            for participant in participants
+        ):
+            raise PublicLifecycleError(400, INVALID_REQUEST) from exc
         raise PublicLifecycleError(503, UNAVAILABLE) from exc
+    # Each seat's resolved model/effort, recorded once so the lifecycle
+    # child rebuilds the exact same bindings without re-deriving them.
+    executors = {}
+    for participant, entry in zip(participants, selected):
+        defaults = model_defaults.get(entry["model_family"]) or {}
+        executors[entry["executor_ref"]] = {
+            "model_family": entry["model_family"],
+            "model": participant.get("model") or defaults.get("model"),
+            "effort": participant.get("effort") or defaults.get("effort"),
+        }
     runtime = {
         "families_order": families,
         "commands": {
@@ -484,6 +578,7 @@ def _runtime_and_roster(config, participants, closure_policy, workspace):
             family: copy.deepcopy(model_defaults.get(family) or {})
             for family in families
         },
+        "executors": executors,
         "worker_stall_window_s": config.get("worker_stall_window_s"),
         "worker_stall_min_cpu_s": config.get("worker_stall_min_cpu_s"),
     }
@@ -494,7 +589,8 @@ def _runtime_and_roster(config, participants, closure_policy, workspace):
     return runtime, run_config, eligible
 
 
-def _resolved_target(request, execution_context, owned_target_path=None):
+def _resolved_target_path(request, execution_context, owned_target_path=None):
+    """Resolve and contain the target path without touching the filesystem."""
     path = coordination.resolve_target_path(request)
     primary = execution_context.get("primary")
     if primary is not None:
@@ -508,11 +604,93 @@ def _resolved_target(request, execution_context, owned_target_path=None):
                 or os.path.abspath(owned_target_path) != path
             ):
                 raise PublicLifecycleError(400, INVALID_REQUEST)
+    return path
+
+
+def _require_capturable(path):
+    """Fail fast on a target the coordination layer would refuse."""
     try:
         coordination.capture_target(path)
     except coordination.CoordinationRejected as exc:
         raise PublicLifecycleError(400, INVALID_REQUEST) from exc
-    return path
+
+
+def _ensure_target_parents(path):
+    """Create the target's missing parent folders; return what was created.
+
+    Runs only after containment and authority-overlap validation, under
+    the registry lock. The returned list (deepest first) is exactly the
+    set of directories this call brought into existence, so a failed
+    create can remove them — and nothing else — on the way out.
+    """
+    parent = os.path.dirname(os.path.abspath(path))
+    missing = []
+    probe = parent
+    while not os.path.lexists(probe):
+        missing.append(probe)
+        upper = os.path.dirname(probe)
+        if upper == probe:
+            break
+        probe = upper
+    if not missing:
+        return []
+    try:
+        os.makedirs(parent, exist_ok=True)
+    except OSError as exc:
+        _remove_created_dirs(missing)
+        raise PublicLifecycleError(400, INVALID_REQUEST) from exc
+    return missing
+
+
+def _remove_created_dirs(created):
+    """Best-effort compensation: remove only empty, still-ours folders."""
+    for directory in created:
+        try:
+            os.rmdir(directory)
+        except FileNotFoundError:
+            continue
+        except OSError:
+            # Non-empty or otherwise busy: someone already relies on it —
+            # never force anything beyond what this create added.
+            return
+
+
+def _discard_created_dirs(home, target_path, created):
+    """Compensate a failed create's mkdir, never a sibling's adoption.
+
+    Runs outside the registry lock (the create's with-block has exited by
+    the time its except paths run), so a concurrent create may have found
+    these folders existing and registered its own session INSIDE them —
+    on the same target or on any other artifact under the same fresh
+    folders (its target file may legitimately not exist yet, so the
+    empty-folder rmdir guard alone cannot protect it). Re-checking under
+    the lock — for any registered target that equals ours or lives under
+    any folder this create added, in raw or realpath form — makes removal
+    and adoption mutually exclusive; compensation stays best-effort.
+    """
+    if not created:
+        return
+    try:
+        with _locked_registry(home):
+            document = _load_registry(home)
+            guarded = set()
+            for directory in created:
+                guarded.add(os.path.abspath(directory))
+                guarded.add(os.path.realpath(directory))
+            for record in document["sessions"]:
+                for recorded in (
+                    os.path.abspath(record["target_path"]),
+                    os.path.realpath(record["target_path"]),
+                ):
+                    if recorded == target_path or any(
+                        recorded == directory
+                        or recorded.startswith(directory + os.sep)
+                        for directory in guarded
+                    ):
+                        return
+            _remove_created_dirs(created)
+    except Exception:
+        pass
 
 
 def _target_identity(path):
@@ -943,21 +1121,32 @@ def _create_session_with_context(
         context["workspace_path"],
     )
     store = brainstorming.SessionStore(state_directory(home))
-    target_path = _resolved_target(
+    target_path = _resolved_target_path(
         checked["request"], context, owned_target_path=owned_target_path
     )
     _reject_authority_overlap(home, store, target_path)
-    identity = _target_identity(target_path)
+    if not checked["create_target_parents"]:
+        # Historical fail-fast: without the opt-in, a target whose parent
+        # is missing (or otherwise uncapturable) refuses before anything
+        # is spawned or written.
+        _require_capturable(target_path)
     launcher = launcher or _launch_lifecycle_process
     launch = None
     session_id = None
     session_creation_attempted = False
     recovery_baseline = None
+    created_dirs = []
 
     try:
         reap_children(home)
         with _locked_registry(home):
             document = _load_registry(home)
+            if checked["create_target_parents"]:
+                # Under the registry lock, after every pure validation: a
+                # concurrent create of the same fresh folder serializes
+                # here, so cleanup can never remove a sibling's folder.
+                created_dirs = _ensure_target_parents(target_path)
+            identity = _target_identity(target_path)
             for record in document["sessions"]:
                 if (
                     _same_target(record, target_path, identity)
@@ -1029,6 +1218,7 @@ def _create_session_with_context(
                     else recovery_baseline["revision"]
                 ),
             )
+        _discard_created_dirs(home, target_path, created_dirs)
         raise
     except (brainstorming.ContractError, coordination.CoordinationRejected) as exc:
         if launch is not None:
@@ -1044,6 +1234,7 @@ def _create_session_with_context(
                     else recovery_baseline["revision"]
                 ),
             )
+        _discard_created_dirs(home, target_path, created_dirs)
         raise PublicLifecycleError(400, INVALID_REQUEST) from exc
     except Exception as exc:
         if launch is not None:
@@ -1062,6 +1253,7 @@ def _create_session_with_context(
                 )
             except Exception as rollback_error:
                 raise PublicLifecycleError(503, UNAVAILABLE) from rollback_error
+        _discard_created_dirs(home, target_path, created_dirs)
         raise PublicLifecycleError(503, UNAVAILABLE) from exc
 
 
@@ -1070,6 +1262,120 @@ def inspect_session(home, session_id, authorize):
     record = _record_by_id(home, session_id)
     _authorize_record(record, authorize)
     return _projection(home, record)
+
+
+def _list_projection(store, record):
+    """One cheap list row: immutable service metadata first, then state.
+
+    A session whose durable state is unreadable still lists — with its
+    state-derived fields null and the fault named — because one broken
+    session must never hide every other session from the operator.
+    """
+    row = {
+        "id": record["id"],
+        "caller": record["caller"],
+        "project": record["project"],
+        "work_area": record["work_area"],
+        "target_path": record["target_path"],
+        "created_at": record["created_at"],
+        "process": "running" if _process_alive(record) else "stopped",
+        "status": None,
+        "question": None,
+        "revision": None,
+        "rounds_used": None,
+        "max_rounds": None,
+        "state_error": None,
+    }
+    try:
+        snapshot = store.read(record["id"])
+        if snapshot is None:
+            raise RuntimeError("Brainstorming session state is unavailable")
+        state = snapshot.state
+        progress = brainstorming.coordination_projection(state)
+        row.update(
+            {
+                "status": state["status"],
+                "question": state["request"]["question"],
+                "revision": snapshot.revision,
+                "rounds_used": (
+                    0 if progress is None else progress["rounds_used"]
+                ),
+                "max_rounds": state["request"]["max_rounds"],
+            }
+        )
+    except Exception as exc:  # one row's fault is not the list's fault
+        row["state_error"] = str(exc)
+    return row
+
+
+def list_sessions(home, visible):
+    """Project every session the caller may see, newest creation first.
+
+    `visible` is a predicate over the immutable service record, so the
+    authorization decision is taken before any durable state is read —
+    the same ordering the single-session routes use.
+    """
+    if not callable(visible):
+        raise PublicLifecycleError(503, UNAVAILABLE)
+    reap_children(home)
+    try:
+        with _locked_registry(home):
+            records = _load_registry(home)["sessions"]
+    except Exception as exc:
+        raise PublicLifecycleError(503, UNAVAILABLE) from exc
+    store = brainstorming.SessionStore(state_directory(home))
+    rows = [
+        _list_projection(store, record)
+        for record in records
+        if visible(copy.deepcopy(record))
+    ]
+    rows.sort(key=lambda row: row["created_at"], reverse=True)
+    return rows
+
+
+def delete_session(home, session_id, authorize, purge=False):
+    """Forget one stopped session; with purge, drop its durable state too.
+
+    A running session refuses (stop it first) — deletion never signals a
+    process. Without purge only the service record is removed: the panel
+    forgets the session, its target is freed for a new discussion, and
+    the durable state stays on disk as evidence (a milestone replaying a
+    retained revision keeps working). With purge the session's keys and
+    transcript are removed FIRST — a purge fault leaves the record in
+    place so the operator can simply retry. The target artifact is never
+    touched either way.
+    """
+    record = _record_by_id(home, session_id)
+    _authorize_record(record, authorize)
+    try:
+        with _locked_registry(home):
+            document = _load_registry(home)
+            record = _find_record(document, session_id)
+            if record is None:
+                raise PublicLifecycleError(404, UNKNOWN_SESSION)
+            with _STOPS_GUARD:
+                stopping = (
+                    os.path.abspath(home), session_id
+                ) in _STOPS_IN_FLIGHT
+            if stopping or _process_alive(record):
+                # A stop mid-reconcile still owns the target's recovery;
+                # freeing the target under it would let the stale
+                # reconcile rewrite a successor session's document.
+                raise PublicLifecycleError(409, SESSION_RUNNING)
+            if purge:
+                store = brainstorming.SessionStore(state_directory(home))
+                store.discard_session(session_id)
+            document["sessions"] = [
+                item
+                for item in document["sessions"]
+                if item["id"] != session_id
+            ]
+            _save_registry(home, document)
+    except PublicLifecycleError:
+        raise
+    except Exception as exc:
+        raise PublicLifecycleError(503, UNAVAILABLE) from exc
+    return {"deleted": session_id, "purged": bool(purge)}
 
 
 def view_session(home, session_id, authorize, preview_limit):
@@ -1235,16 +1541,36 @@ def _reconcile_for_terminal(store, session_id):
     raise PublicLifecycleError(409, STOP_INCOMPLETE)
 
 
+# Stops currently reconciling, announced so deletion can refuse them: a
+# stop's reconcile-and-close phase runs for seconds without the registry
+# lock, and a delete that freed the target meanwhile would let the stale
+# reconcile rewrite a successor session's document. In-process like
+# _CHILDREN — one service instance owns a home.
+_STOPS_IN_FLIGHT = set()
+_STOPS_GUARD = threading.Lock()
+
+
 def stop_session(home, session_id, authorize):
     """Stop worker activity, reconcile only the target, and fail atomically."""
     record = _record_by_id(home, session_id)
     _authorize_record(record, authorize)
+    token = (os.path.abspath(home), session_id)
+    with _STOPS_GUARD:
+        _STOPS_IN_FLIGHT.add(token)
     try:
+        # Re-read AFTER announcing the stop; _record_by_id serializes on
+        # the registry lock, so a delete lands strictly before this
+        # re-read (the record is gone: typed 404, nothing to reconcile)
+        # or strictly after the announcement (the delete refuses).
+        record = _record_by_id(home, session_id)
         return _stop_authorized(home, session_id, record)
     except PublicLifecycleError:
         raise
     except Exception as exc:
         raise PublicLifecycleError(503, UNAVAILABLE) from exc
+    finally:
+        with _STOPS_GUARD:
+            _STOPS_IN_FLIGHT.discard(token)
 
 
 def _stop_authorized(home, session_id, record):
@@ -1324,13 +1650,20 @@ def _participant_execution(store, record, participant_process_factory):
     bindings = {}
     for participant in snapshot.state["run_config"]["participants"]:
         family = participant["model_family"]
-        defaults = runtime.get("model_defaults", {}).get(family) or {}
+        # Per-seat resolution recorded at creation; records written before
+        # seats carried their own model/effort fall back to the family
+        # defaults, which is byte-identical to their original behavior.
+        seat = (runtime.get("executors") or {}).get(
+            participant["executor_ref"]
+        )
+        if seat is None:
+            seat = runtime.get("model_defaults", {}).get(family) or {}
         bindings[participant["executor_ref"]] = (
             execution.RunnerParticipantExecutor(
                 family,
                 provider,
-                model=defaults.get("model"),
-                effort=defaults.get("effort"),
+                model=seat.get("model"),
+                effort=seat.get("effort"),
             )
         )
     return execution.ParticipantExecution(store, bindings)
