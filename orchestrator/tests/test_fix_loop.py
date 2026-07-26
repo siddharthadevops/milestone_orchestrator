@@ -130,11 +130,11 @@ class TestFixLoopSameEpisode(DriverTestCase):
             self.assertEqual(len(fix_prompts), 2)
             for prompt in fix_prompts:
                 self.assertIn(
-                    "permitted_baseline: the documented behavior", prompt
+                    '"permitted_baseline": "the documented behavior"', prompt
                 )
                 self.assertIn(
-                    "incremental_harm: the observed behavior breaks the "
-                    "documented behavior",
+                    '"incremental_harm": "the observed behavior breaks the '
+                    'documented behavior"',
                     prompt,
                 )
             # Same episode: the loop counter reached 2 and only ONE episode
@@ -905,8 +905,11 @@ class TestAdjudicationCircuit(DriverTestCase):
                            if c[1] == "fix_findings"]
             self.assertEqual(len(fix_prompts), 2)
             self.assertIn(
-                "[CONTESTS %s with new evidence: %s]"
-                % (self.REJECTION_ID, self.NEW_EVIDENCE),
+                '"rejection_id": "%s"' % self.REJECTION_ID,
+                fix_prompts[1],
+            )
+            self.assertIn(
+                '"new_evidence": "%s"' % self.NEW_EVIDENCE,
                 fix_prompts[1],
             )
 

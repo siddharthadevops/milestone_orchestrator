@@ -1223,10 +1223,14 @@ def _reconcile_for_terminal(store, session_id):
             return coordinator.prepare(session_id)
         except brainstorming.RevisionConflict:
             continue
-        except (
-            brainstorming.HistoryRewriteError,
-            coordination.CoordinationRejected,
-        ) as exc:
+        except coordination.CoordinationRejected as exc:
+            current = store.read(session_id)
+            if current is None:
+                raise PublicLifecycleError(503, UNAVAILABLE) from exc
+            if current.state["status"] in brainstorming.TERMINAL_STATUSES:
+                return current
+            raise PublicLifecycleError(409, STOP_INCOMPLETE) from exc
+        except brainstorming.HistoryRewriteError as exc:
             raise PublicLifecycleError(409, STOP_INCOMPLETE) from exc
     raise PublicLifecycleError(409, STOP_INCOMPLETE)
 

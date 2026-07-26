@@ -1331,6 +1331,22 @@ class StandaloneBrainstormingApiTest(unittest.TestCase):
         )
         self.assertLessEqual(len(terminal.state["transcript_events"]), 1)
 
+    def test_stop_reconcile_accepts_completion_winning_during_prepare(self):
+        running = mock.Mock(state={"status": "running"})
+        terminal = mock.Mock(state={"status": "failure"})
+        store = mock.Mock()
+        store.read.side_effect = [running, terminal]
+        with mock.patch.object(
+            coordination.BrainstormingCoordinator,
+            "prepare",
+            side_effect=coordination.CoordinationRejected(
+                "the session became terminal"
+            ),
+        ):
+            reconciled = lifecycle._reconcile_for_terminal(store, "session")
+        self.assertIs(reconciled, terminal)
+        self.assertEqual(store.read.call_count, 2)
+
     def test_unreconciled_process_exit_never_fabricates_terminal_state(self):
         target = self._target("unreconciled.md")
         created = lifecycle.create_session(

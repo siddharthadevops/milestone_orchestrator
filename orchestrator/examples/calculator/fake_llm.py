@@ -47,24 +47,23 @@ def read_headers(prompt):
 
 def parse_queued(prompt):
     """Extract the queued findings a fix_findings prompt carries."""
-    findings = []
-    in_block = False
-    for line in prompt.splitlines():
-        if line.startswith("QUEUED FINDINGS"):
-            in_block = True
-            continue
-        if in_block:
-            m = re.match(r"^- (\S+) \[(P\d)\] (.*)$", line)
-            if m:
-                summary = re.sub(r" \[CONTESTS .*$", "", m.group(3))
-                findings.append(
-                    {"id": m.group(1), "severity": m.group(2), "summary": summary}
-                )
-            elif line.startswith("  "):
-                continue
-            elif findings and not line.startswith("- "):
-                break
-    return findings
+    marker = "`finding` without shortening, normalizing, or dropping fields:\n"
+    start = prompt.find(marker)
+    if start < 0:
+        return []
+    payload = prompt[start + len(marker):].lstrip()
+    try:
+        queued, _end = json.JSONDecoder().raw_decode(payload)
+    except (TypeError, ValueError):
+        return []
+    return [
+        {
+            "id": finding["id"],
+            "severity": finding["severity"],
+            "summary": finding["summary"],
+        }
+        for finding in queued
+    ]
 
 
 def parse_first_registry_id(prompt):
