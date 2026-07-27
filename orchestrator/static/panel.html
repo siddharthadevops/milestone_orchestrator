@@ -1647,7 +1647,7 @@ function msChip(s) {
   return `<span class="chip ${esc(s || "")}">${esc(s || "?")}</span>`;
 }
 const ACTIVITY = {
-  pending: "drafting", pre_review_verify: "verifying",
+  pending: "drafting", pre_review_verify: "opening reviews",
   rounds: "review round", fixing: "fixing findings",
   delta_review: "delta review", pre_seal_verify: "verifying",
   sealing: "recording seal result",
@@ -2653,7 +2653,9 @@ async function showStory(item) {
     if (d.wave)
       body += `<div class="story-note">Requalified by the anchor's documentation wave (${esc(d.wave)}): the wave certified the whole documentation set, so this unit did not evaluate its own predicate.</div>`;
     else if (!historical && d.passed)
-      body += `<div class="story-note">Deterministic result: every configured family was clean or debt-clean on the same current bytes, and the verification gate passed. No seal reviewer was called.</div>`;
+      body += `<div class="story-note">Deterministic result: every configured family was clean or debt-clean on the same current bytes, and final verification passed. No seal reviewer was called.</div>`;
+    if (d.verification_event_seq != null)
+      body += `<div class="story-note">Final verification event: ${esc(d.verification_event_seq)}</div>`;
     if (d.invalidated)
       body += `<div class="story-note">INVALIDATED: ${esc(d.invalidated)}</div>`;
     for (const [fam, h] of Object.entries(d.halves || {})) {

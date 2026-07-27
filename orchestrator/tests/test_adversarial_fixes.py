@@ -12,8 +12,8 @@ Covers, in order of severity:
   (3) P2 — a fixer that claims edits ('fixed' dispositions, files_changed,
       a prevention edit) while the worktree delta is empty fails the run:
       no phantom fixes, no phantom prevention pointers in the registry.
-  (4) P2 — synthetic verification episode ids stay unique when a stage is
-      re-entered after accepted review fixes, so
+  (4) P2 — synthetic final-verification episode ids stay unique when the
+      final boundary is re-entered after accepted review fixes, so
       rejected V1 findings cannot mint colliding registry ids.
   (5) P2/P3 — duplicate finding ids within one worker output violate the
       contract (report kinds and fixer echoes).
@@ -99,7 +99,7 @@ class TestGitDisabledTamperRecovery(DriverTestCase):
                      side_effect=write_file("tampered.txt", "oops")),
             ]))
             driver.step()  # draft
-            driver.step()  # pre-review verify (no commands)
+            driver.step()  # full suite deferred to the final boundary
             driver.step()  # tampering review round
             self.assert_failed(
                 path, driver,
@@ -329,7 +329,7 @@ class TestPhantomFixEmptyDelta(DriverTestCase):
                     fix_ok([triaged("F1", "fixed",
                                     "no official suite recorded",
                                     severity="P1")]),
-                    suite_command="mix test",
+                    suite_command="test -f docs/skeleton.md",
                     suite_command_finding_id="F1",
                 )),
                 step("review_round", report("review_round"),
@@ -343,11 +343,22 @@ class TestPhantomFixEmptyDelta(DriverTestCase):
             )
             state = st.load(path)
             self.assertIsNone(state["failure"])
-            self.assertEqual(state["suite_command"], "mix test")
+            self.assertEqual(
+                state["suite_command"], "test -f docs/skeleton.md"
+            )
             self.assertFalse([e for e in state["events"]
                               if e["type"] == "phantom_fix_retry"])
             self.assertTrue([e for e in state["events"]
                              if e["type"] == "suite_discovered"])
+            verification = [
+                e for e in state["events"]
+                if e["type"] == "verification" and e["unit"] == "skeleton"
+            ]
+            self.assertEqual(len(verification), 1)
+            self.assertEqual(verification[0].get("boundary"), "final")
+            self.assertEqual(
+                verification[0]["commands"], ["test -f docs/skeleton.md"]
+            )
 
     def test_suite_state_credit_does_not_hide_another_phantom_fix(self):
         with tempfile.TemporaryDirectory(prefix="orch-adv-") as ws:
@@ -586,12 +597,12 @@ class TestPhantomFixEmptyDelta(DriverTestCase):
             self.assertEqual(unit["status"], st.U_PRE_REVIEW_VERIFY)
             self.assertNotIn("skip_next_verify", unit)
 
-    def test_review_suite_correction_is_state_fix_and_reruns_gate(self):
-        """A review can detect that a green but narrowed command is wrong.
+    def test_review_suite_correction_runs_only_at_final_boundary(self):
+        """A review can detect that a declared narrowed command is wrong.
 
         Its metadata-only correction must replace the run state, avoid the
-        phantom-fix retry, and actually run the corrected command before the
-        reviewer is allowed to continue.
+        phantom-fix retry, invalidate the earlier review evidence, and run
+        only the corrected command after the fresh reviews are clean.
         """
         narrow = "test -f core.txt"
         official = "test -s core.txt"
@@ -645,26 +656,21 @@ class TestPhantomFixEmptyDelta(DriverTestCase):
                     ),
                     family="codex",
                 ),
+                step("review_round", report("review_round"), family="codex"),
+                step("review_round", report("review_round"), family="claude"),
             ]
             mock = runners.MockRunner(script)
             driver = drv.Driver(path, runner=mock)
 
-            def corrected_gate_ran(state):
-                unit = st.current_unit(state)
-                if unit is None or unit["kind"] != st.UNIT_SLICE_IMPL:
-                    return False
-                verification = [
-                    event for event in state["events"]
-                    if event["type"] == "verification"
-                    and event["unit"] == "slice_impl-01"
-                ]
-                return (
-                    unit["status"] == st.U_ROUNDS
-                    and len(verification) == 2
-                    and verification[-1]["commands"] == [official]
-                )
-
-            self.step_until(driver, corrected_gate_ran, max_steps=30)
+            self.step_until(
+                driver,
+                lambda state: any(
+                    unit["kind"] == st.UNIT_SLICE_IMPL
+                    and unit["status"] == st.U_SEALED
+                    for unit in state["units"]
+                ),
+                max_steps=40,
+            )
             state = st.load(path)
             self.assertEqual(mock.script, [])
             self.assertEqual(state["suite_command"], official)
@@ -679,9 +685,15 @@ class TestPhantomFixEmptyDelta(DriverTestCase):
             ]
             self.assertEqual(
                 [event["commands"] for event in verification],
-                [[narrow], [official]],
+                [[], [official]],
             )
+            self.assertTrue(verification[0].get("vacuous"))
+            self.assertEqual(verification[0].get("boundary"), "baseline")
+            self.assertEqual(verification[-1].get("boundary"), "final")
             self.assertNotIn("reused", verification[-1])
+            self.assertFalse(any(
+                event["commands"] == [narrow] for event in verification
+            ))
 
     def test_review_correction_overrides_stale_configured_commands(self):
         official = "test -f docs/skeleton.md"
@@ -713,21 +725,16 @@ class TestPhantomFixEmptyDelta(DriverTestCase):
                     ),
                     family="codex",
                 ),
+                step("review_round", report("review_round"), family="codex"),
+                step("review_round", report("review_round"), family="claude"),
             ])
             driver = drv.Driver(path, runner=mock)
 
-            def corrected_gate_ran(current):
-                verification = [
-                    event for event in current["events"]
-                    if event["type"] == "verification"
-                    and event["unit"] == "skeleton"
-                ]
-                return (
-                    current["units"][0]["status"] == st.U_ROUNDS
-                    and len(verification) == 2
-                )
-
-            self.step_until(driver, corrected_gate_ran, max_steps=15)
+            self.step_until(
+                driver,
+                lambda current: current["units"][0]["status"] == st.U_SEALED,
+                max_steps=25,
+            )
             state = st.load(path)
             verification = [
                 event for event in state["events"]
@@ -736,8 +743,12 @@ class TestPhantomFixEmptyDelta(DriverTestCase):
             ]
             self.assertEqual(
                 [event["commands"] for event in verification],
-                [stale, [official]],
+                [[official]],
             )
+            self.assertEqual(verification[0].get("boundary"), "final")
+            self.assertFalse(any(
+                event["commands"] == stale for event in verification
+            ))
             self.assertFalse([
                 event for event in state["events"]
                 if event["type"] == "phantom_fix_retry"
@@ -771,11 +782,11 @@ class TestPhantomFixEmptyDelta(DriverTestCase):
 
 
 # ---------------------------------------------------------------------------
-# (4) P2: unique synthetic verification episode ids across stage re-entry
+# (4) P2: unique synthetic verification ids across final-boundary re-entry
 
 
 class TestVerifyEpisodeIdsUniqueAcrossReentry(DriverTestCase):
-    def test_reentered_pre_review_episodes_get_distinct_registry_ids(self):
+    def test_reentered_final_episodes_get_distinct_registry_ids(self):
         with tempfile.TemporaryDirectory(prefix="orch-adv-") as ws:
 
             def rm_marker(workspace):
@@ -799,16 +810,20 @@ class TestVerifyEpisodeIdsUniqueAcrossReentry(DriverTestCase):
             ))
             driver = drv.Driver(path, runner=runners.MockRunner([
                 draft_step(),
-                # Initial pre-review verification fails (no marker yet).
-                reject_v1("flaky initial pre-review"),
+                step("review_round", report("review_round"), family="codex"),
+                step("review_round", report("review_round"), family="claude"),
+                # Initial final verification fails (no marker yet). The
+                # rejected finding writes the marker, so its real delta is
+                # reviewed and the whole artifact starts a fresh cycle.
+                reject_v1("flaky initial final"),
                 step("delta_review", report("delta_review")),
                 step("review_round", report("review_round"), family="codex"),
                 step("review_round",
                      report("review_round", [finding(
                          "S1", "readme missing", severity="P2")]),
                      family="claude"),
-                # The accepted review fix changes bytes and removes the
-                # marker, forcing a real return through pre-review verify.
+                # The accepted review fix changes bytes and removes the marker.
+                # Fresh reviews complete before final verification re-enters.
                 step("fix_findings",
                      fix_ok([triaged("S1", "fixed", "readme",
                                      severity="P2")],
@@ -817,6 +832,8 @@ class TestVerifyEpisodeIdsUniqueAcrossReentry(DriverTestCase):
                      side_effect=multi(write_file("README.md", "hi\n"),
                                        rm_marker)),
                 step("delta_review", report("delta_review")),
+                step("review_round", report("review_round"), family="codex"),
+                step("review_round", report("review_round"), family="claude"),
                 reject_v1("flaky after readme fix"),
                 step("delta_review", report("delta_review")),
                 step("review_round", report("review_round"), family="codex"),
@@ -832,8 +849,11 @@ class TestVerifyEpisodeIdsUniqueAcrossReentry(DriverTestCase):
                      side_effect=multi(write_file("CHANGELOG.md", "x\n"),
                                        rm_marker)),
                 step("delta_review", report("delta_review")),
+                step("review_round", report("review_round"), family="codex"),
+                step("review_round", report("review_round"), family="claude"),
                 # A second accepted review fix causes another re-entry into
-                # the same verification stage after its counter was reset.
+                # the same final stage. Its never-reset sequence must mint a
+                # third id even though the first two findings were rejected.
                 reject_v1("flaky after changelog fix"),
                 step("delta_review", report("delta_review")),
                 step("review_round", report("review_round"), family="codex"),
@@ -853,16 +873,16 @@ class TestVerifyEpisodeIdsUniqueAcrossReentry(DriverTestCase):
             self.assertEqual(
                 set(ids),
                 {
-                    "skeleton-verify-pre_review-1/V1",
-                    "skeleton-verify-pre_review-2/V1",
-                    "skeleton-verify-pre_review-3/V1",
+                    "skeleton-verify-pre_seal-1/V1",
+                    "skeleton-verify-pre_seal-2/V1",
+                    "skeleton-verify-pre_seal-3/V1",
                 },
             )
             # Each keeps its own rationale addressable by id.
             by_id = {e["id"]: e["rationale"] for e in entries}
-            self.assertEqual(by_id["skeleton-verify-pre_review-2/V1"],
+            self.assertEqual(by_id["skeleton-verify-pre_seal-2/V1"],
                              "flaky after readme fix")
-            self.assertEqual(by_id["skeleton-verify-pre_review-3/V1"],
+            self.assertEqual(by_id["skeleton-verify-pre_seal-3/V1"],
                              "flaky after changelog fix")
 
 

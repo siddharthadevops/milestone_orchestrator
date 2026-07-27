@@ -17,10 +17,13 @@ LLM orchestrators kept getting wrong):
    of silently doing the wrong thing.
 
 The unit sequence mirrors the canon cycle: one skeleton unit, then per slice
-a documentation unit and an implementation unit. Every unit runs the same
-review machinery: draft -> verify -> codex rounds until clean -> claude
-rounds until clean -> verify -> deterministic seal when every family is
-effectively clean on the same candidate bytes.
+a documentation unit and an implementation unit. Documentation drafts go
+straight through the review families and run the full suite once at the final
+boundary. Implementation establishes a pre-work baseline (reusing an exact
+stable final green when possible), relies on focused checks while bytes
+change, then runs the full suite once after every review family is clean.
+There is no full-suite tax between review/fix cycles. Deterministic sealing
+requires clean same-byte reviews plus that final verification.
 """
 
 import copy
@@ -149,8 +152,9 @@ def new_state(goal, workspace, config, name=None, slug=None, project=None):
         ],
         "events": [],
         # The repo's official full-suite command, discovered by the first
-        # implement worker (its contract's suite_command field). Gates use
-        # it when config verification is not explicitly set.
+        # implement worker (its contract's suite_command field). Later
+        # implementation baselines and every known final boundary use it
+        # when config verification is not explicitly set.
         "suite_command": None,
         "failure": None,
         "config": config,
@@ -182,9 +186,8 @@ def _new_unit(kind, slice_id):
         # across process boundaries.
         "review_evidence_fingerprint": None,
         "seals": [],                # append-only
-        # Per-stage fix-attempt counters; each resets when its stage's
-        # verification passes (the cap bounds consecutive failures of the
-        # current stage, not lifetime fixes of the unit).
+        # Historical per-stage shape retained for compatible state. Current
+        # full-suite repair uses pre_seal; pre_review is a no-suite waypoint.
         "verify_fix_attempts": {"pre_review": 0, "pre_seal": 0},
         # Never-reset per-stage sequence for synthetic verification fix
         # episodes: verify_fix_attempts resets on a pass, so it cannot
@@ -776,7 +779,7 @@ def seal_predicate_reviews(unit, families, current_fingerprint=None):
 
 
 def record_seal_attempt(state, unit, halves, passed, invalidated=None,
-                        reviews=None):
+                        reviews=None, verification_event_seq=None):
     """Append an immutable seal record.
 
     New records derive their evidence from ``reviews`` and carry empty halves.
@@ -795,6 +798,8 @@ def record_seal_attempt(state, unit, halves, passed, invalidated=None,
         "passed": passed,
         "invalidated": invalidated,
     }
+    if verification_event_seq is not None:
+        rec["verification_event_seq"] = verification_event_seq
     unit["seals"].append(rec)
     if reviews is None:
         # Compatibility path for a genuinely attempted historical seal
@@ -896,6 +901,7 @@ def resume_run(state):
         # emergency resume) can lift, not a dead end.
         unit["fix_loop_rounds"] = 0
         unit["verify_fix_attempts"] = {"pre_review": 0, "pre_seal": 0}
+        unit.pop("baseline_unstable_runs", None)
         # The gap-repair back-edge counter is a convergence cap too: a
         # deliberate resume grants it a fresh budget.
         unit["gap_repairs"] = 0
@@ -1080,6 +1086,8 @@ def reset_for_redraft(state, unit, reason):
     unit.pop("under_repair", None)
     unit.pop("design_correction", None)
     unit.pop("design_correction_attempted", None)
+    unit.pop("baseline_verification", None)
+    unit.pop("baseline_unstable_runs", None)
     discarded_handoff = unit.pop("brainstorming_review_handoff", None)
     unit["fix_loop_rounds"] = 0
     unit["verify_fix_attempts"] = {"pre_review": 0, "pre_seal": 0}
@@ -1129,13 +1137,18 @@ def close_redoc_wave(state, anchor):
     anchor_reviews = list(
         (anchor["seals"][-1] if anchor["seals"] else {}).get("reviews") or []
     )
+    verification_event_seq = (
+        (anchor["seals"][-1] if anchor["seals"] else {}).get(
+            "verification_event_seq"
+        )
+    )
     by_key = {unit_key(u): u for u in state["units"]}
     closed = []
     for key in wave.get("docs") or []:
         unit = by_key.get(key)
         if unit is None or unit["status"] != U_REPAIRING:
             continue
-        unit["seals"].append({
+        seal = {
             "attempt": len(unit["seals"]) + 1,
             "at": now_iso(),
             "passed": True,
@@ -1143,19 +1156,23 @@ def close_redoc_wave(state, anchor):
             "halves": {},
             "reviews": list(anchor_reviews),
             "wave": "%s-a%d" % (anchor_key, attempt),
-        })
+        }
+        if verification_event_seq is not None:
+            seal["verification_event_seq"] = verification_event_seq
+        unit["seals"].append(seal)
         transition_unit(
             state, unit, U_SEALED, reason="re-documentation wave reseal"
         )
         closed.append(key)
     if closed:
-        append_event(
-            state,
-            "redoc_wave_closed",
-            anchor=anchor_key,
-            attempt=attempt,
-            docs=closed,
-        )
+        event = {
+            "anchor": anchor_key,
+            "attempt": attempt,
+            "docs": closed,
+        }
+        if verification_event_seq is not None:
+            event["verification_event_seq"] = verification_event_seq
+        append_event(state, "redoc_wave_closed", **event)
     return closed
 
 
@@ -1737,6 +1754,9 @@ def summary(state):
                         # seal, no episode of its own (None otherwise).
                         "wave": s.get("wave"),
                         "reviews": list(s.get("reviews") or []),
+                        "verification_event_seq": s.get(
+                            "verification_event_seq"
+                        ),
                         "findings": {
                             fam: (
                                 len(h["result"].get("findings", []))

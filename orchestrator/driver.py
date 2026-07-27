@@ -281,6 +281,14 @@ def decide(state):
         return Action(A_BRAINSTORM_WAIT, unit=st.unit_key(unit))
     status = unit["status"]
     if status == st.U_PENDING:
+        if (
+            unit["kind"] == st.UNIT_SLICE_IMPL
+            and unit.get("draft") is None
+            and unit.get("baseline_verification") is None
+        ):
+            return Action(
+                A_VERIFY, unit=st.unit_key(unit), stage="baseline"
+            )
         return Action(A_DRAFT, unit=st.unit_key(unit))
     if status in (st.U_PRE_REVIEW_VERIFY, st.U_PRE_SEAL_VERIFY):
         return Action(A_VERIFY, unit=st.unit_key(unit), stage=status)
@@ -468,6 +476,102 @@ class Driver(object):
         ).encode("utf-8")
         return "snapshot-sha256:%s" % hashlib.sha256(payload).hexdigest()
 
+    def _verification_candidate_fingerprint(self, snapshot=None):
+        """Digest the bytes a full suite is expected to certify.
+
+        Gate-generated ledgers are deterministic projections written only
+        after the final suite.  They have never been covered by that suite;
+        excluding them makes the proof honest and lets a documentation
+        closure serve as the following implementation's baseline.
+        """
+        mode, entries = snapshot if snapshot is not None else self._snapshot()
+        generated = set(ledgers.generated_paths(self.state))
+        index = ledgers.index_path(self.state)
+        # The canonical parent index is mixed ownership: only its marker
+        # block is generated, while prose around it belongs to the repo.
+        # Hash that prose instead of dropping the whole file.
+        if index:
+            generated.discard(index)
+        closure_root = ledgers.closures_dir(self.state).rstrip("/")
+        filtered = {
+            path: value
+            for path, value in entries.items()
+            if path not in generated
+            and path != closure_root
+        }
+        if index and index in filtered:
+            filtered[index] = self._verification_index_descriptor(
+                index, filtered[index]
+            )
+        payload = json.dumps(
+            [mode, sorted(filtered.items())],
+            ensure_ascii=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        return "verification-sha256:%s" % hashlib.sha256(payload).hexdigest()
+
+    def _verification_index_descriptor(self, relpath, snapshot_value):
+        """Hash operator-owned bytes around the generated index block.
+
+        If the file is not a regular UTF-8 index with one valid marker pair,
+        retain the snapshot's whole-file descriptor. That is conservative:
+        malformed or not-yet-managed indexes never gain proof reuse.
+        """
+        path = os.path.join(self.workspace, relpath)
+        if os.path.islink(path) or not os.path.isfile(path):
+            return snapshot_value
+        try:
+            with open(path, "rb") as fh:
+                raw = fh.read()
+            current = "file %s" % hashlib.sha256(raw).hexdigest()
+            if current != snapshot_value:
+                return snapshot_value
+            text = raw.decode("utf-8")
+        except (OSError, UnicodeDecodeError):
+            return snapshot_value
+        if (
+            text.count(ledgers.INDEX_START) != 1
+            or text.count(ledgers.INDEX_END) != 1
+            or text.index(ledgers.INDEX_END)
+            < text.index(ledgers.INDEX_START)
+        ):
+            return snapshot_value
+        before, rest = text.split(ledgers.INDEX_START, 1)
+        _generated, after = rest.split(ledgers.INDEX_END, 1)
+        operator_bytes = json.dumps(
+            [before, after], ensure_ascii=True, separators=(",", ":")
+        ).encode("utf-8")
+        return "index-operator-sha256:%s" % hashlib.sha256(
+            operator_bytes
+        ).hexdigest()
+
+    def _matching_final_verification(self, commands, fingerprint):
+        """Return an actual stable final-suite event for these exact inputs."""
+        commands = list(commands)
+        for event in reversed(self.state.get("events") or []):
+            if (
+                event.get("type") == "verification"
+                and event.get("boundary") == "final"
+                and event.get("ok") is True
+                and event.get("stable") is True
+                and not event.get("vacuous")
+                and not event.get("reused")
+                and event.get("commands") == commands
+                and event.get("candidate_after") == fingerprint
+            ):
+                return event
+        return None
+
+    def _baseline_verification_current(self, unit):
+        marker = unit.get("baseline_verification")
+        if not isinstance(marker, dict):
+            return False
+        return (
+            marker.get("commands") == self._verification_commands(unit)
+            and marker.get("candidate_fingerprint")
+            == self._verification_candidate_fingerprint()
+        )
+
     def _review_evidence_inputs(self, unit):
         """Return the exact bytes and hot rules a full reviewer would see.
 
@@ -485,6 +589,11 @@ class Driver(object):
                 "candidate": self._candidate_fingerprint(snapshot),
                 "amendments": amendments,
                 "project_context": project_context,
+                # Bind approvals to the exact execution plan, including
+                # command boundaries. Joining with ``&&`` is only a prompt
+                # rendering: separate list items run in separate shells and
+                # therefore are not equivalent to one joined command.
+                "suite_commands": self._verification_commands(unit),
             },
             ensure_ascii=True,
             sort_keys=True,
@@ -613,10 +722,14 @@ class Driver(object):
     def _verification_commands(self, unit):
         """Gate commands for a unit: explicit config verification wins;
         a fixer-supplied suite correction can replace a stale explicit
-        gate; otherwise the suite command the implementer discovered —
-        applied to implementation units only (doc artifacts cannot break
-        a test suite, and a discovered suite may cost many minutes per
-        run)."""
+        gate; otherwise use the suite command an implementer discovered.
+
+        Documentation does not run a pre-review suite, but its single final
+        boundary deliberately uses the known full suite: that catches the
+        rare executable/configuration document without taxing every review
+        cycle.  Before the first implementer discovers a zero-config suite,
+        the early documentation boundaries are necessarily vacuous.
+        """
         configured = self.config.get("verification") or []
         corrected = self._corrected_suite_command()
         if corrected:
@@ -624,7 +737,7 @@ class Driver(object):
         if configured:
             return list(configured)
         discovered = self.state.get("suite_command")
-        if discovered and unit["kind"] == st.UNIT_SLICE_IMPL:
+        if discovered:
             return [discovered]
         return []
 
@@ -658,11 +771,12 @@ class Driver(object):
                     return discovered
         return None
 
-    def _verified_suite(self, unit):
-        """The gate command string reviewers may rely on, or None. Unit
-        status flow guarantees rounds/sealing are only reachable through
-        a passing verification gate, so a non-empty command here means
-        the gate genuinely ran it green."""
+    def _review_suite_command(self, unit):
+        """The declared final-suite command reviewers must audit.
+
+        Reviews now precede the final full-suite boundary, so this is never
+        presented as proof that the current candidate already passed.
+        """
         cmds = self._verification_commands(unit)
         return " && ".join(cmds) if cmds else None
 
@@ -2313,6 +2427,28 @@ class Driver(object):
 
     def _do_draft(self):
         unit = st.current_unit(self.state)
+        if unit.get("draft") is not None:
+            # Defensive compatibility for a persisted post-draft unit whose
+            # status was left pending by an older/crashed driver. The work is
+            # already present; never call the implementer twice or livelock
+            # trying to establish a pre-work baseline after the fact.
+            st.transition_unit(
+                self.state,
+                unit,
+                st.U_PRE_REVIEW_VERIFY,
+                reason="recovered pending unit with recorded draft",
+            )
+            return "recorded draft recovered; review cycle opened"
+        if (
+            unit["kind"] == st.UNIT_SLICE_IMPL
+            and not self._baseline_verification_current(unit)
+        ):
+            # The baseline action and the implementer call are separate
+            # durable steps. Re-check immediately before spending the worker
+            # call so an operator edit between them cannot ride an obsolete
+            # green proof.
+            unit.pop("baseline_verification", None)
+            return "implementation baseline changed; verification required"
         # Skeleton drafts (and re-drafts on remodel) run the `skeletoner`
         # act — one operator-chosen model for all skeleton content work,
         # default claude-fable-5/max; slice docs keep `drafter`, impl keeps
@@ -3663,9 +3799,10 @@ class Driver(object):
             and output["suite_command"].strip()
         ):
             # A queued finding may expose a missing OR narrowed suite from a
-            # verification failure, review round, or seal.  Correcting that
-            # run state is a real fix even with zero file edits.  Re-run the
-            # corrected gate before any reviewer is allowed to rely on it.
+            # verification failure or review round. Correcting that run
+            # state is a real fix even with zero file edits. The command is
+            # part of review evidence, so changed commands invalidate prior
+            # approvals and execute at the final boundary.
             command = output["suite_command"].strip()
             effective_before = self._verification_commands(unit)
             suite_state_changed = st.set_discovered_suite(
@@ -3906,16 +4043,6 @@ class Driver(object):
                         ),
                     ) is None):
                 return_to = st.U_PRE_REVIEW_VERIFY
-            if (
-                not suite_verification_pending
-                and return_to in (
-                    st.U_PRE_REVIEW_VERIFY, st.U_PRE_SEAL_VERIFY
-                )
-            ):
-                # Zero edits since the gate last proved this tree green:
-                # let _do_verify reuse that result instead of re-running
-                # a potentially long suite for a bit-identical tree.
-                unit["skip_next_verify"] = True
             st.transition_unit(
                 self.state, unit, return_to, reason="no delta (fix episode green)"
             )
@@ -4166,7 +4293,7 @@ class Driver(object):
             output["findings"]
         )
 
-    def _complete_seal_from_reviews(self, unit):
+    def _complete_seal_from_reviews(self, unit, verification_event=None):
         """Seal deterministically from current whole-artifact reviews."""
         families = self.config["families_order"]
         current_fingerprint = self._review_evidence_fingerprint(unit)
@@ -4192,14 +4319,20 @@ class Driver(object):
                 reason="verification passed; review predicate satisfied",
             )
         st.record_seal_attempt(
-            self.state, unit, {}, True, reviews=list(cite)
-        )
-        st.append_event(
             self.state,
-            "seal_satisfied",
-            unit=st.unit_key(unit),
+            unit,
+            {},
+            True,
             reviews=list(cite),
+            verification_event_seq=(
+                verification_event.get("seq")
+                if verification_event is not None else None
+            ),
         )
+        seal_event = {"unit": st.unit_key(unit), "reviews": list(cite)}
+        if verification_event is not None:
+            seal_event["verification_event_seq"] = verification_event["seq"]
+        st.append_event(self.state, "seal_satisfied", **seal_event)
         st.transition_unit(
             self.state,
             unit,
@@ -4216,6 +4349,43 @@ class Driver(object):
         stage = unit["status"]
         if self._migrate_retired_seal_review_handoff(unit):
             return "retired seal discussion migrated to ordinary reviews"
+
+        baseline = (
+            stage == st.U_PENDING
+            and unit["kind"] == st.UNIT_SLICE_IMPL
+            and unit.get("draft") is None
+        )
+        if stage == st.U_PRE_REVIEW_VERIFY:
+            # Compatibility waypoint retained for existing states and the
+            # many fix/review back-edges. Full suites are boundary checks,
+            # not a tax between review cycles: reviews use focused checks,
+            # and the complete suite runs once at the final boundary.
+            unit.pop("skip_next_verify", None)
+            st.append_event(
+                self.state,
+                "verification_deferred",
+                unit=st.unit_key(unit),
+                stage=stage,
+                boundary="final",
+                reason="full suite runs only after all reviewers are clean",
+            )
+            st.transition_unit(
+                self.state,
+                unit,
+                st.U_ROUNDS,
+                reason="full verification deferred to final boundary",
+            )
+            return "full verification deferred; review cycle opened"
+        if not baseline and stage != st.U_PRE_SEAL_VERIFY:
+            raise st.IllegalTransition(
+                "verification cannot run from status %s" % stage
+            )
+
+        # Compatibility with states persisted by the retired gate-reuse
+        # shortcut. A final boundary is never skipped: after a failing suite
+        # even an empty fixer delta must run it again.
+        unit.pop("skip_next_verify", None)
+
         if stage == st.U_PRE_SEAL_VERIFY:
             current_fingerprint = self._review_evidence_fingerprint(unit)
             if st.seal_predicate_reviews(
@@ -4235,55 +4405,121 @@ class Driver(object):
                     reason="pre-seal evidence stale; reviews restarted",
                 )
                 return "pre-seal evidence stale; review cycle restarted"
-        verification_changed = []
-        stage_key = (
-            "pre_review" if stage == st.U_PRE_REVIEW_VERIFY else "pre_seal"
-        )
+
         commands = self._verification_commands(unit)
-        if unit.pop("skip_next_verify", None) and commands:
-            # The fix episode that routed here closed with an EMPTY delta
-            # (all findings rejected, zero edits): the tree is bit-
-            # identical to the one the last gate proved green, so a
-            # 15-minute suite re-run would buy nothing. The reuse is
-            # recorded, never silent.
-            st.append_event(
-                self.state,
-                "verification",
-                unit=st.unit_key(unit),
-                stage=stage,
-                ok=True,
-                commands=list(commands),
-                reused=True,
-                output_tail="(reused: empty-delta fix episode, tree "
-                            "unchanged since the last green gate)",
+        verification_before = self._snapshot()
+        candidate_before = self._verification_candidate_fingerprint(
+            verification_before
+        )
+        if baseline:
+            reusable = self._matching_final_verification(
+                commands, candidate_before
             )
-            ok = True
-        else:
-            unit.pop("skip_next_verify", None)
-            verification_before = self._snapshot()
-            self._mark_busy(
-                "verification (%s)" % stage_key, "verification", None
-            )
-            try:
-                ok, output = run_verification(
-                    commands, self.workspace,
-                    self.config.get("verification_timeout"),
+            if reusable is not None:
+                event = st.append_event(
+                    self.state,
+                    "verification",
+                    unit=st.unit_key(unit),
+                    stage="baseline",
+                    boundary="baseline",
+                    ok=True,
+                    commands=list(commands),
+                    candidate_before=candidate_before,
+                    candidate_after=candidate_before,
+                    stable=True,
+                    reused=True,
+                    reused_from_seq=reusable["seq"],
+                    output_tail=(
+                        "(reused: exact bytes and commands passed at final "
+                        "verification event %d)" % reusable["seq"]
+                    ),
                 )
-            finally:
-                self._clear_busy()
-            verification_changed = self._snapshot_diff(
-                verification_before, self._snapshot()
+                unit["baseline_verification"] = {
+                    "event_seq": event["seq"],
+                    "candidate_fingerprint": candidate_before,
+                    "commands": list(commands),
+                }
+                unit.pop("baseline_unstable_runs", None)
+                return "implementation baseline reused from final verification"
+
+        verification_changed = []
+        boundary = "baseline" if baseline else "final"
+        self._mark_busy(
+            "verification (%s)" % boundary, "verification", None
+        )
+        try:
+            ok, output = run_verification(
+                commands,
+                self.workspace,
+                self.config.get("verification_timeout"),
             )
-            st.append_event(
+        finally:
+            self._clear_busy()
+        verification_after = self._snapshot()
+        verification_changed = self._snapshot_diff(
+            verification_before, verification_after
+        )
+        candidate_after = self._verification_candidate_fingerprint(
+            verification_after
+        )
+        verification_event = st.append_event(
+            self.state,
+            "verification",
+            unit=st.unit_key(unit),
+            stage="baseline" if baseline else stage,
+            boundary=boundary,
+            ok=ok,
+            commands=list(commands),
+            candidate_before=candidate_before,
+            candidate_after=candidate_after,
+            stable=not bool(verification_changed),
+            vacuous=(not commands) or None,
+            output_tail=(output or "")[-2000:],
+        )
+
+        if baseline:
+            if ok and not verification_changed:
+                unit["baseline_verification"] = {
+                    "event_seq": verification_event["seq"],
+                    "candidate_fingerprint": candidate_after,
+                    "commands": list(commands),
+                }
+                unit.pop("baseline_unstable_runs", None)
+                return "implementation baseline verified (%d command(s))" % len(
+                    commands
+                )
+            if ok:
+                attempts = int(unit.get("baseline_unstable_runs") or 0) + 1
+                unit["baseline_unstable_runs"] = attempts
+                if attempts <= self.config["max_verify_fix_attempts"]:
+                    return (
+                        "baseline verification changed candidate bytes; "
+                        "repeating on the resulting tree"
+                    )
+                reason = (
+                    "baseline verification kept changing candidate bytes "
+                    "after %d attempts: %s"
+                    % (
+                        attempts,
+                        runners.format_changes(verification_changed),
+                    )
+                )
+            else:
+                reason = (
+                    "implementation baseline verification failed before any "
+                    "slice bytes were produced; last output tail: %s"
+                    % (output or "")[-1500:]
+                )
+            unit["last_verification_output"] = (output or "")[-4000:]
+            st.fail_run(
                 self.state,
-                "verification",
-                unit=st.unit_key(unit),
-                stage=stage,
-                ok=ok,
-                commands=list(commands),
-                vacuous=(not commands) or None,
-                output_tail=(output or "")[-2000:],
+                reason,
+                unit=unit,
+                type_="baseline_verification",
             )
+            self._save()
+            raise StopStep("implementation baseline verification failed")
+
         if verification_changed:
             st.restart_reviews_after_candidate_change(
                 self.state,
@@ -4296,7 +4532,7 @@ class Driver(object):
             # failing stage; a pass closes the episode.
             unit.pop("suite_verification_pending", None)
             unit.pop("suite_armed_by_fix", None)
-            unit["verify_fix_attempts"][stage_key] = 0
+            unit["verify_fix_attempts"]["pre_seal"] = 0
             if verification_changed and stage == st.U_PRE_SEAL_VERIFY:
                 st.transition_unit(
                     self.state,
@@ -4309,22 +4545,19 @@ class Driver(object):
                     "verification ok but changed candidate bytes; "
                     "review cycle restarted"
                 )
-            if stage == st.U_PRE_REVIEW_VERIFY:
-                st.transition_unit(self.state, unit, st.U_ROUNDS, reason="verified")
-            else:
-                sealed = self._complete_seal_from_reviews(unit)
-                return "verification ok (%d command(s)); %s" % (
-                    len(commands), sealed
-                )
-            return "verification ok (%d command(s))" % len(commands)
-        unit["verify_fix_attempts"][stage_key] += 1
-        if unit["verify_fix_attempts"][stage_key] > self.config["max_verify_fix_attempts"]:
+            sealed = self._complete_seal_from_reviews(
+                unit, verification_event=verification_event
+            )
+            return "verification ok (%d command(s)); %s" % (
+                len(commands), sealed
+            )
+        unit["verify_fix_attempts"]["pre_seal"] += 1
+        if unit["verify_fix_attempts"]["pre_seal"] > self.config["max_verify_fix_attempts"]:
             st.fail_run(
                 self.state,
-                "%s verification still failing after %d fix attempts; last "
+                "final verification still failing after %d fix attempts; last "
                 "output tail: %s"
                 % (
-                    stage_key.replace("_", "-"),
                     self.config["max_verify_fix_attempts"],
                     (output or "")[-1500:],
                 ),
@@ -4344,8 +4577,9 @@ class Driver(object):
         seq = unit.setdefault(
             "verify_episode_seq", {"pre_review": 0, "pre_seal": 0}
         )
-        seq[stage_key] += 1
-        n_episode = seq[stage_key]
+        seq.setdefault("pre_seal", 0)
+        seq["pre_seal"] += 1
+        n_episode = seq["pre_seal"]
         st.enter_fix_episode(
             self.state,
             unit,
@@ -4372,7 +4606,7 @@ class Driver(object):
             ],
             "verification",
             None,
-            "%s-verify-%s-%d" % (st.unit_key(unit), stage_key, n_episode),
+            "%s-verify-pre_seal-%d" % (st.unit_key(unit), n_episode),
             (st.U_PRE_REVIEW_VERIFY
              if verification_changed else stage),
         )
@@ -4610,7 +4844,7 @@ class Driver(object):
             unit_kind=unit["kind"],
             governing=self._governing(unit),
             amendments=amendments,
-            verified_suite=self._verified_suite(unit),
+            verified_suite=self._review_suite_command(unit),
             project_context=project_context,
             battery=interpreter.battery_questions(self.state, unit["kind"]),
             debt=self._debt(unit),

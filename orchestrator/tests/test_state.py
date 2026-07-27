@@ -2007,6 +2007,8 @@ class TestResetForRedraft(TempWorkspaceCase):
     def test_discards_review_handoff_from_abandoned_candidate(self):
         state = make_state(self.workspace)
         unit = unit_in_status(state, st.U_FIXING)
+        unit["baseline_verification"] = {"event_seq": 7}
+        unit["baseline_unstable_runs"] = 3
         unit["brainstorming_review_handoff"] = {
             "kind": contracts.KIND_REVIEW_ROUND,
             "handoff": {"session_id": "old"},
@@ -2017,6 +2019,8 @@ class TestResetForRedraft(TempWorkspaceCase):
 
         self.assertEqual(unit["status"], st.U_PENDING)
         self.assertNotIn("brainstorming_review_handoff", unit)
+        self.assertNotIn("baseline_verification", unit)
+        self.assertNotIn("baseline_unstable_runs", unit)
         self.assertIn(
             "brainstorming_review_handoff_discarded",
             [event["type"] for event in state["events"]],
@@ -2107,13 +2111,15 @@ class TestSummary(TempWorkspaceCase):
         self.assertEqual(
             set(seal.keys()),
             {"attempt", "passed", "invalidated", "wave", "reviews",
-             "findings", "duration_s", "severity", "at"},
+             "verification_event_seq", "findings", "duration_s",
+             "severity", "at"},
         )
         self.assertEqual(seal["attempt"], 1)
         self.assertTrue(seal["passed"])
         self.assertIsNone(seal["invalidated"])
         # Ordinary seal: no wave provenance.
         self.assertIsNone(seal["wave"])
+        self.assertIsNone(seal["verification_event_seq"])
         self.assertEqual(
             seal["reviews"],
             ["skeleton-codex-r1", "skeleton-claude-r1"],
@@ -2401,12 +2407,14 @@ class TestTypedResume(TempWorkspaceCase):
         unit = unit_in_status(state, st.U_FIXING)
         unit["fix_loop_rounds"] = 6
         unit["verify_fix_attempts"] = {"pre_review": 4, "pre_seal": 0}
+        unit["baseline_unstable_runs"] = 4
         st.fail_run(state, "did not converge after 6 loops", unit=unit)
         st.resume_run(state)
         self.assertEqual(unit["status"], st.U_FIXING)
         self.assertEqual(unit["fix_loop_rounds"], 0)
         self.assertEqual(unit["verify_fix_attempts"],
                          {"pre_review": 0, "pre_seal": 0})
+        self.assertNotIn("baseline_unstable_runs", unit)
 
     def test_resume_resets_gap_repairs_but_keeps_the_remodel_flag(self):
         # gap_repairs is a resettable convergence cap; has_gap_remodel is the
@@ -2492,6 +2500,7 @@ class TestCloseRedocWave(TempWorkspaceCase):
         st.transition_unit(state, skeleton, st.U_ROUNDS)
         run_reviews_clean(state, skeleton)
         seal_from_reviews(state, skeleton)
+        skeleton["seals"][-1]["verification_event_seq"] = 77
         return state, skeleton, by
 
     def test_wave_close_reseals_every_co_reopened_note(self):
@@ -2509,9 +2518,11 @@ class TestCloseRedocWave(TempWorkspaceCase):
             self.assertEqual(rec["wave"], "skeleton-a2")
             self.assertEqual(rec["reviews"],
                              skeleton["seals"][-1]["reviews"])
+            self.assertEqual(rec["verification_event_seq"], 77)
         self.assertIsNotNone(state["redoc_wave"])
         ev = [e for e in state["events"] if e["type"] == "redoc_wave_closed"]
         self.assertEqual(ev[-1]["docs"], closed)
+        self.assertEqual(ev[-1]["verification_event_seq"], 77)
         # Idempotent phase 1: nothing left repairing, no duplicate event.
         n_ev = len(ev)
         self.assertEqual(st.close_redoc_wave(state, skeleton), [])

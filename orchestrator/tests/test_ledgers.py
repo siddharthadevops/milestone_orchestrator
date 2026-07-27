@@ -284,6 +284,7 @@ def make_state():
                             "slice_impl-01-codex-r3",
                             "slice_impl-01-claude-r1",
                         ],
+                        "verification_event_seq": 99,
                     },
                 ],
                 "gate_commit": None,
@@ -404,7 +405,7 @@ class TestRenderReviewLog(unittest.TestCase):
         self.assertNotIn("Historical seal attempt", self.text)
         self.assertIn(
             "- deterministic result: every configured family was clean or "
-            "debt-clean on the same current bytes, and the verification gate "
+            "debt-clean on the same current bytes, and the final verification "
             "passed; no seal reviewer was called",
             self.text,
         )
@@ -418,6 +419,7 @@ class TestRenderReviewLog(unittest.TestCase):
             "`slice_impl-01-claude-r1`",
             self.text,
         )
+        self.assertIn("- final verification event: `99`", self.text)
 
     def test_requeued_implementation_debt_is_not_republished(self):
         state = make_state()
@@ -603,7 +605,7 @@ class TestRenderClosure(unittest.TestCase):
         self.assertIn("- seal records: 1", text)
         self.assertIn(
             "- review state: effectively clean (every family clean or "
-            "debt-clean on the same bytes; verification passed)",
+            "debt-clean on the same bytes; final verification passed)",
             text,
         )
 

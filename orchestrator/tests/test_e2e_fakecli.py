@@ -14,11 +14,11 @@ The scenario exercises the review/fix separation model end to end:
     pointer (rejected_adjudicated citing skeleton-claude-r1/F1); claude
     clean; the same-byte review predicate seals deterministically.
   slice note: clean everywhere.
-  implementation: deliberate div bug -> pre-review verification fails ->
-    fix episode; codex docstring finding -> fix episode; claude README
-    finding -> fix episode; every byte change restarts review at codex;
-    current codex+claude reviews satisfy one deterministic seal and the
-    milestone closes.
+  implementation: baseline before implement; codex docstring finding -> fix
+    episode (the scripted replacement also corrects the deliberate div bug);
+    claude README finding -> fix episode; every byte change restarts review at
+    codex; current codex+claude reviews precede one final suite and satisfy one
+    deterministic seal. No full suite runs between review/fix cycles.
 
 The run happens once in setUpClass; each test asserts one aspect.
 
@@ -300,20 +300,18 @@ class TestCalculatorE2E(unittest.TestCase):
 
     def test_impl_round_sequence(self):
         impl = self.unit("slice_impl-01")
-        self.assertEqual(len(impl["rounds"]), 11)
+        self.assertEqual(len(impl["rounds"]), 9)
         self.assertEqual(
             [(r["id"], r["kind"]) for r in impl["rounds"]],
             [
-                ("slice_impl-01-codex-r1", "fix_findings"),
-                ("slice_impl-01-codex-r2", "delta_review"),
-                ("slice_impl-01-codex-r3", "review_round"),
-                ("slice_impl-01-codex-r4", "fix_findings"),
-                ("slice_impl-01-codex-r5", "delta_review"),
-                ("slice_impl-01-codex-r6", "review_round"),
+                ("slice_impl-01-codex-r1", "review_round"),
+                ("slice_impl-01-codex-r2", "fix_findings"),
+                ("slice_impl-01-codex-r3", "delta_review"),
+                ("slice_impl-01-codex-r4", "review_round"),
                 ("slice_impl-01-claude-r1", "review_round"),
-                ("slice_impl-01-codex-r7", "fix_findings"),
-                ("slice_impl-01-codex-r8", "delta_review"),
-                ("slice_impl-01-codex-r9", "review_round"),
+                ("slice_impl-01-codex-r5", "fix_findings"),
+                ("slice_impl-01-codex-r6", "delta_review"),
+                ("slice_impl-01-codex-r7", "review_round"),
                 ("slice_impl-01-claude-r2", "review_round"),
             ],
         )
@@ -332,28 +330,37 @@ class TestCalculatorE2E(unittest.TestCase):
                             % (f.get("id"), r["id"]),
                         )
 
-    # -- verification-failure fix episode --------------------------------------
+    # -- verification chronology -----------------------------------------------
 
-    def test_div_bug_verification_failure_went_through_the_fix_loop(self):
+    def test_full_suite_runs_only_at_baseline_and_final_boundaries(self):
         impl = self.state_unit("slice_impl-01")
-        vfix = self.fix_rounds(impl)[0]
-        self.assertEqual(vfix["id"], "slice_impl-01-codex-r1")
-        self.assertEqual(vfix["family"], "codex")
-        self.assertEqual(
-            vfix["source_round_id"], "slice_impl-01-verify-pre_review-1"
-        )
-        self.assertEqual(
-            [(f["id"], f["disposition"]) for f in vfix["result"]["findings"]],
-            [("V1", "fixed")],
-        )
-        # Exactly one verification failure, at the pre-review stage.
         events = self.disk_state()["events"]
-        failed = [
-            e for e in events if e["type"] == "verification" and not e["ok"]
+        verifications = [
+            e for e in events
+            if e["type"] == "verification" and e["unit"] == "slice_impl-01"
         ]
-        self.assertEqual(len(failed), 1)
-        self.assertEqual(failed[0]["stage"], st.U_PRE_REVIEW_VERIFY)
-        self.assertEqual(failed[0]["unit"], "slice_impl-01")
+        self.assertEqual(
+            [e["boundary"] for e in verifications], ["baseline", "final"]
+        )
+        self.assertTrue(verifications[0]["reused"])
+        self.assertTrue(all(e["ok"] for e in verifications))
+        # This fake's docstring fix also corrects div, so no suite-failure
+        # fixer is expected here; the lifecycle mock covers that final-failure
+        # path explicitly. Every fixer in this subprocess E2E came from a
+        # reviewer, and the final suite happened after the last clean review.
+        self.assertTrue(all(
+            not str(r.get("source_round_id") or "").startswith(
+                "slice_impl-01-verify-"
+            )
+            for r in self.fix_rounds(impl)
+        ))
+        last_review_seq = max(
+            e["seq"] for e in events
+            if e["type"] == "round_recorded"
+            and e.get("unit") == "slice_impl-01"
+            and e.get("kind") == "review_round"
+        )
+        self.assertGreater(verifications[-1]["seq"], last_review_seq)
 
     def test_div_bug_was_fixed_in_workspace(self):
         calc_path = os.path.join(self.work, "calculator.py")
@@ -440,7 +447,7 @@ class TestCalculatorE2E(unittest.TestCase):
              for s in impl["seals"]],
             [(1, True, None, {})],
         )
-        cited = ["slice_impl-01-codex-r9", "slice_impl-01-claude-r2"]
+        cited = ["slice_impl-01-codex-r7", "slice_impl-01-claude-r2"]
         self.assertEqual(impl["seals"][0]["reviews"], cited)
         satisfied = [
             e for e in self.disk_state()["events"]
@@ -530,13 +537,13 @@ class TestCalculatorE2E(unittest.TestCase):
             [e["unit"] for e in wips],
             ["skeleton", "slice_doc-01", "slice_impl-01"],
         )
-        # One amend per green fix episode: two on the skeleton, three on
-        # the implementation (verification, docstring, and README review).
+        # One amend per green fix episode: two on the skeleton and two on
+        # the implementation (docstring and README review findings).
         amends = [e for e in events if e["type"] == "amended"]
         self.assertEqual(
             [e["unit"] for e in amends],
             ["skeleton", "skeleton",
-             "slice_impl-01", "slice_impl-01", "slice_impl-01"],
+             "slice_impl-01", "slice_impl-01"],
         )
         # Gate commits: three unit gates plus the milestone close.
         gates = [e for e in events if e["type"] == "gate_commit"]
@@ -578,7 +585,7 @@ class TestCalculatorE2E(unittest.TestCase):
         self.assertIn("delta_review", review_log)
         self.assertIn("1 rejected_adjudicated", review_log)
         self.assertIn(
-            "- cited reviews: `slice_impl-01-codex-r9`, "
+            "- cited reviews: `slice_impl-01-codex-r7`, "
             "`slice_impl-01-claude-r2`",
             review_log,
         )

@@ -1085,21 +1085,26 @@ class TestOperatorAmendments(unittest.TestCase):
 
 class TestVerificationProtocol(unittest.TestCase):
     """Zero-config verification: the implementer reports suite_command,
-    the driver runs it at gates, and reviewers are told a machine-run
-    green suite exists — so they never burn wall clock re-running it."""
+    reviewers audit that command without being told the current bytes are
+    green, and the driver reserves the full suite for the final boundary."""
 
     def test_review_carries_verified_suite_block(self):
         prompt = normalized(prompts.build_review_round(
             FAMILY, WORKSPACE, GOAL, UNIT, "docs/x.md", [],
             unit_kind="slice_impl", verified_suite="mix test"))
-        self.assertIn("VERIFICATION STATUS", prompt)
-        # The command is the implementer's CLAIM; the result is the
-        # machine's. Reviewers audit the claim, never re-run it.
-        self.assertIn("The command `mix test` was reported by the "
-                      "implementer as the repo's official full suite",
+        self.assertIn("VERIFICATION PLAN", prompt)
+        # The declared command may come from config or the implementer.
+        # Reviewers audit it but never mistake earlier green for proof of
+        # the candidate under review.
+        self.assertIn("The command sequence `mix test` is currently declared "
+                      "as the repo's official full suite",
                       prompt)
-        self.assertIn("passed at the last gate (which ran before any "
-                      "later fix deltas)", prompt)
+        self.assertIn("current candidate bytes have NOT passed that final "
+                      "suite yet", prompt)
+        self.assertIn("earlier green belongs to earlier bytes or another "
+                      "boundary", prompt)
+        self.assertIn("never treat it as verification of the candidate under "
+                      "review", prompt)
         self.assertIn("a trivial, narrowed, or wrong suite command is "
                       "itself a P1 finding", prompt)
         self.assertIn("Do NOT run it (or any full suite) yourself", prompt)
@@ -1111,35 +1116,43 @@ class TestVerificationProtocol(unittest.TestCase):
         prompt = normalized(prompts.build_review_round(
             FAMILY, WORKSPACE, GOAL, UNIT, "docs/x.md", [],
             unit_kind="slice_impl", verified_suite=None))
-        self.assertIn("NO mechanical verification ran for this unit", prompt)
+        self.assertIn("No official full-suite command is armed for this "
+                      "implementation", prompt)
         self.assertIn("that omission is itself a P1 finding", prompt)
         self.assertIn("Focused test runs are permitted here", prompt)
 
-    def test_block_absent_for_doc_units_without_suite(self):
+    def test_doc_without_known_suite_still_forbids_a_full_run(self):
         prompt = prompts.build_review_round(
             FAMILY, WORKSPACE, GOAL, UNIT, "docs/x.md", [],
             unit_kind="skeleton", verified_suite=None)
-        self.assertNotIn("VERIFICATION STATUS", prompt)
+        self.assertIn("VERIFICATION PLAN", prompt)
+        self.assertIn("absence is expected, not a finding", prompt)
+        self.assertIn("Do NOT run a repo", prompt)
+        self.assertIn("full suite yourself", prompt)
 
     def test_implement_reports_suite_and_skips_full_run(self):
         prompt = normalized(prompts.build_implement(
             FAMILY, WORKSPACE, GOAL, SLICE, "docs/slice-01.md", []))
         self.assertIn("do NOT run the repo's full test suite at the end",
                       prompt)
+        self.assertIn("pre-implementation baseline before this call", prompt)
+        self.assertIn("exact candidate bytes and commands still matched",
+                      prompt)
+        self.assertIn("after every configured reviewer is clean", prompt)
         self.assertIn("Report the repo's official full-suite command",
                       prompt)
-        self.assertIn("your suite_command will arm the gates", prompt)
+        self.assertIn("your suite_command will arm the final boundary", prompt)
         armed = normalized(prompts.build_implement(
             FAMILY, WORKSPACE, GOAL, SLICE, "docs/slice-01.md",
             ["mix test"]))
-        self.assertIn("Gate commands currently armed: mix test", armed)
+        self.assertIn("Final-suite commands currently armed: mix test", armed)
 
     def test_fixer_never_runs_the_full_suite(self):
         prompt = normalized(prompts.build_fix_findings(
             FAMILY, WORKSPACE, GOAL, UNIT, FINDINGS, [], "claude",
             ["claude", "-p"], unit_kind="slice_impl"))
-        self.assertIn("never the repo's full suite; the driver re-runs it "
-                      "mechanically at the next gate", prompt)
+        self.assertIn("never the repo's full suite. The driver runs that "
+                      "suite only at the final boundary", prompt)
 
 
 if __name__ == "__main__":

@@ -407,6 +407,15 @@ class GapReopenCommitIsolationTest(unittest.TestCase):
             step("review_round", report("review_round"), family="claude"),
         ]
 
+    def _cross_impl_baseline(self, driver, path):
+        """Leave the next step positioned on the implementation worker."""
+        action, _note = driver.step()
+        self.assertEqual(action.type, drv.A_VERIFY)
+        state = st.load(path)
+        impl = st.current_unit(state)
+        self.assertEqual(st.unit_key(impl), "slice_impl-01")
+        self.assertIsNotNone(impl.get("baseline_verification"))
+
     def test_skeleton_reopen_opens_fresh_commit_and_discards_builder_junk(self):
         gap = {
             "classification": "fits_remodel",
@@ -446,6 +455,7 @@ class GapReopenCommitIsolationTest(unittest.TestCase):
             driver.step()
         self.assertIsNotNone(head_before, "never reached pending slice_impl-01")
 
+        self._cross_impl_baseline(driver, path)
         driver.step()  # implement -> gap -> discard junk -> reopen skeleton
         state = st.load(path)
         self.assertIsNone(state.get("failure"))
@@ -512,6 +522,7 @@ class GapReopenCommitIsolationTest(unittest.TestCase):
                     and cur["status"] == st.U_PENDING):
                 break
             driver.step()
+        self._cross_impl_baseline(driver, path)
         driver.step()  # implement -> gap -> discard staged junk -> reopen
         state = st.load(path)
         self.assertIsNone(state.get("failure"))
@@ -565,6 +576,7 @@ class GapReopenCommitIsolationTest(unittest.TestCase):
                 head_before = _git(self.ws, "rev-parse", "HEAD")
                 break
             driver.step()
+        self._cross_impl_baseline(driver, path)
         driver.step()  # implement -> commit junk -> gap -> undo -> reopen
         state = st.load(path)
         self.assertIsNone(state.get("failure"))
@@ -626,6 +638,7 @@ class GapReopenCommitIsolationTest(unittest.TestCase):
                 orig_branch = _git(self.ws, "symbolic-ref", "--short", "HEAD")
                 break
             driver.step()
+        self._cross_impl_baseline(driver, path)
         driver.step()  # implement -> switch+commit -> gap -> undo -> reopen
         state = st.load(path)
         self.assertIsNone(state.get("failure"))
@@ -677,6 +690,7 @@ class GapReopenCommitIsolationTest(unittest.TestCase):
                     and cur["status"] == st.U_PENDING):
                 break
             driver.step()
+        self._cross_impl_baseline(driver, path)
         # A legitimate branch the operator keeps, present before the builder
         # runs (the repo now has commits, so branching is well-defined).
         _git(self.ws, "branch", "feature")
@@ -771,6 +785,7 @@ class GapReopenCommitIsolationTest(unittest.TestCase):
                     and cur["status"] == st.U_PENDING):
                 break
             driver.step()
+        self._cross_impl_baseline(driver, path)
         # Two pre-existing stash entries the operator keeps.
         write_file("docs/skeleton.md", "# Skeleton\n\nSEALED\nfirst\n")(self.ws)
         _git(self.ws, "stash", "push", "-m", "operator stash one")

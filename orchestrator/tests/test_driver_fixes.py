@@ -7,8 +7,8 @@ Covers, per finding:
 - worker protocol failures persist the raw outputs of both attempts;
 - tool-cache writes by read-only reviewers do not invalidate the round
   (defaults + snapshot_exclude_dirs config);
-- verify-fix attempt caps are per verification stage (verification
-  failures queue a synthetic V1 finding for a fix_findings episode);
+- final-verify repair caps allow the configured attempts, mint distinct
+  synthetic V1 episodes, and reset after the final boundary passes;
 - skeleton fix rounds can update the structural slice plan;
 - a second driver invocation is refused before any worker call runs
   (staleness check + advisory lock);
@@ -531,22 +531,19 @@ class TestSnapshotCacheExclusions(DriverTestCase):
             self.assertNotIn("invalidated", unit["rounds"][0])
 
 
-class TestVerifyFixCapPerStage(DriverTestCase):
-    # Fails on invocations 1, 2 (pre-review) and 4 (pre-seal); passes on
-    # 3 and 5. Counter lives in the workspace; deterministic because
-    # verification runs are strictly sequential.
+class TestFinalVerifyFixCap(DriverTestCase):
+    # The only full-suite boundary fails twice, then passes. Counter lives in
+    # the workspace; deterministic because verification runs are sequential.
     VER_CMD = (
         "python3 -c \"import os,sys; p='.orchestrator/vcount'; "
         "n=int(open(p).read()) if os.path.exists(p) else 0; n+=1; "
-        "open(p,'w').write(str(n)); sys.exit(0 if n in (3,5) else 1)\""
+        "open(p,'w').write(str(n)); sys.exit(0 if n == 3 else 1)\""
     )
 
-    def test_pre_review_attempts_do_not_burn_the_pre_seal_cap(self):
-        """P3: one shared counter meant a unit that consumed the cap
-        pre-review failed on its FIRST pre-seal verification failure with
-        a misleading explanation. Counters are per stage now. Under the
-        redesign, each verification failure queues the synthetic V1
-        finding for a fix_findings episode."""
+    def test_final_boundary_allows_configured_repairs_and_resets(self):
+        """Two final failures consume the allowed repair budget; the third
+        execution passes, seals, and resets the durable counter. No full
+        suite runs before or between review rounds."""
         with tempfile.TemporaryDirectory(prefix="orch-fix-") as ws:
             path = init_state(
                 ws,
@@ -557,17 +554,14 @@ class TestVerifyFixCapPerStage(DriverTestCase):
             )
             mock = runners.MockRunner([
                 draft_skeleton_step(),
-                # pre-review: two failing episodes = the full stage cap
-                step("fix_findings", fix_fixed("V1"), family="codex"),
-                step("fix_findings", fix_fixed("V1"), family="codex"),
                 step("review_round", clean(), family="codex"),
                 step("review_round", clean(), family="claude"),
-                # pre-seal: one failing episode of its own
+                # Git is disabled and these fixes change no bytes, so each
+                # returns directly to the same final boundary.
+                step("fix_findings", fix_fixed("V1"), family="codex"),
                 step("fix_findings", fix_fixed("V1"), family="codex"),
             ])
             driver = drv.Driver(path, runner=mock)
-            # With the old cumulative counter the run FAILED at the first
-            # pre-seal verification failure (3 > 2) before ever sealing.
             self.step_until(
                 driver, lambda s: s["units"][0]["status"] == st.U_SEALED
             )
@@ -577,7 +571,7 @@ class TestVerifyFixCapPerStage(DriverTestCase):
             self.assertIsNone(state["failure"])
             unit = state["units"][0]
             self.assertEqual(unit["status"], st.U_SEALED)
-            # Each stage's counter reset when its verification passed.
+            # The final-stage counter resets when that boundary passes.
             self.assertEqual(
                 unit["verify_fix_attempts"],
                 {"pre_review": 0, "pre_seal": 0},
@@ -587,9 +581,8 @@ class TestVerifyFixCapPerStage(DriverTestCase):
             self.assertEqual(
                 [r["source_round_id"] for r in fixes],
                 [
-                    "skeleton-verify-pre_review-1",
-                    "skeleton-verify-pre_review-2",
                     "skeleton-verify-pre_seal-1",
+                    "skeleton-verify-pre_seal-2",
                 ],
             )
             failed = [
@@ -598,13 +591,12 @@ class TestVerifyFixCapPerStage(DriverTestCase):
             ]
             self.assertEqual(
                 [e["stage"] for e in failed],
-                [st.U_PRE_REVIEW_VERIFY, st.U_PRE_REVIEW_VERIFY,
-                 st.U_PRE_SEAL_VERIFY],
+                [st.U_PRE_SEAL_VERIFY, st.U_PRE_SEAL_VERIFY],
             )
+            self.assertTrue(all(e.get("boundary") == "final" for e in failed))
             # Raw fix outputs kept distinct monotonic names.
             raw_dir = os.path.join(ws, ".orchestrator", "raw")
-            for name in ("skeleton-fix1.txt", "skeleton-fix2.txt",
-                         "skeleton-fix3.txt"):
+            for name in ("skeleton-fix1.txt", "skeleton-fix2.txt"):
                 self.assertIn(name, os.listdir(raw_dir))
 
 

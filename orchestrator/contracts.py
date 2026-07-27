@@ -1075,9 +1075,10 @@ Kind implement adds:
    watch mode; null or omitted if the repo has no suite>"
 
 Kind fix_findings may ALSO include "suite_command" when a queued finding
-identifies a missing, narrowed, or wrong verification gate — whether the
+identifies a missing, narrowed, or wrong final verification command — whether the
 finding came from verification or review. The driver adopts that
-state correction and runs the corrected gate before review continues.
+state correction, makes the updated command part of review evidence, and
+runs it at the final boundary after current-byte reviews are clean.
 It must also include "suite_command_finding_id", naming that queued finding;
 the referenced finding must be disposed "fixed".
 

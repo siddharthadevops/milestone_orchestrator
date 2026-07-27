@@ -8,8 +8,9 @@ Covers here:
       -> green delta -> amend -> reviews restart from Codex; family advance
       only on clean rounds;
   (c) fix-loop cap -> run failed with the 'fix episode' explanation;
-  (d) verification failure -> synthetic V1 queued -> fixer -> delta green
-      -> amend -> re-verify green; and the per-stage episode cap path;
+  (d) final-verification failure -> synthetic V1 queued -> fixer -> delta
+      green -> amend -> fresh reviews -> final green; and the final-stage
+      episode cap path;
   (f) review-round tampering: output discarded, workspace restored,
       invalidated round recorded, retried; the cap includes it;
   (g) delta-review tampering -> run fails 'entangled';
@@ -326,7 +327,7 @@ class TestDeltaFullReviewCheckpoint(DriverTestCase):
 
     def test_verification_episode_keeps_real_delta_review(self):
         # The bypass is safe only when an active whole-commit reviewer will
-        # immediately take over. Verification episodes keep real deltas.
+        # immediately take over. Final-verification episodes keep real deltas.
         with tempfile.TemporaryDirectory(prefix="orch-mock-") as ws:
             path = init_state(
                 ws,
@@ -337,6 +338,8 @@ class TestDeltaFullReviewCheckpoint(DriverTestCase):
             )
             mock = runners.MockRunner([
                 draft_step(),
+                step("review_round", report("review_round"), family="codex"),
+                step("review_round", report("review_round"), family="claude"),
                 step(
                     "fix_findings",
                     fix_ok(
@@ -350,7 +353,10 @@ class TestDeltaFullReviewCheckpoint(DriverTestCase):
             ])
             driver = drv.Driver(path, runner=mock)
             driver.step()  # draft
-            driver.step()  # verification fails
+            driver.step()  # full suite deferred to the final boundary
+            driver.step()  # codex clean
+            driver.step()  # claude clean
+            driver.step()  # final verification fails
             driver.step()  # fix #1
             driver.step()  # real delta review, despite threshold=1
             self.assertEqual(mock.calls[-1][1], "delta_review")
@@ -363,12 +369,12 @@ class TestDeltaFullReviewCheckpoint(DriverTestCase):
     def test_checkpoint_fires_even_with_suite_verify_pending(self):
         # Live bug (2026-07-21): a fixer that also corrected the suite
         # command sets suite_verification_pending, which redirects the delta
-        # loop's return_to from rounds to pre_review_verify. The checkpoint
+        # loop's return_to from rounds to the pre_review compatibility
+        # waypoint. The checkpoint
         # keyed off that redirected target, so it was silently disabled and
         # the review-originated loop ran to max_fix_loops instead of
-        # escalating to a full review after N fixes — and because the loop
-        # never returned to verify, the flag never cleared, making the
-        # suppression permanent (a slice ran 8 dirty deltas this way). The
+        # escalating to a full review after N fixes (a slice ran 8 dirty
+        # deltas this way). The
         # checkpoint must key off where the episode was BORN (a review
         # round), not the suite redirect.
         with tempfile.TemporaryDirectory(prefix="orch-mock-") as ws:
@@ -406,9 +412,9 @@ class TestDeltaFullReviewCheckpoint(DriverTestCase):
                     family="codex",
                     side_effect=append_file("docs/skeleton.md", "\nfix2\n"),
                 ),
-                # After the checkpoint the redirect runs pre_review_verify
-                # (vacuous on a skeleton, which clears the flag), then the
-                # whole-commit review restarts from the first family.
+                # After the checkpoint the redirect crosses the no-suite
+                # pre_review waypoint, then whole-commit review restarts from
+                # the first family. The corrected suite waits for final.
                 step("review_round", report("review_round"), family="codex"),
                 step("review_round", report("review_round"), family="claude"),
             ])
@@ -439,10 +445,10 @@ class TestDeltaFullReviewCheckpoint(DriverTestCase):
             ]
             self.assertEqual(len(checkpoint), 1)
             self.assertEqual(checkpoint[0]["fixes"], 2)
-            # It followed the REDIRECTED edge (suite re-verify first), proving
-            # the flag was set yet the checkpoint still fired.
+            # It followed the REDIRECTED compatibility edge, proving the flag
+            # was set yet the checkpoint still fired without a suite run.
             self.assertEqual(checkpoint[0]["return_to"], st.U_PRE_REVIEW_VERIFY)
-            # The pending flag was cleared by the re-verify it routed through.
+            # The pending flag clears only when final verification passes.
             self.assertFalse(
                 state["units"][0].get("suite_verification_pending")
             )
@@ -503,6 +509,8 @@ class TestVerificationFixEpisode(DriverTestCase):
                 ws, make_config(verification=["test -f marker.txt"]))
             mock = runners.MockRunner([
                 draft_step(),
+                step("review_round", report("review_round"), family="codex"),
+                step("review_round", report("review_round"), family="claude"),
                 step("fix_findings",
                      fix_ok([triaged("V1", "fixed",
                                      "the verification suite failed",
@@ -517,7 +525,10 @@ class TestVerificationFixEpisode(DriverTestCase):
             driver = drv.Driver(path, runner=mock)
 
             driver.step()  # draft
-            driver.step()  # pre-review verification fails
+            driver.step()  # full suite deferred to the final boundary
+            driver.step()  # codex clean
+            driver.step()  # claude clean
+            driver.step()  # final verification fails
             unit = driver.state["units"][0]
             self.assertEqual(unit["status"], st.U_FIXING)
             self.assertEqual(len(unit["fix_queue"]), 1)
@@ -527,9 +538,9 @@ class TestVerificationFixEpisode(DriverTestCase):
             self.assertEqual(unit["fix_source"]["type"], "verification")
             self.assertIsNone(unit["fix_source"]["family"])
             self.assertEqual(unit["fix_source"]["source_round_id"],
-                             "skeleton-verify-pre_review-1")
+                             "skeleton-verify-pre_seal-1")
             self.assertEqual(unit["fix_source"]["return_to"],
-                             st.U_PRE_REVIEW_VERIFY)
+                             st.U_PRE_SEAL_VERIFY)
 
             self.step_until(driver,
                             lambda s: s["units"][0]["status"] == st.U_SEALED)
@@ -548,10 +559,11 @@ class TestVerificationFixEpisode(DriverTestCase):
                              {"pre_review": 0, "pre_seal": 0})
             self.assertEqual(
                 [r["kind"] for r in unit["rounds"]],
-                ["fix_findings", "delta_review", "review_round",
-                 "review_round"],
+                ["review_round", "review_round", "fix_findings",
+                 "delta_review", "review_round", "review_round"],
             )
-            # Order: verify FAIL -> fix -> delta -> amend -> verify OK.
+            # Order: final FAIL -> fix -> delta -> amend -> fresh reviews ->
+            # final OK. No full suite runs between the two review cycles.
             events = state["events"]
 
             def index_of(pred):
@@ -568,14 +580,21 @@ class TestVerificationFixEpisode(DriverTestCase):
                                and e["kind"] == "delta_review")
             i_amend = index_of(lambda e: e["type"] == "amended")
             i_ok = index_of(lambda e: e["type"] == "verification"
-                            and e["ok"] and e["stage"] == st.U_PRE_REVIEW_VERIFY
+                            and e["ok"]
+                            and e.get("boundary") == "final"
                             and events.index(e) > i_fail)
+            i_review_after = index_of(
+                lambda e: e["type"] == "round_recorded"
+                and e["kind"] == "review_round"
+                and events.index(e) > i_amend
+            )
             self.assertLess(i_fail, i_fix)
             self.assertLess(i_fix, i_delta)
             self.assertLess(i_delta, i_amend)
-            self.assertLess(i_amend, i_ok)
+            self.assertLess(i_amend, i_review_after)
+            self.assertLess(i_review_after, i_ok)
 
-    def test_verification_episode_cap_is_per_stage(self):
+    def test_final_verification_episode_cap(self):
         with tempfile.TemporaryDirectory(prefix="orch-mock-") as ws:
             path = init_state(
                 ws,
@@ -584,9 +603,12 @@ class TestVerificationFixEpisode(DriverTestCase):
             )
             mock = runners.MockRunner([
                 draft_step(),
+                step("review_round", report("review_round"), family="codex"),
+                step("review_round", report("review_round"), family="claude"),
                 # The fixer makes a real but INEFFECTIVE edit (the suite is
                 # `false`, it can never pass): the episode goes green and
-                # returns to the stage, which fails again — over the cap.
+                # fresh whole-artifact reviews run, then the final boundary
+                # fails again — over the cap.
                 # (A fixer claiming 'fixed' while editing NOTHING is now a
                 # structural violation of its own; see
                 # test_adversarial_fixes.TestPhantomFixEmptyDelta.)
@@ -599,6 +621,8 @@ class TestVerificationFixEpisode(DriverTestCase):
                      side_effect=write_file("attempted_fix.txt",
                                             "did not help\n")),
                 step("delta_review", report("delta_review"), family="codex"),
+                step("review_round", report("review_round"), family="codex"),
+                step("review_round", report("review_round"), family="claude"),
             ])
             driver = drv.Driver(path, runner=mock)
             _actions, final = self.drive(driver)
@@ -606,17 +630,21 @@ class TestVerificationFixEpisode(DriverTestCase):
             self.assertEqual(mock.script, [])
             self.assert_failed(
                 path, driver,
-                ["pre-review verification still failing after 1 fix attempts"],
+                ["final verification still failing after 1 fix attempts"],
                 unit_key="skeleton",
             )
             state = st.load(path)
             unit = state["units"][0]
-            self.assertEqual(unit["verify_fix_attempts"]["pre_review"], 2)
+            self.assertEqual(unit["verify_fix_attempts"]["pre_review"], 0)
+            self.assertEqual(unit["verify_fix_attempts"]["pre_seal"], 2)
             self.assertEqual([r["kind"] for r in unit["rounds"]],
-                             ["fix_findings", "delta_review"])
+                             ["review_round", "review_round",
+                              "fix_findings", "delta_review",
+                              "review_round", "review_round"])
             fails = [e for e in state["events"]
                      if e["type"] == "verification" and not e["ok"]]
             self.assertEqual(len(fails), 2)
+            self.assertTrue(all(e.get("boundary") == "final" for e in fails))
 
 
 # ---------------------------------------------------------------------------

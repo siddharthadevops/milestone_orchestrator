@@ -585,8 +585,9 @@ FIX_EVIDENCE_BLOCK = (
 
 FIX_SELF_CHECK_BLOCK = (
     "- Run local/focused checks after each modification when they are\n"
-    "  cheap or directly relevant — never the repo's full suite; the\n"
-    "  driver re-runs it mechanically at the next gate. Before\n"
+    "  cheap or directly relevant — never the repo's full suite. The\n"
+    "  driver runs that suite only at the final boundary, after the\n"
+    "  whole-artifact reviews are clean. Before\n"
     "  returning, re-check your own\n"
     "  pending diff: it must actually cover every finding you mark\n"
     "  'fixed', and surfaces you touched in worker-drafted artifacts\n"
@@ -604,7 +605,8 @@ DELTA_COVERAGE_LINE = (
     "  (statuses, acceptance criteria) stay consistent.\n"
     "- Run commands only when the changed lines themselves warrant it\n"
     "  (e.g. one focused test on the changed behavior). Never run the\n"
-    "  full verification suite here — the driver runs it at gates.\n"
+    "  full verification suite here — the driver runs it once at the\n"
+    "  final boundary after whole-artifact reviews are clean.\n"
 )
 
 # The canon requires this exact sentence for full review rounds
@@ -750,18 +752,23 @@ def _amendments_block(amendments):
 
 
 def _verified_suite_block(verified_suite, unit_kind=None):
-    """Injected into full-round prompts. When a gate ran, the
-    suite result is machine truth — but the COMMAND is the implementer's
-    claim, and judging its legitimacy is review work. When no gate ran
-    on an implementation unit, that absence is itself a reviewable
-    claim, never a silent default."""
+    """Tell full reviewers which final-suite command to audit.
+
+    A pre-implementation baseline may have passed, but reviews happen before
+    the final suite by design.  Never present baseline evidence as proof that
+    the candidate bytes under review are already green.
+    """
     if verified_suite:
         return (
-            "VERIFICATION STATUS\n"
-            "- The command `%s` was reported by the implementer as the\n"
-            "  repo's official full suite. It runs mechanically at the\n"
-            "  driver's gates and passed at the last gate (which ran\n"
-            "  before any later fix deltas); it re-runs before any seal.\n"
+            "VERIFICATION PLAN\n"
+            "- The command sequence `%s` is currently declared as the\n"
+            "  repo's official full suite. The driver runs it once after\n"
+            "  every configured reviewer is clean and immediately before\n"
+            "  sealing.\n"
+            "- The current candidate bytes have NOT passed that final suite\n"
+            "  yet. Any earlier green belongs to earlier bytes or another\n"
+            "  boundary (including an implementation baseline); never treat\n"
+            "  it as verification of the candidate under review.\n"
             "- Confirm from repo evidence (Makefile, package.json,\n"
             "  mix.exs, CI config) that it IS the official full suite: a\n"
             "  trivial, narrowed, or wrong suite command is itself a P1\n"
@@ -773,13 +780,18 @@ def _verified_suite_block(verified_suite, unit_kind=None):
         )
     if unit_kind == "slice_impl":
         return (
-            "VERIFICATION STATUS\n"
-            "- NO mechanical verification ran for this unit: the\n"
-            "  implementer reported no official test suite. If the repo\n"
+            "VERIFICATION PLAN\n"
+            "- No official full-suite command is armed for this\n"
+            "  implementation. If the repo\n"
             "  HAS one, that omission is itself a P1 finding. Focused\n"
             "  test runs are permitted here to verify your claims.\n"
         )
-    return ""
+    return (
+        "VERIFICATION PLAN\n"
+        "- No official full-suite command is known yet. For a documentation\n"
+        "  unit that absence is expected, not a finding. Do NOT run a repo\n"
+        "  full suite yourself; use only focused checks needed for a claim.\n"
+    )
 
 
 def _delta_governing_line(governing):
@@ -1241,7 +1253,7 @@ def build_implement(family, workspace, goal, slice_info, note_path, verification
                     amendments=None, project_context=None, gap_enabled=False,
                     skeleton_path=None, remodeled=False):
     ver = "\n".join("  %s" % c for c in verification) or (
-        "  (none yet — your suite_command will arm the gates)"
+        "  (none yet — your suite_command will arm the final boundary)"
     )
     # A RE-draft after this slice's earlier gap triggered a skeleton remodel:
     # the slice note is UNCHANGED (only the skeleton was), so without this the
@@ -1285,14 +1297,18 @@ def build_implement(family, workspace, goal, slice_info, note_path, verification
         + remodel_block
         + _amendments_block(amendments)
         + _project_context_block(project_context)
-        + "Implement the scope, including its tests. Run focused checks on\n"
+        + "The driver handled the pre-implementation baseline before this\n"
+        "call, reusing an earlier final green only when its exact candidate\n"
+        "bytes and commands still matched. That baseline says nothing about\n"
+        "the edits you make now.\n"
+        "Implement the scope, including its tests. Run focused checks on\n"
         "what you touch while working, but do NOT run the repo's full\n"
-        "test suite at the end — the driver runs it mechanically at the\n"
-        "gate right after you return, and re-runs it before any seal.\n"
+        "test suite at the end. The driver runs it once, after every\n"
+        "configured reviewer is clean and immediately before sealing.\n"
         "Report the repo's official full-suite command (as run from the\n"
         "workspace root) in `suite_command` — it must be non-interactive\n"
         "and run the suite exactly once and exit (never a watch mode).\n"
-        "Gate commands currently armed:\n"
+        "Final-suite commands currently armed:\n"
         + ver
         + "\n\n"
         + REUSE_GATE_BLOCK
@@ -1784,7 +1800,8 @@ def build_fix_findings(
             "the edits to disk for real, or dispose honestly ('rejected'\n"
             "with its consultation, or 'blocked'). EXCEPTION: when a\n"
             "queued finding identifies a missing, narrowed, or wrong\n"
-            "verification gate, return the corrected `suite_command` and\n"
+            "final verification command, return the corrected\n"
+            "`suite_command` and\n"
             "its `suite_command_finding_id`; that is a real DRIVER-STATE\n"
             "fix and may correctly have `files_changed: []`. Do not edit a\n"
             "generated ledger or manufacture a repository change for it.\n"

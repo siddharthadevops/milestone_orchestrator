@@ -18,14 +18,14 @@ those rules is enforced here structurally.
 | Rule (canon) | Enforcement point |
 |---|---|
 | History is never rewritten | `state.save()` refuses non-append-only diffs (`HistoryRewriteError`) |
-| Phase gates (draft -> verify -> rounds -> verify -> seal) | `state.transition_unit()` raises `IllegalTransition` |
+| Phase gates (docs: draft -> rounds -> final verify -> seal; implementation: baseline -> implement -> rounds -> final verify -> seal) | `state.transition_unit()` raises `IllegalTransition` |
 | Family order; changed candidate bytes restart review at the first family | review-cycle freshness is reset whenever an accepted fix changes the candidate |
 | Seal is a deterministic result, not another review | every family must be clean or debt-clean on the same current bytes, then the verification suite must pass |
 | Whoever detects never fixes: ALL reviews are report-only | `contracts.REPORT_KINDS` forbid dispositions and file changes; workspace snapshots detect tampering; tampered reviews are discarded and the worktree restored to HEAD |
 | A rejected finding requires an opposite-family consultation | `contracts.validate_fix_finding()` (P0-P3; therefore also P0/P1) |
 | Settled findings stay settled | milestone-global adjudication registry injected into every prompt; `contests` and `rejected_adjudicated` references validated against it; misreadable-target rejections carry a `prevention` edit |
 | The fixer triages exactly what was queued | `contracts.validate_fix_coverage()` (same ids, nothing invented) |
-| Round/verify-fix caps | driver executors fail the run with the explanation in the event log |
+| Round/final-verify-fix caps | driver executors fail the run with the explanation in the event log |
 | Blocked -> stop with explanation, no silent retries | `status: "blocked"` or a `blocked` disposition ends the run; the reason is in `state.failure` and the events |
 | No prose parsing of reviewer output | workers must return contract JSON (`contracts.py`); one repair retry, then the run fails |
 
@@ -115,10 +115,18 @@ becomes the goal, snapshotted at launch), an optional verification command,
 and an optional advanced config JSON merged over defaults. Verification
 is zero-config by default: the implement worker reports the repo's
 official full-suite command (`suite_command` in its contract), the
-driver arms the implementation-unit gates with it (explicit config
-`verification` normally wins and runs on every unit; a `fix_findings`
-`suite_command` that fixes a stale explicit gate replaces it for later
-gates), each gate execution
+driver uses it for that implementation's final boundary and later units
+(explicit config `verification` wins and is available from the first
+baseline; a `fix_findings` `suite_command` that fixes a stale explicit gate
+replaces it for later boundaries). Documentation skips the pre-review suite
+and runs the known suite once, after its reviews. Implementation establishes
+a baseline before work starts, reusing a prior stable final green only when
+the exact candidate bytes and exact command list still match; it then runs
+the full suite once more after its reviews. There are no full-suite runs
+between review/fix cycles. Before the first zero-config implementer reports a
+command, the baseline and earlier documentation boundaries are necessarily
+recorded as vacuous; that implementer's command arms its final boundary and
+all later ones. Each execution or reuse
 lands in the ledger, and `verification_timeout` defaults to unlimited —
 suites may legitimately run for hours. Panel launches
 enable `git.enabled` by default — the full gate/amend/delta-review
@@ -134,6 +142,11 @@ network mount (hung NFS/SMB under `/Volumes`) blocks that request — and any
 retries — until the mount recovers; the service itself stays responsive
 (one daemon handler thread per request), but such a listing cannot be
 cancelled. Avoid pointing the picker at dead mounts.
+
+Persisted runs remain resumable: an old `pre_review_verify` state now opens
+reviews without running the suite. An already-active old review cycle restarts
+once because the declared final-suite command is now part of the evidence each
+approval binds to.
 
 Service home is `~/.impl_roadmap/` (override with `--home`): `registry.json`
 (pointers to per-workspace states + PIDs; atomic writes under an advisory
@@ -273,20 +286,35 @@ into ~500-line slices — is defined in [WORKSPACE.md](../WORKSPACE.md#what-is-a
 This section is the per-unit machinery.)
 
 For the milestone: one `skeleton` unit, then per slice a `slice_doc` and a
-`slice_impl` unit. Every unit runs:
+`slice_impl` unit. Documentation runs:
 
-    draft/implement (edit-permission worker call) -> wip commit
-      -> verification suite (fail -> the findings go to the FIX LOOP)
+    draft (edit-permission worker call) -> wip commit
       -> codex review rounds (REPORT-ONLY) until a clean round
       -> claude review rounds (REPORT-ONLY) until a clean round
-      -> verification suite
+      -> one final verification suite
+      -> deterministic seal
+
+Implementation runs:
+
+    baseline boundary before implementation
+      (run the known suite, or reuse an earlier stable final green when exact
+       bytes and commands match; vacuous only while no command is known)
+      -> implement (focused checks while working) -> wip commit
+      -> codex review rounds (REPORT-ONLY) until a clean round
+      -> claude review rounds (REPORT-ONLY) until a clean round
+      -> one final verification suite
       -> deterministic seal: the ledger proves that every configured family
-         is clean or debt-clean on these same bytes and verification passed;
-         no worker is called, and the wip commit becomes the GATE COMMIT.
+         is clean or debt-clean on these same bytes and final verification
+         passed; no worker is called, and the wip commit becomes the GATE
+         COMMIT.
 
 If an accepted fix changes candidate bytes, all earlier whole-artifact
-approvals become stale. After verification, review restarts at the first
-family. If no bytes changed, same-byte approvals remain current.
+approvals become stale and review restarts at the first family. Implementers,
+fixers, and reviewers use focused checks where relevant; the full suite is
+not repeated between review cycles. If no bytes changed, same-byte approvals
+remain current. If final verification itself changes candidate bytes, review
+restarts on those resulting bytes and the final suite runs again only after
+the new reviews are clean.
 
 Under a reform strategy profile (any governing profile that is not the
 `legacy` compat artifact), doc-unit drafts additionally pass the question
@@ -322,14 +350,14 @@ findings for the FIX LOOP:
          of the fix — review the 5 changed lines, not the 1000-line unit)
       -> findings? -> back to the FIXER (same episode, capped by
          max_fix_loops)
-      -> green -> AMEND into the unit's wip commit -> verify the changed
-         candidate and restart whole-artifact review at the first family
+      -> green -> AMEND into the unit's wip commit -> restart whole-artifact
+         review at the first family; full verification waits for final closure
 
 For a fix episode born from a review round, the pending diff is checkpointed
 after the fifth fix instead of launching another delta review. No synthetic
 clean round is recorded: the WIP commit is amended, the checkpoint is logged,
-and the changed candidate returns to verification and a full review beginning
-with the first family. The limit is derived from the episode history, so
+and the changed candidate returns directly to a full review beginning with
+the first family. The limit is derived from the episode history, so
 Stop/Start or Resume cannot reset it, and it keys off the episode's original
 kind so a dirty-delta re-queue cannot disable it. Verification and gap-repair
 episodes keep their real delta reviews. The threshold is configurable with
@@ -376,7 +404,7 @@ independent nested repo, and every staging/commit operation hard-fails
 rather than touch an enclosing project. Each unit opens with a wip commit
 of its draft; green fix episodes AMEND it (one clean commit per unit, no
 patch stacking). Whole-artifact reviews approve that amended commit; when all
-families are effectively clean on the same bytes and verification passes, the
+families are effectively clean on the same bytes and final verification passes, the
 deterministic seal finalizes it under the canonical gate message (`Seal milestone
 skeleton`, `Seal slice NN note`, `Seal slice NN implementation and close`,
 `Close milestone`). At each gate the driver regenerates the markdown
@@ -398,7 +426,7 @@ edit-kind calls; the boundary is enforced by detection, not sandboxing.
     orchestrator/examples/calculator/run_demo.sh
 
 Runs the whole flow against a scripted fake LLM: a deliberate div bug forces
-the verification-fix path, and later review findings change bytes twice. Each
+the final-verification fix path, and later review findings change bytes twice. Each
 change invalidates prior approvals and restarts review at the first family.
 The milestone closes from clean same-byte reviews without a seal worker call.
 
@@ -441,20 +469,23 @@ Tiers:
   `*.egg-info`), so a report-only worker whose focused checks write tool
   caches is not falsely invalidated (with git enabled the tamper universe
   additionally honors `.gitignore`). Reviewers are told NOT to run the full
-  suite — the driver runs it mechanically at the
-  verification gates. Add tool-specific cache
+  suite — the driver runs it mechanically only for an implementation baseline
+  and at the final boundary after reviews. Add tool-specific cache
   directory names (or fnmatch patterns) via the `snapshot_exclude_dirs`
   config list. Cache FILES written at the workspace root (e.g. coverage's
   `.coverage`) are not excludable; point such tools elsewhere (e.g.
   `COVERAGE_FILE`).
-- **`max_verify_fix_attempts` is per stage.** The cap bounds consecutive
-  fix attempts for the currently failing verification stage (pre-review or
-  pre-seal) and resets when that stage passes.
+- **`max_verify_fix_attempts` bounds final-suite repair.** It caps consecutive
+  fixer attempts after a failing final verification and also bounds retries
+  when a baseline suite keeps changing candidate bytes. An ordinary failing
+  baseline stops before implementation opens rather than being folded into a
+  not-yet-existing WIP.
 
 ## Deliberate v0 divergences from canon v0.9
 
 - The seal is a deterministic ledger result after same-byte reviews and the
-  verification gate; it launches no reviewer and has no concurrency mode.
+  final verification boundary; it launches no reviewer and has no concurrency
+  mode.
 - The pre-relaunch self-review disappears as a bookkeeping device: every
   round already is a fresh stateless agent, and bookkeeping is code now.
 - Consultation transcripts are saved by workers under

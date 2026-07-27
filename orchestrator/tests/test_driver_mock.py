@@ -9,10 +9,10 @@ inside tempfile.TemporaryDirectory workspaces — NEVER against the canon
 repository.
 
 Covers here:
-  (a) the full happy lifecycle mirroring the calculator fake-LLM scenario
-      (unit sequence, statuses, exact round kind/id sequences including
-      fix_findings and delta_review records, derived seal records, gate_commit
-      fields, ledgers, milestone closed);
+  (a) the full calculator-shaped lifecycle, with its deliberate bug held for
+      the final-suite failure path (unit sequence, statuses, exact round
+      kind/id sequences including fix_findings and delta_review records,
+      derived seal records, gate_commit fields, ledgers, milestone closed);
   (i) fixer coverage violation / rejected-without-consultation protocol
       failure / unknown adjudication_ref / unknown contests reference;
   (l) git-disabled legacy path (fix returns directly, no delta/amend);
@@ -277,7 +277,7 @@ class DriverTestCase(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
-# Scripts mirroring the calculator fake-LLM scenario
+# Calculator-shaped scripts
 
 
 def skeleton_script():
@@ -364,8 +364,8 @@ def doc_script():
 
 
 def impl_script():
-    """div bug -> verification fails -> V1 fix episode; docstring round
-    finding -> fix; claude README finding -> fix; both reviewers then clean."""
+    """Review/fix the implementation with focused checks, then let the one
+    final suite expose the div bug; repair V1, re-review, and seal green."""
     return [
         step(
             "implement",
@@ -378,19 +378,6 @@ def impl_script():
                 write_file("test_calculator.py", "# tests\n"),
             ),
         ),
-        # pre-review verification fails (calculator.py without div_fixed)
-        step("fix_findings",
-             fix_ok([triaged("V1", "fixed",
-                             "the verification suite failed", severity="P1")],
-                    files_changed=["calculator.py", "div_fixed"]),
-             family="codex",
-             side_effect=multi(
-                 write_file("calculator.py",
-                            "def div(a, b):\n    return a / b\n"),
-                 write_file("div_fixed", "verification repaired\n"),
-             )),
-        step("delta_review", report("delta_review"), family="codex"),
-        # re-verify green -> rounds
         step("review_round",
              report("review_round",
                     [finding("F1", "calculator module lacks a docstring")]),
@@ -421,6 +408,26 @@ def impl_script():
         step("delta_review", report("delta_review"), family="codex"),
         step("review_round", report("review_round"), family="codex"),
         step("review_round", report("review_round"), family="claude"),
+        # The first full suite since implementation now runs at the final
+        # boundary and exposes calculator.py without div_fixed.
+        step("fix_findings",
+             fix_ok([triaged("V1", "fixed",
+                             "the verification suite failed", severity="P1")],
+                    files_changed=["calculator.py", "div_fixed"]),
+             family="codex",
+             side_effect=multi(
+                 write_file(
+                     "calculator.py",
+                     '\"\"\"Tiny CLI calculator.\"\"\"\n\ndef div(a, b):\n'
+                     "    return a / b\n",
+                 ),
+                 write_file("div_fixed", "verification repaired\n"),
+             )),
+        step("delta_review", report("delta_review"), family="codex"),
+        # The fix changed bytes, so both whole-artifact reviews must approve
+        # the repaired candidate before its one final suite can pass.
+        step("review_round", report("review_round"), family="codex"),
+        step("review_round", report("review_round"), family="claude"),
     ]
 
 
@@ -429,7 +436,7 @@ def impl_script():
 
 
 class TestHappyLifecycle(DriverTestCase):
-    def test_full_lifecycle_mirrors_fake_scenario(self):
+    def test_full_lifecycle_covers_final_verification_failure(self):
         with tempfile.TemporaryDirectory(prefix="orch-mock-") as ws:
             path = init_state(ws, make_config(verification=[VERIFY_CMD]))
             mock = runners.MockRunner(
@@ -458,14 +465,17 @@ class TestHappyLifecycle(DriverTestCase):
                    drv.A_REVIEW_ROUND, drv.A_REVIEW_ROUND,
                    drv.A_VERIFY]
                 # slice impl
-                + [drv.A_DRAFT, drv.A_VERIFY,
-                   drv.A_FIX, drv.A_DELTA_REVIEW, drv.A_VERIFY,
+                + [drv.A_VERIFY,  # pre-implementation baseline
+                   drv.A_DRAFT, drv.A_VERIFY,
                    drv.A_REVIEW_ROUND, drv.A_FIX, drv.A_DELTA_REVIEW,
                    drv.A_VERIFY,
                    drv.A_REVIEW_ROUND, drv.A_REVIEW_ROUND,
                    drv.A_FIX, drv.A_DELTA_REVIEW,
                    drv.A_VERIFY, drv.A_REVIEW_ROUND,
-                   drv.A_REVIEW_ROUND, drv.A_VERIFY]
+                   drv.A_REVIEW_ROUND, drv.A_VERIFY,
+                   drv.A_FIX, drv.A_DELTA_REVIEW, drv.A_VERIFY,
+                   drv.A_REVIEW_ROUND, drv.A_REVIEW_ROUND,
+                   drv.A_VERIFY]
             )
             self.assertEqual([a.type for a, _ in actions], expected_actions)
 
@@ -514,17 +524,19 @@ class TestHappyLifecycle(DriverTestCase):
             self.assertEqual(
                 [(r["id"], r["kind"], r["family"]) for r in impl["rounds"]],
                 [
-                    ("slice_impl-01-codex-r1", "fix_findings", "codex"),
-                    ("slice_impl-01-codex-r2", "delta_review", "codex"),
-                    ("slice_impl-01-codex-r3", "review_round", "codex"),
-                    ("slice_impl-01-codex-r4", "fix_findings", "codex"),
-                    ("slice_impl-01-codex-r5", "delta_review", "codex"),
-                    ("slice_impl-01-codex-r6", "review_round", "codex"),
+                    ("slice_impl-01-codex-r1", "review_round", "codex"),
+                    ("slice_impl-01-codex-r2", "fix_findings", "codex"),
+                    ("slice_impl-01-codex-r3", "delta_review", "codex"),
+                    ("slice_impl-01-codex-r4", "review_round", "codex"),
                     ("slice_impl-01-claude-r1", "review_round", "claude"),
-                    ("slice_impl-01-codex-r7", "fix_findings", "codex"),
-                    ("slice_impl-01-codex-r8", "delta_review", "codex"),
-                    ("slice_impl-01-codex-r9", "review_round", "codex"),
+                    ("slice_impl-01-codex-r5", "fix_findings", "codex"),
+                    ("slice_impl-01-codex-r6", "delta_review", "codex"),
+                    ("slice_impl-01-codex-r7", "review_round", "codex"),
                     ("slice_impl-01-claude-r2", "review_round", "claude"),
+                    ("slice_impl-01-codex-r8", "fix_findings", "codex"),
+                    ("slice_impl-01-codex-r9", "delta_review", "codex"),
+                    ("slice_impl-01-codex-r10", "review_round", "codex"),
+                    ("slice_impl-01-claude-r3", "review_round", "claude"),
                 ],
             )
 
@@ -537,12 +549,12 @@ class TestHappyLifecycle(DriverTestCase):
                              "skeleton-claude-r1")
             self.assertEqual(fixes["skeleton-codex-r8"]["source_round_id"],
                              "skeleton-claude-r2")
-            self.assertEqual(fixes["slice_impl-01-codex-r1"]["source_round_id"],
-                             "slice_impl-01-verify-pre_review-1")
-            self.assertEqual(fixes["slice_impl-01-codex-r4"]["source_round_id"],
-                             "slice_impl-01-codex-r3")
-            self.assertEqual(fixes["slice_impl-01-codex-r7"]["source_round_id"],
+            self.assertEqual(fixes["slice_impl-01-codex-r2"]["source_round_id"],
+                             "slice_impl-01-codex-r1")
+            self.assertEqual(fixes["slice_impl-01-codex-r5"]["source_round_id"],
                              "slice_impl-01-claude-r1")
+            self.assertEqual(fixes["slice_impl-01-codex-r8"]["source_round_id"],
+                             "slice_impl-01-verify-pre_seal-1")
 
             # Reviewer findings carry no disposition; fixer rounds carry
             # exactly the queued ids.
@@ -553,9 +565,9 @@ class TestHappyLifecycle(DriverTestCase):
                     else:
                         self.assertNotIn("disposition", f)
             self.assertEqual(
-                [f["id"] for f in
-                 fixes["slice_impl-01-codex-r7"]["result"]["findings"]],
-                ["S1"],
+                 [f["id"] for f in
+                 fixes["slice_impl-01-codex-r8"]["result"]["findings"]],
+                ["V1"],
             )
 
             # Seal records complete on every unit.
@@ -608,14 +620,27 @@ class TestHappyLifecycle(DriverTestCase):
             self.assertIn("docs/skeleton.md", adjudications)
             self.assertIn("explicit float-support note added", adjudications)
 
-            # Verification bookkeeping: the impl div bug failed exactly once
-            # and the per-stage counter reset on the pass.
+            # Verification bookkeeping: docs ran only their final suite; the
+            # implementation reused the doc's exact final green as baseline,
+            # then its first final suite exposed the div bug exactly once.
             verifs = [e for e in state["events"] if e["type"] == "verification"]
             self.assertEqual([e["ok"] for e in verifs if e["unit"] == "skeleton"],
-                             [True, True, True, True])
+                             [True])
+            self.assertEqual(
+                [e["ok"] for e in verifs if e["unit"] == "slice_doc-01"],
+                [True],
+            )
             self.assertEqual(
                 [e["ok"] for e in verifs if e["unit"] == "slice_impl-01"],
-                [False, True, True, True, True],
+                [True, False, True],
+            )
+            impl_verifs = [
+                e for e in verifs if e["unit"] == "slice_impl-01"
+            ]
+            self.assertEqual(impl_verifs[0]["boundary"], "baseline")
+            self.assertTrue(impl_verifs[0]["reused"])
+            self.assertEqual(
+                [e["boundary"] for e in impl_verifs[1:]], ["final", "final"]
             )
             self.assertEqual(impl["verify_fix_attempts"],
                              {"pre_review": 0, "pre_seal": 0})
@@ -694,11 +719,11 @@ class TestOperatorAmendmentsFlow(DriverTestCase):
 
 
 class TestSuiteDiscoveryProtocol(DriverTestCase):
-    """Zero-config verification: the implementer's suite_command arms the
-    mechanical gates for implementation units; doc units stay cheap; the
-    discovery and every gate run land in the ledger."""
+    """Zero-config verification: the first implementation baseline is
+    necessarily vacuous, then suite_command arms its final boundary and all
+    later documentation/implementation boundaries."""
 
-    def test_discovered_suite_arms_impl_gates_only(self):
+    def test_discovered_suite_arms_impl_final_after_vacuous_baseline(self):
         with tempfile.TemporaryDirectory(prefix="orch-mock-") as ws:
             path = init_state(ws, make_config(verification=[]))
             impl = impl_script()
@@ -721,24 +746,44 @@ class TestSuiteDiscoveryProtocol(DriverTestCase):
             self.assertEqual([e["command"] for e in discoveries],
                              [VERIFY_CMD])
 
-            # Gates: doc units ran nothing; impl gates ran the discovery.
+            # Before discovery, docs and the first implementation baseline
+            # are vacuous. Every implementation final attempt uses the newly
+            # discovered command; no review/fix cycle runs it in between.
             ver = [e for e in state["events"] if e["type"] == "verification"]
             self.assertTrue(ver)
-            for e in ver:
-                if e["unit"].startswith("slice_impl"):
-                    self.assertEqual(e["commands"], [VERIFY_CMD], e)
-                else:
-                    self.assertEqual(e["commands"], [], e)
+            docs = [e for e in ver if not e["unit"].startswith("slice_impl")]
+            self.assertTrue(docs)
+            self.assertTrue(all(e["commands"] == [] for e in docs))
+            impl_ver = [e for e in ver if e["unit"] == "slice_impl-01"]
+            self.assertEqual(impl_ver[0]["boundary"], "baseline")
+            self.assertEqual(impl_ver[0]["commands"], [])
+            self.assertTrue(impl_ver[0]["vacuous"])
+            self.assertEqual(
+                [e["commands"] for e in impl_ver[1:]],
+                [[VERIFY_CMD], [VERIFY_CMD]],
+            )
+            self.assertEqual(
+                [e["boundary"] for e in impl_ver[1:]], ["final", "final"]
+            )
 
-            # Reviewers of the impl unit are told the machine ran the
-            # suite; doc reviewers are not.
+            # Implementation reviewers audit the declared command, but are
+            # explicitly NOT told the current candidate already passed.
+            # Earlier doc reviewers had no command to audit.
             for fam, kind, prompt in mock.calls:
                 if kind == "review_round":
-                    has = "VERIFICATION STATUS" in prompt
+                    has = "VERIFICATION PLAN" in prompt
                     if "slice 1 implementation" in prompt:
                         self.assertTrue(has, kind)
+                        self.assertIn(
+                            "current candidate bytes have NOT passed",
+                            prompt,
+                        )
                     else:
-                        self.assertFalse(has, kind)
+                        self.assertTrue(has, kind)
+                        self.assertIn(
+                            "No official full-suite command is known yet",
+                            prompt,
+                        )
 
     def test_later_discovery_does_not_replace_established_suite(self):
         with tempfile.TemporaryDirectory(prefix="orch-mock-") as ws:

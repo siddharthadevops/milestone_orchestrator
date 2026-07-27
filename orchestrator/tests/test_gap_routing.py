@@ -73,8 +73,32 @@ class GapRoutingCase(unittest.TestCase):
         action, note = driver.step()
         return st.load(path), note
 
+    def _step_impl_baseline(self, path, unit_key="slice_impl-01"):
+        """Consume the durable pre-implementation boundary explicitly.
+
+        These routing tests want the *next* step to be the implementer call.
+        Their configs carry no suite command, so this first baseline is a
+        recorded vacuous verification and invokes no worker.
+        """
+        driver = drv.Driver(path, runner=runners.MockRunner([]))
+        action, note = driver.step()
+        self.assertEqual(action.type, drv.A_VERIFY)
+        self.assertIn("baseline", note)
+        state = st.load(path)
+        unit = next(u for u in state["units"] if st.unit_key(u) == unit_key)
+        self.assertIsNotNone(unit.get("baseline_verification"))
+        baseline = [
+            e for e in state["events"]
+            if e["type"] == "verification"
+            and e.get("unit") == unit_key
+            and e.get("boundary") == "baseline"
+        ]
+        self.assertEqual(len(baseline), 1)
+        self.assertTrue(baseline[0].get("vacuous"))
+
     def test_impl_fits_remodel_reopens_the_skeleton(self):
         path = self._state_to_impl_pending()
+        self._step_impl_baseline(path)
         state, note = self._drive_one(
             path, [step("implement", _gap_output("implement",
                                                  _gap("fits_remodel")))])
@@ -128,6 +152,7 @@ class GapRoutingCase(unittest.TestCase):
     def test_needs_operator_outranks_fits_remodel(self):
         # A report carrying both classes escalates: the operator issue wins.
         path = self._state_to_impl_pending()
+        self._step_impl_baseline(path)
         state, note = self._drive_one(
             path, [step("implement",
                         _gap_output("implement",
@@ -143,6 +168,7 @@ class GapRoutingCase(unittest.TestCase):
                 if st.unit_key(u) == "slice_impl-01"][0]
         impl["gap_repairs"] = 3          # already at the default cap
         st.save(path, state)
+        self._step_impl_baseline(path)
         state, note = self._drive_one(
             path, [step("implement", _gap_output("implement",
                                                  _gap("fits_remodel")))])
@@ -240,6 +266,7 @@ class GapRoutingCase(unittest.TestCase):
         st.transition_unit(state, skeleton, st.U_SEALED)
         st.save(path, state)
 
+        self._step_impl_baseline(path, unit_key="slice_impl-02")
         mock = runners.MockRunner(
             [step("implement", ok("implement", files_changed=["calc.py"]),
                   side_effect=write_file("calc.py", "x = 1\n"))])

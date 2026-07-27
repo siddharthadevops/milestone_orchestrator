@@ -3,9 +3,10 @@
 Starts the local-service HTTP server in a thread over a temporary --home,
 then exercises the JSON API exactly like the panel does: POST /api/runs with
 the fake-LLM calculator config (the same scenario as run_demo.sh: deliberate
-div bug -> verification failure -> fix episode, a mid-flow review finding,
-and a second-family review finding -> fix episode -> clean restart), poll until
-the milestone closes, then stop/forget. Service launches enable git by
+div bug, a first-family review finding whose scripted fix also corrects that
+bug, and a second-family review finding -> fix episode -> clean restart -> one
+final suite), poll until the milestone closes, then stop/forget. Service
+launches enable git by
 default (the panel promises the FULL enforced flow), so like the demo this
 run exercises delta reviews, amends, and gate commits — inside the
 tempdir workspace only.
@@ -32,7 +33,7 @@ import unittest
 import urllib.error
 import urllib.request
 
-from orchestrator import registry, service
+from orchestrator import registry, service, state as st
 
 REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 FAKE_LLM = os.path.join(
@@ -235,13 +236,12 @@ class TestServicePanelE2E(unittest.TestCase):
             "impl seals: %r" % (impl["seals"],),
         )
         impl_kinds = [r["kind"] for r in impl["rounds"]]
-        # The deliberate div bug fails the pre-review verification, so the
-        # very first impl round is a fixer episode (fix_findings) recorded
-        # BEFORE any review round.
-        self.assertTrue(
-            impl_kinds and impl_kinds[0] == "fix_findings",
-            "expected a verification fix episode before the first review "
-            "round on impl: %r" % (impl["rounds"],),
+        # Implementation now opens with ordinary review work: no full suite
+        # is inserted after implement or between review/fix cycles.
+        self.assertEqual(
+            impl_kinds[0], "review_round",
+            "implementation did not enter reviews directly: %r"
+            % (impl["rounds"],),
         )
         self.assertIn(
             "review_round", impl_kinds,
@@ -262,6 +262,38 @@ class TestServicePanelE2E(unittest.TestCase):
             if round_["kind"] == "review_round" and not round_["findings"]
         ][-2:]
         self.assertEqual(impl["seals"][0]["reviews"], final_reviews)
+
+        # The durable event log carries exactly the implementation baseline
+        # and final boundaries. The exact doc-final green is reused for the
+        # baseline, and the final suite happens after the last clean review.
+        state = st.load(detail["entry"]["state_path"])
+        events = state["events"]
+        verifications = [
+            e for e in events
+            if e["type"] == "verification" and e["unit"] == "slice_impl-01"
+        ]
+        self.assertEqual(
+            [e["boundary"] for e in verifications], ["baseline", "final"]
+        )
+        self.assertTrue(verifications[0]["reused"])
+        self.assertTrue(all(e["ok"] for e in verifications))
+        self.assertTrue(all(
+            not str(r.get("source_round_id") or "").startswith(
+                "slice_impl-01-verify-"
+            )
+            for r in next(
+                u for u in state["units"]
+                if st.unit_key(u) == "slice_impl-01"
+            )["rounds"]
+            if r["kind"] == "fix_findings"
+        ))
+        last_review_seq = max(
+            e["seq"] for e in events
+            if e["type"] == "round_recorded"
+            and e.get("unit") == "slice_impl-01"
+            and e.get("kind") == "review_round"
+        )
+        self.assertGreater(verifications[-1]["seq"], last_review_seq)
         # The run list shows the same closed run.
         status, body = self._request("GET", "/api/runs")
         self.assertEqual(status, 200, body)

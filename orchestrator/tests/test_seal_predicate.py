@@ -204,7 +204,7 @@ class SealPredicateDriverTest(unittest.TestCase):
         cfg["verification"] = [
             "n=$(cat .orchestrator/verify-count 2>/dev/null || echo 0); "
             "n=$((n+1)); echo $n > .orchestrator/verify-count; "
-            "if [ \"$n\" = 2 ]; then echo changed > verified-change.txt; fi"
+            "if [ \"$n\" = 1 ]; then echo changed > verified-change.txt; fi"
         ]
         script = self._skeleton_clean_no_seal_halves(
             battery=battery_entries(
@@ -260,7 +260,7 @@ class SealPredicateDriverTest(unittest.TestCase):
         driver = drv.Driver(path, runner=runner)
 
         driver.step()  # draft
-        driver.step()  # pre-review verification
+        driver.step()  # full suite deferred to the final boundary
         driver.step()  # first Codex approval
         write_file("between-reviews.txt", "new candidate bytes\n")(self.ws)
         driver.step()  # detects the edit before calling Claude
@@ -290,7 +290,7 @@ class SealPredicateDriverTest(unittest.TestCase):
         cfg["verification"] = [
             "n=$(cat .orchestrator/verify-count 2>/dev/null || echo 0); "
             "n=$((n+1)); echo $n > .orchestrator/verify-count; "
-            "if [ \"$n\" = 2 ]; then "
+            "if [ \"$n\" = 1 ]; then "
             "echo changed > failed-verification-change.txt; exit 1; fi"
         ]
         script = self._skeleton_clean_no_seal_halves(
