@@ -1782,8 +1782,7 @@ class Driver(object):
                 )
             provider_ref = getattr(result, "session_ref", None)
             if (
-                kind
-                in (contracts.KIND_IMPLEMENT, contracts.KIND_FIX_FINDINGS)
+                kind in contracts.RETHINK_CONTINUATION_KINDS
                 and (
                     not isinstance(provider_ref, str)
                     or not provider_ref.strip()
@@ -2075,10 +2074,7 @@ class Driver(object):
                 kind=kind,
                 session_id=session_id,
             )
-            if kind in (
-                contracts.KIND_IMPLEMENT,
-                contracts.KIND_FIX_FINDINGS,
-            ):
+            if kind in contracts.RETHINK_CONTINUATION_KINDS:
                 pre = origin.get("pre_snapshot") or {}
                 return self._handle_gap(
                     unit,
@@ -2113,10 +2109,7 @@ class Driver(object):
             self._route_rethink_report_failure(unit, wait)
             return "Brainstorming failed; source finding queued for fixing"
 
-        if kind in (
-            contracts.KIND_IMPLEMENT,
-            contracts.KIND_FIX_FINDINGS,
-        ):
+        if kind in contracts.RETHINK_CONTINUATION_KINDS:
             family = origin["family"]
             design_context = (
                 self._design_correction_context(unit)
@@ -2124,6 +2117,11 @@ class Driver(object):
                 else None
             )
             amendments = self._amendments()
+            battery = (
+                interpreter.battery_questions(self.state, unit["kind"])
+                if kind == contracts.KIND_DRAFT_SLICE_NOTE
+                else None
+            )
             project_context, extensions, roots = (
                 self._project_prompt_inputs(unit, kind)
             )
@@ -2140,6 +2138,7 @@ class Driver(object):
                 ),
                 amendments=amendments,
                 project_context=project_context,
+                battery=battery,
             )
             raw_name = "%s-rethink-return" % origin["raw_name"]
             output, result, raw_path = self._call(
@@ -2151,12 +2150,18 @@ class Driver(object):
                 effort=origin.get("effort"),
                 extensions=extensions,
                 roots=roots,
-                validate_opts=(
-                    {"allow_design_correction": True}
-                    if design_context
-                    and design_context.get("mode") == "offer"
-                    else None
-                ),
+                validate_opts={
+                    **(
+                        {"allow_design_correction": True}
+                        if design_context
+                        and design_context.get("mode") == "offer"
+                        else {}
+                    ),
+                    **(
+                        {"battery_questions": battery}
+                        if battery else {}
+                    ),
+                } or None,
                 session_ref=origin["provider_session_ref"],
             )
             unit.pop("brainstorming_wait", None)
@@ -2559,7 +2564,9 @@ class Driver(object):
                 validate_opts=(
                     {"battery_questions": battery} if battery else None
                 ),
-                start_session=kind == contracts.KIND_IMPLEMENT,
+                start_session=(
+                    kind in contracts.RETHINK_CONTINUATION_KINDS
+                ),
             )
         if output.get("status") == "need_rethink":
             self._enforce_sealed_artifacts(raw_name)

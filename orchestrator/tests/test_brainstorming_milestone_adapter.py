@@ -59,7 +59,7 @@ def rethink(kind, finding=None, target="proposals/rethink.md", rounds=17):
         "target_path": target,
         "max_rounds": rounds,
     }
-    if kind in (contracts.KIND_IMPLEMENT, contracts.KIND_FIX_FINDINGS):
+    if kind in contracts.RETHINK_CONTINUATION_KINDS:
         value["failure_gap"] = failure_gap()
     return value
 
@@ -228,8 +228,8 @@ class BrainstormingMilestoneAdapterTest(unittest.TestCase):
             )
         with self.assertRaises(contracts.ContractError):
             contracts.validate_worker_output(
-                rethink(contracts.KIND_DRAFT_SLICE_NOTE),
-                contracts.KIND_DRAFT_SLICE_NOTE,
+                rethink(contracts.KIND_DRAFT_SKELETON),
+                contracts.KIND_DRAFT_SKELETON,
             )
         for bad_target in (
             "/absolute.md",
@@ -1346,6 +1346,19 @@ class MilestoneDriverRethinkTest(unittest.TestCase):
         self.assertEqual(unit["status"], st.U_PENDING)
         self.assertIsNotNone(unit.get("baseline_verification"))
 
+    def _slice_doc_path(self, workspace=None, config=None):
+        path = self._state_path(workspace=workspace, config=config)
+        state = st.load(path)
+        note = next(
+            unit for unit in state["units"]
+            if st.unit_key(unit) == "slice_doc-08"
+        )
+        note["status"] = st.U_PENDING
+        note["artifact"] = None
+        note["draft"] = None
+        st.save(path, state)
+        return path
+
     @staticmethod
     def _created():
         return {
@@ -1554,6 +1567,96 @@ class MilestoneDriverRethinkTest(unittest.TestCase):
         self.assertEqual(unit["status"], st.U_PRE_REVIEW_VERIFY)
         self.assertIsNotNone(unit["draft"])
         self.assertEqual(len(runner.calls), 2)
+
+    def test_slice_note_drafter_rethink_continues_the_origin_session(self):
+        path = self._slice_doc_path()
+        runner = runners.MockRunner(
+            [
+                {
+                    "expect_kind": contracts.KIND_DRAFT_SLICE_NOTE,
+                    "response": rethink(contracts.KIND_DRAFT_SLICE_NOTE),
+                },
+                {
+                    "expect_kind": contracts.KIND_DRAFT_SLICE_NOTE,
+                    "response": {
+                        "status": "ok",
+                        "kind": contracts.KIND_DRAFT_SLICE_NOTE,
+                        "artifact": "docs/slice-08.md",
+                    },
+                },
+            ]
+        )
+        with mock.patch.object(
+            adapter, "create_session", return_value=self._created()
+        ):
+            drv.Driver(path, runner=runner).step()
+
+        paused = st.current_unit(st.load(path))
+        self.assertEqual(paused["kind"], st.UNIT_SLICE_DOC)
+        self.assertEqual(paused["status"], st.U_PENDING)
+        self.assertIsNone(paused["draft"])
+
+        with mock.patch.object(
+            adapter, "terminal_handoff", return_value=self._handoff()
+        ):
+            drv.Driver(path, runner=runner).step()
+        drv.Driver(path, runner=runner).step()
+
+        note = next(
+            unit for unit in st.load(path)["units"]
+            if st.unit_key(unit) == "slice_doc-08"
+        )
+        self.assertEqual(note["status"], st.U_PRE_REVIEW_VERIFY)
+        self.assertEqual(
+            note["draft"]["result"]["artifact"], "docs/slice-08.md"
+        )
+        self.assertEqual(
+            runner.session_calls,
+            [
+                ("start", "codex", "mock-session-1"),
+                ("continue", "codex", "mock-session-1"),
+            ],
+        )
+
+    def test_slice_note_rethink_failure_reuses_its_gap_route(self):
+        path = self._slice_doc_path()
+        runner = runners.MockRunner(
+            [{
+                "expect_kind": contracts.KIND_DRAFT_SLICE_NOTE,
+                "response": rethink(contracts.KIND_DRAFT_SLICE_NOTE),
+            }]
+        )
+        with mock.patch.object(
+            adapter, "create_session", return_value=self._created()
+        ):
+            drv.Driver(path, runner=runner).step()
+        with mock.patch.object(
+            adapter,
+            "terminal_handoff",
+            return_value=self._handoff("failure"),
+        ):
+            drv.Driver(path, runner=runner).step()
+
+        state = st.load(path)
+        note = next(
+            unit for unit in state["units"]
+            if st.unit_key(unit) == "slice_doc-08"
+        )
+        skeleton = next(
+            unit for unit in state["units"]
+            if st.unit_key(unit) == "skeleton"
+        )
+        self.assertEqual(note["status"], st.U_PENDING)
+        self.assertIsNone(note["draft"])
+        self.assertNotIn("brainstorming_wait", note)
+        self.assertEqual(skeleton["status"], st.U_FIXING)
+        self.assertTrue(
+            any(
+                event["type"] == "gap_reported"
+                and event["unit"] == "slice_doc-08"
+                for event in state["events"]
+            )
+        )
 
     def test_implementer_and_fixer_continue_exact_origin_session(self):
         implement_workspace = os.path.join(self.tmp.name, "same-implement")

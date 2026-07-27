@@ -146,7 +146,7 @@ class TestNaturalRethinkExit(unittest.TestCase):
 
         reform = build_all_reform()
         self.assertNotIn(self.HEADING, reform["draft_skeleton"])
-        self.assertNotIn(self.HEADING, reform["draft_slice_note"])
+        self.assertIn(self.HEADING, reform["draft_slice_note"])
         self.assertIn(self.HEADING, reform["implement"])
         self.assertIn(self.HEADING, self.fixer(gap_enabled=True))
         self.assertNotIn(self.HEADING, self.fixer(gap_enabled=False))

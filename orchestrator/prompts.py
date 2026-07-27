@@ -1296,7 +1296,7 @@ def build_draft_slice_note(family, workspace, goal, slice_info, skeleton_path,
         + "\n"
         + _access_block(edit_allowed=True)
         + "\n"
-        + (_gap_block() if gap_enabled else "")
+        + (_gap_block(rethink_allowed=True) if gap_enabled else "")
         + (_battery_contract_block(battery) if battery else "")
         + contracts.CONTRACT_TEXT
     )
@@ -1386,6 +1386,7 @@ def build_rethink_continuation(
     allow_design_correction=False,
     amendments=None,
     project_context=None,
+    battery=None,
 ):
     authority = {
         "session_id": handoff["session_id"],
@@ -1431,6 +1432,7 @@ def build_rethink_continuation(
         + "Finish the original task now and return its ordinary output under\n"
         "the exact OUTPUT CONTRACT below. Only that ordinary envelope may\n"
         "advance milestone state.\n\n"
+        + (_battery_contract_block(battery) if battery else "")
         + contracts.CONTRACT_TEXT
     )
 

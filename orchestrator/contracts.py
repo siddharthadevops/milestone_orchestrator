@@ -78,12 +78,12 @@ KINDS = (
 
 # Reviewers report; they never edit (enforced via snapshots/git restore).
 REPORT_KINDS = (KIND_REVIEW_ROUND, KIND_DELTA_REVIEW)
-RETHINK_KINDS = (
+RETHINK_CONTINUATION_KINDS = (
+    KIND_DRAFT_SLICE_NOTE,
     KIND_IMPLEMENT,
     KIND_FIX_FINDINGS,
-    KIND_REVIEW_ROUND,
-    KIND_DELTA_REVIEW,
 )
+RETHINK_KINDS = RETHINK_CONTINUATION_KINDS + REPORT_KINDS
 
 # Kinds whose worker gets full edit permissions inside the workspace.
 EDIT_KINDS = (
@@ -662,7 +662,7 @@ def validate_need_rethink(obj, kind, ctx, require_plain=False):
         "target_path",
         "max_rounds",
     }
-    if kind in (KIND_IMPLEMENT, KIND_FIX_FINDINGS):
+    if kind in RETHINK_CONTINUATION_KINDS:
         required.add("failure_gap")
     if set(obj) != required:
         raise ContractError(
@@ -703,7 +703,7 @@ def validate_need_rethink(obj, kind, ctx, require_plain=False):
         raise ContractError(
             "%s: need_rethink.max_rounds must be a positive integer" % ctx
         )
-    if kind in (KIND_IMPLEMENT, KIND_FIX_FINDINGS):
+    if kind in RETHINK_CONTINUATION_KINDS:
         validate_gap(obj["failure_gap"], "%s.failure_gap" % ctx)
     return obj
 
@@ -1038,8 +1038,8 @@ opposite-family consultation could not run or ended without a clear result:
 Return no findings or work claims with it. The driver records a transient
 failure and the process guard retries the same fix episode after 15 minutes.
 
-`status: "need_rethink"` is allowed ONLY for implement, fix_findings,
-review_round and delta_review when one focused design question
+`status: "need_rethink"` is allowed ONLY for draft_slice_note, implement,
+fix_findings, review_round and delta_review when one focused design question
 should be resolved by the independent Brainstorming process before this worker
 can finish its current judgment. It is help-seeking, not completion. Return
 EXACTLY:
@@ -1049,9 +1049,10 @@ EXACTLY:
   "finding": {<the one current finding, preserved as source evidence>}
   "target_path": "<normalized workspace-relative source artifact to isolate>"
   "max_rounds": <any positive integer chosen for this discussion>
-For implement and fix_findings, ALSO return exactly one `"failure_gap"` using
-the normal gap-entry shape; it is the already-declared route used only if the
-discussion itself returns failure. Review kinds MUST NOT include failure_gap.
+For draft_slice_note, implement and fix_findings, ALSO return exactly one
+`"failure_gap"` using the normal gap-entry shape; it is the already-declared
+route used only if the discussion itself returns failure. Review kinds MUST
+NOT include failure_gap.
 Do not mix need_rethink with notes, ordinary findings/results, work/file claims,
 retry, disposition, verdict, gap arrays, or slice plans. A fixer must put
 exactly one currently queued finding in `finding`; its queued siblings remain

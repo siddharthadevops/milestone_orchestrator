@@ -33,10 +33,12 @@ class PromptCapturingRunner(runners.MockRunner):
         super().__init__(script)
         self.prompts = []
 
-    def call(self, family, prompt, workspace, model=None, effort=None):
+    def call(self, family, prompt, workspace, model=None, effort=None,
+             timeout_override=None):
         self.prompts.append((runners.prompt_kind(prompt), prompt))
         return super().call(
-            family, prompt, workspace, model=model, effort=effort
+            family, prompt, workspace, model=model, effort=effort,
+            timeout_override=timeout_override,
         )
 
 
