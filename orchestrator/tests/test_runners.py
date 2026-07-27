@@ -465,24 +465,6 @@ class TestValidateWorkerOutputHappy(unittest.TestCase):
         contracts.validate_worker_output(obj, contracts.KIND_FIX_FINDINGS)
         self.assertEqual(len(contracts.blocking_findings(obj)), 1)
 
-    def test_seal_half_report_only_finding(self):
-        obj = ok_output(
-            contracts.KIND_SEAL_HALF,
-            findings=[{
-                "id": "F1",
-                "severity": "P1",
-                "summary": "leak",
-                "validity": finding_validity(True),
-            }],
-        )
-        self.assertIs(
-            contracts.validate_worker_output(obj, contracts.KIND_SEAL_HALF), obj
-        )
-
-    def test_seal_half_clean(self):
-        obj = ok_output(contracts.KIND_SEAL_HALF, findings=[])
-        contracts.validate_worker_output(obj, contracts.KIND_SEAL_HALF)
-
     def test_delta_review_clean_and_with_finding(self):
         contracts.validate_worker_output(
             ok_output(contracts.KIND_DELTA_REVIEW, findings=[]),
@@ -797,20 +779,6 @@ class TestValidateWorkerOutputViolations(unittest.TestCase):
         )
         self.assertContract(obj, contracts.KIND_REVIEW_ROUND)
 
-    def test_seal_half_finding_with_disposition(self):
-        obj = ok_output(
-            contracts.KIND_SEAL_HALF,
-            findings=[
-                {
-                    "id": "F1",
-                    "severity": "P0",
-                    "summary": "bad",
-                    "disposition": "fixed",
-                }
-            ],
-        )
-        self.assertContract(obj, contracts.KIND_SEAL_HALF, "disposition")
-
     def test_bad_severity_on_report_finding(self):
         obj = ok_output(
             contracts.KIND_REVIEW_ROUND,
@@ -827,9 +795,10 @@ class TestValidateWorkerOutputViolations(unittest.TestCase):
 
     def test_missing_severity(self):
         obj = ok_output(
-            contracts.KIND_SEAL_HALF, findings=[{"id": "F1", "summary": "s"}]
+            contracts.KIND_REVIEW_ROUND,
+            findings=[{"id": "F1", "summary": "s"}],
         )
-        self.assertContract(obj, contracts.KIND_SEAL_HALF, "severity")
+        self.assertContract(obj, contracts.KIND_REVIEW_ROUND, "severity")
 
     def test_bad_disposition(self):
         obj = ok_output(
@@ -860,9 +829,10 @@ class TestValidateWorkerOutputViolations(unittest.TestCase):
 
     def test_finding_missing_summary(self):
         obj = ok_output(
-            contracts.KIND_SEAL_HALF, findings=[{"id": "F1", "severity": "P1"}]
+            contracts.KIND_REVIEW_ROUND,
+            findings=[{"id": "F1", "severity": "P1"}],
         )
-        self.assertContract(obj, contracts.KIND_SEAL_HALF, "summary")
+        self.assertContract(obj, contracts.KIND_REVIEW_ROUND, "summary")
 
 
 # ---------------------------------------------------------------------------
@@ -1426,7 +1396,7 @@ class TestUnterminatedEnvelopeRecovery(unittest.TestCase):
         # the verification gate, so "the required keys are present" does
         # not prove the object was finished. Those keep the repair retry.
         self.assertEqual(
-            runners.RECOVERABLE_KINDS, frozenset({"review_round", "seal_half"})
+            runners.RECOVERABLE_KINDS, frozenset({"review_round"})
         )
         text = (
             '{"status": "ok", "kind": "implement", '
@@ -1445,14 +1415,14 @@ class TestUnterminatedEnvelopeRecovery(unittest.TestCase):
     def test_prefix_scan_matches_delimiter_types(self):
         # A depth COUNTER reads `[}` as balanced and would promote the
         # object out of an unterminated array.
-        text = '[} {"status": "ok", "kind": "seal_half", "findings": []'
+        text = '[} {"status": "ok", "kind": "review_round", "findings": []'
         self.assertIsNone(runners._repair_unterminated(text))
 
     def test_duplicate_key_recovery_is_refused(self):
         # json.loads keeps the LAST of duplicate keys, so a recovered
         # `status` could silently flip ok<->blocked. A duplicate is never
         # legitimate worker output.
-        text = ('{"status": "ok", "kind": "seal_half", '
+        text = ('{"status": "ok", "kind": "review_round", '
                 '"status": "blocked", "findings": []')
         self.assertIsNone(runners._repair_unterminated(text))
         # ...including a duplicated nested/extension field.
@@ -1799,7 +1769,7 @@ class TestMockRunner(unittest.TestCase):
 
     def test_expect_kind_mismatch_raises(self):
         runner = MockRunner(
-            [{"expect_kind": "seal_half", "response": VALID_IMPLEMENT}]
+            [{"expect_kind": "review_round", "response": VALID_IMPLEMENT}]
         )
         with self.assertRaises(AssertionError):
             runner.call("codex", make_prompt("implement"), self.workspace)

@@ -1883,7 +1883,7 @@ class MilestoneDriverRethinkTest(unittest.TestCase):
             ],
         )
 
-    def test_review_delta_and_concurrent_seal_restart_fresh(self):
+    def test_review_and_delta_restart_fresh(self):
         path = self._state_path(status=st.U_ROUNDS)
         finding = report_finding()
         runner = runners.MockRunner(
@@ -2076,123 +2076,36 @@ class MilestoneDriverRethinkTest(unittest.TestCase):
         )
         self.assertEqual(delta_runner.session_calls, [])
 
-        seal_workspace = os.path.join(self.tmp.name, "seal")
-        os.makedirs(os.path.join(seal_workspace, "proposals"))
-        seal_config = make_config(seal_concurrent=True)
-        seal_state = st.new_state(
-            "Build the adapter.", seal_workspace, seal_config
-        )
-        st.append_event(
-            seal_state, "initialized", goal=seal_state["goal"]
-        )
-        seal_state["milestone"]["slices"] = [
-            {"id": 8, "title": "Adapter"}
-        ]
-        seal_skeleton = st._new_unit(st.UNIT_SKELETON, None)
-        seal_skeleton["status"] = st.U_SEALED
-        seal_note = st._new_unit(st.UNIT_SLICE_DOC, 8)
-        seal_note["status"] = st.U_SEALED
-        seal_unit = st._new_unit(st.UNIT_SLICE_IMPL, 8)
-        seal_unit["status"] = st.U_SEALING
-        seal_unit["rounds"] = [
-            {
-                "id": "codex-r1",
-                "family": "codex",
-                "kind": contracts.KIND_REVIEW_ROUND,
-                "result": {
-                    "status": "ok",
-                    "kind": contracts.KIND_REVIEW_ROUND,
-                    "findings": [],
-                },
-            },
-            {
-                "id": "claude-r1",
-                "family": "claude",
-                "kind": contracts.KIND_REVIEW_ROUND,
-                "result": {
-                    "status": "ok",
-                    "kind": contracts.KIND_REVIEW_ROUND,
-                    "findings": [],
-                },
-            },
-        ]
-        seal_state["units"] = [seal_skeleton, seal_note, seal_unit]
-        seal_path = drv.default_state_path(seal_workspace)
-        st.save(seal_path, seal_state)
-        seal_runner = runners.MockRunner(
-            [
-                {
-                    "expect_kind": contracts.KIND_SEAL_HALF,
-                    "expect_family": "codex",
-                    "response": rethink(
-                        contracts.KIND_SEAL_HALF, finding=finding
-                    ),
-                },
-                {
-                    "expect_kind": contracts.KIND_SEAL_HALF,
-                    "expect_family": "claude",
-                    "response": rethink(
-                        contracts.KIND_SEAL_HALF,
-                        finding=report_finding("F2"),
-                    ),
-                },
-                {
-                    "expect_kind": contracts.KIND_SEAL_HALF,
-                    "expect_family": "codex",
-                    "response": {
-                        "status": "ok",
-                        "kind": contracts.KIND_SEAL_HALF,
-                        "findings": [],
-                    },
-                },
-                {
-                    "expect_kind": contracts.KIND_SEAL_HALF,
-                    "expect_family": "claude",
-                    "response": {
-                        "status": "ok",
-                        "kind": contracts.KIND_SEAL_HALF,
-                        "findings": [],
-                    },
-                },
-            ]
-        )
-        with mock.patch.object(
-            adapter, "create_session", return_value=self._created()
-        ):
-            drv.Driver(seal_path, runner=seal_runner).step()
-        paused = st.load(seal_path)
-        self.assertEqual(st.current_unit(paused)["seals"], [])
-        selected = [
-            event
-            for event in paused["events"]
-            if event["type"] == "brainstorming_seal_request_selected"
-        ][0]
-        self.assertEqual(selected["selected_family"], "codex")
-        self.assertEqual(
-            selected["requesting_families"], ["codex", "claude"]
-        )
-        with mock.patch.object(
-            adapter, "terminal_handoff", return_value=self._handoff()
-        ):
-            drv.Driver(seal_path, runner=seal_runner).step()
-        after_handoff = st.load(seal_path)
-        self.assertEqual(
-            st.current_unit(after_handoff)["status"], st.U_PRE_SEAL_VERIFY
-        )
-        drv.Driver(seal_path, runner=seal_runner).step()
-        self.assertEqual(
-            st.current_unit(st.load(seal_path))["status"], st.U_SEALING
-        )
-        drv.Driver(seal_path, runner=seal_runner).step()
-        self.assertTrue(
-            all(
-                "BRAINSTORMING RETURN (FRESH REVIEW REQUIRED)" in call[2]
-                for call in seal_runner.calls[2:]
-            )
-        )
+    def test_retired_seal_handoff_is_migrated_to_an_ordinary_review(self):
+        path = self._state_path(status=st.U_PRE_SEAL_VERIFY)
+        state = st.load(path)
+        unit = st.current_unit(state)
+        unit["brainstorming_review_handoff"] = {
+            "kind": "seal_half",
+            "handoff": self._handoff(),
+            "source_finding": report_finding(),
+        }
+        st.save(path, state)
 
-    def _prepare_preseal_verification_delta(self, workspace_name):
-        workspace = os.path.join(self.tmp.name, workspace_name)
+        drv.Driver(path, runner=runners.MockRunner([])).step()
+
+        migrated = st.load(path)
+        current = st.current_unit(migrated)
+        self.assertEqual(current["status"], st.U_PRE_REVIEW_VERIFY)
+        self.assertEqual(
+            current["brainstorming_review_handoff"]["kind"],
+            contracts.KIND_REVIEW_ROUND,
+        )
+        self.assertEqual(current["family_index"], 0)
+        self.assertTrue(any(
+            event["type"] == "brainstorming_review_handoff_migrated"
+            for event in migrated["events"]
+        ))
+
+    def test_retired_seal_handoff_survives_pending_delta_as_review_context(self):
+        from orchestrator.tests.test_driver_mock import fix_ok, triaged, write_file
+
+        workspace = os.path.join(self.tmp.name, "retired-seal-delta")
         os.makedirs(os.path.join(workspace, "proposals"))
         config = make_config(
             git={"enabled": True},
@@ -2205,14 +2118,31 @@ class MilestoneDriverRethinkTest(unittest.TestCase):
             workspace=workspace,
             config=config,
         )
+        state = st.load(path)
+        unit = st.current_unit(state)
+        unit["fix_queue"] = [report_finding()]
+        unit["fix_source"] = {
+            "type": "seal",
+            "origin_type": "seal",
+            "family": "codex",
+            "source_round_id": "slice_impl-08-seal-a1",
+            "return_to": st.U_PRE_SEAL_VERIFY,
+        }
+        unit["brainstorming_review_handoff"] = {
+            "kind": "seal_half",
+            "handoff": self._handoff(),
+            "source_finding": report_finding(),
+        }
+        st.save(path, state)
+        pending_path = os.path.join(workspace, "pending-fix.txt")
         with open(
-            os.path.join(workspace, "candidate.txt"),
+            pending_path,
             "w",
             encoding="utf-8",
         ) as handle:
-            handle.write("reviewed baseline\n")
+            handle.write("baseline\n")
         subprocess.run(
-            ["git", "add", "candidate.txt"],
+            ["git", "add", "pending-fix.txt"],
             cwd=workspace,
             capture_output=True,
             text=True,
@@ -2220,14 +2150,8 @@ class MilestoneDriverRethinkTest(unittest.TestCase):
         )
         subprocess.run(
             [
-                "git",
-                "-c",
-                "user.name=Milestone Test",
-                "-c",
-                "user.email=milestone-test@example.invalid",
-                "commit",
-                "-q",
-                "-m",
+                "git", "-c", "user.name=Test", "-c",
+                "user.email=test@example.invalid", "commit", "-qm",
                 "baseline",
             ],
             cwd=workspace,
@@ -2235,78 +2159,114 @@ class MilestoneDriverRethinkTest(unittest.TestCase):
             text=True,
             check=True,
         )
-
-        finding = report_finding()
-        value = st.load(path)
-        unit = st.current_unit(value)
-        unit["fix_queue"] = [copy.deepcopy(finding)]
-        unit["fix_source"] = {
-            "type": "verification",
-            "origin_type": "verification",
-            "family": None,
-            "source_round_id": "slice_impl-08-verify-pre_seal-1",
-            "return_to": st.U_PRE_SEAL_VERIFY,
-        }
-        unit["brainstorming_review_handoff"] = {
-            "kind": contracts.KIND_SEAL_HALF,
-            "handoff": self._handoff(),
-            "source_finding": copy.deepcopy(finding),
-        }
-        st.save(path, value)
-        with open(
-            os.path.join(workspace, "candidate.txt"),
-            "a",
-            encoding="utf-8",
-        ) as handle:
-            handle.write("verification fix\n")
-        return path, finding
-
-    def test_seal_handoff_survives_verification_fix_delta(self):
-        path, _finding = self._prepare_preseal_verification_delta(
-            "seal-verification-fix"
-        )
-
-        runner = runners.MockRunner([{
-            "expect_kind": contracts.KIND_DELTA_REVIEW,
-            "response": {
-                "status": "ok",
-                "kind": contracts.KIND_DELTA_REVIEW,
-                "findings": [],
+        with open(pending_path, "w", encoding="utf-8") as handle:
+            handle.write("pending fix\n")
+        runner = runners.MockRunner([
+            {
+                "expect_kind": contracts.KIND_DELTA_REVIEW,
+                "response": {
+                    "status": "ok",
+                    "kind": contracts.KIND_DELTA_REVIEW,
+                    "findings": [report_finding("D1")],
+                },
             },
-        }])
-        drv.Driver(path, runner=runner).step()
+            {
+                "expect_kind": contracts.KIND_FIX_FINDINGS,
+                "response": fix_ok([
+                    triaged("D1", "fixed", "delta defect", severity="P1")
+                ], files_changed=["pending-fix.txt"]),
+                "side_effect": write_file("pending-fix.txt", "fixed\n"),
+            },
+            {
+                "expect_kind": contracts.KIND_DELTA_REVIEW,
+                "response": {
+                    "status": "ok",
+                    "kind": contracts.KIND_DELTA_REVIEW,
+                    "findings": [],
+                },
+            },
+        ])
 
-        converged = st.load(path)
-        unit = st.current_unit(converged)
-        self.assertEqual(unit["status"], st.U_PRE_SEAL_VERIFY)
-        self.assertEqual(
-            unit["brainstorming_review_handoff"]["kind"],
-            contracts.KIND_SEAL_HALF,
-        )
-        self.assertNotIn(
-            "BRAINSTORMING RETURN (FRESH REVIEW REQUIRED)",
-            runner.calls[0][2],
-        )
-        seal_handoff = drv.Driver(
-            path, runner=runner
-        )._brainstorming_review_handoff(
-            unit, contracts.KIND_SEAL_HALF
-        )
-        self.assertEqual(
-            seal_handoff["retained_target"]["content"],
-            "accepted proposal",
-        )
+        driver = drv.Driver(path, runner=runner)
+        for _ in range(3):
+            driver.step()
 
-    def test_seal_handoff_survives_nested_verification_delta_rethink(self):
-        path, finding = self._prepare_preseal_verification_delta(
-            "seal-verification-delta-rethink"
+        resumed = st.load(path)
+        current = st.current_unit(resumed)
+        self.assertEqual(current["status"], st.U_PRE_REVIEW_VERIFY)
+        self.assertEqual(
+            current["brainstorming_review_handoff"]["kind"],
+            contracts.KIND_REVIEW_ROUND,
         )
+        self.assertEqual(current["family_index"], 0)
+        self.assertEqual(len(runner.calls), 3)
+        for call in (runner.calls[0], runner.calls[2]):
+            self.assertNotIn(
+                "BRAINSTORMING RETURN (FRESH REVIEW REQUIRED)", call[2]
+            )
+
+    def test_delta_brainstorming_temporarily_reserves_whole_review_handoff(self):
+        workspace = os.path.join(self.tmp.name, "reserved-review-delta")
+        os.makedirs(os.path.join(workspace, "proposals"))
+        config = make_config(
+            git={"enabled": True},
+            snapshot_exclude_dirs=[],
+            error_classifier=False,
+            infra_retry_backoff_s=[],
+        )
+        path = self._state_path(
+            status=st.U_DELTA_REVIEW,
+            workspace=workspace,
+            config=config,
+        )
+        state = st.load(path)
+        unit = st.current_unit(state)
+        unit["fix_queue"] = [report_finding("D2")]
+        unit["fix_source"] = {
+            "type": "round",
+            "origin_type": "round",
+            "family": "codex",
+            "source_round_id": "slice_impl-08-codex-r1",
+            "return_to": st.U_PRE_REVIEW_VERIFY,
+        }
+        original_handoff = {
+            "kind": contracts.KIND_REVIEW_ROUND,
+            "handoff": self._handoff(),
+            "source_finding": report_finding("R1"),
+        }
+        unit["brainstorming_review_handoff"] = copy.deepcopy(
+            original_handoff
+        )
+        st.save(path, state)
+        pending_path = os.path.join(workspace, "pending-fix.txt")
+        with open(pending_path, "w", encoding="utf-8") as handle:
+            handle.write("baseline\n")
+        subprocess.run(
+            ["git", "add", "pending-fix.txt"],
+            cwd=workspace,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        subprocess.run(
+            [
+                "git", "-c", "user.name=Test", "-c",
+                "user.email=test@example.invalid", "commit", "-qm",
+                "baseline",
+            ],
+            cwd=workspace,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        with open(pending_path, "w", encoding="utf-8") as handle:
+            handle.write("pending fix\n")
         runner = runners.MockRunner([
             {
                 "expect_kind": contracts.KIND_DELTA_REVIEW,
                 "response": rethink(
                     contracts.KIND_DELTA_REVIEW,
-                    finding=finding,
+                    finding=report_finding("D2"),
                 ),
             },
             {
@@ -2323,45 +2283,95 @@ class MilestoneDriverRethinkTest(unittest.TestCase):
             adapter, "create_session", return_value=self._created()
         ):
             drv.Driver(path, runner=runner).step()
-
-        delta_handoff = self._handoff()
-        delta_handoff["accepted_target_revision"] = "delta-revision"
-        delta_handoff["retained_target"]["content"] = "delta proposal"
+        paused = st.current_unit(st.load(path))
+        self.assertEqual(
+            paused["brainstorming_review_handoff"], original_handoff
+        )
         with mock.patch.object(
-            adapter, "terminal_handoff", return_value=delta_handoff
+            adapter, "terminal_handoff", return_value=self._handoff()
         ):
             drv.Driver(path, runner=runner).step()
-
-        pending = st.current_unit(st.load(path))[
+        nested = st.current_unit(st.load(path))[
             "brainstorming_review_handoff"
         ]
-        self.assertEqual(pending["kind"], contracts.KIND_DELTA_REVIEW)
-        self.assertEqual(
-            pending["reserved_handoff"]["kind"],
-            contracts.KIND_SEAL_HALF,
-        )
+        self.assertEqual(nested["kind"], contracts.KIND_DELTA_REVIEW)
+        self.assertEqual(nested["reserved_handoff"], original_handoff)
 
         drv.Driver(path, runner=runner).step()
 
-        converged = st.current_unit(st.load(path))
-        self.assertEqual(converged["status"], st.U_PRE_SEAL_VERIFY)
+        resumed = st.current_unit(st.load(path))
+        self.assertEqual(resumed["status"], st.U_PRE_REVIEW_VERIFY)
         self.assertEqual(
-            converged["brainstorming_review_handoff"]["kind"],
-            contracts.KIND_SEAL_HALF,
+            resumed["brainstorming_review_handoff"], original_handoff
         )
         self.assertIn(
-            '"content": "delta proposal"',
-            runner.calls[1][2],
+            "BRAINSTORMING RETURN (FRESH REVIEW REQUIRED)",
+            runner.calls[-1][2],
         )
-        seal_handoff = drv.Driver(
-            path, runner=runner
-        )._brainstorming_review_handoff(
-            converged, contracts.KIND_SEAL_HALF
-        )
+
+    def test_retired_seal_wait_success_restarts_as_ordinary_review(self):
+        path = self._state_path(status=st.U_SEALING)
+        state = st.load(path)
+        unit = st.current_unit(state)
+        unit["brainstorming_wait"] = {
+            "session_id": "brainstorming-session",
+            "signal": {"finding": report_finding()},
+            "references": [],
+            "origin": {
+                "unit": st.unit_key(unit),
+                "kind": "seal_half",
+                "family": "codex",
+            },
+        }
+        st.save(path, state)
+
+        with mock.patch.object(
+            adapter, "terminal_handoff", return_value=self._handoff()
+        ):
+            drv.Driver(path, runner=runners.MockRunner([])).step()
+
+        resumed = st.load(path)
+        current = st.current_unit(resumed)
+        self.assertEqual(current["status"], st.U_PRE_REVIEW_VERIFY)
+        self.assertNotIn("brainstorming_wait", current)
         self.assertEqual(
-            seal_handoff["retained_target"]["content"],
-            "accepted proposal",
+            current["brainstorming_review_handoff"]["kind"],
+            contracts.KIND_REVIEW_ROUND,
         )
+        self.assertEqual(current["family_index"], 0)
+
+    def test_retired_seal_wait_failure_queues_finding_after_restart(self):
+        path = self._state_path(status=st.U_SEALING)
+        state = st.load(path)
+        unit = st.current_unit(state)
+        source_finding = report_finding()
+        unit["brainstorming_wait"] = {
+            "session_id": "brainstorming-session",
+            "signal": {"finding": copy.deepcopy(source_finding)},
+            "references": [],
+            "origin": {
+                "unit": st.unit_key(unit),
+                "kind": "seal_half",
+                "family": "codex",
+            },
+        }
+        st.save(path, state)
+
+        with mock.patch.object(
+            adapter,
+            "terminal_handoff",
+            return_value=self._handoff("failure"),
+        ):
+            drv.Driver(path, runner=runners.MockRunner([])).step()
+
+        resumed = st.load(path)
+        current = st.current_unit(resumed)
+        self.assertEqual(current["status"], st.U_FIXING)
+        self.assertNotIn("brainstorming_wait", current)
+        self.assertEqual(current["family_index"], 0)
+        self.assertEqual([item["id"] for item in current["fix_queue"]],
+                         [source_finding["id"]])
+        self.assertEqual(current["fix_source"]["type"], "round")
 
     def test_fresh_review_uses_retained_content_without_target_monitoring(self):
         workspace = os.path.join(self.tmp.name, "retained-target-review")
@@ -2604,7 +2614,8 @@ class MilestoneDriverRethinkTest(unittest.TestCase):
                 },
                 st.U_ROUNDS,
             )
-        self.assertEqual(unit["status"], st.U_ROUNDS)
+        self.assertEqual(unit["status"], st.U_PRE_REVIEW_VERIFY)
+        self.assertEqual(st.current_family(driver.state, unit), "codex")
         self.assertEqual(note_unit["status"], st.U_SEALED)
         self.assertEqual(note_unit["gate_commit"], "ratified-note")
         self.assertIsNone(driver.state.get("redoc_wave"))

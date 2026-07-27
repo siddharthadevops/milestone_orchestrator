@@ -193,17 +193,15 @@ class ReformActiveTest(unittest.TestCase):
         legacy = _state({"profile": profiles.SEEDS["legacy"]["profile"]})
         self.assertFalse(it.reform_active(legacy))
 
-    def test_gap_and_seal_predicates_delegate(self):
-        # gap_semantics and seal_predicate are reform_active by other
-        # names; the three must never diverge.
+    def test_gap_predicate_delegates(self):
+        # gap_semantics is reform_active by another name; they must never
+        # diverge.
         for cfg in ({},
                     {"profile": profiles.SEEDS["legacy"]["profile"]},
                     {"profile": profiles.SEEDS["strict"]["profile"]},
                     {"profile": profiles.SEEDS["light"]["profile"]}):
             state = _state(cfg)
             self.assertEqual(it.gap_semantics(state),
-                             it.reform_active(state))
-            self.assertEqual(it.seal_predicate(state),
                              it.reform_active(state))
 
 

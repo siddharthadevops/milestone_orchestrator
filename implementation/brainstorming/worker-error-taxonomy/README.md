@@ -81,12 +81,12 @@ The taxonomy grows from evidence, not from speculation.
 
 ## Raw-output links (observability)
 
-- Every round/seal-half already records `raw_path`; protocol failures
+- Every live worker call already records `raw_path`; protocol failures
   save both attempts (`-protoerr1/2`) but the failure record does not
   reference them → add the paths to the failure record.
 - `GET /api/runs/<id>/raw/<round-id>` (localhost, read-only, path
   restricted to the run's `.orchestrator/raw/` dir — no traversal).
-- Panel: round chips and seal halves link their raw; the failure banner
+- Panel: worker chips link their raw; the failure banner
   links the protoerr raws directly. Truncated view with "open full".
 
 ## Content-discipline failures (added 2026-07-05, from the M164 incident)

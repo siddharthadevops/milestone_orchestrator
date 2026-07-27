@@ -18,7 +18,7 @@ from . import contracts
 
 # Bounds for worker-authored text re-rendered into later prompts. The
 # adjudicated-rejections registry is injected into EVERY subsequent
-# review/delta/seal/fix prompt for the rest of the milestone, so unbounded
+# review/delta/fix prompt for the rest of the milestone, so unbounded
 # summaries/rationales would inflate every prompt until workers fail on
 # context; and raw newlines in them could inject spoofed one-per-line
 # registry entries (luring a later reviewer into contesting a nonexistent
@@ -62,7 +62,7 @@ def _access_block(edit_allowed):
             "  changes yourself; never describe a fix without applying it.",
             "  Never modify anything outside WORKSPACE.",
         ]
-    # Report-only roles (reviewers, seal halves, reclassifiers) get no edit
+    # Report-only roles (reviewers and reclassifiers) get no edit
     # grant, which is the whole instruction: they return findings, not file
     # changes. The old "do not modify ANY file, anywhere — it invalidates
     # your entire output" warning was dropped deliberately: the real guard
@@ -607,9 +607,9 @@ DELTA_COVERAGE_LINE = (
     "  full verification suite here — the driver runs it at gates.\n"
 )
 
-# The canon requires this exact sentence for all review phases
-# (codex-review.md:277); full and seal rounds carry it verbatim, the
-# delta review carries the delta-scoped variant in DELTA_COVERAGE_LINE.
+# The canon requires this exact sentence for full review rounds
+# (codex-review.md:277); delta review carries the delta-scoped variant in
+# DELTA_COVERAGE_LINE.
 EXHAUSTIVE_SENTENCE = (
     "Do not stop at the first finding: report every defect you can\n"
     "verify in a complete pass of the artifact and the code it cites.\n"
@@ -750,7 +750,7 @@ def _amendments_block(amendments):
 
 
 def _verified_suite_block(verified_suite, unit_kind=None):
-    """Injected into full-round and seal prompts. When a gate ran, the
+    """Injected into full-round prompts. When a gate ran, the
     suite result is machine truth — but the COMMAND is the implementer's
     claim, and judging its legitimacy is review work. When no gate ran
     on an implementation unit, that absence is itself a reviewable
@@ -791,7 +791,7 @@ def _delta_governing_line(governing):
     return (
         "CANONICAL REFERENCE: %s (sealed) is the standard behind the\n"
         "artifact. Check only that the DELTA does not contradict it — do\n"
-        "not re-judge the artifact against it; full rounds and seals do\n"
+        "not re-judge the artifact against it; full rounds do\n"
         "that.\n\n" % governing
     )
 
@@ -837,7 +837,7 @@ def _delta_quality_block(unit_kind, reform=False):
     # and a fix delta is exactly where an invented stricter posture (and the
     # machinery it summons) gets introduced — a delta reviewer without the
     # authority/altitude rules would approve it and let it be amended in,
-    # leaving the later full/seal round to recover.
+    # leaving the later full round to recover.
     # The base proportionality check is ordinary review guidance and rides
     # every delta prompt. The reform addendum remains gated because it carries
     # reform-specific authority and routing language.
@@ -847,8 +847,8 @@ def _delta_quality_block(unit_kind, reform=False):
     parts.append(DELTA_COVERAGE_LINE)
     if unit_kind in DOC_UNIT_KINDS:
         # NOT REUSE_POSTURE_REVIEW_LINE: whether the ARTIFACT carries a Reuse
-        # Posture section is a whole-document duty the full round and the seal
-        # already enforce. A delta reviewer judges only the delta — demanding
+        # Posture section is a whole-document duty the full round already
+        # enforces. A delta reviewer judges only the delta — demanding
         # the section here would let a typo-only delta be rejected for a
         # pre-existing hollow section it never touched.
         parts.append(ALTITUDE_BLOCK)
@@ -1382,15 +1382,35 @@ def attach_rethink_review_handoff(prompt, handoff):
 # Review kinds (report-only)
 
 
+def _wave_full_review_block(wave_docs):
+    if wave_docs is None:
+        return ""
+    listing = ("".join("  %s\n" % path for path in wave_docs)
+               or "  (no slice notes are sealed yet — the set is the\n"
+                  "  skeleton alone)\n")
+    return (
+        "RE-DOCUMENTATION WAVE — ENTIRE DOCUMENTATION SET\n"
+        "- Review the skeleton together with every slice note below, edited\n"
+        "  or not. An untouched note was asserted coherent: verify the SET's\n"
+        "  coherence and continuability against the GOAL. A contradiction\n"
+        "  between any two documents is a finding.\n"
+        + listing
+        + "\n"
+        + (SLICE_NOTE_CONTENT_BLOCK + "\n" if wave_docs else "")
+    )
+
+
 def build_review_round(family, workspace, goal, unit_desc, artifact, registry,
                        unit_kind=None, governing=None, amendments=None,
                        verified_suite=None, project_context=None,
-                       battery=None, debt=None, gap_enabled=False):
+                       battery=None, debt=None, gap_enabled=False,
+                       wave_docs=None):
     return (
         _header(contracts.KIND_REVIEW_ROUND, family, workspace)
         + "\nTASK: full review round of %s. REPORT ONLY.\n" % unit_desc
         + "GOAL: %s\n" % goal
         + "TARGET: %s (plus any code/tests it governs)\n\n" % artifact
+        + _wave_full_review_block(wave_docs)
         + _amendments_block(amendments)
         + _project_context_block(project_context)
         + _governing_line(governing)
@@ -1526,62 +1546,6 @@ def build_delta_review(family, workspace, goal, unit_desc, diff_text, registry,
     )
 
 
-def build_seal_half(family, workspace, goal, unit_desc, artifact, registry,
-                    unit_kind=None, governing=None, amendments=None,
-                    verified_suite=None, project_context=None,
-                    battery=None, debt=None, wave_docs=None,
-                    gap_enabled=False):
-    # A re-documentation wave's seal certifies the WHOLE documentation set,
-    # edited or not: the re-documenter choosing to leave a note untouched
-    # asserted it is coherent with the re-documented design — this seal
-    # verifies exactly that assertion. `wave_docs is not None` marks a wave
-    # (an EMPTY list is still a wave: no notes sealed yet, the set is the
-    # skeleton alone); co-reopened notes bring the slice-note content
-    # criteria into the seal, or an incomplete edited note would reseal on
-    # skeleton criteria only.
-    wave_block = ""
-    if wave_docs is not None:
-        listing = ("".join("  %s\n" % p for p in wave_docs)
-                   or "  (no slice notes are sealed yet — the set is the\n"
-                      "  skeleton alone)\n")
-        wave_block = (
-            "WAVE SEAL — the ENTIRE documentation set is the candidate\n"
-            "- This seal closes a re-documentation wave: it certifies the\n"
-            "  skeleton TOGETHER WITH every slice note below, edited or\n"
-            "  not (an untouched note was asserted coherent; verify it).\n"
-            "  Judge the SET's coherence and continuability against the\n"
-            "  GOAL — a contradiction between any two documents of the set\n"
-            "  is a finding on this seal.\n"
-            + listing
-            + "\n"
-            + (SLICE_NOTE_CONTENT_BLOCK + "\n" if wave_docs else "")
-        )
-    return (
-        _header(contracts.KIND_SEAL_HALF, family, workspace)
-        + "\nTASK: independent final seal review of %s. REPORT ONLY.\n"
-        % unit_desc
-        + "GOAL: %s\n" % goal
-        + "TARGET: %s (plus any code/tests it governs)\n\n" % artifact
-        + wave_block
-        + _amendments_block(amendments)
-        + _project_context_block(project_context)
-        + _governing_line(governing)
-        + "You are one half of a double seal: a fresh, independent, final\n"
-        "check on a target other agents already reviewed and fixed.\n"
-        + EXHAUSTIVE_SENTENCE
-        + "You fix nothing and triage nothing.\n\n"
-        + _verified_suite_block(verified_suite, unit_kind)
-        + _review_quality_block(unit_kind, reform=gap_enabled)
-        + (_battery_review_block(battery) if battery else "")
-        + _debt_block(debt)
-        + _registry_block(registry)
-        + "\n"
-        + _access_block(edit_allowed=False)
-        + "\n"
-        + contracts.CONTRACT_TEXT
-    )
-
-
 # ---------------------------------------------------------------------------
 # Reclassify kind (opposite-family second opinion for debt deferral)
 
@@ -1624,7 +1588,7 @@ TWO_AXIS_BLOCK = (
     "  low    a small local fix once seen (re-pin a value, correct a\n"
     "         row); exposure by the first compile/test/use is a bonus\n"
     "  medium bounded rework inside this unit; caught at its own\n"
-    "         review or seal\n"
+    "         review or verification\n"
     "  high   the CORRECTION reopens sealed work or propagates: other\n"
     "         slices/consumers built on the wrong contract must rework\n"
     "  xhigh  effectively irreversible or externally published: data\n"

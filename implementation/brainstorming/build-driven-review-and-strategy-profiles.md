@@ -1,8 +1,8 @@
 # Build-driven review and per-run strategy profiles
 
 Status: AS-BUILT (core landed on main, overnight build 2026-07-08;
-phase 7 completed 2026-07-08 on the battery-gate branch; 1195-test
-suite green; profile-less runs bit-identical, gate-proven).
+phase 7 completed 2026-07-08 on the battery-gate branch; seal semantics
+amended 2026-07-27 to one universal deterministic same-byte predicate).
 Landed: phases 1 (profile store + wiring + panel arm), 2 (interpreter +
 equivalence gate), 3a/3b (dials differentiate; doc gate widened to
 P2/P3 under reform profiles), 4 (gap contract + prompts +
@@ -11,16 +11,16 @@ reopen_for_repair + routing, e2e-proven), 5 (seal predicate), 7
 contract gate — skeleton answers the full battery, slice notes answer
 the slice-scoped remainder, presence/shape machine-checked with the
 worker's single repair retry, substance is review work, answered
-questions' wording is settled in review/seal prompts; plain/example
+questions' wording is settled in review prompts; plain/example
 hard-required on every reform finding). REALIZATION CHOICES adopted
 into this spec (operator-vetoable, design concurrence recorded): the
-predicate's stale fallback is the proven double-seal halves (a half IS
-a whole-artifact look — semantically equivalent to the pure
-rounds-return); profile dials win over explicit config values
+seal predicate is universal; any accepted byte change invalidates the
+review cycle and restarts whole-artifact review at the first family;
+profile dials win over explicit config values
 (clone-to-vary; anchored metrics never lie); the mandatory profile
 choice binds the PANEL, the machine API stays permissive (harness needs
-profile-less runs); repair reseals are always full double (the light
-composition stays a future dial); the battery is NOT a dial — every
+profile-less runs); repair requalification uses that same full ordered
+review cycle; the battery is NOT a dial — every
 reform profile carries it, and it rides the contract JSON (mirroring
 the doc's Question Battery section), never prose parsing.
 PARKED (independent, unblocked): phase 6 meter, phase 3c
@@ -52,8 +52,9 @@ returning clean. The result, measured live on the LPC chat-workflows bundle
 - Late rounds review the fixes, not the draft. Forensic trace of one
   finding (slice-02, 2026-07-07): a fix at 12:49, satisfying a P2 that
   asked to "specify the exact CSS custom property names", ADDED a fourth
-  public CSS variable no recorded authority supported; the next seal
-  half flagged it; the drift-risk rater rated it high; another fix
+  public CSS variable no recorded authority supported; review restarted
+  at the first family after the changed bytes and flagged it; the
+  drift-risk rater rated it high; another fix
   removed it at 14:09. Eighty minutes and three worker calls to return
   to the starting point — self-inflicted churn, invisible without commit
   archaeology.
@@ -104,7 +105,7 @@ prose re-readers lack.
 
 ### 2. Threshold gates over drift-risk ratings
 
-The live reclassify machinery generalizes from "lone P3s at seal time" to
+The live reclassify machinery generalizes from late P3 review findings to
 the whole document gate: findings carry the reviewer's severity AND the
 opposite-family drift-risk rating where the gate needs it; the run's
 profile threshold decides deterministically what opens a fix cycle and
@@ -138,11 +139,11 @@ In EVERY profile, identically:
   <smallest concrete scenario>}`. A gap response carries NO artifact
   claim (nothing was finished); `ok` with a non-empty gaps array is a
   contract violation. The driver routes it as a repair queue on the upstream
-  unit: fix at P1 quality, delta review, reseal, then the downstream
+  unit: fix at P1 quality, delta review, restart review at the first
+  family, re-evaluate the seal predicate, then the downstream
   unit resumes with fresh budgets (the resume amnesty markers, already
   live). HONEST SCOPE (corrected by review): today a SEALED unit is
-  terminal — the M164 "reseals" were failed seal ATTEMPTS reopening a
-  not-yet-sealed unit, not a reopen of a sealed one. The reform must
+  terminal. The reform must
   BUILD the reopen: a `reopen_for_repair` transition (sealed ->
   repairing) with its ledger event, gate-commit discipline for the
   repaired artifact, and the reseal path. New machinery, priced as
@@ -218,25 +219,20 @@ sealed when:
    cites the review ids that satisfied the predicate.
 
 Zero dedicated seal calls. When the predicate fails for a family (the
-bytes changed after its last clean whole-artifact look), THAT family —
-and only that family — owes a fresh whole-artifact review: the
-pipeline returns to rounds for exactly the stale families. This
-preserves the empirical protection the old a1 codex half provided (its
-historical P1 catch happened precisely when codex was stale after
-claude-finding fixes — the predicate forces that same fresh look)
-while deleting the redundant re-read (impl-04's a1: same bytes, same
-family, 0 findings, pure cost). The existing `single_seal_first_attempt`
-machinery was a partial step toward this and is subsumed: reform
-profiles have no seal-half calls at all; the `legacy` artifact keeps
-them for reproduction.
+bytes changed after a recorded approval), the entire review cycle is
+stale: after verification the pipeline returns to rounds at the FIRST
+configured family. Every family then gives a fresh whole-artifact look
+in ordinary order. This preserves the empirical protection of a fresh
+first-family review after later-family fixes without inventing a second
+review phase. The rule is identical for documents, implementations,
+legacy, profile-less, and reform runs: there are no dedicated seal
+workers, retry attempts, family subsets, or seal concurrency.
 
-Repair composition under the predicate (resolving the third review's
-P1 with the same vocabulary): after an upstream DOC repair in a light
-profile rated below high, cross-family approval may compose as
-{diff-scoped delta review by the family opposite the repair fixer} +
-{fresh whole-artifact review by the other family}; strict requires
-fresh whole-artifact looks from both. Implementations: never composed,
-never relaxed.
+Repair composition under the predicate is deliberately simple. A delta
+review may approve the narrow fix, but it is not a whole-artifact
+approval. If the accepted repair changed bytes, document and
+implementation units both restart the complete ordered review cycle;
+no profile may compose or relax that requirement.
 
 Profiles decompose into config dials (several already exist:
 `p3_defer_max_risk`, `p3_reclassify_debt`); the panel's new-run form
@@ -335,8 +331,8 @@ gate (seal) is invariant and outside the composition.
   ledger and surfaced as a panel chip (auditable calibration of the
   cheap tier's noise rate); when unsure it passes the finding through —
   the fuser never owns risk (the binary-reclassify lesson).
-- **Concurrency mechanics.** Reuses the seal_concurrent pattern: report-
-  only workers, one tamper snapshot around the whole batch (any
+- **Concurrency mechanics.** Uses report-only workers and one tamper
+  snapshot around the whole batch (any
   workspace change voids the batch). Partial-result tolerance is
   mandatory: a fan-out hitting a quota window returns what it returns;
   the fuser works with the arrived subset and the missing dimensions
@@ -397,9 +393,9 @@ gate (seal) is invariant and outside the composition.
     (one dial changed per clone). Once the project-concept milestone
     lands, a project's KV may carry its default profile.
   Invariants live OUTSIDE the algebra and no profile can compose them
-  away: the final double seal, the gap semantics (stop-report-repair-
-  resume), battery presence, report-only + tamper snapshots on every
-  review, and full ledger recording of every stage.
+  away: the deterministic same-byte seal predicate, the gap semantics
+  (stop-report-repair-resume), battery presence, report-only + tamper
+  snapshots on every review, and full ledger recording of every stage.
 
 - **The algebra is recursive: implementation and the operating mode are
   loops too (operator refinement, 2026-07-07).** Implementation is a
@@ -433,9 +429,10 @@ gate (seal) is invariant and outside the composition.
   config (an impl action pinned exit-0-always), so migration is a
   profile choice, not a code fork. FENCED (corrected by review — an
   exit-0-always action contradicts the constitutional gap semantics):
-  `legacy` is a grandfathered COMPATIBILITY ARTIFACT, valid only for
-  bit-equivalence testing and for reproducing pre-reform behavior; it
-  is excluded from the constitution's claims, cannot be composed into
+  `legacy` is a grandfathered COMPATIBILITY POSTURE for pre-reform prompt
+  interpretation; runtime sealing is still the universal deterministic
+  result of current clean reviews. It is excluded from the constitution's
+  claims, cannot be composed into
   new profiles (a reform profile may not embed an exit-0-always
   action), and the panel labels it as such. The back-edge is budgeted and judged
   like every loop: cycle caps with resume amnesties, and the
@@ -445,8 +442,8 @@ gate (seal) is invariant and outside the composition.
   exit-code metaphor is literal.
 
 DEBT RESOLUTION (third-review fix): tracked debt is closeable — a
-fix, repair, or seal that resolves a deferred finding cites its debt
-id; the driver records `debt_resolved` and the chip shows
+fix, repair, or later review that resolves a deferred finding cites its
+debt id; the driver records `debt_resolved` and the chip shows
 resolved/open counts. Unresolved debt survives to the milestone close
 record; it is never silently dropped.
 
@@ -510,11 +507,11 @@ set from its own data and the profile clones to an armed version.
 
 - Drift-risk rating + threshold decision (`b9d0a75`), A/B-validated.
 - P3 debt deferral default ON (`b0c05b1`), timeline chips (`03709b5`).
-- Resume amnesties for review-round/seal caps (`a251afd`) — repairs and
+- Resume amnesties for review-round caps (`a251afd`) — repairs and
   resumes get fresh budgets mechanically.
 - The `blocked` worker path (halt semantics exist), amendments and their
   authority rendering, the adjudicated-rejections registry, the
-  amendment+reseal precedent (M164 a3/a4).
+  amendment-and-requalification precedent (M164 a3/a4).
 - The plain mirror soft field (`8a7b874`).
 
 New machinery this milestone must build: the gap-report contract field on
@@ -562,8 +559,8 @@ REJECTED — adopt their concepts, not their engines:
   state store, splitting or duplicating the append-only, inspectable
   state.json ledger that IS the product — and "nothing vendored or
   pinned" is sealed doctrine across all consumers. (3) The scale is one
-  operator, one machine, a handful of concurrent CLI subprocesses:
-  seal_concurrent already demonstrates the stdlib concurrency pattern,
+  operator, one machine, a handful of concurrent CLI subprocesses: a
+  small standard-library worker pool is sufficient for optional review fan-out,
   at-least-once worker calls + ledger idempotence are the documented
   execution semantics, and the panel is the visibility surface in the
   system's own vocabulary.
@@ -593,15 +590,13 @@ REJECTED — adopt their concepts, not their engines:
    calls are spent only on P2/P3, where the threshold can actually
    change the outcome. Rating a P0 adds cost and no information.
 2. Repair scope on a sealed upstream — **threshold-rated, DOC units
-   only**: strict requires fresh whole-artifact reviews from BOTH
-   families after the repair; light, for repairs rated below high,
-   composes {diff-scoped delta by the family opposite the fixer} +
-   {fresh whole-artifact review by the other family}. WHO RATES
-   (second-review fix — builders never rate their own blockers): nobody
-   rates the gap itself; the REPAIR's delta review rates the repair
-   diff's drift risk, and THAT rating picks the depth. Implementations
-   always satisfy the full seal predicate (see §5). Re-sealing is then
-   the same predicate re-evaluated — never dedicated calls.
+   only**. WHO RATES (second-review fix — builders never rate their own
+   blockers): nobody rates the gap itself; the REPAIR's delta review
+   rates the repair diff's drift risk, and THAT rating decides whether
+   the upstream is repaired. Once accepted bytes change, every profile
+   restarts whole-artifact review at the first family and satisfies the
+   full seal predicate (see §5). Re-sealing is only that predicate
+   re-evaluated — never dedicated calls.
 3. Battery per unit kind — **skeleton carries the full battery per
    need** (victim / machinery / consumers / cheaper-alternative /
    pricing / threat-model / enforceability); **slice docs inherit** and
@@ -654,8 +649,9 @@ REJECTED — adopt their concepts, not their engines:
    part of what anchored metrics compare, so it must not drift
    independently.
 10. Final open-scope pass after parallel blocks — **profile content**:
-    strict includes one per family; light omits it and relies on the
-    double seal as catch-all. Not a global rule.
+    strict includes one per family; light omits the extra profile stage
+    and relies on the ordinary same-byte family reviews required by the
+    seal predicate. Not a global rule.
 11. Model choices — **pinned in the sealed profile** (they are exactly
     what A/B experiments tune; a hot override would corrupt the
     anchor). The acts hot-edit mechanism SURVIVES for operator

@@ -113,11 +113,7 @@ _PATTERNS = (
         r"socket hang ?up",
     )),
     # The timeout / stall messages are authored by runners.py itself — a
-    # safe self-match, unlike worker prose. The stall pattern covers the
-    # seal-half path, where the failure arrives as a wrapped RunnerError
-    # string and the driver's isinstance(WorkerStalled) special-case never
-    # runs; without it a frozen seal worker would degrade to `unknown` and
-    # never auto-resume.
+    # safe self-match, unlike worker prose.
     ("timeout", (
         r"timed out after \d+s",
         # The runner's exact self-authored stall message, numeric parts and

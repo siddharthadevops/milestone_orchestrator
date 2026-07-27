@@ -12,12 +12,13 @@ The scenario exercises the review/fix separation model end to end:
     claude reported finding -> fixer REJECTS (consultation + prevention);
     claude stubbornly re-raises without contests -> fixer kills it by
     pointer (rejected_adjudicated citing skeleton-claude-r1/F1); claude
-    clean; double seal passes.
+    clean; the same-byte review predicate seals deterministically.
   slice note: clean everywhere.
   implementation: deliberate div bug -> pre-review verification fails ->
-    fix episode; codex docstring finding -> fix episode; seal a1 fails on
-    the claude README finding -> fix episode -> seal a2 passes; milestone
-    closes.
+    fix episode; codex docstring finding -> fix episode; claude README
+    finding -> fix episode; every byte change restarts review at codex;
+    current codex+claude reviews satisfy one deterministic seal and the
+    milestone closes.
 
 The run happens once in setUpClass; each test asserts one aspect.
 
@@ -96,7 +97,6 @@ class TestCalculatorE2E(unittest.TestCase):
             "timeouts": {"codex": 60, "claude": 60},
             "verification": ["python3 run_checks.py"],
             "max_rounds_per_family": 6,
-            "max_seal_attempts": 4,
             "git": {"enabled": True},
             "acts": {
                 "skeletoner": "codex",
@@ -260,7 +260,7 @@ class TestCalculatorE2E(unittest.TestCase):
 
     def test_skeleton_round_sequence(self):
         skeleton = self.unit("skeleton")
-        self.assertEqual(len(skeleton["rounds"]), 10)
+        self.assertEqual(len(skeleton["rounds"]), 11)
         self.assertEqual(
             [(r["id"], r["kind"]) for r in skeleton["rounds"]],
             [
@@ -271,8 +271,9 @@ class TestCalculatorE2E(unittest.TestCase):
                 ("skeleton-claude-r1", "review_round"),
                 ("skeleton-codex-r5", "fix_findings"),
                 ("skeleton-codex-r6", "delta_review"),
+                ("skeleton-codex-r7", "review_round"),
                 ("skeleton-claude-r2", "review_round"),
-                ("skeleton-codex-r7", "fix_findings"),
+                ("skeleton-codex-r8", "fix_findings"),
                 ("skeleton-claude-r3", "review_round"),
             ],
         )
@@ -299,7 +300,7 @@ class TestCalculatorE2E(unittest.TestCase):
 
     def test_impl_round_sequence(self):
         impl = self.unit("slice_impl-01")
-        self.assertEqual(len(impl["rounds"]), 9)
+        self.assertEqual(len(impl["rounds"]), 11)
         self.assertEqual(
             [(r["id"], r["kind"]) for r in impl["rounds"]],
             [
@@ -312,6 +313,8 @@ class TestCalculatorE2E(unittest.TestCase):
                 ("slice_impl-01-claude-r1", "review_round"),
                 ("slice_impl-01-codex-r7", "fix_findings"),
                 ("slice_impl-01-codex-r8", "delta_review"),
+                ("slice_impl-01-codex-r9", "review_round"),
+                ("slice_impl-01-claude-r2", "review_round"),
             ],
         )
 
@@ -361,8 +364,7 @@ class TestCalculatorE2E(unittest.TestCase):
         self.assertNotIn("BUG: should divide", calc)
         # The codex impl review finding produced the module docstring fix.
         self.assertTrue(calc.startswith('"""Tiny CLI calculator'))
-        # The seal-finding fix episode wrote the README the claude seal
-        # half demanded.
+        # Claude's ordinary whole-artifact review produced the README fix.
         self.assertTrue(os.path.exists(os.path.join(self.work, "README.md")))
 
     # -- adjudicated rejections -------------------------------------------------
@@ -379,7 +381,7 @@ class TestCalculatorE2E(unittest.TestCase):
             [
                 ("skeleton-codex-r2", "skeleton-codex-r1", "fixed"),
                 ("skeleton-codex-r5", "skeleton-claude-r1", "rejected"),
-                ("skeleton-codex-r7", "skeleton-claude-r2",
+                ("skeleton-codex-r8", "skeleton-claude-r2",
                  "rejected_adjudicated"),
             ],
         )
@@ -429,26 +431,33 @@ class TestCalculatorE2E(unittest.TestCase):
             adjudications,
         )
 
-    # -- seals ------------------------------------------------------------------
+    # -- deterministic seal -----------------------------------------------------
 
-    def test_impl_unit_seal_a1_failed_then_a2_passed(self):
-        impl = self.unit("slice_impl-01")
+    def test_impl_seal_cites_current_same_byte_reviews(self):
+        impl = self.state_unit("slice_impl-01")
         self.assertEqual(
-            [(s["attempt"], s["passed"], s["invalidated"])
+            [(s["attempt"], s["passed"], s["invalidated"], s["halves"])
              for s in impl["seals"]],
-            [(1, False, None), (2, True, None)],
+            [(1, True, None, {})],
         )
-        self.assertEqual(impl["seals"][0]["findings"],
-                         {"codex": 0, "claude": 1})
-        self.assertEqual(impl["seals"][1]["findings"],
-                         {"codex": 0, "claude": 0})
-        # The seal-finding fix episode returned to pre-seal verification:
-        # its fix round cites the seal attempt as its source.
-        seal_fix = self.fix_rounds(self.state_unit("slice_impl-01"))[-1]
-        self.assertEqual(seal_fix["source_round_id"], "slice_impl-01-seal-a1")
+        cited = ["slice_impl-01-codex-r9", "slice_impl-01-claude-r2"]
+        self.assertEqual(impl["seals"][0]["reviews"], cited)
+        satisfied = [
+            e for e in self.disk_state()["events"]
+            if e["type"] == "seal_satisfied"
+            and e.get("unit") == "slice_impl-01"
+        ]
+        self.assertEqual(len(satisfied), 1)
+        self.assertEqual(satisfied[0]["reviews"], cited)
+        # The former seal finding is now an ordinary Claude finding. Its fix
+        # changes bytes, so the cited reviews are the later codex+claude pair.
+        readme_fix = self.fix_rounds(impl)[-1]
+        self.assertEqual(readme_fix["source_round_id"],
+                         "slice_impl-01-claude-r1")
         self.assertEqual(
-            [(f["id"], f["disposition"]) for f in seal_fix["result"]["findings"]],
-            [("claude-S1", "fixed")],
+            [(f["id"], f["disposition"])
+             for f in readme_fix["result"]["findings"]],
+            [("F1", "fixed")],
         )
 
     # -- raw worker outputs -------------------------------------------------------
@@ -456,43 +465,31 @@ class TestCalculatorE2E(unittest.TestCase):
     def test_raw_worker_outputs_exist(self):
         raw_dir = os.path.join(self.work, ".orchestrator", "raw")
         self.assertTrue(os.path.isdir(raw_dir))
-        expected = [
-            "skeleton-draft.txt",
-            "skeleton-codex-r1.txt",
-            "skeleton-claude-r1.txt",
-            "skeleton-claude-r2.txt",
-            "skeleton-claude-r3.txt",
-            "skeleton-fix1.txt",
-            "skeleton-fix2.txt",
-            "skeleton-fix3.txt",
-            "skeleton-delta1.txt",
-            "skeleton-delta2.txt",
-            "skeleton-seal-a1-codex.txt",
-            "skeleton-seal-a1-claude.txt",
-            "slice_doc-01-draft.txt",
-            "slice_impl-01-draft.txt",
-            "slice_impl-01-fix1.txt",
-            "slice_impl-01-fix2.txt",
-            "slice_impl-01-fix3.txt",
-            "slice_impl-01-delta1.txt",
-            "slice_impl-01-delta2.txt",
-            "slice_impl-01-delta3.txt",
-            "slice_impl-01-seal-a1-claude.txt",
-            "slice_impl-01-seal-a2-codex.txt",
-            "slice_impl-01-seal-a2-claude.txt",
-        ]
+        state = self.disk_state()
+        expected = {
+            os.path.basename(unit["draft"]["raw_path"])
+            for unit in state["units"] if unit.get("draft")
+        }
+        expected.update(
+            os.path.basename(round_["raw_path"])
+            for unit in state["units"] for round_ in unit["rounds"]
+        )
         present = set(os.listdir(raw_dir))
         for name in expected:
             self.assertIn(name, present)
             path = os.path.join(raw_dir, name)
             self.assertGreater(os.path.getsize(path), 0,
                                "%s is empty" % name)
-        # Raw outputs are the workers' verbatim JSON replies.
-        with open(os.path.join(raw_dir, "slice_impl-01-seal-a1-claude.txt"),
+        self.assertFalse(
+            [name for name in present if "-seal-" in name],
+            "deterministic sealing must not create worker raw outputs",
+        )
+        # Raw outputs remain the ordinary reviewers' verbatim JSON replies.
+        with open(os.path.join(raw_dir, "slice_impl-01-claude-r1.txt"),
                   "r", encoding="utf-8") as fh:
-            half = json.loads(fh.read())
-        self.assertEqual(half["kind"], "seal_half")
-        self.assertEqual(len(half["findings"]), 1)
+            review = json.loads(fh.read())
+        self.assertEqual(review["kind"], "review_round")
+        self.assertEqual(len(review["findings"]), 1)
 
     # -- git gates ------------------------------------------------------------
 
@@ -534,7 +531,7 @@ class TestCalculatorE2E(unittest.TestCase):
             ["skeleton", "slice_doc-01", "slice_impl-01"],
         )
         # One amend per green fix episode: two on the skeleton, three on
-        # the implementation (verification fix, docstring fix, seal fix).
+        # the implementation (verification, docstring, and README review).
         amends = [e for e in events if e["type"] == "amended"]
         self.assertEqual(
             [e["unit"] for e in amends],
@@ -580,6 +577,11 @@ class TestCalculatorE2E(unittest.TestCase):
         self.assertIn("fix_findings", review_log)
         self.assertIn("delta_review", review_log)
         self.assertIn("1 rejected_adjudicated", review_log)
+        self.assertIn(
+            "- cited reviews: `slice_impl-01-codex-r9`, "
+            "`slice_impl-01-claude-r2`",
+            review_log,
+        )
 
     # -- incident regression: the enclosing canon repo is untouched ------------
 

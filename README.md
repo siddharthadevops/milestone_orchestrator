@@ -3,7 +3,8 @@
 Deterministic orchestrator for AI-led implementation milestones: a
 hardcoded driver runs the whole canon flow — skeleton → slice notes →
 implementation, adversarial review rounds between CLI agent families,
-review/fix separation, double seals, mechanical verification gates —
+review/fix separation, deterministic same-byte seals, mechanical verification
+gates —
 with JSON worker contracts and an append-only run ledger. Sequencing and
 bookkeeping live in tested code; only content judgment is delegated to
 the LLM workers.

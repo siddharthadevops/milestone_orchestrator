@@ -19,8 +19,8 @@ LLM orchestrators kept getting wrong):
 The unit sequence mirrors the canon cycle: one skeleton unit, then per slice
 a documentation unit and an implementation unit. Every unit runs the same
 review machinery: draft -> verify -> codex rounds until clean -> claude
-rounds until clean -> verify -> double seal until both halves are clean on
-an unchanged workspace.
+rounds until clean -> verify -> deterministic seal when every family is
+effectively clean on the same candidate bytes.
 """
 
 import copy
@@ -174,6 +174,13 @@ def _new_unit(kind, slice_id):
         "draft": None,              # write-once draft record
         "family_index": 0,          # index into config families_order
         "rounds": [],               # append-only
+        # First round belonging to the current candidate bytes. Accepted
+        # edits advance this boundary and restart review from family zero.
+        "review_cycle_start": 0,
+        # Driver-computed digest of the exact candidate and hot governing
+        # context reviewed in this cycle. It binds separate reviewer calls
+        # across process boundaries.
+        "review_evidence_fingerprint": None,
         "seals": [],                # append-only
         # Per-stage fix-attempt counters; each resets when its stage's
         # verification passes (the cap bounds consecutive failures of the
@@ -182,17 +189,14 @@ def _new_unit(kind, slice_id):
         # Never-reset per-stage sequence for synthetic verification fix
         # episodes: verify_fix_attempts resets on a pass, so it cannot
         # number the episode ids (ids must stay unique when a stage is
-        # re-entered after a dirty seal attempt).
+        # re-entered after accepted candidate changes).
         "verify_episode_seq": {"pre_review": 0, "pre_seal": 0},
         "closed_record": None,      # slice_impl closure bookkeeping
         "gate_commit": None,        # short sha of this unit's seal gate commit
         "failed_from": None,        # status at failure time (resume target)
-        # Indexes into `rounds`/`seals` set at each resume; the per-family
-        # review-round cap and the seal-attempt cap count only records after
-        # them (both lists are immutable history, so the caps need markers
-        # to be resettable). Seal attempt NUMBERING stays global.
+        # Index into `rounds` set at each resume; the per-family review cap
+        # counts only records after it while immutable history stays intact.
         "rounds_amnesty": 0,
-        "seals_amnesty": 0,
         # The active fix episode (working fields; history lives in rounds):
         "fix_queue": [],            # findings currently queued for the fixer
         "fix_source": None,         # {"type": verification|round|seal|delta,
@@ -399,24 +403,26 @@ def transition_unit(state, unit, new_status, reason=None):
         # exactly where the dirty review would have gone.
         U_PENDING: (U_PRE_REVIEW_VERIFY, U_FAILED),
         U_PRE_REVIEW_VERIFY: (U_ROUNDS, U_FIXING, U_FAILED),
-        U_ROUNDS: (U_ROUNDS, U_FIXING, U_PRE_SEAL_VERIFY, U_FAILED),
+        U_ROUNDS: (U_ROUNDS, U_FIXING, U_PRE_REVIEW_VERIFY,
+                   U_PRE_SEAL_VERIFY, U_FAILED),
         U_FIXING: (U_DELTA_REVIEW, U_PRE_REVIEW_VERIFY, U_ROUNDS,
                    U_PRE_SEAL_VERIFY, U_FAILED),
         U_DELTA_REVIEW: (U_FIXING, U_PRE_REVIEW_VERIFY, U_ROUNDS,
                          U_PRE_SEAL_VERIFY, U_FAILED),
-        U_PRE_SEAL_VERIFY: (U_SEALING, U_FIXING, U_FAILED),
-        # U_SEALING stays on an invalidated attempt (the workspace is
-        # restored to the sealed candidate commit and the attempt retries).
-        U_SEALING: (U_SEALED, U_FIXING, U_PRE_SEAL_VERIFY, U_FAILED),
+        U_PRE_SEAL_VERIFY: (U_SEALING, U_FIXING, U_PRE_REVIEW_VERIFY,
+                            U_FAILED),
+        # U_SEALING is now only a transient/recovery state for deterministic
+        # closure. Older persisted states without current review evidence
+        # restart the ordinary review cycle.
+        U_SEALING: (U_SEALED, U_PRE_REVIEW_VERIFY, U_FAILED),
         # A sealed unit is terminal EXCEPT for reopen_for_repair, which
         # reopens it to resolve a downstream builder's gap (reform §3). The
         # repair immediately enters a fix episode (U_REPAIRING -> U_FIXING)
         # and reseals through the normal seal path.
         U_SEALED: (U_REPAIRING,),
         # REPAIRING -> SEALED is the re-documentation wave's close: a slice
-        # note co-reopened with the skeleton reseals when the ANCHOR's wave
-        # seal passes (the wave certifies the whole documentation set); it
-        # never runs its own episode.
+        # note co-reopened with the skeleton reseals when the ANCHOR's reviews
+        # certify the whole documentation set; it never runs its own episode.
         U_REPAIRING: (U_FIXING, U_SEALED, U_FAILED),
         U_FAILED: (),
     }
@@ -646,11 +652,31 @@ def record_round(state, unit, family, kind, result, raw_path=None, duration=None
     return rec
 
 
+def restart_reviews_after_candidate_change(state, unit, reason):
+    """Start a fresh whole-artifact review cycle after accepted byte changes.
+
+    Earlier reviews and debt remain immutable audit history, but cannot satisfy
+    the seal predicate for the new candidate.
+    """
+    start = len(unit.get("rounds") or [])
+    unit["review_cycle_start"] = start
+    unit["review_evidence_fingerprint"] = None
+    unit["family_index"] = 0
+    append_event(
+        state,
+        "review_cycle_restarted",
+        unit=unit_key(unit),
+        round_index=start,
+        reason=str(reason or "candidate bytes changed")[:300],
+    )
+    return start
+
+
 def advance_family_if_clean(state, unit, last_result):
     """After a clean review round, move to the next family or to pre-seal.
 
-    Encodes the canon ordering rule: families run in configured order and a
-    later family's rounds never reopen an earlier family's normal rounds.
+    Families run in configured order for one candidate. Accepted byte changes
+    start a new cycle from the first family.
     """
     from . import contracts
 
@@ -699,96 +725,62 @@ def advance_family_deferred(state, unit):
 
 
 def can_open_seal(state, unit):
-    """Seal opens only when every configured family has a recorded clean
-    round and the unit passed pre-seal verification (status sealing)."""
-    families = state["config"]["families_order"]
-    for fam in families:
-        rounds = family_rounds(unit, fam)
-        review_rounds = [
-            r
-            for r in rounds
-            if r["kind"] == "review_round" and not r.get("invalidated")
-        ]
-        if not review_rounds or not _round_effectively_clean(review_rounds[-1]):
-            return False
-    return True
+    """Whether every family is effectively clean in the current review cycle."""
+    return seal_predicate_reviews(
+        unit, state["config"]["families_order"]
+    ) is not None
 
 
-def seal_predicate_reviews(unit, families):
-    """The reform seal PREDICATE over the ledger (spec §5). Returns the list
+def seal_predicate_reviews(unit, families, current_fingerprint=None):
+    """The seal predicate over the ledger. Returns the list
     of review-round ids that SATISFY it — every family's most recent
     whole-artifact review is clean (or clean-with-deferred-debt) AND on the
-    CURRENT bytes — or None when it is not satisfied (a family never
-    reviewed, its last look is dirty, or a later fix changed the artifact
-    after it, making the look stale).
+    CURRENT bytes and hot governing context — or None when it is not
+    satisfied (a family never reviewed in the current cycle, its latest look
+    is dirty, or its evidence fingerprint is stale).
 
-    Git-agnostic: a fix_findings round is the only thing that changes the
-    artifact bytes, so a family's clean review is on the current bytes iff
-    no fix round follows it. When the predicate holds, the dedicated
-    seal-half re-reads would re-read bytes each family already blessed —
-    exactly the redundant call this replaces; when it does not, that
-    family owes a fresh look (the caller falls back to the seal halves,
-    which give it)."""
+    New states persist ``review_cycle_start`` when accepted edits change the
+    candidate. For an older state without that marker, retain the conservative
+    historical rule that any later fix round makes prior reviews stale.
+    """
     rounds = unit["rounds"]
-    last_fix = max(
-        (i for i, r in enumerate(rounds) if r["kind"] == "fix_findings"),
-        default=-1,
-    )
+    cycle_start = unit.get("review_cycle_start")
+    if cycle_start is None:
+        cycle_start = 1 + max(
+            (i for i, r in enumerate(rounds) if r["kind"] == "fix_findings"),
+            default=-1,
+        )
+    cycle_start = max(0, min(int(cycle_start), len(rounds)))
+    if current_fingerprint is not None:
+        if unit.get("review_evidence_fingerprint") != current_fingerprint:
+            return None
     cite = []
     for fam in families:
         revs = [
             (i, r) for i, r in enumerate(rounds)
-            if r["family"] == fam and r["kind"] == "review_round"
+            if i >= cycle_start
+            and r["family"] == fam and r["kind"] == "review_round"
             and not r.get("invalidated")
         ]
         if not revs:
             return None
-        idx, last = revs[-1]           # most recent whole-artifact review
-        if not _round_effectively_clean(last) or idx < last_fix:
-            return None                 # dirty, or stale after a later fix
+        _idx, last = revs[-1]
+        if not _round_effectively_clean(last):
+            return None
+        if (current_fingerprint is not None
+                and last.get("evidence_fingerprint")
+                != current_fingerprint):
+            return None
         cite.append(last["id"])
     return cite
 
 
-def stale_seal_families(unit, families):
-    """The reform predicate's REFINED fallback (spec §5, realized
-    2026-07-09 after the conservative full-double fallback showed its
-    cost live — a claude a1 half re-reading bytes claude had blessed 15
-    minutes earlier): when the predicate does not hold, only the
-    families whose most recent whole-artifact look is missing, dirty,
-    or stale owe a fresh seal half; a family clean on the CURRENT bytes
-    stands on its cited review. Returns (stale_families, fresh_cites)
-    where fresh_cites maps each fresh family to the standing review id.
-    When the predicate returned None, stale_families is never empty."""
-    rounds = unit["rounds"]
-    last_fix = max(
-        (i for i, r in enumerate(rounds) if r["kind"] == "fix_findings"),
-        default=-1,
-    )
-    stale, fresh = [], {}
-    for fam in families:
-        revs = [
-            (i, r) for i, r in enumerate(rounds)
-            if r["family"] == fam and r["kind"] == "review_round"
-            and not r.get("invalidated")
-        ]
-        if not revs:
-            stale.append(fam)
-            continue
-        idx, last = revs[-1]
-        if not _round_effectively_clean(last) or idx < last_fix:
-            stale.append(fam)
-        else:
-            fresh[fam] = last["id"]
-    return stale, fresh
+def record_seal_attempt(state, unit, halves, passed, invalidated=None,
+                        reviews=None):
+    """Append an immutable seal record.
 
-
-def record_seal_attempt(state, unit, halves, passed, invalidated=None):
-    """Append an immutable seal attempt record.
-
-    halves: {family: {"result": <validated seal_half output or None>,
-                      "raw_path": ..., "duration_s": ...,
-                      "workspace_modified": bool}}
+    New records derive their evidence from ``reviews`` and carry empty halves.
+    The halves argument remains part of the persisted-history reader shape.
     """
     if unit["status"] != U_SEALING:
         raise IllegalTransition(
@@ -799,18 +791,24 @@ def record_seal_attempt(state, unit, halves, passed, invalidated=None):
         "attempt": len(unit["seals"]) + 1,
         "at": now_iso(),
         "halves": copy.deepcopy(halves),
+        "reviews": list(reviews or []),
         "passed": passed,
         "invalidated": invalidated,
     }
     unit["seals"].append(rec)
-    append_event(
-        state,
-        "seal_attempt",
-        unit=unit_key(unit),
-        attempt=rec["attempt"],
-        passed=passed,
-        invalidated=invalidated,
-    )
+    if reviews is None:
+        # Compatibility path for a genuinely attempted historical seal
+        # worker pair. A derived seal has no attempt ceremony; its caller
+        # records the single ``seal_satisfied`` result event instead.
+        append_event(
+            state,
+            "seal_attempt",
+            unit=unit_key(unit),
+            attempt=rec["attempt"],
+            passed=passed,
+            invalidated=invalidated,
+            reviews=[],
+        )
     return rec
 
 
@@ -885,11 +883,8 @@ def resume_run(state):
             # claim + empty delta; the cure is re-running the fixer.
             target = U_FIXING
         if target == U_SEALING:
-            # A run that died while sealing re-enters through the pre-seal
-            # gate: a crashed/killed seal half may have left unverified
-            # edits behind, and seal reviewers are told the suite passed
-            # at the last gate — that claim must be re-proven, not
-            # assumed across a failure boundary. The gate is idempotent.
+            # A recovered transient sealing state re-enters through the
+            # pre-seal gate so verification is re-proven before closure.
             target = U_PRE_SEAL_VERIFY
         unit["status"] = target
         unit["failed_from"] = None
@@ -904,12 +899,9 @@ def resume_run(state):
         # The gap-repair back-edge counter is a convergence cap too: a
         # deliberate resume grants it a fresh budget.
         unit["gap_repairs"] = 0
-        # The review-round cap (max_rounds_per_family) and the seal-attempt
-        # cap (max_seal_attempts) count immutable history, so they would
-        # re-fire instantly on resume; move the amnesty markers so the caps
-        # only count post-resume records.
+        # The review-round cap counts immutable history, so move its marker
+        # to grant a fresh post-resume budget.
         unit["rounds_amnesty"] = len(unit["rounds"])
-        unit["seals_amnesty"] = len(unit["seals"])
         restored[unit_key(unit)] = target
     old_reason = state["failure"].get("reason")
     state["failure"] = None
@@ -1023,7 +1015,7 @@ def registry_ids(state):
 def reopen_for_repair(state, unit, gap, reason, reported_by=None):
     """Reopen a SEALED unit to resolve a downstream builder's gap (reform
     §3, stop-report-repair-resume). Transitions sealed -> repairing and
-    grants FRESH fix/seal budgets — the repair and its reseal must not
+    grants FRESH fix/review budgets — the repair and its reseal must not
     inherit the exhausted counters of the original build (same amnesty as
     resume_run). Two callers: the wave ANCHOR (the skeleton) immediately
     enters a fix episode (U_REPAIRING -> U_FIXING); a slice note
@@ -1038,7 +1030,8 @@ def reopen_for_repair(state, unit, gap, reason, reported_by=None):
         )
     transition_unit(state, unit, U_REPAIRING, reason=reason)
     # The whole repair CYCLE (first fix, delta reviews, follow-up fixes,
-    # reseal) must know the unit's own artifact is editable — not just
+    # deterministic reseal) must know the unit's own artifact is editable —
+    # not just
     # the first fix episode. The fix prompt's editability line keys off
     # this flag, which only the reseal clears; keying off the queue's
     # source type instead dropped the line on delta-loop fix rounds and
@@ -1048,7 +1041,9 @@ def reopen_for_repair(state, unit, gap, reason, reported_by=None):
     unit["fix_loop_rounds"] = 0
     unit["verify_fix_attempts"] = {"pre_review": 0, "pre_seal": 0}
     unit["rounds_amnesty"] = len(unit["rounds"])
-    unit["seals_amnesty"] = len(unit["seals"])
+    restart_reviews_after_candidate_change(
+        state, unit, "sealed unit reopened for repair"
+    )
     append_event(
         state,
         "reopened_for_repair",
@@ -1071,7 +1066,7 @@ def reset_for_redraft(state, unit, reason):
     (fixing/sealing), not pending. After the machine reopens the design as a
     re-documentation wave, that unit must redo its slice AGAINST the remodelled
     design — exactly as a builder-gap reporter re-drafts. Grants fresh
-    review/seal budgets (same amnesty as reopen_for_repair/resume) and clears
+    review budgets (same amnesty as reopen_for_repair/resume) and clears
     the abandoned fix episode. `has_gap_remodel`/`gap_repairs` are set by the
     caller (_reopen_and_repair) and deliberately preserved so the re-draft
     reads the remodelled skeleton. History (rounds/seals) is append-only and
@@ -1085,16 +1080,25 @@ def reset_for_redraft(state, unit, reason):
     unit.pop("under_repair", None)
     unit.pop("design_correction", None)
     unit.pop("design_correction_attempted", None)
+    discarded_handoff = unit.pop("brainstorming_review_handoff", None)
     unit["fix_loop_rounds"] = 0
     unit["verify_fix_attempts"] = {"pre_review": 0, "pre_seal": 0}
     unit["rounds_amnesty"] = len(unit["rounds"])
-    unit["seals_amnesty"] = len(unit["seals"])
     # The re-draft starts a FRESH review cycle from the first family; a unit
-    # whose family_index had advanced (a seal-fixer gap, or a gap after the
+    # whose family_index had advanced (for example, a gap after the
     # first family cleared) would otherwise reach U_ROUNDS with no family to
     # run (IllegalTransition) or silently skip the first family's review.
     unit["family_index"] = 0
+    unit["review_cycle_start"] = len(unit["rounds"])
+    unit["review_evidence_fingerprint"] = None
     unit["status"] = U_PENDING
+    if discarded_handoff is not None:
+        append_event(
+            state,
+            "brainstorming_review_handoff_discarded",
+            unit=unit_key(unit),
+            reason="unit reset for a new draft",
+        )
     append_event(
         state,
         "reset_for_redraft",
@@ -1111,10 +1115,9 @@ def close_redoc_wave(state, anchor):
     """PHASE 1 of the wave close, run BEFORE the anchor's gate commit so
     the gate's generated ledgers render the truth: every co-reopened slice
     note returns repairing -> sealed carrying a WAVE seal record that
-    references the anchor's passing attempt. The wave seal certified the
-    ENTIRE documentation set — edited or not, a note the re-documenter
-    chose to leave untouched was asserted coherent and the seal verified
-    it — so the notes never run their own episodes. KEEPS state["redoc_wave"]
+    references the anchor's passing result and cited reviews. Those reviews
+    certified the ENTIRE documentation set — edited or not — so the notes
+    never run their own review cycles. KEEPS state["redoc_wave"]
     (phase 2, stamp_redoc_wave_gate, clears it after the gate commit binds
     the shas — a crash between the phases must stay recoverable).
     Idempotent: already-sealed notes are skipped. Returns the closed keys."""
@@ -1123,6 +1126,9 @@ def close_redoc_wave(state, anchor):
     if wave.get("anchor") != anchor_key:
         return []
     attempt = len(anchor["seals"])
+    anchor_reviews = list(
+        (anchor["seals"][-1] if anchor["seals"] else {}).get("reviews") or []
+    )
     by_key = {unit_key(u): u for u in state["units"]}
     closed = []
     for key in wave.get("docs") or []:
@@ -1135,6 +1141,7 @@ def close_redoc_wave(state, anchor):
             "passed": True,
             "invalidated": None,
             "halves": {},
+            "reviews": list(anchor_reviews),
             "wave": "%s-a%d" % (anchor_key, attempt),
         })
         transition_unit(
@@ -1271,7 +1278,7 @@ def requeue_implementation_debt(state, target_unit=None):
         raise IllegalTransition(
             "implementation debt requires a current slice_impl target"
         )
-    if target.get("status") not in (U_ROUNDS, U_PRE_SEAL_VERIFY, U_SEALING):
+    if target.get("status") not in (U_ROUNDS, U_PRE_SEAL_VERIFY):
         raise IllegalTransition(
             "cannot requeue implementation debt from status %s"
             % target.get("status")
@@ -1419,10 +1426,10 @@ def _draft_history(state, unit):
 def _work_durations(state):
     """Return ({unit_key: seconds}, unassigned_malformed_seconds).
 
-    This is *work consumed*, not elapsed wall time: concurrent seal halves
-    both count.  Every completed call has one durable home (draft, round,
-    seal half, reclassification, or a repaired malformed first strike), so
-    deriving the total here keeps it restart-safe and avoids mutable counters.
+    This is *work consumed*, not elapsed wall time. Every completed live call
+    has one durable home (draft, round, reclassification, or a repaired
+    malformed first strike); persisted historical seal-half durations are
+    included too. Deriving the total keeps it restart-safe.
     """
     keys = [unit_key(unit) for unit in state.get("units") or []]
     totals = dict((key, 0.0) for key in keys)
@@ -1714,6 +1721,7 @@ def summary(state):
                         "severity": _worst_severity(
                             r["result"].get("findings", [])
                         ),
+                        "deferred_clean": bool(r.get("deferred_clean")),
                         "invalidated": r.get("invalidated"),
                         "duration_s": r.get("duration_s"),
                         "at": r["at"],
@@ -1728,6 +1736,7 @@ def summary(state):
                         # Wave provenance: resealed by the anchor's wave
                         # seal, no episode of its own (None otherwise).
                         "wave": s.get("wave"),
+                        "reviews": list(s.get("reviews") or []),
                         "findings": {
                             fam: (
                                 len(h["result"].get("findings", []))

@@ -6,9 +6,8 @@ duration unrecorded (a panel round showing 7 minutes that took 20 on the
 wall). Now: the malformed text lands in raw/ as <label>-malformed.txt and
 a worker_malformed event carries label/kind/family/error/duration/raw
 path; state.summary projects the full trail for the panel's chip card.
-Covers the ordinary _call path, the seal-half thread path (event emitted
-on the MAIN thread after the join; the seal record keeps its historical
-shape), and the summary projection.
+Covers repaired and recoverable review output, fatal review failures, and
+the summary projection.
 """
 
 import json
@@ -25,7 +24,6 @@ from orchestrator.tests.test_driver_mock import (
 )
 
 MALFORMED_REVIEW = {"kind": "review_round", "findings": []}   # no "status"
-MALFORMED_SEAL = {"kind": "seal_half", "findings": []}        # no "status"
 
 
 def draft():
@@ -125,57 +123,6 @@ class MalformedObservabilityTest(unittest.TestCase):
         self.assertEqual(len(rounds), 1)
         self.assertEqual(rounds[0]["result"]["findings"], valid["findings"])
 
-    def test_seal_half_repair_records_event_on_the_main_thread(self):
-        state = self._drive(
-            [
-                draft(),
-                step("review_round", report("review_round"), family="codex"),
-                step("review_round", report("review_round"), family="claude"),
-                # codex half: malformed then repaired; claude half clean.
-                step("seal_half", MALFORMED_SEAL, family="codex"),
-                step("seal_half", report("seal_half"), family="codex"),
-                step("seal_half", report("seal_half"), family="claude"),
-            ],
-            stop=lambda s: s["units"][0]["status"] == st.U_SEALED,
-        )
-        self.assertEqual(state["units"][0]["status"], st.U_SEALED)
-        events = self._malformed_events(state)
-        self.assertEqual(len(events), 1)
-        self.assertEqual(events[0]["kind"], "seal_half")
-        self.assertEqual(events[0]["family"], "codex")
-        self.assertEqual(events[0]["unit"], "skeleton")
-        # The stashed strike never leaks into the recorded seal halves —
-        # the ledger keeps its exact historical shape.
-        for s_ in state["units"][0]["seals"]:
-            for half in (s_.get("halves") or {}).values():
-                self.assertNotIn("repair", half)
-
-    def test_seal_half_recovery_is_not_silent(self):
-        # The seal is the LAST place a malformed output could slip past
-        # unseen: a clean seal_half missing only its final `}` recovers,
-        # so it must still leave the same trail a repaired strike does.
-        seal = report("seal_half")
-        state = self._drive(
-            [
-                draft(),
-                step("review_round", report("review_round"), family="codex"),
-                step("review_round", report("review_round"), family="claude"),
-                step("seal_half", json.dumps(seal)[:-1] + "\n",
-                     family="codex"),
-                step("seal_half", report("seal_half"), family="claude"),
-            ],
-            stop=lambda s: s["units"][0]["status"] == st.U_SEALED,
-        )
-        self.assertEqual(state["units"][0]["status"], st.U_SEALED)
-        events = self._malformed_events(state)
-        self.assertEqual(len(events), 1)
-        self.assertEqual(events[0]["kind"], "seal_half")
-        self.assertEqual(events[0]["family"], "codex")
-        self.assertIn("unterminated", events[0]["error"])
-        for s_ in state["units"][0]["seals"]:
-            for half in (s_.get("halves") or {}).values():
-                self.assertNotIn("repair", half)
-
     def test_summary_projects_the_malformed_trail(self):
         state = self._drive(
             [
@@ -189,110 +136,6 @@ class MalformedObservabilityTest(unittest.TestCase):
         self.assertEqual(len(summ["malformed"]), 1)
         self.assertEqual(summ["malformed"][0]["kind"], "review_round")
         self.assertIn("seq", summ["malformed"][0])
-
-    def test_recovered_half_is_reported_on_the_concurrent_path_too(self):
-        # The sequential path proves nothing about worker-thread stashing:
-        # events may never be appended from a half thread, so the
-        # concurrent path must reach the ledger through the main-thread
-        # drain, in configured family order.
-        seal = report("seal_half")
-        path = init_state(
-            self.ws,
-            make_config(git={"enabled": False}, seal_concurrent=True),
-        )
-        script = [
-            draft(),
-            step("review_round", report("review_round"), family="codex"),
-            step("review_round", report("review_round"), family="claude"),
-            step("seal_half", json.dumps(seal)[:-1] + "\n", family="codex"),
-            step("seal_half", json.dumps(seal)[:-1] + "\n", family="claude"),
-        ]
-        driver = drv.Driver(path, runner=runners.MockRunner(script))
-        for _ in range(40):
-            state = st.load(path)
-            if state["units"][0]["status"] == st.U_SEALED:
-                break
-            action, _n = driver.step()
-            if action.type in (drv.A_DONE, drv.A_FAILED):
-                break
-        state = st.load(path)
-        self.assertEqual(state["units"][0]["status"], st.U_SEALED)
-        events = [e for e in self._malformed_events(state)
-                  if e["kind"] == "seal_half"]
-        self.assertEqual([e["family"] for e in events], ["codex", "claude"])
-        for e in events:
-            self.assertIn("unterminated", e["error"])
-
-    def test_strike_raw_is_not_overwritten_across_a_resumed_attempt(self):
-        # A failed seal attempt leaves no seal record, so a resume runs the
-        # SAME attempt number and re-saves the strike raw. Overwriting it
-        # would leave the first attempt's ledger event pointing at replaced
-        # bytes. _save_raw_noclobber keeps each distinct.
-        path = init_state(self.ws, make_config(git={"enabled": False}))
-        driver = drv.Driver(path, runner=runners.MockRunner([]))
-        rel1 = driver._save_raw_noclobber("skeleton-seal-a1-codex-malformed",
-                                          "first attempt strike")
-        rel2 = driver._save_raw_noclobber("skeleton-seal-a1-codex-malformed",
-                                          "second attempt strike")
-        self.assertNotEqual(rel1, rel2)
-        base = os.path.join(self.ws)
-        with open(os.path.join(base, rel1), encoding="utf-8") as fh:
-            self.assertEqual(fh.read(), "first attempt strike")
-        with open(os.path.join(base, rel2), encoding="utf-8") as fh:
-            self.assertEqual(fh.read(), "second attempt strike")
-
-    def test_a_blocked_half_still_reports_its_recovery(self):
-        # The blocked check used to raise before the strike was stashed,
-        # so a blocked-and-recovered half left an orphan raw file.
-        blocked = {"status": "blocked", "kind": "seal_half",
-                   "blocked_reason": "cannot verify the pinned claim"}
-        state = self._drive(
-            [
-                draft(),
-                step("review_round", report("review_round"), family="codex"),
-                step("review_round", report("review_round"), family="claude"),
-                step("seal_half", json.dumps(blocked)[:-1] + "\n",
-                     family="codex"),
-            ],
-            stop=lambda s: s.get("failure"),
-        )
-        events = [e for e in self._malformed_events(state)
-                  if "unterminated" in e["error"]]
-        self.assertEqual(len(events), 1)
-        self.assertEqual(events[0]["family"], "codex")
-        self.assertTrue(os.path.exists(
-            os.path.join(state["workspace"], events[0]["raw_path"])
-        ))
-
-    def test_a_failing_sibling_half_does_not_erase_a_recovered_one(self):
-        # codex's half recovers; claude's then violates the contract twice
-        # and fails the attempt. The failure path used to exit before the
-        # stashed strike was emitted, leaving an orphan raw file and no
-        # event — the recovered half's defect vanished from the ledger.
-        seal = report("seal_half")
-        state = self._drive(
-            [
-                draft(),
-                step("review_round", report("review_round"), family="codex"),
-                step("review_round", report("review_round"), family="claude"),
-                step("seal_half", json.dumps(seal)[:-1] + "\n",
-                     family="codex"),
-                step("seal_half", MALFORMED_SEAL, family="claude"),
-                step("seal_half", MALFORMED_SEAL, family="claude"),
-            ],
-            stop=lambda s: s.get("failure"),
-        )
-        self.assertIsNotNone(state["failure"])
-        recovered = [
-            e for e in self._malformed_events(state)
-            if e["family"] == "codex" and "unterminated" in e["error"]
-        ]
-        self.assertEqual(len(recovered), 1)
-        self.assertEqual(recovered[0]["kind"], "seal_half")
-        # Its raw file is referenced by a real event, not orphaned.
-        self.assertTrue(os.path.exists(
-            os.path.join(state["workspace"], recovered[0]["raw_path"])
-        ))
 
     def test_double_violation_records_a_fatal_event(self):
         # BOTH attempts malformed: the run fails AND the strike is a
@@ -319,25 +162,6 @@ class MalformedObservabilityTest(unittest.TestCase):
                 self.assertIn('"kind": "review_round"', fh.read())
         # The summary trail carries it for the panel's red chip.
         self.assertTrue(st.summary(state)["malformed"][0]["fatal"])
-
-    def test_seal_half_double_violation_records_fatal(self):
-        state = self._drive(
-            [
-                draft(),
-                step("review_round", report("review_round"), family="codex"),
-                step("review_round", report("review_round"), family="claude"),
-                step("seal_half", MALFORMED_SEAL, family="codex"),
-                step("seal_half", MALFORMED_SEAL, family="codex"),
-            ],
-            stop=lambda s: s.get("failure"),
-        )
-        self.assertIsNotNone(state["failure"])
-        events = self._malformed_events(state)
-        self.assertEqual(len(events), 1)
-        self.assertTrue(events[0]["fatal"])
-        self.assertEqual(events[0]["kind"], "seal_half")
-        self.assertEqual(events[0]["family"], "codex")
-        self.assertTrue(events[0]["raw_path2"])
 
     def test_runner_failure_records_a_fatal_incident(self):
         # ANY definitively failed LLM call is a red incident — here the

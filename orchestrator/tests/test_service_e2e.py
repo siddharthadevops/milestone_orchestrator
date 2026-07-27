@@ -4,7 +4,7 @@ Starts the local-service HTTP server in a thread over a temporary --home,
 then exercises the JSON API exactly like the panel does: POST /api/runs with
 the fake-LLM calculator config (the same scenario as run_demo.sh: deliberate
 div bug -> verification failure -> fix episode, a mid-flow review finding,
-and an impl seal attempt 1 failure -> fix episode + attempt 2), poll until
+and a second-family review finding -> fix episode -> clean restart), poll until
 the milestone closes, then stop/forget. Service launches enable git by
 default (the panel promises the FULL enforced flow), so like the demo this
 run exercises delta reviews, amends, and gate commits — inside the
@@ -148,21 +148,9 @@ class TestServicePanelE2E(unittest.TestCase):
             "timeouts": {"codex": 60, "claude": 60},
             # The skeleton defaults to claude/fable-5/max in real runs; in this
             # fake-CLI scenario keep it on codex (the fake claude only scripts
-            # review/seal work, not skeleton drafting/fixing).
+            # review work, not skeleton drafting/fixing).
             "acts": {"skeletoner": "codex"},
             "verification": ["python3 run_checks.py"],
-            # This scenario deliberately exercises the sequential double-seal
-            # REOPEN path (the fake worker raises a README finding on claude's
-            # a1 half -> fix -> a2). Pin both seal defaults the service would
-            # otherwise force on: single_seal_first_attempt would skip claude's
-            # a1 half, and seal_concurrent would run both halves in parallel —
-            # which races the fake worker's file-based call counter (a test
-            # artifact; real workers share no such state). Sequential + full
-            # double seal keeps this end-to-end scenario deterministic. The
-            # single-seal and concurrency defaults are covered by
-            # test_single_seal_first_attempt and the seal_concurrent unit tests.
-            "single_seal_first_attempt": False,
-            "seal_concurrent": False,
         }
 
     def _create_run(self, autostart):
@@ -243,7 +231,7 @@ class TestServicePanelE2E(unittest.TestCase):
         impl = self._find_unit(summary, "slice_impl-01")
         self.assertEqual(
             [(s["attempt"], s["passed"]) for s in impl["seals"]],
-            [(1, False), (2, True)],
+            [(1, True)],
             "impl seals: %r" % (impl["seals"],),
         )
         impl_kinds = [r["kind"] for r in impl["rounds"]]
@@ -259,15 +247,21 @@ class TestServicePanelE2E(unittest.TestCase):
             "review_round", impl_kinds,
             "no review rounds on impl: %r" % (impl["rounds"],),
         )
-        # Seal attempt 1 fails (missing README), forcing another fix
-        # episode after the clean reviews; attempt 2 then passes. With git
-        # enabled (the service default) every fix is followed by its delta
-        # review before the amend.
+        # Claude's missing-README finding forces another fix episode after
+        # codex was clean. Accepted byte changes restart the whole review
+        # cycle; with git enabled every fix is followed by a delta review.
         self.assertEqual(
-            impl_kinds[-2:], ["fix_findings", "delta_review"],
-            "expected a seal fix episode (fixer + delta review) as the "
-            "last impl rounds: %r" % (impl["rounds"],),
+            impl_kinds[-4:],
+            ["fix_findings", "delta_review", "review_round", "review_round"],
+            "expected the README fix followed by a complete clean review "
+            "restart: %r" % (impl["rounds"],),
         )
+        final_reviews = [
+            round_["id"]
+            for round_ in impl["rounds"]
+            if round_["kind"] == "review_round" and not round_["findings"]
+        ][-2:]
+        self.assertEqual(impl["seals"][0]["reviews"], final_reviews)
         # The run list shows the same closed run.
         status, body = self._request("GET", "/api/runs")
         self.assertEqual(status, 200, body)

@@ -8,10 +8,10 @@ opposite-family consultations themselves; the driver only decides *which*
 call is legal next, records immutable history, and enforces gates
 mechanically.
 
-Motivation, from the field: mid-2026 milestone logs showed ~40% of failed
-double-seal attempts caused purely by orchestrator bookkeeping drift
-(stale work-log rows, misattributed self-review lines, evidence fields
-forgotten). Every one of those rules is enforced here structurally.
+Motivation, from the field: mid-2026 milestone logs showed repeated gate
+failures caused purely by orchestrator bookkeeping drift (stale work-log rows,
+misattributed self-review lines, evidence fields forgotten). Every one of
+those rules is enforced here structurally.
 
 ## What is enforced in code (was prose)
 
@@ -19,13 +19,13 @@ forgotten). Every one of those rules is enforced here structurally.
 |---|---|
 | History is never rewritten | `state.save()` refuses non-append-only diffs (`HistoryRewriteError`) |
 | Phase gates (draft -> verify -> rounds -> verify -> seal) | `state.transition_unit()` raises `IllegalTransition` |
-| Family order; later families never reopen earlier normal rounds | `state.advance_family_if_clean()` |
-| Seal opens only after every family has a recorded clean round | `state.can_open_seal()` checked before `U_SEALING` |
+| Family order; changed candidate bytes restart review at the first family | review-cycle freshness is reset whenever an accepted fix changes the candidate |
+| Seal is a deterministic result, not another review | every family must be clean or debt-clean on the same current bytes, then the verification suite must pass |
 | Whoever detects never fixes: ALL reviews are report-only | `contracts.REPORT_KINDS` forbid dispositions and file changes; workspace snapshots detect tampering; tampered reviews are discarded and the worktree restored to HEAD |
 | A rejected finding requires an opposite-family consultation | `contracts.validate_fix_finding()` (P0-P3; therefore also P0/P1) |
 | Settled findings stay settled | milestone-global adjudication registry injected into every prompt; `contests` and `rejected_adjudicated` references validated against it; misreadable-target rejections carry a `prevention` edit |
 | The fixer triages exactly what was queued | `contracts.validate_fix_coverage()` (same ids, nothing invented) |
-| Round/seal/verify-fix caps | driver executors fail the run with the explanation in the event log |
+| Round/verify-fix caps | driver executors fail the run with the explanation in the event log |
 | Blocked -> stop with explanation, no silent retries | `status: "blocked"` or a `blocked` disposition ends the run; the reason is in `state.failure` and the events |
 | No prose parsing of reviewer output | workers must return contract JSON (`contracts.py`); one repair retry, then the run fails |
 
@@ -85,7 +85,7 @@ Left pane: one list per project of everything that project holds —
 milestones (flag icon) and brainstorming sessions (lamp icon) together,
 whatever is in progress first, then the rest newest-first. Both kinds open
 in the right pane. For a milestone that is the run view — pipeline,
-rounds, seals, failure banner, event log, driver log — with Start / Stop /
+rounds, seal results, failure banner, event log, driver log — with Start / Stop /
 Forget. For a session it is the polled session view: status and round
 line, Stop session, an activity chip row (one chip per completed round
 and ballot, a live spinner chip for the round under way, the accepted
@@ -221,12 +221,12 @@ its result back — `continued`, `restarted`, `failed`, `detached`, or still
 `waiting`). The chip opens that session's page.
 
 Panel time is completed LLM work derived from the append-only ledger, not
-driver wall time: draft/implement calls, review/fix/delta rounds, every seal
-half, reported builder gaps, repaired first strikes, and reclassifications each
-count once. Parallel calls both count because this measures work consumed. The
-global clock sums all units; each Slice heading sums its doc + implementation
-units. Verification, backoff, and interrupted calls without a completed
-duration stay out.
+driver wall time: draft/implement calls, review/fix/delta rounds, reported
+builder gaps, repaired first strikes, and reclassifications each count once.
+Parallel review-profile calls both count because this measures work consumed.
+The deterministic seal adds no LLM time. The global clock sums all units; each
+Slice heading sums its doc + implementation units. Verification, backoff, and
+interrupted calls without a completed duration stay out.
 
 Trust model: binds 127.0.0.1, no auth. It spawns full-permission LLM CLIs,
 exactly like running the driver yourself; never expose the port.
@@ -239,7 +239,7 @@ Projects can enable one built-in safeguard pair with:
     {"source": "...", "inventory": "...", "registry": "...", "version": 1}
 
 The service writes two ordinary policies: `reuse-audit` for skeleton and
-slice-note drafting, and `reuse-audit-review` for review/delta/seal reports.
+slice-note drafting, and `reuse-audit-review` for review/delta reports.
 They require one per-package audit row, with citations, checked against the
 immediate children of `inventory`. Required `source`, `inventory`, and
 `registry` values have no built-in defaults; blank or unknown parameters
@@ -278,9 +278,13 @@ For the milestone: one `skeleton` unit, then per slice a `slice_doc` and a
       -> codex review rounds (REPORT-ONLY) until a clean round
       -> claude review rounds (REPORT-ONLY) until a clean round
       -> verification suite
-      -> double seal: both families report-only on the unit's amended
-         commit; findings -> FIX LOOP -> verify -> full new attempt;
-         both clean -> the wip commit is finalized as the GATE COMMIT.
+      -> deterministic seal: the ledger proves that every configured family
+         is clean or debt-clean on these same bytes and verification passed;
+         no worker is called, and the wip commit becomes the GATE COMMIT.
+
+If an accepted fix changes candidate bytes, all earlier whole-artifact
+approvals become stale. After verification, review restarts at the first
+family. If no bytes changed, same-byte approvals remain current.
 
 Under a reform strategy profile (any governing profile that is not the
 `legacy` compat artifact), doc-unit drafts additionally pass the question
@@ -301,7 +305,7 @@ project contract extension may no longer claim it).
 
 ### Review/fix separation (whoever detects never fixes)
 
-Every review — codex round, claude round, seal half, delta review — is
+Every review — codex round, claude round, and delta review — is
 REPORT-ONLY: it returns findings and edits nothing (enforced by workspace
 snapshots; a tampering reviewer's output is discarded and, because reviews
 run on a clean worktree, the workspace is mechanically restored to HEAD —
@@ -316,16 +320,14 @@ findings for the FIX LOOP:
          of the fix — review the 5 changed lines, not the 1000-line unit)
       -> findings? -> back to the FIXER (same episode, capped by
          max_fix_loops)
-      -> green -> AMEND into the unit's wip commit -> continue exactly
-         where the dirty review left off (next round of the same family,
-         re-verify, or a fresh seal attempt)
+      -> green -> AMEND into the unit's wip commit -> verify the changed
+         candidate and restart whole-artifact review at the first family
 
-For a fix episode born from a review round OR a seal, the pending diff is
-checkpointed after the fifth fix instead of launching another delta review. No
-synthetic clean round is recorded: the WIP commit is amended, the checkpoint is
-logged, and the episode returns to a full re-review — a review episode to a
-whole-commit review by the same active family, a seal episode to a fresh full
-seal (via the pre-seal gate). The limit is derived from the episode history, so
+For a fix episode born from a review round, the pending diff is checkpointed
+after the fifth fix instead of launching another delta review. No synthetic
+clean round is recorded: the WIP commit is amended, the checkpoint is logged,
+and the changed candidate returns to verification and a full review beginning
+with the first family. The limit is derived from the episode history, so
 Stop/Start or Resume cannot reset it, and it keys off the episode's original
 kind so a dirty-delta re-queue cannot disable it. Verification and gap-repair
 episodes keep their real delta reviews. The threshold is configurable with
@@ -337,8 +339,8 @@ family name, "self", or "opposite" (relative to the act's origin). The
 fixes — with one operator-chosen model (default claude-fable-5/max); only
 skeleton reviews stay on the review families. Delta review has no independent
 policy: it always uses the latest fixer's family and the selected Review
-profile for that family. Review rounds and seal halves keep their family
-identity by definition.
+profile for that family. Whole-artifact review rounds keep their family
+identity by definition; sealing launches no family worker.
 
 The liveness watchdog kills a worker whose whole process tree burns less than
 `worker_stall_min_cpu_s` of CPU across a full `worker_stall_window_s` window (a
@@ -371,8 +373,9 @@ strictly its OWN: a workspace nested inside another repo gets an
 independent nested repo, and every staging/commit operation hard-fails
 rather than touch an enclosing project. Each unit opens with a wip commit
 of its draft; green fix episodes AMEND it (one clean commit per unit, no
-patch stacking); the double seal reviews that amended commit and a passing
-seal finalizes it under the canonical gate message (`Seal milestone
+patch stacking). Whole-artifact reviews approve that amended commit; when all
+families are effectively clean on the same bytes and verification passes, the
+deterministic seal finalizes it under the canonical gate message (`Seal milestone
 skeleton`, `Seal slice NN note`, `Seal slice NN implementation and close`,
 `Close milestone`). At each gate the driver regenerates the markdown
 ledgers from state.json — the milestone record (`README.md`; `MILESTONE.md`
@@ -392,9 +395,10 @@ edit-kind calls; the boundary is enforced by detection, not sandboxing.
 
     orchestrator/examples/calculator/run_demo.sh
 
-Runs the whole flow against a scripted fake LLM: deliberate div bug (forces
-the verification-fix path), a mid-flow review finding, and a seal finding
-(forces a seal-fix + second attempt). Ends with the milestone closed.
+Runs the whole flow against a scripted fake LLM: a deliberate div bug forces
+the verification-fix path, and later review findings change bytes twice. Each
+change invalidates prior approvals and restarts review at the first family.
+The milestone closes from clean same-byte reviews without a seal worker call.
 
 ## Tests
 
@@ -404,7 +408,7 @@ Tiers:
 1. Unit: state transitions, append-only enforcement, JSON extraction,
    contract validation, subprocess runner against tiny fake commands.
 2. Mock lifecycle: full milestone via `MockRunner`, happy path and every
-   failure path (blocked worker, round caps, seal-half tampering, protocol
+   failure path (blocked worker, round caps, review tampering, protocol
    violations).
 3. Fake-CLI e2e: real subprocesses, the calculator scenario end to end.
 4. Real LLMs (opt-in, costs quota):
@@ -434,8 +438,8 @@ Tiers:
   `.pytest_cache`, `.mypy_cache`, `.ruff_cache`, `.hypothesis`, `.tox`,
   `*.egg-info`), so a report-only worker whose focused checks write tool
   caches is not falsely invalidated (with git enabled the tamper universe
-  additionally honors `.gitignore`). Reviewers and seal halves are told
-  NOT to run the full suite — the driver runs it mechanically at the
+  additionally honors `.gitignore`). Reviewers are told NOT to run the full
+  suite — the driver runs it mechanically at the
   verification gates. Add tool-specific cache
   directory names (or fnmatch patterns) via the `snapshot_exclude_dirs`
   config list. Cache FILES written at the workspace root (e.g. coverage's
@@ -447,8 +451,8 @@ Tiers:
 
 ## Deliberate v0 divergences from canon v0.9
 
-- Seal halves run sequentially by default (`seal_concurrent: false`):
-  deterministic and per-half attributable; flip the flag for concurrency.
+- The seal is a deterministic ledger result after same-byte reviews and the
+  verification gate; it launches no reviewer and has no concurrency mode.
 - The pre-relaunch self-review disappears as a bookkeeping device: every
   round already is a fresh stateless agent, and bookkeeping is code now.
 - Consultation transcripts are saved by workers under

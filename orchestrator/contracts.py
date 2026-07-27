@@ -6,7 +6,7 @@ objects, fake CLIs and tests import them.
 
 Role separation (the core rule): WHOEVER DETECTS NEVER FIXES.
 
-- Report kinds (review_round, delta_review, seal_half): review a target,
+- Report kinds (review_round, delta_review): review a target,
   return findings, edit NOTHING (enforced mechanically by the driver via
   workspace snapshots, never by trust). Findings carry no disposition —
   reviewers do not triage. A finding that contests a previously adjudicated
@@ -55,7 +55,6 @@ KIND_DRAFT_SLICE_NOTE = "draft_slice_note"
 KIND_IMPLEMENT = "implement"
 KIND_REVIEW_ROUND = "review_round"
 KIND_DELTA_REVIEW = "delta_review"
-KIND_SEAL_HALF = "seal_half"
 KIND_FIX_FINDINGS = "fix_findings"
 # Opposite-family second opinion on whether an eligible finding is safe to
 # DEFER as tracked debt. The worker RATES drift risk on a fixed
@@ -73,19 +72,17 @@ KINDS = (
     KIND_IMPLEMENT,
     KIND_REVIEW_ROUND,
     KIND_DELTA_REVIEW,
-    KIND_SEAL_HALF,
     KIND_FIX_FINDINGS,
     KIND_RECLASSIFY,
 )
 
 # Reviewers report; they never edit (enforced via snapshots/git restore).
-REPORT_KINDS = (KIND_REVIEW_ROUND, KIND_DELTA_REVIEW, KIND_SEAL_HALF)
+REPORT_KINDS = (KIND_REVIEW_ROUND, KIND_DELTA_REVIEW)
 RETHINK_KINDS = (
     KIND_IMPLEMENT,
     KIND_FIX_FINDINGS,
     KIND_REVIEW_ROUND,
     KIND_DELTA_REVIEW,
-    KIND_SEAL_HALF,
 )
 
 # Kinds whose worker gets full edit permissions inside the workspace.
@@ -953,7 +950,6 @@ KIND_OUTPUT_KEYS = {
     KIND_DELTA_REVIEW: frozenset(
         {"findings", "files_changed", "design_correction_verdict"}
     ),
-    KIND_SEAL_HALF: frozenset({"findings", "files_changed"}),
     # fix_findings may also carry suite_command (the driver adopts it when
     # correcting/arming the verification gate).
     KIND_FIX_FINDINGS: frozenset(
@@ -1043,7 +1039,7 @@ Return no findings or work claims with it. The driver records a transient
 failure and the process guard retries the same fix episode after 15 minutes.
 
 `status: "need_rethink"` is allowed ONLY for implement, fix_findings,
-review_round, delta_review, and seal_half when one focused design question
+review_round and delta_review when one focused design question
 should be resolved by the independent Brainstorming process before this worker
 can finish its current judgment. It is help-seeking, not completion. Return
 EXACTLY:
@@ -1080,12 +1076,12 @@ Kind implement adds:
 
 Kind fix_findings may ALSO include "suite_command" when a queued finding
 identifies a missing, narrowed, or wrong verification gate — whether the
-finding came from verification, review, or seal. The driver adopts that
+finding came from verification or review. The driver adopts that
 state correction and runs the corrected gate before review continues.
 It must also include "suite_command_finding_id", naming that queued finding;
 the referenced finding must be disposed "fixed".
 
-REVIEW kinds (review_round / delta_review / seal_half) add:
+REVIEW kinds (review_round / delta_review) add:
   "findings": [
     {"id": "F1", "severity": "P0"|"P1"|"P2"|"P3", "summary": "...",
      "validity": {

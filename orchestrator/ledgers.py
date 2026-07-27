@@ -142,17 +142,18 @@ def render_milestone(state):
         "",
         "## Units",
         "",
-        "| Unit | Status | Rounds | Seal attempts | Gate commit |",
+        "| Unit | Status | Rounds | Seal result | Gate commit |",
         "|---|---|---|---|---|",
     ]
     for unit in state["units"]:
         seals = ", ".join(
-            "a%d:%s%s"
+            "%s%s"
             % (
-                s["attempt"],
-                "pass" if s["passed"] else ("invalid" if s["invalidated"] else "findings"),
-                # Wave provenance: a note resealed by the ANCHOR's wave seal
-                # never ran its own episode — the record must say so.
+                "satisfied"
+                if s["passed"]
+                else ("historical invalid" if s["invalidated"] else "historical findings"),
+                # Wave provenance: a note requalified by the ANCHOR's wave
+                # never evaluated its own predicate — the record must say so.
                 (" (wave %s)" % s["wave"]) if s.get("wave") else "",
             )
             for s in unit["seals"]
@@ -211,6 +212,8 @@ def render_review_log(state):
                     triage += " (%d consulted)" % consultations
                 if r.get("invalidated"):
                     triage = "INVALIDATED: %s" % r["invalidated"]
+                elif r.get("deferred_clean"):
+                    triage = "DEBT-CLEAN (reclassified)"
                 lines.append(
                     "| %s | %s | %s | %d | %s | `%s` |"
                     % (
@@ -223,12 +226,15 @@ def render_review_log(state):
                     )
                 )
         for seal in unit["seals"]:
+            deterministic = seal["passed"] and not (seal.get("halves") or {})
             lines += [
                 "",
-                "### Seal attempt a%d — %s%s"
+                "### %s — %s%s"
                 % (
-                    seal["attempt"],
-                    "PASSED"
+                    "Seal result"
+                    if deterministic
+                    else "Historical seal attempt a%d" % seal["attempt"],
+                    "SATISFIED"
                     if seal["passed"]
                     else ("INVALIDATED" if seal["invalidated"] else "findings"),
                     (" (re-documentation wave %s)" % seal["wave"])
@@ -238,17 +244,29 @@ def render_review_log(state):
             ]
             if seal.get("wave"):
                 lines.append(
-                    "- resealed by the anchor's wave seal (%s): the wave "
-                    "certified the whole documentation set; this unit ran "
-                    "no seal episode of its own" % seal["wave"]
+                    "- requalified by the anchor's documentation wave (%s): "
+                    "the wave certified the whole documentation set; this "
+                    "unit did not evaluate its own predicate" % seal["wave"]
                 )
+            elif deterministic:
+                lines.append(
+                    "- deterministic result: every configured family was "
+                    "clean or debt-clean on the same current bytes, and the "
+                    "verification gate passed; no seal reviewer was called"
+                )
+                if seal.get("reviews"):
+                    lines.append(
+                        "- cited reviews: %s"
+                        % ", ".join("`%s`" % rid for rid in seal["reviews"])
+                    )
             if seal["invalidated"]:
                 lines.append("- invalidated: %s" % seal["invalidated"])
-            for fam in sorted(seal["halves"]):
+            for fam in sorted(seal.get("halves") or {}):
                 half = seal["halves"][fam]
                 result = half.get("result") or {}
                 lines.append(
-                    "- %s half: %d finding(s); workspace_modified=%s; raw `%s`"
+                    "- historical %s seal review: %d finding(s); "
+                    "workspace_modified=%s; raw `%s`"
                     % (
                         fam,
                         len(result.get("findings", [])),
@@ -318,10 +336,10 @@ def render_closure(state, unit):
         + "# Closure — slice %02d (%s)\n\n" % (unit["slice_id"], _slice_title(state, unit["slice_id"]))
         + "- closed at: %s\n" % closed.get("at")
         + "- rounds: %s\n" % closed.get("rounds")
-        + "- seal attempts: %s\n" % closed.get("seal_attempts")
+        + "- seal records: %s\n" % closed.get("seal_attempts")
         + "- gate commit: %s\n" % (unit.get("gate_commit") or "(this commit)")
-        + "- review state: review_clean (double seal passed on an unchanged "
-        "workspace)\n"
+        + "- review state: effectively clean (every family clean or "
+        "debt-clean on the same bytes; verification passed)\n"
     )
 
 

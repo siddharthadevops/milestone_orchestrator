@@ -59,7 +59,7 @@ class SealedGuardTest(unittest.TestCase):
         return st.load(path)
 
     def _skeleton_sealed_script(self):
-        # Draft + clean rounds + double seal: the skeleton SEALS and its
+        # Draft + clean rounds derive the seal; the skeleton's
         # gate commit pins docs/skeleton.md as canonical.
         return [
             step("draft_skeleton",
@@ -70,8 +70,6 @@ class SealedGuardTest(unittest.TestCase):
                                         "# Skeleton\n\nSEALED CONTENT\n")),
             step("review_round", report("review_round"), family="codex"),
             step("review_round", report("review_round"), family="claude"),
-            step("seal_half", report("seal_half"), family="codex"),
-            step("seal_half", report("seal_half"), family="claude"),
         ]
 
     def test_fixer_rewrite_of_sealed_note_is_restored_and_recorded(self):
@@ -186,8 +184,6 @@ class SealedGuardTest(unittest.TestCase):
                  side_effect=write_file("docs/slice-01.md", "# Slice 01\n")),
             step("review_round", report("review_round"), family="codex"),
             step("review_round", report("review_round"), family="claude"),
-            step("seal_half", report("seal_half"), family="codex"),
-            step("seal_half", report("seal_half"), family="claude"),
         ]
         driver = drv.Driver(path, runner=runners.MockRunner(script))
         for _ in range(40):
@@ -287,8 +283,6 @@ class RepairEditabilityAcrossDeltaLoopsTest(unittest.TestCase):
                                         "# Skeleton\n\nORIGINAL\n")),
             step("review_round", report("review_round"), family="codex"),
             step("review_round", report("review_round"), family="claude"),
-            step("seal_half", report("seal_half"), family="codex"),
-            step("seal_half", report("seal_half"), family="claude"),
         ]
         driver = drv.Driver(path, runner=runners.MockRunner(seal_script))
         for _ in range(20):
@@ -334,10 +328,11 @@ class RepairEditabilityAcrossDeltaLoopsTest(unittest.TestCase):
                         files_changed=["docs/skeleton.md"]),
                  side_effect=write_file("docs/skeleton.md",
                                         "# Skeleton\n\nREPAIRED v2\n")),
-            # Clean delta closes the loop toward the reseal.
+            # Clean delta changes the candidate, so both reviewers approve
+            # the repaired bytes before the seal is derived.
             step("delta_review", report("delta_review")),
-            step("seal_half", report("seal_half"), family="codex"),
-            step("seal_half", report("seal_half"), family="claude"),
+            step("review_round", report("review_round"), family="codex"),
+            step("review_round", report("review_round"), family="claude"),
         ]
         mock = runners.MockRunner(repair_script)
         driver = drv.Driver(path, runner=mock)
@@ -388,8 +383,7 @@ class GapReopenCommitIsolationTest(unittest.TestCase):
 
     def _seal_doc_unit(self, kind, artifact, content, reform=False):
         # Under a reform profile every DOC draft answers the engineering
-        # battery as structure; profile-less runs must NOT carry it. The seal
-        # halves are unchanged (the strict profile keeps double-seal).
+        # battery as structure; profile-less runs must NOT carry it.
         def _battery(ids):
             return [{"question": q, "answer": "answered: %s" % q,
                      "evidence": ["%s:1" % artifact]} for q in ids]
@@ -404,7 +398,7 @@ class GapReopenCommitIsolationTest(unittest.TestCase):
                        **({"battery": _battery(
                            contracts.BATTERY_QUESTIONS_SLICE_NOTE)}
                           if reform else {}))
-        steps = [
+        return [
             step("draft_%s" % ("skeleton" if kind == "skeleton"
                                else "slice_note"),
                  draft, family="codex",
@@ -412,15 +406,6 @@ class GapReopenCommitIsolationTest(unittest.TestCase):
             step("review_round", report("review_round"), family="codex"),
             step("review_round", report("review_round"), family="claude"),
         ]
-        if not reform:
-            # Legacy/profile-less: explicit double-seal halves. A reform
-            # profile seals by PREDICATE after both families' clean rounds —
-            # no seal_half calls.
-            steps += [
-                step("seal_half", report("seal_half"), family="codex"),
-                step("seal_half", report("seal_half"), family="claude"),
-            ]
-        return steps
 
     def test_skeleton_reopen_opens_fresh_commit_and_discards_builder_junk(self):
         gap = {
@@ -1053,8 +1038,8 @@ class GapReopenCommitIsolationTest(unittest.TestCase):
                                    "# Slice 01\n\nnote v2 (wave)\n")(ws),
                     )),
                step("delta_review", report("delta_review"), family="codex"),
-               step("seal_half", report("seal_half"), family="codex"),
-               step("seal_half", report("seal_half"), family="claude"),
+               step("review_round", report("review_round"), family="codex"),
+               step("review_round", report("review_round"), family="claude"),
                # The reporter re-drafts after the wave closed; the guard's
                # post-draft sweep must accept the note's NEW bytes (the wave
                # gate is the baseline now) and restore nothing.

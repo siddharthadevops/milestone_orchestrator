@@ -1535,15 +1535,11 @@ def _create_bound_run(home, payload, workspace):
     if user_cfg is not None and not isinstance(user_cfg, dict):
         raise ApiError(400, "config must be a JSON object")
 
-    # Launch-time standing defaults: the SAME trio the project-less path
-    # forces (found live 2026-07-09: the first project-bound run sealed
-    # sequentially because this dict only carried git) merged BENEATH the
-    # persisted project defaults — standing operator law beats a service
-    # convention, and the explicit launch config beats both.
+    # Launch-time standing defaults are merged BENEATH the persisted project
+    # defaults — standing operator law beats a service convention, and the
+    # explicit launch config beats both.
     binding_defaults = {
         "git": {"enabled": True},
-        "seal_concurrent": True,
-        "single_seal_first_attempt": True,
     }
     if project.get("defaults"):
         driver.merge_config(binding_defaults, project["defaults"])
@@ -1732,14 +1728,8 @@ def create_run(home, payload):
         # the demo config, and matching driver.DEFAULT_CONFIG's own note.
         # An explicit {"git": {"enabled": false}} in the advanced config
         # still wins (merged below), for deliberate pure-state runs.
-        # Live runs also seal concurrently (the two double-seal halves run in
-        # parallel) and run a single half on the first attempt (a1's last
-        # reviewer is byte-redundant; any finding reopens to the full double
-        # seal). Both are overridable in the advanced config, merged below.
         driver.merge_config(config, {
             "git": {"enabled": True},
-            "seal_concurrent": True,
-            "single_seal_first_attempt": True,
         })
         user_cfg = payload.get("config")
         if user_cfg is not None:
@@ -2220,11 +2210,17 @@ def read_profile(entry):
 def _profile_view(doc):
     """The panel-facing shape of one profile document (identity hash
     exposed, semantic content included for the decomposition view)."""
+    description = doc.get("description", "")
+    if doc.get("name") == "legacy":
+        # Existing profile files are metadata-immutable seed snapshots. Show
+        # the current topology truth even when their old description claimed
+        # exact pre-reform sealing behavior.
+        description = profiles.SEEDS["legacy"]["description"]
     return {
         "name": doc["name"],
         "version": doc["version"],
         "sealed": doc["sealed"],
-        "description": doc.get("description", ""),
+        "description": description,
         "hash": profiles.semantic_hash(doc["profile"]),
         "profile": doc["profile"],
     }
@@ -2373,6 +2369,7 @@ def run_story(home, run_id, item):
                         "model": r.get("model"),
                         "effort": r.get("effort"),
                         "invalidated": r.get("invalidated"),
+                        "deferred_clean": bool(r.get("deferred_clean")),
                         "raw_path": r.get("raw_path"),
                         "source_round_id": r.get("source_round_id"),
                         "queued": r.get("queued"),
@@ -2396,6 +2393,9 @@ def run_story(home, run_id, item):
                         # Wave provenance: resealed by the anchor's wave
                         # seal (None for ordinary seals).
                         "wave": s_.get("wave"),
+                        "reviews": list(s_.get("reviews") or []),
+                        # Historical records may still carry LLM halves;
+                        # deterministic seals cite ordinary reviews instead.
                         "halves": s_.get("halves"),
                     }
         raise ApiError(404, "unknown seal %r" % ref)

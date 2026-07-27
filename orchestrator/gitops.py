@@ -8,12 +8,14 @@ Two jobs, both structural:
 
 2. The amend discipline that powers the review/fix loop: each unit opens
    with a wip commit of its draft; every green fix episode AMENDS that
-   commit (one clean commit per unit, no patch stacking); the seal reviews
-   that amended commit and a passing seal finalizes it with the canonical
-   gate message. HEAD is therefore always "the last accepted state", and
-   the pending fix delta is exactly `git diff HEAD` (with intent-to-add so
-   new files show). Report-only phases run on a clean worktree, so a
-   tampering reviewer is both detectable AND revertible (restore_clean).
+   commit (one clean commit per unit, no patch stacking). Any changed bytes
+   restart whole-artifact review from the first family. Once every family is
+   clean or debt-clean on those same bytes and verification passes, the
+   deterministic seal result finalizes the commit with the canonical gate
+   message. HEAD is therefore always "the last accepted state", and the
+   pending fix delta is exactly `git diff HEAD` (with intent-to-add so new
+   files show). Report-only phases run on a clean worktree, so a tampering
+   reviewer is both detectable AND revertible (restore_clean).
 
 `.orchestrator/` is force-ignored so runtime bookkeeping (state, raw worker
 outputs, fake counters) never pollutes diffs or gate commits.
@@ -418,8 +420,9 @@ def ratify_note_correction(workspace, artifact, base, message):
 
 
 def finalize_gate(workspace, message):
-    """Seal passed: fold the generated ledgers into the unit's commit and
-    retitle it with the canonical gate message. Returns the short sha."""
+    """Seal predicate satisfied: fold the generated ledgers into the unit's
+    commit and retitle it with the canonical gate message. Returns the short
+    sha."""
     _assert_workspace_root(workspace)
     _assert_no_embedded_repos(workspace)
     _run(workspace, "add", "-A")

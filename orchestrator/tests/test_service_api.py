@@ -256,7 +256,11 @@ class ServiceApiTest(unittest.TestCase):
         self.assertNotIn('<div class="card"><h3>Worker incidents (LLM)</h3>', text)
         self.assertIn("const sameFamilyReview = base.find", text)
         self.assertIn('addLine(`${family} review`', text)
-        self.assertIn('addLine("Seal", `Attempt ${group.number}`', text)
+        self.assertIn(
+            'addLine("Seal", group.deterministic ? "Result" : '
+            '`Historical attempt ${group.number}`',
+            text,
+        )
         self.assertIn('id="a_skeletoner_agent"', text)
         self.assertIn('id="ra_skeletoner_model"', text)
         self.assertNotIn('convergence_fixer', text)
@@ -423,25 +427,17 @@ class ServiceApiTest(unittest.TestCase):
         self.assertIsNone(entry["pid"])
         self.assertEqual(entry["state_path"], state_path)
 
-    def test_service_forces_seal_defaults_on(self):
-        # Live runs seal concurrently and single-half on the first attempt.
-        ws = self.workspace("ws-seal-defaults")
+    def test_service_does_not_inject_retired_seal_worker_config(self):
+        ws = self.workspace("ws-seal-config")
         status, _ = self.create_run(ws)
         self.assertEqual(status, 201)
         cfg = st.load(driver.default_state_path(ws))["config"]
-        self.assertTrue(cfg["seal_concurrent"])
-        self.assertTrue(cfg["single_seal_first_attempt"])
-
-    def test_service_seal_defaults_overridable(self):
-        # An explicit advanced-config value still wins over the forced default.
-        ws = self.workspace("ws-seal-override")
-        status, _ = self.create_run(
-            ws, config={"single_seal_first_attempt": False,
-                        "seal_concurrent": False})
-        self.assertEqual(status, 201)
-        cfg = st.load(driver.default_state_path(ws))["config"]
-        self.assertFalse(cfg["single_seal_first_attempt"])
-        self.assertFalse(cfg["seal_concurrent"])
+        for retired in (
+            "max_seal_attempts",
+            "seal_concurrent",
+            "single_seal_first_attempt",
+        ):
+            self.assertNotIn(retired, cfg)
 
     def test_create_same_workspace_twice_409(self):
         ws = self.workspace("ws-dupe")
@@ -485,7 +481,7 @@ class ServiceApiTest(unittest.TestCase):
         for extra in (
             {"goal": "NEW GOAL"},
             {"goal_doc": os.path.join(self.tmp.name, "whatever.md")},
-            {"config": {"max_seal_attempts": 999}},
+            {"config": {"max_rounds_per_family": 999}},
         ):
             payload = {"workspace": ws, "attach": True, "autostart": False}
             payload.update(extra)
@@ -879,13 +875,27 @@ class StoryApiTest(ServiceApiTest):
                        "findings": [{"id": "F1", "severity": "P2",
                                      "summary": "boundary unclear"}]},
         })
+        unit["rounds"].extend([
+            {
+                "id": "skeleton-codex-r2", "family": "codex",
+                "kind": "review_round", "at": "2026-07-05T10:40:00+0200",
+                "duration_s": 20.0, "raw_path": "raw/r2.txt",
+                "result": {"status": "ok", "kind": "review_round",
+                           "findings": []},
+            },
+            {
+                "id": "skeleton-claude-r1", "family": "claude",
+                "kind": "review_round", "at": "2026-07-05T10:50:00+0200",
+                "duration_s": 22.0, "raw_path": "raw/r3.txt",
+                "result": {"status": "ok", "kind": "review_round",
+                           "findings": []},
+            },
+        ])
         unit["seals"].append({
             "attempt": 1, "passed": True, "invalidated": None,
             "at": "2026-07-05T11:00:00+0200",
-            "halves": {"codex": {"result": {"findings": []},
-                                 "duration_s": 60.0,
-                                 "raw_path": "raw/s1.txt",
-                                 "workspace_modified": False}},
+            "halves": {},
+            "reviews": ["skeleton-codex-r2", "skeleton-claude-r1"],
         })
         unit["debt"] = [{
             "id": "claude-F9", "severity": "P3", "summary": "stale word",
@@ -977,7 +987,11 @@ class StoryApiTest(ServiceApiTest):
             "GET", "/api/runs/%s/story?item=seal:skeleton:1" % rid)
         self.assertEqual(status, 200)
         self.assertTrue(body["passed"])
-        self.assertIn("codex", body["halves"])
+        self.assertEqual(
+            body["reviews"],
+            ["skeleton-codex-r2", "skeleton-claude-r1"],
+        )
+        self.assertEqual(body["halves"], {})
         status, body = self.request_json(
             "GET", "/api/runs/%s/story?item=draft:skeleton" % rid)
         self.assertEqual(status, 200)
@@ -990,18 +1004,34 @@ class StoryApiTest(ServiceApiTest):
         state = st.load(entry["state_path"])
         unit = state["units"][0]
         unit["rounds"].append({
-            "id": "skeleton-claude-r1", "family": "claude",
+            "id": "skeleton-codex-fix-r1", "family": "codex",
             "kind": "fix_findings", "at": "2026-07-05T12:10:00+0200",
             "duration_s": 40.0,
             "result": {"status": "ok", "kind": "fix_findings",
                        "findings": [{"id": "G1", "severity": "P1",
                                      "summary": "pin grading content"}]},
         })
+        unit["rounds"].extend([
+            {
+                "id": "skeleton-codex-r3", "family": "codex",
+                "kind": "review_round", "at": "2026-07-05T12:12:00+0200",
+                "duration_s": 20.0,
+                "result": {"status": "ok", "kind": "review_round",
+                           "findings": []},
+            },
+            {
+                "id": "skeleton-claude-r2", "family": "claude",
+                "kind": "review_round", "at": "2026-07-05T12:15:00+0200",
+                "duration_s": 20.0,
+                "result": {"status": "ok", "kind": "review_round",
+                           "findings": []},
+            },
+        ])
         unit["seals"].append({
             "attempt": 2, "passed": True, "invalidated": None,
             "at": "2026-07-05T12:20:00+0200",
-            "halves": {"codex": {"result": {"findings": []},
-                                    "duration_s": 30.0}},
+            "halves": {},
+            "reviews": ["skeleton-codex-r3", "skeleton-claude-r2"],
         })
         state["events"].extend([
             {"seq": 1002, "at": "2026-07-05T12:00:00+0200",
@@ -1018,7 +1048,14 @@ class StoryApiTest(ServiceApiTest):
 
         _, detail = self.request_json("GET", "/api/runs/%s" % rid)
         repair = detail["summary"]["units"][0]["repairs"][0]
-        self.assertEqual(repair["round_ids"], ["skeleton-claude-r1"])
+        self.assertEqual(
+            repair["round_ids"],
+            [
+                "skeleton-codex-fix-r1",
+                "skeleton-codex-r3",
+                "skeleton-claude-r2",
+            ],
+        )
         self.assertEqual(repair["seal_attempts"], [2])
         status, body = self.request_json(
             "GET", "/api/runs/%s/story?item=repair:skeleton:1002" % rid)
@@ -1060,7 +1097,7 @@ class StoryApiTest(ServiceApiTest):
         doc = st.ensure_next_unit(state)
         doc["status"] = st.U_SEALED
         impl = st.ensure_next_unit(state)
-        impl["status"] = st.U_SEALING
+        impl["status"] = st.U_PRE_SEAL_VERIFY
         st.record_debt(state, impl, [{
             "id": "claude-F1", "severity": "P3", "summary": "code bug",
             "raised_by": "claude", "cleared_by": "codex",

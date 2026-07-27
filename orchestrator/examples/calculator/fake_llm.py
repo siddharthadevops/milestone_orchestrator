@@ -16,14 +16,14 @@ separation model (reviewers report only; a fixer triages):
     consultation and a prevention edit -> claude round 2 stubbornly
     re-raises the same complaint without contests -> fixer kills it by
     pointer (rejected_adjudicated, zero consultations) -> claude round 3
-    clean -> double seal clean -> gate.
-  slice note: clean everywhere, seal first try.
+    clean -> deterministic seal from the current reviews -> gate.
+  slice note: both reviews clean on the same bytes -> deterministic seal.
   implementation:
     deliberate div bug -> verification fails -> fixer repairs it (delta
     review + amend) -> codex round 1 reports a docstring finding -> fixer
-    fixes -> codex round 2 clean -> claude clean -> seal a1: claude half
-    reports a missing README -> fixer writes it -> seal a2 clean -> gate ->
-    milestone closes.
+    fixes -> reviews restart at codex -> claude reports a missing README ->
+    fixer writes it -> reviews restart at codex again -> both clean on the
+    same bytes -> deterministic seal -> gate -> milestone closes.
 """
 
 import argparse
@@ -79,6 +79,29 @@ def parse_first_registry_id(prompt):
             if line.startswith(("ACCESS", "PROCESS AUTHORITY", "OUTPUT CONTRACT")):
                 break
     return None
+
+
+def prompt_scope(prompt):
+    """Stable per-unit counter scope; review restarts must not depend on how
+    many calls earlier units happened to consume."""
+    task = next(
+        (line for line in prompt.splitlines() if line.startswith("TASK:")),
+        "",
+    )
+    if "milestone skeleton" in task:
+        return "skeleton"
+    if "slice 1 note" in task:
+        return "slice_doc-01"
+    if "slice 1 implementation" in task or "implement slice 1" in task:
+        return "slice_impl-01"
+    # Reclassification has a generic TASK line; its artifact is the only
+    # unit identity in that prompt. Counts do not drive its answer, but a
+    # useful scope keeps the diagnostic counter readable.
+    if "on docs/skeleton.md." in prompt:
+        return "skeleton"
+    if "on docs/slice-01.md." in prompt:
+        return "slice_doc-01"
+    return "run"
 
 
 def bump_counter(workspace, key):
@@ -196,6 +219,7 @@ def report(kind, findings):
 
 
 def respond(kind, family, workspace, count, prompt):
+    scope = prompt_scope(prompt)
     # ---- drafts ----------------------------------------------------------
     if kind == "draft_skeleton":
         write(
@@ -228,12 +252,12 @@ def respond(kind, family, workspace, count, prompt):
 
     # ---- report-only reviews --------------------------------------------
     if kind == "review_round" and family == "codex":
-        if count == 1:  # skeleton r1
+        if scope == "skeleton" and count == 1:
             return report(kind, [
                 {"id": "F1", "severity": "P3",
                  "summary": "skeleton lacks explicit non-goals"}
             ])
-        if count == 4:  # impl r1
+        if scope == "slice_impl-01" and count == 1:
             return report(kind, [
                 {"id": "F1", "severity": "P3",
                  "summary": "calculator module lacks a docstring"}
@@ -241,28 +265,33 @@ def respond(kind, family, workspace, count, prompt):
         return report(kind, [])
 
     if kind == "review_round" and family == "claude":
-        if count == 1:  # skeleton claude r1
+        if scope == "skeleton" and count == 1:
             return report(kind, [
                 {"id": "F1", "severity": "P3",
                  "summary": "goal wording is ambiguous about float support"}
             ])
-        if count == 2:  # the stubborn re-raise, no contests, no new evidence
+        if scope == "skeleton" and count == 2:
             return report(kind, [
                 {"id": "F1", "severity": "P3",
                  "summary": "goal wording is ambiguous about float support"}
+            ])
+        if scope == "slice_impl-01" and count == 1:
+            return report(kind, [
+                {"id": "F1", "severity": "P3",
+                 "summary": "workspace lacks a README describing CLI usage"}
             ])
         return report(kind, [])
 
     if kind == "delta_review":
         return report(kind, [])  # every fix delta in this scenario is green
 
-    if kind == "seal_half":
-        if family == "claude" and count == 3:  # impl seal a1
-            return report(kind, [
-                {"id": "S1", "severity": "P3",
-                 "summary": "workspace lacks a README describing CLI usage"}
-            ])
-        return report(kind, [])
+    if kind == "reclassify":
+        return ok(
+            kind,
+            drift_risk="high",
+            drift_damage="high",
+            reason="the scripted finding changes required calculator behavior",
+        )
 
     # ---- the fixer -------------------------------------------------------
     if kind == "fix_findings":
@@ -296,12 +325,15 @@ def respond(kind, family, workspace, count, prompt):
                 out.append(entry)
             return out
 
-        if count == 1:  # skeleton: concede non-goals
+        summaries = {f["summary"] for f in queued}
+
+        if "skeleton lacks explicit non-goals" in summaries:
             append(workspace, "docs/skeleton.md",
                    "\n## Non-goals\n\nNo scientific functions.\n")
             return ok(kind, findings=echo("fixed"),
                       files_changed=["docs/skeleton.md"])
-        if count == 2:  # skeleton: dissent on "ambiguous wording"
+        if ("goal wording is ambiguous about float support" in summaries
+                and count == 2):
             append(workspace, "docs/skeleton.md",
                    "\nNote: operations are defined over floats "
                    "(clarified after review).\n")
@@ -321,22 +353,23 @@ def respond(kind, family, workspace, count, prompt):
                 ),
                 files_changed=["docs/skeleton.md"],
             )
-        if count == 3:  # the stubborn duplicate dies by pointer
+        if "goal wording is ambiguous about float support" in summaries:
             ref = parse_first_registry_id(prompt) or "unknown"
             return ok(
                 kind,
                 findings=echo("rejected_adjudicated", adjudication_ref=ref),
                 files_changed=[],
             )
-        if count == 4:  # verification failure: repair div
+        if any("verification suite failed" in summary
+               for summary in summaries):
             write(workspace, "calculator.py", CALC_FIXED)
             return ok(kind, findings=echo("fixed"),
                       files_changed=["calculator.py"])
-        if count == 5:  # impl round finding: docstring
+        if "calculator module lacks a docstring" in summaries:
             write(workspace, "calculator.py", CALC_DOCSTRING)
             return ok(kind, findings=echo("fixed"),
                       files_changed=["calculator.py"])
-        if count == 6:  # seal finding: README
+        if "workspace lacks a README describing CLI usage" in summaries:
             write(workspace, "README.md",
                   "# Calculator\n\nUsage: python3 calculator.py "
                   "add|sub|mul|div A B\n")
@@ -363,7 +396,9 @@ def main():
         print(json.dumps({"status": "blocked", "kind": "unknown",
                           "blocked_reason": "prompt had no KIND header"}))
         return 0
-    count = bump_counter(workspace, "%s:%s" % (kind, family))
+    count = bump_counter(
+        workspace, "%s:%s:%s" % (prompt_scope(prompt), kind, family)
+    )
     print(json.dumps(respond(kind, family, workspace, count, prompt)))
     return 0
 

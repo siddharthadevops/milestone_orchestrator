@@ -51,6 +51,10 @@ NONDET_FIELDS = frozenset({
     "opened_epoch",
     "closed_epoch",
     "resume_at",
+    # Opaque hashes cover generated workspace bytes, including timestamps
+    # and git ids already classified above. Their semantics are tested in
+    # same-workspace seal regressions; hashes from two repos cannot match.
+    "review_evidence_fingerprint", "evidence_fingerprint",
     # git object ids — different repos, different shas
     "sha", "wip_sha", "gate_sha", "gate_commit", "commit", "parent", "head",
 })
@@ -128,7 +132,6 @@ def _base_config():
         "timeouts": {"codex": 60, "claude": 60},
         "verification": ["python3 run_checks.py"],
         "max_rounds_per_family": 6,
-        "max_seal_attempts": 4,
         "git": {"enabled": True},
         "acts": {"skeletoner": "codex", "fixer": "codex", "delta_review": "codex",
                  "consultation": "opposite"},

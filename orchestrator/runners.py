@@ -369,8 +369,7 @@ _COMPLETE_TOKEN_TAIL = ('"', "}", "]")
 # does NOT mean the object was finished: a truncation just before
 # `,"suite_command": ...` would validate and silently seal against the
 # wrong suite. They keep the repair retry, whose cost is honest.
-RECOVERABLE_KINDS = frozenset({contracts.KIND_REVIEW_ROUND,
-                               contracts.KIND_SEAL_HALF})
+RECOVERABLE_KINDS = frozenset({contracts.KIND_REVIEW_ROUND})
 
 
 def _prefix_opens_nothing(stripped, start):
@@ -1475,9 +1474,9 @@ def call_worker(runner, family, prompt, kind, workspace,
 # ---------------------------------------------------------------------------
 # Workspace snapshot (structural "unchanged artifact" enforcement)
 
-# Runtime/bookkeeping dirs plus well-known Python tool caches: read-only
-# seal halves are instructed to base claims on tests/command output, and
-# those legitimately write tool caches. Entries are directory names or
+# Runtime/bookkeeping dirs plus well-known Python tool caches: report-only
+# reviewers may base claims on tests/command output, and those legitimately
+# write tool caches. Entries are directory names or
 # fnmatch patterns. Operators can extend the set per run via the
 # "snapshot_exclude_dirs" config key (driver plumbs it here).
 SNAPSHOT_EXCLUDE_DIRS = {
@@ -1540,9 +1539,8 @@ def _walk_entries(workspace, root, exclude, entries):
 def snapshot_workspace(workspace, extra_exclude=None, paths=None):
     """Map of workspace entries -> content descriptors (the tamper check).
 
-    Used to enforce, mechanically, that report-only workers edit nothing
-    and that both seal halves reviewed the same artifact. Snapshots
-    compare with ==; snapshot_changes() names the paths that differ.
+    Used to enforce mechanically that report-only workers edit nothing.
+    Snapshots compare with ==; snapshot_changes() names the paths that differ.
 
     Two universes:
     - paths=None (git-disabled runs): raw filesystem walk. Every entry

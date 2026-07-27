@@ -6,9 +6,10 @@ marker, written under docs/ by generate(). These tests drive them with
 small handcrafted states covering the interesting shapes under the
 review/fix separation model: a reported review finding, a fix_findings
 round (fixed / rejected-with-consultation), a clean delta review, an
-INVALIDATED seal attempt, a findings seal attempt, a passed seal attempt,
-a closed slice_impl, a failed run, and the adjudications ledger derived
-from the rejected findings.
+ordered same-byte review cycle, a deterministic seal citing those reviews,
+a closed slice_impl, a failed run, and the adjudications ledger derived from
+the rejected findings. Legacy seal-attempt shapes live only in the explicitly
+historical compatibility test.
 """
 
 import copy
@@ -28,7 +29,7 @@ ADJ_RATIONALE = (
 )
 
 
-def _clean_half(raw_path):
+def _historical_clean_half(raw_path):
     return {
         "result": {"findings": []},
         "raw_path": raw_path,
@@ -40,10 +41,10 @@ def _clean_half(raw_path):
 def make_state():
     """A small but structurally complete state under the review/fix model:
     a sealed skeleton (reported finding -> fixer fixed -> clean delta ->
-    reported finding -> fixer REJECTED with consultation+prevention -> clean
-    round -> passed seal), a bare sealed slice_doc, and a closed slice_impl
-    (verification fix episode + clean claude round) whose seal history is
-    a1 INVALIDATED -> a2 findings -> a3 passed."""
+    codex clean -> reported Claude finding -> fixer REJECTED with a prevention
+    edit -> review restarts at codex -> both families clean), a clean slice
+    note, and a closed implementation. Every unit has one deterministic seal
+    that cites its current whole-artifact reviews and has no worker halves."""
     return {
         "goal": "Ship a tiny calculator with tests",
         "milestone": {
@@ -103,6 +104,13 @@ def make_state():
                         "result": {"findings": []},
                     },
                     {
+                        "id": "skeleton-codex-r4",
+                        "kind": "review_round",
+                        "family": "codex",
+                        "raw_path": ".orchestrator/raw/skeleton-codex-r2.txt",
+                        "result": {"findings": []},
+                    },
+                    {
                         "id": "skeleton-claude-r1",
                         "kind": "review_round",
                         "family": "claude",
@@ -119,7 +127,7 @@ def make_state():
                         },
                     },
                     {
-                        "id": "skeleton-codex-r4",
+                        "id": "skeleton-codex-r5",
                         "kind": "fix_findings",
                         "family": "codex",
                         "source_round_id": "skeleton-claude-r1",
@@ -145,6 +153,20 @@ def make_state():
                         },
                     },
                     {
+                        "id": "skeleton-codex-r6",
+                        "kind": "delta_review",
+                        "family": "codex",
+                        "raw_path": ".orchestrator/raw/skeleton-delta2.txt",
+                        "result": {"findings": []},
+                    },
+                    {
+                        "id": "skeleton-codex-r7",
+                        "kind": "review_round",
+                        "family": "codex",
+                        "raw_path": ".orchestrator/raw/skeleton-codex-r3.txt",
+                        "result": {"findings": []},
+                    },
+                    {
                         "id": "skeleton-claude-r2",
                         "kind": "review_round",
                         "family": "claude",
@@ -157,14 +179,11 @@ def make_state():
                         "attempt": 1,
                         "passed": True,
                         "invalidated": None,
-                        "halves": {
-                            "codex": _clean_half(
-                                ".orchestrator/raw/skeleton-seal-a1-codex.txt"
-                            ),
-                            "claude": _clean_half(
-                                ".orchestrator/raw/skeleton-seal-a1-claude.txt"
-                            ),
-                        },
+                        "halves": {},
+                        "reviews": [
+                            "skeleton-codex-r7",
+                            "skeleton-claude-r2",
+                        ],
                     }
                 ],
                 "gate_commit": "abc1234",
@@ -176,8 +195,32 @@ def make_state():
                 "status": "sealed",
                 "artifact": "docs/slice-01.md",
                 "draft": None,
-                "rounds": [],
-                "seals": [],
+                "rounds": [
+                    {
+                        "id": "slice_doc-01-codex-r1",
+                        "kind": "review_round",
+                        "family": "codex",
+                        "raw_path": ".orchestrator/raw/slice_doc-01-codex-r1.txt",
+                        "result": {"findings": []},
+                    },
+                    {
+                        "id": "slice_doc-01-claude-r1",
+                        "kind": "review_round",
+                        "family": "claude",
+                        "raw_path": ".orchestrator/raw/slice_doc-01-claude-r1.txt",
+                        "result": {"findings": []},
+                    },
+                ],
+                "seals": [{
+                    "attempt": 1,
+                    "passed": True,
+                    "invalidated": None,
+                    "halves": {},
+                    "reviews": [
+                        "slice_doc-01-codex-r1",
+                        "slice_doc-01-claude-r1",
+                    ],
+                }],
                 "gate_commit": None,
                 "closed_record": None,
             },
@@ -217,6 +260,13 @@ def make_state():
                         "result": {"findings": []},
                     },
                     {
+                        "id": "slice_impl-01-codex-r3",
+                        "kind": "review_round",
+                        "family": "codex",
+                        "raw_path": ".orchestrator/raw/slice_impl-01-codex-r1.txt",
+                        "result": {"findings": []},
+                    },
+                    {
                         "id": "slice_impl-01-claude-r1",
                         "kind": "review_round",
                         "family": "claude",
@@ -227,67 +277,21 @@ def make_state():
                 "seals": [
                     {
                         "attempt": 1,
-                        "passed": False,
-                        "invalidated": "seal half codex modified the "
-                        "workspace; its output is invalid",
-                        "halves": {
-                            "codex": {
-                                "result": {"findings": []},
-                                "raw_path": ".orchestrator/raw/"
-                                "slice_impl-01-seal-a1-codex.txt",
-                                "duration_s": 1.0,
-                                "workspace_modified": True,
-                            },
-                            "claude": _clean_half(
-                                ".orchestrator/raw/slice_impl-01-seal-a1-claude.txt"
-                            ),
-                        },
-                    },
-                    {
-                        "attempt": 2,
-                        "passed": False,
-                        "invalidated": None,
-                        "halves": {
-                            "codex": _clean_half(
-                                ".orchestrator/raw/slice_impl-01-seal-a2-codex.txt"
-                            ),
-                            "claude": {
-                                "result": {
-                                    "findings": [
-                                        {
-                                            "id": "S1",
-                                            "severity": "P3",
-                                            "summary": "workspace lacks a README",
-                                        }
-                                    ]
-                                },
-                                "raw_path": ".orchestrator/raw/"
-                                "slice_impl-01-seal-a2-claude.txt",
-                                "duration_s": 1.0,
-                                "workspace_modified": False,
-                            },
-                        },
-                    },
-                    {
-                        "attempt": 3,
                         "passed": True,
                         "invalidated": None,
-                        "halves": {
-                            "codex": _clean_half(
-                                ".orchestrator/raw/slice_impl-01-seal-a3-codex.txt"
-                            ),
-                            "claude": _clean_half(
-                                ".orchestrator/raw/slice_impl-01-seal-a3-claude.txt"
-                            ),
-                        },
+                        "halves": {},
+                        "reviews": [
+                            "slice_impl-01-codex-r3",
+                            "slice_impl-01-claude-r1",
+                        ],
                     },
                 ],
                 "gate_commit": None,
                 "closed_record": {
                     "at": "2026-01-02T03:04:05+0000",
                     "slice_id": 1,
-                    "rounds": 3,
-                    "seal_attempts": 3,
+                    "rounds": 4,
+                    "seal_attempts": 1,
                 },
             },
         ],
@@ -310,15 +314,17 @@ class TestRenderMilestone(unittest.TestCase):
         self.assertIn("| 01 | Calculator core |", self.text)
 
     def test_unit_rows_with_seal_summaries_and_gate_commit(self):
-        self.assertIn("| skeleton | sealed | 6 | a1:pass | abc1234 |", self.text)
         self.assertIn(
-            "| slice_doc-01 (Calculator core) | sealed | 0 | - | - |", self.text
+            "| skeleton | sealed | 9 | satisfied | abc1234 |", self.text
         )
-        # The invalidated attempt renders as "invalid", the findings attempt
-        # as "findings", the clean one as "pass"; no gate commit -> "-".
         self.assertIn(
-            "| slice_impl-01 (Calculator core) | sealed | 3 "
-            "| a1:invalid, a2:findings, a3:pass | - |",
+            "| slice_doc-01 (Calculator core) | sealed | 2 "
+            "| satisfied | - |",
+            self.text,
+        )
+        self.assertIn(
+            "| slice_impl-01 (Calculator core) | sealed | 4 "
+            "| satisfied | - |",
             self.text,
         )
 
@@ -380,7 +386,7 @@ class TestRenderReviewLog(unittest.TestCase):
         )
         # The rejection carries its consultation.
         self.assertIn(
-            "| skeleton-codex-r4 | fix_findings | codex | 1 "
+            "| skeleton-codex-r5 | fix_findings | codex | 1 "
             "| 1 rejected (1 consulted) "
             "| `.orchestrator/raw/skeleton-fix2.txt` |",
             self.text,
@@ -393,37 +399,31 @@ class TestRenderReviewLog(unittest.TestCase):
             self.text,
         )
 
-    def test_seal_attempt_headings_cover_all_outcomes(self):
-        self.assertIn("### Seal attempt a1 — PASSED", self.text)  # skeleton
-        self.assertIn("### Seal attempt a1 — INVALIDATED", self.text)
-        self.assertIn("### Seal attempt a2 — findings", self.text)
-        self.assertIn("### Seal attempt a3 — PASSED", self.text)
-
-    def test_invalidated_attempt_details(self):
+    def test_deterministic_seal_cites_same_byte_reviews(self):
+        self.assertEqual(self.text.count("### Seal result — SATISFIED"), 3)
+        self.assertNotIn("Historical seal attempt", self.text)
         self.assertIn(
-            "- invalidated: seal half codex modified the workspace; "
-            "its output is invalid",
+            "- deterministic result: every configured family was clean or "
+            "debt-clean on the same current bytes, and the verification gate "
+            "passed; no seal reviewer was called",
             self.text,
         )
         self.assertIn(
-            "- codex half: 0 finding(s); workspace_modified=True; "
-            "raw `.orchestrator/raw/slice_impl-01-seal-a1-codex.txt`",
+            "- cited reviews: `skeleton-codex-r7`, "
+            "`skeleton-claude-r2`",
             self.text,
         )
-
-    def test_findings_attempt_lists_each_finding(self):
         self.assertIn(
-            "- claude half: 1 finding(s); workspace_modified=False; "
-            "raw `.orchestrator/raw/slice_impl-01-seal-a2-claude.txt`",
+            "- cited reviews: `slice_impl-01-codex-r3`, "
+            "`slice_impl-01-claude-r1`",
             self.text,
         )
-        self.assertIn("  - [P3] workspace lacks a README", self.text)
 
     def test_requeued_implementation_debt_is_not_republished(self):
         state = make_state()
         state["events"] = []
         impl = state["units"][2]
-        impl["status"] = st.U_SEALING
+        impl["status"] = st.U_PRE_SEAL_VERIFY
         impl["debt"] = [{
             "id": "claude-F9",
             "severity": "P3",
@@ -439,6 +439,90 @@ class TestRenderReviewLog(unittest.TestCase):
         self.assertEqual(len(impl["debt"]), 1)
         self.assertNotIn("historical implementation defect", text)
         self.assertNotIn("Deferred debt", text)
+
+
+class TestHistoricalSealRendering(unittest.TestCase):
+    """Persisted pre-predicate runs remain readable, but are clearly history."""
+
+    def setUp(self):
+        state = make_state()
+        impl = state["units"][2]
+        impl["seals"] = [
+            {
+                "attempt": 1,
+                "passed": False,
+                "invalidated": "historical reviewer modified the workspace",
+                "halves": {
+                    "codex": {
+                        "result": {"findings": []},
+                        "raw_path": ".orchestrator/raw/legacy-a1-codex.txt",
+                        "duration_s": 1.0,
+                        "workspace_modified": True,
+                    },
+                    "claude": _historical_clean_half(
+                        ".orchestrator/raw/legacy-a1-claude.txt"
+                    ),
+                },
+            },
+            {
+                "attempt": 2,
+                "passed": False,
+                "invalidated": None,
+                "halves": {
+                    "codex": _historical_clean_half(
+                        ".orchestrator/raw/legacy-a2-codex.txt"
+                    ),
+                    "claude": {
+                        "result": {"findings": [{
+                            "id": "S1",
+                            "severity": "P3",
+                            "summary": "workspace lacks a README",
+                        }]},
+                        "raw_path": ".orchestrator/raw/legacy-a2-claude.txt",
+                        "duration_s": 1.0,
+                        "workspace_modified": False,
+                    },
+                },
+            },
+            {
+                "attempt": 3,
+                "passed": True,
+                "invalidated": None,
+                "halves": {
+                    "codex": _historical_clean_half(
+                        ".orchestrator/raw/legacy-a3-codex.txt"
+                    ),
+                    "claude": _historical_clean_half(
+                        ".orchestrator/raw/legacy-a3-claude.txt"
+                    ),
+                },
+            },
+        ]
+        self.text = ledgers.render_review_log(state)
+
+    def test_attempts_are_explicitly_historical(self):
+        self.assertIn("### Historical seal attempt a1 — INVALIDATED", self.text)
+        self.assertIn("### Historical seal attempt a2 — findings", self.text)
+        self.assertIn("### Historical seal attempt a3 — SATISFIED", self.text)
+        self.assertIn(
+            "- invalidated: historical reviewer modified the workspace",
+            self.text,
+        )
+
+    def test_historical_reviews_and_findings_remain_auditable(self):
+        self.assertIn(
+            "- historical codex seal review: 0 finding(s); "
+            "workspace_modified=True; raw "
+            "`.orchestrator/raw/legacy-a1-codex.txt`",
+            self.text,
+        )
+        self.assertIn(
+            "- historical claude seal review: 1 finding(s); "
+            "workspace_modified=False; raw "
+            "`.orchestrator/raw/legacy-a2-claude.txt`",
+            self.text,
+        )
+        self.assertIn("  - [P3] workspace lacks a README", self.text)
 
 
 class TestRenderAdjudications(unittest.TestCase):
@@ -480,7 +564,7 @@ class TestRenderAdjudications(unittest.TestCase):
 
     def test_no_prevention_line_when_absent(self):
         state = make_state()
-        rejected = state["units"][0]["rounds"][4]["result"]["findings"][0]
+        rejected = state["units"][0]["rounds"][5]["result"]["findings"][0]
         rejected["prevention"] = None
         text = ledgers.render_adjudications(state)
         self.assertIn("## [%s]" % ADJ_ID, text)
@@ -488,7 +572,7 @@ class TestRenderAdjudications(unittest.TestCase):
 
     def test_missing_rationale_renders_placeholder(self):
         state = make_state()
-        rejected = state["units"][0]["rounds"][4]["result"]["findings"][0]
+        rejected = state["units"][0]["rounds"][5]["result"]["findings"][0]
         rejected["consultation"] = None
         text = ledgers.render_adjudications(state)
         self.assertIn("- rationale: (none)", text)
@@ -515,9 +599,13 @@ class TestRenderClosure(unittest.TestCase):
         self.assertTrue(text.startswith(GENERATED_MARKER))
         self.assertIn("# Closure — slice 01 (Calculator core)", text)
         self.assertIn("- closed at: 2026-01-02T03:04:05+0000", text)
-        self.assertIn("- rounds: 3", text)
-        self.assertIn("- seal attempts: 3", text)
-        self.assertIn("- review state: review_clean", text)
+        self.assertIn("- rounds: 4", text)
+        self.assertIn("- seal records: 1", text)
+        self.assertIn(
+            "- review state: effectively clean (every family clean or "
+            "debt-clean on the same bytes; verification passed)",
+            text,
+        )
 
     def test_gate_commit_placeholder_when_committed_with_closure(self):
         # The closure ledger is generated BEFORE its own gate commit, so a

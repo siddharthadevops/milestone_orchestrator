@@ -262,8 +262,7 @@ class GapRoutingCase(unittest.TestCase):
             # 1. impl draft -> fits_remodel gap (reopens the skeleton)
             [step("implement",
                   _gap_output("implement", _gap("fits_remodel")))]
-            # 2. skeleton remodel (git off: fix returns straight to pre-seal,
-            #    no delta), then reseal both halves
+            # 2. skeleton remodel; changed bytes restart both reviewers
             + [step("fix_findings",
                     fix_ok([triaged("GAP1", "fixed", "recorded the field",
                                     severity="P1")],
@@ -272,15 +271,13 @@ class GapRoutingCase(unittest.TestCase):
                     side_effect=write_file(
                         "docs/skeleton.md",
                         "# Skeleton\n\nSlice 01 records the field.\n")),
-               step("seal_half", report("seal_half"), family="codex"),
-               step("seal_half", report("seal_half"), family="claude")]
-            # 3. impl RE-draft, clean reviews, seal -> close
+               step("review_round", report("review_round"), family="codex"),
+               step("review_round", report("review_round"), family="claude")]
+            # 3. impl RE-draft, clean reviews -> derived seal -> close
             + [step("implement", ok("implement", files_changed=["calc.py"]),
                     side_effect=write_file("calc.py", "def add(a,b):\n return a+b\n")),
                step("review_round", report("review_round"), family="codex"),
-               step("review_round", report("review_round"), family="claude"),
-               step("seal_half", report("seal_half"), family="codex"),
-               step("seal_half", report("seal_half"), family="claude")]
+               step("review_round", report("review_round"), family="claude")]
         )
         mock = runners.MockRunner(script)
         driver = drv.Driver(path, runner=mock)
@@ -322,17 +319,13 @@ class GapRoutingCase(unittest.TestCase):
         self.assertIsNone(state.get("redoc_wave"))
         self.assertIn("redoc_wave_closed",
                       [e["type"] for e in state["events"]])
-        # The wave's fixer + seal prompts declared the SET (re-documenter
-        # framing; the seal certifies the whole documentation set).
+        # The wave's fixer declared the SET (re-documenter framing); the
+        # resulting reviews certify the current documentation set.
         fix_prompts = [p for (_f, kind, p) in mock.calls
                        if kind == "fix_findings"]
         self.assertTrue(any("RE-DOCUMENTATION WAVE" in p
                             and "docs/slice-01.md" in p
                             for p in fix_prompts))
-        seal_prompts = [p for (_f, kind, p) in mock.calls
-                        if kind == "seal_half"]
-        self.assertTrue(any("WAVE SEAL" in p and "docs/slice-01.md" in p
-                            for p in seal_prompts))
         # Post-wave the producer predicate is self-consistent: the note
         # resealed AFTER the skeleton, so nothing "predates" the design.
         d = drv.Driver(path, runner=runners.MockRunner([]))

@@ -96,8 +96,8 @@ def doc_register(state):
 
 def reform_active(state):
     """Whether the reform's semantics govern this run — the single
-    predicate behind gap semantics, the seal predicate, the widened doc
-    gate, the question battery, and the plain/example hard-require. ON
+    predicate behind gap semantics, the widened doc gate, the question
+    battery, and the plain/example hard-require. ON
     for every reform profile; OFF for the `legacy` compatibility artifact
     (which declares `compat`) and for profile-less runs, which reproduce
     the pre-reform driver bit-identically."""
@@ -113,14 +113,6 @@ def gap_semantics(state):
     compatibility artifact and for profile-less runs, which reproduce the
     pre-reform builders exactly (their prompts never advertise the gap
     exit, so they never return one — bit-identical)."""
-    return reform_active(state)
-
-
-def seal_predicate(state):
-    """Whether this run seals by the reform PREDICATE (spec §5) rather than
-    by dedicated seal-half worker calls. ON for every reform profile; OFF
-    for the `legacy` compatibility artifact and profile-less runs, which
-    keep the pre-reform double-seal halves (so they stay bit-identical)."""
     return reform_active(state)
 
 
@@ -158,7 +150,7 @@ def doc_defer_scope(state):
 
 
 def impl_defer_scope(state):
-    """The severities an IMPLEMENTATION-phase review round / seal may defer
+    """The severities an IMPLEMENTATION-phase review round may defer
     as tracked debt (subject to the drift-risk threshold). Always P3 only:
     on the code phase a P2 is a visible functional deviation that must be
     fixed even under the lightest profile, so only cosmetic P3s (polish,

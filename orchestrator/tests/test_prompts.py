@@ -1,23 +1,20 @@
 """Regressions for the PROCESS AUTHORITY section of every worker prompt.
 
-Live incident: a codex seal_half worker on a real run returned status
-"blocked" because a MANUAL-era review log vendored inside the workspace
-(review-log.md pending checkboxes + the old textual canon's "record
-VERDICT before sealing" rule) contradicted the orchestrator's durable
-ledger, which had legitimately opened the sealing phase. The ledger
-(.orchestrator/state.json) is the SOLE process truth; repo-resident
-process documents must never govern a run.
+A report-only reviewer once returned status "blocked" because a MANUAL-era
+review log vendored inside the workspace contradicted the orchestrator's
+durable ledger. The ledger (.orchestrator/state.json) is the SOLE process
+truth; repo-resident process documents must never govern a run.
 
 The fix appended a PROCESS AUTHORITY section to _access_block(), which
 every one of the 7 prompt builders inherits. These tests pin:
   (1) all 7 builders emit the section and its load-bearing phrases;
   (2) report-only builders still carry REPORT-ONLY and edit builders
       still carry the workspace-edit line (access model intact);
-  (3) the incident regression: seal_half prompts carry the authority
+  (3) the incident regression: review prompts carry the authority
       phrases and contain NO instruction to record verdicts in repo
       logs — the only VERDICT mention is the bookkeeping BAN;
   (4) existing invariants: the adjudicated-rejections registry block is
-      injected in review/delta/seal/fix only, and the consultation
+      injected in review/delta/fix only, and the consultation
       protocol block appears only in fix prompts.
 """
 
@@ -49,8 +46,8 @@ EDIT_BUILDERS = (
     "implement",
     "fix_findings",
 )
-REPORT_BUILDERS = ("review_round", "delta_review", "seal_half")
-REGISTRY_BUILDERS = ("review_round", "delta_review", "seal_half", "fix_findings")
+REPORT_BUILDERS = ("review_round", "delta_review")
+REGISTRY_BUILDERS = ("review_round", "delta_review", "fix_findings")
 
 # Phrases that carry the fix's weight. Multi-line phrases are asserted on
 # a whitespace-normalized form so they survive the prompt's line wrapping.
@@ -90,9 +87,6 @@ def build_all():
         ),
         "delta_review": prompts.build_delta_review(
             FAMILY, WORKSPACE, GOAL, UNIT, "diff --git a/x b/x\n", []
-        ),
-        "seal_half": prompts.build_seal_half(
-            FAMILY, WORKSPACE, GOAL, UNIT, "docs/slice-01.md", []
         ),
         "fix_findings": prompts.build_fix_findings(
             FAMILY,
@@ -245,21 +239,19 @@ class TestAccessModelStillIntact(unittest.TestCase):
                 )
 
 
-class TestSealHalfOverridesVendoredCanonBookkeeping(unittest.TestCase):
-    """(3) The incident regression. A seal_half worker blocked a run
-    because a vendored manual canon demanded 'record normal Codex
-    VERDICT: 0 ... in the durable log before any seal phase opens' and
-    the milestone's review-log.md still had pending checkboxes. The
-    seal_half prompt must carry the authority phrases AND contain no
+class TestReviewOverridesVendoredCanonBookkeeping(unittest.TestCase):
+    """(3) The incident regression. A reviewer followed a vendored manual
+    canon's bookkeeping instead of the live ledger. The review prompt must
+    carry the authority phrases AND contain no
     instruction to record verdicts in repo logs — the only VERDICT
     mention allowed is the bookkeeping BAN itself."""
 
     def build(self):
-        return prompts.build_seal_half(
+        return prompts.build_review_round(
             FAMILY, WORKSPACE, GOAL, UNIT, "docs/slice-01.md", []
         )
 
-    def test_seal_half_carries_authority_phrases(self):
+    def test_review_carries_authority_phrases(self):
         prompt = self.build()
         flat = normalized(prompt)
         self.assertIn(AUTHORITY_HEADING, prompt)
@@ -322,7 +314,7 @@ class TestSealHalfOverridesVendoredCanonBookkeeping(unittest.TestCase):
 
 class TestExistingPromptInvariants(unittest.TestCase):
     """(4) Pre-fix invariants that must survive: the registry block is
-    injected in review/delta/seal/fix prompts only, and the consultation
+    injected in review/delta/fix prompts only, and the consultation
     protocol appears only in fix prompts."""
 
     # CONTRACT_TEXT (appended to every prompt) also says "ADJUDICATED
@@ -336,7 +328,7 @@ class TestExistingPromptInvariants(unittest.TestCase):
     )
     CONSULTATION_MARKER = "CONSULTATION PROTOCOL"
 
-    def test_registry_block_in_review_delta_seal_fix(self):
+    def test_registry_block_in_review_delta_fix(self):
         built = build_all()
         for name in REGISTRY_BUILDERS:
             with self.subTest(builder=name):
@@ -379,7 +371,7 @@ class TestExistingPromptInvariants(unittest.TestCase):
                 "rationale": "checked against real code",
             }
         ]
-        prompt = prompts.build_seal_half(
+        prompt = prompts.build_review_round(
             FAMILY, WORKSPACE, GOAL, UNIT, "docs/slice-01.md", registry
         )
         self.assertIn("ADJ-1", prompt)
@@ -428,8 +420,6 @@ class TestDeferredDebtPrompts(unittest.TestCase):
             "delta": prompts.build_delta_review(
                 FAMILY, WORKSPACE, GOAL, UNIT, "diff --git a/x b/x\n", [],
                 debt=debt),
-            "seal": prompts.build_seal_half(
-                FAMILY, WORKSPACE, GOAL, UNIT, "docs/x.md", [], debt=debt),
             "fix": prompts.build_fix_findings(
                 FAMILY, WORKSPACE, GOAL, UNIT, FINDINGS, [], "claude",
                 ["claude", "-p"], debt=debt),
@@ -447,7 +437,7 @@ class TestDeferredDebtPrompts(unittest.TestCase):
                 self.assertNotIn("RATIONALE_SENTINEL", prompt)
 
     def test_debt_requires_new_evidence_to_reopen(self):
-        prompt = normalized(self._builders()["seal"])
+        prompt = normalized(self._builders()["review"])
         self.assertIn(
             "unless concrete NEW evidence shows that correction now exceeds "
             "the recorded rating", prompt)
@@ -455,7 +445,7 @@ class TestDeferredDebtPrompts(unittest.TestCase):
                       "findings", prompt)
 
     def test_debt_precedes_adjudicated_registry_and_access(self):
-        prompt = self._builders()["seal"]
+        prompt = self._builders()["review"]
         self.assertLess(prompt.index("DEFERRED DEBT"),
                         prompt.index("ADJUDICATED REJECTIONS"))
         self.assertLess(prompt.index("ADJUDICATED REJECTIONS"),
@@ -471,7 +461,7 @@ class TestDeferredDebtPrompts(unittest.TestCase):
             }
             for i in range(prompts.DEBT_MAX_ENTRIES + 1)
         ]
-        prompt = prompts.build_seal_half(
+        prompt = prompts.build_review_round(
             FAMILY, WORKSPACE, GOAL, UNIT, "docs/x.md", [], debt=debt)
         self.assertIn("1 older debt entries omitted", prompt)
         self.assertNotIn("line one\nINJECTED", prompt)
@@ -503,13 +493,6 @@ class TestPortedCanonContentRules(unittest.TestCase):
             gap_enabled=reform,
         ))
 
-    def seal(self, kind, reform=False):
-        return normalized(prompts.build_seal_half(
-            FAMILY, WORKSPACE, GOAL, UNIT, "docs/x.md", [],
-            unit_kind=kind, governing="docs/skeleton.md",
-            gap_enabled=reform,
-        ))
-
     def fix(self, kind):
         return normalized(prompts.build_fix_findings(
             FAMILY, WORKSPACE, GOAL, UNIT, FINDINGS, [], "claude",
@@ -535,7 +518,7 @@ class TestPortedCanonContentRules(unittest.TestCase):
                 "named public or cross-slice contract", prompt)
 
     def test_altitude_is_doc_unit_conditional_in_reviews(self):
-        for build in (self.review, self.seal, self.delta, self.fix):
+        for build in (self.review, self.delta, self.fix):
             for kind in ("skeleton", "slice_doc"):
                 self.assertIn("ALTITUDE (documentation discipline)",
                               build(kind), build.__name__)
@@ -544,12 +527,11 @@ class TestPortedCanonContentRules(unittest.TestCase):
 
     def test_bidirectional_altitude_check_with_severities(self):
         for kind in ("skeleton", "slice_doc"):
-            for prompt in (self.review(kind), self.seal(kind)):
-                self.assertIn("under-specified observable contracts and "
-                              "over-specified mechanism", prompt)
-                self.assertIn("P3 by default and P2 when acceptance "
-                              "criteria or tests anchor to mechanism",
-                              prompt)
+            prompt = self.review(kind)
+            self.assertIn("under-specified observable contracts and "
+                          "over-specified mechanism", prompt)
+            self.assertIn("P3 by default and P2 when acceptance "
+                          "criteria or tests anchor to mechanism", prompt)
 
     def test_fix_at_altitude_reaches_doc_fixers_only(self):
         rule = "Fix documentation findings at altitude"
@@ -574,12 +556,11 @@ class TestPortedCanonContentRules(unittest.TestCase):
             self.assertIn(posture, normalized(built[name]), name)
         for kind in ("skeleton", "slice_doc"):
             self.assertIn(posture, self.review(kind))
-            self.assertIn(posture, self.seal(kind))
         # Implementation reviews check the reuse GATE but never demand a
         # Reuse Posture section from code (the section duty is doc-only).
-        for prompt in (self.review("slice_impl"), self.seal("slice_impl")):
-            self.assertIn("check the reuse gate", prompt)
-            self.assertNotIn("Reuse Posture", prompt)
+        prompt = self.review("slice_impl")
+        self.assertIn("check the reuse gate", prompt)
+        self.assertNotIn("Reuse Posture", prompt)
 
     def test_machinery_proportionality_reaches_every_relevant_prompt(self):
         built = build_all()
@@ -598,7 +579,7 @@ class TestPortedCanonContentRules(unittest.TestCase):
             self.assertIn("design gap rather than writing a promise", prompt,
                           name)
 
-        for name in ("review_round", "delta_review", "seal_half"):
+        for name in ("review_round", "delta_review"):
             prompt = normalized(built[name])
             self.assertIn("REUSE AND MACHINERY PROPORTIONALITY", prompt, name)
             self.assertIn("existing capabilities or a cheaper option",
@@ -635,7 +616,6 @@ class TestPortedCanonContentRules(unittest.TestCase):
                 self.assertIn("verified behaviour of the current code", p)
         for kind in ("skeleton", "slice_doc", "slice_impl"):
             for p in (self.review(kind, reform=True),
-                      self.seal(kind, reform=True),
                       self.delta(kind, reform=True)):
                 self.assertIn("Trace each justification to its authority", p)
                 self.assertIn(
@@ -652,7 +632,6 @@ class TestPortedCanonContentRules(unittest.TestCase):
                 self.assertIn("it is over-building", p, name)
         for kind in ("skeleton", "slice_doc", "slice_impl"):
             for p in (self.review(kind, reform=True),
-                      self.seal(kind, reform=True),
                       self.delta(kind, reform=True)):
                 self.assertIn("Check altitude", p)
                 self.assertIn("unless the goal demands the stricter bar", p)
@@ -666,7 +645,6 @@ class TestPortedCanonContentRules(unittest.TestCase):
         # slice-level findings against sealed text.
         for kind in ("skeleton", "slice_doc", "slice_impl"):
             for p in (self.review(kind, reform=True),
-                      self.seal(kind, reform=True),
                       self.delta(kind, reform=True)):
                 self.assertIn("judged WHERE IT LIVES", p)
                 self.assertIn("never deflected as a mere posture-change "
@@ -683,7 +661,6 @@ class TestPortedCanonContentRules(unittest.TestCase):
         # ranking and NO invented-posture exception, in any run mode.
         for kind in ("skeleton", "slice_doc", "slice_impl"):
             for p in (self.review(kind), self.review(kind, reform=True),
-                      self.seal(kind), self.seal(kind, reform=True),
                       self.delta(kind), self.delta(kind, reform=True)):
                 self.assertIn("Behavior within the declared posture is NOT "
                               "a defect", p)
@@ -711,7 +688,7 @@ class TestPortedCanonContentRules(unittest.TestCase):
             for m in legacy_markers:
                 self.assertNotIn(m, p, name)
         for kind in ("skeleton", "slice_doc", "slice_impl"):
-            for p in (self.review(kind), self.seal(kind), self.delta(kind)):
+            for p in (self.review(kind), self.delta(kind)):
                 for m in legacy_markers:
                     self.assertNotIn(m, p)
         # The base proportionality guidance is now universal prompt content,
@@ -727,18 +704,15 @@ class TestPortedCanonContentRules(unittest.TestCase):
         # "Hollow" used to be undefined, so it never bit. Both failure
         # shapes are now named — under reform, where the definition lives.
         for kind in ("skeleton", "slice_doc"):
-            for p in (self.review(kind, reform=True),
-                      self.seal(kind, reform=True)):
-                self.assertIn("A section is HOLLOW when", p)
-                self.assertIn("only by this plan's own adopted requirements",
-                              p)
-                self.assertIn("without a goal demand", p)
+            p = self.review(kind, reform=True)
+            self.assertIn("A section is HOLLOW when", p)
+            self.assertIn("only by this plan's own adopted requirements", p)
+            self.assertIn("without a goal demand", p)
 
     def test_skeleton_scope_rules(self):
         for prompt in (
             normalized(prompts.build_draft_skeleton(FAMILY, WORKSPACE, GOAL)),
             self.review("skeleton"),
-            self.seal("skeleton"),
         ):
             self.assertIn("Skeletons are planning contracts, not slice "
                           "notes", prompt)
@@ -751,7 +725,7 @@ class TestPortedCanonContentRules(unittest.TestCase):
         # Severity follows damage, not mechanism (operator, 2026-07-11,
         # after a victimless millisecond race scored P2 and stalled a
         # night). The battery must ride every prompt that ASSIGNS
-        # severities — review rounds, seal halves, and delta reviews,
+        # severities — review rounds and delta reviews,
         # for BOTH doc and impl units — so the defect-or-design gate,
         # the victim question, and the damage mapping are answered
         # before any P0-P2 is written.
@@ -759,8 +733,7 @@ class TestPortedCanonContentRules(unittest.TestCase):
         gate = "Defect or design?"
         victim = "No nameable victim caps severity at P3"
         for kind in ("slice_doc", "slice_impl", "skeleton"):
-            for surface in (self.review(kind), self.seal(kind),
-                            self.delta(kind)):
+            for surface in (self.review(kind), self.delta(kind)):
                 self.assertIn(battery, surface)
                 self.assertIn(gate, surface)
                 self.assertIn(victim, surface)
@@ -770,8 +743,7 @@ class TestPortedCanonContentRules(unittest.TestCase):
                   "incremental_harm", "exceeds_baseline")
         surfaces = [build_all()["fix_findings"]]
         for kind in ("slice_doc", "slice_impl", "skeleton"):
-            surfaces.extend((self.review(kind), self.seal(kind),
-                             self.delta(kind)))
+            surfaces.extend((self.review(kind), self.delta(kind)))
         for surface in surfaces:
             flat = normalized(surface)
             self.assertIn("PERMITTED BASELINE", flat)
@@ -786,7 +758,6 @@ class TestPortedCanonContentRules(unittest.TestCase):
                      "acceptance criteria, tests, risks, reuse posture, "
                      "and guarantee posture")
         self.assertIn(checklist, self.review("slice_doc"))
-        self.assertIn(checklist, self.seal("slice_doc"))
         note = normalized(prompts.build_draft_slice_note(
             FAMILY, WORKSPACE, GOAL, SLICE, "docs/skeleton.md"))
         self.assertIn("non-goals, dependencies, acceptance", note)
@@ -798,25 +769,22 @@ class TestPortedCanonContentRules(unittest.TestCase):
         posture = "strict, optimistic,"
         self.assertIn("guarantee posture", note)
         self.assertIn(posture, self.review("slice_doc"))
-        self.assertIn(posture, self.seal("slice_doc"))
         self.assertIn("guarantee posture", self.review("skeleton"))
         # Slice notes carry NO file lists and the prompts say NOTHING
         # about them either way (operator, 2026-07-11: an unasked-for
         # list is not something an LLM produces spontaneously, and a
         # prohibition is itself token waste). Pin only the absence.
-        for prompt in (note, self.review("slice_doc"), self.seal("slice_doc")):
+        for prompt in (note, self.review("slice_doc")):
             self.assertNotIn("expected files", prompt)
             self.assertNotIn("likely files", prompt)
             self.assertNotIn("file enumeration", prompt)
         sizing = "record the reason in the slice note"
         self.assertIn(sizing, note)
         self.assertIn(sizing, self.review("slice_doc"))
-        self.assertIn(sizing, self.seal("slice_doc"))
 
-    def test_exhaustive_sentence_exact_in_review_and_seal(self):
-        # The canon requires this exact sentence for all review phases.
+    def test_exhaustive_sentence_exact_in_review(self):
+        # The canon requires this exact sentence for full review rounds.
         self.assertIn(self.EXHAUSTIVE, self.review("slice_impl"))
-        self.assertIn(self.EXHAUSTIVE, self.seal("slice_impl"))
 
     def test_canonical_reference_line(self):
         self.assertIn(
@@ -830,8 +798,8 @@ class TestPortedCanonContentRules(unittest.TestCase):
     def test_evidence_discipline_in_reviews_and_fix(self):
         rule = ("The local filesystem checkout is the source of truth for "
                 "content inspection")
-        for prompt in (self.review("slice_impl"), self.seal("slice_impl"),
-                       self.delta("slice_impl"), self.fix("slice_impl")):
+        for prompt in (self.review("slice_impl"), self.delta("slice_impl"),
+                       self.fix("slice_impl")):
             self.assertIn(rule, prompt)
 
     def test_fixer_triage_evidence_rules(self):
@@ -992,7 +960,7 @@ class TestPortedCanonContentRules(unittest.TestCase):
         # quality blocks.
         registry = [{"id": "ADJ-9", "unit": UNIT, "severity": "P3",
                      "summary": "settled", "rationale": "checked"}]
-        prompt = prompts.build_seal_half(
+        prompt = prompts.build_review_round(
             FAMILY, WORKSPACE, GOAL, UNIT, "docs/x.md", registry,
             unit_kind="slice_doc", governing="docs/skeleton.md")
         self.assertLess(prompt.index("ALTITUDE"),
@@ -1029,9 +997,6 @@ class TestOperatorAmendments(unittest.TestCase):
             "delta_review": prompts.build_delta_review(
                 FAMILY, WORKSPACE, GOAL, UNIT, "diff --git a/x b/x\n", [],
                 amendments=a),
-            "seal_half": prompts.build_seal_half(
-                FAMILY, WORKSPACE, GOAL, UNIT, "docs/slice-01.md", [],
-                amendments=a),
             "fix_findings": prompts.build_fix_findings(
                 FAMILY, WORKSPACE, GOAL, UNIT, FINDINGS, [], "claude",
                 ["claude", "-p"], amendments=a),
@@ -1065,43 +1030,38 @@ class TestVerificationProtocol(unittest.TestCase):
     the driver runs it at gates, and reviewers are told a machine-run
     green suite exists — so they never burn wall clock re-running it."""
 
-    def test_review_and_seal_carry_verified_suite_block(self):
-        for build in (prompts.build_review_round, prompts.build_seal_half):
-            prompt = normalized(build(
-                FAMILY, WORKSPACE, GOAL, UNIT, "docs/x.md", [],
-                unit_kind="slice_impl", verified_suite="mix test"))
-            self.assertIn("VERIFICATION STATUS", prompt)
-            # The command is the implementer's CLAIM; the result is the
-            # machine's. Reviewers audit the claim, never re-run it.
-            self.assertIn("The command `mix test` was reported by the "
-                          "implementer as the repo's official full suite",
-                          prompt)
-            self.assertIn("passed at the last gate (which ran before any "
-                          "later fix deltas)", prompt)
-            self.assertIn("a trivial, narrowed, or wrong suite command is "
-                          "itself a P1 finding", prompt)
-            self.assertIn("Do NOT run it (or any full suite) yourself",
-                          prompt)
-            self.assertIn("verified by the fixer with a focused check",
-                          prompt)
+    def test_review_carries_verified_suite_block(self):
+        prompt = normalized(prompts.build_review_round(
+            FAMILY, WORKSPACE, GOAL, UNIT, "docs/x.md", [],
+            unit_kind="slice_impl", verified_suite="mix test"))
+        self.assertIn("VERIFICATION STATUS", prompt)
+        # The command is the implementer's CLAIM; the result is the
+        # machine's. Reviewers audit the claim, never re-run it.
+        self.assertIn("The command `mix test` was reported by the "
+                      "implementer as the repo's official full suite",
+                      prompt)
+        self.assertIn("passed at the last gate (which ran before any "
+                      "later fix deltas)", prompt)
+        self.assertIn("a trivial, narrowed, or wrong suite command is "
+                      "itself a P1 finding", prompt)
+        self.assertIn("Do NOT run it (or any full suite) yourself", prompt)
+        self.assertIn("verified by the fixer with a focused check", prompt)
 
     def test_impl_unit_without_suite_gets_the_inverse_block(self):
         # Absence is an asserted, reviewable claim — never a silent
         # default: no-suite impl reviews re-arm the reviewers.
-        for build in (prompts.build_review_round, prompts.build_seal_half):
-            prompt = normalized(build(
-                FAMILY, WORKSPACE, GOAL, UNIT, "docs/x.md", [],
-                unit_kind="slice_impl", verified_suite=None))
-            self.assertIn("NO mechanical verification ran for this unit",
-                          prompt)
-            self.assertIn("that omission is itself a P1 finding", prompt)
-            self.assertIn("Focused test runs are permitted here", prompt)
+        prompt = normalized(prompts.build_review_round(
+            FAMILY, WORKSPACE, GOAL, UNIT, "docs/x.md", [],
+            unit_kind="slice_impl", verified_suite=None))
+        self.assertIn("NO mechanical verification ran for this unit", prompt)
+        self.assertIn("that omission is itself a P1 finding", prompt)
+        self.assertIn("Focused test runs are permitted here", prompt)
 
     def test_block_absent_for_doc_units_without_suite(self):
-        for build in (prompts.build_review_round, prompts.build_seal_half):
-            prompt = build(FAMILY, WORKSPACE, GOAL, UNIT, "docs/x.md", [],
-                           unit_kind="skeleton", verified_suite=None)
-            self.assertNotIn("VERIFICATION STATUS", prompt)
+        prompt = prompts.build_review_round(
+            FAMILY, WORKSPACE, GOAL, UNIT, "docs/x.md", [],
+            unit_kind="skeleton", verified_suite=None)
+        self.assertNotIn("VERIFICATION STATUS", prompt)
 
     def test_implement_reports_suite_and_skips_full_run(self):
         prompt = normalized(prompts.build_implement(

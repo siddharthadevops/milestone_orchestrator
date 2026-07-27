@@ -490,19 +490,21 @@ class TestReuseAuditDriverPlanning(ReuseAuditRunTestCase):
                     report("review_round")
                     | {"reuse_audit_review": self.review_audit()},
                     family="claude",
+                    side_effect=bump_template,
                 ),
+                # The template bump happened during Claude's call. Both
+                # families must review again under v2 before sealing.
                 step(
-                    "seal_half",
-                    report("seal_half")
+                    "review_round",
+                    report("review_round")
                     | {"reuse_audit_review": self.review_audit()},
                     family="codex",
                 ),
                 step(
-                    "seal_half",
-                    report("seal_half")
+                    "review_round",
+                    report("review_round")
                     | {"reuse_audit_review": self.review_audit()},
                     family="claude",
-                    side_effect=bump_template,
                 ),
                 self.note_step(audit=self.planning_audit(("chat",))),
                 self.note_step(audit=self.planning_audit()),
@@ -512,13 +514,19 @@ class TestReuseAuditDriverPlanning(ReuseAuditRunTestCase):
                     | {"reuse_audit_review": self.review_audit()},
                     family="codex",
                 ),
+                step(
+                    "review_round",
+                    report("review_round")
+                    | {"reuse_audit_review": self.review_audit()},
+                    family="claude",
+                ),
             ],
         )
-        self.drive_steps(driver, 9)
+        self.drive_steps(driver, 13)
 
         self.assertIsNone(driver.state["failure"])
-        seal_prompt = normalized(driver.runner.calls[3][2])
-        self.assertIn("SAFEGUARD reuse-audit-review v1", seal_prompt)
+        final_review_prompt = normalized(driver.runner.calls[2][2])
+        self.assertIn("SAFEGUARD reuse-audit-review v1", final_review_prompt)
         note_prompt = normalized(driver.runner.calls[5][2])
         self.assertIn("KIND: draft_slice_note", note_prompt)
         self.assertIn("SAFEGUARD reuse-audit v2", note_prompt)
@@ -532,8 +540,8 @@ class TestReuseAuditDriverPlanning(ReuseAuditRunTestCase):
             [
                 ("reuse-audit", 1),
                 ("reuse-audit-review", 1),
-                ("reuse-audit", 2),
                 ("reuse-audit-review", 2),
+                ("reuse-audit", 2),
             ],
         )
 
@@ -606,8 +614,6 @@ class TestReuseAuditDriverReview(ReuseAuditRunTestCase):
             [reuse_audit.REVIEW_POLICY_ID],
         )
         self.assertEqual(store.in_scope("delta_review", "slice_doc").value,
-                         [self.policies[1]])
-        self.assertEqual(store.in_scope("seal_half", "slice_doc").value,
                          [self.policies[1]])
         self.assertEqual(store.in_scope("implement", "slice_impl").value, [])
         self.assertEqual(store.in_scope("fix_findings", "slice_impl").value,

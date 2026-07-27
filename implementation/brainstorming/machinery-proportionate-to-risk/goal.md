@@ -49,9 +49,9 @@ own task:
   set without multiplying paperwork per document.
 - Implementation and fixing prompts apply it only to machinery introduced or
   changed by the work they are performing.
-- Review, delta-review, and seal prompts independently challenge needless
+- Full-review and delta-review prompts independently challenge needless
   machinery and harmful omissions using the candidate and context they already
-  receive.
+  receive. The seal is their deterministic result, not another prompt.
 - Brainstorming discussion, closure, and voting prompts apply the same check
   using the session context already available to them.
 

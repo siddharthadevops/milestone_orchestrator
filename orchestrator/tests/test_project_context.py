@@ -7,9 +7,8 @@ safeguards at operator-amendment authority, the frozen precedence text);
 the frozen `project_safeguard_seen {policy_id, version, text[:300]}` ledger
 event with first-seen-per-(id, version) dedup and re-record on bump; the
 rendered obligation ≡ enforced obligation rule over the recorded grant
-universe (Slice 4's seam activated on the same call); the seal attempt's
-shared half snapshot; the fail-closed matrix for unreadable/malformed
-standing law; and project-less byte-identity.
+universe (Slice 4's seam activated on the same call); the fail-closed matrix
+for unreadable/malformed standing law; and project-less byte-identity.
 
 Stores live in real tempfile directories seeded through Slice 2's
 declare/confirm and Slice 3's PolicyStore; project-bound runs are created
@@ -47,6 +46,7 @@ from orchestrator.tests.test_driver_mock import (
 from orchestrator.tests.test_prompts import normalized
 
 GOAL = "Exercise the project context block"
+_OMIT_PROJECT_CONTEXT = object()
 
 
 def policy_value(pid="ctx-guard", version=1, enabled=True,
@@ -89,11 +89,12 @@ def make_context(safeguards=(), reuse_sources=None,
     }
 
 
-def build_all_bound(project_context, amendments=None):
-    """All seven builders with the same project context, argument-for-
-    argument the calls of test_prompts.build_all (so the None case can be
-    compared byte-for-byte against the unmodified convention)."""
-    kw = {"project_context": project_context}
+def build_all_bound(project_context=_OMIT_PROJECT_CONTEXT, amendments=None):
+    """All seven builders with the same project context. The sentinel omits
+    the keyword entirely so explicit None can be checked byte-for-byte."""
+    kw = {}
+    if project_context is not _OMIT_PROJECT_CONTEXT:
+        kw["project_context"] = project_context
     if amendments is not None:
         kw["amendments"] = amendments
     return {
@@ -115,10 +116,6 @@ def build_all_bound(project_context, amendments=None):
         "delta_review": prompts.build_delta_review(
             tp.FAMILY, tp.WORKSPACE, tp.GOAL, tp.UNIT,
             "diff --git a/x b/x\n", [], **kw
-        ),
-        "seal_half": prompts.build_seal_half(
-            tp.FAMILY, tp.WORKSPACE, tp.GOAL, tp.UNIT, "docs/slice-01.md",
-            [], **kw
         ),
         "reclassify": prompts.build_reclassify(
             tp.FAMILY,
@@ -170,7 +167,7 @@ class TestBlockAcrossBuilders(unittest.TestCase):
             self.assertEqual(prompt.count("PROJECT CONTEXT"), 1, kind)
 
     def test_none_input_is_byte_identical_to_unmodified_builders(self):
-        self.assertEqual(tp.build_all(), build_all_bound(None))
+        self.assertEqual(build_all_bound(), build_all_bound(None))
         for kind, prompt in build_all_bound(None).items():
             self.assertNotIn("PROJECT CONTEXT", prompt, kind)
 
@@ -472,6 +469,10 @@ class TestSeenEvents(ProjectRunTestCase):
                 skeleton_draft_step(),
                 step("review_round", report("review_round") | ack,
                      family="codex"),
+                # The v2 policy invalidates v1's Codex approval, so the
+                # whole review cycle restarts from family zero.
+                step("review_round", report("review_round") | ack,
+                     family="codex"),
                 step("review_round", report("review_round") | ack,
                      family="claude"),
             ],
@@ -481,7 +482,13 @@ class TestSeenEvents(ProjectRunTestCase):
         self.put_policy(
             version=2, kinds=("review_round",), unit_kinds=("skeleton",)
         )
-        driver.step()  # claude round renders v2
+        driver.step()  # policy changed: invalidate v1 approval
+        self.assertEqual(
+            driver.state["units"][0]["status"], st.U_PRE_REVIEW_VERIFY
+        )
+        driver.step()  # verification
+        driver.step()  # fresh Codex round renders and records v2
+        driver.step()  # fresh Claude round sees the same v2 context
         self.assertEqual(
             self.seen_pairs(driver.state), [("ctx-guard", 1), ("ctx-guard", 2)]
         )
@@ -510,31 +517,6 @@ class TestSeenEvents(ProjectRunTestCase):
         for _family, _kind, prompt in driver.runner.calls:
             self.assertEqual(prompt.count("PROJECT CONTEXT"), 1)
             self.assertNotIn("SAFEGUARD", prompt)
-
-    def test_seal_attempt_records_at_most_one_event_across_halves(self):
-        self.put_policy(kinds=("seal_half",), unit_kinds=("skeleton",))
-        path = self.init_bound()
-        ack = {"context_ack": [{"note": "checked"}]}
-        driver = self.make_driver(
-            path,
-            [
-                skeleton_draft_step(),
-                step("review_round", report("review_round"), family="codex"),
-                step("review_round", report("review_round"), family="claude"),
-                step("seal_half", report("seal_half") | ack, family="codex"),
-                step("seal_half", report("seal_half") | ack, family="claude"),
-            ],
-        )
-        # draft, verify, 2 rounds, pre-seal verify, seal attempt
-        self.drive_steps(driver, 6)
-        unit = driver.state["units"][0]
-        self.assertEqual(unit["status"], st.U_SEALED)
-        self.assertEqual(self.seen_pairs(driver.state), [("ctx-guard", 1)])
-        for _family, kind, prompt in driver.runner.calls:
-            if kind == "seal_half":
-                self.assertIn(
-                    "SAFEGUARD ctx-guard v1", normalized(prompt)
-                )
 
     def test_failed_call_still_leaves_seen_event_in_persisted_state(self):
         self.put_policy()
@@ -707,7 +689,7 @@ class TestEnforcementBinding(ProjectRunTestCase):
 
 
 # ---------------------------------------------------------------------------
-# AC7: live re-read of law (ordinary calls and seal attempts)
+# AC7: live re-read of law
 
 
 class TestLiveness(ProjectRunTestCase):
@@ -742,7 +724,10 @@ class TestLiveness(ProjectRunTestCase):
                 skeleton_draft_step(),
                 step("review_round", report("review_round") | ack,
                      family="codex"),
-                # claude round: no extension field — passes base validation
+                # Disabling the policy invalidates the v1 approval. The new
+                # family-zero cycle has no extension field on either round.
+                step("review_round", report("review_round"),
+                     family="codex"),
                 step("review_round", report("review_round"),
                      family="claude"),
             ],
@@ -755,60 +740,17 @@ class TestLiveness(ProjectRunTestCase):
             kinds=("review_round",),
             unit_kinds=("skeleton",),
         )
-        driver.step()  # claude round: disabled law neither renders nor binds
+        driver.step()  # policy changed: invalidate v1 approval
+        self.assertEqual(
+            driver.state["units"][0]["status"], st.U_PRE_REVIEW_VERIFY
+        )
+        driver.step()  # verification
+        driver.step()  # fresh Codex round with no policy
+        driver.step()  # fresh Claude round with no policy
         self.assertIsNone(driver.state["failure"])
+        self.assertNotIn("SAFEGUARD", driver.runner.calls[-2][2])
         self.assertNotIn("SAFEGUARD", driver.runner.calls[-1][2])
         self.assertEqual(self.seen_pairs(driver.state), [("ctx-guard", 1)])
-
-    def test_edit_between_halves_binds_next_call_not_second_half(self):
-        path = self.init_bound()
-        ack = {"context_ack": [{"note": "checked"}]}
-        scope = {
-            "kinds": ("seal_half", "draft_slice_note"),
-            "unit_kinds": ("skeleton", "slice_doc"),
-        }
-
-        def bump_policy(_workspace):
-            self.put_policy(pid="law-p", version=2, **scope)
-
-        driver = self.make_driver(
-            path,
-            [
-                skeleton_draft_step(),
-                step("review_round", report("review_round"), family="codex"),
-                step("review_round", report("review_round"), family="claude"),
-                # First half edits the store mid-attempt (outside the
-                # workspace, so no tamper check fires)...
-                step("seal_half", report("seal_half") | ack, family="codex",
-                     side_effect=bump_policy),
-                # ...the second half still runs under the attempt snapshot.
-                step("seal_half", report("seal_half") | ack, family="claude"),
-                step(
-                    "draft_slice_note",
-                    ok("draft_slice_note", artifact="docs/slice-01.md")
-                    | ack,
-                    side_effect=write_file("docs/slice-01.md", "# Note\n"),
-                ),
-            ],
-        )
-        # draft, verify, 2 rounds, pre-seal verify
-        self.drive_steps(driver, 5)
-        # A put AFTER init and rounds binds the next seal attempt's shared
-        # half snapshot (live selection at attempt time, not at init).
-        self.put_policy(pid="law-p", **scope)
-        self.drive_steps(driver, 2)  # seal attempt, next slice-note draft
-        self.assertIsNone(driver.state["failure"])
-        self.assertEqual(driver.state["units"][0]["status"], st.U_SEALED)
-        first_half = normalized(driver.runner.calls[3][2])
-        self.assertIn("SAFEGUARD law-p v1", first_half)
-        second_half = normalized(driver.runner.calls[4][2])
-        self.assertIn("SAFEGUARD law-p v1", second_half)
-        self.assertNotIn("law-p v2", second_half)
-        note_prompt = normalized(driver.runner.calls[5][2])
-        self.assertIn("SAFEGUARD law-p v2", note_prompt)
-        self.assertEqual(
-            self.seen_pairs(driver.state), [("law-p", 1), ("law-p", 2)]
-        )
 
 
 # ---------------------------------------------------------------------------
@@ -926,69 +868,6 @@ class TestFailClosed(ProjectRunTestCase):
         # Same (id, version) pair as the failed attempt: no duplicate event.
         self.assertEqual(self.seen_pairs(driver2.state), [("ctx-guard", 1)])
 
-    def test_seal_half_verifier_error_fails_attempt_without_repair(self):
-        os.makedirs(os.path.join(self.repo, "pkgs"))
-        with open(os.path.join(self.repo, "pkgs", "shared"),
-                  "w", encoding="utf-8") as fh:
-            fh.write("ready\n")
-        self.put_policy(
-            kinds=("seal_half",),
-            unit_kinds=("skeleton",),
-            field="context_ack",
-            entry={"note": {"type": "string"}},
-            checks=[
-                {"kind": "dir_listing_matches", "root": "pkgs",
-                 "match_field": "note"}
-            ],
-        )
-
-        def remove_listing_root(_workspace):
-            shutil.rmtree(os.path.join(self.repo, "pkgs"))
-
-        path = self.init_bound()
-        driver = self.make_driver(
-            path,
-            [
-                skeleton_draft_step(),
-                step("review_round", report("review_round"), family="codex"),
-                step("review_round", report("review_round"), family="claude"),
-                step(
-                    "seal_half",
-                    report("seal_half") | {
-                        "context_ack": [{"note": "shared"}]
-                    },
-                    family="codex",
-                    side_effect=remove_listing_root,
-                ),
-            ],
-        )
-
-        self.drive_steps(driver, 6)
-        failure = driver.state["failure"]
-        self.assertIsNotNone(failure)
-        self.assertIn(
-            "seal_half call: project standing-law fault", failure["reason"]
-        )
-        self.assertIn(
-            "does not exist under the granted work-area roots",
-            failure["reason"],
-        )
-        unit = driver.state["units"][0]
-        self.assertEqual(unit["status"], st.U_FAILED)
-        self.assertEqual(unit["failed_from"], st.U_SEALING)
-        self.assertEqual(unit["seals"], [])
-        self.assertEqual(
-            [(family, kind) for family, kind, _prompt in driver.runner.calls],
-            [
-                ("codex", "draft_skeleton"),
-                ("codex", "review_round"),
-                ("claude", "review_round"),
-                ("codex", "seal_half"),
-            ],
-        )
-        self.assertEqual(self.seen_pairs(driver.state), [("ctx-guard", 1)])
-
-
 # ---------------------------------------------------------------------------
 # AC9: project-less inertness (driver half; builder half above)
 
@@ -1020,11 +899,11 @@ class TestProjectlessInertness(ProjectRunTestCase):
 
 
 # ---------------------------------------------------------------------------
-# AC10 + AC1 end-to-end: a no-policy project across all seven worker kinds
+# AC10 + AC1 end-to-end: a no-policy project across six lifecycle worker kinds
 
 
 class TestNoPolicyProjectEndToEnd(ProjectRunTestCase):
-    def test_full_lifecycle_renders_map_in_all_seven_kinds(self):
+    def test_full_lifecycle_renders_map_in_all_six_kinds(self):
         meta = self.work_areas().put_meta(
             self.WORK_AREA,
             {
@@ -1052,23 +931,17 @@ class TestNoPolicyProjectEndToEnd(ProjectRunTestCase):
             step("delta_review", report("delta_review")),
             step("review_round", report("review_round"), family="codex"),
             step("review_round", report("review_round"), family="claude"),
-            step("seal_half", report("seal_half"), family="codex"),
-            step("seal_half", report("seal_half"), family="claude"),
             step("draft_slice_note",
                  ok("draft_slice_note", artifact="docs/slice-01.md"),
                  side_effect=write_file("docs/slice-01.md", "# Note\n")),
             step("review_round", report("review_round"), family="codex"),
             step("review_round", report("review_round"), family="claude"),
-            step("seal_half", report("seal_half"), family="codex"),
-            step("seal_half", report("seal_half"), family="claude"),
             step("implement",
                  ok("implement", files_changed=["main.py"],
                     suite_command=None),
                  side_effect=write_file("main.py", "print('hi')\n")),
             step("review_round", report("review_round"), family="codex"),
             step("review_round", report("review_round"), family="claude"),
-            step("seal_half", report("seal_half"), family="codex"),
-            step("seal_half", report("seal_half"), family="claude"),
         ]
         driver = self.make_driver(path, script)
         for _ in range(60):

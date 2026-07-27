@@ -579,7 +579,7 @@ class TestMergeConfigSingleSource(ServiceFixesTestCase):
         override = {
             "timeouts": {"codex": 123},
             "verification": ["true"],
-            "max_seal_attempts": 2,
+            "max_verify_fix_attempts": 2,
         }
         # CLI path.
         cfg_file = os.path.join(self.tmp.name, "cfg.json")
@@ -595,13 +595,10 @@ class TestMergeConfigSingleSource(ServiceFixesTestCase):
         )
         panel_cfg = st.load(entry["state_path"])["config"]
         # Same merge semantics as the CLI, with the deliberate service
-        # defaults on top: panel runs launch the full enforced flow (git on),
-        # seal concurrently, and run a single seal half on the first attempt —
-        # each unless the operator explicitly disables it.
+        # default on top: panel runs launch the full enforced flow (git on)
+        # unless the operator explicitly disables it.
         expected = json.loads(json.dumps(cli_cfg))
         expected["git"] = {"enabled": True}
-        expected["seal_concurrent"] = True
-        expected["single_seal_first_attempt"] = True
         self.assertEqual(panel_cfg, expected)
 
     def test_service_default_enables_git_and_explicit_override_wins(self):

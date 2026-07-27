@@ -54,8 +54,7 @@ class GapContractTest(unittest.TestCase):
         # Plain reviewers still only file findings — one family must not
         # unilaterally reopen the sealed design; the fixer is the confirmation
         # choke-point (a contradiction survives INTO a repair attempt first).
-        for kind in ("review_round", "delta_review", "seal_half",
-                     "reclassify"):
+        for kind in ("review_round", "delta_review", "reclassify"):
             with self.assertRaises(c.ContractError):
                 c.validate_worker_output(
                     {"status": "gap", "kind": kind, "gaps": [_gap()]}, kind)
@@ -145,11 +144,11 @@ class GapPromptGatingTest(unittest.TestCase):
         self.assertIn("fits_remodel", impl)
         self.assertNotIn("fits_remodel", skel)
 
-    def test_wave_blocks_declare_the_set_in_fix_delta_and_seal(self):
+    def test_wave_blocks_declare_the_set_in_fix_delta_and_full_review(self):
         # A re-documentation wave must be declared at PROCESS level in all
         # three prompts that see it: the fixer (re-documenter framing, free
         # rein under the goal), the delta reviewer (multi-doc breadth is not
-        # a finding), and the seal halves (the whole set is the candidate).
+        # a finding), and the full reviewers (the set is the candidate).
         docs = ["docs/slice-01.md", "docs/slice-02.md"]
         fix = prompts.build_fix_findings(
             "codex", "/ws", "goal", "skeleton",
@@ -173,13 +172,13 @@ class GapPromptGatingTest(unittest.TestCase):
             unit_kind="skeleton", wave_docs=docs)
         self.assertIn("RE-DOCUMENTATION WAVE IN PROGRESS", delta)
         self.assertIn("Multi-document breadth is NOT a finding", delta)
-        seal = prompts.build_seal_half(
+        full = prompts.build_review_round(
             "codex", "/ws", "goal", "skeleton", "docs/skeleton.md", [],
             unit_kind="skeleton", wave_docs=docs)
-        self.assertIn("WAVE SEAL", seal)
-        self.assertIn("edited or\n  not", seal)
+        self.assertIn("ENTIRE DOCUMENTATION SET", full)
+        self.assertIn("edited\n  or not", full)
         for d in docs:
-            self.assertIn(d, seal)
+            self.assertIn(d, full)
         # An EMPTY wave (no notes sealed yet) is STILL a wave: the
         # re-documenter framing and code-read-only rule render, with the
         # set declared as the skeleton alone.
@@ -190,16 +189,16 @@ class GapPromptGatingTest(unittest.TestCase):
             repair_artifact="docs/skeleton.md", repair_wave_docs=[])
         self.assertIn("RE-DOCUMENTATION WAVE", empty_fix)
         self.assertIn("skeleton alone", empty_fix)
-        empty_seal = prompts.build_seal_half(
+        empty_full = prompts.build_review_round(
             "codex", "/ws", "goal", "skeleton", "docs/skeleton.md", [],
             unit_kind="skeleton", wave_docs=[])
-        self.assertIn("WAVE SEAL", empty_seal)
-        self.assertIn("skeleton alone", empty_seal)
-        # With notes in the set, the wave seal brings the slice-note
-        # content criteria (an edited note must not reseal on skeleton
+        self.assertIn("ENTIRE DOCUMENTATION SET", empty_full)
+        self.assertIn("skeleton alone", empty_full)
+        # With notes in the set, the full review brings the slice-note
+        # content criteria (an edited note must not pass on skeleton
         # criteria alone).
-        self.assertIn("SLICE NOTE CONTENT", seal)
-        self.assertNotIn("SLICE NOTE CONTENT", empty_seal)
+        self.assertIn("SLICE NOTE CONTENT", full)
+        self.assertNotIn("SLICE NOTE CONTENT", empty_full)
         self.assertIn("SLICE NOTE CONTENT", delta)
         # Without a wave, none of the blocks render.
         plain_fix = prompts.build_fix_findings(

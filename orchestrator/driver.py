@@ -107,16 +107,7 @@ DEFAULT_CONFIG = {
     # work into failures. Set a number (seconds) to cap it per run.
     "verification_timeout": None,
     "max_rounds_per_family": 12,
-    "max_seal_attempts": 8,
     "max_verify_fix_attempts": 4,
-    "seal_concurrent": False,
-    # First seal attempt runs a single half (the last reviewer's redundant
-    # re-review is dropped); any finding reopens to the full double seal.
-    # Off for pure-state/CLI runs; the service forces it on. See
-    # _seal_families for why a1 is the only byte-identical, empirically-quiet
-    # case. Parallelization is decided by half count, not this flag: >1 half
-    # runs concurrently (when seal_concurrent), a lone a1 half runs directly.
-    "single_seal_first_attempt": False,
     # Gate commits + the reviewed-point index discipline (see gitops.py).
     # Off by default for pure-state CLI runs; the demo config and the
     # service panel (service.create_run forces it on unless the operator
@@ -133,7 +124,7 @@ DEFAULT_CONFIG = {
     # ("implementer") and fixes ("fixer"), and with which model/effort.
     # `review_codex` / `review_claude` tune each fixed review family
     # independently without changing family rotation; they apply to
-    # whole-artifact rounds, delta reviews, and seal halves. Absent
+    # whole-artifact rounds and delta reviews. Absent
     # drafter / implementer fall back to fix_family (legacy behavior). The
     # operator can hot-edit all of this mid-run via acts.json; the driver
     # re-reads it before every act resolution.
@@ -209,13 +200,20 @@ DEFAULT_CONFIG = {
     "docs_dir": "implementation/milestones/{slug}",
     # Extra directory names excluded from workspace snapshots, on top of
     # runners.SNAPSHOT_EXCLUDE_DIRS (runtime dirs + common Python tool
-    # caches). Add tool caches your verification suite writes so read-only
-    # seal halves that run it are not falsely invalidated. With git
+    # caches). Add tool caches your verification suite writes so report-only
+    # reviewers are not falsely invalidated. With git
     # enabled the same names are also git-ignored in the workspace repo
     # (gitops.ignore_lines), so cache writes never enter micro-review
     # diffs or gate commits.
     "snapshot_exclude_dirs": [],
 }
+
+RETIRED_CONFIG_KEYS = frozenset({
+    "max_seal_attempts",
+    "seal_concurrent",
+    "single_seal_first_attempt",
+})
+RETIRED_SEAL_WORKER_KIND = "seal_half"
 
 
 def merge_config(config, override):
@@ -225,6 +223,8 @@ def merge_config(config, override):
     and the service panel (service.create_run) go through here, so the two
     entry points can never drift."""
     for key, value in override.items():
+        if key in RETIRED_CONFIG_KEYS:
+            continue
         if isinstance(value, dict) and isinstance(config.get(key), dict):
             config[key].update(value)
         else:
@@ -315,25 +315,6 @@ class ConcurrentRunError(RuntimeError):
     """Another driver invocation is active on the same state (the advisory
     lock is held) or advanced it on disk since this driver loaded it. Raised
     BEFORE any side-effectful worker call is made."""
-
-
-class _SealHalfFailure(RuntimeError):
-    """Internal: a seal half failed (runner/protocol error or a blocked
-    worker). Deliberately mutates no state so it is safe to raise from
-    concurrent seal worker threads; the caller decides how to record it.
-    Carries the raw output texts so the MAIN thread can classify the
-    failure type (the classifier must never run inside half threads)."""
-
-    def __init__(self, message, raw_texts=None, family=None,
-                 protocol_raw_paths=None, protocol_label=None):
-        RuntimeError.__init__(self, message)
-        self.raw_texts = list(raw_texts or [])
-        self.family = family
-        # Set only for a protocol (double contract violation) failure:
-        # the saved raw paths + label the MAIN thread turns into the
-        # fatal worker_malformed event (never appended from half threads).
-        self.protocol_raw_paths = list(protocol_raw_paths or [])
-        self.protocol_label = protocol_label
 
 
 class _StandingLawError(RuntimeError):
@@ -476,6 +457,46 @@ class Driver(object):
             paths=paths,
         )
         return mode, entries
+
+    def _candidate_fingerprint(self, snapshot=None):
+        """Stable digest of every candidate byte visible to tamper checks."""
+        mode, entries = snapshot if snapshot is not None else self._snapshot()
+        payload = json.dumps(
+            [mode, sorted(entries.items())],
+            ensure_ascii=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        return "snapshot-sha256:%s" % hashlib.sha256(payload).hexdigest()
+
+    def _review_evidence_inputs(self, unit):
+        """Return the exact bytes and hot rules a full reviewer would see.
+
+        Reading is side-effect free: if the evidence differs from the bound
+        cycle, no ``*_seen`` event may imply that a reviewer saw it before the
+        family-zero restart actually runs.
+        """
+        snapshot = self._snapshot()
+        project_context, extensions, roots = self._project_prompt_inputs(
+            unit, contracts.KIND_REVIEW_ROUND, record_seen=False
+        )
+        amendments = self._amendments(record_seen=False)
+        payload = json.dumps(
+            {
+                "candidate": self._candidate_fingerprint(snapshot),
+                "amendments": amendments,
+                "project_context": project_context,
+            },
+            ensure_ascii=True,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        fingerprint = "review-evidence-sha256:%s" % hashlib.sha256(
+            payload
+        ).hexdigest()
+        return fingerprint, project_context, extensions, roots, amendments
+
+    def _review_evidence_fingerprint(self, unit):
+        return self._review_evidence_inputs(unit)[0]
 
     @staticmethod
     def _snapshot_diff(before, after):
@@ -696,27 +717,6 @@ class Driver(object):
             raw_path2=(raw_paths[1] if len(raw_paths or []) > 1 else None),
         )
 
-    def _emit_seal_protocol_event(self, exc):
-        """Main-thread emission of a seal half's fatal double violation
-        (the half thread saved the raws and stashed their paths on the
-        exception; events never leave half threads)."""
-        if not getattr(exc, "protocol_label", None):
-            return  # a blocked worker / standing-law fault: not an LLM failure
-        paths = getattr(exc, "protocol_raw_paths", None) or []
-        st.append_event(
-            self.state,
-            "worker_malformed",
-            unit=self._worker_event_unit(),
-            label=exc.protocol_label,
-            kind=contracts.KIND_SEAL_HALF,
-            family=exc.family,
-            fatal=True,
-            error=str(exc)[:300],
-            duration_s=None,
-            raw_path=paths[0] if paths else None,
-            raw_path2=paths[1] if len(paths) > 1 else None,
-        )
-
     def _consume_stale_marker(self):
         """A driver that died mid-call (Stop, crash, SIGKILL) leaves its
         in-flight marker behind. On startup, use it to repair what the
@@ -788,7 +788,26 @@ class Driver(object):
     def _amendments_path(self):
         return os.path.join(self._runtime_dir(), "amendments.json")
 
-    def _amendments(self):
+    def _record_amendments_seen(self, amendments):
+        if not amendments:
+            return
+        seen = {
+            e.get("amendment_id")
+            for e in self.state["events"]
+            if e.get("type") == "amendment_seen"
+        }
+        for amendment in amendments:
+            aid = str(amendment.get("id") or "")
+            if aid and aid not in seen:
+                seen.add(aid)
+                st.append_event(
+                    self.state,
+                    "amendment_seen",
+                    amendment_id=aid,
+                    text=str(amendment.get("text"))[:300],
+                )
+
+    def _amendments(self, record_seen=True):
         """Operator amendments, re-read before every worker call so a note
         added mid-run binds the very next call. The file is operator-owned
         (the panel appends to it; the driver only reads) — deliberately
@@ -806,21 +825,8 @@ class Driver(object):
             ]
         except (OSError, ValueError):
             return []
-        if amendments:
-            seen = {
-                e.get("amendment_id")
-                for e in self.state["events"]
-                if e.get("type") == "amendment_seen"
-            }
-            for a in amendments:
-                aid = str(a.get("id") or "")
-                if aid and aid not in seen:
-                    st.append_event(
-                        self.state,
-                        "amendment_seen",
-                        amendment_id=aid,
-                        text=str(a.get("text"))[:300],
-                    )
+        if record_seen:
+            self._record_amendments_seen(amendments)
         return amendments
 
     def _read_standing_law(self, worker_kind, unit_kind):
@@ -914,17 +920,15 @@ class Driver(object):
                 text=str(policy["prompt"])[:300],
             )
 
-    def _project_prompt_inputs(self, unit, kind):
+    def _project_prompt_inputs(self, unit, kind, record_seen=True):
         """Standing project law for one worker call of a project-bound
         run: (project_context, extensions, roots) — the PROJECT CONTEXT
         builder input, the compiled in-scope contract extensions, and the
         grant universe. (None, None, None) for a project-less run, whose
         builders and validation then behave byte-identically to today.
 
-        Selection and meta are read live per call through this method;
-        callers choose the cadence (every ordinary call; ONCE per seal
-        attempt, so both halves share one snapshot — one judgment
-        surface). Roots and handles come from the state project block
+        Selection and meta are read live for every worker call through this
+        method. Roots and handles come from the state project block
         recorded at init, never a live resolve: the map always describes
         exactly the universe containment enforces, and a mid-run store
         edit to the work-area record changes neither. Selection, meta,
@@ -949,7 +953,8 @@ class Driver(object):
             )
             self._save()
             raise StopStep(str(exc))
-        self._record_safeguards_seen(policies)
+        if record_seen:
+            self._record_safeguards_seen(policies)
         roots = [block["primary"]["path"]] + [
             root["path"] for root in block["additional"]
         ]
@@ -969,8 +974,7 @@ class Driver(object):
     def _mark_busy(self, label, kind, family, model=None, effort=None):
         """Cosmetic in-flight marker for the panel (NOT part of the state
         ledger): what call is executing right now and since when. Written
-        atomically; concurrent seal halves may interleave markers
-        (last-write-wins), which is acceptable for a progress display."""
+        atomically so panel readers never observe a partial record."""
         try:
             os.makedirs(os.path.dirname(self._busy_path()), exist_ok=True)
             tmp = self._busy_path() + ".tmp"
@@ -1194,7 +1198,7 @@ class Driver(object):
         and not each unit's OWN gate: sealed docs carry legal post-seal
         drift — pre-guard-era `prevention` edits reviewed and folded
         into later gates, and repair reseals — so the last gate, a
-        double-sealed checkpoint of the WHOLE tree, is the one canonical
+        deterministically sealed checkpoint of the WHOLE tree, is the canonical
         baseline; baselining on the own gate fired three false restores
         on 2026-07-10, each regressing a legally amended note). A
         mismatch is restored from that gate, the illegal bytes land in
@@ -1599,6 +1603,10 @@ class Driver(object):
         unit["fix_queue"] = []
         unit["fix_source"] = None
         unit.pop("phantom_retried", None)
+        st.restart_reviews_after_candidate_change(
+            self.state, unit, "ratified design correction changed bytes"
+        )
+        return_to = st.U_PRE_REVIEW_VERIFY
         st.transition_unit(
             self.state, unit, return_to,
             reason="own-note correction independently ratified",
@@ -1759,29 +1767,19 @@ class Driver(object):
             record["raw_path"],
         )
 
-    @staticmethod
-    def _is_intermediate_preseal_delta(unit, pending_kind, kind):
-        source = unit.get("fix_source") or {}
-        return (
-            pending_kind == contracts.KIND_SEAL_HALF
-            and kind == contracts.KIND_DELTA_REVIEW
-            and source.get("return_to") == st.U_PRE_SEAL_VERIFY
-        )
-
     def _brainstorming_review_handoff(self, unit, kind):
         record = unit.get("brainstorming_review_handoff")
         if not record:
             return None
+        if (
+            record.get("kind") == contracts.KIND_REVIEW_ROUND
+            and kind == contracts.KIND_DELTA_REVIEW
+        ):
+            # A whole-artifact review handoff may need to wait while
+            # verification/fixer/delta work converges. It belongs only in
+            # the eventual family-zero full review, never in a diff review.
+            return None
         if record.get("kind") != kind:
-            if self._is_intermediate_preseal_delta(
-                unit, record.get("kind"), kind
-            ):
-                # A successful seal rethink deliberately returns through
-                # pre-seal verification. If that gate finds a real defect,
-                # its ordinary fixer/delta loop is intermediate: it neither
-                # consumes nor receives the seal review's retained proposal.
-                # Keep the handoff for the fresh seal after convergence.
-                return None
             raise st.IllegalTransition(
                 "Brainstorming review handoff kind does not match current action"
             )
@@ -1825,14 +1823,12 @@ class Driver(object):
         source_type = {
             contracts.KIND_REVIEW_ROUND: "round",
             contracts.KIND_DELTA_REVIEW: "delta",
-            contracts.KIND_SEAL_HALF: "seal",
         }[kind]
         return_to = {
             contracts.KIND_REVIEW_ROUND: st.U_ROUNDS,
             contracts.KIND_DELTA_REVIEW: (
                 old_source.get("return_to") or st.U_PRE_REVIEW_VERIFY
             ),
-            contracts.KIND_SEAL_HALF: st.U_PRE_SEAL_VERIFY,
         }[kind]
         st.enter_fix_episode(
             self.state,
@@ -1847,6 +1843,44 @@ class Driver(object):
             unit["fix_source"]["origin_type"] = old_source.get(
                 "origin_type", old_source.get("type", "delta")
             )
+
+    def _restart_from_retired_seal_rethink(self, unit, reason):
+        """Migrate an in-flight pre-derived-seal discussion to reviews."""
+        st.restart_reviews_after_candidate_change(self.state, unit, reason)
+        if unit["status"] in (st.U_SEALING, st.U_PRE_SEAL_VERIFY):
+            st.transition_unit(
+                self.state,
+                unit,
+                st.U_PRE_REVIEW_VERIFY,
+                reason="retired seal discussion migrated to ordinary reviews",
+            )
+            return
+        if unit["status"] not in (
+            st.U_PRE_REVIEW_VERIFY,
+            st.U_FIXING,
+            st.U_DELTA_REVIEW,
+        ):
+            raise st.IllegalTransition(
+                "retired seal discussion cannot migrate from status %s"
+                % unit["status"]
+            )
+
+    def _migrate_retired_seal_review_handoff(self, unit):
+        record = unit.get("brainstorming_review_handoff") or {}
+        if record.get("kind") != RETIRED_SEAL_WORKER_KIND:
+            return False
+        record["kind"] = contracts.KIND_REVIEW_ROUND
+        self._restart_from_retired_seal_rethink(
+            unit, "persisted retired seal Brainstorming handoff migrated"
+        )
+        st.append_event(
+            self.state,
+            "brainstorming_review_handoff_migrated",
+            unit=st.unit_key(unit),
+            from_kind=RETIRED_SEAL_WORKER_KIND,
+            to_kind=contracts.KIND_REVIEW_ROUND,
+        )
+        return True
 
     def _do_brainstorming_wait(self):
         unit = st.current_unit(self.state)
@@ -1943,6 +1977,25 @@ class Driver(object):
                     pre_stash=pre.get("stash"),
                     from_fixer=kind == contracts.KIND_FIX_FINDINGS,
                 )
+            if kind == RETIRED_SEAL_WORKER_KIND:
+                self._restart_from_retired_seal_rethink(
+                    unit, "retired seal Brainstorming failed"
+                )
+                st.enter_fix_episode(
+                    self.state,
+                    unit,
+                    [self._rethink_finding_for_fix(
+                        wait["signal"]["finding"]
+                    )],
+                    "round",
+                    origin.get("family"),
+                    "brainstorming:%s" % session_id,
+                    st.U_ROUNDS,
+                )
+                return (
+                    "Brainstorming failed; retired seal finding queued and "
+                    "ordinary reviews restarted"
+                )
             self._route_rethink_report_failure(unit, wait)
             return "Brainstorming failed; source finding queued for fixing"
 
@@ -2032,6 +2085,12 @@ class Driver(object):
             return "Brainstorming succeeded; origin conversation continued"
 
         unit.pop("brainstorming_wait", None)
+        origin_kind = kind
+        if kind == RETIRED_SEAL_WORKER_KIND:
+            self._restart_from_retired_seal_rethink(
+                unit, "retired seal Brainstorming succeeded"
+            )
+            kind = contracts.KIND_REVIEW_ROUND
         review_handoff = {
             "kind": kind,
             "handoff": copy.deepcopy(handoff),
@@ -2039,29 +2098,25 @@ class Driver(object):
         }
         pending = unit.get("brainstorming_review_handoff")
         if pending is not None:
-            if not self._is_intermediate_preseal_delta(
-                unit, pending.get("kind"), kind
+            if (
+                kind == contracts.KIND_DELTA_REVIEW
+                and pending.get("kind") == contracts.KIND_REVIEW_ROUND
             ):
+                review_handoff["reserved_handoff"] = copy.deepcopy(pending)
+            else:
                 raise st.IllegalTransition(
                     "Brainstorming review handoff would replace pending context"
                 )
-            review_handoff["reserved_handoff"] = copy.deepcopy(pending)
         unit["brainstorming_review_handoff"] = review_handoff
         st.append_event(
             self.state,
             "brainstorming_review_restarted",
             unit=st.unit_key(unit),
             kind=kind,
+            origin_kind=origin_kind,
             session_id=session_id,
             accepted_target_revision=handoff["accepted_target_revision"],
         )
-        if kind == contracts.KIND_SEAL_HALF:
-            st.transition_unit(
-                self.state,
-                unit,
-                st.U_PRE_SEAL_VERIFY,
-                reason="Brainstorming proposal accepted; fresh seal required",
-            )
         return "Brainstorming succeeded; fresh reviewer call required"
 
     def _check_worker_blocked(self, unit, output, kind):
@@ -3427,6 +3482,7 @@ class Driver(object):
                 pre_refs = pre_sym = pre_head = pre_tree = None
                 pre_worktree_tree = pre_stash = None
         raw_name = "%s-fix%d" % (st.unit_key(unit), n_fix)
+        fix_workspace_before = self._snapshot()
         resumed = self._take_brainstorming_resume(
             unit, contracts.KIND_FIX_FINDINGS
         )
@@ -3474,6 +3530,9 @@ class Driver(object):
         restored = self._enforce_sealed_artifacts(
             raw_name,
             editable_sealed=([editable_note] if editable_note else None),
+        )
+        fix_workspace_changed = self._snapshot_diff(
+            fix_workspace_before, self._snapshot()
         )
         if output.get("status") == "need_rethink":
             if restored:
@@ -3664,7 +3723,19 @@ class Driver(object):
             )
         # Without git there is no delta to review or amend: return directly.
         target = source.get("return_to") or st.U_PRE_REVIEW_VERIFY
-        if suite_corrected and target == st.U_ROUNDS:
+        if fix_workspace_changed:
+            st.restart_reviews_after_candidate_change(
+                self.state, unit, "git-disabled fixer changed bytes"
+            )
+            target = st.U_PRE_REVIEW_VERIFY
+        elif suite_corrected and target == st.U_ROUNDS:
+            target = st.U_PRE_REVIEW_VERIFY
+        elif (target == st.U_PRE_SEAL_VERIFY
+              and st.seal_predicate_reviews(
+                  unit,
+                  self.config["families_order"],
+                  current_fingerprint=self._review_evidence_fingerprint(unit),
+              ) is None):
             target = st.U_PRE_REVIEW_VERIFY
         st.transition_unit(self.state, unit, target, reason="fix applied (no git)")
         return "fix call done; continuing (git disabled)"
@@ -3730,6 +3801,7 @@ class Driver(object):
 
     def _do_delta_review(self):
         unit = st.current_unit(self.state)
+        self._migrate_retired_seal_review_handoff(unit)
         correction = unit.get("design_correction") or {}
         provisional = (
             correction if correction.get("phase") == "proposed" else None
@@ -3756,23 +3828,11 @@ class Driver(object):
                 )
         source = unit.get("fix_source") or {}
         # The delta convergence checkpoint (delta_full_review_after_fixes)
-        # escalates a fix loop to a full re-review after N fixes: a REVIEW
-        # episode (origin "round") returns to a full review, a SEAL episode
-        # (origin "seal") returns to a full seal. It is keyed off the
-        # episode's ORIGIN, never off return_to — a pending suite re-verify
-        # rewrites return_to to pre_review_verify below, and pre_seal_verify
-        # is also shared by gap-repair and verification episodes, so
-        # return_to cannot distinguish the cases. A round/seal loop must
-        # escalate at N even while a suite correction is pending (found live
-        # 2026-07-21: a slice ran 8 dirty deltas with the checkpoint
-        # suppressed because it keyed off the redirected return_to).
-        # active_fix_origin_type reads origin_type off the source and, for
-        # episodes persisted before that field existed, reconstructs it from
-        # the immutable root transition — so both a fresh and a resumed
-        # pre-feature seal loop escalate. Verification and gap-repair
-        # episodes resolve to their own origins and keep real deltas.
+        # escalates a review finding's fix loop to a full re-review after N
+        # fixes. It is keyed off the episode's origin, not return_to, because
+        # a pending suite re-verification may rewrite the latter.
         origin_type = st.active_fix_origin_type(self.state, unit)
-        checkpoint_source = origin_type in ("round", "seal")
+        checkpoint_source = origin_type == "round"
         return_to = source.get("return_to") or st.U_PRE_REVIEW_VERIFY
         suite_verification_pending = bool(
             unit.get("suite_verification_pending")
@@ -3837,6 +3897,15 @@ class Driver(object):
             unit.pop("phantom_retried", None)
             unit["fix_queue"] = []
             unit["fix_source"] = None
+            if (return_to == st.U_PRE_SEAL_VERIFY
+                    and st.seal_predicate_reviews(
+                        unit,
+                        self.config["families_order"],
+                        current_fingerprint=(
+                            self._review_evidence_fingerprint(unit)
+                        ),
+                    ) is None):
+                return_to = st.U_PRE_REVIEW_VERIFY
             if (
                 not suite_verification_pending
                 and return_to in (
@@ -3875,10 +3944,9 @@ class Driver(object):
             # known findings.  At this point another diff-only review would
             # inspect a large cumulative patch with less context than a full
             # re-review.  Checkpoint the WIP and follow the exact clean-delta
-            # return edge (the REDIRECTED return_to, so a pending suite
-            # re-verify still runs first): a review episode lands in a full
-            # review, a seal episode re-runs the suite and opens a fresh full
-            # seal.  family_index is deliberately untouched.
+            # return edge. The accepted candidate changed, so every prior
+            # whole-artifact approval is stale and review restarts at family
+            # zero after verification.
             try:
                 sha = gitops.amend(self.workspace)
             except gitops.GitError as exc:
@@ -3891,6 +3959,10 @@ class Driver(object):
             st.append_event(
                 self.state, "amended", unit=st.unit_key(unit), sha=sha
             )
+            st.restart_reviews_after_candidate_change(
+                self.state, unit, "delta checkpoint changed bytes"
+            )
+            return_to = st.U_PRE_REVIEW_VERIFY
             st.append_event(
                 self.state,
                 "delta_checkpoint",
@@ -4061,6 +4133,10 @@ class Driver(object):
             st.append_event(
                 self.state, "amended", unit=st.unit_key(unit), sha=sha
             )
+            st.restart_reviews_after_candidate_change(
+                self.state, unit, "accepted delta changed bytes"
+            )
+            return_to = st.U_PRE_REVIEW_VERIFY
             unit["fix_queue"] = []
             unit["fix_source"] = None
             st.transition_unit(
@@ -4090,9 +4166,76 @@ class Driver(object):
             output["findings"]
         )
 
+    def _complete_seal_from_reviews(self, unit):
+        """Seal deterministically from current whole-artifact reviews."""
+        families = self.config["families_order"]
+        current_fingerprint = self._review_evidence_fingerprint(unit)
+        cite = st.seal_predicate_reviews(
+            unit, families, current_fingerprint=current_fingerprint
+        )
+        if cite is None:
+            st.restart_reviews_after_candidate_change(
+                self.state,
+                unit,
+                "seal boundary did not match cited review bytes",
+            )
+            st.transition_unit(
+                self.state,
+                unit,
+                st.U_PRE_REVIEW_VERIFY,
+                reason="seal evidence stale; ordinary reviews restarted",
+            )
+            return "%s review cycle restarted before seal" % st.unit_key(unit)
+        if unit["status"] == st.U_PRE_SEAL_VERIFY:
+            st.transition_unit(
+                self.state, unit, st.U_SEALING,
+                reason="verification passed; review predicate satisfied",
+            )
+        st.record_seal_attempt(
+            self.state, unit, {}, True, reviews=list(cite)
+        )
+        st.append_event(
+            self.state,
+            "seal_satisfied",
+            unit=st.unit_key(unit),
+            reviews=list(cite),
+        )
+        st.transition_unit(
+            self.state,
+            unit,
+            st.U_SEALED,
+            reason="all reviewers effectively clean on current bytes",
+        )
+        self._after_seal(unit)
+        return "%s sealed from reviews %s" % (
+            st.unit_key(unit), ", ".join(cite)
+        )
+
     def _do_verify(self):
         unit = st.current_unit(self.state)
         stage = unit["status"]
+        if self._migrate_retired_seal_review_handoff(unit):
+            return "retired seal discussion migrated to ordinary reviews"
+        if stage == st.U_PRE_SEAL_VERIFY:
+            current_fingerprint = self._review_evidence_fingerprint(unit)
+            if st.seal_predicate_reviews(
+                unit,
+                self.config["families_order"],
+                current_fingerprint=current_fingerprint,
+            ) is None:
+                st.restart_reviews_after_candidate_change(
+                    self.state,
+                    unit,
+                    "pre-seal evidence missing or bound to different bytes",
+                )
+                st.transition_unit(
+                    self.state,
+                    unit,
+                    st.U_PRE_REVIEW_VERIFY,
+                    reason="pre-seal evidence stale; reviews restarted",
+                )
+                return "pre-seal evidence stale; review cycle restarted"
+        verification_changed = []
         stage_key = (
             "pre_review" if stage == st.U_PRE_REVIEW_VERIFY else "pre_seal"
         )
@@ -4117,6 +4260,7 @@ class Driver(object):
             ok = True
         else:
             unit.pop("skip_next_verify", None)
+            verification_before = self._snapshot()
             self._mark_busy(
                 "verification (%s)" % stage_key, "verification", None
             )
@@ -4127,6 +4271,9 @@ class Driver(object):
                 )
             finally:
                 self._clear_busy()
+            verification_changed = self._snapshot_diff(
+                verification_before, self._snapshot()
+            )
             st.append_event(
                 self.state,
                 "verification",
@@ -4137,25 +4284,38 @@ class Driver(object):
                 vacuous=(not commands) or None,
                 output_tail=(output or "")[-2000:],
             )
+        if verification_changed:
+            st.restart_reviews_after_candidate_change(
+                self.state,
+                unit,
+                "verification changed candidate bytes: %s"
+                % runners.format_changes(verification_changed),
+            )
         if ok:
             # The cap bounds consecutive fix attempts for the CURRENT
             # failing stage; a pass closes the episode.
             unit.pop("suite_verification_pending", None)
             unit.pop("suite_armed_by_fix", None)
             unit["verify_fix_attempts"][stage_key] = 0
+            if verification_changed and stage == st.U_PRE_SEAL_VERIFY:
+                st.transition_unit(
+                    self.state,
+                    unit,
+                    st.U_PRE_REVIEW_VERIFY,
+                    reason=("verification changed candidate bytes; "
+                            "review approvals invalidated"),
+                )
+                return (
+                    "verification ok but changed candidate bytes; "
+                    "review cycle restarted"
+                )
             if stage == st.U_PRE_REVIEW_VERIFY:
                 st.transition_unit(self.state, unit, st.U_ROUNDS, reason="verified")
             else:
-                if not st.can_open_seal(self.state, unit):
-                    st.fail_run(
-                        self.state,
-                        "pre-seal verification passed but not every family has "
-                        "a recorded clean round; state is inconsistent",
-                        unit=unit,
-                    )
-                    self._save()
-                    raise StopStep("seal gate violation")
-                st.transition_unit(self.state, unit, st.U_SEALING, reason="verified")
+                sealed = self._complete_seal_from_reviews(unit)
+                return "verification ok (%d command(s)); %s" % (
+                    len(commands), sealed
+                )
             return "verification ok (%d command(s))" % len(commands)
         unit["verify_fix_attempts"][stage_key] += 1
         if unit["verify_fix_attempts"][stage_key] > self.config["max_verify_fix_attempts"]:
@@ -4175,8 +4335,8 @@ class Driver(object):
         unit["last_verification_output"] = (output or "")[-4000:]
         # The synthetic episode id must stay unique for the unit's whole
         # life: verify_fix_attempts resets whenever the stage passes, but a
-        # stage can be RE-ENTERED later (every dirty seal attempt returns
-        # to pre-seal verification), and a colliding id would mint two
+        # stage can be RE-ENTERED later after accepted candidate changes,
+        # and a colliding id would mint two
         # adjudication registry entries with the same id if V1 is rejected
         # in both episodes. A dedicated never-reset sequence numbers the
         # episodes instead (setdefault: field absent in pre-existing
@@ -4213,7 +4373,8 @@ class Driver(object):
             "verification",
             None,
             "%s-verify-%s-%d" % (st.unit_key(unit), stage_key, n_episode),
-            stage,
+            (st.U_PRE_REVIEW_VERIFY
+             if verification_changed else stage),
         )
         return "verification failed; findings queued for the fixer"
 
@@ -4377,15 +4538,49 @@ class Driver(object):
 
     def _do_review_round(self):
         unit = st.current_unit(self.state)
+        (
+            evidence_fingerprint,
+            project_context,
+            extensions,
+            roots,
+            amendments,
+        ) = self._review_evidence_inputs(unit)
+        bound_fingerprint = unit.get("review_evidence_fingerprint")
+        if bound_fingerprint is None:
+            unit["review_evidence_fingerprint"] = evidence_fingerprint
+        elif bound_fingerprint != evidence_fingerprint:
+            st.restart_reviews_after_candidate_change(
+                self.state,
+                unit,
+                "candidate bytes or governing context changed between "
+                "reviewer calls",
+            )
+            st.transition_unit(
+                self.state,
+                unit,
+                st.U_PRE_REVIEW_VERIFY,
+                reason=("review evidence changed; prior approvals "
+                        "invalidated"),
+            )
+            return "review evidence changed; cycle restarted"
+        self._record_amendments_seen(amendments)
+        if project_context is not None:
+            self._record_safeguards_seen(project_context["safeguards"])
         family = st.current_family(self.state, unit)
         if family is None:
             raise st.IllegalTransition("rounds status with no family left")
+        # Two independent boundaries grant a fresh budget.  Resume amnesty
+        # deliberately forgives rounds from before an operator retry; a new
+        # review cycle forgives rounds over obsolete candidate bytes.  Count
+        # only rounds after whichever boundary is newer.
+        budget_start = max(
+            int(unit.get("rounds_amnesty") or 0),
+            int(unit.get("review_cycle_start") or 0),
+        )
         done = len(
             [
                 r
-                # Count from the amnesty marker (moved at each resume), not
-                # from all history: resume grants a fresh review budget.
-                for r in unit["rounds"][unit.get("rounds_amnesty") or 0:]
+                for r in unit["rounds"][budget_start:]
                 if r["family"] == family
                 and r["kind"] == contracts.KIND_REVIEW_ROUND
             ]
@@ -4400,9 +4595,6 @@ class Driver(object):
             )
             self._save()
             raise StopStep("round cap")
-        project_context, extensions, roots = self._project_prompt_inputs(
-            unit, contracts.KIND_REVIEW_ROUND
-        )
         # Reform runs: reviewers of doc units check the question battery
         # (presence and substance, never prose — spec §4) and every
         # finding hard-requires its plain/example lay mirror.
@@ -4417,12 +4609,13 @@ class Driver(object):
             self._registry(),
             unit_kind=unit["kind"],
             governing=self._governing(unit),
-            amendments=self._amendments(),
+            amendments=amendments,
             verified_suite=self._verified_suite(unit),
             project_context=project_context,
             battery=interpreter.battery_questions(self.state, unit["kind"]),
             debt=self._debt(unit),
             gap_enabled=interpreter.gap_semantics(self.state),
+            wave_docs=self._wave_doc_paths(unit),
         )
         rethink_handoff = self._brainstorming_review_handoff(
             unit, contracts.KIND_REVIEW_ROUND
@@ -4476,6 +4669,7 @@ class Driver(object):
                     % runners.format_changes(changed),
                     "model": review_model,
                     "effort": review_effort,
+                    "evidence_fingerprint": evidence_fingerprint,
                 },
             )
             return "%s round INVALID (reviewer edited); restored and retrying" % family
@@ -4523,7 +4717,11 @@ class Driver(object):
                     if (f.get("severity") not in defer_scope
                         or f.get("id") in retained_ids)
                 ]
-        round_meta = {"model": review_model, "effort": review_effort}
+        round_meta = {
+            "model": review_model,
+            "effort": review_effort,
+            "evidence_fingerprint": evidence_fingerprint,
+        }
         if deferred and not fix_findings:
             round_meta["deferred_clean"] = True
         rec = st.record_round(
@@ -4561,521 +4759,37 @@ class Driver(object):
         return ("%s round: %d finding(s) queued for the fixer; %d deferred"
                 % (family, len(fix_findings), len(deferred)))
 
-    def _seal_families(self, unit, attempt_no):
-        """Families that run a seal half this attempt.
-
-        On the FIRST attempt the frozen candidate is byte-identical to what
-        every family just reviewed clean — a1 opens only after every family's
-        review round is clean and a read-only pre-seal verify. So the last
-        reviewer (families_order[-1], whose round immediately preceded the
-        seal) is re-reviewing the exact bytes it just blessed; empirically its
-        a1 half never fires while the first family's fresh pass still catches
-        real defects. single_seal_first_attempt therefore drops that last
-        half on a1 only. Any finding reopens the unit and a2+ runs the full
-        double seal, because the artifact has by then changed. Never reduces
-        below one family (single-family configs keep their only sealer)."""
-        families = self.config["families_order"]
-        if (attempt_no == 1
-                and self.config.get("single_seal_first_attempt")
-                and len(families) > 1):
-            return families[:-1]
-        return families
-
     def _do_seal_attempt(self):
+        """Close a recovered sealing state without launching seal reviewers."""
         unit = st.current_unit(self.state)
-        rethink_handoff = self._brainstorming_review_handoff(
-            unit, contracts.KIND_SEAL_HALF
-        )
-        # The cap counts from the amnesty marker (moved at each resume);
-        # attempt numbering below stays global over the full history.
-        seals_done = len(unit["seals"]) - (unit.get("seals_amnesty") or 0)
-        if seals_done >= self.config["max_seal_attempts"]:
-            st.fail_run(
-                self.state,
-                "max_seal_attempts=%d reached on %s"
-                % (self.config["max_seal_attempts"], st.unit_key(unit)),
-                unit=unit,
-            )
-            self._save()
-            raise StopStep("seal cap")
-        attempt_no = len(unit["seals"]) + 1
-        all_families = self.config["families_order"]
-        # Reform seal PREDICATE (spec §5): the review rounds already carry
-        # every family's whole-artifact judgment. If each family's most
-        # recent review is clean on the CURRENT bytes (no fix changed them
-        # after it), the dedicated seal-half re-reads would re-read bytes
-        # the family already blessed — redundant. Seal directly and cite
-        # the satisfying reviews; zero seal calls. When a family's look is
-        # stale (a later fix changed the bytes) the predicate returns None
-        # and we fall through to the proven double-seal halves, which give
-        # exactly that family its fresh look. Legacy and profile-less runs
-        # never take this path (bit-identical).
-        stale_only = None
-        if rethink_handoff is None and interpreter.seal_predicate(self.state):
-            cite = st.seal_predicate_reviews(unit, all_families)
-            if cite is not None:
-                st.record_seal_attempt(self.state, unit, {}, True)
-                st.append_event(
-                    self.state, "seal_satisfied", unit=st.unit_key(unit),
-                    attempt=attempt_no, reviews=cite,
-                )
-                st.transition_unit(
-                    self.state, unit, st.U_SEALED,
-                    reason="seal predicate satisfied (%s)" % ", ".join(cite),
-                )
-                self._after_seal(unit)
-                return (
-                    "%s sealed by predicate — every family's review is "
-                    "clean on the current bytes (%s); no seal calls"
-                    % (st.unit_key(unit), ", ".join(cite))
-                )
-            # Predicate not satisfied: only the STALE families owe a
-            # fresh look (spec §5 — refined fallback, 2026-07-09); a
-            # family clean on the current bytes stands on its cited
-            # review instead of re-reading bytes it just blessed. After
-            # a fix+amend every family is stale, so a post-fix reseal
-            # degrades to the full double automatically.
-            stale_only = st.stale_seal_families(unit, all_families)
-        if stale_only is not None:
-            families, fresh_cites = stale_only
-            if fresh_cites:
-                st.append_event(
-                    self.state, "seal_stale_only",
-                    unit=st.unit_key(unit), attempt=attempt_no,
-                    ran=list(families), standing=fresh_cites,
-                )
-        else:
-            families = self._seal_families(unit, attempt_no)
-            if families != all_families:
-                st.append_event(
-                    self.state, "seal_single_first_attempt",
-                    unit=st.unit_key(unit), attempt=attempt_no,
-                    ran=list(families),
-                    skipped=[f for f in all_families if f not in families],
-                )
-        goal = self._goal_for(unit)
-        desc = self._unit_desc(unit)
-        artifact = self._artifact(unit)
-        registry = self._registry()
-        debt = self._debt(unit)
-        review_profiles = {
-            family: self._review_profile(family) for family in families
-        }
-        halves = {}
-        # Malformed strikes stashed by the half threads, keyed by family so
-        # concurrent writes never collide. Kept OUTSIDE `halves` because a
-        # half that blocks or fails never lands there, and its strike must
-        # still reach the ledger. Drained on the main thread only (events
-        # are never appended from a worker thread).
-        pending_strikes = {}
-        invalidated = None
-        tamper_family = None  # sequential mode can attribute the tampering
-        amendments = self._amendments()  # once, before any half thread
-        verified_suite = self._verified_suite(unit)
-        wave_docs = self._wave_doc_paths(unit)  # once; None unless anchor
-        gap_enabled_seal = interpreter.gap_semantics(self.state)  # once
-        # A seal attempt is ONE judgment surface: selection/compile/meta
-        # run once here, in the main thread (fail-closed before any half
-        # runs; the seen ledger gains at most one event per pair), and
-        # both halves share the snapshot — an edit between sequential
-        # halves binds the next call after the attempt, never the second
-        # half. Same once-before-half-threads pattern as amendments.
-        project_context, project_extensions, project_roots = (
-            self._project_prompt_inputs(unit, contracts.KIND_SEAL_HALF)
-        )
-        # Reform gates for the halves, computed once on the main thread
-        # (same once-before-half-threads pattern as amendments): doc-unit
-        # sealers check the question battery, and every finding
-        # hard-requires its plain/example lay mirror.
-        seal_battery = interpreter.battery_questions(
-            self.state, unit["kind"]
-        )
-        seal_validate_opts = (
-            {"require_plain": True}
-            if interpreter.reform_active(self.state) else None
-        )
-
-        def run_half_pure(family):
-            """One seal half, mutating NO shared state (thread-safe): any
-            failure raises _SealHalfFailure; raw outputs go to per-family
-            files only."""
-            prompt = prompts.build_seal_half(
-                family, self.workspace, goal, desc, artifact, registry,
-                unit_kind=unit["kind"], governing=self._governing(unit),
-                amendments=amendments, verified_suite=verified_suite,
-                project_context=project_context, battery=seal_battery,
-                debt=debt, wave_docs=wave_docs,
-                gap_enabled=gap_enabled_seal,
-            )
-            if rethink_handoff is not None:
-                prompt = prompts.attach_rethink_review_handoff(
-                    prompt, rethink_handoff
-                )
-            raw_name = "%s-seal-a%d-%s" % (st.unit_key(unit), attempt_no, family)
-            try:
-                review_model, review_effort = review_profiles[family]
-                output, result = runners.call_worker(
-                    self.runner,
-                    family,
-                    prompt,
-                    contracts.KIND_SEAL_HALF,
-                    self.workspace,
-                    model=review_model,
-                    effort=review_effort,
-                    extensions=project_extensions,
-                    roots=project_roots,
-                    validate_opts=seal_validate_opts,
-                )
-            except verifiers.VerifierError as exc:
-                # Slice 4's non-repairable family (operator/environment,
-                # never the worker); no state mutation here — the caller
-                # records the failure.
-                raise _SealHalfFailure(
-                    "%s call: project standing-law fault (never the "
-                    "worker's): %s" % (contracts.KIND_SEAL_HALF, exc),
-                    family=family,
-                )
-            except (runners.RunnerError, runners.WorkerProtocolError) as exc:
-                proto_paths = self._save_protocol_raws(raw_name, exc)
-                raise _SealHalfFailure(
-                    "%s call failed: %s" % (contracts.KIND_SEAL_HALF, exc),
-                    raw_texts=list(getattr(exc, "raw_texts", []) or [])
-                    + [str(exc)],
-                    family=family,
-                    protocol_raw_paths=proto_paths,
-                    protocol_label=raw_name,
-                )
-            raw_path = self._save_raw(raw_name, result.text)
-            # Stash malformed strikes BEFORE any exit below: a blocked half
-            # used to raise first, so a blocked-and-recovered output left an
-            # orphan raw file and no event at all. Both channels are kept —
-            # a repair retry that itself needed delimiter recovery has two
-            # distinct strikes, and `or` would have hidden the second.
-            # Thread-safe: distinct per-family file names and dict keys.
-            strikes = []
-            for attr in ("repair", "recovered"):
-                rep = getattr(result, attr, None)
-                if rep:
-                    strikes.append({
-                        "label": raw_name,
-                        "error": str(rep["error"])[:300],
-                        "duration_s": rep.get("duration_s"),
-                        "raw_path": self._save_raw_noclobber(
-                            "%s-malformed%s"
-                            % (raw_name, "" if attr == "repair" else "-tail"),
-                            rep["raw_text"],
-                        ),
-                    })
-            if strikes:
-                pending_strikes[family] = strikes
-            if output["status"] == "blocked":
-                raise _SealHalfFailure(
-                    "%s worker blocked: %s"
-                    % (contracts.KIND_SEAL_HALF, output.get("blocked_reason"))
-                )
-            half = {
-                "result": output,
-                "raw_path": raw_path,
-                "duration_s": result.duration_s,
-                "workspace_modified": False,
-                "model": review_profiles[family][0],
-                "effort": review_profiles[family][1],
-            }
-            return half
-
-        def flush_half_strikes():
-            """Emit every stashed malformed strike, on the MAIN thread.
-
-            Called before every exit, not just the happy one: a sibling
-            half failing (or blocking) must not erase the evidence that
-            another half came back malformed. Drains in `families` order,
-            never dict-insertion order, so the ledger sequence does not
-            depend on which thread finished first."""
-            for fam in families:
-                for rep in pending_strikes.pop(fam, []):
-                    st.append_event(
-                        self.state, "worker_malformed",
-                        unit=st.unit_key(unit),
-                        label=rep["label"], kind=contracts.KIND_SEAL_HALF,
-                        family=fam, error=rep["error"],
-                        duration_s=rep["duration_s"],
-                        raw_path=rep["raw_path"],
-                    )
-
-        def fail_attempt(reason, raw_texts=None, failed_family=None):
-            flush_half_strikes()
-            # Runs on the main thread (sequential path directly; concurrent
-            # path only after every half has joined), so _save_raw here never
-            # races the seal worker threads.
-            etype, resume_at, evidence = "unknown", None, None
-            if raw_texts:
-                cls_family = self._opposite(failed_family or families[0])
-                cls_model, cls_effort = self._family_defaults(cls_family)
-                etype, resume_at, evidence = errclass.classify_failure(
-                    raw_texts,
-                    runner=self.runner,
-                    opposite_family=cls_family,
-                    workspace=self.workspace,
-                    use_llm=bool(self.config.get("error_classifier", True)),
-                    on_llm_raw=self._classify_raw_saver(
-                        "%s-seal-a%d-classify"
-                        % (st.unit_key(unit), attempt_no)
-                    ),
-                    classifier_model=cls_model,
-                    classifier_effort=cls_effort,
-                )
-                resume_at = errclass.normalize_resume_at(resume_at)
-                if etype in errclass.AUTO_RESUMABLE and not resume_at:
-                    fallback_min = (
-                        30 if etype == "quota"
-                        else errclass.TRANSIENT_BACKOFF_MIN
-                    )
-                    resume_at = errclass.parse_resume_at(
-                        "in %d minutes" % fallback_min
-                    )
-            st.fail_run(self.state, reason, unit=unit, type_=etype,
-                        resume_at=resume_at, evidence=evidence)
-            self._save()
-            raise StopStep(reason)
-
-        if len(families) > 1 and self.config.get("seal_concurrent"):
-            # Parallelize only when there is more than one half to run: a lone
-            # a1 half has nothing to parallelize and takes the direct path.
-            before = self._snapshot()
-            errors = {}
-            error_excs = []
-            error_raws = []
-
-            def worker(fam):
-                # Worker threads never touch driver state: mutating and
-                # saving shared state from here would race (duplicate
-                # run_failed events, clashing event seqs, overwritten
-                # failure reasons). Everything is reported back to the
-                # main thread instead — including unexpected crashes,
-                # which must never let the attempt pass on fewer halves.
-                try:
-                    halves[fam] = run_half_pure(fam)
-                except _SealHalfFailure as exc:
-                    errors[fam] = str(exc)
-                    error_excs.append(exc)
-                    error_raws.extend(exc.raw_texts)
-                except Exception as exc:  # a dead thread must fail the run
-                    errors[fam] = "seal half crashed: %r" % (exc,)
-
-            threads = [
-                threading.Thread(target=worker, args=(fam,)) for fam in families
-            ]
-            self._mark_busy(
-                "%s-seal-a%d (%s)"
-                % (st.unit_key(unit), attempt_no, "+".join(families)),
-                contracts.KIND_SEAL_HALF,
-                None,
-            )
-            try:
-                for t in threads:
-                    t.start()
-                for t in threads:
-                    t.join()
-            finally:
-                self._clear_busy()
-            if errors:
-                for e in error_excs:
-                    self._emit_seal_protocol_event(e)
-                fail_attempt(
-                    "concurrent seal attempt failed: "
-                    + "; ".join(
-                        "%s: %s" % (fam, errors[fam]) for fam in sorted(errors)
-                    ),
-                    raw_texts=error_raws,
-                    failed_family=sorted(errors)[0],
-                )
-            changed = self._snapshot_diff(before, self._snapshot())
-            if changed:
-                for fam in halves:
-                    halves[fam]["workspace_modified"] = True
-                invalidated = (
-                    "workspace changed during concurrent seal attempt (%s); "
-                    "cannot attribute; attempt invalid"
-                    % runners.format_changes(changed)
-                )
-        else:
-            snap = self._snapshot()
-            for fam in families:
-                self._mark_busy(
-                    "%s-seal-a%d-%s" % (st.unit_key(unit), attempt_no, fam),
-                    contracts.KIND_SEAL_HALF,
-                    fam,
-                    model=review_profiles[fam][0],
-                    effort=review_profiles[fam][1],
-                )
-                try:
-                    halves[fam] = run_half_pure(fam)
-                except _SealHalfFailure as exc:
-                    self._emit_seal_protocol_event(exc)
-                    fail_attempt(str(exc), raw_texts=exc.raw_texts,
-                                 failed_family=exc.family)
-                finally:
-                    self._clear_busy()
-                new_snap = self._snapshot()
-                changed = self._snapshot_diff(snap, new_snap)
-                if changed:
-                    halves[fam]["workspace_modified"] = True
-                    invalidated = (
-                        "seal half %s modified the workspace (%s); its "
-                        "output is invalid and the attempt does not count "
-                        "as evidence"
-                        % (fam, runners.format_changes(changed))
-                    )
-                    tamper_family = fam
-                    snap = new_snap
-
-        if set(halves) != set(families):
-            # Defense in depth: a seal attempt must never be judged on
-            # fewer halves than configured families.
-            fail_attempt(
-                "seal attempt %d lost half(s) for: %s"
-                % (attempt_no, ", ".join(sorted(set(families) - set(halves))))
-            )
-        # Main-thread emission of any half's repaired first strike
-        # (stashed thread-safely in run_half_pure); popped so the seal
-        # record itself stays exactly its historical shape.
-        flush_half_strikes()
-        if rethink_handoff is not None and invalidated is None:
-            self._consume_brainstorming_review_handoff(
-                unit, contracts.KIND_SEAL_HALF
-            )
-        rethink_families = [
-            family
-            for family in families
-            if halves[family]["result"].get("status") == "need_rethink"
-        ]
-        if rethink_families and invalidated is None:
-            selected = next(
-                family for family in families if family in rethink_families
-            )
-            half = halves[selected]
-            synthetic_result = runners.RunnerResult(
-                "", 0, half["duration_s"]
-            )
-            st.append_event(
-                self.state,
-                "brainstorming_seal_request_selected",
-                unit=st.unit_key(unit),
-                attempt=attempt_no,
-                selected_family=selected,
-                requesting_families=list(rethink_families),
-            )
-            return self._start_rethink(
-                unit,
-                contracts.KIND_SEAL_HALF,
-                selected,
-                half.get("model"),
-                half.get("effort"),
-                half["result"],
-                synthetic_result,
-                half["raw_path"],
-                "%s-seal-a%d-%s"
-                % (st.unit_key(unit), attempt_no, selected),
-            )
-        clean = all(
-            contracts.findings_clean(halves[fam]["result"]) for fam in families
-        )
-        # Debt at seal is DOC-only, exactly like review-round debt. An
-        # implementation finding always reopens the normal fixer flow: code
-        # is either repaired or the finding is explicitly rejected, never
-        # parked as debt at the final gate.
-        seal_findings = [
-            (f, fam)
-            for fam in families
-            for f in halves[fam]["result"].get("findings", [])
-        ]
-        # The SEAL gate stays strict on the IMPL phase: an impl seal-half
-        # finding always fixes (never defers), so the final double-seal is
-        # a clean confirmation, not a debt-acceptance point. The review-round
-        # loop is where cosmetic P3 churn is absorbed (defer_scope_for).
-        defer_scope = (
-            interpreter.doc_defer_scope(self.state)
-            if unit["kind"] in (st.UNIT_SKELETON, st.UNIT_SLICE_DOC)
-            else ()
-        )
-        deferred = []
-        fix_seal_findings = list(seal_findings)
-        if (defer_scope and not clean and invalidated is None
-                and self.config.get("p3_reclassify_debt")):
-            candidates = [
-                (f, fam) for f, fam in seal_findings
-                if f.get("severity") in defer_scope
-            ]
-            if candidates:
-                deferred, retained = self._partition_defer_candidates(
-                    unit, candidates)
-                retained_ids = {
-                    (fam, f.get("id")) for f, fam in retained
-                }
-                fix_seal_findings = [
-                    (f, fam) for f, fam in seal_findings
-                    if (f.get("severity") not in defer_scope
-                        or (fam, f.get("id")) in retained_ids)
-                ]
-        passed = (clean or not fix_seal_findings) and invalidated is None
-        st.record_seal_attempt(self.state, unit, halves, passed, invalidated)
-        if deferred:
-            st.record_debt(
-                self.state, unit, deferred, "seal",
-                "%s-seal-a%d" % (st.unit_key(unit), attempt_no))
-        if passed:
-            seal_kind = "single seal" if len(families) == 1 else "double seal"
-            st.transition_unit(
-                self.state, unit, st.U_SEALED,
-                reason=("%s clean" % seal_kind if not deferred
-                        else "%s: %d finding(s) deferred as debt"
-                        % (seal_kind, len(deferred))))
-            self._after_seal(unit)
-            return "seal attempt %d PASSED (%s); %s sealed" % (
-                attempt_no,
-                "clean" if not deferred
-                else "%d finding(s) deferred as debt" % len(deferred),
-                st.unit_key(unit))
-        if invalidated is not None:
-            # Seals run on a clean worktree (everything amended), so a
-            # tampering half is fully revertible: restore the sealed
-            # candidate commit and retry a full attempt (one attempt spent).
-            self._restore_or_fail(unit, "seal half tampered")
-            return "seal attempt %d INVALID: %s (workspace restored)" % (
-                attempt_no,
-                invalidated,
-            )
-        for fam in families:
-            self._validate_contests(
-                unit, halves[fam]["result"], contracts.KIND_SEAL_HALF
-            )
-        merged = [
-            {
-                "id": "%s-%s" % (fam, f["id"]),
-                "severity": f["severity"],
-                "summary": "[%s seal half] %s" % (fam, f["summary"]),
-                "validity": copy.deepcopy(f["validity"]),
-                "contests": f.get("contests"),
-            }
-            for f, fam in fix_seal_findings
-        ]
-        st.enter_fix_episode(
-            self.state,
+        if self._migrate_retired_seal_review_handoff(unit):
+            return "retired seal discussion migrated to ordinary reviews"
+        current_fingerprint = self._review_evidence_fingerprint(unit)
+        cite = st.seal_predicate_reviews(
             unit,
-            merged,
-            "seal",
-            None,
-            "%s-seal-a%d" % (st.unit_key(unit), attempt_no),
-            st.U_PRE_SEAL_VERIFY,
+            self.config["families_order"],
+            current_fingerprint=current_fingerprint,
         )
-        return ("seal attempt %d: %d finding(s) queued for the fixer; "
-                "%d deferred" % (attempt_no, len(merged), len(deferred)))
+        if cite is None:
+            st.restart_reviews_after_candidate_change(
+                self.state,
+                unit,
+                "persisted sealing state lacked current review evidence",
+            )
+            st.transition_unit(
+                self.state,
+                unit,
+                st.U_PRE_REVIEW_VERIFY,
+                reason="seal recovery restarted ordinary reviews",
+            )
+            return "seal recovery: review cycle restarted"
+        return self._complete_seal_from_reviews(unit)
 
     def _wave_doc_paths(self, unit):
         """Artifact paths of the slice notes co-reopened with `unit` by an
         active re-documentation wave — None unless `unit` is the wave's
-        anchor. Feeds the fixer's re-documenter framing and the wave seal's
-        set declaration."""
+        anchor. Feeds the fixer, delta reviewer, and full reviewers the same
+        whole-set declaration."""
         wave = self.state.get("redoc_wave")
         if not wave or wave.get("anchor") != st.unit_key(unit):
             return None

@@ -515,17 +515,18 @@
     <p><b>Goal doc</b> — when a description doc path is set, the file's
       content becomes the goal, snapshotted at launch.</p>
     <p><b>Strategy profile</b> — governs the run's review depth.
-      <b>legacy</b> reproduces the pre-reform flow exactly; <b>strict</b> /
+      <b>legacy</b> preserves the pre-reform review policy; <b>strict</b> /
       <b>light</b> set the doc-review threshold (what a finding must exceed
-      to open a fix cycle vs record as tracked debt). No seed is
-      pre-selected on purpose — the choice is explicit.</p>
+      to open a fix cycle vs record as tracked debt). Every profile uses the
+      same deterministic seal. No seed is pre-selected on purpose — the
+      choice is explicit.</p>
     <p><b>Acts</b> — empty = family default (claude: opus-5/high, codex:
       gpt-5.6-sol/xhigh); model options adapt to the agent; editable mid-run
       from the run view. The Skeleton row drives all skeleton content work —
       its draft, re-drafts and fixes (default: claude fable-5/max); only
       skeleton reviews stay on the review rows. The two review rows tune each
-      fixed family for review rounds, delta reviews and seals; family
-      rotation never changes.</p>
+      fixed family for review rounds and delta reviews; family rotation never
+      changes. Sealing does not launch a model.</p>
     <p><b>Verification</b> — left empty, the implementer reports the repo's
       official suite and the driver arms the gates with it.</p>
   </div>
@@ -1647,7 +1648,7 @@ const ACTIVITY = {
   pending: "drafting", pre_review_verify: "verifying",
   rounds: "review round", fixing: "fixing findings",
   delta_review: "delta review", pre_seal_verify: "verifying",
-  sealing: "double seal",
+  sealing: "recording seal result",
 };
 function fmtDHMS(secs) {
   const t = Math.max(0, Math.round(secs));
@@ -1861,7 +1862,7 @@ function mobileBack() {
 }
 const KIND_SHORT = {
   review_round: "review", delta_review: "d-review", fix_findings: "fix",
-  seal_half: "seal", verification: "verify",
+  verification: "verify",
 };
 function shortKind(k) { return KIND_SHORT[k] || k; }
 function fmtDur(secs) {
@@ -1891,6 +1892,8 @@ function roundChip(r) {
   const click = ` clicky" onclick="showStory('round:${esc(r.id)}')`;
   if (r.invalidated)
     return `<span class="chip fail${click}" title="${esc(r.invalidated)}">${actor}${esc(kind)} · INVALID</span>`;
+  if (r.deferred_clean)
+    return `<span class="chip clean${click}" title="all findings were reclassified as non-blocking debt">${actor}${esc(kind)} · debt-clean · F${r.findings}${fmtDur(r.duration_s)}</span>`;
   const cls = WORK_KINDS[r.kind] ? "work"
     : r.findings === 0 ? "clean" : sevClass(r.severity);
   return `<span class="chip ${cls}${click}">${actor}${esc(kind)} · F${r.findings}${fmtDur(r.duration_s)}</span>`;
@@ -1899,20 +1902,19 @@ function sealChip(s, unitKey) {
   const dur = fmtDur(s.duration_s);
   const click = ` clicky" onclick="showStory('seal:${esc(unitKey)}:${s.attempt}')`;
   if (s.passed && s.wave)
-    // Wave provenance: resealed by the anchor's wave seal — the unit ran
-    // no seal episode of its own.
-    return `<span class="chip pass${click}" title="re-documentation wave ${esc(s.wave)}">Seal A${s.attempt} &#10003; wave${dur}</span>`;
+    // Wave provenance: the anchor's documentation wave requalified this unit.
+    return `<span class="chip pass${click}" title="re-documentation wave ${esc(s.wave)}">Seal &#10003; wave${dur}</span>`;
   if (s.passed)
-    return `<span class="chip pass${click}">Seal A${s.attempt} &#10003;${dur}</span>`;
+    return `<span class="chip pass${click}" title="same-byte reviews and verification satisfied">Seal &#10003;${dur}</span>`;
   if (s.invalidated)
-    return `<span class="chip fail${click}" title="${esc(s.invalidated)}">seal a${s.attempt} invalid${dur}</span>`;
+    return `<span class="chip fail${click}" title="${esc(s.invalidated)}">historical seal invalid${dur}</span>`;
   const findings = Object.values(s.findings || {})
     .reduce((total, count) => total + (Number(count) || 0), 0);
-  return `<span class="chip ${sevClass(s.severity)}${click}">Seal A${s.attempt} - F${findings}${dur}</span>`;
+  return `<span class="chip ${sevClass(s.severity)}${click}">historical seal · F${findings}${dur}</span>`;
 }
 function reclassifyChip(ev, unitKey) {
   // One chip per reclassify outcome, placed chronologically among the
-  // unit's round/seal chips (and left there): deferred -> tracked debt,
+  // unit's review and gate chips (and left there): deferred -> tracked debt,
   // kept -> rated above the run threshold, sent to the fixer. Reform
   // ratings carry TWO axes; the decision gates on DAMAGE, so the chip
   // leads with it (risk stays in the tooltip and the story).
@@ -1980,9 +1982,9 @@ function unitHistory(u, activity, running) {
       .map(b => ({at: b.at || "", type: "brainstorm", item: b})),
     repairs.map(repair => ({at: repair.at || "", type: "repair", item: repair}))
   ).sort((a, b) => a.at < b.at ? -1 : a.at > b.at ? 1 : 0);
-  // Reclassification is recorded immediately before its origin round/seal.
-  // Prefer the same-family review at the same timestamp so a review and a
-  // seal recorded in the same second cannot steal each other's debt chips.
+  // Reclassification is recorded immediately before its origin review.
+  // Prefer the same-family review at the same timestamp so adjacent gate
+  // bookkeeping cannot steal the review's debt chips.
   const anchored = new Map(base.map(event => [event, []]));
   const loose = [];
   for (const item of (u.reclassify || [])) {
@@ -2017,11 +2019,12 @@ function unitHistory(u, activity, running) {
       groups.push(current);
     } else if (event.type === "seal") {
       current = {type: "seal", number: event.item.attempt,
+                 deterministic: Object.keys(event.item.findings || {}).length === 0,
                  chips: [sealChip(event.item, u.unit)]};
       groups.push(current);
     } else if (event.type === "repair") {
       // The episode is compact but not opaque: its own fix/delta/review
-      // rounds, seal attempts, and reclassifications render as chips in
+      // rounds, seal records, and reclassifications render as chips in
       // chronological order after the trigger, so an in-flight repair
       // (a reopened skeleton mid-reseal) shows its work live.
       repairCount += 1;
@@ -2057,15 +2060,16 @@ function unitHistory(u, activity, running) {
     const inFlight = activity.in_flight || {};
     const liveKind = inFlight.kind || (
       activity.current_unit_status === "rounds" ? "review_round"
-        : activity.current_unit_status === "sealing" ? "seal_half" : ""
+        : activity.current_unit_status === "sealing" ? "seal_result" : ""
     );
     if (liveKind === "review_round") {
       const family = inFlight.family || activity.current_family || "review";
       groups.push({type: "review", family,
                    number: (reviewCounts[family] || 0) + 1, chips: [chip]});
-    } else if (liveKind === "seal_half") {
+    } else if (liveKind === "seal_result") {
       const attempt = Math.max(0, ...(u.seals || []).map(s => s.attempt || 0)) + 1;
-      groups.push({type: "seal", number: attempt, chips: [chip]});
+      groups.push({type: "seal", number: attempt, deterministic: true,
+                   chips: [chip]});
     } else if (current) current.chips.push(chip);
     else lead.push(chip);
   }
@@ -2090,7 +2094,7 @@ function unitHistory(u, activity, running) {
       addLine(`${family} review`, `Round ${group.number}`, group.chips);
     } else {
       if (group.type === "seal")
-        addLine("Seal", `Attempt ${group.number}`, group.chips);
+        addLine("Seal", group.deterministic ? "Result" : `Historical attempt ${group.number}`, group.chips);
       else
         addLine("Re-documentation", `Episode ${group.number}`, group.chips);
     }
@@ -2623,6 +2627,8 @@ async function showStory(item) {
     title = `${d.unit} — ${d.family} ${shortKind(d.kind)} (${d.id})`;
     if (d.invalidated)
       body += `<div class="story-note">INVALIDATED: ${esc(d.invalidated)}</div>`;
+    if (d.deferred_clean)
+      body += `<div class="story-note">DEBT-CLEAN: every finding was independently reclassified as non-blocking debt. The original findings remain below for audit.</div>`;
     const res = d.result || {};
     if (d.kind === "fix_findings" && d.queued && d.queued.length)
       body += `<div class="story-meta">asked to triage ${d.queued.length} finding(s)` +
@@ -2638,18 +2644,21 @@ async function showStory(item) {
     if (res.notes)
       body += `<div class="story-note">${esc(res.notes)}</div>`;
   } else if (d.story === "seal") {
-    title = `${d.unit} — seal attempt ${d.attempt} (${d.passed ? "pass" : "not passed"})${d.wave ? " — re-documentation wave" : ""}`;
+    const historical = Object.keys(d.halves || {}).length > 0;
+    title = historical
+      ? `${d.unit} — historical seal attempt ${d.attempt} (${d.passed ? "pass" : "not passed"})`
+      : `${d.unit} — seal result (${d.passed ? "satisfied" : "not satisfied"})${d.wave ? " — re-documentation wave" : ""}`;
     if (d.wave)
-      // Wave provenance: a synthetic reseal carried by the anchor's wave
-      // seal — it has no halves of its own, and that is the story.
-      body += `<div class="story-note">Resealed by the anchor's wave seal (${esc(d.wave)}): the wave certified the whole documentation set — this unit ran no seal episode of its own. See the anchor's seal attempt for the halves.</div>`;
+      body += `<div class="story-note">Requalified by the anchor's documentation wave (${esc(d.wave)}): the wave certified the whole documentation set, so this unit did not evaluate its own predicate.</div>`;
+    else if (!historical && d.passed)
+      body += `<div class="story-note">Deterministic result: every configured family was clean or debt-clean on the same current bytes, and the verification gate passed. No seal reviewer was called.</div>`;
     if (d.invalidated)
       body += `<div class="story-note">INVALIDATED: ${esc(d.invalidated)}</div>`;
     for (const [fam, h] of Object.entries(d.halves || {})) {
       if (!h) { body += `<h3>${esc(fam)}: (missing)</h3>`; continue; }
       const res = h.result || {};
       const fs = res.findings || [];
-      body += `<h3 style="margin-top:10px">${esc(fam)}${h.duration_s != null ? " · " + fmtDHMS(h.duration_s) : ""}${h.workspace_modified ? " · MODIFIED WORKSPACE" : ""}</h3>`;
+      body += `<h3 style="margin-top:10px">Historical ${esc(fam)} seal review${h.duration_s != null ? " · " + fmtDHMS(h.duration_s) : ""}${h.workspace_modified ? " · MODIFIED WORKSPACE" : ""}</h3>`;
       body += fs.length ? fs.map(findingRow).join("")
         : `<div class="story-finding">clean — no findings</div>`;
       if (res.notes) body += `<div class="story-note">${esc(res.notes)}</div>`;
@@ -2676,7 +2685,7 @@ async function showStory(item) {
     if ((d.round_ids || []).length)
       work.push(`${d.round_ids.length} repair round(s)`);
     if ((d.seal_attempts || []).length)
-      work.push(`resealed in A${d.seal_attempts[d.seal_attempts.length - 1]}`);
+      work.push(`seal predicate satisfied after repair`);
     if (d.reclassifications)
       work.push(`${d.reclassifications} reclassification(s)`);
     if (d.malformed)
@@ -3167,7 +3176,7 @@ async function submitForm() {
   const profile = document.getElementById("f_profile").value;
   if (!profile) {
     err.textContent =
-      "choose a strategy profile (legacy reproduces the pre-reform flow)";
+      "choose a strategy profile (legacy preserves the pre-reform review posture)";
     return;
   }
   payload.profile = profile;
@@ -3828,16 +3837,20 @@ function declareNamedArea(i) {
 function policyRow(i, pol, j) {
   const preview = pol.prompt.length > 160
     ? pol.prompt.slice(0, 157) + "…" : pol.prompt;
+  const retired = !pol.scope.kinds.length;
+  const toggle = retired
+    ? `<button class="btn" disabled title="This safeguard only targeted the retired seal worker. Edit its scope before enabling it.">Retired</button>`
+    : `<button class="btn" onclick="togglePolicy(${i},${j})">${pol.enabled ? "Disable" : "Enable"}</button>`;
   return `<div class="pol">
     <span class="ops">
-      <button class="btn" onclick="togglePolicy(${i},${j})">${pol.enabled ? "Disable" : "Enable"}</button>
+      ${toggle}
       <button class="btn" onclick="editPolicy(${i},${j})">Edit…</button>
       <button class="btn danger" onclick="deletePolicy(${i},${j})">Delete</button>
     </span>
     <b class="mono">${esc(pol.id)}</b>
     <span class="kv">v${pol.version}</span>
-    <span class="chip ${pol.enabled ? "closed" : ""}">${pol.enabled ? "enabled" : "disabled"}</span>
-    <span class="kv">${esc(pol.scope.kinds.join(", "))} × ${esc(pol.scope.unit_kinds.join(", "))}</span>
+    <span class="chip ${!retired && pol.enabled ? "closed" : ""}">${retired ? "retired/inert" : (pol.enabled ? "enabled" : "disabled")}</span>
+    <span class="kv">${retired ? "retired seal scope — edit to reactivate" : esc(pol.scope.kinds.join(", ")) + " × " + esc(pol.scope.unit_kinds.join(", "))}</span>
     <div class="kv">${esc(preview)}</div>
   </div>`;
 }

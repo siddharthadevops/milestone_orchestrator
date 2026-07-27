@@ -172,8 +172,6 @@ class GoalDemotionTest(unittest.TestCase):
                      family="codex"),
                 step("review_round", report("review_round"), family="codex"),
                 step("review_round", report("review_round"), family="claude"),
-                step("seal_half", report("seal_half"), family="codex"),
-                step("seal_half", report("seal_half"), family="claude"),
                 step("draft_slice_note",
                      ok("draft_slice_note", artifact="docs/slice-01.md"),
                      family="codex"),
@@ -186,8 +184,6 @@ class GoalDemotionTest(unittest.TestCase):
         note_prompt = self._prompt(runner, "draft_slice_note")
         self.assertIn(GOAL_MARKER, note_prompt)
         self.assertNotIn("operative restatement", note_prompt)
-        # Seal halves carried it too (pre-reform shape, untouched).
-        self.assertIn(GOAL_MARKER, self._prompt(runner, "seal_half"))
         # And no goal.md snapshot ledger exists for a legacy run —
         # bit-identical includes the workspace's file set.
         self.assertFalse(os.path.exists(

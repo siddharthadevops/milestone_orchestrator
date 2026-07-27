@@ -30,6 +30,7 @@ UNKNOWN = "unknown_policy"
 MALFORMED = "malformed_policy"
 INVALID_POLICY = "invalid_policy"
 INVALID_DEFAULTS = "invalid_defaults"
+RETIRED_SCOPE_KINDS = frozenset({"seal_half"})
 
 
 @dataclass(frozen=True)
@@ -76,7 +77,7 @@ def _validate_policy_id(policy_id):
         raise PolicyValidationError(INVALID_POLICY) from exc
 
 
-def _validate_scope(scope):
+def _validate_scope(scope, allow_retired=False):
     if not isinstance(scope, dict) or set(scope) != SCOPE_KEYS:
         _raise(MALFORMED)
     kinds = scope["kinds"]
@@ -85,12 +86,18 @@ def _validate_scope(scope):
         _raise(MALFORMED)
     if not isinstance(unit_kinds, list) or not unit_kinds:
         _raise(MALFORMED)
-    if any(kind not in contracts.KINDS for kind in kinds):
+    allowed = set(contracts.KINDS)
+    if allow_retired:
+        allowed.update(RETIRED_SCOPE_KINDS)
+    if any(kind not in allowed for kind in kinds):
         _raise(MALFORMED)
     if any(unit_kind not in UNIT_KINDS for unit_kind in unit_kinds):
         _raise(MALFORMED)
     return {
-        "kinds": list(kinds),
+        # Read migration only: old stored policies may name the retired seal
+        # worker. Drop that inert scope entry without re-advertising it or
+        # accepting it on new writes.
+        "kinds": [kind for kind in kinds if kind not in RETIRED_SCOPE_KINDS],
         "unit_kinds": list(unit_kinds),
     }
 
@@ -130,7 +137,7 @@ def _validate_contract(contract):
     }
 
 
-def validate_policy_value(policy, policy_id=None):
+def validate_policy_value(policy, policy_id=None, allow_retired=False):
     """Return a serialization-stable policy value or raise.
 
     ``policy_id`` is the id derived from the ``policy:<id>`` key when reading.
@@ -152,7 +159,9 @@ def validate_policy_value(policy, policy_id=None):
         "id": validated_id,
         "version": policy["version"],
         "enabled": policy["enabled"],
-        "scope": _validate_scope(policy["scope"]),
+        "scope": _validate_scope(
+            policy["scope"], allow_retired=allow_retired
+        ),
         "prompt": policy["prompt"],
         "contract": _validate_contract(policy["contract"]),
     }
@@ -195,7 +204,9 @@ class PolicyStore:
         if not record["exists?"]:
             return _err(UNKNOWN)
         try:
-            return _ok(validate_policy_value(record["value"], policy_id=policy_id))
+            return _ok(validate_policy_value(
+                record["value"], policy_id=policy_id, allow_retired=True
+            ))
         except PolicyValidationError:
             return _err(MALFORMED)
 
@@ -226,7 +237,10 @@ class PolicyStore:
                 continue
             try:
                 policies.append(
-                    validate_policy_value(record["value"], policy_id=policy_id)
+                    validate_policy_value(
+                        record["value"], policy_id=policy_id,
+                        allow_retired=True,
+                    )
                 )
             except PolicyValidationError:
                 return _err(MALFORMED)

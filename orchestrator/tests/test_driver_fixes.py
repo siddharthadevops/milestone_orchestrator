@@ -2,12 +2,10 @@
 review/fix-separation redesign.
 
 Covers, per finding:
-- concurrent seal never passes with a crashed/missing half, and failure
-  recording happens exactly once, from the main thread;
 - milestone_closed is recorded exactly once, and re-running a finished
   state appends nothing;
 - worker protocol failures persist the raw outputs of both attempts;
-- tool-cache writes by read-only seal halves do not invalidate the half
+- tool-cache writes by read-only reviewers do not invalidate the round
   (defaults + snapshot_exclude_dirs config);
 - verify-fix attempt caps are per verification stage (verification
   failures queue a synthetic V1 finding for a fix_findings episode);
@@ -48,9 +46,7 @@ def make_config(**overrides):
         "verification": [],
         "verification_timeout": 60,
         "max_rounds_per_family": 6,
-        "max_seal_attempts": 4,
         "max_verify_fix_attempts": 2,
-        "seal_concurrent": False,
         "acts": {"skeletoner": "codex", "fixer": "codex", "delta_review": "codex",
                  "consultation": "opposite"},
         "max_fix_loops": 4,
@@ -143,17 +139,15 @@ def draft_skeleton_step(slices=None):
     )
 
 
-def clean_reviews_and_seal():
+def clean_reviews():
     return [
         step("review_round", clean(), family="codex"),
         step("review_round", clean(), family="claude"),
-        step("seal_half", ok("seal_half", findings=[]), family="codex"),
-        step("seal_half", ok("seal_half", findings=[]), family="claude"),
     ]
 
 
 def skeleton_script():
-    return [draft_skeleton_step()] + clean_reviews_and_seal()
+    return [draft_skeleton_step()] + clean_reviews()
 
 
 def doc_script():
@@ -163,7 +157,7 @@ def doc_script():
             ok("draft_slice_note", artifact="docs/slice-01.md"),
             family="codex",
         ),
-    ] + clean_reviews_and_seal()
+    ] + clean_reviews()
 
 
 def impl_script():
@@ -173,7 +167,7 @@ def impl_script():
             ok("implement", files_changed=["calculator.py"]),
             family="codex",
         ),
-    ] + clean_reviews_and_seal()
+    ] + clean_reviews()
 
 
 class DriverTestCase(unittest.TestCase):
@@ -205,45 +199,6 @@ class DriverTestCase(unittest.TestCase):
             driver.step()
             self.assertIsInstance(drv.decide(driver.state), drv.Action)
         self.fail("predicate never satisfied within %d steps" % max_steps)
-
-
-class FamilyRunner(object):
-    """Thread-safe scripted runner keyed by (family, kind).
-
-    MockRunner consumes an ordered script, which is racy under the
-    concurrent seal (both halves pop the same queue in nondeterministic
-    order); this runner is stateless per call and safe for threads.
-    """
-
-    def __init__(self, responses, exceptions=None):
-        self.responses = dict(responses)
-        self.exceptions = dict(exceptions or {})
-        self.calls = []
-
-    def call(self, family, prompt, workspace, model=None, effort=None):
-        kind = runners.prompt_kind(prompt)
-        self.calls.append((family, kind))
-        key = (family, kind)
-        if key in self.exceptions:
-            raise self.exceptions[key]
-        resp = self.responses[key]
-        text = resp if isinstance(resp, str) else json.dumps(resp)
-        return runners.RunnerResult(text, 0, 0.01)
-
-
-def concurrent_responses(codex_half, claude_half):
-    """Responses for a full skeleton unit under seal_concurrent."""
-    return {
-        ("codex", "draft_skeleton"): ok(
-            "draft_skeleton",
-            artifact="docs/skeleton.md",
-            slices=[{"id": 1, "title": "core"}],
-        ),
-        ("codex", "review_round"): clean(),
-        ("claude", "review_round"): clean(),
-        ("codex", "seal_half"): codex_half,
-        ("claude", "seal_half"): claude_half,
-    }
 
 
 class _FailingRunner(object):
@@ -411,87 +366,6 @@ class TestTypedInfraFailures(DriverTestCase):
             self.assertIsNotNone(state["failure"]["resume_at"])
 
 
-class TestConcurrentSeal(DriverTestCase):
-    def test_happy_path_records_both_halves(self):
-        with tempfile.TemporaryDirectory(prefix="orch-fix-") as ws:
-            path = init_state(ws, make_config(seal_concurrent=True))
-            runner = FamilyRunner(concurrent_responses(
-                ok("seal_half", findings=[]), ok("seal_half", findings=[]),
-            ))
-            driver = drv.Driver(path, runner=runner)
-            self.step_until(
-                driver, lambda s: s["units"][0]["status"] == st.U_SEALED
-            )
-            state = st.load(path)
-            seal = state["units"][0]["seals"][0]
-            self.assertTrue(seal["passed"])
-            self.assertEqual(set(seal["halves"].keys()), {"codex", "claude"})
-
-    def test_crashed_half_fails_run_instead_of_sealing(self):
-        """P1: a worker thread dying on an unexpected exception used to
-        leave halves incomplete and all() over the survivors sealed the
-        unit on one half (or zero). Now any crashed half fails the run."""
-        with tempfile.TemporaryDirectory(prefix="orch-fix-") as ws:
-            path = init_state(ws, make_config(seal_concurrent=True))
-            runner = FamilyRunner(
-                concurrent_responses(
-                    ok("seal_half", findings=[]),
-                    ok("seal_half", findings=[]),
-                ),
-                exceptions={
-                    ("claude", "seal_half"): RuntimeError("boom-claude"),
-                },
-            )
-            driver = drv.Driver(path, runner=runner)
-            _actions, final = self.drive(driver)
-            self.assertEqual(final.type, drv.A_FAILED)
-
-            state = st.load(path)
-            self.assertIsNotNone(state["failure"])
-            self.assertIn("crashed", state["failure"]["reason"])
-            self.assertIn("boom-claude", state["failure"]["reason"])
-            unit = state["units"][0]
-            self.assertEqual(unit["status"], st.U_FAILED)
-            self.assertEqual(unit["seals"], [],
-                             "no seal attempt may be recorded from a "
-                             "partial set of halves")
-            run_failed = [
-                e for e in state["events"] if e["type"] == "run_failed"
-            ]
-            self.assertEqual(len(run_failed), 1)
-
-    def test_both_halves_blocked_records_failure_exactly_once(self):
-        """P2: both halves failing used to fail_run+save from both worker
-        threads: duplicate run_failed events, clashing seqs, one reason
-        overwriting the other. Now the main thread records once, with
-        both reasons."""
-        with tempfile.TemporaryDirectory(prefix="orch-fix-") as ws:
-            path = init_state(ws, make_config(seal_concurrent=True))
-            runner = FamilyRunner(concurrent_responses(
-                {"status": "blocked", "kind": "seal_half",
-                 "blocked_reason": "blocked-codex"},
-                {"status": "blocked", "kind": "seal_half",
-                 "blocked_reason": "blocked-claude"},
-            ))
-            driver = drv.Driver(path, runner=runner)
-            _actions, final = self.drive(driver)
-            self.assertEqual(final.type, drv.A_FAILED)
-
-            state = st.load(path)
-            reason = state["failure"]["reason"]
-            self.assertIn("blocked-codex", reason)
-            self.assertIn("blocked-claude", reason)
-            run_failed = [
-                e for e in state["events"] if e["type"] == "run_failed"
-            ]
-            self.assertEqual(len(run_failed), 1)
-            # Event history is single-writer: seqs are exactly 0..n-1.
-            self.assertEqual(
-                [e["seq"] for e in state["events"]],
-                list(range(len(state["events"]))),
-            )
-
-
 class TestPauseAfterSeal(DriverTestCase):
     """Operator safe pause: with control.json's stop_after_seal set, the
     run loop exits cleanly (code 4) right after the next unit seals — the
@@ -607,15 +481,13 @@ class TestProtocolFailureRawOutputs(DriverTestCase):
 
 
 class TestSnapshotCacheExclusions(DriverTestCase):
-    def _drive_seal_with_side_effect(self, ws, config, side_effect):
+    def _drive_review_with_side_effect(self, ws, config, side_effect):
         path = init_state(ws, config)
         mock = runners.MockRunner([
             draft_skeleton_step(),
-            step("review_round", clean(), family="codex"),
+            step("review_round", clean(), family="codex",
+                 side_effect=side_effect),
             step("review_round", clean(), family="claude"),
-            step("seal_half", ok("seal_half", findings=[]),
-                 family="codex", side_effect=side_effect),
-            step("seal_half", ok("seal_half", findings=[]), family="claude"),
         ])
         driver = drv.Driver(path, runner=mock)
         self.step_until(
@@ -624,9 +496,8 @@ class TestSnapshotCacheExclusions(DriverTestCase):
         self.assertEqual(mock.script, [])
         return st.load(path)
 
-    def test_pytest_cache_write_does_not_invalidate_half(self):
-        """P2: a read-only seal half is told to base claims on test runs;
-        the pytest cache it writes must not burn a seal attempt."""
+    def test_pytest_cache_write_does_not_invalidate_round(self):
+        """A reviewer's test cache must not invalidate its clean round."""
         def write_cache(workspace):
             d = os.path.join(workspace, ".pytest_cache", "v", "cache")
             os.makedirs(d)
@@ -635,13 +506,12 @@ class TestSnapshotCacheExclusions(DriverTestCase):
                 fh.write("{}")
 
         with tempfile.TemporaryDirectory(prefix="orch-fix-") as ws:
-            state = self._drive_seal_with_side_effect(
+            state = self._drive_review_with_side_effect(
                 ws, make_config(), write_cache
             )
-            seal = state["units"][0]["seals"][0]
-            self.assertTrue(seal["passed"])
-            self.assertIsNone(seal["invalidated"])
-            self.assertFalse(seal["halves"]["codex"]["workspace_modified"])
+            unit = state["units"][0]
+            self.assertEqual(unit["status"], st.U_SEALED)
+            self.assertNotIn("invalidated", unit["rounds"][0])
 
     def test_snapshot_exclude_dirs_config_is_honored(self):
         def write_custom_cache(workspace):
@@ -651,14 +521,14 @@ class TestSnapshotCacheExclusions(DriverTestCase):
                 fh.write("cache")
 
         with tempfile.TemporaryDirectory(prefix="orch-fix-") as ws:
-            state = self._drive_seal_with_side_effect(
+            state = self._drive_review_with_side_effect(
                 ws,
                 make_config(snapshot_exclude_dirs=[".mytool_cache"]),
                 write_custom_cache,
             )
-            seal = state["units"][0]["seals"][0]
-            self.assertTrue(seal["passed"])
-            self.assertIsNone(seal["invalidated"])
+            unit = state["units"][0]
+            self.assertEqual(unit["status"], st.U_SEALED)
+            self.assertNotIn("invalidated", unit["rounds"][0])
 
 
 class TestVerifyFixCapPerStage(DriverTestCase):
@@ -666,7 +536,7 @@ class TestVerifyFixCapPerStage(DriverTestCase):
     # 3 and 5. Counter lives in the workspace; deterministic because
     # verification runs are strictly sequential.
     VER_CMD = (
-        "python3 -c \"import os,sys; p='vcount'; "
+        "python3 -c \"import os,sys; p='.orchestrator/vcount'; "
         "n=int(open(p).read()) if os.path.exists(p) else 0; n+=1; "
         "open(p,'w').write(str(n)); sys.exit(0 if n in (3,5) else 1)\""
     )
@@ -694,10 +564,6 @@ class TestVerifyFixCapPerStage(DriverTestCase):
                 step("review_round", clean(), family="claude"),
                 # pre-seal: one failing episode of its own
                 step("fix_findings", fix_fixed("V1"), family="codex"),
-                step("seal_half", ok("seal_half", findings=[]),
-                     family="codex"),
-                step("seal_half", ok("seal_half", findings=[]),
-                     family="claude"),
             ])
             driver = drv.Driver(path, runner=mock)
             # With the old cumulative counter the run FAILED at the first
@@ -769,10 +635,6 @@ class TestSkeletonSlicePlanUpdate(DriverTestCase):
                 ),
                 step("review_round", clean(), family="codex"),
                 step("review_round", clean(), family="claude"),
-                step("seal_half", ok("seal_half", findings=[]),
-                     family="codex"),
-                step("seal_half", ok("seal_half", findings=[]),
-                     family="claude"),
             ])
             driver = drv.Driver(path, runner=mock)
             self.step_until(

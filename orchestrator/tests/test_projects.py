@@ -164,6 +164,12 @@ class TestPolicyValidation(ProjectStoreTestCase):
                 with self.assertRaises(projects.PolicyValidationError):
                     self.store.put(policy)
 
+    def test_new_policy_rejects_retired_seal_worker_scope(self):
+        policy = valid_policy("retired-new")
+        policy["scope"]["kinds"] = ["seal_half"]
+        with self.assertRaises(projects.PolicyValidationError):
+            self.store.put(policy)
+
     def test_contract_envelope_is_structural_only(self):
         accepted = valid_policy("unknown-check-kind")
         accepted["contract"]["checks"] = [{"kind": "not_slice_three_vocabulary"}]
@@ -210,6 +216,31 @@ class TestPolicyValidation(ProjectStoreTestCase):
 
 
 class TestPolicyStore(ProjectStoreTestCase):
+    def test_stored_retired_scope_is_read_migrated_without_reactivation(self):
+        mixed = valid_policy("mixed-old")
+        mixed["scope"]["kinds"] = [
+            contracts.KIND_REVIEW_ROUND, "seal_half"
+        ]
+        seal_only = valid_policy("seal-only-old")
+        seal_only["scope"]["kinds"] = ["seal_half"]
+        self.store.envelopes.put(self.key("mixed-old"), mixed)
+        self.store.envelopes.put(self.key("seal-only-old"), seal_only)
+
+        listed = self.store.list_policies()
+        self.assertTrue(listed.ok)
+        by_id = {policy["id"]: policy for policy in listed.value}
+        self.assertEqual(
+            by_id["mixed-old"]["scope"]["kinds"],
+            [contracts.KIND_REVIEW_ROUND],
+        )
+        self.assertEqual(by_id["seal-only-old"]["scope"]["kinds"], [])
+
+        matched = self.store.in_scope(
+            contracts.KIND_REVIEW_ROUND, state.UNIT_SKELETON
+        )
+        self.assertTrue(matched.ok)
+        self.assertEqual([p["id"] for p in matched.value], ["mixed-old"])
+
     def test_read_reports_unknown_and_malformed_without_repairing(self):
         self.assertEqual(self.store.read("missing").reason, projects.UNKNOWN)
 

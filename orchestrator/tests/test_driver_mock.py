@@ -11,11 +11,8 @@ repository.
 Covers here:
   (a) the full happy lifecycle mirroring the calculator fake-LLM scenario
       (unit sequence, statuses, exact round kind/id sequences including
-      fix_findings and delta_review records, seal records, gate_commit
+      fix_findings and delta_review records, derived seal records, gate_commit
       fields, ledgers, milestone closed);
-  (e) seal findings from BOTH halves merged with family-prefixed ids;
-  (h) seal-half tampering: attempt invalidated, workspace restored, next
-      attempt runs;
   (i) fixer coverage violation / rejected-without-consultation protocol
       failure / unknown adjudication_ref / unknown contests reference;
   (l) git-disabled legacy path (fix returns directly, no delta/amend);
@@ -64,9 +61,7 @@ def make_config(**overrides):
         "verification": [],
         "verification_timeout": 60,
         "max_rounds_per_family": 6,
-        "max_seal_attempts": 4,
         "max_verify_fix_attempts": 2,
-        "seal_concurrent": False,
         "git": {"enabled": True},
         "acts": {"skeletoner": "codex", "fixer": "codex", "delta_review": "codex",
                  "consultation": "opposite"},
@@ -111,7 +106,7 @@ def ok(kind, **extra):
 
 
 def report(kind, findings=()):
-    """A report-only response (review_round / delta_review / seal_half)."""
+    """A report-only response (review_round / delta_review)."""
     return ok(kind, findings=list(findings))
 
 
@@ -289,7 +284,7 @@ def skeleton_script():
     """codex finding -> fix -> delta clean -> codex clean; claude finding ->
     reject (consultation + prevention edit) -> delta clean; claude stubborn
     duplicate -> rejected_adjudicated by pointer (no edit, no delta call);
-    claude clean; double seal clean."""
+    claude clean; deterministic seal."""
     return [
         step(
             "draft_skeleton",
@@ -334,6 +329,7 @@ def skeleton_script():
                  "docs/skeleton.md",
                  "\nNote: operations are defined over floats.\n")),
         step("delta_review", report("delta_review"), family="codex"),
+        step("review_round", report("review_round"), family="codex"),
         step("review_round",
              report("review_round",
                     [finding("F1",
@@ -347,13 +343,11 @@ def skeleton_script():
                  adjudication_ref="skeleton-claude-r1/F1")]),
              family="codex"),
         step("review_round", report("review_round"), family="claude"),
-        step("seal_half", report("seal_half"), family="codex"),
-        step("seal_half", report("seal_half"), family="claude"),
     ]
 
 
 def doc_script():
-    """Slice note: clean everywhere, seal first try."""
+    """Slice note: both reviewers clean, then deterministic seal."""
     return [
         step(
             "draft_slice_note",
@@ -366,14 +360,12 @@ def doc_script():
         ),
         step("review_round", report("review_round"), family="codex"),
         step("review_round", report("review_round"), family="claude"),
-        step("seal_half", report("seal_half"), family="codex"),
-        step("seal_half", report("seal_half"), family="claude"),
     ]
 
 
 def impl_script():
     """div bug -> verification fails -> V1 fix episode; docstring round
-    finding -> fix; seal a1 claude README finding -> fix; seal a2 passes."""
+    finding -> fix; claude README finding -> fix; both reviewers then clean."""
     return [
         step(
             "implement",
@@ -414,24 +406,21 @@ def impl_script():
                  "    return a / b\n")),
         step("delta_review", report("delta_review"), family="codex"),
         step("review_round", report("review_round"), family="codex"),
-        step("review_round", report("review_round"), family="claude"),
-        # seal a1: claude half reports the missing README
-        step("seal_half", report("seal_half"), family="codex"),
-        step("seal_half",
-             report("seal_half",
+        step("review_round",
+             report("review_round",
                     [finding("S1",
                              "workspace lacks a README describing CLI usage")]),
              family="claude"),
         step("fix_findings",
              fix_ok([triaged(
-                 "claude-S1", "fixed",
-                 "[claude seal half] workspace lacks a README")],
+                 "S1", "fixed",
+                 "workspace lacks a README describing CLI usage")],
                  files_changed=["README.md"]),
              family="codex",
              side_effect=write_file("README.md", "# Calculator\n\nUsage.\n")),
         step("delta_review", report("delta_review"), family="codex"),
-        step("seal_half", report("seal_half"), family="codex"),
-        step("seal_half", report("seal_half"), family="claude"),
+        step("review_round", report("review_round"), family="codex"),
+        step("review_round", report("review_round"), family="claude"),
     ]
 
 
@@ -456,23 +445,27 @@ class TestHappyLifecycle(DriverTestCase):
                 # skeleton
                 [drv.A_DRAFT, drv.A_VERIFY,
                  drv.A_REVIEW_ROUND, drv.A_FIX, drv.A_DELTA_REVIEW,
+                 drv.A_VERIFY,
                  drv.A_REVIEW_ROUND,
                  drv.A_REVIEW_ROUND, drv.A_FIX, drv.A_DELTA_REVIEW,
-                 drv.A_REVIEW_ROUND, drv.A_FIX, drv.A_DELTA_REVIEW,
+                 drv.A_VERIFY,
+                 drv.A_REVIEW_ROUND, drv.A_REVIEW_ROUND,
+                 drv.A_FIX, drv.A_DELTA_REVIEW,
                  drv.A_REVIEW_ROUND,
-                 drv.A_VERIFY, drv.A_SEAL_ATTEMPT]
+                 drv.A_VERIFY]
                 # slice doc
                 + [drv.A_DRAFT, drv.A_VERIFY,
                    drv.A_REVIEW_ROUND, drv.A_REVIEW_ROUND,
-                   drv.A_VERIFY, drv.A_SEAL_ATTEMPT]
+                   drv.A_VERIFY]
                 # slice impl
                 + [drv.A_DRAFT, drv.A_VERIFY,
                    drv.A_FIX, drv.A_DELTA_REVIEW, drv.A_VERIFY,
                    drv.A_REVIEW_ROUND, drv.A_FIX, drv.A_DELTA_REVIEW,
+                   drv.A_VERIFY,
                    drv.A_REVIEW_ROUND, drv.A_REVIEW_ROUND,
-                   drv.A_VERIFY, drv.A_SEAL_ATTEMPT,
                    drv.A_FIX, drv.A_DELTA_REVIEW,
-                   drv.A_VERIFY, drv.A_SEAL_ATTEMPT]
+                   drv.A_VERIFY, drv.A_REVIEW_ROUND,
+                   drv.A_REVIEW_ROUND, drv.A_VERIFY]
             )
             self.assertEqual([a.type for a, _ in actions], expected_actions)
 
@@ -507,8 +500,9 @@ class TestHappyLifecycle(DriverTestCase):
                     ("skeleton-claude-r1", "review_round", "claude"),
                     ("skeleton-codex-r5", "fix_findings", "codex"),
                     ("skeleton-codex-r6", "delta_review", "codex"),
+                    ("skeleton-codex-r7", "review_round", "codex"),
                     ("skeleton-claude-r2", "review_round", "claude"),
-                    ("skeleton-codex-r7", "fix_findings", "codex"),
+                    ("skeleton-codex-r8", "fix_findings", "codex"),
                     ("skeleton-claude-r3", "review_round", "claude"),
                 ],
             )
@@ -529,6 +523,8 @@ class TestHappyLifecycle(DriverTestCase):
                     ("slice_impl-01-claude-r1", "review_round", "claude"),
                     ("slice_impl-01-codex-r7", "fix_findings", "codex"),
                     ("slice_impl-01-codex-r8", "delta_review", "codex"),
+                    ("slice_impl-01-codex-r9", "review_round", "codex"),
+                    ("slice_impl-01-claude-r2", "review_round", "claude"),
                 ],
             )
 
@@ -539,14 +535,14 @@ class TestHappyLifecycle(DriverTestCase):
                              "skeleton-codex-r1")
             self.assertEqual(fixes["skeleton-codex-r5"]["source_round_id"],
                              "skeleton-claude-r1")
-            self.assertEqual(fixes["skeleton-codex-r7"]["source_round_id"],
+            self.assertEqual(fixes["skeleton-codex-r8"]["source_round_id"],
                              "skeleton-claude-r2")
             self.assertEqual(fixes["slice_impl-01-codex-r1"]["source_round_id"],
                              "slice_impl-01-verify-pre_review-1")
             self.assertEqual(fixes["slice_impl-01-codex-r4"]["source_round_id"],
                              "slice_impl-01-codex-r3")
             self.assertEqual(fixes["slice_impl-01-codex-r7"]["source_round_id"],
-                             "slice_impl-01-seal-a1")
+                             "slice_impl-01-claude-r1")
 
             # Reviewer findings carry no disposition; fixer rounds carry
             # exactly the queued ids.
@@ -559,7 +555,7 @@ class TestHappyLifecycle(DriverTestCase):
             self.assertEqual(
                 [f["id"] for f in
                  fixes["slice_impl-01-codex-r7"]["result"]["findings"]],
-                ["claude-S1"],
+                ["S1"],
             )
 
             # Seal records complete on every unit.
@@ -568,30 +564,9 @@ class TestHappyLifecycle(DriverTestCase):
                 last = unit["seals"][-1]
                 self.assertTrue(last["passed"])
                 self.assertIsNone(last["invalidated"])
-                for seal in unit["seals"]:
-                    self.assertEqual(set(seal["halves"]), {"codex", "claude"})
-                    for half in seal["halves"].values():
-                        self.assertEqual(
-                            set(half.keys()),
-                            {"result", "raw_path", "duration_s",
-                             "workspace_modified", "model", "effort"},
-                        )
-                        self.assertEqual(half["result"]["kind"], "seal_half")
-                        self.assertFalse(half["workspace_modified"])
-                        self.assertTrue(
-                            os.path.exists(os.path.join(ws, half["raw_path"])),
-                            "raw output missing: %s" % half["raw_path"],
-                        )
+                self.assertEqual(len(unit["seals"]), 1)
+                self.assertEqual(unit["seals"][0]["halves"], {})
 
-            # Impl: a1 failed on the claude finding, a2 passed.
-            self.assertEqual(len(impl["seals"]), 2)
-            a1, a2 = impl["seals"]
-            self.assertEqual((a1["attempt"], a1["passed"], a1["invalidated"]),
-                             (1, False, None))
-            self.assertEqual(len(a1["halves"]["claude"]["result"]["findings"]), 1)
-            self.assertEqual(len(a1["halves"]["codex"]["result"]["findings"]), 0)
-            self.assertEqual((a2["attempt"], a2["passed"], a2["invalidated"]),
-                             (2, True, None))
             self.assertIsNotNone(impl["closed_record"])
             self.assertEqual(impl["closed_record"]["slice_id"], 1)
 
@@ -637,10 +612,10 @@ class TestHappyLifecycle(DriverTestCase):
             # and the per-stage counter reset on the pass.
             verifs = [e for e in state["events"] if e["type"] == "verification"]
             self.assertEqual([e["ok"] for e in verifs if e["unit"] == "skeleton"],
-                             [True, True])
+                             [True, True, True, True])
             self.assertEqual(
                 [e["ok"] for e in verifs if e["unit"] == "slice_impl-01"],
-                [False, True, True, True],
+                [False, True, True, True, True],
             )
             self.assertEqual(impl["verify_fix_attempts"],
                              {"pre_review": 0, "pre_seal": 0})
@@ -667,260 +642,6 @@ class TestHappyLifecycle(DriverTestCase):
             self.assertEqual(wips, ["skeleton", "slice_doc-01", "slice_impl-01"])
 
 
-# ---------------------------------------------------------------------------
-# (e) seal findings from both halves merged for the fixer
-
-
-class TestSealFindingsMerged(DriverTestCase):
-    def test_both_halves_merge_with_family_prefixed_ids(self):
-        with tempfile.TemporaryDirectory(prefix="orch-mock-") as ws:
-            path = init_state(ws, make_config())
-            mock = runners.MockRunner([
-                skeleton_script()[0],  # draft ok
-                step("review_round", report("review_round"), family="codex"),
-                step("review_round", report("review_round"), family="claude"),
-                # a1: BOTH halves report findings
-                step("seal_half",
-                     report("seal_half",
-                            [finding("S1", "missing usage docs")]),
-                     family="codex"),
-                step("seal_half",
-                     report("seal_half",
-                            [finding("S2", "missing error handling note")]),
-                     family="claude"),
-            ])
-            driver = drv.Driver(path, runner=mock)
-            self.step_until(
-                driver,
-                lambda s: (s["units"][0].get("fix_source") or {}).get("type")
-                == "seal",
-            )
-            unit = driver.state["units"][0]
-            self.assertEqual(unit["status"], st.U_FIXING)
-            self.assertEqual(
-                unit["fix_queue"],
-                [
-                    {"id": "codex-S1", "severity": "P3",
-                     "summary": "[codex seal half] missing usage docs",
-                     "validity": validity(True),
-                     "contests": None},
-                    {"id": "claude-S2", "severity": "P3",
-                     "summary": "[claude seal half] missing error handling note",
-                     "validity": validity(True),
-                     "contests": None},
-                ],
-            )
-            self.assertEqual(unit["fix_source"]["source_round_id"],
-                             "skeleton-seal-a1")
-            self.assertEqual(unit["fix_source"]["return_to"],
-                             st.U_PRE_SEAL_VERIFY)
-
-            # Continue: fixer covers exactly the merged ids, delta green,
-            # re-verify, second attempt passes.
-            mock.script.extend([
-                step("fix_findings",
-                     fix_ok([
-                         triaged("codex-S1", "fixed",
-                                 "[codex seal half] missing usage docs"),
-                         triaged("claude-S2", "fixed",
-                                 "[claude seal half] missing error handling"),
-                     ], files_changed=["docs/skeleton.md"]),
-                     family="codex",
-                     side_effect=append_file("docs/skeleton.md",
-                                             "\nUsage + error notes.\n")),
-                step("delta_review", report("delta_review"), family="codex"),
-                step("seal_half", report("seal_half"), family="codex"),
-                step("seal_half", report("seal_half"), family="claude"),
-            ])
-            self.step_until(driver,
-                            lambda s: s["units"][0]["status"] == st.U_SEALED)
-            self.assertEqual(mock.script, [])
-
-            state = st.load(path)
-            unit = state["units"][0]
-            a1, a2 = unit["seals"]
-            self.assertFalse(a1["passed"])
-            self.assertIsNone(a1["invalidated"])
-            self.assertTrue(a2["passed"])
-
-            # The fixer prompt carried both family-prefixed findings.
-            fix_calls = [c for c in mock.calls if c[1] == "fix_findings"]
-            self.assertEqual(len(fix_calls), 1)
-            prompt = fix_calls[0][2]
-            self.assertIn("codex-S1", prompt)
-            self.assertIn("claude-S2", prompt)
-            self.assertIn("[codex seal half] missing usage docs", prompt)
-            self.assertIn("[claude seal half] missing error handling note",
-                          prompt)
-
-            # Re-verify between the failed attempt and the passing one.
-            events = state["events"]
-            seal_idx = [i for i, e in enumerate(events)
-                        if e["type"] == "seal_attempt"]
-            self.assertEqual(len(seal_idx), 2)
-            verifs_between = [
-                e for e in events[seal_idx[0]:seal_idx[1]]
-                if e["type"] == "verification"
-                and e["stage"] == st.U_PRE_SEAL_VERIFY
-            ]
-            self.assertTrue(verifs_between,
-                            "no pre-seal re-verify before attempt 2")
-
-
-# ---------------------------------------------------------------------------
-# (h) seal half tampering
-
-
-class TestSealHalfTampering(DriverTestCase):
-    def test_tampering_half_invalidates_attempt_restores_and_retries(self):
-        with tempfile.TemporaryDirectory(prefix="orch-mock-") as ws:
-            path = init_state(ws, make_config())
-            mock = runners.MockRunner([
-                skeleton_script()[0],  # draft ok
-                step("review_round", report("review_round"), family="codex"),
-                step("review_round", report("review_round"), family="claude"),
-                # a1: codex half reports clean but EDITS the workspace
-                step("seal_half", report("seal_half"), family="codex",
-                     side_effect=write_file("tampered.txt", "sneaky\n")),
-                step("seal_half", report("seal_half"), family="claude"),
-                # a2: genuinely clean
-                step("seal_half", report("seal_half"), family="codex"),
-                step("seal_half", report("seal_half"), family="claude"),
-            ])
-            driver = drv.Driver(path, runner=mock)
-            self.step_until(driver,
-                            lambda s: s["units"][0]["status"] == st.U_SEALED)
-            self.assertEqual(mock.script, [])
-
-            # The workspace was mechanically restored.
-            self.assertFalse(os.path.exists(os.path.join(ws, "tampered.txt")))
-
-            state = st.load(path)
-            unit = state["units"][0]
-            self.assertEqual(len(unit["seals"]), 2)
-            a1, a2 = unit["seals"]
-            self.assertFalse(a1["passed"])
-            self.assertIn("seal half codex modified the workspace",
-                          a1["invalidated"])
-            self.assertTrue(a1["halves"]["codex"]["workspace_modified"])
-            self.assertFalse(a1["halves"]["claude"]["workspace_modified"])
-            self.assertEqual(a1["halves"]["codex"]["result"]["findings"], [])
-            self.assertTrue(a2["passed"])
-            self.assertIsNone(a2["invalidated"])
-
-            # The unit stayed in U_SEALING between attempts (no fix episode,
-            # no re-verify: the invalidated attempt is retried wholesale).
-            transitions = [
-                (e["from_status"], e["to_status"])
-                for e in state["events"]
-                if e["type"] == "unit_transition" and e["unit"] == "skeleton"
-            ]
-            self.assertEqual(
-                transitions.count((st.U_SEALING, st.U_SEALED)), 1)
-            self.assertNotIn((st.U_SEALING, st.U_FIXING), transitions)
-            self.assertNotIn(
-                "fix_findings", [r["kind"] for r in unit["rounds"]])
-
-
-# ---------------------------------------------------------------------------
-# (i) fixer protocol enforcement
-
-
-class TestSealInFlightMarker(DriverTestCase):
-    """Seal halves must write the cosmetic in-flight marker
-    (.orchestrator/current.json) like every other worker call, so the
-    panel can show WHO is sealing and for how long — the double seal is
-    the longest phase and used to run with no live counter at all."""
-
-    def test_sequential_seal_halves_write_and_clear_marker(self):
-        import json as _json
-        with tempfile.TemporaryDirectory(prefix="orch-mock-") as ws:
-            cfg = make_config()
-            cfg["model_defaults"] = {
-                "codex": {"model": "gpt-5.6-sol", "effort": "high"},
-                "claude": {"model": "claude-fable-5", "effort": "medium"},
-            }
-            path = init_state(ws, cfg)
-            seen = []
-
-            def probe(workspace):
-                marker = os.path.join(
-                    workspace, ".orchestrator", "current.json")
-                try:
-                    with open(marker, "r", encoding="utf-8") as fh:
-                        seen.append(_json.load(fh))
-                except OSError:
-                    seen.append(None)
-
-            mock = runners.MockRunner([
-                skeleton_script()[0],
-                step("review_round", report("review_round"), family="codex"),
-                step("review_round", report("review_round"), family="claude"),
-                step("seal_half", report("seal_half"), family="codex",
-                     side_effect=probe),
-                step("seal_half", report("seal_half"), family="claude",
-                     side_effect=probe),
-            ])
-            driver = drv.Driver(path, runner=mock)
-            self.step_until(
-                driver, lambda s: s["units"][0]["status"] == st.U_SEALED)
-            self.assertEqual(mock.script, [])
-            self.assertEqual(len(seen), 2)
-            for rec in seen:
-                self.assertIsNotNone(
-                    rec, "no in-flight marker during a seal half")
-                self.assertEqual(rec["kind"], "seal_half")
-                self.assertIn("started_at", rec)
-            self.assertEqual([r["family"] for r in seen],
-                             ["codex", "claude"])
-            self.assertEqual([r["model"] for r in seen],
-                             ["gpt-5.6-sol", "claude-fable-5"])
-            self.assertEqual([r["effort"] for r in seen],
-                             ["high", "medium"])
-            # Cleared once the attempt is over.
-            self.assertFalse(os.path.exists(
-                os.path.join(ws, ".orchestrator", "current.json")))
-
-    def test_concurrent_seal_writes_attempt_level_marker(self):
-        import json as _json
-        with tempfile.TemporaryDirectory(prefix="orch-mock-") as ws:
-            path = init_state(ws, make_config(seal_concurrent=True))
-            seen = []
-
-            def probe(workspace):
-                marker = os.path.join(
-                    workspace, ".orchestrator", "current.json")
-                try:
-                    with open(marker, "r", encoding="utf-8") as fh:
-                        seen.append(_json.load(fh))
-                except OSError:
-                    seen.append(None)
-
-            mock = runners.MockRunner([
-                skeleton_script()[0],
-                step("review_round", report("review_round"), family="codex"),
-                step("review_round", report("review_round"), family="claude"),
-                step("seal_half", report("seal_half"), family="codex",
-                     side_effect=probe),
-                step("seal_half", report("seal_half"), family="claude",
-                     side_effect=probe),
-            ])
-            driver = drv.Driver(path, runner=mock)
-            self.step_until(
-                driver, lambda s: s["units"][0]["status"] == st.U_SEALED)
-            self.assertEqual(len(seen), 2)
-            for rec in seen:
-                self.assertIsNotNone(
-                    rec, "no in-flight marker during concurrent seal")
-                self.assertEqual(rec["kind"], "seal_half")
-                # Attempt-level marker: one record for both halves, no
-                # per-family attribution (threads must not race on it).
-                self.assertIsNone(rec["family"])
-                self.assertIsNone(rec["model"])
-            self.assertFalse(os.path.exists(
-                os.path.join(ws, ".orchestrator", "current.json")))
-
-
 class TestOperatorAmendmentsFlow(DriverTestCase):
     """Amendments dropped into .orchestrator/amendments.json mid-run reach
     every subsequent worker prompt and leave an amendment_seen ledger
@@ -941,15 +662,13 @@ class TestOperatorAmendmentsFlow(DriverTestCase):
                 skeleton_script()[0],
                 step("review_round", report("review_round"), family="codex"),
                 step("review_round", report("review_round"), family="claude"),
-                step("seal_half", report("seal_half"), family="codex"),
-                step("seal_half", report("seal_half"), family="claude"),
             ])
             driver = drv.Driver(path, runner=mock)
             self.step_until(
                 driver, lambda s: s["units"][0]["status"] == st.U_SEALED)
             self.assertEqual(mock.script, [])
             # Every worker prompt carried the amendment.
-            self.assertEqual(len(mock.calls), 5)
+            self.assertEqual(len(mock.calls), 3)
             for _fam, _kind, prompt in mock.calls:
                 self.assertIn("OPERATOR AMENDMENTS", prompt)
                 self.assertIn("No hot-path changes.", prompt)
@@ -1014,7 +733,7 @@ class TestSuiteDiscoveryProtocol(DriverTestCase):
             # Reviewers of the impl unit are told the machine ran the
             # suite; doc reviewers are not.
             for fam, kind, prompt in mock.calls:
-                if kind in ("review_round", "seal_half"):
+                if kind == "review_round":
                     has = "VERIFICATION STATUS" in prompt
                     if "slice 1 implementation" in prompt:
                         self.assertTrue(has, kind)
@@ -1247,7 +966,7 @@ class TestActProfiles(DriverTestCase):
             self.assertEqual((meta["model"], meta["effort"]),
                              ("opus", "max"))
 
-    def test_each_review_family_has_its_own_model_for_rounds_and_seals(self):
+    def test_each_review_family_has_its_own_model(self):
         with tempfile.TemporaryDirectory(prefix="orch-mock-") as ws:
             cfg = make_config()
             cfg["acts"] = dict(cfg["acts"])
@@ -1268,8 +987,6 @@ class TestActProfiles(DriverTestCase):
                 skeleton_script()[0],
                 step("review_round", report("review_round"), family="codex"),
                 step("review_round", report("review_round"), family="claude"),
-                step("seal_half", report("seal_half"), family="codex"),
-                step("seal_half", report("seal_half"), family="claude"),
             ])
             driver = drv.Driver(path, runner=mock)
             self.step_until(driver,
@@ -1280,17 +997,16 @@ class TestActProfiles(DriverTestCase):
                 for (family, kind, _prompt), meta
                 in zip(mock.calls, mock.call_meta)
             }
-            for kind in ("review_round", "seal_half"):
-                self.assertEqual(
-                    (by_call[("codex", kind)]["model"],
-                     by_call[("codex", kind)]["effort"]),
-                    ("gpt-5.6-terra", "high"),
-                )
-                self.assertEqual(
-                    (by_call[("claude", kind)]["model"],
-                     by_call[("claude", kind)]["effort"]),
-                    ("claude-sonnet-5", "medium"),
-                )
+            self.assertEqual(
+                (by_call[("codex", "review_round")]["model"],
+                 by_call[("codex", "review_round")]["effort"]),
+                ("gpt-5.6-terra", "high"),
+            )
+            self.assertEqual(
+                (by_call[("claude", "review_round")]["model"],
+                 by_call[("claude", "review_round")]["effort"]),
+                ("claude-sonnet-5", "medium"),
+            )
 
             unit = st.load(path)["units"][0]
             reviews = [r for r in unit["rounds"]
@@ -1300,9 +1016,7 @@ class TestActProfiles(DriverTestCase):
                 [("codex", "gpt-5.6-terra", "high"),
                  ("claude", "claude-sonnet-5", "medium")],
             )
-            halves = unit["seals"][0]["halves"]
-            self.assertEqual(halves["codex"]["model"], "gpt-5.6-terra")
-            self.assertEqual(halves["claude"]["effort"], "medium")
+            self.assertEqual(unit["seals"][0]["halves"], {})
 
     def test_hot_review_model_rebinds_the_next_delta_review(self):
         import json as _json
@@ -1518,7 +1232,7 @@ class TestFixerProtocolFailures(DriverTestCase):
 
 
 class TestGitDisabledLegacyPath(DriverTestCase):
-    def test_fix_episode_returns_directly_without_delta_or_amend(self):
+    def test_fix_episode_restarts_reviews_without_delta_or_amend(self):
         with tempfile.TemporaryDirectory(prefix="orch-mock-") as ws:
             path = init_state(ws, make_config(git={"enabled": False}))
             mock = runners.MockRunner([
@@ -1536,8 +1250,6 @@ class TestGitDisabledLegacyPath(DriverTestCase):
                                              "\n## Non-goals\n")),
                 step("review_round", report("review_round"), family="codex"),
                 step("review_round", report("review_round"), family="claude"),
-                step("seal_half", report("seal_half"), family="codex"),
-                step("seal_half", report("seal_half"), family="claude"),
             ])
             driver = drv.Driver(path, runner=mock)
             self.step_until(driver,
@@ -1561,8 +1273,9 @@ class TestGitDisabledLegacyPath(DriverTestCase):
                 for e in state["events"]
                 if e["type"] == "unit_transition" and e["unit"] == "skeleton"
             ]
-            # The fix episode went straight back to rounds.
-            self.assertIn((st.U_FIXING, st.U_ROUNDS), transitions)
+            # Without Git there is no delta artefact, but changed bytes still
+            # invalidate prior approvals and restart mechanical verification.
+            self.assertIn((st.U_FIXING, st.U_PRE_REVIEW_VERIFY), transitions)
             self.assertNotIn(
                 st.U_DELTA_REVIEW,
                 [t for pair in transitions for t in pair],
@@ -1642,8 +1355,6 @@ class TestResume(DriverTestCase):
                 step("delta_review", report("delta_review"), family="codex"),
                 step("review_round", report("review_round"), family="codex"),
                 step("review_round", report("review_round"), family="claude"),
-                step("seal_half", report("seal_half"), family="codex"),
-                step("seal_half", report("seal_half"), family="claude"),
             ] + doc_script() + [
                 step("implement",
                      ok("implement", files_changed=["calculator.py"]),
@@ -1653,8 +1364,6 @@ class TestResume(DriverTestCase):
                                             "    return a / b\n")),
                 step("review_round", report("review_round"), family="codex"),
                 step("review_round", report("review_round"), family="claude"),
-                step("seal_half", report("seal_half"), family="codex"),
-                step("seal_half", report("seal_half"), family="claude"),
             ])
             driver2 = drv.Driver(path, runner=mock2)
             _actions, final = self.drive(driver2)

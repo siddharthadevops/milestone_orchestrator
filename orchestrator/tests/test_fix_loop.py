@@ -5,7 +5,7 @@ test_driver_mock).
 
 Covers here:
   (b) dirty review -> fixer -> dirty delta -> fixer again (SAME episode)
-      -> green delta -> amend -> same family reviews next; family advance
+      -> green delta -> amend -> reviews restart from Codex; family advance
       only on clean rounds;
   (c) fix-loop cap -> run failed with the 'fix episode' explanation;
   (d) verification failure -> synthetic V1 queued -> fixer -> delta green
@@ -57,7 +57,49 @@ def draft_step():
 
 
 class TestFixLoopSameEpisode(DriverTestCase):
-    def test_dirty_delta_loops_back_to_fixer_then_same_family_reviews(self):
+    def test_candidate_change_grants_each_family_a_fresh_round_budget(self):
+        with tempfile.TemporaryDirectory(prefix="orch-mock-") as ws:
+            path = init_state(ws, make_config(max_rounds_per_family=1))
+            mock = runners.MockRunner([
+                draft_step(),
+                step("review_round", report("review_round"), family="codex"),
+                step(
+                    "review_round",
+                    report("review_round", [finding("F1", "later defect")]),
+                    family="claude",
+                ),
+                step(
+                    "fix_findings",
+                    fix_ok(
+                        [triaged("F1", "fixed", "later defect")],
+                        files_changed=["docs/skeleton.md"],
+                    ),
+                    family="codex",
+                    side_effect=append_file("docs/skeleton.md", "\nfixed\n"),
+                ),
+                step("delta_review", report("delta_review"), family="codex"),
+                # The old reviews belong to the obsolete candidate.  Even
+                # with a one-round cap, both families get one fresh look.
+                step("review_round", report("review_round"), family="codex"),
+                step("review_round", report("review_round"), family="claude"),
+            ])
+            driver = drv.Driver(path, runner=mock)
+            self.step_until(
+                driver,
+                lambda state: state["units"][0]["status"] == st.U_SEALED,
+            )
+            self.assertEqual(mock.script, [])
+            self.assertIsNone(driver.state["failure"])
+            self.assertEqual(
+                [
+                    call[0]
+                    for call in mock.calls
+                    if call[1] == "review_round"
+                ],
+                ["codex", "claude", "codex", "claude"],
+            )
+
+    def test_dirty_delta_loops_then_restarts_reviews_from_codex(self):
         with tempfile.TemporaryDirectory(prefix="orch-mock-") as ws:
             path = init_state(ws, make_config())
             mock = runners.MockRunner([
@@ -89,11 +131,10 @@ class TestFixLoopSameEpisode(DriverTestCase):
                      side_effect=append_file("docs/skeleton.md",
                                              "\n(with unit tests)\n")),
                 step("delta_review", report("delta_review"), family="codex"),
-                # Back to ROUNDS with the SAME family (codex never went clean).
+                # Changed bytes invalidate all prior approvals, so the full
+                # review cycle restarts from Codex.
                 step("review_round", report("review_round"), family="codex"),
                 step("review_round", report("review_round"), family="claude"),
-                step("seal_half", report("seal_half"), family="codex"),
-                step("seal_half", report("seal_half"), family="claude"),
             ])
             driver = drv.Driver(path, runner=mock)
             self.step_until(driver,
@@ -152,13 +193,17 @@ class TestFixLoopSameEpisode(DriverTestCase):
             self.assertEqual(
                 transitions.count((st.U_FIXING, st.U_DELTA_REVIEW)), 2)
             self.assertEqual(
-                transitions.count((st.U_DELTA_REVIEW, st.U_ROUNDS)), 1)
+                transitions.count(
+                    (st.U_DELTA_REVIEW, st.U_PRE_REVIEW_VERIFY)
+                ),
+                1,
+            )
             # One green episode => exactly one amend.
             self.assertEqual(
                 len([e for e in state["events"] if e["type"] == "amended"]), 1)
 
-            # The review round AFTER the episode ran with the same family
-            # (codex); family advance happened only on the clean rounds.
+            # The review round AFTER the episode restarted with Codex;
+            # family advance happened only on the clean rounds.
             review_families = [
                 c[0] for c in mock.calls if c[1] == "review_round"
             ]
@@ -178,7 +223,7 @@ class TestFixLoopSameEpisode(DriverTestCase):
 
 
 class TestDeltaFullReviewCheckpoint(DriverTestCase):
-    def test_second_fix_skips_delta_and_same_claude_reviewer_continues(self):
+    def test_second_fix_skips_delta_and_restarts_reviews_from_codex(self):
         self.assertEqual(drv.DEFAULT_CONFIG["delta_full_review_after_fixes"], 5)
         with tempfile.TemporaryDirectory(prefix="orch-mock-") as ws:
             path = init_state(
@@ -217,11 +262,10 @@ class TestDeltaFullReviewCheckpoint(DriverTestCase):
                     family="codex",
                     side_effect=append_file("docs/skeleton.md", "\nfix2\n"),
                 ),
-                # No second delta call: fix #2 is amended and Claude performs
-                # the whole-commit review that would normally follow F0.
+                # No second delta call: fix #2 is amended and the changed
+                # candidate is reviewed afresh from the first family.
+                step("review_round", report("review_round"), family="codex"),
                 step("review_round", report("review_round"), family="claude"),
-                step("seal_half", report("seal_half"), family="codex"),
-                step("seal_half", report("seal_half"), family="claude"),
             ])
             driver = drv.Driver(path, runner=mock)
             self.step_until(
@@ -251,12 +295,12 @@ class TestDeltaFullReviewCheckpoint(DriverTestCase):
                 [
                     "draft_skeleton", "review_round", "review_round",
                     "fix_findings", "delta_review", "fix_findings",
-                    "review_round", "seal_half", "seal_half",
+                    "review_round", "review_round",
                 ],
             )
             self.assertEqual(
                 [call[0] for call in mock.calls if call[1] == "review_round"],
-                ["codex", "claude", "claude"],
+                ["codex", "claude", "codex", "claude"],
             )
             deltas = [
                 round_ for round_ in unit["rounds"]
@@ -271,8 +315,10 @@ class TestDeltaFullReviewCheckpoint(DriverTestCase):
             self.assertEqual(len(checkpoint), 1)
             self.assertEqual(checkpoint[0]["fixes"], 2)
             self.assertEqual(checkpoint[0]["dirty_deltas"], 1)
-            self.assertEqual(checkpoint[0]["return_to"], st.U_ROUNDS)
-            self.assertEqual(checkpoint[0]["review_family"], "claude")
+            self.assertEqual(
+                checkpoint[0]["return_to"], st.U_PRE_REVIEW_VERIFY
+            )
+            self.assertEqual(checkpoint[0]["review_family"], "codex")
             self.assertEqual(
                 len([e for e in state["events"] if e["type"] == "amended"]),
                 1,
@@ -280,7 +326,7 @@ class TestDeltaFullReviewCheckpoint(DriverTestCase):
 
     def test_verification_episode_keeps_real_delta_review(self):
         # The bypass is safe only when an active whole-commit reviewer will
-        # immediately take over. Verification/seal episodes keep real deltas.
+        # immediately take over. Verification episodes keep real deltas.
         with tempfile.TemporaryDirectory(prefix="orch-mock-") as ws:
             path = init_state(
                 ws,
@@ -362,10 +408,9 @@ class TestDeltaFullReviewCheckpoint(DriverTestCase):
                 ),
                 # After the checkpoint the redirect runs pre_review_verify
                 # (vacuous on a skeleton, which clears the flag), then the
-                # whole-commit review resumes with the active family.
+                # whole-commit review restarts from the first family.
+                step("review_round", report("review_round"), family="codex"),
                 step("review_round", report("review_round"), family="claude"),
-                step("seal_half", report("seal_half"), family="codex"),
-                step("seal_half", report("seal_half"), family="claude"),
             ])
             driver = drv.Driver(path, runner=mock)
             self.step_until(
@@ -407,66 +452,6 @@ class TestDeltaFullReviewCheckpoint(DriverTestCase):
                      if r["kind"] == "delta_review"]),
                 1,
             )
-
-    def test_checkpoint_fires_for_a_seal_episode(self):
-        # A seal that raises a finding opens a fix episode of origin_type
-        # "seal"; after N fixes it must checkpoint back to a full seal (via
-        # pre_seal_verify), not keep looping deltas. This is the path that,
-        # left unbounded, was the last place convergence could have fired.
-        # Threshold 2 (not 1) so a dirty delta REQUEUES first — proving the
-        # checkpoint keys off origin_type, which survives the requeue that
-        # rewrites fix_source["type"] to "delta".
-        with tempfile.TemporaryDirectory(prefix="orch-mock-") as ws:
-            path = init_state(
-                ws, make_config(delta_full_review_after_fixes=2)
-            )
-            mock = runners.MockRunner([
-                draft_step(),
-                step("review_round", report("review_round"), family="codex"),
-                step("review_round", report("review_round"), family="claude"),
-                # seal a1: codex clean, claude raises S1 -> seal fix episode.
-                step("seal_half", report("seal_half"), family="codex"),
-                step("seal_half",
-                     report("seal_half", [finding("S1", "seal defect")]),
-                     family="claude"),
-                step("fix_findings",
-                     fix_ok([triaged("claude-S1", "fixed", "seal defect")],
-                            files_changed=["docs/skeleton.md"]),
-                     family="codex",
-                     side_effect=append_file("docs/skeleton.md", "\nf1\n")),
-                # Dirty delta -> requeue D1 (fix_source["type"] becomes
-                # "delta", but origin_type stays "seal").
-                step("delta_review",
-                     report("delta_review", [finding("D1", "delta defect")]),
-                     family="codex"),
-                step("fix_findings",
-                     fix_ok([triaged("D1", "fixed", "delta defect")],
-                            files_changed=["docs/skeleton.md"]),
-                     family="codex",
-                     side_effect=append_file("docs/skeleton.md", "\nf2\n")),
-                # Fix #2 -> the checkpoint fires (no second delta call) and
-                # returns to the pre-seal gate; seal a2 is a fresh full seal.
-                step("seal_half", report("seal_half"), family="codex"),
-                step("seal_half", report("seal_half"), family="claude"),
-            ])
-            driver = drv.Driver(path, runner=mock)
-            self.step_until(
-                driver, lambda s: s["units"][0]["status"] == st.U_SEALED)
-            self.assertEqual(mock.script, [])
-            state = st.load(path)
-            checkpoint = [e for e in state["events"]
-                          if e["type"] == "delta_checkpoint"]
-            self.assertEqual(len(checkpoint), 1)
-            self.assertEqual(checkpoint[0]["fixes"], 2)
-            self.assertEqual(checkpoint[0]["return_to"], st.U_PRE_SEAL_VERIFY)
-            # Exactly one real delta ran (the dirty one); the second was the
-            # checkpoint, not another delta_review.
-            self.assertEqual(
-                len([r for r in state["units"][0]["rounds"]
-                     if r["kind"] == "delta_review"]),
-                1,
-            )
-
 
 # ---------------------------------------------------------------------------
 # (c) fix-loop cap
@@ -528,8 +513,6 @@ class TestVerificationFixEpisode(DriverTestCase):
                 step("delta_review", report("delta_review"), family="codex"),
                 step("review_round", report("review_round"), family="codex"),
                 step("review_round", report("review_round"), family="claude"),
-                step("seal_half", report("seal_half"), family="codex"),
-                step("seal_half", report("seal_half"), family="claude"),
             ])
             driver = drv.Driver(path, runner=mock)
 
@@ -656,8 +639,6 @@ class TestReviewRoundTampering(DriverTestCase):
                      side_effect=write_file("evil.txt", "reviewer edit\n")),
                 step("review_round", report("review_round"), family="codex"),
                 step("review_round", report("review_round"), family="claude"),
-                step("seal_half", report("seal_half"), family="codex"),
-                step("seal_half", report("seal_half"), family="claude"),
             ])
             driver = drv.Driver(path, runner=mock)
             self.step_until(driver,
@@ -738,8 +719,6 @@ class TestReviewRoundTampering(DriverTestCase):
                 step("review_round", report("review_round"), family="claude",
                      side_effect=write_file(
                          os.path.join("_build", "app.beam"), "recompiled\n")),
-                step("seal_half", report("seal_half"), family="codex"),
-                step("seal_half", report("seal_half"), family="claude"),
             ])
             driver = drv.Driver(path, runner=mock)
             self.step_until(driver,
@@ -764,8 +743,6 @@ class TestReviewRoundTampering(DriverTestCase):
                      side_effect=write_file("evil.txt", "reviewer edit\n")),
                 step("review_round", report("review_round"), family="codex"),
                 step("review_round", report("review_round"), family="claude"),
-                step("seal_half", report("seal_half"), family="codex"),
-                step("seal_half", report("seal_half"), family="claude"),
             ])
             driver = drv.Driver(path, runner=mock)
             self.step_until(driver,
@@ -851,6 +828,7 @@ class TestAdjudicationCircuit(DriverTestCase):
                      side_effect=append_file("docs/skeleton.md",
                                              "\nNote: floats supported.\n")),
                 step("delta_review", report("delta_review"), family="codex"),
+                step("review_round", report("review_round"), family="codex"),
                 # A later round re-raises WITH the registry id and genuinely
                 # new evidence: passes validation, reaches the fixer.
                 step("review_round",
@@ -869,9 +847,8 @@ class TestAdjudicationCircuit(DriverTestCase):
                      side_effect=append_file("docs/skeleton.md",
                                              "\nParser fixed for floats.\n")),
                 step("delta_review", report("delta_review"), family="codex"),
+                step("review_round", report("review_round"), family="codex"),
                 step("review_round", report("review_round"), family="claude"),
-                step("seal_half", report("seal_half"), family="codex"),
-                step("seal_half", report("seal_half"), family="claude"),
             ])
             driver = drv.Driver(path, runner=mock)
             self.step_until(driver,
@@ -979,9 +956,8 @@ class TestActsResolution(DriverTestCase):
                      family="codex",
                      side_effect=append_file("docs/skeleton.md", "\nfix2\n")),
                 step("delta_review", report("delta_review"), family="codex"),
+                step("review_round", report("review_round"), family="codex"),
                 step("review_round", report("review_round"), family="claude"),
-                step("seal_half", report("seal_half"), family="codex"),
-                step("seal_half", report("seal_half"), family="claude"),
             ])
             fix_delta_calls = [(c[1], c[0]) for c in mock.calls
                                if c[1] in ("fix_findings", "delta_review")]
@@ -1022,8 +998,6 @@ class TestActsResolution(DriverTestCase):
                 step("delta_review", report("delta_review"), family="claude"),
                 step("review_round", report("review_round"), family="codex"),
                 step("review_round", report("review_round"), family="claude"),
-                step("seal_half", report("seal_half"), family="codex"),
-                step("seal_half", report("seal_half"), family="claude"),
             ])
             fix_delta_calls = [(c[1], c[0]) for c in mock.calls
                                if c[1] in ("fix_findings", "delta_review")]
@@ -1059,8 +1033,6 @@ class TestActsResolution(DriverTestCase):
                 step("delta_review", report("delta_review"), family="claude"),
                 step("review_round", report("review_round"), family="codex"),
                 step("review_round", report("review_round"), family="claude"),
-                step("seal_half", report("seal_half"), family="codex"),
-                step("seal_half", report("seal_half"), family="claude"),
             ])
             fix_meta = [m for c, m in zip(mock.calls, mock.call_meta)
                         if c[1] == "fix_findings"][0]
@@ -1091,8 +1063,6 @@ class TestActsResolution(DriverTestCase):
                 step("delta_review", report("delta_review"), family="claude"),
                 step("review_round", report("review_round"), family="codex"),
                 step("review_round", report("review_round"), family="claude"),
-                step("seal_half", report("seal_half"), family="codex"),
-                step("seal_half", report("seal_half"), family="claude"),
             ])
             # call[0] is the skeleton draft.
             self.assertEqual(mock.calls[0][1], "draft_skeleton")

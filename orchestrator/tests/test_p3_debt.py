@@ -1,6 +1,6 @@
 """Finding-debt deferral with opposite-family reclassification.
 
-When `p3_reclassify_debt` is on, eligible review/seal findings receive a
+When `p3_reclassify_debt` is on, eligible whole-artifact review findings receive a
 reclassification one by one. Ratings below the configured threshold become
 tracked debt; only the remaining findings reach the fixer. One blocking
 finding never drags accepted debt into its fix cycle. The deferrable scope is
@@ -81,9 +81,7 @@ class TestP3Debt(DriverTestCase):
                      report("review_round", [finding("F1", "typo")]),
                      family="claude"),
                 reclassify(True, family="codex", reason="wording only"),
-                # both families deferred-clean -> seal
-                step("seal_half", report("seal_half"), family="codex"),
-                step("seal_half", report("seal_half"), family="claude"),
+                # both families deferred-clean -> deterministic seal
             ])
             driver = drv.Driver(path, runner=mock)
             self.step_until(driver,
@@ -103,7 +101,7 @@ class TestP3Debt(DriverTestCase):
             debt_events = [e for e in state["events"]
                            if e["type"] == "debt_recorded"]
             self.assertEqual(len(debt_events), 2)
-            # Once rated, later reviewers/sealers receive only the compact
+            # Once rated, later reviewers receive only the compact
             # technical fingerprint — never the lay framing used by the
             # reclassifier to calibrate gravity.
             claude_review = [
@@ -113,14 +111,8 @@ class TestP3Debt(DriverTestCase):
             self.assertIn("codex-F1", claude_review)
             self.assertNotIn("PLAIN_DEBT_SENTINEL", claude_review)
             self.assertNotIn("EXAMPLE_DEBT_SENTINEL", claude_review)
-            seal_prompts = [
-                prompt for _fam, kind, prompt in mock.calls
-                if kind == "seal_half"
-            ]
-            self.assertEqual(len(seal_prompts), 2)
-            for prompt in seal_prompts:
-                self.assertIn("codex-F1", prompt)
-                self.assertIn("claude-F1", prompt)
+            self.assertNotIn("seal_half", [kind for _fam, kind, _p in mock.calls])
+            self.assertEqual(unit["seals"][0]["halves"], {})
 
     def test_reclassifier_refusal_routes_to_the_fixer(self):
         with tempfile.TemporaryDirectory(prefix="orch-mock-") as ws:
@@ -167,8 +159,6 @@ class TestP3Debt(DriverTestCase):
                      family="claude"),
                 reclassify(True, family="codex", reason="cosmetic",
                            risk="low"),
-                step("seal_half", report("seal_half"), family="codex"),
-                step("seal_half", report("seal_half"), family="claude"),
             ])
             driver = drv.Driver(path, runner=mock)
             self.step_until(driver,
@@ -441,8 +431,6 @@ class TestP3Debt(DriverTestCase):
                             [finding("F1", "test names could be clearer")]),
                      family="claude"),
                 reclassify(True, family="codex", reason="test-naming nit"),
-                step("seal_half", report("seal_half"), family="codex"),
-                step("seal_half", report("seal_half"), family="claude"),
             ])
             driver = drv.Driver(path, runner=mock)
             self.step_until(
@@ -460,6 +448,7 @@ class TestP3Debt(DriverTestCase):
             self.assertEqual(len(impl["debt"]), 2)
             self.assertEqual({d["cleared_by"] for d in impl["debt"]},
                              {"claude", "codex"})
+            self.assertEqual(impl["seals"][0]["halves"], {})
 
     def test_impl_round_p2_is_never_deferred(self):
         # The impl scope is P3-only: a code P2 (a real functional deviation)
@@ -488,130 +477,6 @@ class TestP3Debt(DriverTestCase):
             self.assertEqual(impl["debt"], [])
             self.assertNotIn("reclassify", [c[1] for c in mock.calls])
             self.assertEqual([f["id"] for f in impl["fix_queue"]], ["F1"])
-
-    def test_seal_p3_only_is_deferred_and_seals(self):
-        with tempfile.TemporaryDirectory(prefix="orch-mock-") as ws:
-            path = init_state(ws, make_config(p3_reclassify_debt=True))
-            mock = runners.MockRunner([
-                draft_step(),
-                step("review_round", report("review_round"), family="codex"),
-                step("review_round", report("review_round"), family="claude"),
-                # Seal: codex half raises a lone P3; claude half clean.
-                step("seal_half",
-                     report("seal_half", [finding("F1", "note typo")]),
-                     family="codex"),
-                step("seal_half", report("seal_half"), family="claude"),
-                # The codex-half P3 -> claude reclassifies -> defer -> seal.
-                reclassify(True, family="claude", reason="cosmetic"),
-            ])
-            driver = drv.Driver(path, runner=mock)
-            self.step_until(driver,
-                            lambda s: s["units"][0]["status"] == st.U_SEALED)
-            self.assertEqual(mock.script, [])
-            state = st.load(path)
-            unit = state["units"][0]
-            self.assertEqual(unit["status"], st.U_SEALED)
-            # Sealed on the first attempt (no reopen), P3 recorded as debt.
-            self.assertEqual(len(unit["seals"]), 1)
-            self.assertTrue(unit["seals"][0]["passed"])
-            self.assertEqual(len(unit["debt"]), 1)
-            self.assertEqual(unit["debt"][0]["id"], "codex-F1")
-
-    def test_mixed_seal_keeps_debt_out_of_the_fix_queue(self):
-        with tempfile.TemporaryDirectory(prefix="orch-mock-") as ws:
-            path = init_state(ws, make_config(p3_reclassify_debt=True))
-            mock = runners.MockRunner([
-                draft_step(),
-                step("review_round", report("review_round"), family="codex"),
-                step("review_round", report("review_round"), family="claude"),
-                step("seal_half",
-                     report("seal_half",
-                            [finding("F1", "real break", severity="P1"),
-                             finding("F2", "minor wording")]),
-                     family="codex"),
-                step("seal_half", report("seal_half"), family="claude"),
-                reclassify(True, family="claude", reason="local correction"),
-            ])
-            driver = drv.Driver(path, runner=mock)
-            self.step_until(
-                driver, lambda s: s["units"][0]["status"] == st.U_FIXING)
-            unit = st.load(path)["units"][0]
-            self.assertEqual([d["id"] for d in unit["debt"]], ["codex-F2"])
-            self.assertEqual(
-                [f["id"] for f in unit["fix_queue"]], ["codex-F1"])
-            self.assertFalse(unit["seals"][0]["passed"])
-
-    def test_implementation_seal_p3_is_never_deferred(self):
-        with tempfile.TemporaryDirectory(prefix="orch-mock-") as ws:
-            path = init_state(ws, make_config(p3_reclassify_debt=True))
-            state = st.load(path)
-            state["milestone"]["slices"] = [{"id": 1, "title": "impl"}]
-            state["units"][0]["status"] = st.U_SEALED
-            doc = st.ensure_next_unit(state)
-            doc["status"] = st.U_SEALED
-            unit = st.ensure_next_unit(state)
-            unit["status"] = st.U_SEALING
-            unit["artifact"] = "docs/slices/slice-01.md"
-            st.save(path, state)
-            mock = runners.MockRunner([
-                step("seal_half",
-                     report("seal_half", [finding("F1", "small code bug")]),
-                     family="codex"),
-                step("seal_half", report("seal_half"), family="claude"),
-            ])
-            driver = drv.Driver(path, runner=mock)
-            driver.step()
-
-            self.assertEqual(mock.script, [])
-            self.assertNotIn("reclassify", [call[1] for call in mock.calls])
-            unit = st.load(path)["units"][-1]
-            self.assertEqual(unit["status"], st.U_FIXING)
-            self.assertEqual(unit["debt"], [])
-            self.assertEqual(
-                [finding_["id"] for finding_ in unit["fix_queue"]],
-                ["codex-F1"],
-            )
-
-    def test_reform_doc_seal_uses_the_same_p2_scope_as_review(self):
-        strict = profiles.SEEDS["strict"]["profile"]
-        with tempfile.TemporaryDirectory(prefix="orch-mock-") as ws:
-            config = make_config(p3_reclassify_debt=True, profile=strict)
-            config["git"] = {"enabled": False}
-            path = init_state(
-                ws, config)
-            mock = runners.MockRunner([
-                reform_draft_step(),
-                step("review_round", report("review_round"), family="codex"),
-                step("review_round",
-                     report("review_round", [
-                         finding("F0", "forces a real edit", severity="P1")
-                     ]),
-                     family="claude"),
-                step("fix_findings",
-                     fix_ok([triaged("F0", "fixed", "forces a real edit",
-                                             severity="P1")]),
-                     family="codex"),
-                step("review_round", report("review_round"), family="claude"),
-                # Codex's earlier clean review is stale after the fix, so the
-                # reform predicate requests exactly this one fresh half.
-                step("seal_half",
-                     report("seal_half", [
-                         finding("F1", "bounded doc correction", severity="P2")
-                     ]),
-                     family="codex"),
-                reclassify(True, family="claude", risk="high",
-                           damage="low", reason="local doc correction"),
-            ])
-            driver = drv.Driver(path, runner=mock)
-            self.step_until(driver,
-                            lambda s: s["units"][0]["status"] == st.U_SEALED)
-            unit = st.load(path)["units"][0]
-            self.assertEqual(unit["debt"][0]["severity"], "P2")
-            self.assertEqual(
-                len([r for r in unit["rounds"]
-                     if r["kind"] == contracts.KIND_FIX_FINDINGS]),
-                1, "the deferred seal P2 must not open another fix episode")
-
 
 if __name__ == "__main__":
     unittest.main()

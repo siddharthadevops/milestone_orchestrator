@@ -237,8 +237,8 @@ work area's roots and must land inside one of them — never outside.
 
 Scope vocabularies are the EXISTING ones — no new names: worker kinds are
 `contracts.py`'s KIND_* values (`draft_skeleton`, `draft_slice_note`,
-`implement`, `review_round`, `delta_review`, `seal_half`,
-`fix_findings`); unit kinds are `state.py`'s exact constants (`skeleton`,
+`implement`, `review_round`, `delta_review`, `fix_findings`); unit kinds are
+`state.py`'s exact constants (`skeleton`,
 `slice_doc`, `slice_impl`) — `prompts.py`'s DOC_UNIT_KINDS is just the
 document subset. No prose names.
 

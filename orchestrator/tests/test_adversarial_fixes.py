@@ -5,7 +5,7 @@ Covers, in order of severity:
   (1) P1 — tamper recovery with git DISABLED must never run reset/clean
       against a repository the orchestrator never committed to (a user's
       own project): the run FAILS with an accurate reason and the
-      workspace is left untouched (review-round and seal-half paths).
+      workspace is left untouched.
   (2) P2 — a fixer cannot kill a CONTESTS-carrying finding by pointer
       (rejected_adjudicated): the contest re-opened the adjudication, so
       it must be fixed or rejected with a fresh consultation.
@@ -13,7 +13,7 @@ Covers, in order of severity:
       a prevention edit) while the worktree delta is empty fails the run:
       no phantom fixes, no phantom prevention pointers in the registry.
   (4) P2 — synthetic verification episode ids stay unique when a stage is
-      re-entered (pre-seal verify after every dirty seal attempt), so
+      re-entered after accepted review fixes, so
       rejected V1 findings cannot mint colliding registry ids.
   (5) P2/P3 — duplicate finding ids within one worker output violate the
       contract (report kinds and fixer echoes).
@@ -119,38 +119,6 @@ class TestGitDisabledTamperRecovery(DriverTestCase):
             # No invalidated round was minted from the discarded output.
             state = st.load(path)
             self.assertEqual(state["units"][0]["rounds"], [])
-
-    def test_seal_half_tamper_fails_run_and_preserves_workspace(self):
-        with tempfile.TemporaryDirectory(prefix="orch-adv-") as ws:
-            ws = os.path.realpath(ws)
-            make_user_repo(ws)
-            path = init_state(ws, make_config(git={"enabled": False}))
-            driver = drv.Driver(path, runner=runners.MockRunner([
-                draft_step(),
-                step("review_round", report("review_round"), family="codex"),
-                step("review_round", report("review_round"), family="claude"),
-                step("seal_half", report("seal_half"), family="codex",
-                     side_effect=write_file("tampered.txt", "oops")),
-                step("seal_half", report("seal_half"), family="claude"),
-            ]))
-            self.step_until(
-                driver, lambda s: s["failure"] is not None, max_steps=20
-            )
-            self.assert_failed(
-                path, driver,
-                ["seal half tampered", "git is disabled",
-                 "cannot be mechanically restored"],
-                unit_key="skeleton",
-            )
-            # The invalidated attempt is on record; the workspace is intact.
-            state = st.load(path)
-            seal = state["units"][0]["seals"][0]
-            self.assertFalse(seal["passed"])
-            self.assertIn("modified the workspace", seal["invalidated"])
-            self.assertTrue(os.path.exists(os.path.join(ws, "tampered.txt")))
-            with open(os.path.join(ws, "user_file.txt")) as fh:
-                self.assertIn("UNCOMMITTED user edit", fh.read())
-
 
 # ---------------------------------------------------------------------------
 # (2) P2: a contested finding is never killable by pointer
@@ -281,8 +249,6 @@ class TestPhantomFixEmptyDelta(DriverTestCase):
                      family="codex"),
                 step("review_round", report("review_round"),
                      family="claude"),
-                step("seal_half", report("seal_half"), family="codex"),
-                step("seal_half", report("seal_half"), family="claude"),
             ]))
             self.step_until(
                 driver, lambda s: s["units"][0]["status"] == st.U_SEALED,
@@ -370,8 +336,6 @@ class TestPhantomFixEmptyDelta(DriverTestCase):
                      family="codex"),
                 step("review_round", report("review_round"),
                      family="claude"),
-                step("seal_half", report("seal_half"), family="codex"),
-                step("seal_half", report("seal_half"), family="claude"),
             ]))
             self.step_until(
                 driver, lambda s: s["units"][0]["status"] == st.U_SEALED,
@@ -637,8 +601,6 @@ class TestPhantomFixEmptyDelta(DriverTestCase):
                 draft_step(),
                 step("review_round", report("review_round"), family="codex"),
                 step("review_round", report("review_round"), family="claude"),
-                step("seal_half", report("seal_half"), family="codex"),
-                step("seal_half", report("seal_half"), family="claude"),
                 step(
                     "draft_slice_note",
                     ok("draft_slice_note", artifact="docs/slice-01.md"),
@@ -649,8 +611,6 @@ class TestPhantomFixEmptyDelta(DriverTestCase):
                 ),
                 step("review_round", report("review_round"), family="codex"),
                 step("review_round", report("review_round"), family="claude"),
-                step("seal_half", report("seal_half"), family="codex"),
-                step("seal_half", report("seal_half"), family="claude"),
                 step(
                     "implement",
                     ok(
@@ -815,7 +775,7 @@ class TestPhantomFixEmptyDelta(DriverTestCase):
 
 
 class TestVerifyEpisodeIdsUniqueAcrossReentry(DriverTestCase):
-    def test_two_pre_seal_episodes_get_distinct_registry_ids(self):
+    def test_reentered_pre_review_episodes_get_distinct_registry_ids(self):
         with tempfile.TemporaryDirectory(prefix="orch-adv-") as ws:
 
             def rm_marker(workspace):
@@ -839,69 +799,71 @@ class TestVerifyEpisodeIdsUniqueAcrossReentry(DriverTestCase):
             ))
             driver = drv.Driver(path, runner=runners.MockRunner([
                 draft_step(),
-                # pre-review verification fails once (no marker yet).
-                reject_v1("flaky pre-review"),
+                # Initial pre-review verification fails (no marker yet).
+                reject_v1("flaky initial pre-review"),
                 step("delta_review", report("delta_review")),
                 step("review_round", report("review_round"), family="codex"),
-                step("review_round", report("review_round"), family="claude"),
-                # pre-seal passes; seal a1 dirty; the fix removes the marker
-                step("seal_half", report("seal_half"), family="codex"),
-                step("seal_half",
-                     report("seal_half", [finding("S1", "readme missing")]),
+                step("review_round",
+                     report("review_round", [finding(
+                         "S1", "readme missing", severity="P2")]),
                      family="claude"),
+                # The accepted review fix changes bytes and removes the
+                # marker, forcing a real return through pre-review verify.
                 step("fix_findings",
-                     fix_ok([triaged("claude-S1", "fixed", "readme")],
+                     fix_ok([triaged("S1", "fixed", "readme",
+                                     severity="P2")],
                             files_changed=["README.md"]),
+                     family="codex",
                      side_effect=multi(write_file("README.md", "hi\n"),
                                        rm_marker)),
                 step("delta_review", report("delta_review")),
-                # pre-seal verify fails -> episode 1; passes after the fix.
-                reject_v1("flaky pre-seal one"),
+                reject_v1("flaky after readme fix"),
                 step("delta_review", report("delta_review")),
-                # seal a2 dirty again; its fix removes the marker again.
-                step("seal_half", report("seal_half"), family="codex"),
-                step("seal_half",
-                     report("seal_half", [finding("S2", "changelog missing")]),
+                step("review_round", report("review_round"), family="codex"),
+                step("review_round",
+                     report("review_round", [finding(
+                         "S2", "changelog missing", severity="P2")]),
                      family="claude"),
                 step("fix_findings",
-                     fix_ok([triaged("claude-S2", "fixed", "changelog")],
+                     fix_ok([triaged("S2", "fixed", "changelog",
+                                     severity="P2")],
                             files_changed=["CHANGELOG.md"]),
+                     family="codex",
                      side_effect=multi(write_file("CHANGELOG.md", "x\n"),
                                        rm_marker)),
                 step("delta_review", report("delta_review")),
-                # pre-seal verify fails AGAIN: the attempts counter was
-                # reset by the earlier pass, but the episode id must not
-                # collide with pre_seal episode 1.
-                reject_v1("flaky pre-seal two"),
+                # A second accepted review fix causes another re-entry into
+                # the same verification stage after its counter was reset.
+                reject_v1("flaky after changelog fix"),
                 step("delta_review", report("delta_review")),
-                step("seal_half", report("seal_half"), family="codex"),
-                step("seal_half", report("seal_half"), family="claude"),
+                step("review_round", report("review_round"), family="codex"),
+                step("review_round", report("review_round"), family="claude"),
             ]))
             self.step_until(
                 driver, lambda s: s["units"][0]["status"] == st.U_SEALED,
-                max_steps=40,
+                max_steps=60,
             )
             state = st.load(path)
             self.assertIsNone(state["failure"])
             entries = st.adjudicated_rejections(state)
             ids = [e["id"] for e in entries]
-            # Three distinct entries — no collision between the two
-            # pre-seal episodes despite the counter reset in between.
+            # Three distinct entries — no collision after two real
+            # re-entries into the same stage despite its counter resets.
             self.assertEqual(len(ids), len(set(ids)), ids)
             self.assertEqual(
                 set(ids),
                 {
                     "skeleton-verify-pre_review-1/V1",
-                    "skeleton-verify-pre_seal-1/V1",
-                    "skeleton-verify-pre_seal-2/V1",
+                    "skeleton-verify-pre_review-2/V1",
+                    "skeleton-verify-pre_review-3/V1",
                 },
             )
             # Each keeps its own rationale addressable by id.
             by_id = {e["id"]: e["rationale"] for e in entries}
-            self.assertEqual(by_id["skeleton-verify-pre_seal-1/V1"],
-                             "flaky pre-seal one")
-            self.assertEqual(by_id["skeleton-verify-pre_seal-2/V1"],
-                             "flaky pre-seal two")
+            self.assertEqual(by_id["skeleton-verify-pre_review-2/V1"],
+                             "flaky after readme fix")
+            self.assertEqual(by_id["skeleton-verify-pre_review-3/V1"],
+                             "flaky after changelog fix")
 
 
 # ---------------------------------------------------------------------------

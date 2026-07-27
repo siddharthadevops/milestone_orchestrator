@@ -302,7 +302,9 @@ class TestFieldCollisions(unittest.TestCase):
             "retry_reason", contracts.reserved_output_keys("implement")
         )
         self.assertIn("artifact", contracts.reserved_output_keys("draft_skeleton"))
-        self.assertIn("findings", contracts.reserved_output_keys("seal_half"))
+        self.assertIn(
+            "findings", contracts.reserved_output_keys("review_round")
+        )
         with self.assertRaises(contracts.ContractError):
             contracts.reserved_output_keys("bogus_kind")
 

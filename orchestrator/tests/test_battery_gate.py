@@ -522,19 +522,19 @@ class BatteryPromptGatingTest(unittest.TestCase):
         self.assertNotIn("QUESTION BATTERY", text)
         self.assertNotIn("BATTERY OUTPUT", text)
 
-    def test_review_and_seal_carry_the_review_block(self):
-        for build in (prompts.build_review_round, prompts.build_seal_half):
-            text = self._review(build, c.BATTERY_QUESTIONS_SKELETON)
-            self.assertIn(REVIEW_MARKER, text)
-            self.assertIn(SETTLED_RULE, text)
-            for q in c.BATTERY_QUESTIONS_SKELETON:
-                self.assertIn(q, text)
+    def test_review_carries_the_review_block(self):
+        text = self._review(
+            prompts.build_review_round, c.BATTERY_QUESTIONS_SKELETON
+        )
+        self.assertIn(REVIEW_MARKER, text)
+        self.assertIn(SETTLED_RULE, text)
+        for q in c.BATTERY_QUESTIONS_SKELETON:
+            self.assertIn(q, text)
 
-    def test_review_and_seal_without_battery_carry_nothing(self):
-        for build in (prompts.build_review_round, prompts.build_seal_half):
-            text = self._review(build, None)
-            self.assertNotIn("QUESTION BATTERY", text)
-            self.assertNotIn(SETTLED_RULE, text)
+    def test_review_without_battery_carries_nothing(self):
+        text = self._review(prompts.build_review_round, None)
+        self.assertNotIn("QUESTION BATTERY", text)
+        self.assertNotIn(SETTLED_RULE, text)
 
     def test_delta_review_is_never_battery_aware(self):
         # Diff-scoped: the delta reviewer judges a fix delta, not the

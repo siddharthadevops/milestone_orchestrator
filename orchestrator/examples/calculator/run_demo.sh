@@ -19,7 +19,6 @@ cat > "$CFG" <<EOF
   "timeouts": {"codex": 60, "claude": 60},
   "verification": ["python3 run_checks.py"],
   "max_rounds_per_family": 6,
-  "max_seal_attempts": 4,
   "git": {"enabled": true},
   "acts": {"fixer": "codex", "consultation": "opposite"},
   "max_fix_loops": 4,
