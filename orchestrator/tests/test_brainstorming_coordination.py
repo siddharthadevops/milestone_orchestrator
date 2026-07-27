@@ -258,13 +258,81 @@ class BrainstormingCoordinationTest(unittest.TestCase):
                 self.assertIn(
                     second.state["accepted_target_revision"], lead_prompt
                 )
-                self.assertIn("prefer proportional", lead_prompt)
+                self.assertIn("simplest sufficient response", lead_prompt)
                 self.assertEqual(
                     [call["mode"] for call in executors[
                         roster[0]["executor_ref"]
                     ].calls],
                     ["start", "continue"],
                 )
+
+    def test_every_discussion_and_closure_prompt_gets_proportionality_check(
+        self,
+    ):
+        session_id = "proportionality-prompts"
+        roster = participants()
+        self._create_running(session_id, roster=roster)
+        subject, _executors = self._subject(
+            roster,
+            {
+                "lead": [envelope("unused")],
+                "critic": [envelope("unused")],
+            },
+        )
+        snapshot = subject.prepare(session_id)
+        revision = (
+            snapshot.state["accepted_target_revision"]
+            or snapshot.state["recovery_baseline_revision"]
+        )
+        target_revision = self.store.read_target_revision(
+            session_id, revision
+        )
+        prompts_under_test = (
+            coordination.build_turn_prompt(
+                snapshot.state, roster[0], 1, target_revision
+            ),
+            coordination.build_turn_prompt(
+                snapshot.state, roster[1], 1, target_revision
+            ),
+            coordination.build_closure_proposal_prompt(
+                snapshot.state, target_revision
+            ),
+            coordination.build_closure_vote_prompt(
+                snapshot.state, roster[1], target_revision
+            ),
+        )
+        anchors = (
+            "independent authority establishing the need",
+            "existing code, contracts, dependencies",
+            "documentation, configuration, or no change",
+            "authorised outcome it serves",
+            "build, migration, operation, maintenance, and review cost",
+            "omission cost and reversibility",
+            '"opaque": true',
+        )
+        for prompt in prompts_under_test:
+            prompt = " ".join(prompt.split())
+            for anchor in anchors:
+                self.assertIn(anchor, prompt)
+            self.assertIn("keep the decision in scope", prompt)
+            self.assertIn(
+                "Do not invent victims, guarantees, threats", prompt
+            )
+            self.assertIn("design gap, not a promise", prompt)
+
+        discussion_prompt, critic_prompt, proposal_prompt, vote_prompt = (
+            prompts_under_test
+        )
+        report_instruction = "If no machinery is justified, say so briefly"
+        rationale_instruction = "Explain why anything cheaper is insufficient"
+        self.assertIn(report_instruction, discussion_prompt)
+        self.assertIn(report_instruction, critic_prompt)
+        self.assertIn(report_instruction, proposal_prompt)
+        self.assertNotIn(report_instruction, vote_prompt)
+        self.assertIn(rationale_instruction, discussion_prompt)
+        self.assertIn(rationale_instruction, critic_prompt)
+        self.assertIn(rationale_instruction, proposal_prompt)
+        self.assertNotIn(rationale_instruction, vote_prompt)
 
     def test_coordination_without_exact_launch_baseline_is_rejected(self):
         session_id = "missing-launch-baseline"

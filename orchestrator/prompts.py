@@ -331,12 +331,28 @@ ALTITUDE_FIX_BLOCK = (
 # rounds of ranking language each leaked a new hole; this dissolution is
 # the fix.)
 REUSE_GATE_BLOCK = (
-    "REUSE GATE\n"
-    "- Before proposing new machinery, first check existing project\n"
-    "  code, existing project contracts, pinned shared dependencies, and\n"
-    "  already-approved platform surfaces. Prefer reuse, extension,\n"
-    "  wrapping, parameterization, or documentation over parallel\n"
-    "  machinery.\n"
+    "REUSE GATE — MACHINERY PROPORTIONALITY\n"
+    "- Before adding or materially changing machinery, use the evidence\n"
+    "  already available in this call to answer: who or what is affected\n"
+    "  without it, what harm occurs, how exposed and reversible that harm\n"
+    "  is, and what independent authority establishes the need; what\n"
+    "  existing code, contracts, dependencies, and approved platform\n"
+    "  capabilities can be reused or extended; what the cheapest sufficient\n"
+    "  option is (including documentation, configuration, or no change) and\n"
+    "  why anything cheaper is insufficient; what machinery remains, which\n"
+    "  authorised outcome it serves, and who consumes or observes it; and\n"
+    "  what it costs to build, migrate, operate, maintain, and review,\n"
+    "  weighed against omission cost and reversibility.\n"
+    "- Prefer reuse, extension, wrapping, parameterization, or documentation\n"
+    "  over parallel machinery. Configuration or no change may be cheaper\n"
+    "  still. Choose the simplest sufficient response, not the strongest\n"
+    "  imaginable one. A state already permitted in normal operation is not\n"
+    "  new harm by itself.\n"
+    "- An independently authoritative requirement fixes the outcome, not the\n"
+    "  mechanism. Remove or weaken a guarantee invented only by the working\n"
+    "  material, or made stricter than its authority requires, instead of\n"
+    "  building machinery for it. If an authoritative outcome cannot be\n"
+    "  enforced, report a design gap rather than writing a promise.\n"
 )
 
 REUSE_GATE_REFORM_ADDENDUM = (
@@ -350,9 +366,27 @@ REUSE_GATE_REFORM_ADDENDUM = (
 )
 
 REUSE_POSTURE_LINE = (
-    "- Include a short `Reuse Posture` section: what was checked; what\n"
-    "  is reused or extended; why any new machinery is necessary; how\n"
-    "  the new path stays compatible with existing contracts.\n"
+    "- Include one short `Reuse Posture` section recording the local result\n"
+    "  of the proportionality check: affected party, realistic harm and\n"
+    "  exposure, authority, what was checked and reused, the cheapest\n"
+    "  sufficient option, any machinery still justified and its consumer,\n"
+    "  and lifecycle cost weighed against omission and reversibility. If no\n"
+    "  machinery is justified, name the relevant surfaces checked and say\n"
+    "  so. Do not create a separate account or artifact.\n"
+)
+
+MACHINERY_RESULT_LINE = (
+    "- In the ordinary `notes` response, briefly state the proportionality\n"
+    "  result for machinery this call introduced or materially changed. If\n"
+    "  it changed none, name the relevant surfaces checked and say so. Use\n"
+    "  no new field, artifact, marker, or cross-call delivery mechanism.\n"
+)
+
+FIX_MACHINERY_RESULT_LINE = (
+    "- Apply the machinery check once to this coherent fix pass. For editable\n"
+    "  documentation, update an existing `Reuse Posture` in place when its\n"
+    "  machinery decision changed; do not add another account. Briefly record\n"
+    "  the result in ordinary `notes`, using no new field or artifact.\n"
 )
 
 REUSE_POSTURE_REFORM_ADDENDUM = (
@@ -366,10 +400,23 @@ REUSE_POSTURE_REFORM_ADDENDUM = (
 )
 
 REUSE_REVIEW_BLOCK = (
-    "REUSE\n"
+    "REUSE AND MACHINERY PROPORTIONALITY\n"
     "- When the artifact proposes new machinery, check the reuse gate:\n"
     "  existing project code, contracts, pinned shared dependencies, and\n"
     "  already-approved platform surfaces come first.\n"
+    "- Using only the target and context already available in this call,\n"
+    "  verify who or what is affected, the realistic harm, exposure and\n"
+    "  reversibility, and the independent authority for the need; whether\n"
+    "  existing capabilities or a cheaper option (including documentation,\n"
+    "  configuration, or no change) suffice; what authorised outcome and\n"
+    "  consumer justify any remaining machinery; and whether build,\n"
+    "  migration, operation, maintenance, and review cost is proportionate\n"
+    "  to omission cost. Challenge both needless machinery and harmful\n"
+    "  omission, but do not demand the strongest imaginable guarantee.\n"
+    "- A guarantee invented only by the working material, or made stricter\n"
+    "  than its independent authority requires, does not justify machinery.\n"
+    "  An authoritative but unenforceable outcome is a design gap, not a\n"
+    "  promise to preserve.\n"
 )
 
 REUSE_REVIEW_REFORM_ADDENDUM = (
@@ -791,12 +838,11 @@ def _delta_quality_block(unit_kind, reform=False):
     # machinery it summons) gets introduced — a delta reviewer without the
     # authority/altitude rules would approve it and let it be amended in,
     # leaving the later full/seal round to recover.
-    # Deltas carried NO reuse canon pre-reform: base AND addendum are both
-    # reform-gated here (unlike full reviews/seals, whose base block
-    # predates the reform and stays unconditional).
-    parts = [EVIDENCE_BLOCK, SEVERITY_BATTERY_BLOCK]
+    # The base proportionality check is ordinary review guidance and rides
+    # every delta prompt. The reform addendum remains gated because it carries
+    # reform-specific authority and routing language.
+    parts = [EVIDENCE_BLOCK, SEVERITY_BATTERY_BLOCK, REUSE_REVIEW_BLOCK]
     if reform:
-        parts.append(REUSE_REVIEW_BLOCK)
         parts.append(REUSE_REVIEW_REFORM_ADDENDUM)
     parts.append(DELTA_COVERAGE_LINE)
     if unit_kind in DOC_UNIT_KINDS:
@@ -817,7 +863,8 @@ def _delta_quality_block(unit_kind, reform=False):
 
 def _fix_quality_block(unit_kind):
     parts = [EVIDENCE_BLOCK, FINDING_VALIDITY_BLOCK, FIX_EVIDENCE_BLOCK,
-             FIX_SELF_CHECK_BLOCK]
+             FIX_SELF_CHECK_BLOCK, REUSE_GATE_BLOCK,
+             FIX_MACHINERY_RESULT_LINE]
     if unit_kind in DOC_UNIT_KINDS:
         parts.append(ALTITUDE_BLOCK)
         parts.append(ALTITUDE_FIX_BLOCK)
@@ -856,16 +903,19 @@ TWO_REGISTER_BLOCK = (
 # contracts.BATTERY_QUESTIONS_* (the interpreter picks the set per unit
 # kind).
 BATTERY_QUESTION_DESCRIPTIONS = {
-    "victim": "who is the victim without this — the concrete person or "
-              "system that suffers if it is not built",
-    "machinery": "what new machinery this introduces and why it must "
-                 "exist",
-    "consumers": "who consumes it — VERIFIED against real code "
+    "victim": "who or what is affected without this, the realistic harm, "
+              "exposure and reversibility, and the independent authority "
+              "that establishes the need",
+    "machinery": "what new machinery this introduces, which authorised "
+                 "outcome it serves, and why it must exist",
+    "consumers": "who consumes or observes it — VERIFIED against real code "
                  "(file:line), never assumed",
-    "cheaper_alternative": "what cheaper alternative — reuse, extension, "
-                           "documentation, or doing nothing — was "
-                           "rejected and why",
-    "cost": "what it costs: build, migration, and maintenance",
+    "cheaper_alternative": "the cheapest sufficient option — reuse, "
+                           "extension, documentation, configuration, or "
+                           "doing nothing — and why anything cheaper is "
+                           "insufficient",
+    "cost": "build, migration, operation, maintenance, and review cost, "
+            "weighed against omission cost and reversibility",
     "threat_model": "who the attacker is and which inputs they control, "
                     "versus who is TRUSTED (operator, product code, "
                     "compile-time configuration) — defenses guard the "
@@ -883,9 +933,10 @@ BATTERY_QUESTION_DESCRIPTIONS = {
                     "each fact is pinned",
     "verification": "how this slice's claims are verified — the tests or "
                     "checks that pin them",
-    "reuse_posture": "what was checked, what is adopted, and why "
-                     "anything new is new (checked / adopted / "
-                     "new-with-why)",
+    "reuse_posture": "the local proportionality result: what was checked "
+                     "and reused, the cheapest sufficient option, any new "
+                     "machinery and its authority and consumer, and lifecycle "
+                     "cost weighed against omission and reversibility",
 }
 
 
@@ -1222,6 +1273,7 @@ def build_implement(family, workspace, goal, slice_info, note_path, verification
         + "\n\n"
         + REUSE_GATE_BLOCK
         + (REUSE_GATE_REFORM_ADDENDUM if gap_enabled else "")
+        + MACHINERY_RESULT_LINE
         + PLANNING_CONTEXT_LINE
         + "- Run local/focused checks after each modification when they\n"
         "  are cheap or directly relevant.\n"

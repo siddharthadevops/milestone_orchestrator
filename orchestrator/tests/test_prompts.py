@@ -581,6 +581,44 @@ class TestPortedCanonContentRules(unittest.TestCase):
             self.assertIn("check the reuse gate", prompt)
             self.assertNotIn("Reuse Posture", prompt)
 
+    def test_machinery_proportionality_reaches_every_relevant_prompt(self):
+        built = build_all()
+        for name in (
+            "draft_skeleton", "draft_slice_note", "implement", "fix_findings"
+        ):
+            prompt = normalized(built[name])
+            self.assertIn("MACHINERY PROPORTIONALITY", prompt, name)
+            self.assertIn("who or what is affected", prompt, name)
+            self.assertIn("independent authority", prompt, name)
+            self.assertIn("documentation, configuration, or no change",
+                          prompt, name)
+            self.assertIn("omission cost and reversibility", prompt, name)
+            self.assertIn("invented only by the working material", prompt,
+                          name)
+            self.assertIn("design gap rather than writing a promise", prompt,
+                          name)
+
+        for name in ("review_round", "delta_review", "seal_half"):
+            prompt = normalized(built[name])
+            self.assertIn("REUSE AND MACHINERY PROPORTIONALITY", prompt, name)
+            self.assertIn("existing capabilities or a cheaper option",
+                          prompt, name)
+            self.assertIn("authorised outcome", prompt, name)
+            self.assertIn(
+                "build, migration, operation, maintenance, and review cost",
+                prompt,
+                name,
+            )
+            self.assertIn("does not justify machinery", prompt, name)
+            self.assertIn("design gap, not a promise", prompt, name)
+
+        self.assertIn("ordinary `notes` response",
+                      built["implement"])
+        self.assertIn("once to this coherent fix pass",
+                      built["fix_findings"])
+        self.assertNotIn("MACHINERY PROPORTIONALITY",
+                         built["reclassify"])
+
     def test_new_machinery_needs_an_authority_outside_this_plan(self):
         # Reform layer: a reuse posture that answers "why is this machinery
         # necessary?" with "because the requirement I just adopted demands
@@ -676,16 +714,14 @@ class TestPortedCanonContentRules(unittest.TestCase):
             for p in (self.review(kind), self.seal(kind), self.delta(kind)):
                 for m in legacy_markers:
                     self.assertNotIn(m, p)
-        # The base canon still rides where it pre-existed (full reviews and
-        # seals) — but legacy DELTAS carried no reuse canon at all, so the
-        # base block must be absent there too (found by codex round 7: the
-        # base block had leaked into legacy deltas unconditionally).
+        # The base proportionality guidance is now universal prompt content,
+        # while the reform-only authority/routing addenda remain gated.
         for kind in ("skeleton", "slice_doc"):
             self.assertIn("must include a short `Reuse Posture` section",
                           " ".join(self.review(kind).split()))
         for kind in ("skeleton", "slice_doc", "slice_impl"):
-            self.assertNotIn("When the artifact proposes new machinery",
-                             self.delta(kind))
+            self.assertIn("When the artifact proposes new machinery",
+                          self.delta(kind))
 
     def test_hollow_reuse_posture_is_defined_for_reviewers(self):
         # "Hollow" used to be undefined, so it never bit. Both failure
