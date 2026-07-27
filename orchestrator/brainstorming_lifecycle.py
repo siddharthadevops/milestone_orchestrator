@@ -1378,6 +1378,31 @@ def delete_session(home, session_id, authorize, purge=False):
     return {"deleted": session_id, "purged": bool(purge)}
 
 
+def _view_participants(record, state):
+    """Expose the resolved seat settings without leaking runtime commands."""
+    runtime = record.get("runtime") or {}
+    executors = runtime.get("executors") or {}
+    defaults = runtime.get("model_defaults") or {}
+    projected = []
+    for participant in state["run_config"]["participants"]:
+        binding = executors.get(participant["executor_ref"]) or {}
+        family_defaults = defaults.get(participant["model_family"]) or {}
+        projected.append(
+            {
+                "id": participant["id"],
+                "role": participant["role"],
+                "model_family": participant["model_family"],
+                "model": (
+                    binding.get("model") or family_defaults.get("model")
+                ),
+                "effort": (
+                    binding.get("effort") or family_defaults.get("effort")
+                ),
+            }
+        )
+    return projected
+
+
 def view_session(home, session_id, authorize, preview_limit):
     """Project one authorized durable revision for the dedicated view."""
     record = _record_by_id(home, session_id)
@@ -1424,9 +1449,7 @@ def view_session(home, session_id, authorize, preview_limit):
             "process": "running" if _process_alive(record) else "stopped",
             "revision": snapshot.revision,
             "target": target,
-            "participants": copy.deepcopy(
-                state["run_config"]["participants"]
-            ),
+            "participants": _view_participants(record, state),
             "same_family_fallback": state["run_config"][
                 "same_family_fallback"
             ],

@@ -1278,7 +1278,9 @@ function renderSessionDetail(view) {
       <div class="amend-hint mono">rounds: ${view.round.completed} complete · ${view.round.maximum} maximum</div></div>`;
     html += `<div class="card"><h3>Participants</h3>` +
       view.participants.map(p =>
-        `<div class="amend-hint mono">${esc(p.role)}: ${esc(p.id)} · ${esc(p.model_family)}</div>`
+        `<div class="amend-hint mono"><b>${esc(p.role)}</b>: ${esc(p.id)} · ` +
+        `family ${esc(p.model_family)} · model ${esc(p.model || "—")} · ` +
+        `effort ${esc(p.effort || "—")}</div>`
       ).join("") + `</div>`;
     html += `<div class="card"><h3>Accepted target</h3>
       <div class="amend-hint mono">version: ${esc(view.target.revision || "—")}</div>

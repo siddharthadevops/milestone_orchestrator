@@ -202,6 +202,9 @@ class ServiceApiTest(unittest.TestCase):
         self.assertIn("function sessionChips", text)
         self.assertIn('onclick="openSessionInfo()">Info', text)
         self.assertIn("function closeSessionInfo", text)
+        self.assertIn('family ${esc(p.model_family)}', text)
+        self.assertIn('model ${esc(p.model || "—")}', text)
+        self.assertIn('effort ${esc(p.effort || "—")}', text)
         # Session content flows with the page — one scroll, preserved
         # across the 2s repaint — never a nested scrollbox that resets.
         self.assertIn(".mdbody.flow { max-height: none", text)

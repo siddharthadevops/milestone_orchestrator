@@ -136,7 +136,24 @@ class BrainstormingVisualizationTest(unittest.TestCase):
         view = self._view(session_id, headers=headers)
         state = created["session"]["state"]
         self.assertEqual(view["revision"], created["session"]["revision"])
-        self.assertEqual(view["participants"], state["run_config"]["participants"])
+        record = lifecycle._record_by_id(self.api.home, session_id)
+        expected_participants = []
+        for participant in state["run_config"]["participants"]:
+            binding = record["runtime"]["executors"][
+                participant["executor_ref"]
+            ]
+            expected_participants.append({
+                "id": participant["id"],
+                "role": participant["role"],
+                "model_family": participant["model_family"],
+                "model": binding["model"],
+                "effort": binding["effort"],
+            })
+        self.assertEqual(view["participants"], expected_participants)
+        self.assertTrue(all(
+            "executor_ref" not in participant
+            for participant in view["participants"]
+        ))
         self.assertEqual(view["transcript_markdown"], bs.render_transcript(state))
         status, unknown = self.api._request(
             "GET", "/api/brainstorming/sessions/unknown/view", headers=headers

@@ -209,7 +209,9 @@ deliberate choice, not an invalid same-family fallback — an unavailable
 family refuses with `invalid_brainstorming_request`, and each seat's
 resolved model/effort is recorded once in the service record's
 `runtime.executors` (keyed by per-seat `executor_ref`), which the
-lifecycle child replays without re-deriving. Records created before seats
+lifecycle child replays without re-deriving; the session's **Info** view
+shows the resolved family, model, and effort for every seat without exposing
+runtime commands. Records created before seats
 carried their own settings keep family-default behavior byte-identical.
 Refusal tokens surface verbatim; the panel validates only form
 completeness.

@@ -1015,7 +1015,29 @@ def _battery_review_block(ids):
     )
 
 
-def _gap_block(skeleton_only=False):
+def _rethink_before_gap_block():
+    return (
+        "BEFORE RETURNING A GAP — FOCUSED RETHINK OPTION\n"
+        "- If exactly one bounded design question remains unresolved and a\n"
+        "  short discussion could settle it with a bounded amendment, without\n"
+        "  a full design-repair cycle,\n"
+        "  return `need_rethink` instead of guessing or forcing a judgment.\n"
+        "  This is a normal, non-completing handoff; the orchestrator returns\n"
+        "  the agreed result to this task.\n"
+        "- Do NOT use it for facts you can establish from the workspace,\n"
+        "  missing investigation, an ordinary defect or fix, broad\n"
+        "  exploration, personal preference, or to avoid making a supported\n"
+        "  judgment. If a real hole or contradiction is already established\n"
+        "  and repairing it requires the full design-repair cycle, use `gap`\n"
+        "  below.\n"
+        "- Ask one decision-shaped question, preserve its concrete evidence\n"
+        "  in `finding`, choose the smallest relevant target and a\n"
+        "  proportionate round bound, and follow the exact `need_rethink`\n"
+        "  envelope in the OUTPUT CONTRACT.\n\n"
+    )
+
+
+def _gap_block(skeleton_only=False, rethink_allowed=False):
     """The stop-report-CLASSIFY instruction for a builder (draft/implement).
     The worker does not route or decide whose job the fix is — it CLASSIFIES
     the gap against one question and reports the facts; the machine derives
@@ -1045,7 +1067,8 @@ def _gap_block(skeleton_only=False):
         )
     return (
         "GAP EXIT (this run runs stop-report-repair-resume):\n"
-        "If you meet a hole or a contradiction that would CHANGE WHAT YOU\n"
+        + (_rethink_before_gap_block() if rethink_allowed else "")
+        + "If you meet a hole or a contradiction that would CHANGE WHAT YOU\n"
         "BUILD — a missing fact, a choice between readings, a conflict with\n"
         "a sealed upstream, or data/a contract this step needs that no\n"
         "earlier step provides — STOP. Do NOT resolve it yourself and do NOT\n"
@@ -1098,7 +1121,8 @@ def _fix_gap_block():
     not depend on who found it. Added only when a reform profile governs."""
     return (
         "GAP EXIT (this run runs stop-report-repair-resume):\n"
-        "If a queued finding is VALID but you cannot fix it without rewriting\n"
+        + _rethink_before_gap_block()
+        + "If a queued finding is VALID but you cannot fix it without rewriting\n"
         "a SEALED doc (a note or the skeleton) — the sealed design set\n"
         "contradicts itself, a sealed requirement contradicts the GOAL, or a\n"
         "sealed requirement summons machinery that no authority outside its\n"
@@ -1280,7 +1304,7 @@ def build_implement(family, workspace, goal, slice_info, note_path, verification
         + "\n"
         + _access_block(edit_allowed=True)
         + "\n"
-        + (_gap_block() if gap_enabled else "")
+        + (_gap_block(rethink_allowed=True) if gap_enabled else "")
         + contracts.CONTRACT_TEXT
     )
 

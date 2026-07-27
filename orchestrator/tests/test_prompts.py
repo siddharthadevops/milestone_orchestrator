@@ -122,6 +122,64 @@ def build_all_reform():
     }
 
 
+class TestNaturalRethinkExit(unittest.TestCase):
+    HEADING = "BEFORE RETURNING A GAP — FOCUSED RETHINK OPTION"
+
+    def fixer(self, gap_enabled):
+        return prompts.build_fix_findings(
+            FAMILY,
+            WORKSPACE,
+            GOAL,
+            UNIT,
+            FINDINGS,
+            [],
+            "claude",
+            ["claude", "-p"],
+            gap_enabled=gap_enabled,
+        )
+
+    def test_rethink_is_offered_only_beside_an_applicable_gap_exit(self):
+        legacy = build_all()
+        for kind, prompt in legacy.items():
+            with self.subTest(surface="legacy", kind=kind):
+                self.assertNotIn(self.HEADING, prompt)
+
+        reform = build_all_reform()
+        self.assertNotIn(self.HEADING, reform["draft_skeleton"])
+        self.assertNotIn(self.HEADING, reform["draft_slice_note"])
+        self.assertIn(self.HEADING, reform["implement"])
+        self.assertIn(self.HEADING, self.fixer(gap_enabled=True))
+        self.assertNotIn(self.HEADING, self.fixer(gap_enabled=False))
+
+    def test_rethink_branch_draws_the_boundary_before_gap(self):
+        prompt = normalized(build_all_reform()["implement"])
+        self.assertLess(prompt.index(self.HEADING),
+                        prompt.index("If you meet a hole or a contradiction"))
+        self.assertIn("one bounded design question remains unresolved", prompt)
+        self.assertIn("settle it with a bounded amendment", prompt)
+        self.assertIn("Do NOT use it for facts you can establish from the "
+                      "workspace", prompt)
+        self.assertIn("If a real hole or contradiction is already "
+                      "established", prompt)
+
+    def test_reviewers_and_continuations_are_not_invited_to_rethink(self):
+        built = build_all()
+        self.assertNotIn(self.HEADING, built["review_round"])
+        self.assertNotIn(self.HEADING, built["delta_review"])
+        continuation = prompts.build_rethink_continuation(
+            contracts.KIND_IMPLEMENT,
+            FAMILY,
+            WORKSPACE,
+            {
+                "session_id": "brainstorming-1",
+                "accepted_target_revision": 2,
+                "result": {"outcome": "success"},
+                "retained_target": {"content": "accepted proposal"},
+            },
+        )
+        self.assertNotIn(self.HEADING, continuation)
+
+
 class TestProcessAuthorityInEveryBuilder(unittest.TestCase):
     """(1) All builders emit PROCESS AUTHORITY with its load-bearing
     phrases — the section lives in _access_block, which every builder
