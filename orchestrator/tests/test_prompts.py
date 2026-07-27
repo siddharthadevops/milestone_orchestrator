@@ -867,6 +867,47 @@ class TestPortedCanonContentRules(unittest.TestCase):
         self.assertIn("the decision must come from the current artifact "
                       "and direct evidence", prompt)
 
+    def test_fixer_gets_opposing_named_provenance_and_falsifies_first(self):
+        expected = {
+            "codex": ("Codex", "Claude"),
+            "claude": ("Claude", "Codex"),
+        }
+        for family, (fixer, reviewer) in expected.items():
+            with self.subTest(family=family):
+                # Attribution follows the fixer's identity, not the supplied
+                # consultation family or any real finding provenance.
+                prompt = normalized(prompts.build_fix_findings(
+                    family, WORKSPACE, GOAL, UNIT, FINDINGS, [], family, []
+                ))
+                self.assertIn("You are %s" % fixer, prompt)
+                self.assertIn(
+                    "This finding was produced by %s, an automated reviewer, "
+                    "not by the operator" % reviewer,
+                    prompt,
+                )
+                self.assertIn(
+                    "IS %s'S FINDING INCORRECT?" % reviewer.upper(),
+                    prompt,
+                )
+                self.assertIn("make one focused falsification pass", prompt)
+
+    def test_fixer_falsification_covers_damage_and_scope(self):
+        prompt = normalized(self.fix("slice_impl"))
+        for question in (
+            "Guarantee: which exact declared guarantee, if any, does the "
+            "observed outcome violate",
+            "Affected party: who or what concretely suffers",
+            "Permitted operation: is the alleged state already allowed",
+            "Incremental damage: what happens BEYOND",
+            "Functional deviation: does real behavior change",
+            "Exposure: how often can it occur",
+            "Scope and altitude: is this a defect in the assigned unit",
+        ):
+            self.assertIn(question, prompt)
+        self.assertIn("Timing alone does not turn an allowed state into "
+                      "additional harm", prompt)
+        self.assertIn("If the claim survives falsification, fix it", prompt)
+
     def test_consultation_cap_and_severity_gate(self):
         prompt = self.fix("slice_impl")
         self.assertIn("Run at most two dialogue rounds, stopping earlier "
