@@ -293,6 +293,8 @@ A_BRAINSTORM_WAIT = "brainstorming_wait"
 A_DONE = "done"
 A_FAILED = "failed"
 
+BRAINSTORMING_POLL_INTERVAL_S = 1.0
+
 
 def decide(state):
     """Pure decision function: the single legal next action for a state."""
@@ -2146,7 +2148,7 @@ class Driver(object):
             session_id=created["id"],
             target_path=checked["target_path"],
         )
-        return "paused for Brainstorming session %s" % created["id"]
+        return "started Brainstorming session %s" % created["id"]
 
     @staticmethod
     def _resume_result(record):
@@ -2304,7 +2306,7 @@ class Driver(object):
         return {"max_rounds": rounds}
 
     def _start_guarantee_calibration(self, unit):
-        """Pause a drafted skeleton for one focused guarantee discussion."""
+        """Hold a drafted skeleton for one focused guarantee discussion."""
         settings = self._guarantee_calibration_config()
         if settings is None:
             return self._finish_draft(unit, "drafted")
@@ -2916,18 +2918,33 @@ class Driver(object):
             A_SEAL_ATTEMPT: self._do_seal_attempt,
             A_BRAINSTORM_WAIT: self._do_brainstorming_wait,
         }[action.type]
+        waiting_session = (
+            self._brainstorming_wait_session()
+            if action.type == A_BRAINSTORM_WAIT else None
+        )
         with self._exclusive():
             self._assert_not_stale()
             try:
                 note = handler()
             except StopStep as exc:
                 return action, "run failed: %s" % exc
+            if (
+                action.type == A_BRAINSTORM_WAIT
+                and self._brainstorming_wait_session() == waiting_session
+            ):
+                return action, note
             self._save()
             return action, note
 
+    def _brainstorming_wait_session(self):
+        unit = st.current_unit(self.state)
+        if unit is None:
+            return None
+        return (unit.get("brainstorming_wait") or {}).get("session_id")
+
     def run(self, max_steps=1000):
         steps = 0
-        while steps < max_steps:
+        while True:
             action = decide(self.state)
             if action.type == A_DONE:
                 if st.current_unit(self.state) is None:
@@ -2938,16 +2955,21 @@ class Driver(object):
                 return 0
             if action.type == A_FAILED:
                 return 2
+            if steps >= max_steps and action.type != A_BRAINSTORM_WAIT:
+                return 3
             sealed_before = self._sealed_keys()
+            waiting_session = (
+                self._brainstorming_wait_session()
+                if action.type == A_BRAINSTORM_WAIT else None
+            )
             self.step()
-            steps += 1
             if (
                 action.type == A_BRAINSTORM_WAIT
-                and (st.current_unit(self.state) or {}).get(
-                    "brainstorming_wait"
-                )
+                and self._brainstorming_wait_session() == waiting_session
             ):
-                return 4
+                time.sleep(BRAINSTORMING_POLL_INTERVAL_S)
+                continue
+            steps += 1
             newly_sealed = self._sealed_keys() - sealed_before
             if newly_sealed and self._control().get("stop_after_seal"):
                 # Operator-ordered safe pause: a seal is the one point
@@ -6587,15 +6609,8 @@ def cmd_run(args):
     elif code == 2:
         print("RUN FAILED: %s" % (summ["failure"] or {}).get("reason"))
     elif code == 4:
-        current = st.current_unit(driver.state)
-        if current is not None and current.get("brainstorming_wait"):
-            print(
-                "paused for Brainstorming session %s; start again to check"
-                % current["brainstorming_wait"]["session_id"]
-            )
-        else:
-            print("paused after seal (operator-ordered safe stop); "
-                  "start again to resume")
+        print("paused after seal (operator-ordered safe stop); "
+              "start again to resume")
     else:
         print("stopped after --max-steps")
     return code

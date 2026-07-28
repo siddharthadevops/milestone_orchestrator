@@ -1964,6 +1964,179 @@ class MilestoneDriverRethinkTest(unittest.TestCase):
         self.assertIsNotNone(unit["draft"])
         self.assertEqual(len(runner.calls), 2)
 
+    def test_run_waits_for_brainstorming_and_continues_without_manual_start(self):
+        path = self._state_path()
+        runner = runners.MockRunner(
+            [
+                {
+                    "expect_kind": contracts.KIND_IMPLEMENT,
+                    "response": rethink(contracts.KIND_IMPLEMENT),
+                },
+                {
+                    "expect_kind": contracts.KIND_IMPLEMENT,
+                    "response": {
+                        "status": "ok",
+                        "kind": contracts.KIND_IMPLEMENT,
+                        "files_changed": [],
+                    },
+                },
+            ]
+        )
+        self._advance_impl_baseline(path, runner)
+        with mock.patch.object(
+            adapter, "create_session", return_value=self._created()
+        ):
+            drv.Driver(path, runner=runner).step()
+
+        with (
+            mock.patch.object(
+                adapter,
+                "terminal_handoff",
+                side_effect=[None, None, self._handoff()],
+            ) as inspect,
+            mock.patch.object(drv.time, "sleep") as sleep,
+        ):
+            code = drv.Driver(path, runner=runner).run(max_steps=2)
+
+        self.assertEqual(code, 3)
+        self.assertEqual(inspect.call_count, 3)
+        self.assertEqual(
+            sleep.call_args_list,
+            [
+                mock.call(drv.BRAINSTORMING_POLL_INTERVAL_S),
+                mock.call(drv.BRAINSTORMING_POLL_INTERVAL_S),
+            ],
+        )
+        unit = st.current_unit(st.load(path))
+        self.assertNotIn("brainstorming_wait", unit)
+        self.assertNotIn("brainstorming_resume", unit)
+        self.assertEqual(unit["status"], st.U_PRE_REVIEW_VERIFY)
+        self.assertEqual(
+            runner.session_calls,
+            [
+                ("start", "codex", "mock-session-1"),
+                ("continue", "codex", "mock-session-1"),
+            ],
+        )
+
+    def test_run_detects_brainstorming_process_failure_while_waiting(self):
+        path = self._state_path()
+        runner = runners.MockRunner(
+            [{
+                "expect_kind": contracts.KIND_IMPLEMENT,
+                "response": rethink(contracts.KIND_IMPLEMENT),
+            }]
+        )
+        self._advance_impl_baseline(path, runner)
+        with mock.patch.object(
+            adapter, "create_session", return_value=self._created()
+        ):
+            drv.Driver(path, runner=runner).step()
+
+        with (
+            mock.patch.object(
+                adapter,
+                "terminal_handoff",
+                side_effect=[
+                    None,
+                    adapter.OperationalTerminalError(
+                        "participant execution failed"
+                    ),
+                ],
+            ),
+            mock.patch.object(drv.time, "sleep") as sleep,
+        ):
+            code = drv.Driver(path, runner=runner).run(max_steps=2)
+
+        self.assertEqual(code, 2)
+        sleep.assert_called_once_with(drv.BRAINSTORMING_POLL_INTERVAL_S)
+        state = st.load(path)
+        self.assertEqual(
+            state["failure"]["type"], "brainstorming_operational"
+        )
+        self.assertNotIn(
+            "brainstorming_wait", st.current_unit(state)
+        )
+
+    def test_run_observes_brainstorming_started_on_last_allowed_step(self):
+        path = self._state_path()
+        runner = runners.MockRunner(
+            [
+                {
+                    "expect_kind": contracts.KIND_IMPLEMENT,
+                    "response": rethink(contracts.KIND_IMPLEMENT),
+                },
+                {
+                    "expect_kind": contracts.KIND_IMPLEMENT,
+                    "response": {
+                        "status": "ok",
+                        "kind": contracts.KIND_IMPLEMENT,
+                        "files_changed": [],
+                    },
+                },
+            ]
+        )
+        self._advance_impl_baseline(path, runner)
+
+        with (
+            mock.patch.object(
+                adapter, "create_session", return_value=self._created()
+            ),
+            mock.patch.object(
+                adapter,
+                "terminal_handoff",
+                side_effect=[None, self._handoff()],
+            ) as inspect,
+            mock.patch.object(drv.time, "sleep") as sleep,
+        ):
+            code = drv.Driver(path, runner=runner).run(max_steps=1)
+
+        self.assertEqual(code, 3)
+        self.assertEqual(inspect.call_count, 2)
+        sleep.assert_called_once_with(drv.BRAINSTORMING_POLL_INTERVAL_S)
+        unit = st.current_unit(st.load(path))
+        self.assertNotIn("brainstorming_wait", unit)
+        self.assertIn("brainstorming_resume", unit)
+        self.assertEqual(
+            runner.session_calls,
+            [
+                ("start", "codex", "mock-session-1"),
+                ("continue", "codex", "mock-session-1"),
+            ],
+        )
+
+    def test_run_reports_terminal_failure_on_last_allowed_step(self):
+        path = self._state_path()
+        runner = runners.MockRunner(
+            [{
+                "expect_kind": contracts.KIND_IMPLEMENT,
+                "response": rethink(contracts.KIND_IMPLEMENT),
+            }]
+        )
+        self._advance_impl_baseline(path, runner)
+        with mock.patch.object(
+            adapter, "create_session", return_value=self._created()
+        ):
+            drv.Driver(path, runner=runner).step()
+
+        with mock.patch.object(
+            adapter,
+            "terminal_handoff",
+            side_effect=adapter.OperationalTerminalError(
+                "participant execution failed"
+            ),
+        ):
+            code = drv.Driver(path, runner=runner).run(max_steps=1)
+
+        self.assertEqual(code, 2)
+        state = st.load(path)
+        self.assertEqual(
+            state["failure"]["type"], "brainstorming_operational"
+        )
+        self.assertNotIn(
+            "brainstorming_wait", st.current_unit(state)
+        )
+
     def test_slice_note_drafter_rethink_continues_the_origin_session(self):
         path = self._slice_doc_path()
         runner = runners.MockRunner(

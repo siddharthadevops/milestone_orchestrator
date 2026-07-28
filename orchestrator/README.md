@@ -229,7 +229,9 @@ carried their own settings keep family-default behavior byte-identical.
 Refusal tokens surface verbatim; the panel validates only form
 completeness.
 
-A milestone that stops to ask a session chips it in the unit's chronology
+A milestone that opens a session remains alive, observes it until terminal,
+and then routes the result without a manual restart. It chips the discussion
+in the unit's chronology
 (the `brainstormings` array of each unit in the run summary, derived from
 the ledger's `brainstorming_wait_started` event and whichever event routed
 its result back — `continued`, `restarted`, `failed`, `detached`, or still
