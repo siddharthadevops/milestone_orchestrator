@@ -1115,7 +1115,7 @@ Kind draft_slice_note adds:
 Kind implement adds:
   "files_changed": ["<workspace-relative paths you created or edited>", ...]
   "suite_command": "<the repo's official full-test-suite command, exactly
-   as you would run it from the workspace root (e.g. 'mix test'); it must
+   as you would run it from the workspace root; it must
    be non-interactive and run the suite exactly ONCE and exit — never a
    watch mode; null or omitted if the repo has no suite>"
 

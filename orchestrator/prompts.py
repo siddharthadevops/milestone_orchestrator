@@ -776,46 +776,12 @@ def _amendments_block(amendments):
     return "\n".join(lines) + "\n\n"
 
 
-def _verified_suite_block(verified_suite, unit_kind=None):
-    """Tell full reviewers which final-suite command to audit.
-
-    A pre-implementation baseline may have passed, but reviews happen before
-    the final suite by design.  Never present baseline evidence as proof that
-    the candidate bytes under review are already green.
-    """
-    if verified_suite:
-        return (
-            "VERIFICATION PLAN\n"
-            "- The command sequence `%s` is currently declared as the\n"
-            "  repo's official full suite. The driver runs it once after\n"
-            "  every configured reviewer is clean and immediately before\n"
-            "  sealing.\n"
-            "- The current candidate bytes have NOT passed that final suite\n"
-            "  yet. Any earlier green belongs to earlier bytes or another\n"
-            "  boundary (including an implementation baseline); never treat\n"
-            "  it as verification of the candidate under review.\n"
-            "- Confirm from repo evidence (Makefile, package.json,\n"
-            "  mix.exs, CI config) that it IS the official full suite: a\n"
-            "  trivial, narrowed, or wrong suite command is itself a P1\n"
-            "  finding.\n"
-            "- Do NOT run it (or any full suite) yourself. Base claims on\n"
-            "  code-level evidence; a finding that needs runtime\n"
-            "  confirmation will be verified by the fixer with a focused\n"
-            "  check.\n" % verified_suite
-        )
-    if unit_kind == "slice_impl":
-        return (
-            "VERIFICATION PLAN\n"
-            "- No official full-suite command is armed for this\n"
-            "  implementation. If the repo\n"
-            "  HAS one, that omission is itself a P1 finding. Focused\n"
-            "  test runs are permitted here to verify your claims.\n"
-        )
+def _review_verification_block():
+    """Keep review independent from another worker's suite choice."""
     return (
-        "VERIFICATION PLAN\n"
-        "- No official full-suite command is known yet. For a documentation\n"
-        "  unit that absence is expected, not a finding. Do NOT run a repo\n"
-        "  full suite yourself; use only focused checks needed for a claim.\n"
+        "VERIFICATION BOUNDARY\n"
+        "- Do NOT run the repository's full suite during review.\n"
+        "- Use focused checks only when necessary to verify a concrete claim.\n"
     )
 
 
@@ -1539,9 +1505,8 @@ def _wave_full_review_block(wave_docs):
 
 def build_review_round(family, workspace, goal, unit_desc, artifact, registry,
                        unit_kind=None, governing=None, amendments=None,
-                       verified_suite=None, project_context=None,
-                       battery=None, debt=None, gap_enabled=False,
-                       wave_docs=None):
+                       project_context=None, battery=None, debt=None,
+                       gap_enabled=False, wave_docs=None):
     return (
         _header(contracts.KIND_REVIEW_ROUND, family, workspace)
         + "\nTASK: full review round of %s. REPORT ONLY.\n" % unit_desc
@@ -1555,7 +1520,7 @@ def build_review_round(family, workspace, goal, unit_desc, artifact, registry,
         + "You fix nothing and triage nothing — a separate fixer call\n"
         "will verify your findings against the real files and concede or\n"
         "dissent.\n\n"
-        + _verified_suite_block(verified_suite, unit_kind)
+        + _review_verification_block()
         + _review_quality_block(unit_kind, reform=gap_enabled)
         + (_battery_review_block(battery) if battery else "")
         + _debt_block(debt)

@@ -803,15 +803,6 @@ class Driver(object):
                     return discovered
         return None
 
-    def _review_suite_command(self, unit):
-        """The declared final-suite command reviewers must audit.
-
-        Reviews now precede the final full-suite boundary, so this is never
-        presented as proof that the current candidate already passed.
-        """
-        cmds = self._verification_commands(unit)
-        return " && ".join(cmds) if cmds else None
-
     def _governing(self, unit):
         """The sealed document the unit's artifact answers to (the
         reviewer's explicit standard): the skeleton for a slice note, the
@@ -5203,7 +5194,6 @@ class Driver(object):
             unit_kind=unit["kind"],
             governing=self._governing(unit),
             amendments=amendments,
-            verified_suite=self._review_suite_command(unit),
             project_context=project_context,
             battery=interpreter.battery_questions(self.state, unit["kind"]),
             debt=self._debt(unit),

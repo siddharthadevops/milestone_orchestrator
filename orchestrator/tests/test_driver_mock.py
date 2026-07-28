@@ -766,24 +766,15 @@ class TestSuiteDiscoveryProtocol(DriverTestCase):
                 [e["boundary"] for e in impl_ver[1:]], ["final", "final"]
             )
 
-            # Implementation reviewers audit the declared command, but are
-            # explicitly NOT told the current candidate already passed.
-            # Earlier doc reviewers had no command to audit.
+            # Reviews receive one generic verification boundary. The exact
+            # suite remains driver state and never anchors their judgment.
             for fam, kind, prompt in mock.calls:
                 if kind == "review_round":
-                    has = "VERIFICATION PLAN" in prompt
-                    if "slice 1 implementation" in prompt:
-                        self.assertTrue(has, kind)
-                        self.assertIn(
-                            "current candidate bytes have NOT passed",
-                            prompt,
-                        )
-                    else:
-                        self.assertTrue(has, kind)
-                        self.assertIn(
-                            "No official full-suite command is known yet",
-                            prompt,
-                        )
+                    self.assertIn("VERIFICATION BOUNDARY", prompt)
+                    self.assertIn(
+                        "Do NOT run the repository's full suite", prompt
+                    )
+                    self.assertNotIn(VERIFY_CMD, prompt)
 
     def test_later_discovery_does_not_replace_established_suite(self):
         with tempfile.TemporaryDirectory(prefix="orch-mock-") as ws:

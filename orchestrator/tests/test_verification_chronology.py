@@ -353,15 +353,9 @@ class TestVerificationChronology(DriverTestCase):
             unit = st.current_unit(driver.state)
 
             split_fingerprint = driver._review_evidence_fingerprint(unit)
-            self.assertEqual(
-                driver._review_suite_command(unit), joined[0]
-            )
 
             driver.config["verification"] = joined
             joined_fingerprint = driver._review_evidence_fingerprint(unit)
-            self.assertEqual(
-                driver._review_suite_command(unit), joined[0]
-            )
 
             self.assertNotEqual(split_fingerprint, joined_fingerprint)
 

@@ -1155,50 +1155,29 @@ class TestOperatorAmendments(unittest.TestCase):
 
 class TestVerificationProtocol(unittest.TestCase):
     """Zero-config verification: the implementer reports suite_command,
-    reviewers audit that command without being told the current bytes are
-    green, and the driver reserves the full suite for the final boundary."""
+    the driver reserves it for the final boundary, and reviewers receive only
+    the generic boundary needed for independent judgment."""
 
-    def test_review_carries_verified_suite_block(self):
+    def test_impl_review_carries_only_generic_verification_boundary(self):
         prompt = normalized(prompts.build_review_round(
             FAMILY, WORKSPACE, GOAL, UNIT, "docs/x.md", [],
-            unit_kind="slice_impl", verified_suite="mix test"))
-        self.assertIn("VERIFICATION PLAN", prompt)
-        # The declared command may come from config or the implementer.
-        # Reviewers audit it but never mistake earlier green for proof of
-        # the candidate under review.
-        self.assertIn("The command sequence `mix test` is currently declared "
-                      "as the repo's official full suite",
+            unit_kind="slice_impl"))
+        self.assertIn("VERIFICATION BOUNDARY", prompt)
+        self.assertIn("Do NOT run the repository's full suite during review",
                       prompt)
-        self.assertIn("current candidate bytes have NOT passed that final "
-                      "suite yet", prompt)
-        self.assertIn("earlier green belongs to earlier bytes or another "
-                      "boundary", prompt)
-        self.assertIn("never treat it as verification of the candidate under "
-                      "review", prompt)
-        self.assertIn("a trivial, narrowed, or wrong suite command is "
-                      "itself a P1 finding", prompt)
-        self.assertIn("Do NOT run it (or any full suite) yourself", prompt)
-        self.assertIn("verified by the fixer with a focused check", prompt)
+        self.assertIn("Use focused checks only when necessary to verify a "
+                      "concrete claim", prompt)
+        self.assertNotIn("mix test", prompt)
+        self.assertNotIn("mix.exs", prompt)
+        self.assertNotIn("official full suite", prompt)
 
-    def test_impl_unit_without_suite_gets_the_inverse_block(self):
-        # Absence is an asserted, reviewable claim — never a silent
-        # default: no-suite impl reviews re-arm the reviewers.
-        prompt = normalized(prompts.build_review_round(
-            FAMILY, WORKSPACE, GOAL, UNIT, "docs/x.md", [],
-            unit_kind="slice_impl", verified_suite=None))
-        self.assertIn("No official full-suite command is armed for this "
-                      "implementation", prompt)
-        self.assertIn("that omission is itself a P1 finding", prompt)
-        self.assertIn("Focused test runs are permitted here", prompt)
-
-    def test_doc_without_known_suite_still_forbids_a_full_run(self):
+    def test_doc_review_uses_the_same_generic_boundary(self):
         prompt = prompts.build_review_round(
             FAMILY, WORKSPACE, GOAL, UNIT, "docs/x.md", [],
-            unit_kind="skeleton", verified_suite=None)
-        self.assertIn("VERIFICATION PLAN", prompt)
-        self.assertIn("absence is expected, not a finding", prompt)
-        self.assertIn("Do NOT run a repo", prompt)
-        self.assertIn("full suite yourself", prompt)
+            unit_kind="skeleton")
+        self.assertIn("VERIFICATION BOUNDARY", prompt)
+        self.assertIn("Do NOT run the repository's full suite", prompt)
+        self.assertIn("Use focused checks only when necessary", prompt)
 
     def test_implement_reports_suite_and_skips_full_run(self):
         prompt = normalized(prompts.build_implement(
