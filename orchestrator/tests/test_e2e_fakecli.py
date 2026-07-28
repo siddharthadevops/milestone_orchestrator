@@ -498,6 +498,24 @@ class TestCalculatorE2E(unittest.TestCase):
         self.assertEqual(review["kind"], "review_round")
         self.assertEqual(len(review["findings"]), 1)
 
+    def test_exact_worker_prompts_are_runtime_only_artifacts(self):
+        prompt_dir = os.path.join(self.work, ".orchestrator", "prompts")
+        self.assertTrue(os.path.isdir(prompt_dir))
+        prompt_paths = [
+            os.path.join(prompt_dir, name)
+            for name in os.listdir(prompt_dir)
+        ]
+        self.assertTrue(prompt_paths)
+        for path in prompt_paths:
+            with open(path, "r", encoding="utf-8") as handle:
+                prompt = handle.read()
+            self.assertIn("KIND:", prompt)
+            self.assertNotIn("KIND: seal", prompt)
+        self.assertEqual(
+            _git(self.work, "check-ignore", ".orchestrator/prompts").returncode,
+            0,
+        )
+
     # -- git gates ------------------------------------------------------------
 
     def test_workspace_is_its_own_repo_with_canonical_gate_commits(self):

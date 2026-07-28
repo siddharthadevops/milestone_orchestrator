@@ -1660,12 +1660,33 @@ def _stop_authorized(home, session_id, record):
 
 def _participant_execution(store, record, participant_process_factory):
     runtime = record["runtime"]
+    session_id = record["id"]
+
+    def record_prompt(family, prompt):
+        attempt = store.read_turn_attempt(session_id)
+        label = session_id
+        if attempt is not None:
+            stage = (attempt.get("action_context") or {}).get("stage")
+            label = "%s-%03d-%s%s" % (
+                attempt.get("kind", "discussion_turn"),
+                attempt["completed_turn_count"] + 1,
+                attempt["participant_id"],
+                ("-" + stage) if stage else "",
+            )
+        return runners.save_prompt_trace(
+            store.prompt_directory(session_id),
+            family,
+            prompt,
+            label=label,
+        )
+
     provider = runners.SubprocessRunner(
         runtime["commands"],
         runtime.get("timeouts") or {},
         stall_window_s=runtime.get("worker_stall_window_s"),
         stall_min_cpu_s=runtime.get("worker_stall_min_cpu_s"),
         participant_process_factory=participant_process_factory,
+        prompt_recorder=record_prompt,
     )
     snapshot = store.read(record["id"])
     if snapshot is None:

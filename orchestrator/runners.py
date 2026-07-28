@@ -614,7 +614,7 @@ class SubprocessRunner(object):
 
     def __init__(self, commands, timeouts, cwd=None, env=None,
                  stall_window_s=None, stall_min_cpu_s=None,
-                 participant_process_factory=None):
+                 participant_process_factory=None, prompt_recorder=None):
         self.commands = commands
         self.timeouts = timeouts or {}
         self.cwd = cwd
@@ -626,6 +626,14 @@ class SubprocessRunner(object):
         # the supervised process. Ordinary one-shot calls keep using Popen
         # directly and therefore remain byte-for-byte compatible.
         self.participant_process_factory = participant_process_factory
+        if prompt_recorder is not None and not callable(prompt_recorder):
+            raise RunnerError("prompt_recorder must be callable")
+        # Optional caller-owned durable sink. It receives the exact stdin
+        # prompt for EVERY physical CLI invocation (ordinary calls, explicit
+        # session starts/continuations, repair retries, infrastructure retries,
+        # reclassification, and error classification). The sink runs before a
+        # worker is spawned: an unrecordable prompt is never sent to an LLM.
+        self.prompt_recorder = prompt_recorder
         # Liveness watchdog: kill a worker whose whole process tree burns
         # less than stall_min_cpu_s of CPU over a stall_window_s window
         # (a frozen call — no local compute at all). Disabled when either
@@ -1017,6 +1025,16 @@ class SubprocessRunner(object):
                 arg = arg.replace("{workspace}", workspace)
                 argv.append(arg)
 
+            prompt_path = None
+            if self.prompt_recorder is not None:
+                try:
+                    prompt_path = self.prompt_recorder(family, prompt)
+                except Exception as exc:
+                    raise RunnerError(
+                        "could not persist the exact %s prompt: %s"
+                        % (family, exc)
+                    )
+
             # stdout goes to a FILE, not a pipe, so the watchdog can watch it
             # grow as a liveness signal: a slow token streamer burns little
             # CPU but is working, and its bytes land here as they arrive. The
@@ -1145,6 +1163,7 @@ class SubprocessRunner(object):
                 duration,
                 transport_text=stdout_text,
             )
+            result.prompt_path = prompt_path
             # Ordered Brainstorming coordination consumes this positive
             # evidence before accepting a turn. Plain participant exchanges
             # retain the existing fail-open delivery posture when process
@@ -1320,6 +1339,50 @@ def prompt_kind(prompt):
         if line.startswith("KIND:"):
             return line.split(":", 1)[1].strip()
     return None
+
+
+def save_prompt_trace(directory, family, prompt, label=None):
+    """Persist one exact LLM stdin prompt as an immutable runtime artifact.
+
+    The caller chooses an already-ignored runtime directory. A readable label
+    is useful for pairing the prompt with milestone activity, but uniqueness
+    never depends on it: O_EXCL plus a numeric suffix preserves every retry,
+    repair, resume, and repeated label without overwriting history.
+    """
+    if not isinstance(prompt, str):
+        raise RunnerError("prompt trace requires text")
+
+    def safe(value, fallback):
+        rendered = "".join(
+            char
+            if (char.isascii() and (char.isalnum() or char in "._-"))
+            else "_"
+            for char in str(value or "")
+        ).strip("._-")
+        return (rendered[:96] or fallback)
+
+    os.makedirs(directory, exist_ok=True)
+    family_part = safe(family, "family")
+    kind_part = safe(prompt_kind(prompt), "prompt")
+    label_part = safe(label, str(time.time_ns()))
+    stem = "%s-%s-%s" % (label_part, family_part, kind_part)
+    candidate = stem
+    counter = 1
+    while True:
+        path = os.path.join(directory, candidate + ".txt")
+        try:
+            fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o666)
+            break
+        except FileExistsError:
+            counter += 1
+            candidate = "%s-%d" % (stem, counter)
+    try:
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(prompt.encode("utf-8"))
+    except BaseException:
+        _unlink_quiet(path)
+        raise
+    return path
 
 
 # ---------------------------------------------------------------------------

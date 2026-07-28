@@ -899,8 +899,12 @@ class TestSubprocessRunner(unittest.TestCase):
             fh.write(textwrap.dedent(body))
         return path
 
-    def runner_for(self, argv, timeouts=None, family="fam"):
-        return SubprocessRunner({family: argv}, timeouts or {})
+    def runner_for(self, argv, timeouts=None, family="fam",
+                   prompt_recorder=None):
+        return SubprocessRunner(
+            {family: argv}, timeouts or {},
+            prompt_recorder=prompt_recorder,
+        )
 
     def test_prompt_arrives_on_stdin(self):
         script = self.write_script(
@@ -914,6 +918,100 @@ class TestSubprocessRunner(unittest.TestCase):
         result = runner.call("fam", "hello worker\nline two", self.workspace)
         self.assertEqual(result.text, "hello worker\nline two")
         self.assertEqual(result.exit_code, 0)
+
+    def test_each_physical_call_persists_the_exact_prompt_without_clobber(self):
+        script = self.write_script(
+            "echo_recorded_stdin.py",
+            """\
+            import sys
+            sys.stdout.write(sys.stdin.read())
+            """,
+        )
+        prompt_dir = os.path.join(self._tmp.name, "prompts")
+        paths = []
+
+        def record(family, prompt):
+            path = runners.save_prompt_trace(
+                prompt_dir, family, prompt, label="same-call"
+            )
+            paths.append(path)
+            return path
+
+        runner = self.runner_for(
+            [sys.executable, script], prompt_recorder=record
+        )
+        prompts = ["first exact prompt", "second exact prompt"]
+        results = [
+            runner.call("fam", prompt, self.workspace) for prompt in prompts
+        ]
+
+        self.assertEqual(len(set(paths)), 2)
+        self.assertEqual([result.prompt_path for result in results], paths)
+        for path, prompt in zip(paths, prompts):
+            with open(path, "r", encoding="utf-8") as handle:
+                self.assertEqual(handle.read(), prompt)
+
+    def test_unrecordable_prompt_never_starts_the_worker(self):
+        marker = os.path.join(self._tmp.name, "worker-started")
+        script = self.write_script(
+            "mark_start.py",
+            """\
+            import pathlib, sys
+            pathlib.Path(sys.argv[1]).write_text("started")
+            print("unexpected")
+            """,
+        )
+
+        def refuse(_family, _prompt):
+            raise OSError("trace disk unavailable")
+
+        runner = self.runner_for(
+            [sys.executable, script, marker], prompt_recorder=refuse
+        )
+        with self.assertRaisesRegex(
+            RunnerError, "could not persist the exact fam prompt"
+        ):
+            runner.call("fam", "must be recorded", self.workspace)
+        self.assertFalse(os.path.exists(marker))
+
+    def test_contract_repair_persists_original_and_repair_prompts(self):
+        counter = os.path.join(self._tmp.name, "repair-count")
+        script = self.write_script(
+            "repair_once.py",
+            """\
+            import json, pathlib, sys
+            path = pathlib.Path(sys.argv[1])
+            count = int(path.read_text()) if path.exists() else 0
+            path.write_text(str(count + 1))
+            if count == 0:
+                print("not json")
+            else:
+                print(json.dumps({
+                    "status": "ok",
+                    "kind": "implement",
+                    "files_changed": ["calc.py"],
+                }))
+            """,
+        )
+        recorded = []
+        runner = self.runner_for(
+            [sys.executable, script, counter],
+            prompt_recorder=lambda _family, prompt: recorded.append(prompt),
+        )
+        prompt = make_prompt("implement")
+
+        output, _result = call_worker(
+            runner, "fam", prompt, "implement", self.workspace
+        )
+
+        self.assertEqual(output, VALID_IMPLEMENT)
+        self.assertEqual(recorded[0], prompt)
+        self.assertEqual(len(recorded), 2)
+        self.assertEqual(
+            recorded[1],
+            prompt + (runners.REPAIR_SUFFIX
+                      % "no valid JSON object found in worker output"),
+        )
 
     def test_workspace_substitution(self):
         script = self.write_script(

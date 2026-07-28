@@ -353,6 +353,7 @@ class Driver(object):
             self.config["commands"], self.config.get("timeouts", {}),
             stall_window_s=self.config.get("worker_stall_window_s"),
             stall_min_cpu_s=self.config.get("worker_stall_min_cpu_s"),
+            prompt_recorder=self._record_llm_prompt,
         )
         # Before repo validation: if a pending gap's cleanup never ran (a crash
         # between recording the gap and cleaning up), worker junk such as a
@@ -692,6 +693,25 @@ class Driver(object):
         path = os.path.join(self._runtime_dir(), "raw")
         os.makedirs(path, exist_ok=True)
         return path
+
+    def _prompt_dir(self):
+        path = os.path.join(self._runtime_dir(), "prompts")
+        os.makedirs(path, exist_ok=True)
+        return path
+
+    def _record_llm_prompt(self, family, prompt):
+        """Persist one exact physical worker prompt outside the Git ledger."""
+        label = None
+        try:
+            with open(self._busy_path(), "r", encoding="utf-8") as handle:
+                current = json.load(handle)
+            if isinstance(current, dict):
+                label = current.get("label")
+        except (OSError, ValueError, TypeError):
+            pass
+        return runners.save_prompt_trace(
+            self._prompt_dir(), family, prompt, label=label
+        )
 
     def _save_raw(self, name, text):
         path = os.path.join(self._raw_dir(), name + ".txt")

@@ -22,7 +22,7 @@ from orchestrator import access
 from orchestrator import brainstorming as bs
 from orchestrator import brainstorming_coordination as coordination
 from orchestrator import brainstorming_lifecycle as lifecycle
-from orchestrator import registry, service, workareas
+from orchestrator import registry, runners, service, workareas
 
 
 class StandaloneBrainstormingApiTest(unittest.TestCase):
@@ -733,6 +733,13 @@ class StandaloneBrainstormingApiTest(unittest.TestCase):
             second_id = second["session"]["id"]
             self._stop_sleeper_record(second_id)
             transcript = store.transcript_ref(second_id)
+            prompt_path = runners.save_prompt_trace(
+                store.prompt_directory(second_id),
+                "codex",
+                "exact discarded prompt",
+                label="turn-1",
+            )
+            self.assertTrue(os.path.exists(prompt_path))
             status, purged = self._request(
                 "DELETE",
                 "/api/brainstorming/sessions/%s?purge=1" % second_id,
@@ -740,6 +747,7 @@ class StandaloneBrainstormingApiTest(unittest.TestCase):
             self.assertEqual(status, 200, purged)
             self.assertTrue(purged["purged"])
             self.assertIsNone(store.read(second_id))
+            self.assertFalse(os.path.exists(prompt_path))
             self.assertFalse(os.path.exists(os.path.dirname(transcript)))
 
         # The target artifact was never touched by any of it.
@@ -1200,6 +1208,17 @@ class StandaloneBrainstormingApiTest(unittest.TestCase):
         )
 
         self.assertEqual(len(progressed.state["completed_turns"]), 1)
+        prompt_directory = store.prompt_directory(created["id"])
+        prompt_names = os.listdir(prompt_directory)
+        self.assertEqual(len(prompt_names), 1)
+        with open(
+            os.path.join(prompt_directory, prompt_names[0]),
+            "r",
+            encoding="utf-8",
+        ) as handle:
+            recorded_prompt = handle.read()
+        self.assertIn("Question:", recorded_prompt)
+        self.assertIn("role: lead", recorded_prompt)
         self.assertFalse(os.path.samefile(target, unrelated))
         real_identity = lifecycle._target_identity
 

@@ -2125,6 +2125,12 @@ class SessionStore:
             os.path.join(self._transcript_root, directory, "chat.md")
         )
 
+    def prompt_directory(self, session_id):
+        """Brainstorming-owned runtime directory for exact LLM prompts."""
+        return os.path.join(
+            os.path.dirname(self.transcript_ref(session_id)), "prompts"
+        )
+
     @staticmethod
     def _snapshot(record):
         if not record["exists?"]:
@@ -2631,6 +2637,34 @@ class SessionStore:
                 os.unlink(transcript)
             except FileNotFoundError:
                 pass
+
+            # Exact prompt traces are session-owned just like chat.md. Public
+            # deletion removes them without following directories or links.
+            prompt_directory = self.prompt_directory(session_id)
+            if os.path.islink(prompt_directory):
+                try:
+                    os.unlink(prompt_directory)
+                except FileNotFoundError:
+                    pass
+                prompt_entries = None
+            else:
+                try:
+                    prompt_entries = os.scandir(prompt_directory)
+                except (FileNotFoundError, NotADirectoryError):
+                    prompt_entries = None
+            if prompt_entries is not None:
+                with prompt_entries:
+                    for entry in prompt_entries:
+                        if entry.is_file(follow_symlinks=False) \
+                                or entry.is_symlink():
+                            try:
+                                os.unlink(entry.path)
+                            except FileNotFoundError:
+                                pass
+                try:
+                    os.rmdir(prompt_directory)
+                except OSError:
+                    pass
 
             def remove(document):
                 doomed = [
