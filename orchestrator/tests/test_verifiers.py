@@ -289,7 +289,8 @@ class TestFieldCollisions(unittest.TestCase):
             contracts.reserved_output_keys("implement"),
             {"status", "kind", "blocked_reason", "notes", "gaps",
              "question", "finding", "target_path", "max_rounds",
-             "failure_gap", "files_changed", "suite_command"},
+             "result_mode", "failure_gap", "files_changed",
+             "suite_command", "slices"},
         )
         self.assertIn(
             "suite_command_finding_id",
@@ -772,8 +773,10 @@ class TestMergedOutputValidation(FilesystemCase):
             make_policy(kinds=["fix_findings", "delta_review"])
         )
         validity = {
+            "affected_party": "the user relying on the correction route",
+            "observable_damage": "the accepted correction is not applied",
+            "violated_guarantee": "accepted corrections remain applicable",
             "permitted_baseline": "the correction route remains available",
-            "actual_outcome": "the correction is ready for independent review",
             "incremental_harm": "none after this repair",
             "exceeds_baseline": True,
         }

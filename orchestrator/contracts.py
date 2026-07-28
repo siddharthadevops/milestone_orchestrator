@@ -128,7 +128,27 @@ def _optional(obj, key, types, ctx, default=None):
     return val
 
 
-def _validate_finding_validity(finding, ctx, expected_exceeds_baseline):
+REPORT_VALIDITY_TEXT_FIELDS = (
+    "permitted_baseline",
+    "actual_outcome",
+    "incremental_harm",
+)
+
+FIX_VALIDITY_TEXT_FIELDS = (
+    "affected_party",
+    "observable_damage",
+    "violated_guarantee",
+    "permitted_baseline",
+    "incremental_harm",
+)
+
+
+def _validate_finding_validity(
+    finding,
+    ctx,
+    expected_exceeds_baseline,
+    text_fields=REPORT_VALIDITY_TEXT_FIELDS,
+):
     """Validate the evidence-backed comparison that makes a finding real.
 
     Reviewers may report only outcomes outside the mechanism's permitted
@@ -137,18 +157,13 @@ def _validate_finding_validity(finding, ctx, expected_exceeds_baseline):
     """
     validity = _require(finding, "validity", dict, ctx)
     vctx = "%s.validity" % ctx
-    expected = {
-        "permitted_baseline",
-        "actual_outcome",
-        "incremental_harm",
-        "exceeds_baseline",
-    }
+    expected = set(text_fields) | {"exceeds_baseline"}
     if set(validity) != expected:
         raise ContractError(
             "%s: validity must contain exactly %s"
             % (vctx, sorted(expected))
         )
-    for key in ("permitted_baseline", "actual_outcome", "incremental_harm"):
+    for key in text_fields:
         value = _require(validity, key, str, vctx)
         if not value.strip():
             raise ContractError("%s: key %r must be non-empty" % (vctx, key))
@@ -314,6 +329,7 @@ def validate_fix_finding(finding, ctx):
         finding,
         ctx,
         expected_exceeds_baseline=disp in ("fixed", "blocked"),
+        text_fields=FIX_VALIDITY_TEXT_FIELDS,
     )
     consultation = _optional(finding, "consultation", dict, ctx)
     prevention = _optional(finding, "prevention", dict, ctx)
@@ -654,7 +670,9 @@ def validate_suite_command(command, ctx):
         )
 
 
-def validate_need_rethink(obj, kind, ctx, require_plain=False):
+def validate_need_rethink(
+    obj, kind, ctx, require_plain=False, require_failure_gap=False
+):
     """Validate the closed, non-completing milestone adapter signal."""
     if kind not in RETHINK_KINDS:
         raise ContractError(
@@ -668,13 +686,11 @@ def validate_need_rethink(obj, kind, ctx, require_plain=False):
         "target_path",
         "max_rounds",
     }
-    if kind in RETHINK_CONTINUATION_KINDS:
-        required.add("failure_gap")
-    allowed = required | {"result_mode"}
+    allowed = required | {"result_mode", "failure_gap"}
     if not required.issubset(obj) or not set(obj).issubset(allowed):
         raise ContractError(
             "%s: need_rethink must contain %s and may additionally contain "
-            "only result_mode"
+            "only result_mode or the legacy failure_gap"
             % (ctx, sorted(required))
         )
     result_mode = obj.get("result_mode", RETHINK_RESULT_PROPOSAL)
@@ -717,6 +733,11 @@ def validate_need_rethink(obj, kind, ctx, require_plain=False):
         raise ContractError(
             "%s: need_rethink.max_rounds must be a positive integer" % ctx
         )
+    if require_failure_gap and "failure_gap" not in obj:
+        raise ContractError(
+            "%s: legacy continuation need_rethink requires failure_gap"
+            % ctx
+        )
     if (
         result_mode == RETHINK_RESULT_DESIGN_AMENDMENT
         and obj["max_rounds"] > 2
@@ -724,21 +745,18 @@ def validate_need_rethink(obj, kind, ctx, require_plain=False):
         raise ContractError(
             "%s: design_amendment is a fast path limited to 2 rounds" % ctx
         )
-    if kind in RETHINK_CONTINUATION_KINDS:
+    if "failure_gap" in obj:
+        if kind not in RETHINK_CONTINUATION_KINDS:
+            raise ContractError(
+                "%s: failure_gap is allowed only for a continuable legacy "
+                "builder/fixer" % ctx
+            )
         validate_gap(obj["failure_gap"], "%s.failure_gap" % ctx)
     if result_mode == RETHINK_RESULT_DESIGN_AMENDMENT:
         if kind not in RETHINK_CONTINUATION_KINDS:
             raise ContractError(
                 "%s: design_amendment is allowed only for a continuable "
                 "builder/fixer" % ctx
-            )
-        if (
-            obj["failure_gap"].get("classification")
-            != CLASSIFY_FITS_REMODEL
-        ):
-            raise ContractError(
-                "%s: design_amendment requires a fits_remodel failure_gap; "
-                "Brainstorming cannot amend the operator goal" % ctx
             )
     return obj
 
@@ -747,7 +765,8 @@ def validate_worker_output(obj, kind, require_plain=False,
                            battery_questions=None,
                            require_drift_damage=False,
                            allow_design_correction=False,
-                           require_design_correction_verdict=False):
+                           require_design_correction_verdict=False,
+                           require_failure_gap=False):
     """Validate the full worker JSON output for a call of `kind`.
 
     require_plain: reform runs hard-require the plain/example lay mirror
@@ -779,7 +798,11 @@ def validate_worker_output(obj, kind, require_plain=False,
         )
     if status == "need_rethink":
         return validate_need_rethink(
-            obj, kind, ctx, require_plain=require_plain
+            obj,
+            kind,
+            ctx,
+            require_plain=require_plain,
+            require_failure_gap=require_failure_gap,
         )
     # gaps ride ONLY with a gap status — an `ok` carrying a non-empty gaps
     # array is a contract violation (nothing was finished, or nothing was
@@ -854,11 +877,25 @@ def validate_worker_output(obj, kind, require_plain=False,
             validate_battery(obj["battery"], battery_questions, ctx)
     elif kind == KIND_DRAFT_SLICE_NOTE:
         _require(obj, "artifact", str, ctx)
+        slices = _optional(obj, "slices", list, ctx)
+        if slices is not None:
+            if not slices:
+                raise ContractError(
+                    "%s: slices, when present, must be non-empty" % ctx
+                )
+            validate_slices(slices, "%s.slices" % ctx)
         if battery_questions is not None:
             _require(obj, "battery", list, ctx)
             validate_battery(obj["battery"], battery_questions, ctx)
     elif kind == KIND_IMPLEMENT:
         _require(obj, "files_changed", list, ctx)
+        slices = _optional(obj, "slices", list, ctx)
+        if slices is not None:
+            if not slices:
+                raise ContractError(
+                    "%s: slices, when present, must be non-empty" % ctx
+                )
+            validate_slices(slices, "%s.slices" % ctx)
         if obj.get("suite_command") is not None:
             validate_suite_command(obj["suite_command"], ctx)
     elif kind in REPORT_KINDS:
@@ -971,6 +1008,7 @@ COMMON_OUTPUT_KEYS = frozenset(
         "finding",
         "target_path",
         "max_rounds",
+        "result_mode",
         "failure_gap",
     })
 
@@ -979,8 +1017,8 @@ KIND_OUTPUT_KEYS = {
     # it: a project contract extension must never collide with the
     # question battery's output field.
     KIND_DRAFT_SKELETON: frozenset({"artifact", "slices", "battery"}),
-    KIND_DRAFT_SLICE_NOTE: frozenset({"artifact", "battery"}),
-    KIND_IMPLEMENT: frozenset({"files_changed", "suite_command"}),
+    KIND_DRAFT_SLICE_NOTE: frozenset({"artifact", "battery", "slices"}),
+    KIND_IMPLEMENT: frozenset({"files_changed", "suite_command", "slices"}),
     KIND_REVIEW_ROUND: frozenset({"findings", "files_changed"}),
     KIND_DELTA_REVIEW: frozenset(
         {"findings", "files_changed", "design_correction_verdict"}
@@ -1085,13 +1123,11 @@ EXACTLY:
   "target_path": "<normalized workspace-relative source artifact to isolate>"
   "max_rounds": <any positive integer chosen for this discussion>
   "result_mode": "proposal" | "design_amendment"
-For draft_slice_note, implement and fix_findings, ALSO return exactly one
-`"failure_gap"` using the normal gap-entry shape; it is the already-declared
-route used only if the discussion itself returns failure. Review kinds MUST
-NOT include failure_gap.
 Use `design_amendment` only when one conservative, bounded clarification of
-sealed design can resolve an in-goal contradiction without changing the goal,
-public API, schemas, security, ownership, or slice boundaries. In that mode
+the current reviewed design can resolve an in-goal contradiction without
+changing the operator goal or an operator-reserved decision. It may amend the
+skeleton and affected slice notes and may assign bounded repair work to the
+current slice or a new future slice. In that mode
 `target_path` names the smallest source artifact for context; Brainstorming
 constructs a separate concise amendment target. Use `proposal` for an ordinary
 focused question. A design amendment is limited to at most 2 rounds. Review
@@ -1101,7 +1137,7 @@ Do not mix need_rethink with notes, ordinary findings/results, work/file claims,
 retry, disposition, verdict, gap arrays, or slice plans. A fixer must put
 exactly one currently queued finding in `finding`; its queued siblings remain
 pending. Any materializable workspace artifact may be selected as the source,
-including one also named in context, a sealed/generated milestone record, or
+including one also named in context, a generated milestone record, or
 the artifact currently under judgment; the adapter supplies isolation by
 copying it into the Brainstorming-owned work area.
 
@@ -1176,8 +1212,10 @@ Kind fix_findings adds:
     {"id": "<echo the queued finding's id>", "severity": "<echo>",
      "summary": "...",
      "validity": {
+       "affected_party": "<who or what is concretely affected, or why none>",
+       "observable_damage": "<the concrete observable damage, or why none>",
+       "violated_guarantee": "<the exact violated guarantee, or why none>",
        "permitted_baseline": "<independently verified normal/allowed outcome>",
-       "actual_outcome": "<the concrete observed outcome>",
        "incremental_harm": "<harm beyond that permitted baseline, or why
                             there is none>",
        "exceeds_baseline": true | false},
@@ -1197,8 +1235,12 @@ Kind fix_findings adds:
    change leaves the added slices unbuilt. Omit it when the table is
    untouched.)
   Rules: triage EXACTLY the queued findings (same ids, nothing else).
-  Verify each against the real code/doc before deciding. `fixed` and
-  `blocked` require `validity.exceeds_baseline: true`; `rejected` and
+  Verify each against the real code/doc before deciding. A finding is valid
+  only when affected_party, observable_damage, and violated_guarantee are
+  concrete and evidence-backed and `exceeds_baseline` is true. If any cannot
+  be demonstrated, the finding is invalid: use `rejected` and its mandatory
+  consultation (or `rejected_adjudicated` for a settled duplicate). `fixed`
+  and `blocked` require `validity.exceeds_baseline: true`; `rejected` and
   `rejected_adjudicated` require false. "rejected"
   REQUIRES the consultation; when the target was correct but misreadable,
   ALSO make the minimal clarifying edit and record it in `prevention` so
@@ -1258,14 +1300,19 @@ Completed fix pass:
  "files_changed":["..."],"notes":"<optional short note>"}
 Return one result for every queued id, and no others:
 {"id":"<echo>","severity":"<echo>","summary":"...",
- "validity":{"permitted_baseline":"...","actual_outcome":"...",
+ "validity":{"affected_party":"...","observable_damage":"...",
+             "violated_guarantee":"...","permitted_baseline":"...",
              "incremental_harm":"...","exceeds_baseline":true|false},
  "disposition":"fixed|rejected|rejected_adjudicated|blocked",
  "consultation":null|{"resolution":"..."},
  "prevention":null|{"documented_in":"<edited path>","note":"..."},
  "adjudication_ref":null|"<settled rejection id>"}
-`fixed`/`blocked` require exceeds_baseline=true; both rejection dispositions
-require false. Include any extra field explicitly required by an active block
+`fixed`/`blocked` require a concrete, evidence-backed affected party,
+observable damage, and violated guarantee, plus exceeds_baseline=true. If any
+cannot be demonstrated, the finding is invalid: `rejected` requires its
+consultation (`rejected_adjudicated` remains the settled-duplicate path), and
+both rejection dispositions require exceeds_baseline=false. Include any extra
+field explicitly required by an active block
 above (`slices`, the `suite_command` pair, `design_correction`, or a project
 safeguard field).
 When fixing a queued final-suite-command finding, also return `suite_command`
@@ -1283,10 +1330,16 @@ Focused discussion before deciding one queued finding:
 {"status":"need_rethink","kind":"fix_findings","question":"...",
  "finding":{<one complete queued finding>},
  "target_path":"<normalized workspace-relative path>",
- "max_rounds":<positive integer>,"result_mode":"proposal|design_amendment",
- "failure_gap":{<normal gap entry>}}
-`design_amendment` is limited to two rounds and requires a fits_remodel
-failure_gap. Return no work claims or sibling findings with this status.
+ "max_rounds":<positive integer>,"result_mode":"proposal|design_amendment"}
+`design_amendment` is limited to two rounds. Return no work claims or sibling
+findings with this status.
+"""
+
+LEGACY_FAILURE_GAP_CONTRACT = """
+Legacy fallback for a focused discussion:
+When returning `need_rethink`, also include exactly one `failure_gap` object
+using the normal GAP EXIT entry schema. It is required only so the historical
+repair route can resume if Brainstorming ends without agreement.
 """
 
 
@@ -1303,5 +1356,13 @@ def prompt_contract(kind, gap_enabled=False):
             "claims.\n"
             if gap_enabled else ""
         )
-        return FIX_CONTRACT_TEXT + gap
-    return CONTRACT_TEXT
+        legacy_rethink = (
+            LEGACY_FAILURE_GAP_CONTRACT if gap_enabled else ""
+        )
+        return FIX_CONTRACT_TEXT + gap + legacy_rethink
+    legacy_rethink = (
+        LEGACY_FAILURE_GAP_CONTRACT
+        if gap_enabled and kind in RETHINK_CONTINUATION_KINDS
+        else ""
+    )
+    return CONTRACT_TEXT + legacy_rethink

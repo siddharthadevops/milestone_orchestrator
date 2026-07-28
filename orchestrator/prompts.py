@@ -13,6 +13,7 @@ mechanically and their output discarded.
 """
 
 import json
+import re
 
 from . import contracts
 
@@ -46,6 +47,54 @@ def _oneline(text, limit):
 
 def _header(kind, family, workspace):
     return "KIND: %s\nFAMILY: %s\nWORKSPACE: %s\n" % (kind, family, workspace)
+
+
+def _modern_contract(kind):
+    """Render a contract without vocabulary from the retired workflow.
+
+    Contracts remain independently versioned so old runs can still request
+    their exact gap-enabled contract.  New prompts use this small scrubber as
+    a backstop while rolling upgrades may temporarily mix module versions.
+    """
+    text = contracts.prompt_contract(kind, gap_enabled=False)
+    replacements = (
+        ("sealed/generated milestone record", "generated milestone record"),
+        ("sealed design", "the current reviewed design baseline"),
+        ("design-correction block", "active project block"),
+        ("`design_correction`, ", ""),
+    )
+    for old, new in replacements:
+        text = text.replace(old, new)
+    text = re.sub(
+        r"For draft_slice_note, implement and fix_findings, ALSO return "
+        r"exactly one\n`\"failure_gap\"`.*?Review kinds MUST\nNOT include "
+        r"failure_gap\.\n",
+        "",
+        text,
+        flags=re.DOTALL,
+    )
+    text = text.replace(
+        ',\n "failure_gap":{<normal gap entry>}',
+        "",
+    )
+    text = re.sub(
+        r"`design_amendment` is limited to two rounds and requires a .*?\n"
+        r"failure_gap\.",
+        "`design_amendment` is limited to two rounds.",
+        text,
+    )
+    text = re.sub(r"\bfits_remodel\b", "in-goal design change", text,
+                  flags=re.IGNORECASE)
+    text = re.sub(r"\bunsealed\b", "under review", text,
+                  flags=re.IGNORECASE)
+    text = re.sub(r"\bresealing\b|\bresealed\b|\breseals\b",
+                  "reviewing again", text, flags=re.IGNORECASE)
+    text = re.sub(r"\bsealing\b|\bsealed\b|\bseal\b",
+                  "reviewed", text, flags=re.IGNORECASE)
+    text = re.sub(r"\bre[-_ ]?skeleton(?:ing)?\b|\bredoc\b|"
+                  r"\bre-document(?:ation|ing)?\b",
+                  "design update", text, flags=re.IGNORECASE)
+    return text
 
 
 def _access_block(edit_allowed):
@@ -86,10 +135,9 @@ def _access_block(edit_allowed):
         "  NOT a reportable defect; never perform their bookkeeping or write",
         "  VERDICT lines. Edit such a document only when TASK assigns it;",
         "  system claims remain reviewable.",
-        "- A seal closes history; it does NOT grant permanent ownership of",
-        "  files or code. Sealed documents change only in an explicit repair",
-        "  or correction. Current-skeleton work may change earlier code; the",
-        "  historical unit remains sealed and is not rerun.",
+        "- A completed review cycle does NOT grant permanent ownership of",
+        "  files or code. Later in-goal work may change earlier code; the",
+        "  historical unit's record is preserved and is not rerun.",
         '- Missing or stale process records are NEVER grounds for "blocked".',
         "  Block only when your own task is truly impossible, never for",
         "  process-state concerns. In fix calls the per-finding \"blocked\"",
@@ -177,8 +225,9 @@ def _consultation_block(opposite_family, opposite_cmd):
         "CONSULTATION PROTOCOL (for rejections)\n"
         "Before `rejected`, consult the %s family with the artifact/path,\n"
         "finding, proposed resolution, and checked evidence. Compare\n"
-        "permitted_baseline, actual_outcome, incremental_harm, and\n"
-        "exceeds_baseline; permitted operation is not damage by itself.\n"
+        "affected_party, observable_damage, violated_guarantee,\n"
+        "permitted_baseline, incremental_harm, and exceeds_baseline;\n"
+        "permitted operation is not damage by itself.\n"
         "Command (prompt on stdin):\n"
         "  %s\n"
         "Save the transcript under WORKSPACE/.orchestrator/scratch/; summarize\n"
@@ -229,17 +278,17 @@ ALTITUDE_BLOCK = (
 
 REMODEL_SCOPE_REVIEW_BLOCK = (
     "SCOPE AUTHORITY\n"
-    "- Scope is authorized by the CURRENT sealed SKELETON, not only by this\n"
-    "  unit's own note. When the skeleton was remodelled to resolve a\n"
-    "  downstream gap, a unit legitimately does the work the skeleton now\n"
+    "- Scope is authorized by the CURRENT reviewed SKELETON, not only by\n"
+    "  this unit's own note. When a later design amendment updates the\n"
+    "  skeleton, a unit legitimately does the work the skeleton now\n"
     "  assigns it — including a modification an earlier step should have made\n"
     "  — folded into its own change. Authority runs GOAL > current SKELETON >\n"
-    "  this unit's own note: the remodelled skeleton OUTRANKS this unit's own\n"
-    "  note where they diverge (the note predates the remodel and is stale on\n"
-    "  those points), so code that follows the remodel over its own note is\n"
+    "  this unit's own note: the updated skeleton OUTRANKS this unit's own\n"
+    "  note where they diverge (the note predates the amendment and is stale on\n"
+    "  those points), so code that follows the update over its own note is\n"
     "  NOT a violation. Judge against the CURRENT skeleton, and flag only work\n"
     "  no unit is assigned, or a change that contradicts the GOAL or ANOTHER\n"
-    "  unit's sealed contract.\n"
+    "  unit's reviewed contract.\n"
 )
 
 ALTITUDE_REVIEW_BLOCK = (
@@ -302,7 +351,8 @@ REUSE_GATE_BLOCK = (
     "  mechanism. Remove or weaken a guarantee invented only by the working\n"
     "  material, or made stricter than its authority requires, instead of\n"
     "  building machinery for it. If an authoritative outcome cannot be\n"
-    "  enforced, report a design gap rather than writing a promise.\n"
+    "  enforced, request a focused design rethink rather than writing a\n"
+    "  promise.\n"
 )
 
 REUSE_GATE_REFORM_ADDENDUM = (
@@ -423,7 +473,7 @@ PLANNING_CONTEXT_LINE = (
     "PLANNING CONTEXT\n"
     "- If the workspace contains brainstorming or `_drafts` planning\n"
     "  material, it is non-canonical context: it does not authorize\n"
-    "  implementation and does not override sealed artifacts. An\n"
+    "  implementation and does not override the current reviewed baseline. An\n"
     "  artifact leaning on it must explicitly record how it Adopts /\n"
     "  Revises / Rejects the relevant decisions.\n"
 )
@@ -464,7 +514,7 @@ FINDING_VALIDITY_BLOCK = (
     "   the cheapest sufficient option, its consumer, lifecycle cost, and\n"
     "   omission cost. Prefer reuse or no change; an invented stricter\n"
     "   guarantee cannot justify machinery. An authoritative but\n"
-    "   unenforceable outcome is a design gap.\n"
+    "   unenforceable outcome requires a focused design rethink.\n"
     "A reviewer reports only exceeds_baseline=true; a fixer independently\n"
     "uses true for fixed/blocked and false for either rejection.\n"
 )
@@ -472,7 +522,8 @@ FINDING_VALIDITY_BLOCK = (
 SEVERITY_BATTERY_BLOCK = FINDING_VALIDITY_BLOCK + (
     "SEVERITY BATTERY\n"
     "- Defect or design? Behavior inside the declared posture is NOT a defect;\n"
-    "  if posture is undeclared, infer it from sealed design and say so.\n"
+    "  if posture is undeclared, infer it from the current reviewed design\n"
+    "  baseline and say so.\n"
     "- P0/P1: grave/irreversible victim harm, normal-use contract break, or\n"
     "  at-will trigger. P2: bounded reversible victim harm or visible\n"
     "  normal-use deviation. P3: no nameable victim, negligible damage,\n"
@@ -484,6 +535,36 @@ SEVERITY_BATTERY_BLOCK = FINDING_VALIDITY_BLOCK + (
 FIX_EVIDENCE_BLOCK = (
     "- Do not triage from memory, chat, or prior review authority. Use the\n"
     "  finding only to locate evidence; decide from the current artifact.\n"
+)
+
+FIX_VERDICT_ACCOUNT_BLOCK = (
+    "FIX VERDICT ACCOUNT (mandatory for every queued finding)\n"
+    "1. Guarantee: which exact declared guarantee, if any, does the observed\n"
+    "   outcome violate under its actual posture, rather than a preferred\n"
+    "   stronger design? Return it as `violated_guarantee`.\n"
+    "2. PERMITTED BASELINE: compare normal, transition, recovery, and failure\n"
+    "   states with the observed damage. Harm is the delta BEYOND the\n"
+    "   permitted baseline. Timing alone does not turn an allowed state into\n"
+    "   additional harm. Return `permitted_baseline`, `incremental_harm`, and\n"
+    "   `exceeds_baseline`.\n"
+    "3. Affected party: who or what concretely suffers, and what damage is\n"
+    "   observable? Return `affected_party` and `observable_damage`.\n"
+    "4. Functional deviation: does behavior really change? Exposure: how\n"
+    "   often, who can trigger it, and how readily does it recover?\n"
+    "5. Scope and altitude: is this a defect in the assigned unit?\n"
+    "6. Machinery: identify independent authority, existing capabilities,\n"
+    "   the cheapest sufficient option, its consumer, lifecycle cost, and\n"
+    "   omission cost. Prefer reuse or no change; an invented stricter\n"
+    "   guarantee cannot justify machinery. An authoritative but\n"
+    "   unenforceable outcome requires a focused design rethink.\n"
+    "A finding is valid only when affected party, observable damage, and\n"
+    "violated guarantee are concrete and evidence-backed AND incremental\n"
+    "harm exceeds the permitted baseline. Only then may disposition be\n"
+    "`fixed` or `blocked`.\n"
+    "If no exact violated guarantee exists, no concrete party suffers\n"
+    "observable damage, or the harm does not exceed the baseline, the finding\n"
+    "is invalid: use `rejected` after consultation, or\n"
+    "`rejected_adjudicated` for a settled duplicate.\n"
 )
 
 FIX_SELF_CHECK_BLOCK = (
@@ -663,7 +744,7 @@ def _amendments_block(amendments):
             lines.append("")
         lines += [
             "ACCEPTED BRAINSTORMING DESIGN AMENDMENTS",
-            "These concise decisions clarify sealed design for this run and",
+            "These concise decisions update the reviewed design for this run and",
             "override conflicting skeleton or slice-note wording. They may not",
             "change the GOAL, an OPERATOR AMENDMENT, or a project safeguard;",
             "those higher authorities win. Later design amendments win over",
@@ -685,12 +766,12 @@ def _review_verification_block():
 
 def _delta_governing_line(governing):
     """Delta-scoped canonical reference: the delta must not CONTRADICT the
-    sealed standard — re-judging the whole artifact against it is a full
+    reviewed standard — re-judging the whole artifact against it is a full
     round's job and turns a cheap incremental review into a full one."""
     if not governing:
         return ""
     return (
-        "CANONICAL REFERENCE: %s (sealed) is the standard behind the\n"
+        "CANONICAL REFERENCE: %s is the current reviewed baseline behind the\n"
         "artifact. Check only that the DELTA does not contradict it — do\n"
         "not re-judge the artifact against it; full rounds do\n"
         "that.\n\n" % governing
@@ -698,12 +779,13 @@ def _delta_governing_line(governing):
 
 
 def _governing_line(governing):
-    """Name the sealed document the reviewed artifact answers to — the
+    """Name the reviewed document the artifact answers to — the
     explicit standard the reviewer judges against."""
     if not governing:
         return ""
     return (
-        "CANONICAL REFERENCE: judge the target against %s (sealed) — the\n"
+        "CANONICAL REFERENCE: judge the target against %s — the current\n"
+        "reviewed baseline and the\n"
         "standard this artifact must satisfy. The reference itself stays\n"
         "reviewable content: a defect you newly discover in it is a\n"
         "finding, never grounds for blocked.\n\n" % governing
@@ -763,7 +845,7 @@ def _delta_quality_block(unit_kind, reform=False):
 
 
 def _fix_quality_block(unit_kind):
-    parts = [EVIDENCE_BLOCK, FINDING_VALIDITY_BLOCK, FIX_EVIDENCE_BLOCK,
+    parts = [EVIDENCE_BLOCK, FIX_VERDICT_ACCOUNT_BLOCK, FIX_EVIDENCE_BLOCK,
              FIX_SELF_CHECK_BLOCK, FIX_MACHINERY_RESULT_LINE]
     if unit_kind in DOC_UNIT_KINDS:
         parts.append(ALTITUDE_BLOCK)
@@ -771,33 +853,18 @@ def _fix_quality_block(unit_kind):
     return "".join(parts) + "\n"
 
 
-def _fixer_adversarial_block(family):
-    """Counter the fixer's tendency to treat a queued claim as authority.
-
-    The opposing Codex/Claude attribution is deliberate adversarial framing,
-    independent of the finding's ledger provenance. The ledger remains the
-    truthful process record; this prompt makes the fixer falsify before it
-    edits instead of completing the reviewer's narrative by default.
-    """
-    identities = {
-        "codex": ("Codex", "Claude"),
-        "claude": ("Claude", "Codex"),
-    }
-    key = str(family or "").strip().lower()
-    fixer, reviewer = identities.get(
-        key, (str(family or "Fixer"), "opposing reviewer")
-    )
+def _fixer_adversarial_block():
+    """Counter the fixer's tendency to treat a queued claim as authority."""
     return (
         "ADVERSARIAL FINDING VALIDATION\n"
-        "- You are %s. This finding was produced by %s, an automated reviewer,\n"
-        "  not by the operator. %s may be wrong. Treat every stored field as\n"
-        "  an unverified claim.\n"
-        "- First ask: IS %s'S FINDING INCORRECT? Make one focused\n"
+        "- This finding was produced by a non-authoritative automated reviewing\n"
+        "  agent, not by the operator. It may be wrong. Treat every stored field\n"
+        "  as an unverified claim.\n"
+        "- First ask: IS THIS FINDING INCORRECT? Make one focused\n"
         "  falsification pass against current evidence and every item in the\n"
         "  JUDGMENT RUBRIC before editing. Do not reject reflexively: if the\n"
         "  claim survives falsification, fix it; otherwise use the rejection\n"
         "  route.\n\n"
-        % (fixer, reviewer, reviewer, reviewer.upper())
     )
 
 
@@ -974,6 +1041,83 @@ def _rethink_before_gap_block():
     )
 
 
+def _design_rethink_block(fixer=False):
+    subject = (
+        "one queued finding whose valid resolution requires changing the "
+        "current design baseline"
+        if fixer else
+        "one concrete in-goal inconsistency whose resolution requires "
+        "changing the current design baseline"
+    )
+    evidence = (
+        "Copy exactly that complete queued finding into `finding`."
+        if fixer else
+        "Put the concrete evidence and contradiction in `finding`."
+    )
+    return (
+        "IN-GOAL DESIGN CHANGE — USE NEED_RETHINK\n"
+        "- If you confirm %s, return `need_rethink` with result_mode\n"
+        "  `design_amendment`; do not code around it, silently rewrite design\n"
+        "  documents, or stop the run merely because those documents need an\n"
+        "  edit. %s Ask one decision-shaped question, select the smallest\n"
+        "  useful source artifact, and use at most two rounds.\n"
+        "- The accepted amendment will return to this same task with an\n"
+        "  explicit list of editable design paths. Apply only the agreed\n"
+        "  change, then continue normally; the resulting delta and complete\n"
+        "  artifact go through the ordinary reviews.\n"
+        "- Use result_mode `proposal` only for a genuinely open focused\n"
+        "  question that does not yet authorize a design edit. Establish\n"
+        "  workspace facts yourself. If the GOAL itself is contradictory or\n"
+        "  must change, return `blocked` with the exact operator decision\n"
+        "  required.\n\n"
+        % (subject, evidence)
+    )
+
+
+def _editable_design_block(editable_design_paths):
+    if not editable_design_paths:
+        return ""
+    listing = "".join(
+        "  - %s\n" % _oneline(path, 300)
+        for path in editable_design_paths
+    )
+    return (
+        "ACCEPTED AMENDMENT EDIT SCOPE\n"
+        "The current milestone skeleton and slice notes listed below are\n"
+        "EDITABLE during this active work/review cycle only as needed to\n"
+        "apply the accepted\n"
+        "agreement:\n"
+        + listing
+        + "Do not change the GOAL, operator amendments, project safeguards,\n"
+        "or unrelated design. Keep the documentation set coherent, then\n"
+        "continue the original task. If the agreement inserts a bounded new\n"
+        "future slice, preserve every existing slice id and order, place it\n"
+        "after the current slice, and return the complete updated `slices`\n"
+        "array.\n"
+        "These edits need no special ratification:\n"
+        "they enter the same candidate and are judged by the ordinary pending-\n"
+        "delta review and complete-artifact reviews.\n\n"
+    )
+
+
+def _amendment_review_scope(editable_design_paths, delta=False):
+    if not editable_design_paths:
+        return ""
+    listing = "".join(
+        "  - %s\n" % _oneline(path, 300)
+        for path in editable_design_paths
+    )
+    subject = "pending delta" if delta else "complete artifact"
+    return (
+        "ACCEPTED AMENDMENT REVIEW SCOPE\n"
+        "The following design documents were changed to apply an accepted\n"
+        "amendment and are an ordinary part of this %s review:\n" % subject
+        + listing
+        + "Judge those changes under the same GOAL, amendments, and review\n"
+        "rules as everything else. No special verdict or ratification applies.\n\n"
+    )
+
+
 def _gap_block(skeleton_only=False, rethink_allowed=False):
     """The stop-report-CLASSIFY instruction for a builder (draft/implement).
     The worker does not route or decide whose job the fix is — it CLASSIFIES
@@ -1114,20 +1258,28 @@ def build_draft_skeleton(family, workspace, goal, amendments=None,
         + "\n"
         + (_gap_block(skeleton_only=True) if gap_enabled else "")
         + (_battery_contract_block(battery) if battery else "")
-        + contracts.CONTRACT_TEXT
+        + (
+            contracts.prompt_contract(
+                contracts.KIND_DRAFT_SKELETON, gap_enabled=True
+            )
+            if gap_enabled else
+            _modern_contract(contracts.KIND_DRAFT_SKELETON)
+        )
     )
 
 
 def build_draft_slice_note(family, workspace, goal, slice_info, skeleton_path,
                            amendments=None, note_path=None,
                            project_context=None, gap_enabled=False,
-                           two_register=False, battery=None):
+                           two_register=False, battery=None,
+                           editable_design_paths=None):
     return (
         _header(contracts.KIND_DRAFT_SLICE_NOTE, family, workspace)
         + "\nTASK: draft the slice note for slice %d (%s).\n"
         % (slice_info["id"], slice_info["title"])
         + "GOAL: %s\n" % goal
-        + "SKELETON: %s (sealed; stay inside its boundary)\n\n" % skeleton_path
+        + "SKELETON: %s (current reviewed design baseline)\n\n"
+        % skeleton_path
         + _amendments_block(amendments)
         + _project_context_block(project_context)
         + "Write %s: scope as observable contracts and the\n"
@@ -1147,56 +1299,59 @@ def build_draft_slice_note(family, workspace, goal, slice_info, skeleton_path,
         + (REUSE_POSTURE_REFORM_ADDENDUM if gap_enabled else "")
         + PLANNING_CONTEXT_LINE
         + "\n"
+        + _editable_design_block(editable_design_paths)
         + _access_block(edit_allowed=True)
         + "\n"
-        + (_gap_block(rethink_allowed=True) if gap_enabled else "")
+        + (
+            _gap_block(rethink_allowed=True)
+            if gap_enabled else _design_rethink_block()
+        )
         + (_battery_contract_block(battery) if battery else "")
-        + contracts.CONTRACT_TEXT
+        + (
+            contracts.prompt_contract(
+                contracts.KIND_DRAFT_SLICE_NOTE, gap_enabled=True
+            )
+            if gap_enabled else
+            _modern_contract(contracts.KIND_DRAFT_SLICE_NOTE)
+        )
     )
 
 
 def build_implement(family, workspace, goal, slice_info, note_path, verification,
                     amendments=None, project_context=None, gap_enabled=False,
-                    skeleton_path=None, remodeled=False):
+                    skeleton_path=None, remodeled=False,
+                    editable_design_paths=None):
     ver = "\n".join("  %s" % c for c in verification) or (
         "  (none yet — your suite_command will arm the final boundary)"
     )
-    # A RE-draft after this slice's earlier gap triggered a skeleton remodel:
-    # the slice note is UNCHANGED (only the skeleton was), so without this the
-    # prompt is byte-identical and the worker just re-reports the same gap.
-    # Point it at the CURRENT skeleton, which now carries the assignment.
+    # Compatibility hint for a run whose design baseline changed after this
+    # slice note was written. Point it at the current skeleton, which carries
+    # the updated assignment.
     remodel_block = ""
     if remodeled and skeleton_path:
         remodel_block = (
-            "REMODEL ASSIGNMENT (the design was remodelled AFTER this\n"
-            "slice's note sealed)\n"
+            "UPDATED DESIGN ASSIGNMENT\n"
             "- The skeleton was revised since this slice's note was written\n"
-            "  (typically a downstream gap remodelled it — this slice's own,\n"
-            "  or another slice's whose resolution was assigned here). Read the\n"
+            "  (typically an accepted amendment assigned work here). Read the\n"
             "  CURRENT skeleton at %s — it is the design authority and may\n"
             "  assign THIS slice work its note never mentions: a datum,\n"
             "  contract, or step to produce/record within this slice's own\n"
             "  scope, folded into this slice's change. Authority runs GOAL >\n"
             "  current SKELETON > this slice's own note: where the current\n"
             "  skeleton and your note diverge, the skeleton wins and the\n"
-            "  remodel assignment OVERRIDES any conflicting clause in your\n"
-            "  note (it predates the remodel). File provenance is not scope\n"
+            "  updated assignment OVERRIDES any conflicting clause in your\n"
+            "  note (it predates the amendment). File provenance is not scope\n"
             "  ownership: this assignment may require modifying code first\n"
-            "  introduced by an already-sealed slice. That is THIS slice's\n"
-            "  new change; the earlier slice remains sealed and is not\n"
-            "  rerun. Do the assigned work; report\n"
-            "  a gap if a build-changing hole still blocks you — one an\n"
-            "  earlier remodel did not actually resolve, or a new one it\n"
-            "  exposed — classifying it by the same one question: does\n"
-            "  fixing it fit the goal? An in-goal design gap (even one that\n"
-            "  also needs ANOTHER slice's design revised) is fits_remodel;\n"
-            "  only an out-of-goal need or a goal that contradicts ITSELF is\n"
-            "  needs_operator.\n\n"
+            "  introduced by an earlier slice. That is THIS slice's new\n"
+            "  change; the earlier unit's record is preserved and not rerun.\n"
+            "  Do the assigned work. If a remaining in-goal inconsistency\n"
+            "  requires another design edit, use `need_rethink`; only a GOAL\n"
+            "  contradiction or out-of-goal need requires the operator.\n\n"
             % skeleton_path
         )
     return (
         _header(contracts.KIND_IMPLEMENT, family, workspace)
-        + "\nTASK: implement slice %d (%s) exactly per its sealed note.\n"
+        + "\nTASK: implement slice %d (%s) against its current reviewed note.\n"
         % (slice_info["id"], slice_info["title"])
         + "GOAL: %s\n" % goal
         + "SLICE NOTE: %s\n\n" % note_path
@@ -1210,7 +1365,7 @@ def build_implement(family, workspace, goal, slice_info, note_path, verification
         "Implement the scope, including its tests. Run focused checks on\n"
         "what you touch while working, but do NOT run the repo's full\n"
         "test suite at the end. The driver runs it once, after every\n"
-        "configured reviewer is clean and immediately before sealing.\n"
+        "configured reviewer is clean at the final boundary.\n"
         "Report the repo's official full-suite command (as run from the\n"
         "workspace root) in `suite_command` — it must be non-interactive\n"
         "and run the suite exactly once and exit (never a watch mode).\n"
@@ -1224,10 +1379,19 @@ def build_implement(family, workspace, goal, slice_info, note_path, verification
         + "- Run local/focused checks after each modification when they\n"
         "  are cheap or directly relevant.\n"
         + "\n"
+        + _editable_design_block(editable_design_paths)
         + _access_block(edit_allowed=True)
         + "\n"
-        + (_gap_block(rethink_allowed=True) if gap_enabled else "")
-        + contracts.CONTRACT_TEXT
+        + (
+            _gap_block(rethink_allowed=True)
+            if gap_enabled else _design_rethink_block()
+        )
+        + (
+            contracts.prompt_contract(
+                contracts.KIND_IMPLEMENT, gap_enabled=True
+            )
+            if gap_enabled else _modern_contract(contracts.KIND_IMPLEMENT)
+        )
     )
 
 
@@ -1241,6 +1405,7 @@ def build_rethink_continuation(
     project_context=None,
     battery=None,
     accepted_design_amendment=False,
+    editable_design_paths=None,
 ):
     authority = {
         "session_id": handoff["session_id"],
@@ -1248,23 +1413,16 @@ def build_rethink_continuation(
             "accepted_target_revision"
         ],
     }
-    correction = ""
-    if allow_design_correction:
-        correction = (
-            "If this accepted proposal uniquely resolves a contradiction in\n"
-            "your own sealed slice note and the existing one-shot correction\n"
-            "offer applies, use `design_correction.brainstorming_authority`\n"
-            "equal to the authority object below. Do not substitute a live\n"
-            "file or VCS fact for that retained Brainstorming authority.\n\n"
-        )
+    # `allow_design_correction` remains in the call signature while old driver
+    # versions drain, but new prompts intentionally offer no one-shot path.
     authority_posture = (
         "The retained target has been adopted as a run-scoped design "
         "amendment and is also rendered above. It is binding below the GOAL, "
         "operator amendments, and project safeguards; continue the original "
         "task from that clarification.\n\n"
         if accepted_design_amendment else
-        "It is a proposal, not approval: ordinary verification, review,\n"
-        "delta review, and sealing still apply.\n\n"
+        "It is a proposal, not approval: ordinary verification and review\n"
+        "still apply.\n\n"
     )
     return (
         _header(kind, family, workspace)
@@ -1291,14 +1449,12 @@ def build_rethink_continuation(
             indent=2,
         )
         + "\n\n"
-        + correction
+        + _editable_design_block(editable_design_paths)
         + "Finish the original task now and return its ordinary output under\n"
         "the exact OUTPUT CONTRACT below. Only that ordinary envelope may\n"
         "advance milestone state.\n\n"
         + (_battery_contract_block(battery) if battery else "")
-        + contracts.prompt_contract(
-            kind, gap_enabled=(kind == contracts.KIND_FIX_FINDINGS)
-        )
+        + _modern_contract(kind)
     )
 
 
@@ -1363,13 +1519,15 @@ def _wave_full_review_block(wave_docs):
 def build_review_round(family, workspace, goal, unit_desc, artifact, registry,
                        unit_kind=None, governing=None, amendments=None,
                        project_context=None, battery=None, debt=None,
-                       gap_enabled=False, wave_docs=None):
+                       gap_enabled=False, wave_docs=None,
+                       editable_design_paths=None):
     return (
         _header(contracts.KIND_REVIEW_ROUND, family, workspace)
         + "\nTASK: full review round of %s. REPORT ONLY.\n" % unit_desc
         + "GOAL: %s\n" % goal
         + "TARGET: %s (plus any code/tests it governs)\n\n" % artifact
-        + _wave_full_review_block(wave_docs)
+        + (_wave_full_review_block(wave_docs) if gap_enabled else "")
+        + _amendment_review_scope(editable_design_paths)
         + _amendments_block(amendments)
         + _project_context_block(project_context)
         + _governing_line(governing)
@@ -1385,14 +1543,21 @@ def build_review_round(family, workspace, goal, unit_desc, artifact, registry,
         + "\n"
         + _access_block(edit_allowed=False)
         + "\n"
-        + contracts.prompt_contract(contracts.KIND_REVIEW_ROUND)
+        + (
+            contracts.prompt_contract(
+                contracts.KIND_REVIEW_ROUND, gap_enabled=True
+            )
+            if gap_enabled else
+            _modern_contract(contracts.KIND_REVIEW_ROUND)
+        )
     )
 
 
 def build_delta_review(family, workspace, goal, unit_desc, registry,
                        unit_kind=None, governing=None, amendments=None,
                        project_context=None, debt=None, wave_docs=None,
-                       gap_enabled=False, design_correction=None):
+                       gap_enabled=False, design_correction=None,
+                       editable_design_paths=None):
     # During a re-documentation wave the fixer legitimately edits SEVERAL
     # milestone documents at once (they are co-reopened, not sealed); the
     # delta reviewer must judge the multi-document diff as one coherent
@@ -1400,7 +1565,7 @@ def build_delta_review(family, workspace, goal, unit_desc, registry,
     # EMPTY list is still a wave (no notes sealed yet). Note edits in the
     # delta are judged with the slice-note content criteria too.
     wave_block = ""
-    if wave_docs is not None:
+    if gap_enabled and wave_docs is not None:
         listing = ("".join("  %s\n" % p for p in wave_docs)
                    or "  (no slice notes are sealed yet — the set is the\n"
                       "  skeleton alone)\n")
@@ -1416,7 +1581,7 @@ def build_delta_review(family, workspace, goal, unit_desc, registry,
             + (SLICE_NOTE_CONTENT_BLOCK + "\n" if wave_docs else "")
         )
     correction_block = ""
-    if design_correction:
+    if gap_enabled and design_correction:
         authority = design_correction.get("brainstorming_authority")
         if authority is None:
             authority_block = "- authority artifact: %s\n" % _oneline(
@@ -1479,6 +1644,7 @@ def build_delta_review(family, workspace, goal, unit_desc, registry,
         + "GOAL: %s\n\n" % goal
         + wave_block
         + correction_block
+        + _amendment_review_scope(editable_design_paths, delta=True)
         + _amendments_block(amendments)
         + _project_context_block(project_context)
         + _delta_governing_line(governing)
@@ -1492,7 +1658,13 @@ def build_delta_review(family, workspace, goal, unit_desc, registry,
         + "\n"
         + _access_block(edit_allowed=False)
         + "\n"
-        + contracts.prompt_contract(contracts.KIND_DELTA_REVIEW)
+        + (
+            contracts.prompt_contract(
+                contracts.KIND_DELTA_REVIEW, gap_enabled=True
+            )
+            if gap_enabled else
+            _modern_contract(contracts.KIND_DELTA_REVIEW)
+        )
     )
 
 
@@ -1539,7 +1711,7 @@ TWO_AXIS_BLOCK = (
     "         row); exposure by the first compile/test/use is a bonus\n"
     "  medium bounded rework inside this unit; caught at its own\n"
     "         review or verification\n"
-    "  high   the CORRECTION reopens sealed work or propagates: other\n"
+    "  high   the CORRECTION changes reviewed work or propagates: other\n"
     "         slices/consumers built on the wrong contract must rework\n"
     "  xhigh  effectively irreversible or externally published: data\n"
     "         destroyed, preserved code deleted, a contract outside\n"
@@ -1671,8 +1843,17 @@ def build_fix_findings(
     repair_artifact=None,
     repair_wave_docs=None,
     gap_enabled=False,
+    legacy_design_process=None,
     design_correction=None,
+    editable_design_paths=None,
 ):
+    # `gap_enabled` answers only whether THIS fixer may emit a new gap.  A
+    # legacy repair fixer deliberately cannot open a nested gap, but it still
+    # needs the legacy repair/editability contract.  Keep the old inference
+    # for direct callers while the driver supplies the two decisions
+    # independently.
+    if legacy_design_process is None:
+        legacy_design_process = bool(gap_enabled)
     findings_text = (
         json.dumps(
             list(findings),
@@ -1721,7 +1902,8 @@ def build_fix_findings(
             "run.\n\n"
         )
     correction_block = ""
-    if design_correction and design_correction.get("mode") == "offer":
+    if (legacy_design_process and design_correction
+            and design_correction.get("mode") == "offer"):
         correction_block = (
             "ONE-SHOT OWN-NOTE CORRECTION\n"
             "You may amend exactly this implementation's governing note:\n"
@@ -1737,7 +1919,8 @@ def build_fix_findings(
             "the envelope does not fit, use the normal GAP EXIT.\n\n"
             % design_correction.get("artifact")
         )
-    elif design_correction and design_correction.get("mode") == "active":
+    elif (legacy_design_process and design_correction
+          and design_correction.get("mode") == "active"):
         authority = design_correction.get("brainstorming_authority")
         if authority is None:
             authority_text = (
@@ -1772,7 +1955,8 @@ def build_fix_findings(
             % (design_correction.get("artifact"), authority_text)
         )
     correction_line = ""
-    if design_correction and design_correction.get("mode") == "offer":
+    if (legacy_design_process and design_correction
+            and design_correction.get("mode") == "offer"):
         correction_line = (
             "- ONE-SHOT OWN-NOTE CORRECTION: this call makes exactly this\n"
             "  sealed note provisionally EDITABLE within the correction\n"
@@ -1781,7 +1965,8 @@ def build_fix_findings(
             "  Every other sealed artifact remains read-only.\n"
             % design_correction.get("artifact")
         )
-    elif design_correction and design_correction.get("mode") == "active":
+    elif (legacy_design_process and design_correction
+          and design_correction.get("mode") == "active"):
         correction_line = (
             "- PROVISIONAL OWN-NOTE CORRECTION: this note remains EDITABLE\n"
             "  only for the active correction stated below:\n"
@@ -1790,7 +1975,8 @@ def build_fix_findings(
             % design_correction.get("artifact")
         )
     repair_line = ""
-    if repair_artifact and repair_wave_docs is not None:
+    if (legacy_design_process and repair_artifact
+            and repair_wave_docs is not None):
         # RE-DOCUMENTATION WAVE: the whole documentation set is reopened
         # with the anchor. The re-documenter's authority is the GOAL — the
         # findings state the objective, never the edit scope. Process-level
@@ -1827,7 +2013,7 @@ def build_fix_findings(
                     "  skeleton alone)\n"),
             )
         )
-    elif repair_artifact:
+    elif legacy_design_process and repair_artifact:
         # Process-level authority for the repair path: a fixer must not
         # take "you may edit the sealed note" from a FINDING (that is
         # exactly what a malicious finding would claim — found live
@@ -1876,6 +2062,22 @@ def build_fix_findings(
         + "- A silent rewrite of a sealed document is a process violation:\n"
         "  it is detected mechanically and reverted.\n\n"
     )
+    if legacy_design_process:
+        design_baseline_block = sealed_block
+    else:
+        design_baseline_block = (
+            "CURRENT REVIEWED DESIGN BASELINE\n"
+            "- The current unit's artifact named by TASK is editable for its\n"
+            "  queued findings. Other milestone skeleton and slice-note files\n"
+            "  are read-only unless an accepted amendment lists them below.\n"
+            "  A `prevention` edit follows the same boundary.\n"
+            + _editable_design_block(editable_design_paths)
+            + "- If a confirmed finding requires an in-goal change to another\n"
+            "  design document, return `need_rethink`; do not code around it,\n"
+            "  rewrite that document silently, or call the design edit\n"
+            "  impossible. A GOAL contradiction or out-of-goal decision is an\n"
+            "  operator blocker.\n\n"
+        )
     slice_table_block = ""
     if unit_kind == "skeleton":
         slice_table_block = (
@@ -1890,15 +2092,18 @@ def build_fix_findings(
         _header(contracts.KIND_FIX_FINDINGS, family, workspace)
         + "\nTASK: triage and fix the queued findings on %s.\n" % unit_desc
         + "GOAL: %s\n\n" % goal
-        + sealed_block
+        + design_baseline_block
         + correction_block
-        + (_fix_gap_block() if gap_enabled else "")
+        + (
+            (_fix_gap_block() if gap_enabled else "")
+            if legacy_design_process else _design_rethink_block(fixer=True)
+        )
         + slice_table_block
         + killed_block
         + phantom_block
         + _amendments_block(amendments)
         + _project_context_block(project_context)
-        + _fixer_adversarial_block(family)
+        + _fixer_adversarial_block()
         + "QUEUED FINDINGS (claims, not facts — verify each against the\n"
         "real code/doc before deciding). These are the exact stored objects;\n"
         "if you request `need_rethink`, copy exactly one complete object into\n"
@@ -1922,7 +2127,11 @@ def build_fix_findings(
         + "\n"
         + _consultation_block(consultation_family, consultation_cmd)
         + "\n"
-        + contracts.prompt_contract(
-            contracts.KIND_FIX_FINDINGS, gap_enabled=gap_enabled
+        + (
+            contracts.prompt_contract(
+                contracts.KIND_FIX_FINDINGS, gap_enabled=gap_enabled
+            )
+            if legacy_design_process else
+            _modern_contract(contracts.KIND_FIX_FINDINGS)
         )
     )

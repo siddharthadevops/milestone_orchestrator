@@ -38,6 +38,26 @@ def report_finding(fid="F1"):
     }
 
 
+def fixer_validity(exceeds=True):
+    return {
+        "affected_party": "the user relying on the declared behavior",
+        "observable_damage": (
+            "the declared behavior is unavailable"
+            if exceeds else "no damage beyond the permitted behavior"
+        ),
+        "violated_guarantee": (
+            "the explicit behavior guarantee"
+            if exceeds else "no guarantee is violated"
+        ),
+        "permitted_baseline": "the documented behavior",
+        "incremental_harm": (
+            "the outcome exceeds the baseline"
+            if exceeds else "no harm beyond the baseline"
+        ),
+        "exceeds_baseline": exceeds,
+    }
+
+
 def failure_gap():
     return {
         "classification": "fits_remodel",
@@ -278,10 +298,36 @@ class BrainstormingMilestoneAdapterTest(unittest.TestCase):
             )
         outside_goal = copy.deepcopy(amendment)
         outside_goal["failure_gap"]["classification"] = "needs_operator"
-        with self.assertRaises(contracts.ContractError):
+        self.assertIs(
             contracts.validate_worker_output(
                 outside_goal, contracts.KIND_FIX_FINDINGS
+            ),
+            outside_goal,
+        )
+        modern = copy.deepcopy(amendment)
+        modern.pop("failure_gap")
+        self.assertIs(
+            contracts.validate_worker_output(
+                modern, contracts.KIND_FIX_FINDINGS
+            ),
+            modern,
+        )
+        with self.assertRaisesRegex(
+            contracts.ContractError, "requires failure_gap"
+        ):
+            contracts.validate_worker_output(
+                modern,
+                contracts.KIND_FIX_FINDINGS,
+                require_failure_gap=True,
             )
+        self.assertIs(
+            contracts.validate_worker_output(
+                amendment,
+                contracts.KIND_FIX_FINDINGS,
+                require_failure_gap=True,
+            ),
+            amendment,
+        )
         too_long = copy.deepcopy(amendment)
         too_long["max_rounds"] = 3
         with self.assertRaises(contracts.ContractError):
@@ -293,7 +339,7 @@ class BrainstormingMilestoneAdapterTest(unittest.TestCase):
             contracts.CONTRACT_TEXT,
         )
         self.assertIn(
-            "including one also named in context, a sealed/generated milestone "
+            "including one also named in context, a generated milestone "
             "record, or",
             contracts.CONTRACT_TEXT,
         )
@@ -754,6 +800,229 @@ class BrainstormingMilestoneAdapterTest(unittest.TestCase):
         self.assertIs(captured["config"], self.config)
         self.assertEqual(captured["home"], self.home)
 
+    def test_adapter_pins_lead_and_counterpart_profiles(self):
+        state = {
+            "name": "run",
+            "workspace": self.workspace,
+            "docs_dir": "docs",
+        }
+        captured = {}
+
+        def capture(
+            home,
+            body,
+            caller,
+            context,
+            config,
+            owned_target_path=None,
+        ):
+            captured["participants"] = copy.deepcopy(body["participants"])
+            return {"id": "session", "state": {"status": "created"}}
+
+        with (
+            mock.patch.object(adapter, "service_home", return_value=self.home),
+            mock.patch.object(
+                lifecycle, "create_resolved_session", side_effect=capture
+            ),
+        ):
+            adapter.create_session(
+                state,
+                self.config,
+                "slice_impl-08",
+                rethink(contracts.KIND_IMPLEMENT),
+                [],
+                lead_profile={
+                    "agent": "codex",
+                    "model": "gpt-5.6-sol",
+                    "effort": "max",
+                },
+                counterpart_profile={
+                    "agent": "claude",
+                    "model": "claude-fable-5",
+                    "effort": "max",
+                },
+            )
+
+        self.assertEqual(
+            captured["participants"],
+            [
+                {
+                    "id": "lead",
+                    "role": "lead",
+                    "model_family": "codex",
+                    "model": "gpt-5.6-sol",
+                    "effort": "max",
+                },
+                {
+                    "id": "interlocutor",
+                    "role": "interlocutor",
+                    "model_family": "claude",
+                    "model": "claude-fable-5",
+                    "effort": "max",
+                },
+            ],
+        )
+
+    def test_adapter_rejects_incomplete_participant_profile_before_materializing(self):
+        state = {
+            "name": "run",
+            "workspace": self.workspace,
+            "docs_dir": "docs",
+        }
+        before = set(os.listdir(self.home))
+        with (
+            mock.patch.object(adapter, "service_home", return_value=self.home),
+            self.assertRaises(adapter.AdapterError),
+        ):
+            adapter.create_session(
+                state,
+                self.config,
+                "slice_impl-08",
+                rethink(contracts.KIND_IMPLEMENT),
+                [],
+                lead_profile={"agent": "codex", "model": "gpt-5.6-sol"},
+            )
+        self.assertEqual(set(os.listdir(self.home)), before)
+
+    def test_guarantee_calibration_uses_an_isolated_complete_skeleton(self):
+        skeleton_rel = "docs/skeleton.md"
+        skeleton = os.path.join(self.workspace, skeleton_rel)
+        original = (
+            "# Skeleton\n\n"
+            "## Guarantees\n\n"
+            "- Workspace authority is strict.\n"
+        )
+        with open(skeleton, "w", encoding="utf-8") as handle:
+            handle.write(original)
+        state = {
+            "name": "run",
+            "goal": "Deliver the bounded workspace capability.",
+            "workspace": self.workspace,
+            "docs_dir": "docs",
+        }
+        captured = {}
+
+        def capture(
+            home,
+            body,
+            caller,
+            context,
+            config,
+            owned_target_path=None,
+        ):
+            captured.update(
+                {
+                    "body": copy.deepcopy(body),
+                    "caller": caller,
+                    "context": copy.deepcopy(context),
+                    "target": owned_target_path,
+                }
+            )
+            return {"id": "calibration", "state": {"status": "created"}}
+
+        lead = {
+            "agent": "codex",
+            "model": "gpt-5.6-sol",
+            "effort": "max",
+        }
+        counterpart = {
+            "agent": "claude",
+            "model": "claude-fable-5",
+            "effort": "max",
+        }
+        with (
+            mock.patch.object(adapter, "service_home", return_value=self.home),
+            mock.patch.object(
+                lifecycle, "create_resolved_session", side_effect=capture
+            ),
+        ):
+            adapter.create_guarantee_calibration_session(
+                state,
+                self.config,
+                "skeleton",
+                skeleton_rel,
+                lead,
+                counterpart,
+                references=["docs/context.md"],
+                authority_context={"amendments": []},
+            )
+
+        request = captured["body"]["request"]
+        self.assertEqual(
+            request["max_rounds"], adapter.GUARANTEE_CALIBRATION_MAX_ROUNDS
+        )
+        self.assertEqual(
+            request["question"], adapter.GUARANTEE_CALIBRATION_QUESTION
+        )
+        self.assertIn("affected party", request["context"]["brief"])
+        self.assertIn("complete agreed skeleton", request["context"]["brief"])
+        self.assertIn("slice table", request["context"]["brief"])
+        self.assertEqual(
+            request["context"]["source_payload"],
+            {
+                "goal": state["goal"],
+                "authority_context": {"amendments": []},
+            },
+        )
+        self.assertEqual(
+            request["context"]["references"],
+            ["docs/context.md", skeleton_rel],
+        )
+        self.assertEqual(captured["caller"],
+                         "milestone:run:skeleton:guarantee-calibration")
+        self.assertEqual(request["target_path"], captured["target"])
+        self.assertFalse(adapter._path_overlap(captured["target"], self.workspace))
+        with open(captured["target"], encoding="utf-8") as handle:
+            self.assertEqual(handle.read(), original)
+        with open(captured["target"], "w", encoding="utf-8") as handle:
+            handle.write("# Complete agreed skeleton\n")
+        with open(skeleton, encoding="utf-8") as handle:
+            self.assertEqual(handle.read(), original)
+        self.assertEqual(
+            captured["body"]["participants"],
+            [
+                {
+                    "id": "lead",
+                    "role": "lead",
+                    "model_family": "codex",
+                    "model": "gpt-5.6-sol",
+                    "effort": "max",
+                },
+                {
+                    "id": "interlocutor",
+                    "role": "interlocutor",
+                    "model_family": "claude",
+                    "model": "claude-fable-5",
+                    "effort": "max",
+                },
+            ],
+        )
+
+    def test_guarantee_calibration_requires_an_existing_regular_skeleton(self):
+        state = {
+            "name": "run",
+            "goal": "goal",
+            "workspace": self.workspace,
+            "docs_dir": "docs",
+        }
+        profile = {
+            "agent": "codex",
+            "model": "gpt-5.6-sol",
+            "effort": "max",
+        }
+        with mock.patch.object(
+            adapter, "service_home", return_value=self.home
+        ):
+            with self.assertRaises(adapter.AdapterError):
+                adapter.create_guarantee_calibration_session(
+                    state,
+                    self.config,
+                    "skeleton",
+                    "docs/missing.md",
+                    profile,
+                    profile,
+                )
+
     def test_design_amendment_uses_a_fresh_target_and_source_as_context(self):
         source = os.path.join(self.workspace, "docs", "sealed.md")
         with open(source, "w", encoding="utf-8") as handle:
@@ -816,6 +1085,29 @@ class BrainstormingMilestoneAdapterTest(unittest.TestCase):
         self.assertEqual(
             payload["source_payload"]["authority_context"], authority
         )
+
+        modern_signal = copy.deepcopy(signal)
+        modern_signal.pop("failure_gap")
+        captured.clear()
+        with (
+            mock.patch.object(adapter, "service_home", return_value=self.home),
+            mock.patch.object(
+                lifecycle, "create_resolved_session", side_effect=capture
+            ),
+        ):
+            adapter.create_session(
+                state,
+                self.config,
+                "slice_impl-08",
+                modern_signal,
+                [],
+                authority_context=authority,
+            )
+        modern_payload = captured["body"]["request"]["context"][
+            "source_payload"
+        ]
+        self.assertEqual(modern_payload["finding"], signal["finding"])
+        self.assertNotIn("failure_gap", modern_payload)
 
     def test_project_bound_prompts_keep_owned_target_outside_primary_root(self):
         source = os.path.join(self.workspace, "proposals", "prompted.md")
@@ -1840,7 +2132,7 @@ class MilestoneDriverRethinkTest(unittest.TestCase):
             "id": finding["id"],
             "severity": finding["severity"],
             "summary": "The unresolved choice is now implemented.",
-            "validity": copy.deepcopy(finding["validity"]),
+            "validity": fixer_validity(True),
             "disposition": "fixed",
             "consultation": None,
             "prevention": None,
@@ -1915,7 +2207,7 @@ class MilestoneDriverRethinkTest(unittest.TestCase):
             "id": finding["id"],
             "severity": finding["severity"],
             "summary": "The accepted amendment settles the choice.",
-            "validity": copy.deepcopy(finding["validity"]),
+            "validity": fixer_validity(True),
             "disposition": "fixed",
             "consultation": None,
             "prevention": None,

@@ -36,9 +36,9 @@ from orchestrator import state as st
 GOAL = "Build a small CLI calculator (add/sub/mul/div) with unit tests"
 
 GATE_MSG_INIT = "Initialize milestone workspace"
-GATE_MSG_SKELETON = "Seal milestone skeleton"
-GATE_MSG_NOTE = "Seal slice 01 note"
-GATE_MSG_IMPL = "Seal slice 01 implementation and close"
+GATE_MSG_SKELETON = "Complete review of milestone skeleton"
+GATE_MSG_NOTE = "Complete review of slice 01 note"
+GATE_MSG_IMPL = "Complete review of slice 01 implementation"
 GATE_MSG_CLOSE = "Close milestone"
 
 # Verification used by the happy path: passes until calculator.py exists,
@@ -67,6 +67,10 @@ def make_config(**overrides):
                  "consultation": "opposite"},
         "max_fix_loops": 6,
         "snapshot_exclude_dirs": [],
+        # Most driver tests exercise another state-machine seam and use a
+        # MockRunner only.  Guarantee calibration has dedicated tests below;
+        # keep it off in this shared legacy harness unless a test opts in.
+        "guarantee_calibration": {"enabled": False},
         # Deterministic tests: no LLM classifier fallback, no sleeps.
         "error_classifier": False,
         "infra_retry_backoff_s": [],
@@ -122,6 +126,26 @@ def validity(exceeds=True):
     }
 
 
+def fixer_validity(exceeds=True):
+    return {
+        "affected_party": "the concrete user or system component",
+        "observable_damage": (
+            "the declared behavior is observably broken"
+            if exceeds else "no damage beyond the allowed behavior"
+        ),
+        "violated_guarantee": (
+            "the exact declared behavior"
+            if exceeds else "no declared guarantee is violated"
+        ),
+        "permitted_baseline": "the documented behavior",
+        "incremental_harm": (
+            "the observed behavior exceeds that baseline"
+            if exceeds else "no harm beyond the documented behavior"
+        ),
+        "exceeds_baseline": exceeds,
+    }
+
+
 def finding(fid, summary, severity="P3", contests=None, plain=None,
             example=None):
     # Every test finding carries the lay mirror by default: optional in
@@ -149,7 +173,7 @@ def triaged(fid, disposition, summary="triaged finding", severity="P3",
         "summary": summary,
         "disposition": disposition,
         "consultation": consultation,
-        "validity": validity(disposition in ("fixed", "blocked")),
+        "validity": fixer_validity(disposition in ("fixed", "blocked")),
     }
     if prevention is not None:
         entry["prevention"] = prevention

@@ -130,6 +130,22 @@ DEFAULT_CONFIG = {
     # re-reads it before every act resolution.
     "acts": {
         "fixer": "codex",
+        # The normal implementation owner is also the lead voice in every
+        # milestone-owned Brainstorming session.  Pinning the profile here
+        # avoids silently dropping from max effort to the family default.
+        "implementer": {
+            "agent": "codex",
+            "model": "gpt-5.6-sol",
+            "effort": "max",
+        },
+        # The second voice is independent configuration, not inferred from
+        # family rotation. Same-family fallbacks remain valid when that is all
+        # the runtime can provide.
+        "brainstorming_counterpart": {
+            "agent": "claude",
+            "model": "claude-fable-5",
+            "effort": "max",
+        },
         # The skeleton is drafted, re-drafted, and fixed by one chosen
         # model — skeleton work is high-leverage planning, so it defaults
         # to claude-fable-5 at max effort. Reviews of the skeleton are
@@ -147,6 +163,14 @@ DEFAULT_CONFIG = {
         # rater is still a fresh stateless look).
         "reclassifier": "opposite",
     },
+    # New runs calibrate the skeleton's declared guarantees once, before its
+    # ordinary review cycle. Persisted runs created before this key existed
+    # continue without inserting a new stage into their chronology.
+    "guarantee_calibration": {"enabled": True, "max_rounds": 2},
+    # New design contradictions use a focused discussion and an ordinary
+    # reviewed amendment. Runs whose frozen config predates this flag retain
+    # their historical gap/re-documentation recovery semantics.
+    "rethink_design_updates": True,
     # A delta stops being meaningfully incremental after enough cumulative
     # fixes.  After this many fixes in one episode born from a review round
     # or a seal, amend the pending diff without fabricating a clean delta
@@ -1773,12 +1797,49 @@ class Driver(object):
         return "design correction ratified; amended (%s)" % sha
 
     def _maybe_update_slices(self, unit, output):
-        """A fix call on the skeleton unit may report an updated slice plan
-        (it has edit permissions on the skeleton document); keep the
-        structural plan in sync with it. Validated by contracts already."""
+        """Keep a legitimately edited skeleton table aligned with state."""
         slices = output.get("slices")
-        if unit["kind"] != st.UNIT_SKELETON or not slices:
+        if not slices or (
+            unit["kind"] != st.UNIT_SKELETON
+            and not unit.get("design_update")
+        ):
             return
+        if unit["kind"] != st.UNIT_SKELETON:
+            before = list(self.state["milestone"]["slices"])
+            old_ids = [item["id"] for item in before]
+            new_ids = [item["id"] for item in slices]
+            if [value for value in new_ids if value in old_ids] != old_ids:
+                reason = (
+                    "a lightweight design update may insert future slices, "
+                    "but may not remove, renumber, or reorder existing ones"
+                )
+                st.fail_run(self.state, reason, unit=unit)
+                self._save()
+                raise StopStep(reason)
+            added_ids = [value for value in new_ids if value not in old_ids]
+            if len(added_ids) > 1:
+                reason = (
+                    "a lightweight design update may insert at most one "
+                    "bounded future slice"
+                )
+                st.fail_run(self.state, reason, unit=unit)
+                self._save()
+                raise StopStep(reason)
+            current_id = unit.get("slice_id")
+            if current_id in new_ids:
+                current_index = new_ids.index(current_id)
+                additions_before_current = [
+                    value for value in new_ids[:current_index]
+                    if value not in old_ids
+                ]
+                if additions_before_current:
+                    reason = (
+                        "a lightweight design update may not insert work "
+                        "before the slice currently being completed"
+                    )
+                    st.fail_run(self.state, reason, unit=unit)
+                    self._save()
+                    raise StopStep(reason)
         if slices != self.state["milestone"]["slices"]:
             self.state["milestone"]["slices"] = [dict(sl) for sl in slices]
             st.append_event(
@@ -1867,6 +1928,80 @@ class Driver(object):
             )
         return event
 
+    def _design_document_paths(self):
+        """Existing worker-authored design documents, in plan order."""
+        paths = []
+        by_key = {
+            (candidate["kind"], candidate["slice_id"]): candidate
+            for candidate in self.state.get("units") or []
+        }
+        for kind, slice_id in st.planned_units(self.state):
+            if kind not in (st.UNIT_SKELETON, st.UNIT_SLICE_DOC):
+                continue
+            candidate = by_key.get((kind, slice_id))
+            path = (candidate or {}).get("artifact")
+            if not path:
+                path = (
+                    ledgers.skeleton_path(self.state)
+                    if kind == st.UNIT_SKELETON
+                    else ledgers.slice_note_path(self.state, slice_id)
+                )
+            if os.path.isfile(os.path.join(self.workspace, path)):
+                paths.append(path)
+        return paths
+
+    def _activate_design_update(self, unit, handoff, amendment_event):
+        """Authorize ordinary reviewable document edits after agreement."""
+        previous = unit.get("design_update") or {}
+        editable_paths = list(previous.get("editable_paths") or [])
+        for path in self._design_document_paths():
+            if path not in editable_paths:
+                editable_paths.append(path)
+        update = {
+            "session_id": handoff["session_id"],
+            "accepted_target_revision": handoff[
+                "accepted_target_revision"
+            ],
+            "amendment_id": amendment_event.get("amendment_id"),
+            "amendment": amendment_event.get("text"),
+            "editable_paths": editable_paths,
+        }
+        if previous.get("changed_paths"):
+            update["changed_paths"] = list(previous["changed_paths"])
+        unit["design_update"] = update
+        st.append_event(
+            self.state,
+            "brainstorming_design_update_authorized",
+            unit=st.unit_key(unit),
+            session_id=update["session_id"],
+            accepted_target_revision=update["accepted_target_revision"],
+            editable_paths=list(update["editable_paths"]),
+        )
+        return update
+
+    @staticmethod
+    def _editable_design_paths(unit):
+        update = unit.get("design_update") or {}
+        return list(update.get("editable_paths") or [])
+
+    @staticmethod
+    def _design_review_paths(unit):
+        update = unit.get("design_update") or {}
+        return list(update.get("changed_paths") or [])
+
+    def _record_design_changes(self, unit, changed_paths):
+        update = unit.get("design_update") or {}
+        allowed = set(update.get("editable_paths") or [])
+        changed = [path for path in changed_paths if path in allowed]
+        if not changed:
+            return
+        merged = list(update.get("changed_paths") or [])
+        for path in changed:
+            if path not in merged:
+                merged.append(path)
+        update["changed_paths"] = merged
+        unit["design_update"] = update
+
     def _design_amendment_finding_id(self, result):
         handoff = getattr(result, "brainstorming_handoff", None) or {}
         for event in reversed(self.state.get("events", [])):
@@ -1930,6 +2065,9 @@ class Driver(object):
                     "amendments": self._amendments(record_seen=False),
                     "project_context": project_context,
                 }
+            lead_profile, counterpart_profile = (
+                self._brainstorming_profiles()
+            )
             created = brainstorming_milestone.create_session(
                 self.state,
                 self.config,
@@ -1937,6 +2075,8 @@ class Driver(object):
                 checked,
                 references,
                 authority_context=authority_context,
+                lead_profile=lead_profile,
+                counterpart_profile=counterpart_profile,
             )
             progress = brainstorming.coordination_projection(created["state"])
             if (
@@ -2059,7 +2199,7 @@ class Driver(object):
     def _fixer_gap_enabled(self, unit):
         """One shared eligibility gate for advertised and routed fixer gaps."""
         return (
-            interpreter.gap_semantics(self.state)
+            self._legacy_gap_enabled()
             and gitops.enabled(self.config)
             and not unit.get("under_repair")
             and unit["kind"] != st.UNIT_SKELETON
@@ -2134,6 +2274,158 @@ class Driver(object):
         )
         return True
 
+    def _guarantee_calibration_config(self):
+        value = self.config.get("guarantee_calibration")
+        if not isinstance(value, dict) or value.get("enabled") is not True:
+            return None
+        rounds = value.get("max_rounds", 2)
+        if isinstance(rounds, bool) or not isinstance(rounds, int) \
+                or rounds <= 0:
+            rounds = 2
+        return {"max_rounds": rounds}
+
+    def _start_guarantee_calibration(self, unit):
+        """Pause a drafted skeleton for one focused guarantee discussion."""
+        settings = self._guarantee_calibration_config()
+        if settings is None:
+            return self._finish_draft(unit, "drafted")
+        skeleton_path = unit.get("artifact") or self._skeleton_artifact()
+        lead_profile, counterpart_profile = self._brainstorming_profiles()
+        project_context, _extensions, _roots = self._project_prompt_inputs(
+            unit, contracts.KIND_DRAFT_SKELETON, record_seen=False
+        )
+        references = brainstorming_milestone.stable_references(
+            self.state,
+            [skeleton_path, ledgers.goal_path(self.state)],
+            skeleton_path,
+        )
+        try:
+            created = (
+                brainstorming_milestone.create_guarantee_calibration_session(
+                    self.state,
+                    self.config,
+                    st.unit_key(unit),
+                    skeleton_path,
+                    lead_profile,
+                    counterpart_profile,
+                    references=references,
+                    authority_context={
+                        "amendments": self._amendments(record_seen=False),
+                        "project_context": project_context,
+                    },
+                    max_rounds=settings["max_rounds"],
+                )
+            )
+        except Exception as exc:
+            unit["guarantee_calibration"] = {
+                "status": "failed",
+                "reason": str(exc)[:500],
+            }
+            st.fail_run(
+                self.state,
+                "guarantee calibration could not start: %s" % exc,
+                unit=unit,
+                type_="brainstorming_operational",
+            )
+            self._save()
+            raise StopStep("guarantee calibration creation failed")
+        unit["guarantee_calibration"] = {
+            "status": "running",
+            "session_id": created["id"],
+        }
+        unit["brainstorming_wait"] = {
+            "session_id": created["id"],
+            "signal": None,
+            "references": list(references),
+            "origin": {
+                "unit": st.unit_key(unit),
+                "kind": "guarantee_calibration",
+                "family": lead_profile["agent"],
+                "model": lead_profile["model"],
+                "effort": lead_profile["effort"],
+                "raw_name": "%s-guarantee-calibration"
+                % st.unit_key(unit),
+            },
+        }
+        st.append_event(
+            self.state,
+            "brainstorming_wait_started",
+            unit=st.unit_key(unit),
+            kind="guarantee_calibration",
+            family=lead_profile["agent"],
+            session_id=created["id"],
+            target_path=skeleton_path,
+        )
+        return "skeleton drafted; guarantee calibration started"
+
+    def _complete_guarantee_calibration(self, unit, wait, handoff):
+        expanded = brainstorming_milestone.prompt_handoff(
+            self.state, handoff
+        )
+        retained = expanded.get("retained_target") or {}
+        content = retained.get("content")
+        if (
+            retained.get("exists") is not True
+            or retained.get("encoding") != "utf-8"
+            or not isinstance(content, str)
+            or not content.strip()
+            or "\x00" in content
+        ):
+            raise brainstorming_milestone.AdapterError(
+                "guarantee calibration did not retain one complete UTF-8 "
+                "skeleton"
+            )
+        relpath = unit.get("artifact") or self._skeleton_artifact()
+        path = os.path.join(self.workspace, relpath)
+        with open(path, "r", encoding="utf-8") as handle:
+            before = handle.read()
+        changed = before != content
+        if changed:
+            tmp = path + ".guarantee-calibration.tmp"
+            with open(tmp, "w", encoding="utf-8") as handle:
+                handle.write(content)
+            os.replace(tmp, path)
+        unit.pop("brainstorming_wait", None)
+        unit["guarantee_calibration"] = {
+            "status": "complete",
+            "session_id": handoff["session_id"],
+            "accepted_target_revision": handoff[
+                "accepted_target_revision"
+            ],
+            "changed": changed,
+        }
+        st.append_event(
+            self.state,
+            "guarantee_calibration_completed",
+            unit=st.unit_key(unit),
+            session_id=handoff["session_id"],
+            accepted_target_revision=handoff[
+                "accepted_target_revision"
+            ],
+            changed=changed,
+        )
+        return self._finish_draft(unit, "guarantees calibrated")
+
+    def _finish_draft(self, unit, reason):
+        if gitops.enabled(self.config):
+            try:
+                sha = gitops.commit_wip(
+                    self.workspace, "wip: %s" % st.unit_key(unit)
+                )
+            except gitops.GitError as exc:
+                st.fail_run(
+                    self.state, "wip commit failed: %s" % exc, unit=unit
+                )
+                self._save()
+                raise StopStep(str(exc))
+            st.append_event(
+                self.state, "wip_commit", unit=st.unit_key(unit), sha=sha
+            )
+        st.transition_unit(
+            self.state, unit, st.U_PRE_REVIEW_VERIFY, reason=reason
+        )
+        return "drafted %s" % (unit["artifact"] or "(implementation)")
+
     def _do_brainstorming_wait(self):
         unit = st.current_unit(self.state)
         wait = copy.deepcopy(unit.get("brainstorming_wait") or {})
@@ -2155,6 +2447,13 @@ class Driver(object):
             # longer monopolize the unit's next action. Operator resume now
             # retries the unchanged originating milestone call.
             unit.pop("brainstorming_wait", None)
+            if (wait.get("origin") or {}).get("kind") \
+                    == "guarantee_calibration":
+                unit["guarantee_calibration"] = {
+                    "status": "failed",
+                    "session_id": session_id,
+                    "reason": str(exc)[:500],
+                }
             st.append_event(
                 self.state,
                 "brainstorming_operational_detached",
@@ -2185,7 +2484,73 @@ class Driver(object):
 
         origin = wait["origin"]
         kind = origin["kind"]
+        if kind == "guarantee_calibration":
+            if handoff["result"]["outcome"] == "failure":
+                unit.pop("brainstorming_wait", None)
+                unit["guarantee_calibration"] = {
+                    "status": "failed",
+                    "session_id": session_id,
+                    "reason": "the participants did not agree",
+                }
+                st.append_event(
+                    self.state,
+                    "guarantee_calibration_failed",
+                    unit=st.unit_key(unit),
+                    session_id=session_id,
+                )
+                st.fail_run(
+                    self.state,
+                    "guarantee calibration ended without agreement",
+                    unit=unit,
+                    type_="guarantee_calibration",
+                )
+                self._save()
+                raise StopStep("guarantee calibration did not agree")
+            try:
+                return self._complete_guarantee_calibration(
+                    unit, wait, handoff
+                )
+            except Exception as exc:
+                unit.pop("brainstorming_wait", None)
+                unit["guarantee_calibration"] = {
+                    "status": "failed",
+                    "session_id": session_id,
+                    "reason": str(exc)[:500],
+                }
+                st.append_event(
+                    self.state,
+                    "guarantee_calibration_failed",
+                    unit=st.unit_key(unit),
+                    session_id=session_id,
+                )
+                st.fail_run(
+                    self.state,
+                    "accepted guarantee calibration could not be applied: "
+                    "%s" % exc,
+                    unit=unit,
+                    type_="brainstorming_operational",
+                )
+                self._save()
+                raise StopStep("guarantee calibration adoption failed")
         if handoff["result"]["outcome"] == "failure":
+            if self._modern_design_updates():
+                unit.pop("brainstorming_wait", None)
+                st.append_event(
+                    self.state,
+                    "brainstorming_failure_routed",
+                    unit=st.unit_key(unit),
+                    kind=kind,
+                    session_id=session_id,
+                )
+                st.fail_run(
+                    self.state,
+                    "focused design discussion ended without agreement; "
+                    "the original work and candidate are preserved",
+                    unit=unit,
+                    type_="brainstorming_no_agreement",
+                )
+                self._save()
+                raise StopStep("Brainstorming ended without agreement")
             if (
                 kind == contracts.KIND_FIX_FINDINGS
                 and not self._fixer_gap_enabled(unit)
@@ -2214,10 +2579,21 @@ class Driver(object):
                 session_id=session_id,
             )
             if kind in contracts.RETHINK_CONTINUATION_KINDS:
+                failure_gap = wait["signal"].get("failure_gap")
+                if not isinstance(failure_gap, dict):
+                    st.fail_run(
+                        self.state,
+                        "a historical Brainstorming continuation has no "
+                        "failure_gap for its no-agreement route",
+                        unit=unit,
+                        type_="worker_protocol",
+                    )
+                    self._save()
+                    raise StopStep("missing legacy failure gap")
                 pre = origin.get("pre_snapshot") or {}
                 return self._handle_gap(
                     unit,
-                    {"gaps": [copy.deepcopy(wait["signal"]["failure_gap"])]},
+                    {"gaps": [copy.deepcopy(failure_gap)]},
                     origin.get("duration_s"),
                     pre_tree=pre.get("tree"),
                     pre_head=pre.get("head"),
@@ -2255,9 +2631,13 @@ class Driver(object):
             )
             if amendment_mode:
                 try:
-                    self._adopt_brainstorming_design_amendment(
+                    amendment_event = self._adopt_brainstorming_design_amendment(
                         unit, wait, handoff
                     )
+                    if self._modern_design_updates():
+                        self._activate_design_update(
+                            unit, handoff, amendment_event
+                        )
                 except brainstorming_milestone.AdapterError as exc:
                     unit.pop("brainstorming_wait", None)
                     st.fail_run(
@@ -2272,7 +2652,11 @@ class Driver(object):
             family = origin["family"]
             design_context = (
                 self._design_correction_context(unit)
-                if kind == contracts.KIND_FIX_FINDINGS
+                if (
+                    kind == contracts.KIND_FIX_FINDINGS
+                    and (not self._modern_design_updates()
+                         or unit.get("design_correction"))
+                )
                 else None
             )
             amendments = self._amendments()
@@ -2299,8 +2683,16 @@ class Driver(object):
                 project_context=project_context,
                 battery=battery,
                 accepted_design_amendment=amendment_mode,
+                editable_design_paths=(
+                    self._editable_design_paths(unit)
+                    if amendment_mode and self._modern_design_updates()
+                    else None
+                ),
             )
             raw_name = "%s-rethink-return" % origin["raw_name"]
+            design_before = (
+                self._snapshot() if unit.get("design_update") else None
+            )
             output, result, raw_path = self._call(
                 family,
                 prompt,
@@ -2321,9 +2713,19 @@ class Driver(object):
                         {"battery_questions": battery}
                         if battery else {}
                     ),
+                    **(
+                        {"require_failure_gap": True}
+                        if self._legacy_failure_gap_required(unit, kind)
+                        else {}
+                    ),
                 } or None,
                 session_ref=origin["provider_session_ref"],
             )
+            if design_before is not None:
+                self._record_design_changes(
+                    unit,
+                    self._snapshot_diff(design_before, self._snapshot()),
+                )
             unit.pop("brainstorming_wait", None)
             if output.get("status") == "need_rethink":
                 return self._start_rethink(
@@ -2534,10 +2936,10 @@ class Driver(object):
         survives the worker's own context compaction where inline prose
         does not — the worker can re-read ground truth at any point.
 
-        Reform runs, later units: they consume the SEALED SKELETON
+        Reform runs, later units consume the current reviewed skeleton
         (spec §2's chain of consumption) — operator planning prose stops
         riding every downstream call, and downstream workers judge scope
-        against the sealed boundary rather than a raw brainstorm's
+        against that reviewed boundary rather than a raw brainstorm's
         non-binding sketches; goal.md stays one read away.
 
         Legacy and profile-less runs keep the full goal inline
@@ -2561,7 +2963,8 @@ class Driver(object):
             )
         self._ensure_goal_ledger()
         return (
-            "the sealed skeleton at %s is the operative restatement of "
+            "the current reviewed skeleton at %s is the operative "
+            "restatement of "
             "the goal — the milestone boundary; judge scope against IT. "
             "The operator's full original goal text is preserved at %s "
             "(generated snapshot); read it only to trace intent the "
@@ -2689,6 +3092,13 @@ class Driver(object):
             if prepared is not None:
                 return prepared
         if unit.get("draft") is not None:
+            if (
+                unit["kind"] == st.UNIT_SKELETON
+                and self._guarantee_calibration_config() is not None
+                and (unit.get("guarantee_calibration") or {}).get("status")
+                != "complete"
+            ):
+                return self._start_guarantee_calibration(unit)
             # Defensive compatibility for a persisted post-draft unit whose
             # status was left pending by an older/crashed driver. The work is
             # already present; never call the implementer twice or livelock
@@ -2738,7 +3148,7 @@ class Driver(object):
         # Doc drafts under a reform profile additionally answer the
         # structured question battery (spec §4) — prompted, mirrored in
         # the contract JSON, and machine-checked for presence.
-        gap_enabled = interpreter.gap_semantics(self.state)
+        gap_enabled = self._legacy_gap_enabled()
         two_register = interpreter.doc_register(self.state) == "lay+hard-table"
         battery = interpreter.battery_questions(self.state, unit["kind"])
         if unit["kind"] == st.UNIT_SKELETON:
@@ -2758,6 +3168,7 @@ class Driver(object):
                 ),
                 project_context=project_context, gap_enabled=gap_enabled,
                 two_register=two_register, battery=battery,
+                editable_design_paths=self._editable_design_paths(unit),
             )
         else:
             sl = self._slice_info(unit["slice_id"])
@@ -2783,6 +3194,7 @@ class Driver(object):
                            and (bool(unit.get("has_gap_remodel"))
                                 or self._note_predates_skeleton(
                                     unit["slice_id"]))),
+                editable_design_paths=self._editable_design_paths(unit),
             )
         # The reviewed baseline as it stands BEFORE the builder runs: the local
         # ref map, HEAD's branch identity and commit tip, and the index tree
@@ -2802,6 +3214,7 @@ class Driver(object):
                 pre_refs = pre_sym = pre_head = pre_tree = pre_stash = None
         raw_name = "%s-draft" % st.unit_key(unit)
         resumed = self._take_brainstorming_resume(unit, kind)
+        design_before = None
         if resumed is not None:
             output, result, raw_path = resumed
             family = result.origin_family or family
@@ -2814,18 +3227,38 @@ class Driver(object):
             pre_tree = original_pre.get("tree")
             pre_stash = original_pre.get("stash")
         else:
+            if unit.get("design_update"):
+                design_before = self._snapshot()
             output, result, raw_path = self._call(
                 family, prompt, kind, raw_name,
                 model=model, effort=effort, extensions=extensions, roots=roots,
                 validate_opts=(
-                    {"battery_questions": battery} if battery else None
+                    {
+                        **(
+                            {"battery_questions": battery}
+                            if battery else {}
+                        ),
+                        **(
+                            {"require_failure_gap": True}
+                            if self._legacy_failure_gap_required(unit, kind)
+                            else {}
+                        ),
+                    } or None
                 ),
                 start_session=(
                     kind in contracts.RETHINK_CONTINUATION_KINDS
                 ),
             )
+        if design_before is not None:
+            self._record_design_changes(
+                unit,
+                self._snapshot_diff(design_before, self._snapshot()),
+            )
         if output.get("status") == "need_rethink":
-            self._enforce_sealed_artifacts(raw_name)
+            self._enforce_sealed_artifacts(
+                raw_name,
+                editable_sealed=self._editable_design_paths(unit),
+            )
             return self._start_rethink(
                 unit,
                 kind,
@@ -2845,6 +3278,22 @@ class Driver(object):
                 },
             )
         if output.get("status") == "gap":
+            if self._modern_design_updates() and not any(
+                gap.get("classification") == contracts.CLASSIFY_NEEDS_OPERATOR
+                for gap in output.get("gaps") or []
+            ):
+                self._enforce_sealed_artifacts(raw_name)
+                st.fail_run(
+                    self.state,
+                    "%s returned the retired in-goal gap route; retry this "
+                    "same task with need_rethink so a focused amendment can "
+                    "be discussed without rebuilding prior documentation"
+                    % kind,
+                    unit=unit,
+                    type_="worker_protocol",
+                )
+                self._save()
+                raise StopStep("retired in-goal gap route")
             # The builder met a build-changing hole/conflict and stopped
             # (reform §3). Route it upstream (repair) or to the operator
             # (goal). The unit finished NOTHING and stays pending; it
@@ -2853,7 +3302,10 @@ class Driver(object):
                                     pre_tree=pre_tree, pre_head=pre_head,
                                     pre_sym=pre_sym, pre_refs=pre_refs,
                                     pre_stash=pre_stash)
-        self._enforce_sealed_artifacts(raw_name)
+        self._enforce_sealed_artifacts(
+            raw_name,
+            editable_sealed=self._editable_design_paths(unit),
+        )
         self._check_worker_blocked(unit, output, kind)
         st.record_draft(self.state, unit, kind, output, raw_path,
                         family=family, duration=result.duration_s,
@@ -2862,22 +3314,15 @@ class Driver(object):
             st.set_discovered_suite(self.state, output["suite_command"])
         if unit["kind"] == st.UNIT_SKELETON:
             self.state["milestone"]["slices"] = output["slices"]
-        if gitops.enabled(self.config):
-            try:
-                sha = gitops.commit_wip(
-                    self.workspace, "wip: %s" % st.unit_key(unit)
-                )
-            except gitops.GitError as exc:
-                st.fail_run(self.state, "wip commit failed: %s" % exc, unit=unit)
-                self._save()
-                raise StopStep(str(exc))
-            st.append_event(
-                self.state, "wip_commit", unit=st.unit_key(unit), sha=sha
-            )
-        st.transition_unit(
-            self.state, unit, st.U_PRE_REVIEW_VERIFY, reason="drafted"
-        )
-        return "drafted %s" % (unit["artifact"] or "(implementation)")
+        elif output.get("slices"):
+            self._maybe_update_slices(unit, output)
+        if (
+            unit["kind"] == st.UNIT_SKELETON
+            and self._guarantee_calibration_config() is not None
+        ):
+            unit["guarantee_calibration"] = {"status": "pending"}
+            return self._start_guarantee_calibration(unit)
+        return self._finish_draft(unit, "drafted")
 
     # -- gap routing (reform §3: stop-report-repair-resume) -----------------
 
@@ -3672,6 +4117,58 @@ class Driver(object):
         d = (self.config.get("model_defaults") or {}).get(family) or {}
         return d.get("model"), d.get("effort")
 
+    def _brainstorming_profiles(self):
+        """Pin milestone discussions to their two configured voices."""
+        family, model, effort = self._act_profile("implementer")
+        default_model, default_effort = self._family_defaults(family)
+        lead = {
+            "agent": family,
+            "model": model or default_model,
+            "effort": effort or default_effort,
+        }
+
+        defaults = DEFAULT_CONFIG["acts"]["brainstorming_counterpart"]
+        family, model, effort = self._act_profile(
+            "brainstorming_counterpart",
+            origin_family=lead["agent"],
+            default_family=defaults["agent"],
+        )
+        default_model, default_effort = self._family_defaults(family)
+        counterpart = {
+            "agent": family,
+            "model": (
+                model
+                or (defaults["model"] if family == defaults["agent"] else None)
+                or default_model
+            ),
+            "effort": (
+                effort
+                or (defaults["effort"] if family == defaults["agent"] else None)
+                or default_effort
+            ),
+        }
+        return lead, counterpart
+
+    def _modern_design_updates(self):
+        return self.config.get("rethink_design_updates") is True
+
+    def _legacy_gap_enabled(self):
+        return (
+            interpreter.gap_semantics(self.state)
+            and not self._modern_design_updates()
+        )
+
+    def _legacy_failure_gap_required(self, unit, kind):
+        if (
+            not self._legacy_gap_enabled()
+            or kind not in contracts.RETHINK_CONTINUATION_KINDS
+        ):
+            return False
+        return (
+            kind != contracts.KIND_FIX_FINDINGS
+            or self._fixer_gap_enabled(unit)
+        )
+
     def _review_profile(self, family):
         """Effective model/effort for a fixed review family.
 
@@ -3845,7 +4342,20 @@ class Driver(object):
         project_context, extensions, roots = self._project_prompt_inputs(
             unit, contracts.KIND_FIX_FINDINGS
         )
-        design_context = self._design_correction_context(unit)
+        # New runs amend design through need_rethink and the ordinary review
+        # cycle. Keep the old one-note envelope only for an already-persisted
+        # correction episode.
+        design_context = (
+            self._design_correction_context(unit)
+            if (not self._modern_design_updates()
+                or unit.get("design_correction"))
+            else None
+        )
+        legacy_design_process = (
+            not self._modern_design_updates()
+            or bool(unit.get("under_repair"))
+            or design_context is not None
+        )
         if (
             design_context
             and design_context.get("mode") == "active"
@@ -3916,7 +4426,9 @@ class Driver(object):
             gap_enabled=(
                 self._fixer_gap_enabled(unit)
             ),
+            legacy_design_process=legacy_design_process,
             design_correction=design_context,
+            editable_design_paths=self._editable_design_paths(unit),
         )
         n_fix = 1 + len(
             [r for r in unit["rounds"] if r["kind"] == contracts.KIND_FIX_FINDINGS]
@@ -3938,6 +4450,7 @@ class Driver(object):
                 pre_worktree_tree = (
                     gitops.snapshot_worktree_tree(self.workspace)
                     if self._fixer_gap_enabled(unit)
+                    or self._editable_design_paths(unit)
                     or (
                         design_context
                         and design_context.get("mode") == "offer"
@@ -3976,10 +4489,21 @@ class Driver(object):
                 extensions=extensions,
                 roots=roots,
                 validate_opts=(
-                    {"allow_design_correction": True}
-                    if design_context
-                    and design_context.get("mode") == "offer"
-                    else None
+                    {
+                        **(
+                            {"allow_design_correction": True}
+                            if design_context
+                            and design_context.get("mode") == "offer"
+                            else {}
+                        ),
+                        **(
+                            {"require_failure_gap": True}
+                            if self._legacy_failure_gap_required(
+                                unit, contracts.KIND_FIX_FINDINGS
+                            )
+                            else {}
+                        ),
+                    } or None
                 ),
                 start_session=True,
             )
@@ -3994,13 +4518,17 @@ class Driver(object):
             editable_note = active_correction.get("artifact")
         elif declaration is not None and design_context:
             editable_note = design_context.get("artifact")
+        editable_documents = self._editable_design_paths(unit)
+        if editable_note:
+            editable_documents.append(editable_note)
         restored = self._enforce_sealed_artifacts(
             raw_name,
-            editable_sealed=([editable_note] if editable_note else None),
+            editable_sealed=editable_documents,
         )
         fix_workspace_changed = self._snapshot_diff(
             fix_workspace_before, self._snapshot()
         )
+        self._record_design_changes(unit, fix_workspace_changed)
         if output.get("status") == "need_rethink":
             if restored:
                 st.fail_run(
@@ -4486,8 +5014,9 @@ class Driver(object):
             project_context=project_context,
             debt=self._debt(unit),
             wave_docs=self._wave_doc_paths(unit),
-            gap_enabled=interpreter.gap_semantics(self.state),
+            gap_enabled=self._legacy_gap_enabled(),
             design_correction=review_correction,
+            editable_design_paths=self._design_review_paths(unit),
         )
         rethink_handoff = self._brainstorming_review_handoff(
             unit, contracts.KIND_DELTA_REVIEW
@@ -5196,8 +5725,9 @@ class Driver(object):
             project_context=project_context,
             battery=interpreter.battery_questions(self.state, unit["kind"]),
             debt=self._debt(unit),
-            gap_enabled=interpreter.gap_semantics(self.state),
+            gap_enabled=self._legacy_gap_enabled(),
             wave_docs=self._wave_doc_paths(unit),
+            editable_design_paths=self._design_review_paths(unit),
         )
         rethink_handoff = self._brainstorming_review_handoff(
             unit, contracts.KIND_REVIEW_ROUND
@@ -5402,6 +5932,8 @@ class Driver(object):
         if is_anchor:
             st.close_redoc_wave(self.state, unit)
         self._gate_commit(unit)
+        if unit.get("design_update"):
+            unit.pop("design_update", None)
         if is_anchor:
             st.stamp_redoc_wave_gate(
                 self.state, unit, unit.get("gate_commit")
@@ -5413,10 +5945,10 @@ class Driver(object):
 
     def _gate_message(self, unit):
         if unit["kind"] == st.UNIT_SKELETON:
-            return "Seal milestone skeleton"
+            return "Complete review of milestone skeleton"
         if unit["kind"] == st.UNIT_SLICE_DOC:
-            return "Seal slice %02d note" % unit["slice_id"]
-        return "Seal slice %02d implementation and close" % unit["slice_id"]
+            return "Complete review of slice %02d note" % unit["slice_id"]
+        return "Complete review of slice %02d implementation" % unit["slice_id"]
 
     def _gate_commit(self, unit):
         """The canon's commit-the-sealed-unit rule, executed by code: the
@@ -5435,6 +5967,11 @@ class Driver(object):
             self._save()
             raise StopStep(str(exc))
         unit["gate_commit"] = sha
+        design_paths = set(self._design_review_paths(unit))
+        if design_paths:
+            for candidate in self.state.get("units") or []:
+                if candidate.get("artifact") in design_paths:
+                    candidate["gate_commit"] = sha
         correction = unit.get("design_correction") or {}
         if correction.get("phase") == "ratified":
             note = self._unit_by_key(correction.get("note_unit"))

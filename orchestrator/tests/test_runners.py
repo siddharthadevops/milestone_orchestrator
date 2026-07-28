@@ -145,6 +145,29 @@ def finding_validity(exceeds=True):
     }
 
 
+def fix_finding_validity(exceeds=True):
+    return {
+        "affected_party": (
+            "the user relying on the documented behavior"
+            if exceeds else "none; no party is affected beyond normal operation"
+        ),
+        "observable_damage": (
+            "the documented operation fails"
+            if exceeds else "none; the observed result is permitted"
+        ),
+        "violated_guarantee": (
+            "the declared documented-behavior guarantee"
+            if exceeds else "none; no declared guarantee is violated"
+        ),
+        "permitted_baseline": "the documented behavior",
+        "incremental_harm": (
+            "the observed behavior breaks the documented behavior"
+            if exceeds else "no harm beyond the documented behavior"
+        ),
+        "exceeds_baseline": exceeds,
+    }
+
+
 def report_finding(severity="P2", contests=None):
     """A reviewer finding: no disposition (reviewers never triage)."""
     f = {"id": "F1", "severity": severity, "summary": "a finding",
@@ -162,7 +185,7 @@ def full_finding(disposition="fixed", severity="P2", consultation=None,
         "severity": severity,
         "summary": "a finding",
         "disposition": disposition,
-        "validity": finding_validity(
+        "validity": fix_finding_validity(
             disposition in ("fixed", "blocked")
         ),
     }
@@ -323,17 +346,17 @@ class TestValidateWorkerOutputHappy(unittest.TestCase):
 
     def test_fixer_disposition_must_match_the_baseline_delta(self):
         cases = (
-            full_finding("fixed", validity=finding_validity(False)),
-            full_finding("blocked", validity=finding_validity(False)),
+            full_finding("fixed", validity=fix_finding_validity(False)),
+            full_finding("blocked", validity=fix_finding_validity(False)),
             full_finding(
                 "rejected",
                 consultation={"resolution": "both families agree"},
-                validity=finding_validity(True),
+                validity=fix_finding_validity(True),
             ),
             full_finding(
                 "rejected_adjudicated",
                 adjudication_ref="skeleton-claude-r1/F1",
-                validity=finding_validity(True),
+                validity=fix_finding_validity(True),
             ),
         )
         for finding in cases:
@@ -347,6 +370,83 @@ class TestValidateWorkerOutputHappy(unittest.TestCase):
                         ),
                         contracts.KIND_FIX_FINDINGS,
                     )
+
+    def test_fixer_requires_the_exact_damage_account(self):
+        text_fields = (
+            "affected_party",
+            "observable_damage",
+            "violated_guarantee",
+            "permitted_baseline",
+            "incremental_harm",
+        )
+        for key in text_fields:
+            with self.subTest(case="missing", key=key):
+                finding = full_finding()
+                del finding["validity"][key]
+                with self.assertRaisesRegex(contracts.ContractError, "exactly"):
+                    contracts.validate_worker_output(
+                        ok_output(
+                            contracts.KIND_FIX_FINDINGS,
+                            findings=[finding],
+                        ),
+                        contracts.KIND_FIX_FINDINGS,
+                    )
+            with self.subTest(case="empty", key=key):
+                finding = full_finding()
+                finding["validity"][key] = "  "
+                with self.assertRaisesRegex(
+                    contracts.ContractError, "must be non-empty"
+                ):
+                    contracts.validate_worker_output(
+                        ok_output(
+                            contracts.KIND_FIX_FINDINGS,
+                            findings=[finding],
+                        ),
+                        contracts.KIND_FIX_FINDINGS,
+                    )
+            with self.subTest(case="bounded", key=key):
+                finding = full_finding()
+                finding["validity"][key] = "x" * (
+                    contracts.FINDING_TEXT_MAX + 1
+                )
+                with self.assertRaisesRegex(contracts.ContractError, key):
+                    contracts.validate_worker_output(
+                        ok_output(
+                            contracts.KIND_FIX_FINDINGS,
+                            findings=[finding],
+                        ),
+                        contracts.KIND_FIX_FINDINGS,
+                    )
+
+        legacy = full_finding()
+        legacy["validity"]["actual_outcome"] = "legacy fixer field"
+        with self.assertRaisesRegex(contracts.ContractError, "exactly"):
+            contracts.validate_worker_output(
+                ok_output(
+                    contracts.KIND_FIX_FINDINGS,
+                    findings=[legacy],
+                ),
+                contracts.KIND_FIX_FINDINGS,
+            )
+
+    def test_reviewer_validity_schema_stays_unchanged(self):
+        obj = ok_output(
+            contracts.KIND_REVIEW_ROUND, findings=[report_finding()]
+        )
+        self.assertIs(
+            contracts.validate_worker_output(obj, contracts.KIND_REVIEW_ROUND),
+            obj,
+        )
+        finding = report_finding()
+        finding["validity"]["affected_party"] = "a user"
+        with self.assertRaisesRegex(contracts.ContractError, "exactly"):
+            contracts.validate_worker_output(
+                ok_output(
+                    contracts.KIND_REVIEW_ROUND,
+                    findings=[finding],
+                ),
+                contracts.KIND_REVIEW_ROUND,
+            )
 
     def test_report_finding_accepts_the_plain_language_mirror(self):
         # `plain` (one lay-language sentence naming what is being built

@@ -214,11 +214,16 @@ class ProjectsServiceTestCase(unittest.TestCase):
         return body["work_area"]["record"]
 
     def launch(self, slug=PROJECT, area=AREA, expect=201, **extra):
+        launch_config = {
+            "guarantee_calibration": {"enabled": False},
+        }
+        launch_config.update(extra.pop("config", {}) or {})
         payload = {
             "project": slug,
             "work_area": area,
             "goal": GOAL,
             "autostart": False,
+            "config": launch_config,
         }
         payload.update(extra)
         status, body = self.request_json("POST", "/api/runs", payload)

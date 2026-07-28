@@ -277,7 +277,7 @@ class GapRoutingCase(unittest.TestCase):
         self.assertIn("slice 2", impl_prompts[0])
         # No has_gap_remodel flag on impl-2 — the note-predates-reseal
         # predicate alone must expose the remodel.
-        self.assertIn("REMODEL ASSIGNMENT", impl_prompts[0])
+        self.assertIn("UPDATED DESIGN ASSIGNMENT", impl_prompts[0])
 
     def test_full_cycle_fits_remodel_reseal_redraft_close(self):
         # End to end (git off — pure state flow; git gates are orthogonal
@@ -333,8 +333,8 @@ class GapRoutingCase(unittest.TestCase):
         impl_prompts = [p for (_f, kind, p) in mock.calls
                         if kind == "implement"]
         self.assertEqual(len(impl_prompts), 2)
-        self.assertNotIn("REMODEL ASSIGNMENT", impl_prompts[0])
-        self.assertIn("REMODEL ASSIGNMENT", impl_prompts[1])
+        self.assertNotIn("UPDATED DESIGN ASSIGNMENT", impl_prompts[0])
+        self.assertIn("UPDATED DESIGN ASSIGNMENT", impl_prompts[1])
         # RE-DOCUMENTATION WAVE: doc-01 was co-reopened with the anchor and
         # resealed by the wave when the anchor's seal passed — a WAVE seal
         # record referencing the anchor's attempt, never its own episode.

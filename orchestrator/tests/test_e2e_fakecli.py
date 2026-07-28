@@ -51,9 +51,9 @@ ADJ_ID = "skeleton-claude-r1/F1"
 # commits are amended away: nothing else may appear in the history.
 GATE_MESSAGES = [
     "Close milestone",
-    "Seal slice 01 implementation and close",
-    "Seal slice 01 note",
-    "Seal milestone skeleton",
+    "Complete review of slice 01 implementation",
+    "Complete review of slice 01 note",
+    "Complete review of milestone skeleton",
     "Initialize milestone workspace",
 ]
 
@@ -109,6 +109,7 @@ class TestCalculatorE2E(unittest.TestCase):
             # canonical layout has its own dedicated tests.
             "docs_dir": "docs",
             "error_classifier": False,
+            "guarantee_calibration": {"enabled": False},
         }
         cfg_path = os.path.join(cls.tmp.name, "demo-config.json")
         with open(cfg_path, "w", encoding="utf-8") as fh:
@@ -535,9 +536,9 @@ class TestCalculatorE2E(unittest.TestCase):
             sha, subject = line.split(" ", 1)
             sha_by_subject[subject] = sha
         for unit_key, subject in (
-            ("skeleton", "Seal milestone skeleton"),
-            ("slice_doc-01", "Seal slice 01 note"),
-            ("slice_impl-01", "Seal slice 01 implementation and close"),
+            ("skeleton", "Complete review of milestone skeleton"),
+            ("slice_doc-01", "Complete review of slice 01 note"),
+            ("slice_impl-01", "Complete review of slice 01 implementation"),
         ):
             self.assertEqual(
                 self.state_unit(unit_key)["gate_commit"],
@@ -568,9 +569,9 @@ class TestCalculatorE2E(unittest.TestCase):
         self.assertEqual(
             [(e["unit"], e["message"]) for e in gates],
             [
-                ("skeleton", "Seal milestone skeleton"),
-                ("slice_doc-01", "Seal slice 01 note"),
-                ("slice_impl-01", "Seal slice 01 implementation and close"),
+                ("skeleton", "Complete review of milestone skeleton"),
+                ("slice_doc-01", "Complete review of slice 01 note"),
+                ("slice_impl-01", "Complete review of slice 01 implementation"),
                 (None, "Close milestone"),
             ],
         )

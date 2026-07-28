@@ -138,6 +138,7 @@ def _base_config():
         "max_fix_loops": 4,
         "docs_dir": "docs",
         "error_classifier": False,
+        "guarantee_calibration": {"enabled": False},
     }
 
 

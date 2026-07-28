@@ -154,8 +154,10 @@ class GapPromptGatingTest(unittest.TestCase):
             "codex", "/ws", "goal", "skeleton",
             [{"id": "GAP1", "severity": "P1", "summary": "objective"}],
             [], "claude", ["claude"], unit_kind="skeleton",
-            repair_artifact="docs/skeleton.md", repair_wave_docs=docs)
+            repair_artifact="docs/skeleton.md", repair_wave_docs=docs,
+            legacy_design_process=True)
         self.assertIn("RE-DOCUMENTATION WAVE", fix)
+        self.assertNotIn("GAP EXIT", fix)
         self.assertIn("RE-DOCUMENTER", fix)
         self.assertIn("do NOT\n  bound WHERE", fix)
         flat_fix = " ".join(fix.split())
@@ -169,12 +171,12 @@ class GapPromptGatingTest(unittest.TestCase):
             self.assertIn(d, fix)
         delta = prompts.build_delta_review(
             "codex", "/ws", "goal", "skeleton", [],
-            unit_kind="skeleton", wave_docs=docs)
+            unit_kind="skeleton", wave_docs=docs, gap_enabled=True)
         self.assertIn("RE-DOCUMENTATION WAVE IN PROGRESS", delta)
         self.assertIn("Multi-document breadth is NOT a finding", delta)
         full = prompts.build_review_round(
             "codex", "/ws", "goal", "skeleton", "docs/skeleton.md", [],
-            unit_kind="skeleton", wave_docs=docs)
+            unit_kind="skeleton", wave_docs=docs, gap_enabled=True)
         self.assertIn("ENTIRE DOCUMENTATION SET", full)
         self.assertIn("edited\n  or not", full)
         for d in docs:
@@ -186,12 +188,13 @@ class GapPromptGatingTest(unittest.TestCase):
             "codex", "/ws", "goal", "skeleton",
             [{"id": "GAP1", "severity": "P1", "summary": "objective"}],
             [], "claude", ["claude"], unit_kind="skeleton",
-            repair_artifact="docs/skeleton.md", repair_wave_docs=[])
+            repair_artifact="docs/skeleton.md", repair_wave_docs=[],
+            legacy_design_process=True)
         self.assertIn("RE-DOCUMENTATION WAVE", empty_fix)
         self.assertIn("skeleton alone", empty_fix)
         empty_full = prompts.build_review_round(
             "codex", "/ws", "goal", "skeleton", "docs/skeleton.md", [],
-            unit_kind="skeleton", wave_docs=[])
+            unit_kind="skeleton", wave_docs=[], gap_enabled=True)
         self.assertIn("ENTIRE DOCUMENTATION SET", empty_full)
         self.assertIn("skeleton alone", empty_full)
         # With notes in the set, the full review brings the slice-note
@@ -205,7 +208,8 @@ class GapPromptGatingTest(unittest.TestCase):
             "codex", "/ws", "goal", "skeleton",
             [{"id": "F1", "severity": "P1", "summary": "s"}],
             [], "claude", ["claude"], unit_kind="skeleton",
-            repair_artifact="docs/skeleton.md")
+            repair_artifact="docs/skeleton.md",
+            legacy_design_process=True)
         self.assertNotIn("RE-DOCUMENTATION WAVE", plain_fix)
         self.assertIn("REOPENED FOR REPAIR", plain_fix)
 
@@ -222,7 +226,7 @@ class GapPromptGatingTest(unittest.TestCase):
             unit_kind="slice_impl")
         for text in (full_impl, delta_impl):
             self.assertIn("SCOPE AUTHORITY", text)
-            self.assertIn("authorized by the CURRENT sealed SKELETON", text)
+            self.assertIn("authorized by the CURRENT reviewed SKELETON", text)
             # The reviewer's authority ordering matches the implementer's, so
             # a remodel-assigned change over a stale own-note is not flagged.
             self.assertIn("GOAL > current SKELETON", text)
@@ -244,8 +248,8 @@ class GapPromptGatingTest(unittest.TestCase):
             "codex", "/ws", "goal", self.SLICE, "n.md", [],
             gap_enabled=True, skeleton_path="docs/skeleton.md",
             remodeled=True)
-        self.assertNotIn("REMODEL ASSIGNMENT", base)
-        self.assertIn("REMODEL ASSIGNMENT", redraft)
+        self.assertNotIn("UPDATED DESIGN ASSIGNMENT", base)
+        self.assertIn("UPDATED DESIGN ASSIGNMENT", redraft)
         self.assertIn("docs/skeleton.md", redraft)
         # The implementer's authority ordering matches the reviewer's, so the
         # remodel over a stale own-note is not an unresolvable conflict.

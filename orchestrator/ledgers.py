@@ -176,7 +176,7 @@ def render_milestone(state):
         "",
         "## Units",
         "",
-        "| Unit | Status | Rounds | Seal result | Gate commit |",
+        "| Unit | Status | Rounds | Review result | Gate commit |",
         "|---|---|---|---|---|",
     ]
     for unit in state["units"]:
@@ -196,7 +196,19 @@ def render_milestone(state):
             "| %s | %s | %d | %s | %s |"
             % (
                 _unit_label(state, unit),
-                unit["status"],
+                (
+                    "reviewed"
+                    if unit["status"] == st.U_SEALED
+                    else (
+                        "completing review"
+                        if unit["status"] == st.U_SEALING
+                        else (
+                            "final verification"
+                            if unit["status"] == st.U_PRE_SEAL_VERIFY
+                            else unit["status"]
+                        )
+                    )
+                ),
                 len(unit["rounds"]),
                 seals,
                 unit.get("gate_commit") or "-",
@@ -265,28 +277,29 @@ def render_review_log(state):
                 "",
                 "### %s — %s%s"
                 % (
-                    "Seal result"
+                    "Review completion"
                     if deterministic
-                    else "Historical seal attempt a%d" % seal["attempt"],
+                    else "Historical completion attempt a%d"
+                    % seal["attempt"],
                     "SATISFIED"
                     if seal["passed"]
                     else ("INVALIDATED" if seal["invalidated"] else "findings"),
-                    (" (re-documentation wave %s)" % seal["wave"])
+                    (" (documentation update %s)" % seal["wave"])
                     if seal.get("wave") else "",
                 ),
                 "",
             ]
             if seal.get("wave"):
                 lines.append(
-                    "- requalified by the anchor's documentation wave (%s): "
+                    "- covered by the anchor's documentation update (%s): "
                     "the wave certified the whole documentation set; this "
-                    "unit did not evaluate its own predicate" % seal["wave"]
+                    "unit did not run a separate completion check" % seal["wave"]
                 )
             elif deterministic:
                 lines.append(
                     "- deterministic result: every configured family was "
                     "clean or debt-clean on the same current bytes, and the "
-                    "final verification passed; no seal reviewer was called"
+                    "final verification passed; no extra reviewer was called"
                 )
                 if seal.get("reviews"):
                     lines.append(
@@ -304,7 +317,7 @@ def render_review_log(state):
                 half = seal["halves"][fam]
                 result = half.get("result") or {}
                 lines.append(
-                    "- historical %s seal review: %d finding(s); "
+                    "- historical %s completion review: %d finding(s); "
                     "workspace_modified=%s; raw `%s`"
                     % (
                         fam,
@@ -375,7 +388,7 @@ def render_closure(state, unit):
         + "# Closure — slice %02d (%s)\n\n" % (unit["slice_id"], _slice_title(state, unit["slice_id"]))
         + "- closed at: %s\n" % closed.get("at")
         + "- rounds: %s\n" % closed.get("rounds")
-        + "- seal records: %s\n" % closed.get("seal_attempts")
+        + "- review completion records: %s\n" % closed.get("seal_attempts")
         + "- gate commit: %s\n" % (unit.get("gate_commit") or "(this commit)")
         + "- review state: effectively clean (every family clean or "
         "debt-clean on the same bytes; final verification passed)\n"

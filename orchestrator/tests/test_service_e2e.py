@@ -152,6 +152,7 @@ class TestServicePanelE2E(unittest.TestCase):
             # review work, not skeleton drafting/fixing).
             "acts": {"skeletoner": "codex"},
             "verification": ["python3 run_checks.py"],
+            "guarantee_calibration": {"enabled": False},
         }
 
     def _create_run(self, autostart):

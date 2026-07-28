@@ -520,8 +520,9 @@
       to open a fix cycle vs record as tracked debt). Every profile uses the
       same deterministic seal. No seed is pre-selected on purpose — the
       choice is explicit.</p>
-    <p><b>Acts</b> — empty = family default (claude: opus-5/high, codex:
-      gpt-5.6-sol/xhigh); model options adapt to the agent; editable mid-run
+    <p><b>Acts</b> — implementation defaults to codex gpt-5.6-sol/max;
+      other empty rows use their family default (claude: opus-5/high, codex:
+      gpt-5.6-sol/xhigh). Model options adapt to the agent; editable mid-run
       from the run view. The Skeleton row drives all skeleton content work —
       its draft, re-drafts and fixes (default: claude fable-5/max); only
       skeleton reviews stay on the review rows. The two review rows tune each
@@ -575,11 +576,11 @@
       <label>Implement</label>
       <select id="a_implementer_agent"
         onchange="onAgentChange('a_','implementer', true)">
-        <option value="">default</option>
+        <option value="">default (codex)</option>
         <option>codex</option><option>claude</option></select>
       <input id="a_implementer_model" list="dl_a_implementer"
-        placeholder="default">
-      <select id="a_implementer_effort"><option value="">default</option>
+        placeholder="default (gpt-5.6-sol)">
+      <select id="a_implementer_effort"><option value="">default (max)</option>
         <option>low</option><option>medium</option><option>high</option>
         <option>xhigh</option><option>max</option></select>
       <label>Review · Codex</label>
@@ -813,11 +814,11 @@
     <label>Implement</label>
     <select id="ra_implementer_agent"
       onchange="onAgentChange('ra_','implementer', true)">
-      <option value="">default</option>
+      <option value="">default (codex)</option>
       <option>codex</option><option>claude</option></select>
     <input id="ra_implementer_model" list="dl_ra_implementer"
-      placeholder="default">
-    <select id="ra_implementer_effort"><option value="">default</option></select>
+      placeholder="default (gpt-5.6-sol)">
+    <select id="ra_implementer_effort"><option value="">default (max)</option></select>
     <label>Review · Codex</label>
     <span class="actfamily mono">codex</span>
     <input id="ra_review_codex_model" list="dl_ra_review_codex"

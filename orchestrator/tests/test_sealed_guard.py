@@ -354,6 +354,7 @@ class RepairEditabilityAcrossDeltaLoopsTest(unittest.TestCase):
                 "fix round %d lost the editability declaration" % (i + 1),
             )
             self.assertIn("docs/skeleton.md", prompt)
+            self.assertNotIn("GAP EXIT", prompt)
 
         # The reseal ends the repair cycle and clears the flag.
         state = st.load(path)
@@ -1099,7 +1100,7 @@ class GapReopenCommitIsolationTest(unittest.TestCase):
         self.assertNotIn("| repairing |", record)
         review_log = gitops.show_file(
             self.ws, gate, ledgers.review_log_path(state)).decode()
-        self.assertIn("re-documentation wave skeleton-a2", review_log)
+        self.assertIn("documentation update skeleton-a2", review_log)
 
     def test_out_of_envelope_gap_still_runs_the_sealed_guard(self):
         # Codex round 6 P1: the out-of-envelope rejection must NOT be a side

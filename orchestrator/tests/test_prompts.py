@@ -122,7 +122,8 @@ def build_all_reform():
 
 
 class TestNaturalRethinkExit(unittest.TestCase):
-    HEADING = "BEFORE RETURNING A GAP — FOCUSED RETHINK OPTION"
+    HEADING = "IN-GOAL DESIGN CHANGE — USE NEED_RETHINK"
+    LEGACY_HEADING = "BEFORE RETURNING A GAP — FOCUSED RETHINK OPTION"
 
     def fixer(self, gap_enabled):
         return prompts.build_fix_findings(
@@ -137,31 +138,29 @@ class TestNaturalRethinkExit(unittest.TestCase):
             gap_enabled=gap_enabled,
         )
 
-    def test_rethink_is_offered_only_beside_an_applicable_gap_exit(self):
-        legacy = build_all()
-        for kind, prompt in legacy.items():
-            with self.subTest(surface="legacy", kind=kind):
-                self.assertNotIn(self.HEADING, prompt)
+    def test_modern_builders_and_fixer_offer_rethink_without_gap(self):
+        modern = build_all()
+        self.assertNotIn(self.HEADING, modern["draft_skeleton"])
+        self.assertIn(self.HEADING, modern["draft_slice_note"])
+        self.assertIn(self.HEADING, modern["implement"])
+        self.assertIn(self.HEADING, modern["fix_findings"])
+        for kind in ("review_round", "delta_review", "reclassify"):
+            self.assertNotIn(self.HEADING, modern[kind])
 
-        reform = build_all_reform()
-        self.assertNotIn(self.HEADING, reform["draft_skeleton"])
-        self.assertIn(self.HEADING, reform["draft_slice_note"])
-        self.assertIn(self.HEADING, reform["implement"])
-        self.assertIn(self.HEADING, self.fixer(gap_enabled=True))
-        self.assertNotIn(self.HEADING, self.fixer(gap_enabled=False))
+        historical = build_all_reform()
+        self.assertNotIn(self.LEGACY_HEADING, historical["draft_skeleton"])
+        self.assertIn(self.LEGACY_HEADING, historical["draft_slice_note"])
+        self.assertIn(self.LEGACY_HEADING, historical["implement"])
+        self.assertIn(self.LEGACY_HEADING, self.fixer(gap_enabled=True))
 
     def test_rethink_branch_draws_the_boundary_before_gap(self):
-        prompt = normalized(build_all_reform()["implement"])
-        self.assertLess(prompt.index(self.HEADING),
-                        prompt.index("If you meet a hole or a contradiction"))
-        self.assertIn("one bounded design question remains unresolved", prompt)
-        self.assertIn("already-established, obvious contradiction", prompt)
-        self.assertIn("result_mode to `design_amendment`", prompt)
+        prompt = normalized(build_all()["implement"])
+        self.assertIn("one concrete in-goal inconsistency", prompt)
+        self.assertIn("current design baseline", prompt)
+        self.assertIn("result_mode `design_amendment`", prompt)
         self.assertIn("at most two rounds", prompt)
-        self.assertIn("Do NOT use it for facts you can establish from the "
-                      "workspace", prompt)
-        self.assertIn("An established contradiction is not, by itself, a "
-                      "reason to skip", prompt)
+        self.assertIn("Establish workspace facts yourself", prompt)
+        self.assertIn("GOAL itself is contradictory", prompt)
 
     def test_reviewers_and_continuations_are_not_invited_to_rethink(self):
         built = build_all()
@@ -179,6 +178,80 @@ class TestNaturalRethinkExit(unittest.TestCase):
             },
         )
         self.assertNotIn(self.HEADING, continuation)
+
+    def test_accepted_amendment_paths_flow_through_ordinary_reviews(self):
+        paths = ["docs/skeleton.md", "docs/slice-01.md"]
+        handoff = {
+            "session_id": "brainstorming-1",
+            "accepted_target_revision": 2,
+            "result": {"outcome": "success"},
+            "retained_target": {"content": "accepted amendment"},
+        }
+        surfaces = (
+            prompts.build_rethink_continuation(
+                contracts.KIND_IMPLEMENT,
+                FAMILY,
+                WORKSPACE,
+                handoff,
+                accepted_design_amendment=True,
+                editable_design_paths=paths,
+            ),
+            prompts.build_fix_findings(
+                FAMILY, WORKSPACE, GOAL, UNIT, FINDINGS, [], "claude", [],
+                editable_design_paths=paths,
+            ),
+            prompts.build_review_round(
+                FAMILY, WORKSPACE, GOAL, UNIT, "docs/x.md", [],
+                editable_design_paths=paths,
+            ),
+            prompts.build_delta_review(
+                FAMILY, WORKSPACE, GOAL, UNIT, [],
+                editable_design_paths=paths,
+            ),
+        )
+        for surface in surfaces:
+            with self.subTest(kind=surface.splitlines()[0]):
+                self.assertIn("ACCEPTED AMENDMENT", surface)
+                for path in paths:
+                    self.assertIn(path, surface)
+                self.assertIn("ordinary", surface)
+                self.assertIn("no special", surface.lower())
+
+    def test_modern_prompts_have_no_retired_workflow_vocabulary(self):
+        retired = re.compile(
+            r"(?i)\b(?:seal(?:ed|ing)?|reseal(?:ed|ing|s)?|unsealed|"
+            r"fits_remodel|redoc|re-document(?:ation|ing)?|"
+            r"re[-_ ]?skeleton(?:ing)?)\b"
+        )
+        modern = build_all()
+        modern["implement_updated_design"] = prompts.build_implement(
+            FAMILY, WORKSPACE, GOAL, SLICE, "docs/slice-01.md", [],
+            skeleton_path="docs/skeleton.md", remodeled=True,
+        )
+        modern["fix_compat_args_ignored"] = prompts.build_fix_findings(
+            FAMILY, WORKSPACE, GOAL, UNIT, FINDINGS, [], "claude", [],
+            repair_artifact="docs/slice-01.md",
+            repair_wave_docs=["docs/slice-01.md"],
+            design_correction={
+                "mode": "offer", "artifact": "docs/slice-01.md",
+            },
+        )
+        modern["delta_compat_args_ignored"] = prompts.build_delta_review(
+            FAMILY, WORKSPACE, GOAL, UNIT, [],
+            wave_docs=["docs/slice-01.md"],
+            design_correction={
+                "mode": "offer", "artifact": "docs/slice-01.md",
+            },
+        )
+        for name, prompt in modern.items():
+            with self.subTest(builder=name):
+                self.assertIsNone(retired.search(prompt))
+                self.assertNotIn("design_correction", prompt)
+                self.assertNotIn("failure_gap", prompt)
+
+        historical = self.fixer(gap_enabled=True)
+        self.assertIn("fits_remodel", historical)
+        self.assertIn("failure_gap", historical)
 
 
 class TestProcessAuthorityInEveryBuilder(unittest.TestCase):
@@ -230,28 +303,31 @@ class TestProcessAuthorityInEveryBuilder(unittest.TestCase):
                     flat,
                 )
 
-    def test_seal_closes_history_without_owning_code_forever(self):
+    def test_completed_review_does_not_own_code_forever(self):
         for name, prompt in build_all().items():
             with self.subTest(builder=name):
                 flat = normalized(prompt)
                 self.assertIn(
-                    "does NOT grant permanent ownership of files or code",
+                    "completed review cycle does NOT grant permanent "
+                    "ownership of files or code",
                     flat,
                 )
                 self.assertIn(
-                    "the historical unit remains sealed and is not rerun",
+                    "the historical unit's record is preserved and is not "
+                    "rerun",
                     flat,
                 )
 
-    def test_remodel_assignment_can_modify_earlier_code(self):
+    def test_updated_assignment_can_modify_earlier_code(self):
         prompt = normalized(prompts.build_implement(
             FAMILY, WORKSPACE, GOAL, SLICE, "docs/slice-01.md",
             ["make test"], skeleton_path="docs/skeleton.md",
             remodeled=True,
         ))
         self.assertIn("File provenance is not scope ownership", prompt)
-        self.assertIn("code first introduced by an already-sealed slice",
+        self.assertIn("code first introduced by an earlier slice",
                       prompt)
+        self.assertIn("UPDATED DESIGN ASSIGNMENT", prompt)
 
 
 class TestAccessModelStillIntact(unittest.TestCase):
@@ -453,8 +529,10 @@ class TestExistingPromptInvariants(unittest.TestCase):
         repair = prompts.build_fix_findings(
             FAMILY, WORKSPACE, GOAL, UNIT, FINDINGS, [], "claude",
             ["claude", "-p"], repair_artifact="docs/slice-02.md",
+            legacy_design_process=True,
         )
         self.assertIn("REOPENED FOR REPAIR", repair)
+        self.assertNotIn("GAP EXIT", repair)
         self.assertIn("docs/slice-02.md", repair)
         self.assertIn("NOT sealed while under repair", repair)
         # Every other sealed artifact stays read-only in the same block.
@@ -639,8 +717,8 @@ class TestPortedCanonContentRules(unittest.TestCase):
             self.assertIn("omission cost and reversibility", prompt, name)
             self.assertIn("invented only by the working material", prompt,
                           name)
-            self.assertIn("design gap rather than writing a promise", prompt,
-                          name)
+            self.assertIn("focused design rethink rather than writing a "
+                          "promise", prompt, name)
 
         for name in ("review_round", "delta_review", "fix_findings"):
             prompt = normalized(built[name])
@@ -652,7 +730,7 @@ class TestPortedCanonContentRules(unittest.TestCase):
                 "lifecycle cost",
                 "omission cost",
                 "invented stricter guarantee cannot justify machinery",
-                "unenforceable outcome is a design gap",
+                "unenforceable outcome requires a focused design rethink",
             ):
                 self.assertIn(atom, prompt, name)
 
@@ -798,17 +876,24 @@ class TestPortedCanonContentRules(unittest.TestCase):
                 self.assertIn(victim, surface)
 
     def test_baseline_relative_validity_reaches_reviewers_and_fixer(self):
-        fields = ("permitted_baseline", "actual_outcome",
-                  "incremental_harm", "exceeds_baseline")
-        surfaces = [build_all()["fix_findings"]]
+        review_fields = ("permitted_baseline", "actual_outcome",
+                         "incremental_harm", "exceeds_baseline")
+        review_surfaces = []
         for kind in ("slice_doc", "slice_impl", "skeleton"):
-            surfaces.extend((self.review(kind), self.delta(kind)))
-        for surface in surfaces:
+            review_surfaces.extend((self.review(kind), self.delta(kind)))
+        for surface in review_surfaces:
             flat = normalized(surface)
             self.assertIn("PERMITTED BASELINE", flat)
             self.assertIn("delta BEYOND the permitted baseline", flat)
-            for field in fields:
+            for field in review_fields:
                 self.assertIn(field, flat)
+        fixer = normalized(build_all()["fix_findings"])
+        for field in (
+            "affected_party", "observable_damage", "violated_guarantee",
+            "permitted_baseline", "incremental_harm", "exceeds_baseline",
+        ):
+            self.assertIn(field, fixer)
+        self.assertIn("delta BEYOND the permitted baseline", fixer)
         self.assertIsNone(re.search(r"\bttl\b",
                                     prompts.FINDING_VALIDITY_BLOCK.lower()))
         self.assertIsNone(re.search(r"\brace\b",
@@ -850,7 +935,8 @@ class TestPortedCanonContentRules(unittest.TestCase):
     def test_canonical_reference_line(self):
         self.assertIn(
             "CANONICAL REFERENCE: judge the target against "
-            "docs/skeleton.md (sealed)", self.review("slice_doc"))
+            "docs/skeleton.md — the current reviewed baseline",
+            self.review("slice_doc"))
         no_gov = normalized(prompts.build_review_round(
             FAMILY, WORKSPACE, GOAL, UNIT, "docs/x.md", [],
             unit_kind="skeleton", governing=None))
@@ -870,28 +956,18 @@ class TestPortedCanonContentRules(unittest.TestCase):
                      "decide from the current artifact"):
             self.assertIn(atom, prompt)
 
-    def test_fixer_gets_opposing_named_provenance_and_falsifies_first(self):
-        expected = {
-            "codex": ("Codex", "Claude"),
-            "claude": ("Claude", "Codex"),
-        }
-        for family, (fixer, reviewer) in expected.items():
+    def test_fixer_gets_non_authoritative_provenance_and_falsifies_first(self):
+        for family in ("codex", "claude"):
             with self.subTest(family=family):
-                # Attribution follows the fixer's identity, not the supplied
-                # consultation family or any real finding provenance.
                 prompt = normalized(prompts.build_fix_findings(
                     family, WORKSPACE, GOAL, UNIT, FINDINGS, [], family, []
                 ))
-                self.assertIn("You are %s" % fixer, prompt)
                 self.assertIn(
-                    "This finding was produced by %s, an automated reviewer, "
-                    "not by the operator" % reviewer,
+                    "This finding was produced by a non-authoritative automated "
+                    "reviewing agent, not by the operator",
                     prompt,
                 )
-                self.assertIn(
-                    "IS %s'S FINDING INCORRECT?" % reviewer.upper(),
-                    prompt,
-                )
+                self.assertIn("IS THIS FINDING INCORRECT?", prompt)
                 self.assertIn("Make one focused falsification pass", prompt)
 
     def test_fixer_falsification_covers_damage_and_scope(self):
@@ -899,7 +975,7 @@ class TestPortedCanonContentRules(unittest.TestCase):
         for question in (
             "Guarantee: which exact declared guarantee, if any, does the "
             "observed outcome violate",
-            "PERMITTED BASELINE vs actual outcome",
+            "PERMITTED BASELINE: compare normal, transition, recovery",
             "Affected party: who or what concretely suffers",
             "Functional deviation: does behavior really change",
             "Exposure: how often",
@@ -941,8 +1017,8 @@ class TestPortedCanonContentRules(unittest.TestCase):
                       "pass of the delta", prompt)
         # Delta-scoped reference: consistency check, never a full re-judge
         # (a full-review-shaped delta costs full-review wall clock).
-        self.assertIn("CANONICAL REFERENCE: docs/slice-01.md (sealed) is "
-                      "the standard behind the artifact", prompt)
+        self.assertIn("CANONICAL REFERENCE: docs/slice-01.md is the current "
+                      "reviewed baseline behind the artifact", prompt)
         self.assertIn("do not re-judge the artifact against it", prompt)
         self.assertNotIn("judge the target against", prompt)
 

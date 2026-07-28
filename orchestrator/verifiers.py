@@ -483,7 +483,8 @@ def validate_merged_output(obj, kind, extensions, roots,
                            require_plain=False, battery_questions=None,
                            require_drift_damage=False,
                            allow_design_correction=False,
-                           require_design_correction_verdict=False):
+                           require_design_correction_verdict=False,
+                           require_failure_gap=False):
     """Validate a worker output against the base kind contract PLUS the
     in-scope compiled extensions.
 
@@ -523,6 +524,7 @@ def validate_merged_output(obj, kind, extensions, roots,
             require_design_correction_verdict=(
                 require_design_correction_verdict
             ),
+            require_failure_gap=require_failure_gap,
         )
         if obj.get("status") == "retry":
             ctx = "worker[%s]" % kind
@@ -542,6 +544,7 @@ def validate_merged_output(obj, kind, extensions, roots,
         require_drift_damage=require_drift_damage,
         allow_design_correction=allow_design_correction,
         require_design_correction_verdict=require_design_correction_verdict,
+        require_failure_gap=require_failure_gap,
     )
     if not extensions:
         return obj

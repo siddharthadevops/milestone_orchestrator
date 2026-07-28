@@ -22,7 +22,8 @@ cat > "$CFG" <<EOF
   "git": {"enabled": true},
   "acts": {"fixer": "codex", "consultation": "opposite"},
   "max_fix_loops": 4,
-  "docs_dir": "docs"
+  "docs_dir": "docs",
+  "guarantee_calibration": {"enabled": false}
 }
 EOF
 

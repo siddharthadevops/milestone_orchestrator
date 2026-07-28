@@ -316,18 +316,25 @@ class TestRenderMilestone(unittest.TestCase):
 
     def test_unit_rows_with_seal_summaries_and_gate_commit(self):
         self.assertIn(
-            "| skeleton | sealed | 9 | satisfied | abc1234 |", self.text
+            "| skeleton | reviewed | 9 | satisfied | abc1234 |", self.text
         )
         self.assertIn(
-            "| slice_doc-01 (Calculator core) | sealed | 2 "
+            "| slice_doc-01 (Calculator core) | reviewed | 2 "
             "| satisfied | - |",
             self.text,
         )
         self.assertIn(
-            "| slice_impl-01 (Calculator core) | sealed | 4 "
+            "| slice_impl-01 (Calculator core) | reviewed | 4 "
             "| satisfied | - |",
             self.text,
         )
+
+    def test_internal_pre_seal_status_is_rendered_as_final_verification(self):
+        state = make_state()
+        state["units"][0]["status"] = st.U_PRE_SEAL_VERIFY
+        text = ledgers.render_milestone(state)
+        self.assertIn("| skeleton | final verification |", text)
+        self.assertNotIn("pre_seal_verify", text)
 
     def test_no_failure_section_without_failure(self):
         self.assertNotIn("## Failure", self.text)
@@ -401,12 +408,12 @@ class TestRenderReviewLog(unittest.TestCase):
         )
 
     def test_deterministic_seal_cites_same_byte_reviews(self):
-        self.assertEqual(self.text.count("### Seal result — SATISFIED"), 3)
-        self.assertNotIn("Historical seal attempt", self.text)
+        self.assertEqual(self.text.count("### Review completion — SATISFIED"), 3)
+        self.assertNotIn("Historical completion attempt", self.text)
         self.assertIn(
             "- deterministic result: every configured family was clean or "
             "debt-clean on the same current bytes, and the final verification "
-            "passed; no seal reviewer was called",
+            "passed; no extra reviewer was called",
             self.text,
         )
         self.assertIn(
@@ -503,9 +510,9 @@ class TestHistoricalSealRendering(unittest.TestCase):
         self.text = ledgers.render_review_log(state)
 
     def test_attempts_are_explicitly_historical(self):
-        self.assertIn("### Historical seal attempt a1 — INVALIDATED", self.text)
-        self.assertIn("### Historical seal attempt a2 — findings", self.text)
-        self.assertIn("### Historical seal attempt a3 — SATISFIED", self.text)
+        self.assertIn("### Historical completion attempt a1 — INVALIDATED", self.text)
+        self.assertIn("### Historical completion attempt a2 — findings", self.text)
+        self.assertIn("### Historical completion attempt a3 — SATISFIED", self.text)
         self.assertIn(
             "- invalidated: historical reviewer modified the workspace",
             self.text,
@@ -513,13 +520,13 @@ class TestHistoricalSealRendering(unittest.TestCase):
 
     def test_historical_reviews_and_findings_remain_auditable(self):
         self.assertIn(
-            "- historical codex seal review: 0 finding(s); "
+            "- historical codex completion review: 0 finding(s); "
             "workspace_modified=True; raw "
             "`.orchestrator/raw/legacy-a1-codex.txt`",
             self.text,
         )
         self.assertIn(
-            "- historical claude seal review: 1 finding(s); "
+            "- historical claude completion review: 1 finding(s); "
             "workspace_modified=False; raw "
             "`.orchestrator/raw/legacy-a2-claude.txt`",
             self.text,
@@ -602,7 +609,7 @@ class TestRenderClosure(unittest.TestCase):
         self.assertIn("# Closure — slice 01 (Calculator core)", text)
         self.assertIn("- closed at: 2026-01-02T03:04:05+0000", text)
         self.assertIn("- rounds: 4", text)
-        self.assertIn("- seal records: 1", text)
+        self.assertIn("- review completion records: 1", text)
         self.assertIn(
             "- review state: effectively clean (every family clean or "
             "debt-clean on the same bytes; final verification passed)",

@@ -27,6 +27,24 @@ DESIGN_AMENDMENT_PLACEHOLDER = (
     "amendment that resolves the stated question without changing the goal.\n"
 )
 
+GUARANTEE_CALIBRATION_MAX_ROUNDS = 2
+GUARANTEE_CALIBRATION_QUESTION = (
+    "Does this skeleton declare each guarantee at the right level and within "
+    "the right observable scope, no stronger or weaker than its authority "
+    "requires?"
+)
+GUARANTEE_CALIBRATION_BRIEF = (
+    "Discuss only the guarantee declarations in the milestone skeleton. "
+    "For each disputed guarantee, check its authority, affected party, "
+    "realistic damage, enforceability, and the normal, transition, recovery, "
+    "or failure states it permits. Do not strengthen a guarantee merely as a "
+    "precaution. Do not alter the goal restatement, boundary, non-goals, "
+    "slice plan, slice table, or unrelated material. The lead must leave "
+    "target_path as the complete agreed skeleton, changing it only where the "
+    "discussion requires; if the current declarations are sound, retain the "
+    "document unchanged."
+)
+
 
 def service_home(state):
     """Use the bound service home, or the ordinary default for local runs."""
@@ -220,6 +238,85 @@ def _materialize_target(state, signal, references):
     return work_area, target
 
 
+def _participant(participant_id, role, profile, label):
+    """Translate one optional act-style profile into a pinned session seat."""
+    participant = {"id": participant_id, "role": role}
+    if profile is None:
+        return participant
+    try:
+        brainstorming._exact_keys(
+            profile,
+            ("agent", "model", "effort"),
+            (),
+            label,
+        )
+        participant.update(
+            {
+                "model_family": brainstorming._text(
+                    profile["agent"], "%s.agent" % label
+                ),
+                "model": brainstorming._text(
+                    profile["model"], "%s.model" % label
+                ),
+                "effort": brainstorming._text(
+                    profile["effort"], "%s.effort" % label
+                ),
+            }
+        )
+    except (TypeError, ValueError, brainstorming.ContractError) as exc:
+        raise AdapterError(
+            "%s must contain exactly non-empty agent, model and effort"
+            % label
+        ) from exc
+    return participant
+
+
+def _participants(lead_profile=None, counterpart_profile=None):
+    return [
+        _participant("lead", "lead", lead_profile, "lead_profile"),
+        _participant(
+            "interlocutor",
+            "interlocutor",
+            counterpart_profile,
+            "counterpart_profile",
+        ),
+    ]
+
+
+def _launch_owned_session(
+    state,
+    config,
+    unit_key,
+    work_area,
+    target,
+    body,
+    caller_suffix=None,
+):
+    """Launch one session whose isolated target belongs to this adapter."""
+    context = execution_context(state)
+    if context["project"] is not None:
+        body["project"] = context["project"]
+        body["work_area"] = context["work_area"]
+    caller = "milestone:%s:%s" % (
+        state.get("name") or "run",
+        unit_key,
+    )
+    if caller_suffix:
+        caller += ":%s" % caller_suffix
+    try:
+        return brainstorming_lifecycle.create_resolved_session(
+            service_home(state),
+            body,
+            caller,
+            context,
+            config,
+            owned_target_path=target,
+        )
+    except Exception:
+        shutil.rmtree(work_area)
+        raise
+
+
 def create_session(
     state,
     config,
@@ -227,10 +324,12 @@ def create_session(
     signal,
     references,
     authority_context=None,
+    lead_profile=None,
+    counterpart_profile=None,
 ):
     """Translate one valid signal into the existing standalone lifecycle."""
+    participants = _participants(lead_profile, counterpart_profile)
     work_area, target = _materialize_target(state, signal, references)
-    context = execution_context(state)
     amendment_mode = (
         signal.get("result_mode")
         == contracts.RETHINK_RESULT_DESIGN_AMENDMENT
@@ -238,6 +337,16 @@ def create_session(
     context_references = list(references)
     if amendment_mode and signal["target_path"] not in context_references:
         context_references.append(signal["target_path"])
+    source_payload = copy.deepcopy(signal["finding"])
+    if amendment_mode:
+        source_payload = {
+            "finding": copy.deepcopy(signal["finding"]),
+            "authority_context": copy.deepcopy(authority_context or {}),
+        }
+        if "failure_gap" in signal:
+            source_payload["failure_gap"] = copy.deepcopy(
+                signal["failure_gap"]
+            )
     body = {
         "request": {
             "workspace_path": state["workspace"],
@@ -256,45 +365,82 @@ def create_session(
                     "The source finding below is preserved unchanged."
                 ),
                 "references": context_references,
-                "source_payload": (
-                    {
-                        "finding": copy.deepcopy(signal["finding"]),
-                        "failure_gap": copy.deepcopy(signal["failure_gap"]),
-                        "authority_context": copy.deepcopy(
-                            authority_context or {}
-                        ),
-                    }
-                    if amendment_mode else
-                    copy.deepcopy(signal["finding"])
-                ),
+                "source_payload": source_payload,
             },
             "max_rounds": signal["max_rounds"],
         },
-        "participants": [
-            {"id": "lead", "role": "lead"},
-            {"id": "interlocutor", "role": "interlocutor"},
-        ],
+        "participants": participants,
         "closure_policy": "unanimity",
     }
-    if context["project"] is not None:
-        body["project"] = context["project"]
-        body["work_area"] = context["work_area"]
-    caller = "milestone:%s:%s" % (
-        state.get("name") or "run",
+    return _launch_owned_session(
+        state,
+        config,
         unit_key,
+        work_area,
+        target,
+        body,
     )
-    try:
-        return brainstorming_lifecycle.create_resolved_session(
-            service_home(state),
-            body,
-            caller,
-            context,
-            config,
-            owned_target_path=target,
+
+
+def create_guarantee_calibration_session(
+    state,
+    config,
+    unit_key,
+    skeleton_path,
+    lead_profile,
+    counterpart_profile,
+    references=None,
+    authority_context=None,
+    max_rounds=GUARANTEE_CALIBRATION_MAX_ROUNDS,
+):
+    """Open a bounded discussion over an isolated full-skeleton copy."""
+    if isinstance(max_rounds, bool) or not isinstance(max_rounds, int) \
+            or max_rounds <= 0:
+        raise AdapterError("guarantee calibration max_rounds must be positive")
+    participants = _participants(lead_profile, counterpart_profile)
+    references = list(references or [])
+    source = {
+        "target_path": skeleton_path,
+        "result_mode": contracts.RETHINK_RESULT_PROPOSAL,
+    }
+    source_path = validate_target(state, source, references)
+    if not os.path.isfile(source_path) or os.path.islink(source_path):
+        raise AdapterError(
+            "guarantee calibration requires one existing regular skeleton"
         )
-    except Exception:
-        shutil.rmtree(work_area)
-        raise
+    work_area, target = _materialize_target(state, source, references)
+    context_references = list(references)
+    if skeleton_path not in context_references:
+        context_references.append(skeleton_path)
+    body = {
+        "request": {
+            "workspace_path": state["workspace"],
+            "target_path": target,
+            "question": GUARANTEE_CALIBRATION_QUESTION,
+            "context": {
+                "brief": GUARANTEE_CALIBRATION_BRIEF,
+                "references": context_references,
+                "source_payload": {
+                    "goal": copy.deepcopy(state.get("goal")),
+                    "authority_context": copy.deepcopy(
+                        authority_context or {}
+                    ),
+                },
+            },
+            "max_rounds": max_rounds,
+        },
+        "participants": participants,
+        "closure_policy": "unanimity",
+    }
+    return _launch_owned_session(
+        state,
+        config,
+        unit_key,
+        work_area,
+        target,
+        body,
+        caller_suffix="guarantee-calibration",
+    )
 
 
 def inspect_session(state, session_id):

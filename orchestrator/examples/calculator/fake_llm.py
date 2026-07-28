@@ -307,10 +307,24 @@ def respond(kind, family, workspace, count, prompt):
                     "disposition": disposition,
                     "consultation": None,
                     "validity": {
+                        "affected_party": (
+                            "calculator users"
+                            if disposition in ("fixed", "blocked")
+                            else "no affected party"
+                        ),
+                        "observable_damage": (
+                            f["summary"]
+                            if disposition in ("fixed", "blocked")
+                            else "no observable damage"
+                        ),
+                        "violated_guarantee": (
+                            "the documented calculator behavior"
+                            if disposition in ("fixed", "blocked")
+                            else "no violated guarantee"
+                        ),
                         "permitted_baseline": (
                             "the documented calculator behavior"
                         ),
-                        "actual_outcome": f["summary"],
                         "incremental_harm": (
                             "the candidate misses that behavior"
                             if disposition in ("fixed", "blocked")

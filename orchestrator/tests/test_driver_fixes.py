@@ -93,6 +93,26 @@ def reported(kind, summary, fid="F1", severity="P2"):
     )
 
 
+def fixer_validity(exceeds=True):
+    return {
+        "affected_party": "the concrete user or system component",
+        "observable_damage": (
+            "the declared behavior is observably broken"
+            if exceeds else "no damage beyond the allowed behavior"
+        ),
+        "violated_guarantee": (
+            "the exact declared behavior"
+            if exceeds else "no declared guarantee is violated"
+        ),
+        "permitted_baseline": "the documented behavior",
+        "incremental_harm": (
+            "the observed behavior exceeds that baseline"
+            if exceeds else "no harm beyond the documented behavior"
+        ),
+        "exceeds_baseline": exceeds,
+    }
+
+
 def fix_fixed(*ids, **extra):
     """A fixer triage conceding every queued finding as fixed."""
     return ok(
@@ -104,12 +124,7 @@ def fix_fixed(*ids, **extra):
                 "summary": "queued finding %s addressed" % fid,
                 "disposition": "fixed",
                 "consultation": None,
-                "validity": {
-                    "permitted_baseline": "the documented behavior",
-                    "actual_outcome": "the observed behavior",
-                    "incremental_harm": "the observed behavior breaks it",
-                    "exceeds_baseline": True,
-                },
+                "validity": fixer_validity(True),
             }
             for fid in ids
         ],

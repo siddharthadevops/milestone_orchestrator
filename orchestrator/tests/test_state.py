@@ -61,6 +61,26 @@ def finding_validity(exceeds=True):
     }
 
 
+def fixer_validity(exceeds=True):
+    return {
+        "affected_party": "the concrete user or system component",
+        "observable_damage": (
+            "the declared behavior is observably broken"
+            if exceeds else "no damage beyond the allowed behavior"
+        ),
+        "violated_guarantee": (
+            "the exact declared behavior"
+            if exceeds else "no declared guarantee is violated"
+        ),
+        "permitted_baseline": "the documented behavior",
+        "incremental_harm": (
+            "the observed behavior exceeds that baseline"
+            if exceeds else "no harm beyond the documented behavior"
+        ),
+        "exceeds_baseline": exceeds,
+    }
+
+
 def dirty_review(kind=contracts.KIND_REVIEW_ROUND, n=1):
     # Reviewer findings carry NO disposition (whoever detects never fixes)
     # and report kinds must not claim file changes.
@@ -81,7 +101,7 @@ def fixed_finding(fid="F1", severity="P1"):
         "severity": severity,
         "summary": "issue %s" % fid,
         "disposition": "fixed",
-        "validity": finding_validity(True),
+        "validity": fixer_validity(True),
     }
 
 
@@ -93,7 +113,7 @@ def rejected_finding(fid="F1", resolution="the artifact is correct",
         "summary": summary or "issue %s" % fid,
         "disposition": "rejected",
         "consultation": {"resolution": resolution},
-        "validity": finding_validity(False),
+        "validity": fixer_validity(False),
     }
     if prevention is not None:
         f["prevention"] = prevention
@@ -107,7 +127,7 @@ def adjudicated_finding(fid, ref, severity="P2"):
         "summary": "duplicate of settled finding",
         "disposition": "rejected_adjudicated",
         "adjudication_ref": ref,
-        "validity": finding_validity(False),
+        "validity": fixer_validity(False),
     }
 
 
@@ -117,7 +137,7 @@ def blocked_finding(fid="F1"):
         "severity": "P0",
         "summary": "cannot proceed",
         "disposition": "blocked",
-        "validity": finding_validity(True),
+        "validity": fixer_validity(True),
     }
 
 

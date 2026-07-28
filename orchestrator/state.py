@@ -1591,6 +1591,8 @@ _BRAINSTORMING_OUTCOMES = {
     "brainstorming_review_restarted": "restarted",
     "brainstorming_failure_routed": "failed",
     "brainstorming_operational_detached": "detached",
+    "guarantee_calibration_completed": "continued",
+    "guarantee_calibration_failed": "failed",
 }
 
 
