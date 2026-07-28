@@ -1532,7 +1532,7 @@ def build_review_round(family, workspace, goal, unit_desc, artifact, registry,
     )
 
 
-def build_delta_review(family, workspace, goal, unit_desc, diff_text, registry,
+def build_delta_review(family, workspace, goal, unit_desc, registry,
                        unit_kind=None, governing=None, amendments=None,
                        project_context=None, debt=None, wave_docs=None,
                        gap_enabled=False, design_correction=None):
@@ -1625,19 +1625,10 @@ def build_delta_review(family, workspace, goal, unit_desc, diff_text, registry,
         + _amendments_block(amendments)
         + _project_context_block(project_context)
         + _delta_governing_line(governing)
-        + "Below is the exact uncommitted diff a fixer just produced. Review\n"
-        "ONLY this delta: correctness of the change, consistency with the\n"
-        "immediately surrounding code/document, and collateral damage in\n"
-        "what the change directly affects (callers/callees of changed\n"
-        "code). Read beyond the touched hunks only as far as verifying\n"
-        "the change requires — do NOT audit entire touched files and do\n"
-        "NOT re-review the rest of the workspace; full rounds cover both.\n"
+        + "Review ONLY the uncommitted changes and their direct effects.\n"
+        "Do NOT re-review the rest of the workspace; full rounds cover that.\n"
         "An empty findings list means the delta is correct and will be\n"
         "amended into the unit's commit.\n\n"
-        "PENDING DIFF\n"
-        "------------\n"
-        + (diff_text or "(empty diff)")
-        + "\n------------\n\n"
         + _delta_quality_block(unit_kind, reform=gap_enabled)
         + _debt_block(debt)
         + _registry_block(registry)

@@ -4479,7 +4479,6 @@ class Driver(object):
             self.workspace,
             self._goal_for(unit),
             self._unit_desc(unit),
-            delta,
             self._registry(),
             unit_kind=unit["kind"],
             governing=self._governing(unit),

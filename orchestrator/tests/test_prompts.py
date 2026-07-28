@@ -86,7 +86,7 @@ def build_all():
             FAMILY, WORKSPACE, GOAL, UNIT, "docs/slice-01.md", []
         ),
         "delta_review": prompts.build_delta_review(
-            FAMILY, WORKSPACE, GOAL, UNIT, "diff --git a/x b/x\n", []
+            FAMILY, WORKSPACE, GOAL, UNIT, []
         ),
         "fix_findings": prompts.build_fix_findings(
             FAMILY,
@@ -478,7 +478,7 @@ class TestDeferredDebtPrompts(unittest.TestCase):
             "review": prompts.build_review_round(
                 FAMILY, WORKSPACE, GOAL, UNIT, "docs/x.md", [], debt=debt),
             "delta": prompts.build_delta_review(
-                FAMILY, WORKSPACE, GOAL, UNIT, "diff --git a/x b/x\n", [],
+                FAMILY, WORKSPACE, GOAL, UNIT, [],
                 debt=debt),
             "fix": prompts.build_fix_findings(
                 FAMILY, WORKSPACE, GOAL, UNIT, FINDINGS, [], "claude",
@@ -561,7 +561,7 @@ class TestPortedCanonContentRules(unittest.TestCase):
 
     def delta(self, kind, reform=False):
         return normalized(prompts.build_delta_review(
-            FAMILY, WORKSPACE, GOAL, UNIT, "diff --git a/x b/x\n", [],
+            FAMILY, WORKSPACE, GOAL, UNIT, [],
             unit_kind=kind, gap_enabled=reform,
         ))
 
@@ -937,7 +937,7 @@ class TestPortedCanonContentRules(unittest.TestCase):
 
     def test_delta_review_is_exhaustive_and_knows_its_standard(self):
         prompt = normalized(prompts.build_delta_review(
-            FAMILY, WORKSPACE, GOAL, UNIT, "diff --git a/x b/x\n", [],
+            FAMILY, WORKSPACE, GOAL, UNIT, [],
             unit_kind="slice_impl", governing="docs/slice-01.md",
         ))
         self.assertIn("report every defect you can verify in a complete "
@@ -951,10 +951,12 @@ class TestPortedCanonContentRules(unittest.TestCase):
 
     def test_delta_review_bounds_its_cost(self):
         prompt = normalized(prompts.build_delta_review(
-            FAMILY, WORKSPACE, GOAL, UNIT, "diff --git a/x b/x\n", [],
+            FAMILY, WORKSPACE, GOAL, UNIT, [],
             unit_kind="slice_impl", governing="docs/slice-01.md",
         ))
-        self.assertIn("do NOT audit entire touched files", prompt)
+        self.assertIn("Review ONLY the uncommitted changes", prompt)
+        self.assertNotIn("PENDING DIFF", prompt)
+        self.assertNotIn("diff --git", prompt)
         self.assertIn("Never run the full verification suite here", prompt)
 
     def test_doc_unit_kinds_match_state_constants(self):
@@ -1096,7 +1098,7 @@ class TestOperatorAmendments(unittest.TestCase):
                 FAMILY, WORKSPACE, GOAL, UNIT, "docs/slice-01.md", [],
                 amendments=a),
             "delta_review": prompts.build_delta_review(
-                FAMILY, WORKSPACE, GOAL, UNIT, "diff --git a/x b/x\n", [],
+                FAMILY, WORKSPACE, GOAL, UNIT, [],
                 amendments=a),
             "fix_findings": prompts.build_fix_findings(
                 FAMILY, WORKSPACE, GOAL, UNIT, FINDINGS, [], "claude",

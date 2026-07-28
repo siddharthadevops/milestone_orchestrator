@@ -544,7 +544,7 @@ class BatteryPromptGatingTest(unittest.TestCase):
         # legitimately rides every finding-producing prompt, deltas
         # included.
         text = prompts.build_delta_review(
-            "codex", "/ws", "goal", UNIT, "diff --git a/x b/x\n", [],
+            "codex", "/ws", "goal", UNIT, [],
             unit_kind="skeleton")
         self.assertNotIn("QUESTION BATTERY", text)
         self.assertNotIn("question battery", text)

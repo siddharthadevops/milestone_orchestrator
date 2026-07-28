@@ -115,7 +115,7 @@ def build_all_bound(project_context=_OMIT_PROJECT_CONTEXT, amendments=None):
         ),
         "delta_review": prompts.build_delta_review(
             tp.FAMILY, tp.WORKSPACE, tp.GOAL, tp.UNIT,
-            "diff --git a/x b/x\n", [], **kw
+            [], **kw
         ),
         "reclassify": prompts.build_reclassify(
             tp.FAMILY,

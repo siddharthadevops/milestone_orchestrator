@@ -168,7 +168,7 @@ class GapPromptGatingTest(unittest.TestCase):
         for d in docs:
             self.assertIn(d, fix)
         delta = prompts.build_delta_review(
-            "codex", "/ws", "goal", "skeleton", "diff\n", [],
+            "codex", "/ws", "goal", "skeleton", [],
             unit_kind="skeleton", wave_docs=docs)
         self.assertIn("RE-DOCUMENTATION WAVE IN PROGRESS", delta)
         self.assertIn("Multi-document breadth is NOT a finding", delta)
@@ -218,7 +218,7 @@ class GapPromptGatingTest(unittest.TestCase):
             "codex", "/ws", "goal", "slice_impl-01", "calc.py", [],
             unit_kind="slice_impl")
         delta_impl = prompts.build_delta_review(
-            "codex", "/ws", "goal", "slice_impl-01", "diff\n", [],
+            "codex", "/ws", "goal", "slice_impl-01", [],
             unit_kind="slice_impl")
         for text in (full_impl, delta_impl):
             self.assertIn("SCOPE AUTHORITY", text)
@@ -228,7 +228,7 @@ class GapPromptGatingTest(unittest.TestCase):
             self.assertIn("GOAL > current SKELETON", text)
             self.assertIn("OUTRANKS this unit's own", text)
         delta_doc = prompts.build_delta_review(
-            "codex", "/ws", "goal", "slice_doc-01", "diff\n", [],
+            "codex", "/ws", "goal", "slice_doc-01", [],
             unit_kind="slice_doc")
         self.assertNotIn("SCOPE AUTHORITY", delta_doc)
 
