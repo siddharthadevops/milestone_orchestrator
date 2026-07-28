@@ -224,7 +224,7 @@ class DesignCorrectionTest(unittest.TestCase):
             "sealed note provisionally EDITABLE", fix_prompts[-2]
         )
         self.assertIn(
-            "OWN-NOTE CORRECTION declared elsewhere", fix_prompts[-2]
+            "except artifacts declared editable", fix_prompts[-2]
         )
         self.assertIn("CORRECTION IN PROGRESS", fix_prompts[-1])
         self.assertIn(

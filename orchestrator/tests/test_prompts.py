@@ -19,6 +19,7 @@ every one of the 7 prompt builders inherits. These tests pin:
 """
 
 import json
+import re
 import unittest
 
 from orchestrator import contracts, prompts
@@ -49,19 +50,17 @@ EDIT_BUILDERS = (
 REPORT_BUILDERS = ("review_round", "delta_review")
 REGISTRY_BUILDERS = ("review_round", "delta_review", "fix_findings")
 
-# Phrases that carry the fix's weight. Multi-line phrases are asserted on
-# a whitespace-normalized form so they survive the prompt's line wrapping.
+# Semantic atoms that carry the fix's weight. They are asserted on a
+# whitespace-normalized form so concise rewrites and wrapping stay harmless.
 AUTHORITY_HEADING = "PROCESS AUTHORITY"
-AUTHORITY_PHRASES_RAW = (
+AUTHORITY_PHRASES_NORMALIZED = (
     "SOLE source of truth",
     "never for process-state concerns",
-)
-AUTHORITY_PHRASES_NORMALIZED = (
-    "never re-derive or second-guess process state",
+    "Never re-derive or second-guess process state",
     "do NOT govern this run",
     "never perform their bookkeeping",
     "supersedes any instruction file in or above the workspace",
-    "is NOT a reportable defect",
+    "NOT a reportable defect",
 )
 
 
@@ -202,9 +201,6 @@ class TestProcessAuthorityInEveryBuilder(unittest.TestCase):
     def test_every_builder_emits_load_bearing_phrases(self):
         for name, prompt in build_all().items():
             flat = normalized(prompt)
-            for phrase in AUTHORITY_PHRASES_RAW:
-                with self.subTest(builder=name, phrase=phrase):
-                    self.assertIn(phrase, prompt)
             for phrase in AUTHORITY_PHRASES_NORMALIZED:
                 with self.subTest(builder=name, phrase=phrase):
                     self.assertIn(phrase, flat)
@@ -223,7 +219,7 @@ class TestProcessAuthorityInEveryBuilder(unittest.TestCase):
             flat = normalized(prompt)
             with self.subTest(builder=name):
                 self.assertIn(
-                    'is NEVER grounds for "blocked"', flat
+                    'are NEVER grounds for "blocked"', flat
                 )
                 self.assertIn(
                     "Block only when your own task is truly impossible", flat
@@ -315,8 +311,6 @@ class TestReviewOverridesVendoredCanonBookkeeping(unittest.TestCase):
         prompt = self.build()
         flat = normalized(prompt)
         self.assertIn(AUTHORITY_HEADING, prompt)
-        for phrase in AUTHORITY_PHRASES_RAW:
-            self.assertIn(phrase, prompt)
         for phrase in AUTHORITY_PHRASES_NORMALIZED:
             self.assertIn(phrase, flat)
 
@@ -335,14 +329,14 @@ class TestReviewOverridesVendoredCanonBookkeeping(unittest.TestCase):
 
     def test_review_log_named_only_as_generated_ledger(self):
         # review-log.md may appear ONLY inside the generated-ledger
-        # enumeration ("documents the driver itself generates ..."), so a
+        # GENERATED-ledger enumeration, so a
         # worker can never read the mention as an instruction to keep a
         # manual-era review log.
         flat = normalized(self.build())
         self.assertEqual(flat.count("review-log.md"), 1)
         idx = flat.find("review-log.md")
         window = flat[max(0, idx - 160): idx]
-        self.assertIn("documents the driver itself generates", window)
+        self.assertIn("GENERATED milestone ledgers", window)
 
     def test_every_verdict_mention_is_inside_the_bookkeeping_ban(self):
         # Case-sensitive on purpose: uppercase VERDICT is the manual
@@ -415,8 +409,8 @@ class TestExistingPromptInvariants(unittest.TestCase):
         for field in ("permitted_baseline", "actual_outcome",
                       "incremental_harm", "exceeds_baseline"):
             self.assertIn(field, prompt)
-        self.assertIn("not damage without a distinct outcome beyond its "
-                      "allowed envelope", prompt)
+        self.assertIn("permitted operation is not damage by itself", prompt)
+        self.assertIn("delta BEYOND the permitted baseline", prompt)
         for value in ("BASELINE_SENTINEL", "OUTCOME_SENTINEL",
                       "HARM_SENTINEL"):
             self.assertIn(value, prompt)
@@ -436,6 +430,13 @@ class TestExistingPromptInvariants(unittest.TestCase):
         )
         self.assertIn("ADJ-1", prompt)
         self.assertIn("settled finding", prompt)
+        flat = normalized(prompt)
+        self.assertIn(
+            "If a finding challenges a listed rejection, `contests` is "
+            "mandatory",
+            flat,
+        )
+        self.assertIn("Without new evidence, emit no finding", flat)
 
     def test_repair_episode_declares_the_reopened_artifact(self):
         # Process-level authority for the repair path (found live
@@ -498,11 +499,13 @@ class TestDeferredDebtPrompts(unittest.TestCase):
 
     def test_debt_requires_new_evidence_to_reopen(self):
         prompt = normalized(self._builders()["review"])
-        self.assertIn(
-            "unless concrete NEW evidence shows that correction now exceeds "
-            "the recorded rating", prompt)
-        self.assertIn("They remain deferred even when this call reports other "
-                      "findings", prompt)
+        for atom in (
+            "settled unless NEW evidence",
+            "correction risk above its recorded rating",
+            "cite its id",
+            "report only the delta",
+        ):
+            self.assertIn(atom, prompt)
 
     def test_debt_precedes_adjudicated_registry_and_access(self):
         prompt = self._builders()["review"]
@@ -619,14 +622,14 @@ class TestPortedCanonContentRules(unittest.TestCase):
         # Implementation reviews check the reuse GATE but never demand a
         # Reuse Posture section from code (the section duty is doc-only).
         prompt = self.review("slice_impl")
-        self.assertIn("check the reuse gate", prompt)
+        self.assertIn("REUSE AND MACHINERY PROPORTIONALITY", prompt)
+        self.assertIn("Machinery: identify independent authority", prompt)
+        self.assertIn("Prefer reuse or no change", prompt)
         self.assertNotIn("Reuse Posture", prompt)
 
     def test_machinery_proportionality_reaches_every_relevant_prompt(self):
         built = build_all()
-        for name in (
-            "draft_skeleton", "draft_slice_note", "implement", "fix_findings"
-        ):
+        for name in ("draft_skeleton", "draft_slice_note", "implement"):
             prompt = normalized(built[name])
             self.assertIn("MACHINERY PROPORTIONALITY", prompt, name)
             self.assertIn("who or what is affected", prompt, name)
@@ -639,19 +642,19 @@ class TestPortedCanonContentRules(unittest.TestCase):
             self.assertIn("design gap rather than writing a promise", prompt,
                           name)
 
-        for name in ("review_round", "delta_review"):
+        for name in ("review_round", "delta_review", "fix_findings"):
             prompt = normalized(built[name])
-            self.assertIn("REUSE AND MACHINERY PROPORTIONALITY", prompt, name)
-            self.assertIn("existing capabilities or a cheaper option",
-                          prompt, name)
-            self.assertIn("authorised outcome", prompt, name)
-            self.assertIn(
-                "build, migration, operation, maintenance, and review cost",
-                prompt,
-                name,
-            )
-            self.assertIn("does not justify machinery", prompt, name)
-            self.assertIn("design gap, not a promise", prompt, name)
+            for atom in (
+                "independent authority",
+                "existing capabilities",
+                "cheapest sufficient option",
+                "consumer",
+                "lifecycle cost",
+                "omission cost",
+                "invented stricter guarantee cannot justify machinery",
+                "unenforceable outcome is a design gap",
+            ):
+                self.assertIn(atom, prompt, name)
 
         self.assertIn("ordinary `notes` response",
                       built["implement"])
@@ -677,10 +680,9 @@ class TestPortedCanonContentRules(unittest.TestCase):
         for kind in ("skeleton", "slice_doc", "slice_impl"):
             for p in (self.review(kind, reform=True),
                       self.delta(kind, reform=True)):
-                self.assertIn("Trace each justification to its authority", p)
-                self.assertIn(
-                    "the finding is the invented requirement, not the "
-                    "absent machinery", p)
+                self.assertIn("invented or circular requirement is a finding",
+                              p)
+                self.assertIn("In sealed design it is binding", p)
 
     def test_reuse_altitude_inherits_the_domains_accepted_rigor(self):
         for name, built in build_all_reform().items():
@@ -693,8 +695,8 @@ class TestPortedCanonContentRules(unittest.TestCase):
         for kind in ("skeleton", "slice_doc", "slice_impl"):
             for p in (self.review(kind, reform=True),
                       self.delta(kind, reform=True)):
-                self.assertIn("Check altitude", p)
-                self.assertIn("unless the goal demands the stricter bar", p)
+                self.assertIn("Comparable accepted rigor is the default", p)
+                self.assertIn("unless the GOAL demands a stricter bar", p)
 
     def test_requirements_are_judged_where_they_live(self):
         # TIME and ROUTE replace authority ranking: an UNSEALED artifact's
@@ -706,13 +708,11 @@ class TestPortedCanonContentRules(unittest.TestCase):
         for kind in ("skeleton", "slice_doc", "slice_impl"):
             for p in (self.review(kind, reform=True),
                       self.delta(kind, reform=True)):
-                self.assertIn("judged WHERE IT LIVES", p)
-                self.assertIn("never deflected as a mere posture-change "
-                              "proposal", p)
-                self.assertIn("do not file findings against sealed text", p)
-                self.assertIn("design contradiction for the repair "
-                              "machinery", p)
-                self.assertIn("re-documenting the design under the goal", p)
+                self.assertIn("Judge a requirement where it lives", p)
+                self.assertIn("artifact under review", p)
+                self.assertIn("In sealed design it is binding", p)
+                self.assertIn("design contradiction for repair", p)
+                self.assertIn("instead of attacking the sealed text", p)
 
     def test_severity_battery_stays_pristine(self):
         # The battery judges BEHAVIOR against its declared contract; posture
@@ -722,7 +722,7 @@ class TestPortedCanonContentRules(unittest.TestCase):
         for kind in ("skeleton", "slice_doc", "slice_impl"):
             for p in (self.review(kind), self.review(kind, reform=True),
                       self.delta(kind), self.delta(kind, reform=True)):
-                self.assertIn("Behavior within the declared posture is NOT "
+                self.assertIn("Behavior inside the declared posture is NOT "
                               "a defect", p)
                 self.assertNotIn("The authorities, in rank", p)
                 self.assertNotIn("shields nothing", p)
@@ -733,12 +733,9 @@ class TestPortedCanonContentRules(unittest.TestCase):
         # — legacy/profile-less prompts keep the pre-reform reuse canon
         # exactly (base gate, posture section duty, review reuse line).
         legacy_markers = (
-            "Trace each justification to its authority",
-            # NOT bare "Check altitude": the pre-existing documentation
-            # ALTITUDE block legitimately says "Check altitude in BOTH
-            # directions" in every doc review, reform or not.
-            "Check altitude: machinery that exists to satisfy a stricter",
-            "judged WHERE IT LIVES",
+            "invented or circular requirement is a finding",
+            "In sealed design it is binding",
+            "Comparable accepted rigor is the default",
             "exists INDEPENDENTLY of this document",
             "match the rigor the surrounding domain already accepts",
             "A section is HOLLOW when",
@@ -757,7 +754,9 @@ class TestPortedCanonContentRules(unittest.TestCase):
             self.assertIn("must include a short `Reuse Posture` section",
                           " ".join(self.review(kind).split()))
         for kind in ("skeleton", "slice_doc", "slice_impl"):
-            self.assertIn("When the artifact proposes new machinery",
+            self.assertIn("REUSE AND MACHINERY PROPORTIONALITY",
+                          self.delta(kind))
+            self.assertIn("Machinery: identify independent authority",
                           self.delta(kind))
 
     def test_hollow_reuse_posture_is_defined_for_reviewers(self):
@@ -810,8 +809,10 @@ class TestPortedCanonContentRules(unittest.TestCase):
             self.assertIn("delta BEYOND the permitted baseline", flat)
             for field in fields:
                 self.assertIn(field, flat)
-        self.assertNotIn("ttl", prompts.FINDING_VALIDITY_BLOCK.lower())
-        self.assertNotIn("race", prompts.FINDING_VALIDITY_BLOCK.lower())
+        self.assertIsNone(re.search(r"\bttl\b",
+                                    prompts.FINDING_VALIDITY_BLOCK.lower()))
+        self.assertIsNone(re.search(r"\brace\b",
+                                    prompts.FINDING_VALIDITY_BLOCK.lower()))
 
     def test_slice_note_checklist_reaches_author_and_reviewers(self):
         checklist = ("scope, non-goals, dependencies, "
@@ -864,10 +865,10 @@ class TestPortedCanonContentRules(unittest.TestCase):
 
     def test_fixer_triage_evidence_rules(self):
         prompt = self.fix("slice_impl")
-        self.assertIn("Do not triage from memory or chat, and do not "
-                      "treat prior review output as authority", prompt)
-        self.assertIn("the decision must come from the current artifact "
-                      "and direct evidence", prompt)
+        for atom in ("Do not triage from memory, chat, or prior review "
+                     "authority", "finding only to locate evidence",
+                     "decide from the current artifact"):
+            self.assertIn(atom, prompt)
 
     def test_fixer_gets_opposing_named_provenance_and_falsifies_first(self):
         expected = {
@@ -891,49 +892,45 @@ class TestPortedCanonContentRules(unittest.TestCase):
                     "IS %s'S FINDING INCORRECT?" % reviewer.upper(),
                     prompt,
                 )
-                self.assertIn("make one focused falsification pass", prompt)
+                self.assertIn("Make one focused falsification pass", prompt)
 
     def test_fixer_falsification_covers_damage_and_scope(self):
         prompt = normalized(self.fix("slice_impl"))
         for question in (
             "Guarantee: which exact declared guarantee, if any, does the "
             "observed outcome violate",
+            "PERMITTED BASELINE vs actual outcome",
             "Affected party: who or what concretely suffers",
-            "Permitted operation: is the alleged state already allowed",
-            "Incremental damage: what happens BEYOND",
-            "Functional deviation: does real behavior change",
-            "Exposure: how often can it occur",
+            "Functional deviation: does behavior really change",
+            "Exposure: how often",
             "Scope and altitude: is this a defect in the assigned unit",
+            "Machinery: identify independent authority",
         ):
             self.assertIn(question, prompt)
         self.assertIn("Timing alone does not turn an allowed state into "
                       "additional harm", prompt)
-        self.assertIn("If the claim survives falsification, fix it", prompt)
+        self.assertIn("claim survives falsification, fix it", prompt)
 
     def test_consultation_cap_and_severity_gate(self):
         prompt = self.fix("slice_impl")
-        self.assertIn("Run at most two dialogue rounds, stopping earlier "
-                      "if agreement is clear", prompt)
-        self.assertIn("Never reject a P0 or P1 finding without a clear "
-                      "consultation resolution", prompt)
+        self.assertIn("Run at most two dialogue rounds, stopping earlier on "
+                      "clear agreement", prompt)
+        self.assertIn("Never reject P0/P1 without a clear resolution", prompt)
 
     def test_unresolved_consultation_retries_never_concedes(self):
         # An unresolved dispute is a transient CALL failure, not evidence
         # that the finding exceeds its permitted baseline. The fixer returns
         # no disposition; the guard retries the same queue after 15 minutes.
         prompt = self.fix("slice_impl")
-        self.assertIn("an unresolved dispute means a justified rejection "
-                      "is NOT possible", prompt)
-        self.assertIn("top-level status 'retry'", prompt)
-        self.assertIn("retry_reason 'consultation_unavailable'", prompt)
+        self.assertIn("consultation is unavailable or unresolved", prompt)
+        self.assertIn("do not block, concede, or reject", prompt)
+        self.assertIn("return only the retry envelope", prompt)
         self.assertIn("after 15 minutes", prompt)
-        self.assertIn("Never mark the finding 'blocked'", prompt)
-        self.assertIn("silently concede, or reject", prompt)
         self.assertNotIn("reasonably fixable", prompt)
-        contract = normalized(contracts.CONTRACT_TEXT)
-        self.assertIn("An unresolved or unavailable consultation is NOT a "
-                      "finding disposition", contract)
-        self.assertIn('status: "retry"', contract)
+        contract = normalized(contracts.prompt_contract(
+            contracts.KIND_FIX_FINDINGS))
+        self.assertIn('"status":"retry"', contract)
+        self.assertIn('"retry_reason":"consultation_unavailable"', contract)
 
     def test_delta_review_is_exhaustive_and_knows_its_standard(self):
         prompt = normalized(prompts.build_delta_review(
@@ -1202,8 +1199,51 @@ class TestVerificationProtocol(unittest.TestCase):
         prompt = normalized(prompts.build_fix_findings(
             FAMILY, WORKSPACE, GOAL, UNIT, FINDINGS, [], "claude",
             ["claude", "-p"], unit_kind="slice_impl"))
-        self.assertIn("never the repo's full suite. The driver runs that "
-                      "suite only at the final boundary", prompt)
+        self.assertIn("never the repo's full suite", prompt)
+        self.assertIn("the driver runs it at the final boundary", prompt)
+
+
+class TestPromptCompression(unittest.TestCase):
+    """Keep static instructions small; run data is deliberately excluded."""
+
+    def test_review_and_fix_use_role_specific_contracts(self):
+        review = build_all()["review_round"]
+        fix = build_all()["fix_findings"]
+        for prompt in (review, fix):
+            self.assertNotIn("Kind draft_skeleton adds", prompt)
+            self.assertNotIn("Kind implement adds", prompt)
+            self.assertIn("<normalized workspace-relative path>", prompt)
+            self.assertNotIn("<workspace path>", prompt)
+        self.assertNotIn('"disposition":"fixed', review)
+        self.assertIn('"disposition":"fixed|rejected', fix)
+        self.assertIn('"retry_reason":"consultation_unavailable"', fix)
+
+    def test_static_prompt_budgets(self):
+        limits = {
+            "slice_impl": (10_000, 10_000, 14_000),
+            "slice_doc": (12_000, 12_000, 16_000),
+            "skeleton": (12_000, 12_000, 16_000),
+        }
+        for kind, (review_limit, delta_limit, fix_limit) in limits.items():
+            review = prompts.build_review_round(
+                FAMILY, WORKSPACE, GOAL, UNIT, "docs/x.md", [],
+                unit_kind=kind, governing="docs/skeleton.md",
+                gap_enabled=True,
+            )
+            delta = prompts.build_delta_review(
+                FAMILY, WORKSPACE, GOAL, UNIT, [], unit_kind=kind,
+                governing="docs/skeleton.md", gap_enabled=True,
+            )
+            fix = prompts.build_fix_findings(
+                FAMILY, WORKSPACE, GOAL, UNIT, FINDINGS, [], "claude",
+                ["claude", "-p"], unit_kind=kind, gap_enabled=True,
+            )
+            with self.subTest(kind=kind, surface="review"):
+                self.assertLessEqual(len(review.encode()), review_limit)
+            with self.subTest(kind=kind, surface="delta"):
+                self.assertLessEqual(len(delta.encode()), delta_limit)
+            with self.subTest(kind=kind, surface="fix"):
+                self.assertLessEqual(len(fix.encode()), fix_limit)
 
 
 if __name__ == "__main__":

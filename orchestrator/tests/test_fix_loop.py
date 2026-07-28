@@ -1006,8 +1006,8 @@ class TestActsResolution(DriverTestCase):
             # consultation "self" resolves to the fixer's own family.
             fix_prompts = [c[2] for c in mock.calls
                            if c[1] == "fix_findings"]
-            self.assertIn("with the claude family", fix_prompts[0])
-            self.assertIn("with the codex family", fix_prompts[1])
+            self.assertIn("consult the claude family", fix_prompts[0])
+            self.assertIn("consult the codex family", fix_prompts[1])
 
     def test_literal_fixer_selects_same_family_delta(self):
         acts = {"fixer": "claude", "skeletoner": "claude",
@@ -1036,7 +1036,7 @@ class TestActsResolution(DriverTestCase):
             # consultation "opposite" of the claude fixer is codex.
             fix_prompt = [c[2] for c in mock.calls
                           if c[1] == "fix_findings"][0]
-            self.assertIn("with the codex family", fix_prompt)
+            self.assertIn("consult the codex family", fix_prompt)
 
     def test_skeleton_fix_routes_through_skeletoner_not_fixer(self):
         # Routing check with the two acts set to DIFFERENT families: the

@@ -2401,7 +2401,7 @@ class MilestoneDriverRethinkTest(unittest.TestCase):
             delta_runner.calls[1][2],
         )
         self.assertIn(
-            "Review\nONLY this delta",
+            "Review ONLY the uncommitted changes",
             delta_runner.calls[1][2],
         )
         self.assertNotIn(

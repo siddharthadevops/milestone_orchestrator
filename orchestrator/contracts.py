@@ -1210,3 +1210,98 @@ Kind fix_findings adds:
   your reason. An unresolved or unavailable consultation is NOT a finding
   disposition: return top-level `status: "retry"` as specified above.
 """
+
+
+# Review/fix prompts use narrow contracts.  CONTRACT_TEXT remains the
+# compatibility contract for draft/implement continuations, but making a
+# reviewer read every other worker kind buried its own schema under thousands
+# of irrelevant words.
+REPORT_CONTRACT_TEXT = """OUTPUT CONTRACT (mandatory)
+Return exactly one JSON object; no prose or markdown fences.
+
+Clean or findings:
+{"status":"ok","kind":"<echo KIND>","findings":[<finding>, ...],
+ "notes":"<optional short note>"}
+Each finding is exactly:
+{"id":"<unique id>","severity":"P0|P1|P2|P3","summary":"...",
+ "validity":{"permitted_baseline":"...","actual_outcome":"...",
+             "incremental_harm":"...","exceeds_baseline":true},
+ "plain":"<one lay sentence, under 500 chars>",
+ "example":"<smallest concrete scenario, under 500 chars>",
+ "contests":null|{"rejection_id":"<settled id>",
+                   "new_evidence":"<what changes it>"}}
+Reviewers report only: never add a disposition. Empty findings means clean.
+If the outcome does not exceed the permitted baseline, emit no finding.
+Plain and example must expose the defect and its scale without opening files.
+If a finding challenges a listed rejection, `contests` is mandatory: cite its
+id and genuinely new evidence. Without new evidence, emit no finding.
+Include any extra field explicitly required by an active project-safeguard or
+design-correction block above.
+
+Impossible task:
+{"status":"blocked","kind":"<echo KIND>","blocked_reason":"..."}
+
+Focused discussion before finishing this judgment:
+{"status":"need_rethink","kind":"<echo KIND>","question":"...",
+ "finding":{<one complete current finding>},
+ "target_path":"<normalized workspace-relative path>",
+ "max_rounds":<positive integer>,"result_mode":"proposal"}
+Return no other fields with `blocked` or `need_rethink`.
+"""
+
+
+FIX_CONTRACT_TEXT = """OUTPUT CONTRACT (mandatory)
+Return exactly one JSON object; no prose or markdown fences.
+
+Completed fix pass:
+{"status":"ok","kind":"fix_findings","findings":[<result>, ...],
+ "files_changed":["..."],"notes":"<optional short note>"}
+Return one result for every queued id, and no others:
+{"id":"<echo>","severity":"<echo>","summary":"...",
+ "validity":{"permitted_baseline":"...","actual_outcome":"...",
+             "incremental_harm":"...","exceeds_baseline":true|false},
+ "disposition":"fixed|rejected|rejected_adjudicated|blocked",
+ "consultation":null|{"resolution":"..."},
+ "prevention":null|{"documented_in":"<edited path>","note":"..."},
+ "adjudication_ref":null|"<settled rejection id>"}
+`fixed`/`blocked` require exceeds_baseline=true; both rejection dispositions
+require false. Include any extra field explicitly required by an active block
+above (`slices`, the `suite_command` pair, `design_correction`, or a project
+safeguard field).
+When fixing a queued final-suite-command finding, also return `suite_command`
+and `suite_command_finding_id`; the command must run the official full suite
+once, non-interactively, from the workspace root.
+
+Impossible worker task (not a finding disposition):
+{"status":"blocked","kind":"fix_findings","blocked_reason":"..."}
+
+Unavailable or unresolved mandatory consultation:
+{"status":"retry","kind":"fix_findings",
+ "retry_reason":"consultation_unavailable","notes":"<optional>"}
+
+Focused discussion before deciding one queued finding:
+{"status":"need_rethink","kind":"fix_findings","question":"...",
+ "finding":{<one complete queued finding>},
+ "target_path":"<normalized workspace-relative path>",
+ "max_rounds":<positive integer>,"result_mode":"proposal|design_amendment",
+ "failure_gap":{<normal gap entry>}}
+`design_amendment` is limited to two rounds and requires a fits_remodel
+failure_gap. Return no work claims or sibling findings with this status.
+"""
+
+
+def prompt_contract(kind, gap_enabled=False):
+    """Smallest output contract relevant to one worker call."""
+    if kind in REPORT_KINDS:
+        return REPORT_CONTRACT_TEXT
+    if kind == KIND_FIX_FINDINGS:
+        gap = (
+            "\nDesign contradiction:\n"
+            "When GAP EXIT applies, return exactly "
+            "{\"status\":\"gap\",\"kind\":\"fix_findings\","
+            "\"gaps\":[<one or more gap entries>]}; no findings or work "
+            "claims.\n"
+            if gap_enabled else ""
+        )
+        return FIX_CONTRACT_TEXT + gap
+    return CONTRACT_TEXT
