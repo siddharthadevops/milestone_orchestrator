@@ -2179,6 +2179,79 @@ class MilestoneDriverRethinkTest(unittest.TestCase):
             st.U_DELTA_REVIEW,
         )
 
+    def test_suite_repair_rethink_continuation_keeps_suite_contract(self):
+        command = "python3 -m unittest discover -s tests"
+        path = self._state_path(
+            status=st.U_FIXING,
+            config=make_config(verification=[command]),
+        )
+        state = st.load(path)
+        unit = st.current_unit(state)
+        signal = report_finding("V1")
+        unit["fix_queue"] = [copy.deepcopy(signal)]
+        unit["fix_source"] = {
+            "type": "verification",
+            "origin_type": "verification",
+            "family": None,
+            "source_round_id": "slice_impl-08-verify-pre_seal-1",
+            "return_to": st.U_PRE_SEAL_VERIFY,
+        }
+        unit["verify_fix_attempts"]["pre_seal"] = 1
+        st.save(path, state)
+        runner = runners.MockRunner([
+            {
+                "expect_kind": contracts.KIND_FIX_FINDINGS,
+                "response": rethink(
+                    contracts.KIND_FIX_FINDINGS,
+                    finding=signal,
+                ),
+            },
+            {
+                "expect_kind": contracts.KIND_FIX_FINDINGS,
+                "response": {
+                    "status": "ok",
+                    "kind": contracts.KIND_FIX_FINDINGS,
+                    "findings": [],
+                    "files_changed": [],
+                },
+            },
+        ])
+
+        with mock.patch.object(
+            adapter, "create_session", return_value=self._created()
+        ):
+            drv.Driver(path, runner=runner).step()
+        with mock.patch.object(
+            adapter, "terminal_handoff", return_value=self._handoff()
+        ):
+            drv.Driver(path, runner=runner).step()
+        drv.Driver(path, runner=runner).step()
+
+        continuation = runner.calls[1][2]
+        self.assertIn("FULL-SUITE REPAIR CONTINUES", continuation)
+        self.assertIn(command, continuation)
+        self.assertIn("SUITE FAILURE JUDGMENT", continuation)
+        self.assertIn("affected party", continuation)
+        self.assertIn("findings` must be empty", continuation)
+        self.assertNotIn("FIX DECISION TABLE", continuation)
+        state = st.load(path)
+        unit = st.current_unit(state)
+        self.assertIsNone(state["failure"])
+        self.assertEqual(unit["status"], st.U_PRE_REVIEW_VERIFY)
+        self.assertEqual(unit["rounds"][-1]["result"]["findings"], [])
+        self.assertTrue(any(
+            event["type"] == "verification"
+            and event.get("fixer_certified") is True
+            for event in state["events"]
+        ))
+        self.assertEqual(
+            runner.session_calls,
+            [
+                ("start", "codex", "mock-session-1"),
+                ("continue", "codex", "mock-session-1"),
+            ],
+        )
+
     def test_fixer_amendment_continues_and_closes_without_phantom_bytes(self):
         workspace = os.path.join(self.tmp.name, "amendment-fixer")
         os.makedirs(os.path.join(workspace, "proposals"))

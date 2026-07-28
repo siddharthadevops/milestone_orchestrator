@@ -153,7 +153,7 @@ def fix_result(findings=None, files_changed=None):
 
 
 def verification_finding():
-    """The synthetic V1 finding the driver queues on a verification failure."""
+    """The durable V1 source signal for a suite-repair episode."""
     return {
         "id": "V1",
         "severity": "P1",
@@ -521,7 +521,7 @@ class TestUnitLifecycle(TempWorkspaceCase):
         self.assertEqual(doc["kind"], st.UNIT_SLICE_DOC)
         st.record_draft(state, doc, contracts.KIND_DRAFT_SLICE_NOTE, default_draft_for(doc))
         st.transition_unit(state, doc, st.U_PRE_REVIEW_VERIFY)
-        # pre-review verification fails -> synthetic V1 finding -> fix
+        # pre-review verification fails -> durable V1 source -> suite repair
         # episode -> clean delta -> back to pre-review verification
         st.enter_fix_episode(
             state, doc, [verification_finding()], "verification", None,

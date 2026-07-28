@@ -107,6 +107,8 @@ DEFAULT_CONFIG = {
     # work into failures. Set a number (seconds) to cap it per run.
     "verification_timeout": None,
     "max_rounds_per_family": 12,
+    # Compatibility name: this now bounds only a baseline suite that keeps
+    # mutating bytes. Final-suite convergence belongs to one fixer call.
     "max_verify_fix_attempts": 4,
     # Gate commits + the reviewed-point index discipline (see gitops.py).
     # Off by default for pure-state CLI runs; the demo config and the
@@ -593,6 +595,23 @@ class Driver(object):
                 and event.get("stable") is True
                 and not event.get("vacuous")
                 and not event.get("reused")
+                and event.get("commands") == commands
+                and event.get("candidate_after") == fingerprint
+            ):
+                return event
+        return None
+
+    def _matching_fixer_verification(self, commands, fingerprint):
+        """Return a fixer's full-suite success for these exact inputs."""
+        commands = list(commands)
+        for event in reversed(self.state.get("events") or []):
+            if (
+                event.get("type") == "verification"
+                and event.get("boundary") == "final"
+                and event.get("ok") is True
+                and event.get("stable") is True
+                and event.get("fixer_certified") is True
+                and not event.get("vacuous")
                 and event.get("commands") == commands
                 and event.get("candidate_after") == fingerprint
             ):
@@ -2665,6 +2684,15 @@ class Driver(object):
                 if kind == contracts.KIND_DRAFT_SLICE_NOTE
                 else None
             )
+            verification_repair = (
+                kind == contracts.KIND_FIX_FINDINGS
+                and (unit.get("fix_source") or {}).get("type")
+                == "verification"
+            )
+            verification_commands = (
+                self._verification_commands(unit)
+                if verification_repair else None
+            )
             project_context, extensions, roots = (
                 self._project_prompt_inputs(unit, kind)
             )
@@ -2687,6 +2715,17 @@ class Driver(object):
                     self._editable_design_paths(unit)
                     if amendment_mode and self._modern_design_updates()
                     else None
+                ),
+                verification_repair=verification_repair,
+                verification_commands=verification_commands,
+                verification_signal=(
+                    wait.get("signal", {}).get("finding")
+                    if verification_repair else None
+                ),
+                unit_kind=unit["kind"],
+                gap_enabled=(
+                    self._fixer_gap_enabled(unit)
+                    if verification_repair else False
                 ),
             )
             raw_name = "%s-rethink-return" % origin["raw_name"]
@@ -2717,6 +2756,10 @@ class Driver(object):
                         {"require_failure_gap": True}
                         if self._legacy_failure_gap_required(unit, kind)
                         else {}
+                    ),
+                    **(
+                        {"verification_repair": True}
+                        if verification_repair else {}
                     ),
                 } or None,
                 session_ref=origin["provider_session_ref"],
@@ -4315,6 +4358,10 @@ class Driver(object):
     def _do_fix(self):
         unit = st.current_unit(self.state)
         source = unit.get("fix_source") or {}
+        verification_repair = source.get("type") == "verification"
+        verification_commands = (
+            self._verification_commands(unit) if verification_repair else None
+        )
         max_loops = self.config.get("max_fix_loops", 6)
         if unit.get("fix_loop_rounds", 0) >= max_loops:
             st.fail_run(
@@ -4388,11 +4435,6 @@ class Driver(object):
             self._registry(),
             consultation_family,
             self.config["commands"].get(consultation_family, []),
-            verification_output=(
-                unit.get("last_verification_output")
-                if source.get("type") == "verification"
-                else None
-            ),
             unit_kind=unit["kind"],
             amendments=self._amendments(),
             phantom_retry=bool(unit.get("phantom_retried")),
@@ -4429,6 +4471,8 @@ class Driver(object):
             legacy_design_process=legacy_design_process,
             design_correction=design_context,
             editable_design_paths=self._editable_design_paths(unit),
+            verification_repair=verification_repair,
+            verification_commands=verification_commands,
         )
         n_fix = 1 + len(
             [r for r in unit["rounds"] if r["kind"] == contracts.KIND_FIX_FINDINGS]
@@ -4502,6 +4546,10 @@ class Driver(object):
                                 unit, contracts.KIND_FIX_FINDINGS
                             )
                             else {}
+                        ),
+                        **(
+                            {"verification_repair": True}
+                            if verification_repair else {}
                         ),
                     } or None
                 ),
@@ -4608,14 +4656,28 @@ class Driver(object):
                                     pre_worktree_tree=pre_worktree_tree,
                                     from_fixer=True)
         self._check_worker_blocked(unit, output, contracts.KIND_FIX_FINDINGS)
-        try:
-            contracts.validate_fix_coverage(output, unit.get("fix_queue") or [])
-        except contracts.ContractError as exc:
-            st.fail_run(self.state, str(exc), unit=unit)
-            self._save()
-            raise StopStep(str(exc))
-        self._validate_adjudication_refs(unit, output)
-        self._validate_contested_dispositions(unit, output)
+        if verification_repair:
+            if output.get("findings") != []:
+                reason = (
+                    "verification repair must return an empty findings list; "
+                    "its ok status certifies the live full suite"
+                )
+                st.fail_run(
+                    self.state, reason, unit=unit, type_="worker_protocol"
+                )
+                self._save()
+                raise StopStep(reason)
+        else:
+            try:
+                contracts.validate_fix_coverage(
+                    output, unit.get("fix_queue") or []
+                )
+            except contracts.ContractError as exc:
+                st.fail_run(self.state, str(exc), unit=unit)
+                self._save()
+                raise StopStep(str(exc))
+            self._validate_adjudication_refs(unit, output)
+            self._validate_contested_dispositions(unit, output)
         if active_correction.get("phase") == "proposed":
             correction_error = self._design_correction_integrity_error(
                 active_correction
@@ -4721,8 +4783,54 @@ class Driver(object):
                 ),
             },
         )
+        if verification_repair:
+            # The fixer owns the complete suite in this episode. Its `ok`
+            # certifies the final workspace bytes; bind that assertion to the
+            # exact candidate and commands so any later edit invalidates it.
+            certified_fingerprint = self._verification_candidate_fingerprint()
+            st.append_event(
+                self.state,
+                "verification",
+                unit=st.unit_key(unit),
+                stage="fixer",
+                boundary="final",
+                ok=True,
+                commands=list(verification_commands or []),
+                candidate_before=certified_fingerprint,
+                candidate_after=certified_fingerprint,
+                stable=True,
+                vacuous=not bool(verification_commands),
+                fixer_certified=True,
+                raw_path=raw_path,
+                output_tail="(fixer reported the configured full suite green)",
+            )
+            unit.pop("last_verification_output", None)
+            unit.pop("suite_verification_pending", None)
+            unit.pop("suite_armed_by_fix", None)
+            unit["verify_fix_attempts"]["pre_seal"] = 0
         self._maybe_update_slices(unit, output)
         unit["fix_loop_rounds"] = unit.get("fix_loop_rounds", 0) + 1
+        if verification_repair and not fix_workspace_changed:
+            target = source.get("return_to") or st.U_PRE_SEAL_VERIFY
+            if (
+                target == st.U_PRE_SEAL_VERIFY
+                and st.seal_predicate_reviews(
+                    unit,
+                    self.config["families_order"],
+                    current_fingerprint=self._review_evidence_fingerprint(unit),
+                ) is None
+            ):
+                target = st.U_PRE_REVIEW_VERIFY
+            unit["fix_queue"] = []
+            unit["fix_source"] = None
+            unit.pop("phantom_retried", None)
+            st.transition_unit(
+                self.state,
+                unit,
+                target,
+                reason="full suite certified by fixer; no candidate delta",
+            )
+            return "full suite green; continuing without re-verification"
         if gitops.enabled(self.config):
             st.transition_unit(
                 self.state, unit, st.U_DELTA_REVIEW, reason="fix applied"
@@ -5259,9 +5367,9 @@ class Driver(object):
                 "verification cannot run from status %s" % stage
             )
 
-        # Compatibility with states persisted by the retired gate-reuse
-        # shortcut. A final boundary is never skipped: after a failing suite
-        # even an empty fixer delta must run it again.
+        # Compatibility with states persisted by the retired generic
+        # gate-reuse shortcut. Only a fixer that explicitly owned the full
+        # suite may now certify this boundary without another execution.
         unit.pop("skip_next_verify", None)
 
         if stage == st.U_PRE_SEAL_VERIFY:
@@ -5319,6 +5427,37 @@ class Driver(object):
                 }
                 unit.pop("baseline_unstable_runs", None)
                 return "implementation baseline reused from final verification"
+        else:
+            reusable = self._matching_fixer_verification(
+                commands, candidate_before
+            )
+            if reusable is not None:
+                event = st.append_event(
+                    self.state,
+                    "verification",
+                    unit=st.unit_key(unit),
+                    stage=stage,
+                    boundary="final",
+                    ok=True,
+                    commands=list(commands),
+                    candidate_before=candidate_before,
+                    candidate_after=candidate_before,
+                    stable=True,
+                    reused=True,
+                    reused_from_seq=reusable["seq"],
+                    fixer_certified=True,
+                    output_tail=(
+                        "(reused: fixer certified these exact bytes and "
+                        "commands at event %d)" % reusable["seq"]
+                    ),
+                )
+                unit.pop("suite_verification_pending", None)
+                unit.pop("suite_armed_by_fix", None)
+                unit["verify_fix_attempts"]["pre_seal"] = 0
+                closed = self._complete_seal_from_reviews(
+                    unit, verification_event=event
+                )
+                return "fixer suite result reused; %s" % closed
 
         verification_changed = []
         boundary = "baseline" if baseline else "final"
@@ -5406,8 +5545,7 @@ class Driver(object):
                 % runners.format_changes(verification_changed),
             )
         if ok:
-            # The cap bounds consecutive fix attempts for the CURRENT
-            # failing stage; a pass closes the episode.
+            # A mechanical pass closes any pending suite-repair episode.
             unit.pop("suite_verification_pending", None)
             unit.pop("suite_armed_by_fix", None)
             unit["verify_fix_attempts"]["pre_seal"] = 0
@@ -5430,28 +5568,10 @@ class Driver(object):
                 len(commands), sealed
             )
         unit["verify_fix_attempts"]["pre_seal"] += 1
-        if unit["verify_fix_attempts"]["pre_seal"] > self.config["max_verify_fix_attempts"]:
-            st.fail_run(
-                self.state,
-                "final verification still failing after %d fix attempts; last "
-                "output tail: %s"
-                % (
-                    self.config["max_verify_fix_attempts"],
-                    (output or "")[-1500:],
-                ),
-                unit=unit,
-            )
-            self._save()
-            raise StopStep("verification fix attempts exhausted")
-        unit["last_verification_output"] = (output or "")[-4000:]
-        # The synthetic episode id must stay unique for the unit's whole
-        # life: verify_fix_attempts resets whenever the stage passes, but a
-        # stage can be RE-ENTERED later after accepted candidate changes,
-        # and a colliding id would mint two
-        # adjudication registry entries with the same id if V1 is rejected
-        # in both episodes. A dedicated never-reset sequence numbers the
-        # episodes instead (setdefault: field absent in pre-existing
-        # states).
+        unit.pop("last_verification_output", None)
+        # Keep a unique source signal solely for durable episode identity and
+        # the optional rethink handoff. The fixer receives no parsed failure
+        # or output tail; it diagnoses the live suite itself.
         seq = unit.setdefault(
             "verify_episode_seq", {"pre_review": 0, "pre_seal": 0}
         )
@@ -5465,8 +5585,8 @@ class Driver(object):
                 {
                     "id": "V1",
                     "severity": "P1",
-                    "summary": "the verification suite failed (see the "
-                    "verification output in this prompt)",
+                    "summary": "the configured full verification suite is "
+                    "not green",
                     "validity": {
                         "permitted_baseline": (
                             "the configured verification suite passes"
@@ -5488,7 +5608,7 @@ class Driver(object):
             (st.U_PRE_REVIEW_VERIFY
              if verification_changed else stage),
         )
-        return "verification failed; findings queued for the fixer"
+        return "verification failed; full-suite repair queued"
 
     def _partition_defer_candidates(self, unit, items):
         """Rate candidates independently and split debt from fix work.

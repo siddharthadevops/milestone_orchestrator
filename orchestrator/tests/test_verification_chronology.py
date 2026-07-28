@@ -439,13 +439,9 @@ class TestVerificationChronology(DriverTestCase):
                              st.U_PRE_REVIEW_VERIFY)
             self.assertEqual(len(mock.calls), calls_before)
 
-    def test_final_failure_fixes_then_rereviews_before_final_retry(self):
+    def test_final_failure_fixes_then_rereviews_before_reusing_success(self):
         marker = "suite-green.marker"
         command = "test -f %s" % marker
-        summary = (
-            "the verification suite failed (see the verification output "
-            "in this prompt)"
-        )
         script = [
             _skeleton_step(),
             step(contracts.KIND_REVIEW_ROUND,
@@ -454,10 +450,7 @@ class TestVerificationChronology(DriverTestCase):
                  report(contracts.KIND_REVIEW_ROUND), family="claude"),
             step(
                 contracts.KIND_FIX_FINDINGS,
-                fix_ok(
-                    [triaged("V1", "fixed", summary, severity="P1")],
-                    files_changed=[marker],
-                ),
+                fix_ok([], files_changed=[marker]),
                 family="codex",
                 side_effect=write_file(marker, "green\n"),
             ),
@@ -480,8 +473,12 @@ class TestVerificationChronology(DriverTestCase):
             self.assertEqual(mock.script, [])
             state = st.load(path)
             final = self._verification_events(state, "final")
-            self.assertEqual([event["ok"] for event in final], [False, True])
-            self.assertTrue(all(not event.get("reused") for event in final))
+            self.assertEqual(
+                [event["ok"] for event in final], [False, True, True]
+            )
+            self.assertTrue(final[1].get("fixer_certified"))
+            self.assertFalse(final[1].get("reused"))
+            self.assertTrue(final[2].get("reused"))
 
             reviews = [
                 round_info for round_info in state["units"][0]["rounds"]

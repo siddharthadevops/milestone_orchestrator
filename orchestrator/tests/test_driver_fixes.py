@@ -7,8 +7,8 @@ Covers, per finding:
 - worker protocol failures persist the raw outputs of both attempts;
 - tool-cache writes by read-only reviewers do not invalidate the round
   (defaults + snapshot_exclude_dirs config);
-- final-verify repair caps allow the configured attempts, mint distinct
-  synthetic V1 episodes, and reset after the final boundary passes;
+- a successful full-suite fixer replaces a duplicate driver verification and
+  resets the final-boundary counter;
 - skeleton fix rounds can update the structural slice plan;
 - a second driver invocation is refused before any worker call runs
   (staleness check + advisory lock);
@@ -546,19 +546,16 @@ class TestSnapshotCacheExclusions(DriverTestCase):
             self.assertNotIn("invalidated", unit["rounds"][0])
 
 
-class TestFinalVerifyFixCap(DriverTestCase):
-    # The only full-suite boundary fails twice, then passes. Counter lives in
-    # the workspace; deterministic because verification runs are sequential.
+class TestFinalVerifyFixOwnership(DriverTestCase):
+    # The driver executes the boundary once. The fixer then owns full-suite
+    # convergence, so its success must not trigger another driver execution.
     VER_CMD = (
         "python3 -c \"import os,sys; p='.orchestrator/vcount'; "
         "n=int(open(p).read()) if os.path.exists(p) else 0; n+=1; "
-        "open(p,'w').write(str(n)); sys.exit(0 if n == 3 else 1)\""
+        "open(p,'w').write(str(n)); sys.exit(1)\""
     )
 
-    def test_final_boundary_allows_configured_repairs_and_resets(self):
-        """Two final failures consume the allowed repair budget; the third
-        execution passes, seals, and resets the durable counter. No full
-        suite runs before or between review rounds."""
+    def test_fixer_success_replaces_driver_retry_and_resets_counter(self):
         with tempfile.TemporaryDirectory(prefix="orch-fix-") as ws:
             path = init_state(
                 ws,
@@ -571,10 +568,11 @@ class TestFinalVerifyFixCap(DriverTestCase):
                 draft_skeleton_step(),
                 step("review_round", clean(), family="codex"),
                 step("review_round", clean(), family="claude"),
-                # Git is disabled and these fixes change no bytes, so each
-                # returns directly to the same final boundary.
-                step("fix_findings", fix_fixed("V1"), family="codex"),
-                step("fix_findings", fix_fixed("V1"), family="codex"),
+                step(
+                    "fix_findings",
+                    ok("fix_findings", findings=[], files_changed=[]),
+                    family="codex",
+                ),
             ])
             driver = drv.Driver(path, runner=mock)
             self.step_until(
@@ -591,14 +589,10 @@ class TestFinalVerifyFixCap(DriverTestCase):
                 unit["verify_fix_attempts"],
                 {"pre_review": 0, "pre_seal": 0},
             )
-            # Every fix episode cites its own synthetic verification source.
             fixes = [r for r in unit["rounds"] if r["kind"] == "fix_findings"]
             self.assertEqual(
                 [r["source_round_id"] for r in fixes],
-                [
-                    "skeleton-verify-pre_seal-1",
-                    "skeleton-verify-pre_seal-2",
-                ],
+                ["skeleton-verify-pre_seal-1"],
             )
             failed = [
                 e for e in state["events"]
@@ -606,13 +600,14 @@ class TestFinalVerifyFixCap(DriverTestCase):
             ]
             self.assertEqual(
                 [e["stage"] for e in failed],
-                [st.U_PRE_SEAL_VERIFY, st.U_PRE_SEAL_VERIFY],
+                [st.U_PRE_SEAL_VERIFY],
             )
             self.assertTrue(all(e.get("boundary") == "final" for e in failed))
-            # Raw fix outputs kept distinct monotonic names.
+            with open(os.path.join(ws, ".orchestrator", "vcount"),
+                      encoding="utf-8") as fh:
+                self.assertEqual(fh.read(), "1")
             raw_dir = os.path.join(ws, ".orchestrator", "raw")
-            for name in ("skeleton-fix1.txt", "skeleton-fix2.txt"):
-                self.assertIn(name, os.listdir(raw_dir))
+            self.assertIn("skeleton-fix1.txt", os.listdir(raw_dir))
 
 
 class TestSkeletonSlicePlanUpdate(DriverTestCase):

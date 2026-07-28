@@ -353,6 +353,16 @@ findings for the FIX LOOP:
       -> green -> AMEND into the unit's wip commit -> restart whole-artifact
          review at the first family; full verification waits for final closure
 
+A failing final suite opens a dedicated full-suite fixer call, not a synthetic
+review-finding dispute. The fixer receives the goal, reviewed design, project
+context, amendments, proportionality rules, and configured suite commands; it
+receives no parsed or truncated failure excerpt. It runs the complete suite,
+repairs only justified failures, and returns `ok` only after the final workspace
+bytes are green (`blocked` stops the run). That success is bound to the exact
+bytes and commands. Changed bytes still take the normal delta and full-review
+path, but unchanged review calls do not rerun the suite; any later edit or
+command change invalidates the success automatically.
+
 For a fix episode born from a review round, the pending diff is checkpointed
 after the fifth fix instead of launching another delta review. No synthetic
 clean round is recorded: the WIP commit is amended, the checkpoint is logged,
@@ -469,17 +479,18 @@ Tiers:
   `*.egg-info`), so a report-only worker whose focused checks write tool
   caches is not falsely invalidated (with git enabled the tamper universe
   additionally honors `.gitignore`). Reviewers are told NOT to run the full
-  suite — the driver runs it mechanically only for an implementation baseline
-  and at the final boundary after reviews. Add tool-specific cache
+  suite — it runs mechanically for an implementation baseline and at the final
+  boundary after reviews; after a boundary failure, the dedicated fixer owns
+  full-suite convergence. Add tool-specific cache
   directory names (or fnmatch patterns) via the `snapshot_exclude_dirs`
   config list. Cache FILES written at the workspace root (e.g. coverage's
   `.coverage`) are not excludable; point such tools elsewhere (e.g.
   `COVERAGE_FILE`).
-- **`max_verify_fix_attempts` bounds final-suite repair.** It caps consecutive
-  fixer attempts after a failing final verification and also bounds retries
-  when a baseline suite keeps changing candidate bytes. An ordinary failing
-  baseline stops before implementation opens rather than being folded into a
-  not-yet-existing WIP.
+- **`max_verify_fix_attempts` bounds unstable baselines.** The compatibility
+  name remains in frozen configs, but the value now caps only repeated baseline
+  executions that keep changing candidate bytes. Final-suite convergence is a
+  single fixer responsibility. An ordinary failing baseline stops before
+  implementation opens rather than being folded into a not-yet-existing WIP.
 
 ## Deliberate v0 divergences from canon v0.9
 

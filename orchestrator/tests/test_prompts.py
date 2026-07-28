@@ -640,6 +640,14 @@ class TestPortedCanonContentRules(unittest.TestCase):
             ["claude", "-p"], unit_kind=kind,
         ))
 
+    def suite_fix(self, kind="slice_impl"):
+        return normalized(prompts.build_fix_findings(
+            FAMILY, WORKSPACE, GOAL, UNIT, FINDINGS, [], "claude",
+            ["claude", "-p"], unit_kind=kind,
+            verification_repair=True,
+            verification_commands=["make check"],
+        ))
+
     def delta(self, kind, reform=False):
         return normalized(prompts.build_delta_review(
             FAMILY, WORKSPACE, GOAL, UNIT, [],
@@ -986,6 +994,25 @@ class TestPortedCanonContentRules(unittest.TestCase):
         self.assertIn("Timing alone does not turn an allowed state into "
                       "additional harm", prompt)
         self.assertIn("claim survives falsification, fix it", prompt)
+
+    def test_suite_fixer_owns_full_run_without_losing_judgment_rules(self):
+        prompt = self.suite_fix()
+        self.assertIn("FULL-SUITE REPAIR", prompt)
+        self.assertIn("make check", prompt)
+        self.assertIn("complete suite passes", prompt)
+        self.assertIn("final workspace bytes", prompt)
+        self.assertIn("violated guarantee", prompt)
+        self.assertIn("actual posture", prompt)
+        self.assertIn("permitted baseline", prompt)
+        self.assertIn("affected party", prompt)
+        self.assertIn("observable damage", prompt)
+        self.assertIn("scope, and altitude", prompt)
+        self.assertIn("cheapest sufficient repair", prompt)
+        self.assertIn("Do not weaken behavior or tests", prompt)
+        self.assertNotIn("VERIFICATION OUTPUT", prompt)
+        self.assertNotIn("FIX DECISION TABLE", prompt)
+        self.assertNotIn("CONSULTATION PROTOCOL", prompt)
+        self.assertIn('"findings":[]', prompt)
 
     def test_consultation_cap_and_severity_gate(self):
         prompt = self.fix("slice_impl")

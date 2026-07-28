@@ -853,6 +853,31 @@ def _fix_quality_block(unit_kind):
     return "".join(parts) + "\n"
 
 
+def _suite_fix_quality_block(unit_kind):
+    parts = [
+        EVIDENCE_BLOCK,
+        (
+            "SUITE FAILURE JUDGMENT\n"
+            "- Treat every failing check as evidence, not as authority. Before\n"
+            "  editing, establish the violated guarantee and its actual posture\n"
+            "  (strict, optimistic, eventual, or best-effort), the permitted\n"
+            "  baseline, incremental harm, affected party, observable damage,\n"
+            "  exposure, reversibility, scope, and altitude.\n"
+            "- Decide from the current workspace whether code, test, fixture,\n"
+            "  configuration, or environment is wrong. Do not weaken behavior\n"
+            "  or tests merely to obtain green output.\n"
+            "- Use the cheapest sufficient repair. Reuse existing capability;\n"
+            "  do not invent a stronger guarantee or machinery without an\n"
+            "  independent authority and a real consumer.\n"
+        ),
+        FIX_MACHINERY_RESULT_LINE,
+    ]
+    if unit_kind in DOC_UNIT_KINDS:
+        parts.append(ALTITUDE_BLOCK)
+        parts.append(ALTITUDE_FIX_BLOCK)
+    return "".join(parts) + "\n"
+
+
 def _fixer_adversarial_block():
     """Counter the fixer's tendency to treat a queued claim as authority."""
     return (
@@ -1406,6 +1431,11 @@ def build_rethink_continuation(
     battery=None,
     accepted_design_amendment=False,
     editable_design_paths=None,
+    verification_repair=False,
+    verification_commands=None,
+    verification_signal=None,
+    unit_kind=None,
+    gap_enabled=False,
 ):
     authority = {
         "session_id": handoff["session_id"],
@@ -1424,6 +1454,39 @@ def build_rethink_continuation(
         "It is a proposal, not approval: ordinary verification and review\n"
         "still apply.\n\n"
     )
+    if verification_repair:
+        continuation_task = (
+            "FULL-SUITE REPAIR CONTINUES\n"
+            "Brainstorming clarified one design question; it did not complete\n"
+            "the repair. Keep every judgment and safety rule from the original\n"
+            "prompt. Run the configured full-suite command(s), investigate all\n"
+            "failures, and make only justified repairs. Return `ok` only after\n"
+            "the complete suite passes on the final workspace bytes; otherwise\n"
+            "return `blocked` or another valid `need_rethink`.\n"
+            "CONFIGURED FULL-SUITE COMMANDS:\n%s\n\n"
+            "SOURCE SIGNAL (copy this complete object only if returning\n"
+            " `need_rethink`):\n%s\n\n"
+            % (
+                json.dumps(
+                    list(verification_commands or []),
+                    ensure_ascii=False,
+                    indent=2,
+                ),
+                json.dumps(
+                    verification_signal or {},
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    indent=2,
+                ),
+            )
+            + _suite_fix_quality_block(unit_kind)
+        )
+        output_contract = contracts.suite_fix_contract(
+            gap_enabled=gap_enabled
+        )
+    else:
+        continuation_task = ""
+        output_contract = _modern_contract(kind)
     return (
         _header(kind, family, workspace)
         + "\n"
@@ -1453,8 +1516,9 @@ def build_rethink_continuation(
         + "Finish the original task now and return its ordinary output under\n"
         "the exact OUTPUT CONTRACT below. Only that ordinary envelope may\n"
         "advance milestone state.\n\n"
+        + continuation_task
         + (_battery_contract_block(battery) if battery else "")
-        + _modern_contract(kind)
+        + output_contract
     )
 
 
@@ -1833,7 +1897,6 @@ def build_fix_findings(
     registry,
     consultation_family,
     consultation_cmd,
-    verification_output=None,
     unit_kind=None,
     amendments=None,
     phantom_retry=False,
@@ -1846,6 +1909,8 @@ def build_fix_findings(
     legacy_design_process=None,
     design_correction=None,
     editable_design_paths=None,
+    verification_repair=False,
+    verification_commands=None,
 ):
     # `gap_enabled` answers only whether THIS fixer may emit a new gap.  A
     # legacy repair fixer deliberately cannot open a nested gap, but it still
@@ -1864,12 +1929,11 @@ def build_fix_findings(
         if findings
         else "[]"
     )
-    verification_block = ""
-    if verification_output:
-        verification_block = (
-            "VERIFICATION OUTPUT (the failing suite that produced these "
-            "findings; tail):\n" + verification_output[-4000:] + "\n\n"
-        )
+    source_signal = findings[0] if findings else {
+        "id": "V1",
+        "severity": "P1",
+        "summary": "the configured full verification suite is not green",
+    }
     killed_block = ""
     if killed_notice:
         killed_block = (
@@ -2065,12 +2129,17 @@ def build_fix_findings(
     if legacy_design_process:
         design_baseline_block = sealed_block
     else:
+        repair_scope = (
+            "verified suite failures"
+            if verification_repair else "queued findings"
+        )
         design_baseline_block = (
             "CURRENT REVIEWED DESIGN BASELINE\n"
             "- The current unit's artifact named by TASK is editable for its\n"
-            "  queued findings. Other milestone skeleton and slice-note files\n"
+            "  %s. Other milestone skeleton and slice-note files\n"
             "  are read-only unless an accepted amendment lists them below.\n"
             "  A `prevention` edit follows the same boundary.\n"
+            % repair_scope
             + _editable_design_block(editable_design_paths)
             + "- If a confirmed finding requires an in-goal change to another\n"
             "  design document, return `need_rethink`; do not code around it,\n"
@@ -2088,50 +2157,99 @@ def build_fix_findings(
             "  table exactly — the orchestrator builds the milestone's\n"
             "  units from that field, never by parsing the document.\n\n"
         )
-    return (
-        _header(contracts.KIND_FIX_FINDINGS, family, workspace)
-        + "\nTASK: triage and fix the queued findings on %s.\n" % unit_desc
-        + "GOAL: %s\n\n" % goal
-        + design_baseline_block
-        + correction_block
-        + (
-            (_fix_gap_block() if gap_enabled else "")
-            if legacy_design_process else _design_rethink_block(fixer=True)
+    rethink_block = (
+        (_fix_gap_block() if gap_enabled else "")
+        if legacy_design_process else _design_rethink_block(fixer=True)
+    )
+    if verification_repair:
+        task_line = (
+            "\nTASK: make the configured full verification suite green on %s.\n"
+            % unit_desc
         )
-        + slice_table_block
-        + killed_block
-        + phantom_block
-        + _amendments_block(amendments)
-        + _project_context_block(project_context)
-        + _fixer_adversarial_block()
-        + "QUEUED FINDINGS (claims, not facts — verify each against the\n"
-        "real code/doc before deciding). These are the exact stored objects;\n"
-        "if you request `need_rethink`, copy exactly one complete object into\n"
-        "`finding` without shortening, normalizing, or dropping fields:\n"
-        + findings_text
-        + "\n\n"
-        + verification_block
-        + "FIX DECISION TABLE (exactly once per queued finding)\n"
-        "- valid -> `fixed`; apply the fix now.\n"
-        "- invalid -> `rejected` after consultation. If ambiguity caused the\n"
-        "  false finding, add the smallest clarifying `prevention` edit.\n"
-        "- settled duplicate without new evidence -> `rejected_adjudicated`\n"
-        "  with adjudication_ref; no consultation. CONTESTS means reassess\n"
-        "  the new evidence and consult again if rejecting.\n"
-        "- confirmed and impossible -> per-finding `blocked`.\n\n"
-        + _fix_quality_block(unit_kind)
-        + _debt_block(debt)
-        + _registry_block(registry)
-        + "\n"
-        + _access_block(edit_allowed=True)
-        + "\n"
-        + _consultation_block(consultation_family, consultation_cmd)
-        + "\n"
-        + (
+        work_block = (
+            "FULL-SUITE REPAIR\n"
+            "- The suite is not green. Run the configured full command(s)\n"
+            "  yourself in the current workspace; no stored failure excerpt\n"
+            "  is authoritative or supplied. Investigate every failure, apply\n"
+            "  only justified repairs, and rerun the full suite.\n"
+            "- Return `status: \"ok\"` only after the complete suite passes on\n"
+            "  the final workspace bytes. Return `blocked` if you cannot leave\n"
+            "  it green.\n"
+            "CONFIGURED FULL-SUITE COMMANDS:\n%s\n\n"
+            "SOURCE SIGNAL (copy this complete object only if returning\n"
+            " `need_rethink`):\n%s\n\n"
+            % (
+                json.dumps(
+                    list(verification_commands or []),
+                    ensure_ascii=False,
+                    indent=2,
+                ),
+                json.dumps(
+                    source_signal,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    indent=2,
+                ),
+            )
+        )
+        decision_block = ""
+        quality_block = _suite_fix_quality_block(unit_kind)
+        consultation_block = ""
+        output_contract = contracts.suite_fix_contract(
+            gap_enabled=gap_enabled
+        )
+    else:
+        task_line = "\nTASK: triage and fix the queued findings on %s.\n" % unit_desc
+        work_block = (
+            _fixer_adversarial_block()
+            + "QUEUED FINDINGS (claims, not facts — verify each against the\n"
+            "real code/doc before deciding). These are the exact stored objects;\n"
+            "if you request `need_rethink`, copy exactly one complete object into\n"
+            "`finding` without shortening, normalizing, or dropping fields:\n"
+            + findings_text
+            + "\n\n"
+        )
+        decision_block = (
+            "FIX DECISION TABLE (exactly once per queued finding)\n"
+            "- valid -> `fixed`; apply the fix now.\n"
+            "- invalid -> `rejected` after consultation. If ambiguity caused the\n"
+            "  false finding, add the smallest clarifying `prevention` edit.\n"
+            "- settled duplicate without new evidence -> `rejected_adjudicated`\n"
+            "  with adjudication_ref; no consultation. CONTESTS means reassess\n"
+            "  the new evidence and consult again if rejecting.\n"
+            "- confirmed and impossible -> per-finding `blocked`.\n\n"
+        )
+        quality_block = _fix_quality_block(unit_kind)
+        consultation_block = (
+            _consultation_block(consultation_family, consultation_cmd) + "\n"
+        )
+        output_contract = (
             contracts.prompt_contract(
                 contracts.KIND_FIX_FINDINGS, gap_enabled=gap_enabled
             )
             if legacy_design_process else
             _modern_contract(contracts.KIND_FIX_FINDINGS)
         )
+    return (
+        _header(contracts.KIND_FIX_FINDINGS, family, workspace)
+        + task_line
+        + "GOAL: %s\n\n" % goal
+        + design_baseline_block
+        + correction_block
+        + rethink_block
+        + slice_table_block
+        + killed_block
+        + ("" if verification_repair else phantom_block)
+        + _amendments_block(amendments)
+        + _project_context_block(project_context)
+        + work_block
+        + decision_block
+        + quality_block
+        + _debt_block(debt)
+        + _registry_block(registry)
+        + "\n"
+        + _access_block(edit_allowed=True)
+        + "\n"
+        + consultation_block
+        + output_contract
     )

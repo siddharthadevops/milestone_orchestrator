@@ -782,11 +782,11 @@ class TestPhantomFixEmptyDelta(DriverTestCase):
 
 
 # ---------------------------------------------------------------------------
-# (4) P2: unique synthetic verification ids across final-boundary re-entry
+# (4) Verification repair credit is invalidated by later byte changes
 
 
 class TestVerifyEpisodeIdsUniqueAcrossReentry(DriverTestCase):
-    def test_reentered_final_episodes_get_distinct_registry_ids(self):
+    def test_reentered_final_episodes_get_distinct_source_ids(self):
         with tempfile.TemporaryDirectory(prefix="orch-adv-") as ws:
 
             def rm_marker(workspace):
@@ -794,12 +794,10 @@ class TestVerifyEpisodeIdsUniqueAcrossReentry(DriverTestCase):
                 if os.path.exists(p):
                     os.unlink(p)
 
-            def reject_v1(resolution, **extra):
+            def repair_suite(**extra):
                 return step(
                     "fix_findings",
-                    fix_ok([triaged("V1", "rejected", "suite flaky",
-                                    severity="P1",
-                                    consultation={"resolution": resolution})]),
+                    fix_ok([], files_changed=["ok_marker"]),
                     side_effect=write_file("ok_marker", "1"),
                     **extra
                 )
@@ -812,10 +810,10 @@ class TestVerifyEpisodeIdsUniqueAcrossReentry(DriverTestCase):
                 draft_step(),
                 step("review_round", report("review_round"), family="codex"),
                 step("review_round", report("review_round"), family="claude"),
-                # Initial final verification fails (no marker yet). The
-                # rejected finding writes the marker, so its real delta is
-                # reviewed and the whole artifact starts a fresh cycle.
-                reject_v1("flaky initial final"),
+                # Initial final verification fails (no marker yet). The suite
+                # fixer writes it, certifies green, and its real delta is
+                # reviewed before the certification can be reused.
+                repair_suite(),
                 step("delta_review", report("delta_review")),
                 step("review_round", report("review_round"), family="codex"),
                 step("review_round",
@@ -834,7 +832,7 @@ class TestVerifyEpisodeIdsUniqueAcrossReentry(DriverTestCase):
                 step("delta_review", report("delta_review")),
                 step("review_round", report("review_round"), family="codex"),
                 step("review_round", report("review_round"), family="claude"),
-                reject_v1("flaky after readme fix"),
+                repair_suite(),
                 step("delta_review", report("delta_review")),
                 step("review_round", report("review_round"), family="codex"),
                 step("review_round",
@@ -852,9 +850,9 @@ class TestVerifyEpisodeIdsUniqueAcrossReentry(DriverTestCase):
                 step("review_round", report("review_round"), family="codex"),
                 step("review_round", report("review_round"), family="claude"),
                 # A second accepted review fix causes another re-entry into
-                # the same final stage. Its never-reset sequence must mint a
-                # third id even though the first two findings were rejected.
-                reject_v1("flaky after changelog fix"),
+                # the same final stage and invalidates the preceding exact-
+                # byte suite certification too.
+                repair_suite(),
                 step("delta_review", report("delta_review")),
                 step("review_round", report("review_round"), family="codex"),
                 step("review_round", report("review_round"), family="claude"),
@@ -865,25 +863,25 @@ class TestVerifyEpisodeIdsUniqueAcrossReentry(DriverTestCase):
             )
             state = st.load(path)
             self.assertIsNone(state["failure"])
-            entries = st.adjudicated_rejections(state)
-            ids = [e["id"] for e in entries]
-            # Three distinct entries — no collision after two real
-            # re-entries into the same stage despite its counter resets.
-            self.assertEqual(len(ids), len(set(ids)), ids)
+            fixes = [
+                r for r in state["units"][0]["rounds"]
+                if r["kind"] == "fix_findings"
+                and str(r.get("source_round_id", "")).startswith(
+                    "skeleton-verify-pre_seal-"
+                )
+            ]
             self.assertEqual(
-                set(ids),
-                {
-                    "skeleton-verify-pre_seal-1/V1",
-                    "skeleton-verify-pre_seal-2/V1",
-                    "skeleton-verify-pre_seal-3/V1",
-                },
+                [r["source_round_id"] for r in fixes],
+                [
+                    "skeleton-verify-pre_seal-1",
+                    "skeleton-verify-pre_seal-2",
+                    "skeleton-verify-pre_seal-3",
+                ],
             )
-            # Each keeps its own rationale addressable by id.
-            by_id = {e["id"]: e["rationale"] for e in entries}
-            self.assertEqual(by_id["skeleton-verify-pre_seal-2/V1"],
-                             "flaky after readme fix")
-            self.assertEqual(by_id["skeleton-verify-pre_seal-3/V1"],
-                             "flaky after changelog fix")
+            self.assertFalse(any(
+                entry["id"].endswith("/V1")
+                for entry in st.adjudicated_rejections(state)
+            ))
 
 
 # ---------------------------------------------------------------------------

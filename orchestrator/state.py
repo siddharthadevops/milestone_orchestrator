@@ -187,12 +187,11 @@ def _new_unit(kind, slice_id):
         "review_evidence_fingerprint": None,
         "seals": [],                # append-only
         # Historical per-stage shape retained for compatible state. Current
-        # full-suite repair uses pre_seal; pre_review is a no-suite waypoint.
+        # full-suite repair resets pre_seal when its fixer certifies green;
+        # pre_review is a no-suite waypoint.
         "verify_fix_attempts": {"pre_review": 0, "pre_seal": 0},
-        # Never-reset per-stage sequence for synthetic verification fix
-        # episodes: verify_fix_attempts resets on a pass, so it cannot
-        # number the episode ids (ids must stay unique when a stage is
-        # re-entered after accepted candidate changes).
+        # Never-reset sequence for durable suite-repair source ids. The
+        # attempt counter resets on success, so it cannot number re-entry.
         "verify_episode_seq": {"pre_review": 0, "pre_seal": 0},
         "closed_record": None,      # slice_impl closure bookkeeping
         "gate_commit": None,        # short sha of this unit's seal gate commit
@@ -893,12 +892,8 @@ def resume_run(state):
             target = U_PRE_SEAL_VERIFY
         unit["status"] = target
         unit["failed_from"] = None
-        # Grant a FRESH fix/verify budget: a run that failed by exhausting
-        # max_fix_loops (or max_verify_fix_attempts) would otherwise re-fail
-        # instantly on resume, since these counters carry across the failure
-        # boundary. Resetting them makes resume a genuine "try again" — the
-        # convergence cap is a soft ceiling the operator (or the guard's
-        # emergency resume) can lift, not a dead end.
+        # Grant fresh convergence state: a run that exhausted max_fix_loops
+        # or an unstable baseline budget must not re-fail instantly on resume.
         unit["fix_loop_rounds"] = 0
         unit["verify_fix_attempts"] = {"pre_review": 0, "pre_seal": 0}
         unit.pop("baseline_unstable_runs", None)

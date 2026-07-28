@@ -435,9 +435,7 @@ def impl_script():
         # The first full suite since implementation now runs at the final
         # boundary and exposes calculator.py without div_fixed.
         step("fix_findings",
-             fix_ok([triaged("V1", "fixed",
-                             "the verification suite failed", severity="P1")],
-                    files_changed=["calculator.py", "div_fixed"]),
+             fix_ok([], files_changed=["calculator.py", "div_fixed"]),
              family="codex",
              side_effect=multi(
                  write_file(
@@ -580,8 +578,8 @@ class TestHappyLifecycle(DriverTestCase):
             self.assertEqual(fixes["slice_impl-01-codex-r8"]["source_round_id"],
                              "slice_impl-01-verify-pre_seal-1")
 
-            # Reviewer findings carry no disposition; fixer rounds carry
-            # exactly the queued ids.
+            # Reviewer findings carry no disposition; ordinary fixer rounds
+            # carry queued ids. The suite fixer reports no synthetic finding.
             for r in skeleton["rounds"] + impl["rounds"]:
                 for f in r["result"].get("findings", []):
                     if r["kind"] == "fix_findings":
@@ -591,7 +589,7 @@ class TestHappyLifecycle(DriverTestCase):
             self.assertEqual(
                  [f["id"] for f in
                  fixes["slice_impl-01-codex-r8"]["result"]["findings"]],
-                ["V1"],
+                [],
             )
 
             # Seal records complete on every unit.
@@ -656,7 +654,7 @@ class TestHappyLifecycle(DriverTestCase):
             )
             self.assertEqual(
                 [e["ok"] for e in verifs if e["unit"] == "slice_impl-01"],
-                [True, False, True],
+                [True, False, True, True],
             )
             impl_verifs = [
                 e for e in verifs if e["unit"] == "slice_impl-01"
@@ -664,8 +662,11 @@ class TestHappyLifecycle(DriverTestCase):
             self.assertEqual(impl_verifs[0]["boundary"], "baseline")
             self.assertTrue(impl_verifs[0]["reused"])
             self.assertEqual(
-                [e["boundary"] for e in impl_verifs[1:]], ["final", "final"]
+                [e["boundary"] for e in impl_verifs[1:]],
+                ["final", "final", "final"],
             )
+            self.assertTrue(impl_verifs[-1]["reused"])
+            self.assertTrue(impl_verifs[-2]["fixer_certified"])
             self.assertEqual(impl["verify_fix_attempts"],
                              {"pre_review": 0, "pre_seal": 0})
 
@@ -784,10 +785,11 @@ class TestSuiteDiscoveryProtocol(DriverTestCase):
             self.assertTrue(impl_ver[0]["vacuous"])
             self.assertEqual(
                 [e["commands"] for e in impl_ver[1:]],
-                [[VERIFY_CMD], [VERIFY_CMD]],
+                [[VERIFY_CMD], [VERIFY_CMD], [VERIFY_CMD]],
             )
             self.assertEqual(
-                [e["boundary"] for e in impl_ver[1:]], ["final", "final"]
+                [e["boundary"] for e in impl_ver[1:]],
+                ["final", "final", "final"],
             )
 
             # Reviews receive one generic verification boundary. The exact

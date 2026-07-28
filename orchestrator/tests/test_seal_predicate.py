@@ -300,13 +300,7 @@ class SealPredicateDriverTest(unittest.TestCase):
         ) + [
             step(
                 "fix_findings",
-                fix_ok([
-                    triaged(
-                        "V1", "rejected", "suite failure was transient",
-                        severity="P1",
-                        consultation={"resolution": "transient failure"},
-                    )
-                ]),
+                fix_ok([]),
                 family="codex",
             ),
             step("review_round", report("review_round"), family="codex"),

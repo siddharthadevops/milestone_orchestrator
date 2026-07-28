@@ -766,7 +766,8 @@ def validate_worker_output(obj, kind, require_plain=False,
                            require_drift_damage=False,
                            allow_design_correction=False,
                            require_design_correction_verdict=False,
-                           require_failure_gap=False):
+                           require_failure_gap=False,
+                           verification_repair=False):
     """Validate the full worker JSON output for a call of `kind`.
 
     require_plain: reform runs hard-require the plain/example lay mirror
@@ -779,6 +780,10 @@ def validate_worker_output(obj, kind, require_plain=False,
     """
     if kind not in KINDS:
         raise ContractError("unknown kind %r" % (kind,))
+    if verification_repair and kind != KIND_FIX_FINDINGS:
+        raise ContractError(
+            "verification_repair is only valid for fix_findings"
+        )
     ctx = "worker[%s]" % kind
     if not isinstance(obj, dict):
         raise ContractError("%s: output must be a JSON object" % ctx)
@@ -820,6 +825,10 @@ def validate_worker_output(obj, kind, require_plain=False,
             )
         return obj
     if status == "retry":
+        if verification_repair:
+            raise ContractError(
+                "%s: verification repair does not support retry" % ctx
+            )
         if kind != KIND_FIX_FINDINGS:
             raise ContractError(
                 "%s: retry status is only allowed for fix_findings" % ctx
@@ -923,33 +932,46 @@ def validate_worker_output(obj, kind, require_plain=False,
             )
     elif kind == KIND_FIX_FINDINGS:
         findings = _require(obj, "findings", list, ctx)
+        if verification_repair and findings:
+            raise ContractError(
+                "%s: verification repair requires an empty findings list; "
+                "ok certifies the live full suite" % ctx
+            )
         for i, f in enumerate(findings):
             validate_fix_finding(f, "%s.findings[%d]" % (ctx, i))
         _assert_unique_finding_ids(findings, ctx)
         _optional(obj, "files_changed", list, ctx, default=[])
-        suite_command = obj.get("suite_command")
-        suite_finding_id = obj.get("suite_command_finding_id")
-        if suite_command is not None:
-            validate_suite_command(suite_command, ctx)
-            suite_finding_id = _require(
-                obj, "suite_command_finding_id", str, ctx
-            )
-            matches = [
-                finding for finding in findings
-                if finding.get("id") == suite_finding_id
-            ]
-            if (
-                len(matches) != 1
-                or matches[0].get("disposition") != "fixed"
-            ):
-                raise ContractError(
-                    "%s: suite_command_finding_id must name exactly one "
-                    "finding disposed 'fixed'" % ctx
+        if verification_repair:
+            for claim in ("suite_command", "suite_command_finding_id"):
+                if claim in obj:
+                    raise ContractError(
+                        "%s: verification repair must not include %r"
+                        % (ctx, claim)
+                    )
+        else:
+            suite_command = obj.get("suite_command")
+            suite_finding_id = obj.get("suite_command_finding_id")
+            if suite_command is not None:
+                validate_suite_command(suite_command, ctx)
+                suite_finding_id = _require(
+                    obj, "suite_command_finding_id", str, ctx
                 )
-        elif suite_finding_id is not None:
-            raise ContractError(
-                "%s: suite_command_finding_id requires suite_command" % ctx
-            )
+                matches = [
+                    finding for finding in findings
+                    if finding.get("id") == suite_finding_id
+                ]
+                if (
+                    len(matches) != 1
+                    or matches[0].get("disposition") != "fixed"
+                ):
+                    raise ContractError(
+                        "%s: suite_command_finding_id must name exactly one "
+                        "finding disposed 'fixed'" % ctx
+                    )
+            elif suite_finding_id is not None:
+                raise ContractError(
+                    "%s: suite_command_finding_id requires suite_command" % ctx
+                )
         # Optional updated slice plan: only meaningful when the fix touched
         # the milestone skeleton's slice table (before the skeleton seals).
         slices = _optional(obj, "slices", list, ctx)
@@ -1335,6 +1357,32 @@ Focused discussion before deciding one queued finding:
 findings with this status.
 """
 
+
+SUITE_FIX_CONTRACT_TEXT = """OUTPUT CONTRACT (mandatory)
+Return exactly one JSON object; no prose or markdown fences.
+
+Completed suite repair:
+{"status":"ok","kind":"fix_findings","findings":[],
+ "files_changed":["..."],"notes":"<optional short note>"}
+`status: "ok"` certifies that you ran the configured full suite on the final
+workspace bytes and it passed. `findings` must be empty: this task repairs the
+live suite result, not a stored review finding.
+When the prompt explicitly requires slice-plan synchronization or offers a
+legacy design correction, include its normal `slices` or `design_correction`
+field as well; those fields receive their ordinary validation.
+
+Impossible worker task:
+{"status":"blocked","kind":"fix_findings","blocked_reason":"..."}
+
+Focused discussion before completing a required in-goal design change:
+{"status":"need_rethink","kind":"fix_findings","question":"...",
+ "finding":{<copy the complete SOURCE SIGNAL from the prompt>},
+ "target_path":"<normalized workspace-relative path>",
+ "max_rounds":<positive integer>,"result_mode":"proposal|design_amendment"}
+`design_amendment` is limited to two rounds. Return no work claims with this
+status.
+"""
+
 LEGACY_FAILURE_GAP_CONTRACT = """
 Legacy fallback for a focused discussion:
 When returning `need_rethink`, also include exactly one `failure_gap` object
@@ -1366,3 +1414,17 @@ def prompt_contract(kind, gap_enabled=False):
         else ""
     )
     return CONTRACT_TEXT + legacy_rethink
+
+
+def suite_fix_contract(gap_enabled=False):
+    """Output contract for a fixer that owns full-suite convergence."""
+    gap = (
+        "\nDesign contradiction:\n"
+        "When GAP EXIT applies, return exactly "
+        "{\"status\":\"gap\",\"kind\":\"fix_findings\","
+        "\"gaps\":[<one or more gap entries>]}; no findings or work "
+        "claims.\n"
+        if gap_enabled else ""
+    )
+    legacy_rethink = LEGACY_FAILURE_GAP_CONTRACT if gap_enabled else ""
+    return SUITE_FIX_CONTRACT_TEXT + gap + legacy_rethink

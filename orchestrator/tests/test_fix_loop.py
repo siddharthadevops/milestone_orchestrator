@@ -8,9 +8,8 @@ Covers here:
       -> green delta -> amend -> reviews restart from Codex; family advance
       only on clean rounds;
   (c) fix-loop cap -> run failed with the 'fix episode' explanation;
-  (d) final-verification failure -> synthetic V1 queued -> fixer -> delta
-      green -> amend -> fresh reviews -> final green; and the final-stage
-      episode cap path;
+  (d) final-verification failure -> full-suite fixer -> delta green -> amend
+      -> fresh reviews -> exact fixer result reused without rerunning tests;
   (f) review-round tampering: output discarded, workspace restored,
       invalidated round recorded, retried; the cap includes it;
   (g) delta-review tampering -> run fails 'entangled';
@@ -343,7 +342,7 @@ class TestDeltaFullReviewCheckpoint(DriverTestCase):
                 step(
                     "fix_findings",
                     fix_ok(
-                        [triaged("V1", "fixed", "verification failed")],
+                        [],
                         files_changed=["marker.txt"],
                     ),
                     family="codex",
@@ -503,7 +502,7 @@ class TestFixLoopCap(DriverTestCase):
 
 
 class TestVerificationFixEpisode(DriverTestCase):
-    def test_synthetic_v1_fix_delta_amend_reverify_green(self):
+    def test_suite_fixer_delta_amend_reviews_then_reuses_green(self):
         with tempfile.TemporaryDirectory(prefix="orch-mock-") as ws:
             path = init_state(
                 ws, make_config(verification=["test -f marker.txt"]))
@@ -512,10 +511,7 @@ class TestVerificationFixEpisode(DriverTestCase):
                 step("review_round", report("review_round"), family="codex"),
                 step("review_round", report("review_round"), family="claude"),
                 step("fix_findings",
-                     fix_ok([triaged("V1", "fixed",
-                                     "the verification suite failed",
-                                     severity="P1")],
-                            files_changed=["marker.txt"]),
+                     fix_ok([], files_changed=["marker.txt"]),
                      family="codex",
                      side_effect=write_file("marker.txt", "repaired\n")),
                 step("delta_review", report("delta_review"), family="codex"),
@@ -534,7 +530,7 @@ class TestVerificationFixEpisode(DriverTestCase):
             self.assertEqual(len(unit["fix_queue"]), 1)
             v1 = unit["fix_queue"][0]
             self.assertEqual((v1["id"], v1["severity"]), ("V1", "P1"))
-            self.assertIn("verification suite failed", v1["summary"])
+            self.assertIn("verification suite is not green", v1["summary"])
             self.assertEqual(unit["fix_source"]["type"], "verification")
             self.assertIsNone(unit["fix_source"]["family"])
             self.assertEqual(unit["fix_source"]["source_round_id"],
@@ -546,11 +542,16 @@ class TestVerificationFixEpisode(DriverTestCase):
                             lambda s: s["units"][0]["status"] == st.U_SEALED)
             self.assertEqual(mock.script, [])
 
-            # The fixer prompt carried the failing suite output.
+            # The fixer diagnoses the live suite; no parsed/truncated failure
+            # output is supplied.
             fix_prompt = [c[2] for c in mock.calls
                           if c[1] == "fix_findings"][0]
-            self.assertIn("VERIFICATION OUTPUT", fix_prompt)
+            self.assertIn("FULL-SUITE REPAIR", fix_prompt)
             self.assertIn("test -f marker.txt", fix_prompt)
+            self.assertNotIn("VERIFICATION OUTPUT", fix_prompt)
+            self.assertIn("affected party", fix_prompt)
+            self.assertIn("permitted", fix_prompt)
+            self.assertIn("altitude", fix_prompt)
 
             state = st.load(path)
             unit = state["units"][0]
@@ -562,8 +563,9 @@ class TestVerificationFixEpisode(DriverTestCase):
                 ["review_round", "review_round", "fix_findings",
                  "delta_review", "review_round", "review_round"],
             )
-            # Order: final FAIL -> fix -> delta -> amend -> fresh reviews ->
-            # final OK. No full suite runs between the two review cycles.
+            # Order: final FAIL -> fixer certifies green -> delta -> amend ->
+            # fresh reviews -> exact certification reused. The driver never
+            # executes the suite a second time.
             events = state["events"]
 
             def index_of(pred):
@@ -579,72 +581,86 @@ class TestVerificationFixEpisode(DriverTestCase):
             i_delta = index_of(lambda e: e["type"] == "round_recorded"
                                and e["kind"] == "delta_review")
             i_amend = index_of(lambda e: e["type"] == "amended")
+            i_cert = index_of(lambda e: e["type"] == "verification"
+                              and e.get("fixer_certified")
+                              and not e.get("reused"))
             i_ok = index_of(lambda e: e["type"] == "verification"
-                            and e["ok"]
-                            and e.get("boundary") == "final"
-                            and events.index(e) > i_fail)
+                            and e.get("reused")
+                            and e.get("fixer_certified"))
             i_review_after = index_of(
                 lambda e: e["type"] == "round_recorded"
                 and e["kind"] == "review_round"
                 and events.index(e) > i_amend
             )
             self.assertLess(i_fail, i_fix)
+            self.assertLess(i_fix, i_cert)
             self.assertLess(i_fix, i_delta)
             self.assertLess(i_delta, i_amend)
             self.assertLess(i_amend, i_review_after)
             self.assertLess(i_review_after, i_ok)
 
-    def test_final_verification_episode_cap(self):
+    def test_no_delta_suite_success_continues_without_rerun(self):
         with tempfile.TemporaryDirectory(prefix="orch-mock-") as ws:
             path = init_state(
                 ws,
-                make_config(verification=["false"],
-                            max_verify_fix_attempts=1),
+                make_config(verification=["false"]),
             )
             mock = runners.MockRunner([
                 draft_step(),
                 step("review_round", report("review_round"), family="codex"),
                 step("review_round", report("review_round"), family="claude"),
-                # The fixer makes a real but INEFFECTIVE edit (the suite is
-                # `false`, it can never pass): the episode goes green and
-                # fresh whole-artifact reviews run, then the final boundary
-                # fails again — over the cap.
-                # (A fixer claiming 'fixed' while editing NOTHING is now a
-                # structural violation of its own; see
-                # test_adversarial_fixes.TestPhantomFixEmptyDelta.)
-                step("fix_findings",
-                     fix_ok([triaged("V1", "fixed",
-                                     "the verification suite failed",
-                                     severity="P1")],
-                            files_changed=["attempted_fix.txt"]),
-                     family="codex",
-                     side_effect=write_file("attempted_fix.txt",
-                                            "did not help\n")),
-                step("delta_review", report("delta_review"), family="codex"),
+                step("fix_findings", fix_ok([]), family="codex"),
+            ])
+            driver = drv.Driver(path, runner=mock)
+            self.step_until(
+                driver,
+                lambda state: state["units"][0]["status"] == st.U_SEALED,
+            )
+            self.assertEqual(mock.script, [])
+            state = st.load(path)
+            unit = state["units"][0]
+            self.assertEqual(unit["status"], st.U_SEALED)
+            self.assertEqual(unit["verify_fix_attempts"]["pre_seal"], 0)
+            self.assertEqual([r["kind"] for r in unit["rounds"]],
+                             ["review_round", "review_round", "fix_findings"])
+            actual = [
+                e for e in state["events"]
+                if e["type"] == "verification"
+                and not e.get("fixer_certified")
+                and not e.get("reused")
+            ]
+            self.assertEqual(len(actual), 1)
+            self.assertFalse(actual[0]["ok"])
+
+    def test_suite_fixer_blocked_stops_without_retrying_verification(self):
+        with tempfile.TemporaryDirectory(prefix="orch-mock-") as ws:
+            path = init_state(ws, make_config(verification=["false"]))
+            mock = runners.MockRunner([
+                draft_step(),
                 step("review_round", report("review_round"), family="codex"),
                 step("review_round", report("review_round"), family="claude"),
+                step(
+                    "fix_findings",
+                    {
+                        "status": "blocked",
+                        "kind": "fix_findings",
+                        "blocked_reason": "the configured suite cannot run",
+                    },
+                    family="codex",
+                ),
             ])
             driver = drv.Driver(path, runner=mock)
             _actions, final = self.drive(driver)
             self.assertEqual(final.type, drv.A_FAILED)
             self.assertEqual(mock.script, [])
-            self.assert_failed(
-                path, driver,
-                ["final verification still failing after 1 fix attempts"],
-                unit_key="skeleton",
-            )
+            self.assertIn("configured suite cannot run", final.params["reason"])
             state = st.load(path)
-            unit = state["units"][0]
-            self.assertEqual(unit["verify_fix_attempts"]["pre_review"], 0)
-            self.assertEqual(unit["verify_fix_attempts"]["pre_seal"], 2)
-            self.assertEqual([r["kind"] for r in unit["rounds"]],
-                             ["review_round", "review_round",
-                              "fix_findings", "delta_review",
-                              "review_round", "review_round"])
-            fails = [e for e in state["events"]
-                     if e["type"] == "verification" and not e["ok"]]
-            self.assertEqual(len(fails), 2)
-            self.assertTrue(all(e.get("boundary") == "final" for e in fails))
+            actual = [
+                e for e in state["events"]
+                if e["type"] == "verification"
+            ]
+            self.assertEqual(len(actual), 1)
+            self.assertFalse(actual[0]["ok"])
 
 
 # ---------------------------------------------------------------------------
