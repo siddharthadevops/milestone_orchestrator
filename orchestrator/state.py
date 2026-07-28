@@ -1065,19 +1065,14 @@ def reopen_for_repair(state, unit, gap, reason, reported_by=None):
 
 
 def reset_for_redraft(state, unit, reason):
-    """Return a non-pending unit to a fresh re-draft, mirroring the state a
-    BUILDER-gap reporter is already left in (pending, draft=None). This is the
-    FIXER-gap counterpart: when a fixer gaps (a queued finding was unfixable in
-    scope because the sealed set contradicted itself), its unit was mid-episode
-    (fixing/sealing), not pending. After the machine reopens the design as a
-    re-documentation wave, that unit must redo its slice AGAINST the remodelled
-    design — exactly as a builder-gap reporter re-drafts. Grants fresh
-    review budgets (same amnesty as reopen_for_repair/resume) and clears
-    the abandoned fix episode. `has_gap_remodel`/`gap_repairs` are set by the
-    caller (_reopen_and_repair) and deliberately preserved so the re-draft
-    reads the remodelled skeleton. History (rounds/seals) is append-only and
-    stays; the amnesty markers reset the caps. Status is set directly (a
-    backward reset, like resume_run, is outside the forward transition table)."""
+    """Explicitly abandon a candidate and return its unit to a fresh draft.
+
+    Production fixer gaps preserve and later replay their existing candidate;
+    this helper remains for callers that have independently established that a
+    draft must be discarded.  It grants fresh review budgets, clears the
+    abandoned fix episode, and preserves append-only review/seal history.
+    Status is set directly because this is an intentional backward reset,
+    outside the normal forward transition table."""
     prior = unit["status"]
     unit["draft"] = None
     unit["artifact"] = None

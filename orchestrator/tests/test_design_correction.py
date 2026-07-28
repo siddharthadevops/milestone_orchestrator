@@ -339,6 +339,9 @@ class DesignCorrectionTest(unittest.TestCase):
         )
         units = {st.unit_key(unit): unit for unit in state["units"]}
         self.assertEqual(units["slice_impl-01"]["status"], st.U_PENDING)
+        self.assertIsNotNone(
+            units["slice_impl-01"].get("preserved_candidate")
+        )
         self.assertFalse(os.path.exists(os.path.join(self.ws, "impl.py")))
         with open(os.path.join(self.ws, self.NOTE), encoding="utf-8") as fh:
             self.assertIn("clamp the requested size to 30", fh.read())
@@ -366,9 +369,9 @@ class DesignCorrectionTest(unittest.TestCase):
         units = {st.unit_key(unit): unit for unit in state["units"]}
         self.assertEqual(state["failure"]["type"], "goal_gap")
         self.assertEqual(
-            units["slice_impl-01"].get("failed_from"), st.U_PENDING
+            units["slice_impl-01"].get("failed_from"), st.U_FIXING
         )
-        self.assertFalse(os.path.exists(os.path.join(self.ws, "impl.py")))
+        self.assertTrue(os.path.exists(os.path.join(self.ws, "impl.py")))
         with open(os.path.join(self.ws, self.NOTE), encoding="utf-8") as fh:
             self.assertIn("clamp the requested size to 30", fh.read())
 

@@ -730,24 +730,49 @@ def _project_context_block(project_context):
 
 
 def _amendments_block(amendments):
-    """Operator-authored, run-scoped constraints added while the milestone
-    runs (.orchestrator/amendments.json). They refine the GOAL without
-    rewriting sealed artifacts and bind every subsequent worker call.
-    Operator text is trusted and rendered verbatim (length-clipped only
-    to protect the context window)."""
+    """Render operator and accepted Brainstorming amendments by authority."""
     if not amendments:
         return ""
-    lines = [
-        "OPERATOR AMENDMENTS (binding; they refine the GOAL)",
-        "For authors and fixers these bind like the TASK itself. For",
-        "report-only reviewers, a violation of any amendment in the",
-        "reviewed artifact is a finding.",
+    operator = [
+        a for a in amendments
+        if a.get("authority") != "brainstorming_design"
     ]
-    for a in amendments:
-        text = str(a.get("text") or "").strip()
-        if len(text) > AMENDMENT_TEXT_CLIP:
-            text = text[: AMENDMENT_TEXT_CLIP - 3] + "..."
-        lines.append("[%s] %s" % (_oneline(a.get("id"), ID_CLIP) or "?", text))
+    design = [
+        a for a in amendments
+        if a.get("authority") == "brainstorming_design"
+    ]
+    lines = []
+
+    def _append(entries):
+        for a in entries:
+            text = str(a.get("text") or "").strip()
+            if len(text) > AMENDMENT_TEXT_CLIP:
+                text = text[: AMENDMENT_TEXT_CLIP - 3] + "..."
+            lines.append(
+                "[%s] %s" % (_oneline(a.get("id"), ID_CLIP) or "?", text)
+            )
+
+    if operator:
+        lines += [
+            "OPERATOR AMENDMENTS (binding; they refine the GOAL)",
+            "For authors and fixers these bind like the TASK itself. For",
+            "report-only reviewers, a violation of any amendment in the",
+            "reviewed artifact is a finding.",
+        ]
+        _append(operator)
+    if design:
+        if lines:
+            lines.append("")
+        lines += [
+            "ACCEPTED BRAINSTORMING DESIGN AMENDMENTS",
+            "These concise decisions clarify sealed design for this run and",
+            "override conflicting skeleton or slice-note wording. They may not",
+            "change the GOAL, an OPERATOR AMENDMENT, or a project safeguard;",
+            "those higher authorities win. Later design amendments win over",
+            "earlier ones only within the same narrow subject. Reviewers treat",
+            "a violation as a finding.",
+        ]
+        _append(design)
     return "\n".join(lines) + "\n\n"
 
 
@@ -1083,18 +1108,25 @@ def _battery_review_block(ids):
 def _rethink_before_gap_block():
     return (
         "BEFORE RETURNING A GAP — FOCUSED RETHINK OPTION\n"
-        "- If exactly one bounded design question remains unresolved and a\n"
-        "  short discussion could settle it with a bounded amendment, without\n"
-        "  a full design-repair cycle,\n"
-        "  return `need_rethink` instead of guessing or forcing a judgment.\n"
+        "- If one bounded design question remains unresolved OR one\n"
+        "  already-established, obvious\n"
+        "  contradiction can be settled by a short discussion and one\n"
+        "  conservative clarification, return `need_rethink` instead of\n"
+        "  paying for a full design-repair cycle. An established\n"
+        "  contradiction is not, by itself, a reason to skip this route.\n"
         "  This is a normal, non-completing handoff; the orchestrator returns\n"
         "  the agreed result to this task.\n"
+        "- For that narrow in-goal contradiction, set result_mode to\n"
+        "  `design_amendment`. Brainstorming then writes a separate concise\n"
+        "  amendment; target_path is only its smallest relevant source/context.\n"
+        "  This fast path permits at most two rounds.\n"
+        "  Use result_mode `proposal` for an unresolved focused question.\n"
         "- Do NOT use it for facts you can establish from the workspace,\n"
         "  missing investigation, an ordinary defect or fix, broad\n"
         "  exploration, personal preference, or to avoid making a supported\n"
-        "  judgment. If a real hole or contradiction is already established\n"
-        "  and repairing it requires the full design-repair cycle, use `gap`\n"
-        "  below.\n"
+        "  judgment. Use `gap` when the repair changes the goal, public API,\n"
+        "  schemas, security, ownership, slice boundaries, or otherwise needs\n"
+        "  broad coordinated redesign.\n"
         "- Ask one decision-shaped question, preserve its concrete evidence\n"
         "  in `finding`, choose the smallest relevant target and a\n"
         "  proportionate round bound, and follow the exact `need_rethink`\n"
@@ -1387,6 +1419,7 @@ def build_rethink_continuation(
     amendments=None,
     project_context=None,
     battery=None,
+    accepted_design_amendment=False,
 ):
     authority = {
         "session_id": handoff["session_id"],
@@ -1403,6 +1436,15 @@ def build_rethink_continuation(
             "equal to the authority object below. Do not substitute a live\n"
             "file or VCS fact for that retained Brainstorming authority.\n\n"
         )
+    authority_posture = (
+        "The retained target has been adopted as a run-scoped design "
+        "amendment and is also rendered above. It is binding below the GOAL, "
+        "operator amendments, and project safeguards; continue the original "
+        "task from that clarification.\n\n"
+        if accepted_design_amendment else
+        "It is a proposal, not approval: ordinary verification, review,\n"
+        "delta review, and sealing still apply.\n\n"
+    )
     return (
         _header(kind, family, workspace)
         + "\n"
@@ -1412,11 +1454,11 @@ def build_rethink_continuation(
         "turn has completed successfully. Continue the SAME original worker\n"
         "task in this provider conversation. The handoff supplies the retained\n"
         "lead-accepted Brainstorming revision and its exact content. Use the\n"
-        "retained_target content below as the proposal; do not substitute bytes\n"
+        "retained_target content below as the decision material; do not\n"
+        "substitute bytes\n"
         "currently present at target_ref.\n"
-        "It is a proposal, not approval: ordinary verification, review,\n"
-        "delta review, and sealing still apply.\n\n"
-        "BRAINSTORMING HANDOFF\n"
+        + authority_posture
+        + "BRAINSTORMING HANDOFF\n"
         + json.dumps(
             {
                 "authority": authority,

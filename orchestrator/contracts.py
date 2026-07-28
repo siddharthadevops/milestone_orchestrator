@@ -84,6 +84,12 @@ RETHINK_CONTINUATION_KINDS = (
     KIND_FIX_FINDINGS,
 )
 RETHINK_KINDS = RETHINK_CONTINUATION_KINDS + REPORT_KINDS
+RETHINK_RESULT_PROPOSAL = "proposal"
+RETHINK_RESULT_DESIGN_AMENDMENT = "design_amendment"
+RETHINK_RESULT_MODES = (
+    RETHINK_RESULT_PROPOSAL,
+    RETHINK_RESULT_DESIGN_AMENDMENT,
+)
 
 # Kinds whose worker gets full edit permissions inside the workspace.
 EDIT_KINDS = (
@@ -664,10 +670,18 @@ def validate_need_rethink(obj, kind, ctx, require_plain=False):
     }
     if kind in RETHINK_CONTINUATION_KINDS:
         required.add("failure_gap")
-    if set(obj) != required:
+    allowed = required | {"result_mode"}
+    if not required.issubset(obj) or not set(obj).issubset(allowed):
         raise ContractError(
-            "%s: need_rethink must contain exactly %s"
+            "%s: need_rethink must contain %s and may additionally contain "
+            "only result_mode"
             % (ctx, sorted(required))
+        )
+    result_mode = obj.get("result_mode", RETHINK_RESULT_PROPOSAL)
+    if result_mode not in RETHINK_RESULT_MODES:
+        raise ContractError(
+            "%s: need_rethink.result_mode %r not in %r"
+            % (ctx, result_mode, RETHINK_RESULT_MODES)
         )
     question = obj["question"]
     if not isinstance(question, str) or not question.strip():
@@ -703,8 +717,29 @@ def validate_need_rethink(obj, kind, ctx, require_plain=False):
         raise ContractError(
             "%s: need_rethink.max_rounds must be a positive integer" % ctx
         )
+    if (
+        result_mode == RETHINK_RESULT_DESIGN_AMENDMENT
+        and obj["max_rounds"] > 2
+    ):
+        raise ContractError(
+            "%s: design_amendment is a fast path limited to 2 rounds" % ctx
+        )
     if kind in RETHINK_CONTINUATION_KINDS:
         validate_gap(obj["failure_gap"], "%s.failure_gap" % ctx)
+    if result_mode == RETHINK_RESULT_DESIGN_AMENDMENT:
+        if kind not in RETHINK_CONTINUATION_KINDS:
+            raise ContractError(
+                "%s: design_amendment is allowed only for a continuable "
+                "builder/fixer" % ctx
+            )
+        if (
+            obj["failure_gap"].get("classification")
+            != CLASSIFY_FITS_REMODEL
+        ):
+            raise ContractError(
+                "%s: design_amendment requires a fits_remodel failure_gap; "
+                "Brainstorming cannot amend the operator goal" % ctx
+            )
     return obj
 
 
@@ -1049,10 +1084,19 @@ EXACTLY:
   "finding": {<the one current finding, preserved as source evidence>}
   "target_path": "<normalized workspace-relative source artifact to isolate>"
   "max_rounds": <any positive integer chosen for this discussion>
+  "result_mode": "proposal" | "design_amendment"
 For draft_slice_note, implement and fix_findings, ALSO return exactly one
 `"failure_gap"` using the normal gap-entry shape; it is the already-declared
 route used only if the discussion itself returns failure. Review kinds MUST
 NOT include failure_gap.
+Use `design_amendment` only when one conservative, bounded clarification of
+sealed design can resolve an in-goal contradiction without changing the goal,
+public API, schemas, security, ownership, or slice boundaries. In that mode
+`target_path` names the smallest source artifact for context; Brainstorming
+constructs a separate concise amendment target. Use `proposal` for an ordinary
+focused question. A design amendment is limited to at most 2 rounds. Review
+kinds may use only `proposal`. The validator accepts
+an omitted result_mode as `proposal` solely for in-flight run compatibility.
 Do not mix need_rethink with notes, ordinary findings/results, work/file claims,
 retry, disposition, verdict, gap arrays, or slice plans. A fixer must put
 exactly one currently queued finding in `finding`; its queued siblings remain

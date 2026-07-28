@@ -50,7 +50,13 @@ def failure_gap():
     }
 
 
-def rethink(kind, finding=None, target="proposals/rethink.md", rounds=17):
+def rethink(
+    kind,
+    finding=None,
+    target="proposals/rethink.md",
+    rounds=17,
+    result_mode="proposal",
+):
     value = {
         "status": "need_rethink",
         "kind": kind,
@@ -58,6 +64,7 @@ def rethink(kind, finding=None, target="proposals/rethink.md", rounds=17):
         "finding": copy.deepcopy(finding or {"id": "BUILD", "summary": "choice"}),
         "target_path": target,
         "max_rounds": rounds,
+        "result_mode": result_mode,
     }
     if kind in contracts.RETHINK_CONTINUATION_KINDS:
         value["failure_gap"] = failure_gap()
@@ -246,6 +253,40 @@ class BrainstormingMilestoneAdapterTest(unittest.TestCase):
             contracts.validate_worker_output(
                 rethink(contracts.KIND_IMPLEMENT, rounds=0),
                 contracts.KIND_IMPLEMENT,
+            )
+        amendment = rethink(
+            contracts.KIND_FIX_FINDINGS,
+            finding=report_finding(),
+            rounds=2,
+            result_mode="design_amendment",
+        )
+        self.assertIs(
+            contracts.validate_worker_output(
+                amendment, contracts.KIND_FIX_FINDINGS
+            ),
+            amendment,
+        )
+        with self.assertRaises(contracts.ContractError):
+            contracts.validate_worker_output(
+                rethink(
+                    contracts.KIND_REVIEW_ROUND,
+                    finding=report_finding(),
+                    result_mode="design_amendment",
+                ),
+                contracts.KIND_REVIEW_ROUND,
+                require_plain=True,
+            )
+        outside_goal = copy.deepcopy(amendment)
+        outside_goal["failure_gap"]["classification"] = "needs_operator"
+        with self.assertRaises(contracts.ContractError):
+            contracts.validate_worker_output(
+                outside_goal, contracts.KIND_FIX_FINDINGS
+            )
+        too_long = copy.deepcopy(amendment)
+        too_long["max_rounds"] = 3
+        with self.assertRaises(contracts.ContractError):
+            contracts.validate_worker_output(
+                too_long, contracts.KIND_FIX_FINDINGS
             )
         self.assertIn(
             "Any materializable workspace artifact may be selected as the source",
@@ -712,6 +753,69 @@ class BrainstormingMilestoneAdapterTest(unittest.TestCase):
         self.assertEqual(captured["context"], adapter.execution_context(state))
         self.assertIs(captured["config"], self.config)
         self.assertEqual(captured["home"], self.home)
+
+    def test_design_amendment_uses_a_fresh_target_and_source_as_context(self):
+        source = os.path.join(self.workspace, "docs", "sealed.md")
+        with open(source, "w", encoding="utf-8") as handle:
+            handle.write("sealed source\n")
+        state = {
+            "name": "run",
+            "workspace": self.workspace,
+            "docs_dir": "docs",
+        }
+        signal = rethink(
+            contracts.KIND_IMPLEMENT,
+            target="docs/sealed.md",
+            rounds=2,
+            result_mode="design_amendment",
+        )
+        captured = {}
+
+        def capture(
+            home,
+            body,
+            caller,
+            context,
+            config,
+            owned_target_path=None,
+        ):
+            captured["body"] = copy.deepcopy(body)
+            captured["target"] = owned_target_path
+            return {"id": "session", "state": {"status": "created"}}
+
+        authority = {
+            "goal": "Build the adapter.",
+            "amendments": [{"id": "A1", "text": "Keep it bounded."}],
+            "project_context": None,
+        }
+        with (
+            mock.patch.object(adapter, "service_home", return_value=self.home),
+            mock.patch.object(
+                lifecycle, "create_resolved_session", side_effect=capture
+            ),
+        ):
+            adapter.create_session(
+                state,
+                self.config,
+                "slice_impl-08",
+                signal,
+                [],
+                authority_context=authority,
+            )
+        self.assertEqual(os.path.basename(captured["target"]), "amendment.md")
+        with open(captured["target"], encoding="utf-8") as handle:
+            self.assertEqual(
+                handle.read(), adapter.DESIGN_AMENDMENT_PLACEHOLDER
+            )
+        payload = captured["body"]["request"]["context"]
+        self.assertIn("docs/sealed.md", payload["references"])
+        self.assertEqual(payload["source_payload"]["finding"], signal["finding"])
+        self.assertEqual(
+            payload["source_payload"]["failure_gap"], signal["failure_gap"]
+        )
+        self.assertEqual(
+            payload["source_payload"]["authority_context"], authority
+        )
 
     def test_project_bound_prompts_keep_owned_target_outside_primary_root(self):
         source = os.path.join(self.workspace, "proposals", "prompted.md")
@@ -1781,6 +1885,109 @@ class MilestoneDriverRethinkTest(unittest.TestCase):
         self.assertEqual(
             st.current_unit(st.load(fixer_path))["status"],
             st.U_DELTA_REVIEW,
+        )
+
+    def test_fixer_amendment_continues_and_closes_without_phantom_bytes(self):
+        workspace = os.path.join(self.tmp.name, "amendment-fixer")
+        os.makedirs(os.path.join(workspace, "proposals"))
+        config = make_config(
+            git={"enabled": True},
+            snapshot_exclude_dirs=[],
+            error_classifier=False,
+            infra_retry_backoff_s=[],
+        )
+        path = self._state_path(
+            status=st.U_FIXING, workspace=workspace, config=config
+        )
+        state = st.load(path)
+        unit = st.current_unit(state)
+        finding = report_finding()
+        unit["fix_queue"] = [copy.deepcopy(finding)]
+        unit["fix_source"] = {
+            "type": "round",
+            "origin_type": "round",
+            "family": "claude",
+            "source_round_id": "round-1",
+            "return_to": st.U_ROUNDS,
+        }
+        st.save(path, state)
+        fixed = {
+            "id": finding["id"],
+            "severity": finding["severity"],
+            "summary": "The accepted amendment settles the choice.",
+            "validity": copy.deepcopy(finding["validity"]),
+            "disposition": "fixed",
+            "consultation": None,
+            "prevention": None,
+            "adjudication_ref": None,
+        }
+        runner = runners.MockRunner(
+            [
+                {
+                    "expect_kind": contracts.KIND_FIX_FINDINGS,
+                    "response": rethink(
+                        contracts.KIND_FIX_FINDINGS,
+                        finding=finding,
+                        rounds=2,
+                        result_mode="design_amendment",
+                    ),
+                },
+                {
+                    "expect_kind": contracts.KIND_FIX_FINDINGS,
+                    "response": {
+                        "status": "ok",
+                        "kind": contracts.KIND_FIX_FINDINGS,
+                        "findings": [fixed],
+                        "files_changed": [],
+                    },
+                },
+            ]
+        )
+        with mock.patch.object(
+            adapter, "create_session", return_value=self._created()
+        ):
+            drv.Driver(path, runner=runner).step()
+        handoff = self._handoff()
+        handoff["retained_target"]["content"] = (
+            "Use behavior A when the two sealed clauses conflict."
+        )
+        with mock.patch.object(
+            adapter, "terminal_handoff", return_value=handoff
+        ):
+            drv.Driver(path, runner=runner).step()
+        drv.Driver(path, runner=runner).step()
+        drv.Driver(path, runner=runner).step()
+
+        state = st.load(path)
+        unit = st.current_unit(state)
+        adopted = [
+            event for event in state["events"]
+            if event["type"] == "brainstorming_design_amendment_adopted"
+        ]
+        self.assertEqual(len(adopted), 1)
+        self.assertEqual(adopted[0]["amendment_id"], "B1")
+        merged = drv.Driver(path, runner=runner)._amendments(
+            record_seen=False
+        )
+        self.assertEqual(merged[-1]["authority"], "brainstorming_design")
+        self.assertEqual(merged[-1]["text"], handoff["retained_target"]["content"])
+        self.assertEqual(unit["status"], st.U_ROUNDS)
+        self.assertEqual(unit["fix_queue"], [])
+        self.assertEqual(
+            unit["rounds"][-1]["design_amendment_finding_id"], finding["id"]
+        )
+        self.assertFalse(
+            any(event["type"] == "phantom_fix_retry" for event in state["events"])
+        )
+        self.assertIn(
+            "ACCEPTED BRAINSTORMING DESIGN AMENDMENTS", runner.calls[1][2]
+        )
+        self.assertEqual(
+            runner.session_calls,
+            [
+                ("start", "codex", "mock-session-1"),
+                ("continue", "codex", "mock-session-1"),
+            ],
         )
 
     def test_continuation_receives_current_amendments_and_project_law(self):

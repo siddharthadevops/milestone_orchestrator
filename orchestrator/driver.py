@@ -390,9 +390,21 @@ class Driver(object):
             try:
                 with self._exclusive():
                     self.state = st.load(self.state_path)
-                    if self.state.get("failure") is None \
-                            and st.ensure_due_unit(self.state) is not None:
-                        self._save()
+                    if self.state.get("failure") is None:
+                        materialized = st.ensure_due_unit(self.state) is not None
+                        try:
+                            # A parked implementation must remain assigned to
+                            # a planned slice across operator resume as well as
+                            # across the redoc close that first detected the
+                            # problem.  Otherwise clearing the failure could
+                            # let navigation reach DONE with work still held
+                            # only by its durable parking ref.
+                            self._guard_unplanned_preserved_candidates()
+                        except StopStep:
+                            pass  # the guard persisted the typed failure
+                        else:
+                            if materialized:
+                                self._save()
             except ConcurrentRunError:
                 pass
 
@@ -902,6 +914,13 @@ class Driver(object):
     def _amendments_path(self):
         return os.path.join(self._runtime_dir(), "amendments.json")
 
+    def _parked_candidate_ref(self, unit):
+        digest = hashlib.sha256(
+            (os.path.abspath(self.state_path) + "\0" + st.unit_key(unit))
+            .encode("utf-8", "surrogatepass")
+        ).hexdigest()[:24]
+        return "refs/orchestrator/parked/%s" % digest
+
     def _record_amendments_seen(self, amendments):
         if not amendments:
             return
@@ -922,26 +941,41 @@ class Driver(object):
                 )
 
     def _amendments(self, record_seen=True):
-        """Operator amendments, re-read before every worker call so a note
-        added mid-run binds the very next call. The file is operator-owned
-        (the panel appends to it; the driver only reads) — deliberately
-        OUTSIDE the append-only ledger so hot edits cannot collide with
-        the driver's lock. The ledger still gets an `amendment_seen`
-        event the first time each id shows up, so every round can be
-        judged against what its workers actually knew."""
+        """Return operator amendments plus accepted design clarifications.
+
+        The panel-owned file remains read-only to the driver. Brainstorming
+        amendments live in the append-only run ledger with narrower authority:
+        they clarify sealed design but never amend the operator's goal.
+        """
+        operator = []
         try:
             with open(self._amendments_path(), "r", encoding="utf-8") as fh:
                 data = json.load(fh)
-            amendments = [
+            operator = [
                 a
                 for a in (data.get("amendments") or [])
                 if isinstance(a, dict) and str(a.get("text") or "").strip()
             ]
         except (OSError, ValueError):
-            return []
+            pass
         if record_seen:
-            self._record_amendments_seen(amendments)
-        return amendments
+            self._record_amendments_seen(operator)
+        design = [
+            {
+                "id": event.get("amendment_id"),
+                "text": event.get("text"),
+                "at": event.get("at"),
+                "authority": "brainstorming_design",
+                "session_id": event.get("session_id"),
+                "accepted_target_revision": event.get(
+                    "accepted_target_revision"
+                ),
+            }
+            for event in self.state.get("events", [])
+            if event.get("type") == "brainstorming_design_amendment_adopted"
+            and str(event.get("text") or "").strip()
+        ]
+        return operator + design
 
     def _read_standing_law(self, worker_kind, unit_kind):
         """LIVE read of the project's standing law for one worker call:
@@ -1754,6 +1788,87 @@ class Driver(object):
             signal["target_path"],
         )
 
+    @staticmethod
+    def _rethink_requests_design_amendment(signal):
+        return (
+            signal.get("result_mode")
+            == contracts.RETHINK_RESULT_DESIGN_AMENDMENT
+        )
+
+    def _adopt_brainstorming_design_amendment(
+        self, unit, wait, handoff
+    ):
+        """Persist one accepted, bounded amendment in the append-only ledger."""
+        for event in self.state.get("events", []):
+            if (
+                event.get("type")
+                == "brainstorming_design_amendment_adopted"
+                and event.get("session_id") == handoff.get("session_id")
+                and event.get("accepted_target_revision")
+                == handoff.get("accepted_target_revision")
+            ):
+                return event
+        retained = handoff.get("retained_target") or {}
+        content = retained.get("content")
+        if (
+            retained.get("exists") is not True
+            or retained.get("encoding") != "utf-8"
+            or not isinstance(content, str)
+        ):
+            raise brainstorming_milestone.AdapterError(
+                "an accepted design amendment must be one UTF-8 text artifact"
+            )
+        text = content.strip()
+        if (
+            not text
+            or brainstorming_milestone.DESIGN_AMENDMENT_PLACEHOLDER.strip()
+            in text
+        ):
+            raise brainstorming_milestone.AdapterError(
+                "the accepted design amendment still contains only its "
+                "placeholder"
+            )
+        if "\x00" in text or len(text) > prompts.AMENDMENT_TEXT_CLIP:
+            raise brainstorming_milestone.AdapterError(
+                "the accepted design amendment must be concise UTF-8 text "
+                "without NUL bytes (max %d characters)"
+                % prompts.AMENDMENT_TEXT_CLIP
+            )
+        number = 1 + sum(
+            event.get("type") == "brainstorming_design_amendment_adopted"
+            for event in self.state.get("events", [])
+        )
+        source = wait["signal"].get("finding") or {}
+        event = st.append_event(
+            self.state,
+            "brainstorming_design_amendment_adopted",
+            unit=st.unit_key(unit),
+            amendment_id="B%d" % number,
+            text=text,
+            session_id=handoff["session_id"],
+            accepted_target_revision=handoff["accepted_target_revision"],
+            source_finding_id=source.get("id"),
+            target_path=wait["signal"].get("target_path"),
+        )
+        if unit.get("rounds"):
+            st.restart_reviews_after_candidate_change(
+                self.state, unit, "accepted Brainstorming design amendment"
+            )
+        return event
+
+    def _design_amendment_finding_id(self, result):
+        handoff = getattr(result, "brainstorming_handoff", None) or {}
+        for event in reversed(self.state.get("events", [])):
+            if (
+                event.get("type")
+                == "brainstorming_design_amendment_adopted"
+                and event.get("session_id") == handoff.get("session_id")
+                and event.get("accepted_target_revision")
+                == handoff.get("accepted_target_revision")
+            ):
+                return event.get("source_finding_id")
+        return None
+
     def _start_rethink(
         self,
         unit,
@@ -1792,12 +1907,25 @@ class Driver(object):
                     "the origin provider exposed no explicit session reference"
                 )
             references = self._brainstorming_references(unit, checked)
+            authority_context = None
+            if self._rethink_requests_design_amendment(checked):
+                project_context, _extensions, _roots = (
+                    self._project_prompt_inputs(
+                        unit, kind, record_seen=False
+                    )
+                )
+                authority_context = {
+                    "goal": self.state.get("goal"),
+                    "amendments": self._amendments(record_seen=False),
+                    "project_context": project_context,
+                }
             created = brainstorming_milestone.create_session(
                 self.state,
                 self.config,
                 st.unit_key(unit),
                 checked,
                 references,
+                authority_context=authority_context,
             )
             progress = brainstorming.coordination_projection(created["state"])
             if (
@@ -2085,6 +2213,7 @@ class Driver(object):
                     pre_sym=pre.get("sym"),
                     pre_refs=pre.get("refs"),
                     pre_stash=pre.get("stash"),
+                    pre_worktree_tree=pre.get("worktree_tree"),
                     from_fixer=kind == contracts.KIND_FIX_FINDINGS,
                 )
             if kind == RETIRED_SEAL_WORKER_KIND:
@@ -2110,6 +2239,25 @@ class Driver(object):
             return "Brainstorming failed; source finding queued for fixing"
 
         if kind in contracts.RETHINK_CONTINUATION_KINDS:
+            amendment_mode = self._rethink_requests_design_amendment(
+                wait["signal"]
+            )
+            if amendment_mode:
+                try:
+                    self._adopt_brainstorming_design_amendment(
+                        unit, wait, handoff
+                    )
+                except brainstorming_milestone.AdapterError as exc:
+                    unit.pop("brainstorming_wait", None)
+                    st.fail_run(
+                        self.state,
+                        "accepted Brainstorming amendment could not be "
+                        "adopted: %s" % exc,
+                        unit=unit,
+                        type_="brainstorming_operational",
+                    )
+                    self._save()
+                    raise StopStep("Brainstorming amendment adoption failed")
             family = origin["family"]
             design_context = (
                 self._design_correction_context(unit)
@@ -2139,6 +2287,7 @@ class Driver(object):
                 amendments=amendments,
                 project_context=project_context,
                 battery=battery,
+                accepted_design_amendment=amendment_mode,
             )
             raw_name = "%s-rethink-return" % origin["raw_name"]
             output, result, raw_path = self._call(
@@ -2430,8 +2579,104 @@ class Driver(object):
         with open(path, "w", encoding="utf-8") as fh:
             fh.write(content)
 
+    def _resume_preserved_candidate(self, unit):
+        """Replay a parked implementation only when its slice is due again."""
+        marker = unit.get("preserved_candidate") or {}
+        tree = marker.get("tree")
+        refname = marker.get("ref")
+        base = marker.get("base")
+        if not (tree and refname and base) or not gitops.enabled(self.config):
+            st.fail_run(
+                self.state,
+                "preserved candidate metadata is incomplete; refusing to "
+                "rebuild or discard it",
+                unit=unit,
+                type_="candidate_replay",
+            )
+            self._save()
+            raise StopStep("preserved candidate metadata incomplete")
+        resume_base = marker.get("resume_base")
+        merged_tree = marker.get("merged_tree")
+        if resume_base is None or merged_tree is None:
+            if gitops.parked_candidate_tree(self.workspace, refname) != tree:
+                st.fail_run(
+                    self.state,
+                    "parked candidate ref is missing or changed; refusing to "
+                    "rebuild or discard the saved implementation",
+                    unit=unit,
+                    type_="candidate_replay",
+                )
+                self._save()
+                raise StopStep("parked candidate ref unavailable")
+            resume_base = gitops.head_full_sha(self.workspace)
+            try:
+                merged_tree, conflicts = gitops.merge_candidate_tree(
+                    self.workspace, base, resume_base, tree
+                )
+            except gitops.GitError as exc:
+                st.fail_run(
+                    self.state,
+                    "could not prepare preserved candidate replay: %s" % exc,
+                    unit=unit,
+                    type_="candidate_replay",
+                )
+                self._save()
+                raise StopStep(str(exc))
+            if conflicts:
+                marker["conflicts"] = conflicts
+                st.fail_run(
+                    self.state,
+                    "preserved candidate overlaps repaired or newly inserted "
+                    "work at %s; the candidate remains parked for explicit "
+                    "resolution" % ", ".join(conflicts[:20]),
+                    unit=unit,
+                    type_="candidate_replay",
+                )
+                self._save()
+                raise StopStep("preserved candidate replay conflicts")
+            marker["resume_base"] = resume_base
+            marker["merged_tree"] = merged_tree
+            st.append_event(
+                self.state,
+                "candidate_replay_prepared",
+                unit=st.unit_key(unit),
+                base=resume_base,
+                merged_tree=merged_tree,
+            )
+            return "preserved candidate replay prepared"
+        try:
+            sha = gitops.restore_parked_candidate(
+                self.workspace,
+                resume_base,
+                merged_tree,
+                "wip: %s (preserved after design repair)" % st.unit_key(unit),
+            )
+            gitops.delete_parked_candidate(self.workspace, refname)
+        except gitops.GitError as exc:
+            st.fail_run(
+                self.state,
+                "could not restore preserved candidate: %s" % exc,
+                unit=unit,
+                type_="candidate_replay",
+            )
+            self._save()
+            raise StopStep(str(exc))
+        unit.pop("preserved_candidate", None)
+        st.append_event(
+            self.state,
+            "candidate_replayed_after_redoc",
+            unit=st.unit_key(unit),
+            sha=sha,
+            tree=merged_tree,
+        )
+        return None
+
     def _do_draft(self):
         unit = st.current_unit(self.state)
+        if unit.get("preserved_candidate"):
+            prepared = self._resume_preserved_candidate(unit)
+            if prepared is not None:
+                return prepared
         if unit.get("draft") is not None:
             # Defensive compatibility for a persisted post-draft unit whose
             # status was left pending by an older/crashed driver. The work is
@@ -2729,7 +2974,7 @@ class Driver(object):
 
     def _handle_gap(self, unit, output, duration_s=None, pre_tree=None,
                     pre_head=None, pre_sym=None, pre_refs=None, pre_stash=None,
-                    from_fixer=False):
+                    pre_worktree_tree=None, from_fixer=False):
         gaps = output.get("gaps", [])
         st.append_event(
             self.state, "gap_reported", unit=st.unit_key(unit),
@@ -2754,6 +2999,7 @@ class Driver(object):
             "pre_sym": pre_sym,
             "pre_refs": pre_refs,
             "pre_stash": pre_stash,
+            "pre_worktree_tree": pre_worktree_tree,
             # A FIXER gap is mid-episode, not a "finished nothing" builder:
             # its reporter already committed a draft wip and may hold prior
             # fix work, so the builder scratch-cleanup (restore to the
@@ -2762,6 +3008,40 @@ class Driver(object):
         }
         self._save()
         return self._route_pending_gap()
+
+    def _park_fixer_candidate(self, unit, baseline, tree, refname):
+        """Pause a built slice for redoc without erasing its implementation."""
+        prior = unit["status"]
+        unit["preserved_candidate"] = {
+            "base": baseline,
+            "tree": tree,
+            "ref": refname,
+        }
+        unit["fix_queue"] = []
+        unit["fix_source"] = None
+        unit.pop("phantom_retried", None)
+        unit.pop("baseline_verification", None)
+        unit.pop("baseline_unstable_runs", None)
+        unit.pop("brainstorming_resume", None)
+        unit["fix_loop_rounds"] = 0
+        unit["verify_fix_attempts"] = {"pre_review": 0, "pre_seal": 0}
+        unit["rounds_amnesty"] = len(unit.get("rounds") or [])
+        st.restart_reviews_after_candidate_change(
+            self.state, unit, "candidate parked for sealed-design repair"
+        )
+        # Like reset_for_redraft, this is an intentional backward process
+        # edge outside transition_unit. Unlike it, draft/artifact stay intact:
+        # _do_draft's recovery branch reopens reviews without another builder.
+        unit["status"] = st.U_PENDING
+        st.append_event(
+            self.state,
+            "candidate_parked_for_redoc",
+            unit=st.unit_key(unit),
+            from_status=prior,
+            base=baseline,
+            tree=tree,
+            ref=refname,
+        )
 
     def _route_pending_gap(self):
         """Clean the worktree and route the recorded gap. Both the fresh path
@@ -2786,14 +3066,10 @@ class Driver(object):
         # successful draft's `git add -A`) would adopt it, and a junk commit
         # the builder made itself would become the repair commit's parent. Undo
         # it all now, BEFORE routing, back to the pre-call snapshot. A FIXER gap
-        # is DIFFERENT: its reporter already committed a draft wip and may hold
-        # prior legitimate fix work, so the pre-CALL snapshot is mid-slice, not
-        # pre-draft — restoring to it would either delete earlier fixes
-        # (needs_operator) or keep the abandoned draft as the wave's parent
-        # (fits_remodel). The fixer branch skips this cleanup: needs_operator
-        # preserves the worktree for the operator's resume, and fits_remodel
-        # unwinds the reporter's whole slice to the last sealed baseline inside
-        # _reopen_and_repair (before the wave commits).
+        # is different: its pre-call worktree is the valuable slice candidate.
+        # Its dedicated branch below restores that exact tree (discarding only
+        # the gapping call's scratch), then either keeps it in place for an
+        # operator goal decision or parks it outside the redoc checkout.
         if not pending.get("from_fixer") and gitops.enabled(self.config):
             pre_tree = pending.get("pre_tree")
             pre_head = pending.get("pre_head")
@@ -2863,80 +3139,89 @@ class Driver(object):
                 )
                 self._save()
                 raise StopStep("gap cleanup failed")
-        # A FIXER gap's reporter already committed a draft wip and may hold
-        # accumulated fix work from a dirty-delta loop — none of it cleanly
-        # separable from the gapping call's own scratch. Rather than try to
-        # preserve part of it (which laundered untracked scratch into a later
-        # commit, or deleted earlier fixes), UNWIND the reporter's whole slice
-        # to the last sealed baseline and re-draft it, for BOTH routes: a
-        # fits_remodel reporter re-drafts against the remodelled skeleton, a
-        # needs_operator reporter re-drafts against the amended goal — each
-        # from a clean baseline, exactly as a builder-gap reporter does.
-        # (1) restore_to_snapshot undoes ref/branch moves and removes untracked
-        # scratch (its clean -ffdq); (2) reset --hard to the newest sealed gate
-        # unwinds the reporter's own draft wip (every sealed unit is an
-        # ancestor of that gate; only the reporter's unfinished slice sits on
-        # top). Idempotent on restart: pre_head stays a valid object for
-        # restore_to_snapshot to re-point, and reset to the stable baseline
-        # re-lands the same clean tree.
+        operator_gaps = [
+            g for g in gaps
+            if g.get("classification") == contracts.CLASSIFY_NEEDS_OPERATOR
+        ]
+        # A fixer gap is taken AFTER the slice already has a candidate. Restore
+        # the exact PRE-FIXER worktree tree: this discards only the gapping
+        # call's scratch while retaining the implementation and any earlier
+        # accepted/pending fixes. A goal gap stops on those bytes. An in-goal
+        # remodel parks the tree behind a durable ref, resets only the checkout
+        # used by the documentation wave, and later replays the candidate over
+        # the repaired/possibly-expanded history.
         if pending.get("from_fixer"):
             if gitops.enabled(self.config):
                 pre_refs = pending.get("pre_refs")
                 pre_sym = pending.get("pre_sym")
                 pre_head = pending.get("pre_head")
                 pre_tree = pending.get("pre_tree")
-                # The baseline is the newest GATE commit among all units that
-                # have one — keyed on gate_commit, NOT on current status: a unit
-                # sealed earlier but now under repair (a wave anchor) still
-                # contributed a durable gate commit that the reporter's slice
-                # sits on top of. Filtering by status==SEALED would drop it and
-                # leave no baseline.
+                candidate_tree = pending.get("pre_worktree_tree")
                 baseline = gitops.newest_commit(
                     self.workspace,
                     [u.get("gate_commit") for u in self.state["units"]
                      if u.get("gate_commit")],
                 )
                 if (baseline is None or pre_refs is None or pre_sym is None
-                        or pre_head is None or pre_tree is None):
+                        or pre_head is None or pre_tree is None
+                        or candidate_tree is None):
                     self.state["pending_gap"] = None
                     st.fail_run(
                         self.state,
-                        "cannot unwind the fixer-gap reporter %s: missing the "
-                        "pre-call baseline snapshot or a sealed gate to reset "
-                        "to — operator inspection required" % st.unit_key(unit),
+                        "cannot preserve fixer-gap reporter %s: missing its "
+                        "exact pre-call candidate or sealed base — operator "
+                        "inspection required" % st.unit_key(unit),
                         unit=unit, type_="gap_cleanup",
                     )
                     self._save()
-                    raise StopStep("fixer-gap unwind: no baseline")
+                    raise StopStep("fixer-gap preservation: no baseline")
                 try:
                     gitops.restore_to_snapshot(
-                        self.workspace, pre_refs, pre_sym, pre_head, pre_tree,
+                        self.workspace, pre_refs, pre_sym, pre_head,
+                        candidate_tree,
                         stash=pending.get("pre_stash"),
                     )
-                    gitops.reset_hard(self.workspace, baseline)
+                    if (
+                        gitops.snapshot_worktree_tree(self.workspace)
+                        != candidate_tree
+                    ):
+                        raise gitops.GitError(
+                            "pre-fixer candidate tree did not restore exactly"
+                        )
                 except gitops.GitError as exc:
                     st.fail_run(
                         self.state,
-                        "could not unwind the fixer-gap reporter %s (%s): its "
-                        "abandoned slice cannot be safely discarded — operator "
-                        "inspection required" % (st.unit_key(unit), exc),
+                        "could not restore fixer-gap reporter %s before "
+                        "routing (%s): candidate preserved for operator "
+                        "inspection" % (st.unit_key(unit), exc),
                         unit=unit, type_="gap_cleanup",
                     )
                     self._save()
                     raise StopStep(str(exc))
                 st.append_event(
                     self.state, "gap_edits_discarded", unit=st.unit_key(unit),
+                    scope="gapping fixer scratch only",
                 )
-            # Reset the reporter to a fresh re-draft (idempotent: a restart
-            # after this already ran finds it pending and skips). fits_remodel
-            # sets has_gap_remodel on it in _reopen_and_repair (reads the
-            # remodelled skeleton); needs_operator leaves it off (the goal, not
-            # the skeleton, changed).
-            if unit["status"] != st.U_PENDING:
-                st.reset_for_redraft(
-                    self.state, unit,
-                    reason="re-drafts from a clean baseline after its fixer "
-                           "gapped a sealed contradiction",
+                if operator_gaps:
+                    return self._route_goal_gap(unit, operator_gaps[0])
+                refname = self._parked_candidate_ref(unit)
+                try:
+                    gitops.park_candidate_tree(
+                        self.workspace, refname, candidate_tree
+                    )
+                    gitops.reset_hard(self.workspace, baseline)
+                except gitops.GitError as exc:
+                    st.fail_run(
+                        self.state,
+                        "could not park fixer-gap reporter %s for design "
+                        "repair (%s) — operator inspection required"
+                        % (st.unit_key(unit), exc),
+                        unit=unit, type_="gap_cleanup",
+                    )
+                    self._save()
+                    raise StopStep(str(exc))
+                self._park_fixer_candidate(
+                    unit, baseline, candidate_tree, refname
                 )
         # The worker classified; the machine routes. needs_operator OUTRANKS
         # fits_remodel: a goal-level issue must reach the operator even if it
@@ -2944,10 +3229,6 @@ class Driver(object):
         # fits_remodel) reopens the skeleton — the design authority — toward
         # the gaps as an objective; the design is remodelled and the pointer
         # continues, never touching the operator.
-        operator_gaps = [
-            g for g in gaps
-            if g.get("classification") == contracts.CLASSIFY_NEEDS_OPERATOR
-        ]
         if operator_gaps:
             return self._route_goal_gap(unit, operator_gaps[0])
         skeleton = self._find_unit(st.UNIT_SKELETON, None)
@@ -3130,10 +3411,11 @@ class Driver(object):
         self._save()
         return (
             "gap on %s -> re-documentation wave: reopened %s + %d slice "
-            "note(s) (%d repair finding(s)); the set reseals, then %s "
-            "re-drafts"
+            "note(s) (%d repair finding(s)); the set reseals, then %s %s"
             % (reporter_key, target_key, len(wave_docs),
-               len(repair_findings), reporter_key)
+               len(repair_findings), reporter_key,
+               ("resumes its preserved candidate"
+                if unit.get("preserved_candidate") else "re-drafts"))
         )
 
     def _pre_clean_pending_gap(self):
@@ -3144,10 +3426,10 @@ class Driver(object):
         _route_pending_gap re-verifies the cleanup before routing anyway.
 
         A FIXER gap runs this too (it must — its worker may have left a nested
-        repo that would deadlock ensure_repo on every resume). Restoring to the
-        pre-CALL snapshot here is harmless for a fixer gap: routing then unwinds
-        the reporter's whole slice to the last sealed baseline anyway, so no
-        prior work is being 'preserved' that this could destroy."""
+        repo that would deadlock ensure_repo on every resume). For that branch
+        the restore uses the exact pre-call WORKTREE tree, not merely its index,
+        so accumulated legitimate fixes survive while gapping-call scratch is
+        removed."""
         pending = self.state.get("pending_gap")
         if not pending or not gitops.enabled(self.config):
             return
@@ -3155,9 +3437,13 @@ class Driver(object):
         pre_sym = pending.get("pre_sym")
         pre_head = pending.get("pre_head")
         pre_tree = pending.get("pre_tree")
+        restore_tree = (
+            pending.get("pre_worktree_tree")
+            if pending.get("from_fixer") else pre_tree
+        )
         pre_stash = pending.get("pre_stash")
         if pre_refs is None or pre_sym is None or pre_head is None \
-                or pre_tree is None:
+                or restore_tree is None:
             return
         # Under the run lock, so it cannot race a concurrent invocation's
         # recovery; skips on contention (the lock holder restores) and on any
@@ -3165,7 +3451,7 @@ class Driver(object):
         try:
             with self._exclusive():
                 gitops.restore_to_snapshot(
-                    self.workspace, pre_refs, pre_sym, pre_head, pre_tree,
+                    self.workspace, pre_refs, pre_sym, pre_head, restore_tree,
                     stash=pre_stash,
                 )
         except (ConcurrentRunError, gitops.GitError):
@@ -3245,6 +3531,7 @@ class Driver(object):
                 st.stamp_redoc_wave_gate(
                     self.state, anchor, anchor.get("gate_commit")
                 )
+                self._guard_unplanned_preserved_candidates()
                 self._save()
         except ConcurrentRunError:
             return
@@ -3256,6 +3543,31 @@ class Driver(object):
             if sl["id"] == slice_id:
                 return sl
         raise st.IllegalTransition("unknown slice id %r" % slice_id)
+
+    def _guard_unplanned_preserved_candidates(self):
+        """Never let a redoc row deletion silently destroy parked work."""
+        planned = set(st.planned_units(self.state))
+        for unit in self.state.get("units", []):
+            marker = unit.get("preserved_candidate")
+            if not marker or (unit["kind"], unit["slice_id"]) in planned:
+                continue
+            st.append_event(
+                self.state,
+                "preserved_candidate_lost_plan_assignment",
+                unit=st.unit_key(unit),
+                tree=marker.get("tree"),
+                ref=marker.get("ref"),
+            )
+            st.fail_run(
+                self.state,
+                "repaired skeleton removed %s while its implementation "
+                "candidate is parked at %s; refusing to discard or silently "
+                "orphan that work" % (st.unit_key(unit), marker.get("ref")),
+                unit=unit,
+                type_="candidate_replay",
+            )
+            self._save()
+            raise StopStep("preserved candidate lost its slice assignment")
 
     def _skeleton_artifact(self):
         for u in self.state["units"]:
@@ -3584,14 +3896,12 @@ class Driver(object):
             # (a doc/impl being built) that meets a queued finding unfixable in
             # scope because the sealed set contradicts itself. Excluded, keeping
             # the existing `blocked`->operator path:
-            #  - git OFF: the gap unwinds the reporter's slice via git; without
-            #    it the abandoned files cannot be discarded (production is git
-            #    on; this only affects pure-CLI/test runs).
+            #  - git OFF: the candidate cannot be parked/replayed safely
+            #    (production is git on; this only affects pure-CLI/test runs).
             #  - an UNDER_REPAIR reporter (a wave's co-reopened note): it is
             #    already inside a repair episode; a nested remodel is out of
             #    scope, and its worktree is the repair wip, not a slice draft.
-            #  - the SKELETON: it cannot remodel itself, and it is not a slice
-            #    to unwind to a predecessor gate.
+            #  - the SKELETON: it cannot remodel itself.
             gap_enabled=(
                 self._fixer_gap_enabled(unit)
             ),
@@ -3603,9 +3913,9 @@ class Driver(object):
         # Pre-call snapshot, exactly as the builder captures before its draft:
         # if the fixer GAPS (a queued finding is valid but unfixable in scope —
         # the sealed doc set contradicts itself), the gap FINISHES NOTHING and
-        # this handle set restores the repo to here, discarding the fixer's
-        # abandoned scratch edits before the wave re-documents from the sealed
-        # baseline. Captured only with git on (same guard as the builder).
+        # the worktree-tree handle preserves the candidate, including earlier
+        # pending fixes, while excluding scratch written by the gapping call.
+        # The wave runs from the sealed base; the candidate is replayed later.
         pre_refs = pre_sym = pre_head = pre_tree = pre_worktree_tree = None
         pre_stash = None
         if gitops.enabled(self.config):
@@ -3616,8 +3926,11 @@ class Driver(object):
                 pre_tree = gitops.snapshot_index_tree(self.workspace)
                 pre_worktree_tree = (
                     gitops.snapshot_worktree_tree(self.workspace)
-                    if design_context
-                    and design_context.get("mode") == "offer"
+                    if self._fixer_gap_enabled(unit)
+                    or (
+                        design_context
+                        and design_context.get("mode") == "offer"
+                    )
                     else pre_tree
                 )
                 pre_stash = gitops.snapshot_stash(self.workspace)
@@ -3746,12 +4059,15 @@ class Driver(object):
                 pre_refs = baseline.get("refs")
                 pre_sym = baseline.get("sym")
                 pre_head = baseline.get("head")
-                pre_tree = baseline.get("tree")
+                pre_tree = baseline.get("index_tree")
+                pre_worktree_tree = baseline.get("tree")
                 pre_stash = baseline.get("stash")
             return self._handle_gap(unit, output, result.duration_s,
                                     pre_tree=pre_tree, pre_head=pre_head,
                                     pre_sym=pre_sym, pre_refs=pre_refs,
-                                    pre_stash=pre_stash, from_fixer=True)
+                                    pre_stash=pre_stash,
+                                    pre_worktree_tree=pre_worktree_tree,
+                                    from_fixer=True)
         self._check_worker_blocked(unit, output, contracts.KIND_FIX_FINDINGS)
         try:
             contracts.validate_fix_coverage(output, unit.get("fix_queue") or [])
@@ -3832,6 +4148,9 @@ class Driver(object):
             )
             if suite_corrected:
                 unit["suite_verification_pending"] = True
+        design_amendment_finding_id = self._design_amendment_finding_id(
+            result
+        )
         st.record_round(
             self.state,
             unit,
@@ -3854,6 +4173,13 @@ class Driver(object):
                     else {}
                 ),
                 **({"suite_corrected": True} if suite_corrected else {}),
+                **(
+                    {
+                        "design_amendment_finding_id":
+                        design_amendment_finding_id,
+                    }
+                    if design_amendment_finding_id else {}
+                ),
             },
         )
         self._maybe_update_slices(unit, output)
@@ -3898,6 +4224,9 @@ class Driver(object):
         if last_fix is None:
             return []
         result = last_fix["result"]
+        design_amendment_finding_id = last_fix.get(
+            "design_amendment_finding_id"
+        )
         suite_corrected = bool(
             last_fix.get("suite_corrected")
             # Resume compatibility for a state saved by the earlier
@@ -3929,6 +4258,8 @@ class Driver(object):
             if f.get("disposition") == "fixed":
                 if not (
                     suite_corrected and f.get("id") == suite_finding_id
+                    or design_amendment_finding_id
+                    and f.get("id") == design_amendment_finding_id
                 ):
                     # Only the explicitly bound finding earns state-fix
                     # credit; unrelated fixed claims still require real edits.
@@ -4248,11 +4579,12 @@ class Driver(object):
                     unit,
                     {"gaps": [gap]},
                     result.duration_s,
-                    pre_tree=baseline.get("tree"),
+                    pre_tree=baseline.get("index_tree"),
                     pre_head=baseline.get("head"),
                     pre_sym=baseline.get("sym"),
                     pre_refs=baseline.get("refs"),
                     pre_stash=baseline.get("stash"),
+                    pre_worktree_tree=baseline.get("tree"),
                     from_fixer=True,
                 )
             # retry intentionally falls through to the existing dirty-delta
@@ -5065,6 +5397,7 @@ class Driver(object):
             st.stamp_redoc_wave_gate(
                 self.state, unit, unit.get("gate_commit")
             )
+            self._guard_unplanned_preserved_candidates()
         nxt = st.ensure_next_unit(self.state)
         if nxt is None and st.maybe_close_milestone(self.state):
             self._final_commit()

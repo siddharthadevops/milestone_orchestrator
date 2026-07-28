@@ -527,6 +527,85 @@ def snapshot_worktree_tree(workspace):
         _run(workspace, "read-tree", original_index, check=False)
 
 
+def merge_candidate_tree(workspace, base, current, candidate_tree):
+    """Three-way merge a parked candidate onto a later sealed HEAD.
+
+    Returns ``(tree_sha, conflict_paths)`` without touching the index or
+    worktree. Git writes a usable result tree even for content conflicts; the
+    caller may commit that tree and send the named overlaps through the normal
+    fixer instead of discarding the candidate.
+    """
+    _assert_workspace_root(workspace)
+    proc = _run(
+        workspace,
+        "merge-tree",
+        "--write-tree",
+        "--name-only",
+        "--no-messages",
+        "--merge-base",
+        base,
+        current,
+        candidate_tree,
+        check=False,
+    )
+    lines = [line.strip() for line in proc.stdout.splitlines() if line.strip()]
+    tree = lines[0] if lines else ""
+    if not tree or any(ch not in "0123456789abcdef" for ch in tree.lower()):
+        raise GitError(
+            "git merge-tree could not preserve the parked candidate: %s"
+            % (proc.stderr or proc.stdout)[-800:]
+        )
+    if proc.returncode not in (0, 1):
+        raise GitError(
+            "git merge-tree failed (%d): %s"
+            % (proc.returncode, (proc.stderr or proc.stdout)[-800:])
+        )
+    return tree, lines[1:]
+
+
+def restore_parked_candidate(workspace, resume_base, merged_tree, message):
+    """Open (or recover) one WIP commit containing a prepared merged tree."""
+    _assert_workspace_root(workspace)
+    head = head_full_sha(workspace)
+    head_tree = _run(workspace, "rev-parse", "HEAD^{tree}").stdout.strip()
+    if head != resume_base:
+        parent = _run(
+            workspace, "rev-parse", "HEAD^", check=False
+        ).stdout.strip()
+        if parent == resume_base and head_tree == merged_tree:
+            return head_sha(workspace)
+        raise GitError(
+            "HEAD moved after parked candidate replay was prepared"
+        )
+    _assert_no_embedded_repos(workspace)
+    _run(workspace, "read-tree", "-u", "--reset", merged_tree)
+    return commit_wip(workspace, message)
+
+
+def park_candidate_tree(workspace, refname, tree):
+    """Keep an otherwise-unreachable candidate tree alive through redoc."""
+    _assert_workspace_root(workspace)
+    if not refname.startswith("refs/orchestrator/parked/"):
+        raise GitError("parked candidate ref is outside its reserved namespace")
+    _run(workspace, "update-ref", refname, tree)
+    return tree
+
+
+def parked_candidate_tree(workspace, refname):
+    _assert_workspace_root(workspace)
+    proc = _run(
+        workspace, "rev-parse", "--verify", "-q", refname, check=False
+    )
+    return proc.stdout.strip() if proc.returncode == 0 else None
+
+
+def delete_parked_candidate(workspace, refname):
+    _assert_workspace_root(workspace)
+    if not refname.startswith("refs/orchestrator/parked/"):
+        raise GitError("parked candidate ref is outside its reserved namespace")
+    _run(workspace, "update-ref", "-d", refname, check=False)
+
+
 def restore_index_tree(workspace, tree):
     """Restore only the index; leave the worktree bytes untouched."""
     _assert_workspace_root(workspace)

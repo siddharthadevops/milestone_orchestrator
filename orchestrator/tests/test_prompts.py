@@ -156,11 +156,13 @@ class TestNaturalRethinkExit(unittest.TestCase):
         self.assertLess(prompt.index(self.HEADING),
                         prompt.index("If you meet a hole or a contradiction"))
         self.assertIn("one bounded design question remains unresolved", prompt)
-        self.assertIn("settle it with a bounded amendment", prompt)
+        self.assertIn("already-established, obvious contradiction", prompt)
+        self.assertIn("result_mode to `design_amendment`", prompt)
+        self.assertIn("at most two rounds", prompt)
         self.assertIn("Do NOT use it for facts you can establish from the "
                       "workspace", prompt)
-        self.assertIn("If a real hole or contradiction is already "
-                      "established", prompt)
+        self.assertIn("An established contradiction is not, by itself, a "
+                      "reason to skip", prompt)
 
     def test_reviewers_and_continuations_are_not_invited_to_rethink(self):
         built = build_all()
@@ -1122,6 +1124,33 @@ class TestOperatorAmendments(unittest.TestCase):
             FAMILY, WORKSPACE, GOAL, UNIT, "docs/x.md", [], amendments=a)
         self.assertNotIn("x" * (prompts.AMENDMENT_TEXT_CLIP + 1), prompt)
         self.assertIn("...", prompt)
+
+    def test_brainstorming_amendment_has_narrower_explicit_authority(self):
+        amendments = self.AMENDMENTS + [
+            {
+                "id": "B1",
+                "text": "When the clauses conflict, behavior A wins.",
+                "authority": "brainstorming_design",
+            }
+        ]
+        prompt = normalized(
+            prompts.build_review_round(
+                FAMILY,
+                WORKSPACE,
+                GOAL,
+                UNIT,
+                "docs/x.md",
+                [],
+                amendments=amendments,
+            )
+        )
+        self.assertIn("ACCEPTED BRAINSTORMING DESIGN AMENDMENTS", prompt)
+        self.assertIn("[B1] When the clauses conflict", prompt)
+        self.assertIn("may not change the GOAL, an OPERATOR AMENDMENT", prompt)
+        self.assertLess(
+            prompt.index("OPERATOR AMENDMENTS"),
+            prompt.index("ACCEPTED BRAINSTORMING"),
+        )
 
 
 class TestVerificationProtocol(unittest.TestCase):

@@ -22,6 +22,12 @@ class OperationalTerminalError(AdapterError):
     """The attached discussion ended because its execution failed."""
 
 
+DESIGN_AMENDMENT_PLACEHOLDER = (
+    "Replace this placeholder with one concise, self-contained design "
+    "amendment that resolves the stated question without changing the goal.\n"
+)
+
+
 def service_home(state):
     """Use the bound service home, or the ordinary default for local runs."""
     project = state.get("project")
@@ -177,19 +183,37 @@ def _owned_work_areas_root(state):
 
 
 def _materialize_target(state, signal, references):
-    """Copy one requested target into a retained Brainstorming-owned area."""
+    """Materialize either a source proposal or a fresh amendment target."""
     source = validate_target(state, signal, references)
     root = _owned_work_areas_root(state)
     os.makedirs(root, exist_ok=True)
     work_area = tempfile.mkdtemp(prefix="milestone-", dir=root)
     target_parent = os.path.join(work_area, "target")
     os.makedirs(target_parent)
-    target = os.path.join(target_parent, os.path.basename(source))
+    amendment_mode = (
+        signal.get("result_mode")
+        == contracts.RETHINK_RESULT_DESIGN_AMENDMENT
+    )
+    target = os.path.join(
+        target_parent,
+        "amendment.md" if amendment_mode else os.path.basename(source),
+    )
     try:
-        source_revision = (
-            brainstorming_coordination.capture_materialization_source(source)
-        )
-        brainstorming_coordination.restore_target(target, source_revision)
+        if amendment_mode:
+            if not os.path.isfile(source) or os.path.islink(source):
+                raise AdapterError(
+                    "a design amendment requires one existing regular source "
+                    "artifact for context"
+                )
+            with open(target, "w", encoding="utf-8") as handle:
+                handle.write(DESIGN_AMENDMENT_PLACEHOLDER)
+        else:
+            source_revision = (
+                brainstorming_coordination.capture_materialization_source(
+                    source
+                )
+            )
+            brainstorming_coordination.restore_target(target, source_revision)
     except Exception:
         shutil.rmtree(work_area)
         raise
@@ -202,10 +226,18 @@ def create_session(
     unit_key,
     signal,
     references,
+    authority_context=None,
 ):
     """Translate one valid signal into the existing standalone lifecycle."""
     work_area, target = _materialize_target(state, signal, references)
     context = execution_context(state)
+    amendment_mode = (
+        signal.get("result_mode")
+        == contracts.RETHINK_RESULT_DESIGN_AMENDMENT
+    )
+    context_references = list(references)
+    if amendment_mode and signal["target_path"] not in context_references:
+        context_references.append(signal["target_path"])
     body = {
         "request": {
             "workspace_path": state["workspace"],
@@ -213,11 +245,28 @@ def create_session(
             "question": signal["question"],
             "context": {
                 "brief": (
+                    (
+                        "A milestone worker paused on one focused, in-goal "
+                        "design contradiction. The target is a new concise "
+                        "design amendment, not a copy of the source. Replace "
+                        "its placeholder with only the agreed amendment. "
+                    )
+                    if amendment_mode else
                     "A milestone worker paused on one focused design question. "
                     "The source finding below is preserved unchanged."
                 ),
-                "references": list(references),
-                "source_payload": copy.deepcopy(signal["finding"]),
+                "references": context_references,
+                "source_payload": (
+                    {
+                        "finding": copy.deepcopy(signal["finding"]),
+                        "failure_gap": copy.deepcopy(signal["failure_gap"]),
+                        "authority_context": copy.deepcopy(
+                            authority_context or {}
+                        ),
+                    }
+                    if amendment_mode else
+                    copy.deepcopy(signal["finding"])
+                ),
             },
             "max_rounds": signal["max_rounds"],
         },

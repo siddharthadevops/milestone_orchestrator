@@ -1190,27 +1190,28 @@ class GapReopenCommitIsolationTest(unittest.TestCase):
             driver.step()
         return path, st.load(path)
 
-    def test_fixer_gap_fits_remodel_unwinds_the_abandoned_slice(self):
-        # Defect (codex round 1): the fixer-gap reporter already committed a
-        # draft wip; reusing the builder's pre-CALL cleanup left that abandoned
-        # work as the wave's parent, contaminating the re-draft. The fix unwinds
-        # the reporter's whole slice to the last sealed baseline before the wave
-        # commits.
+    def test_fixer_gap_fits_remodel_parks_the_existing_candidate(self):
         path, state = self._drive_to_gap(self._fixer_gap("fits_remodel"))
         self.assertIsNone(state.get("failure"))
         units = {st.unit_key(u): u for u in state["units"]}
         self.assertEqual(units["skeleton"]["status"], st.U_FIXING)
         self.assertEqual(units["slice_doc-01"]["status"], st.U_REPAIRING)
         self.assertEqual(units["slice_impl-01"]["status"], st.U_PENDING)
-        # The abandoned draft's file is GONE from the worktree...
+        self.assertIsNotNone(units["slice_impl-01"].get("draft"))
+        parked = units["slice_impl-01"].get("preserved_candidate")
+        self.assertIsNotNone(parked)
+        self.assertEqual(
+            gitops.parked_candidate_tree(self.ws, parked["ref"]),
+            parked["tree"],
+        )
+        # The candidate is absent only from the wave checkout...
         self.assertFalse(
             os.path.exists(os.path.join(self.ws, "abandoned.py")))
         # ...the fixer's UNTRACKED scratch is gone too (restore_to_snapshot's
         # clean ran before the reset, so git add -A cannot fold it in)...
         self.assertFalse(
             os.path.exists(os.path.join(self.ws, "scratch_untracked.py")))
-        # ...and the reporter's wip is NOT an ancestor of the wave commit
-        # (the repair baseline is the last sealed gate, not the abandoned wip).
+        # ...and is not the wave commit's parent.
         log = subprocess.run(
             ["git", "log", "--format=%s", "-5"], cwd=self.ws, text=True,
             capture_output=True, check=True).stdout
@@ -1219,29 +1220,153 @@ class GapReopenCommitIsolationTest(unittest.TestCase):
         self.assertIn("gap_edits_discarded",
                       [e["type"] for e in state["events"]])
 
-    def test_fixer_gap_needs_operator_unwinds_and_redrafts(self):
-        # A needs_operator fixer gap stops for the operator AND unwinds the
-        # reporter's slice to a clean baseline, resetting it to re-draft — so
-        # no gapping-call scratch can be laundered into a later commit (codex
-        # round 3), and after the operator amends the goal the reporter
-        # re-drafts against it from a clean tree.
+    def test_redoc_replays_candidate_without_calling_implementer_again(self):
+        path, state = self._drive_to_gap(self._fixer_gap("fits_remodel"))
+        parked = {
+            st.unit_key(u): u for u in state["units"]
+        }["slice_impl-01"]["preserved_candidate"]
+        parked_ref = parked["ref"]
+        repair = runners.MockRunner(
+            [
+                step(
+                    "fix_findings",
+                    fix_ok(
+                        [triaged("GAP1", "fixed", "reconciled", severity="P1")],
+                        files_changed=["docs/skeleton.md"],
+                    ),
+                    family="codex",
+                    side_effect=write_file(
+                        "docs/skeleton.md", "# Skeleton\n\nREPAIRED\n"
+                    ),
+                ),
+                step("delta_review", report("delta_review"), family="codex"),
+                step("review_round", report("review_round"), family="codex"),
+                step("review_round", report("review_round"), family="claude"),
+            ]
+        )
+        driver = drv.Driver(path, runner=repair)
+        for _ in range(40):
+            current = st.current_unit(st.load(path))
+            if (
+                current is not None
+                and st.unit_key(current) == "slice_impl-01"
+                and current["status"] == st.U_ROUNDS
+            ):
+                break
+            driver.step()
+        state = st.load(path)
+        impl = {
+            st.unit_key(u): u for u in state["units"]
+        }["slice_impl-01"]
+        self.assertEqual(impl["status"], st.U_ROUNDS)
+        self.assertNotIn("preserved_candidate", impl)
+        self.assertIsNone(gitops.parked_candidate_tree(self.ws, parked_ref))
+        with open(os.path.join(self.ws, "abandoned.py"), encoding="utf-8") as fh:
+            self.assertEqual(fh.read(), "old junk\n")
+        with open(
+            os.path.join(self.ws, "docs", "skeleton.md"), encoding="utf-8"
+        ) as fh:
+            self.assertIn("REPAIRED", fh.read())
+        self.assertNotIn("implement", [kind for _family, kind, _p in repair.calls])
+        self.assertIn(
+            "candidate_replayed_after_redoc",
+            [event["type"] for event in state["events"]],
+        )
+
+    def test_removed_slice_keeps_candidate_blocked_across_operator_resume(self):
+        path, state = self._drive_to_gap(self._fixer_gap("fits_remodel"))
+        impl = {
+            st.unit_key(u): u for u in state["units"]
+        }["slice_impl-01"]
+        parked_ref = impl["preserved_candidate"]["ref"]
+
+        # Model a repaired skeleton that no longer assigns the parked unit.
+        # Startup must enforce the invariant even after the wave record is
+        # gone, because an operator may resume the first recorded failure.
+        state["milestone"]["slices"] = []
+        state["redoc_wave"] = None
+        st.save(path, state)
+        drv.Driver(path, runner=runners.MockRunner([]))
+        state = st.load(path)
+        self.assertEqual(state["failure"]["type"], "candidate_replay")
+        self.assertEqual(
+            gitops.parked_candidate_tree(self.ws, parked_ref),
+            impl["preserved_candidate"]["tree"],
+        )
+
+        st.resume_run(state)
+        st.save(path, state)
+        drv.Driver(path, runner=runners.MockRunner([]))
+        state = st.load(path)
+        self.assertEqual(state["failure"]["type"], "candidate_replay")
+        self.assertEqual(
+            gitops.parked_candidate_tree(self.ws, parked_ref),
+            impl["preserved_candidate"]["tree"],
+        )
+
+    def test_candidate_replay_conflict_keeps_parked_tree(self):
+        path, state = self._drive_to_gap(self._fixer_gap("fits_remodel"))
+        impl = {
+            st.unit_key(u): u for u in state["units"]
+        }["slice_impl-01"]
+        parked = dict(impl["preserved_candidate"])
+
+        def repair_with_overlap(workspace):
+            write_file(
+                "docs/skeleton.md", "# Skeleton\n\nREPAIRED\n"
+            )(workspace)
+            write_file("abandoned.py", "replacement from repaired plan\n")(
+                workspace
+            )
+
+        runner = runners.MockRunner(
+            [
+                step(
+                    "fix_findings",
+                    fix_ok(
+                        [triaged("GAP1", "fixed", "reconciled", severity="P1")],
+                        files_changed=["docs/skeleton.md", "abandoned.py"],
+                    ),
+                    family="codex",
+                    side_effect=repair_with_overlap,
+                ),
+                step("delta_review", report("delta_review"), family="codex"),
+                step("review_round", report("review_round"), family="codex"),
+                step("review_round", report("review_round"), family="claude"),
+            ]
+        )
+        driver = drv.Driver(path, runner=runner)
+        for _ in range(40):
+            if st.load(path).get("failure"):
+                break
+            driver.step()
+        state = st.load(path)
+        impl = {
+            st.unit_key(u): u for u in state["units"]
+        }["slice_impl-01"]
+        self.assertEqual(state["failure"]["type"], "candidate_replay")
+        self.assertIn("abandoned.py", impl["preserved_candidate"]["conflicts"])
+        self.assertEqual(
+            gitops.parked_candidate_tree(self.ws, parked["ref"]),
+            parked["tree"],
+        )
+
+    def test_fixer_gap_needs_operator_preserves_candidate_and_fix_episode(self):
         path, state = self._drive_to_gap(self._fixer_gap("needs_operator"))
         self.assertEqual(state["failure"]["type"], "goal_gap")
         units = {st.unit_key(u): u for u in state["units"]}
-        # The reporter's abandoned draft AND the gapping fixer's untracked
-        # scratch are both gone (unwound to the last sealed baseline).
-        self.assertFalse(os.path.exists(os.path.join(self.ws, "abandoned.py")))
+        # The built candidate stays; only scratch from the gapping call goes.
+        self.assertTrue(os.path.exists(os.path.join(self.ws, "abandoned.py")))
         self.assertFalse(
             os.path.exists(os.path.join(self.ws, "scratch_untracked.py")))
         self.assertIn("gap_edits_discarded",
                       [e["type"] for e in state["events"]])
-        # The reporter re-drafts on resume: it failed FROM pending (reset), so
-        # resume restores it to pending — never the skeleton is remodelled here.
+        # After an operator amendment, the same fixer episode resumes.
         self.assertEqual(units["slice_impl-01"].get("failed_from"),
-                         st.U_PENDING)
+                         st.U_FIXING)
         self.assertFalse(units["slice_impl-01"].get("has_gap_remodel"))
         st.resume_run(state)
-        self.assertEqual(units["slice_impl-01"]["status"], st.U_PENDING)
+        self.assertEqual(units["slice_impl-01"]["status"], st.U_FIXING)
 
     def test_fixer_gap_restart_unwinds_idempotently(self):
         # Codex round 2/3: a crash leaves pending_gap(from_fixer) persisted;
@@ -1293,6 +1418,7 @@ class GapReopenCommitIsolationTest(unittest.TestCase):
             "pre_sym": gitops.head_symbolic_ref(self.ws),
             "pre_refs": gitops.snapshot_refs(self.ws),
             "pre_stash": gitops.snapshot_stash(self.ws),
+            "pre_worktree_tree": gitops.snapshot_worktree_tree(self.ws),
             "from_fixer": True,
         }
         st.save(path, state)
@@ -1300,10 +1426,9 @@ class GapReopenCommitIsolationTest(unittest.TestCase):
         state = st.load(path)
         self.assertEqual(state["failure"]["type"], "goal_gap")
         self.assertIsNone(state.get("pending_gap"))
-        # Unwound to the clean sealed baseline: the reporter's slice work is
-        # gone and the worktree is clean (no dangling accumulated fixes).
-        self.assertFalse(os.path.exists(os.path.join(self.ws, "prior_fix.py")))
-        self.assertFalse(gitops.has_builder_edits(self.ws))
+        # The exact pre-gap candidate, including accumulated prior fixes,
+        # remains available to the operator; only new gap scratch is absent.
+        self.assertTrue(os.path.exists(os.path.join(self.ws, "prior_fix.py")))
         # A SECOND startup recovery is a no-op (intent already discharged).
         drv.Driver(path, runner=runners.MockRunner([]))
         self.assertIsNone(st.load(path).get("pending_gap"))
