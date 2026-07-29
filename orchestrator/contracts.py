@@ -90,6 +90,7 @@ RETHINK_RESULT_MODES = (
     RETHINK_RESULT_PROPOSAL,
     RETHINK_RESULT_DESIGN_AMENDMENT,
 )
+MILESTONE_BRAINSTORMING_ROUNDS = 5
 
 # Kinds whose worker gets full edit permissions inside the workspace.
 EDIT_KINDS = (
@@ -755,21 +756,18 @@ def validate_need_rethink(
             "%s: need_rethink.target_path must be normalized and "
             "workspace-relative" % ctx
         )
-    if type(obj["max_rounds"]) is not int or obj["max_rounds"] <= 0:
+    if (
+        type(obj["max_rounds"]) is not int
+        or obj["max_rounds"] != MILESTONE_BRAINSTORMING_ROUNDS
+    ):
         raise ContractError(
-            "%s: need_rethink.max_rounds must be a positive integer" % ctx
+            "%s: need_rethink.max_rounds must be exactly %d"
+            % (ctx, MILESTONE_BRAINSTORMING_ROUNDS)
         )
     if require_failure_gap and "failure_gap" not in obj:
         raise ContractError(
             "%s: legacy continuation need_rethink requires failure_gap"
             % ctx
-        )
-    if (
-        result_mode == RETHINK_RESULT_DESIGN_AMENDMENT
-        and obj["max_rounds"] > 5
-    ):
-        raise ContractError(
-            "%s: design_amendment is a fast path limited to 5 rounds" % ctx
         )
     if "failure_gap" in obj:
         if kind not in RETHINK_CONTINUATION_KINDS:
@@ -1176,7 +1174,7 @@ EXACTLY:
   "question": "<one non-empty focused question>"
   "finding": {<the one current finding, preserved as source evidence>}
   "target_path": "<normalized workspace-relative source artifact to isolate>"
-  "max_rounds": <any positive integer chosen for this discussion>
+  "max_rounds": 5
   "result_mode": "proposal" | "design_amendment"
 Use `design_amendment` only when one conservative, bounded clarification of
 the current reviewed design can resolve an in-goal contradiction without
@@ -1185,7 +1183,8 @@ skeleton and affected slice notes and may assign bounded repair work to the
 current slice or a new future slice. In that mode
 `target_path` names the smallest source artifact for context; Brainstorming
 constructs a separate concise amendment target. Use `proposal` for an ordinary
-focused question. A design amendment is limited to at most 5 rounds. Review
+focused question. Set max_rounds to 5; the session may close earlier on
+agreement. Review
 kinds may use only `proposal`. The validator accepts
 an omitted result_mode as `proposal` solely for in-flight run compatibility.
 Do not mix need_rethink with notes, ordinary findings/results, work/file claims,
@@ -1354,7 +1353,8 @@ Focused discussion before finishing this judgment:
 {"status":"need_rethink","kind":"<echo KIND>","question":"...",
  "finding":{<one complete current finding>},
  "target_path":"<normalized workspace-relative path>",
- "max_rounds":<positive integer>,"result_mode":"proposal"}
+ "max_rounds":5,"result_mode":"proposal"}
+The session may close earlier on agreement.
 Return no other fields with `blocked` or `need_rethink`.
 """
 
@@ -1397,8 +1397,8 @@ Focused discussion before deciding one queued finding:
 {"status":"need_rethink","kind":"fix_findings","question":"...",
  "finding":{<one complete queued finding>},
  "target_path":"<normalized workspace-relative path>",
- "max_rounds":<positive integer>,"result_mode":"proposal|design_amendment"}
-`design_amendment` is limited to five rounds. Return no work claims or sibling
+ "max_rounds":5,"result_mode":"proposal|design_amendment"}
+The session may close earlier on agreement. Return no work claims or sibling
 findings with this status.
 """
 
@@ -1423,8 +1423,8 @@ Focused discussion before completing a required in-goal design change:
 {"status":"need_rethink","kind":"fix_findings","question":"...",
  "finding":{<copy the complete SOURCE SIGNAL from the prompt>},
  "target_path":"<normalized workspace-relative path>",
- "max_rounds":<positive integer>,"result_mode":"proposal|design_amendment"}
-`design_amendment` is limited to five rounds. Return no work claims with this
+ "max_rounds":5,"result_mode":"proposal|design_amendment"}
+The session may close earlier on agreement. Return no work claims with this
 status.
 """
 

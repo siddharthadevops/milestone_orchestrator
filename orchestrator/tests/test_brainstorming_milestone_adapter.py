@@ -74,7 +74,7 @@ def rethink(
     kind,
     finding=None,
     target="proposals/rethink.md",
-    rounds=17,
+    rounds=5,
     result_mode="proposal",
 ):
     value = {
@@ -245,7 +245,7 @@ class BrainstormingMilestoneAdapterTest(unittest.TestCase):
                 ),
                 value,
             )
-            self.assertEqual(value["max_rounds"], 17)
+            self.assertEqual(value["max_rounds"], 5)
 
         with self.assertRaises(contracts.ContractError):
             contracts.validate_worker_output(
@@ -272,6 +272,11 @@ class BrainstormingMilestoneAdapterTest(unittest.TestCase):
         with self.assertRaises(contracts.ContractError):
             contracts.validate_worker_output(
                 rethink(contracts.KIND_IMPLEMENT, rounds=0),
+                contracts.KIND_IMPLEMENT,
+            )
+        with self.assertRaises(contracts.ContractError):
+            contracts.validate_worker_output(
+                rethink(contracts.KIND_IMPLEMENT, rounds=3),
                 contracts.KIND_IMPLEMENT,
             )
         amendment = rethink(
@@ -783,7 +788,9 @@ class BrainstormingMilestoneAdapterTest(unittest.TestCase):
             adapter._path_overlap(request["target_path"], self.workspace)
         )
         self.assertFalse(os.path.exists(request["target_path"]))
-        self.assertEqual(request["max_rounds"], 23)
+        self.assertEqual(
+            request["max_rounds"], contracts.MILESTONE_BRAINSTORMING_ROUNDS
+        )
         self.assertEqual(
             request["context"]["source_payload"], signal["finding"]
         )
@@ -1035,7 +1042,7 @@ class BrainstormingMilestoneAdapterTest(unittest.TestCase):
         signal = rethink(
             contracts.KIND_IMPLEMENT,
             target="docs/sealed.md",
-            rounds=2,
+            rounds=5,
             result_mode="design_amendment",
         )
         captured = {}
@@ -1077,6 +1084,8 @@ class BrainstormingMilestoneAdapterTest(unittest.TestCase):
                 handle.read(), adapter.DESIGN_AMENDMENT_PLACEHOLDER
             )
         payload = captured["body"]["request"]["context"]
+        self.assertIn("preferably under 3,000 characters", payload["brief"])
+        self.assertIn("never omit necessary meaning", payload["brief"])
         self.assertIn("docs/sealed.md", payload["references"])
         self.assertEqual(payload["source_payload"]["finding"], signal["finding"])
         self.assertEqual(
@@ -2466,7 +2475,7 @@ class MilestoneDriverRethinkTest(unittest.TestCase):
                     "response": rethink(
                         contracts.KIND_FIX_FINDINGS,
                         finding=finding,
-                        rounds=2,
+                        rounds=5,
                         result_mode="design_amendment",
                     ),
                 },
@@ -2487,7 +2496,9 @@ class MilestoneDriverRethinkTest(unittest.TestCase):
             drv.Driver(path, runner=runner).step()
         handoff = self._handoff()
         handoff["retained_target"]["content"] = (
-            "Use behavior A when the two sealed clauses conflict."
+            "    # Indented amendment\n\n"
+            + " ".join(["Necessary semantic detail."] * 180)
+            + "\n\n"
         )
         with mock.patch.object(
             adapter, "terminal_handoff", return_value=handoff
@@ -2509,6 +2520,7 @@ class MilestoneDriverRethinkTest(unittest.TestCase):
         )
         self.assertEqual(merged[-1]["authority"], "brainstorming_design")
         self.assertEqual(merged[-1]["text"], handoff["retained_target"]["content"])
+        self.assertIn(handoff["retained_target"]["content"], runner.calls[1][2])
         self.assertEqual(unit["status"], st.U_ROUNDS)
         self.assertEqual(unit["fix_queue"], [])
         self.assertEqual(
@@ -2527,6 +2539,26 @@ class MilestoneDriverRethinkTest(unittest.TestCase):
                 ("continue", "codex", "mock-session-1"),
             ],
         )
+
+    def test_current_and_legacy_amendment_placeholders_are_not_adopted(self):
+        path = self._state_path()
+        driver = drv.Driver(path, runner=runners.MockRunner([]))
+        unit = st.current_unit(driver.state)
+        wait = {
+            "signal": {
+                "finding": {"id": "F1"},
+                "target_path": "proposals/rethink.md",
+            }
+        }
+        for placeholder in adapter.DESIGN_AMENDMENT_PLACEHOLDERS:
+            handoff = self._handoff()
+            handoff["retained_target"]["content"] = placeholder
+            with self.subTest(placeholder=placeholder), self.assertRaises(
+                adapter.AdapterError
+            ):
+                driver._adopt_brainstorming_design_amendment(
+                    unit, wait, handoff
+                )
 
     def test_continuation_receives_current_amendments_and_project_law(self):
         path = self._state_path()

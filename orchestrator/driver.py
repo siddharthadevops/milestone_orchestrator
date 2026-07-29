@@ -2564,21 +2564,24 @@ class Driver(object):
             raise brainstorming_milestone.AdapterError(
                 "an accepted design amendment must be one UTF-8 text artifact"
             )
-        text = content.strip()
+        text = content
         if (
-            not text
-            or brainstorming_milestone.DESIGN_AMENDMENT_PLACEHOLDER.strip()
-            in text
+            not text.strip()
+            or any(
+                placeholder.strip() in text
+                for placeholder in (
+                    brainstorming_milestone.DESIGN_AMENDMENT_PLACEHOLDERS
+                )
+            )
         ):
             raise brainstorming_milestone.AdapterError(
                 "the accepted design amendment still contains only its "
                 "placeholder"
             )
-        if "\x00" in text or len(text) > prompts.AMENDMENT_TEXT_CLIP:
+        if "\x00" in text:
             raise brainstorming_milestone.AdapterError(
-                "the accepted design amendment must be concise UTF-8 text "
-                "without NUL bytes (max %d characters)"
-                % prompts.AMENDMENT_TEXT_CLIP
+                "the accepted design amendment must be UTF-8 text without "
+                "NUL bytes"
             )
         number = 1 + sum(
             event.get("type") == "brainstorming_design_amendment_adopted"

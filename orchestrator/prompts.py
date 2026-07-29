@@ -78,19 +78,29 @@ def _modern_contract(kind):
         "",
     )
     text = re.sub(
+        r'"max_rounds"\s*:\s*<any positive integer chosen for this discussion>',
+        '"max_rounds": 5',
+        text,
+    )
+    text = re.sub(
+        r'"max_rounds"\s*:\s*<positive integer>',
+        '"max_rounds":5',
+        text,
+    )
+    text = re.sub(
         r"`design_amendment` is limited to (?:two|five) rounds and requires a .*?\n"
         r"failure_gap\.",
-        "`design_amendment` is limited to five rounds.",
+        "Set `max_rounds` to 5; the session may close earlier on agreement.",
         text,
     )
     text = re.sub(
         r"`design_amendment` is limited to (?:two|five) rounds\.",
-        "`design_amendment` is limited to five rounds.",
+        "Set `max_rounds` to 5; the session may close earlier on agreement.",
         text,
     )
     text = re.sub(
         r"A design amendment is limited to at most (?:2|5) rounds\.",
-        "A design amendment is limited to at most 5 rounds.",
+        "Set `max_rounds` to 5; the session may close earlier on agreement.",
         text,
     )
     text = re.sub(r"\bfits_remodel\b", "in-goal design change", text,
@@ -622,16 +632,14 @@ EXHAUSTIVE_SENTENCE = (
 )
 
 
-AMENDMENT_TEXT_CLIP = 2000
+PROJECT_CONTEXT_TEXT_CLIP = 2000
 
 
 def _clip_operator_text(text):
-    """Operator-authored text is trusted and rendered verbatim,
-    length-clipped only to protect the context window — the amendments
-    posture, shared by the PROJECT CONTEXT block."""
+    """Bound project-context prose while preserving its operator authority."""
     text = str(text)
-    if len(text) > AMENDMENT_TEXT_CLIP:
-        return text[: AMENDMENT_TEXT_CLIP - 3] + "..."
+    if len(text) > PROJECT_CONTEXT_TEXT_CLIP:
+        return text[: PROJECT_CONTEXT_TEXT_CLIP - 3] + "..."
     return text
 
 
@@ -746,14 +754,14 @@ def _amendments_block(amendments):
     ]
     lines = []
 
-    def _append(entries):
+    def _append(entries, preserve_markdown=False):
         for a in entries:
-            text = str(a.get("text") or "").strip()
-            if len(text) > AMENDMENT_TEXT_CLIP:
-                text = text[: AMENDMENT_TEXT_CLIP - 3] + "..."
-            lines.append(
-                "[%s] %s" % (_oneline(a.get("id"), ID_CLIP) or "?", text)
-            )
+            text = str(a.get("text") or "")
+            label = _oneline(a.get("id"), ID_CLIP) or "?"
+            if preserve_markdown:
+                lines.append("[%s]\n%s" % (label, text))
+            else:
+                lines.append("[%s] %s" % (label, text.strip()))
 
     if operator:
         lines += [
@@ -775,7 +783,7 @@ def _amendments_block(amendments):
             "earlier ones only within the same narrow subject. Reviewers treat",
             "a violation as a finding.",
         ]
-        _append(design)
+        _append(design, preserve_markdown=True)
     return "\n".join(lines) + "\n\n"
 
 
@@ -1075,7 +1083,8 @@ def _rethink_before_gap_block():
         "- For that narrow in-goal contradiction, set result_mode to\n"
         "  `design_amendment`. Brainstorming then writes a separate concise\n"
         "  amendment; target_path is only its smallest relevant source/context.\n"
-        "  This fast path permits at most five rounds.\n"
+        "  Set `max_rounds` to exactly 5; agreement may close the session\n"
+        "  earlier.\n"
         "  Use result_mode `proposal` for an unresolved focused question.\n"
         "- Do NOT use it for facts you can establish from the workspace,\n"
         "  missing investigation, an ordinary defect or fix, broad\n"
@@ -1084,8 +1093,8 @@ def _rethink_before_gap_block():
         "  schemas, security, ownership, slice boundaries, or otherwise needs\n"
         "  broad coordinated redesign.\n"
         "- Ask one decision-shaped question, preserve its concrete evidence\n"
-        "  in `finding`, choose the smallest relevant target and a\n"
-        "  proportionate round bound, and follow the exact `need_rethink`\n"
+        "  in `finding`, choose the smallest relevant target, set\n"
+        "  `max_rounds` to exactly 5, and follow the exact `need_rethink`\n"
         "  envelope in the OUTPUT CONTRACT.\n\n"
     )
 
@@ -1109,7 +1118,8 @@ def _design_rethink_block(fixer=False):
         "  `design_amendment`; do not code around it, silently rewrite design\n"
         "  documents, or stop the run merely because those documents need an\n"
         "  edit. %s Ask one decision-shaped question, select the smallest\n"
-        "  useful source artifact, and use at most five rounds.\n"
+        "  useful source artifact, and set `max_rounds` to exactly 5;\n"
+        "  agreement may close the session earlier.\n"
         "- The accepted amendment will return to this same task with an\n"
         "  explicit list of editable design paths. Apply only the agreed\n"
         "  change, then continue normally; the resulting delta and complete\n"
@@ -1255,7 +1265,8 @@ def _fix_gap_block():
         "- Prefer `need_rethink` when one bounded question or obvious in-goal\n"
         "  contradiction can be settled by a short discussion. Use `proposal`\n"
         "  for an open question; use `design_amendment` for one conservative\n"
-        "  clarification (at most five rounds). Choose one finding, one\n"
+        "  clarification. Set `max_rounds` to exactly 5; agreement may close\n"
+        "  the session earlier. Choose one finding, one\n"
         "  decision-shaped question, and the smallest relevant target.\n"
         "- Do not rethink workspace facts, missing investigation, ordinary\n"
         "  defects, broad exploration, or preference.\n"

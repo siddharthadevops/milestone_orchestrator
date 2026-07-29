@@ -225,7 +225,7 @@ class TestEcosystemMap(unittest.TestCase):
 
     def test_reuse_source_roles_render_recorded_descriptor_text(self):
         long_inventory = "inventory-" + (
-            "x" * (prompts.AMENDMENT_TEXT_CLIP + 20)
+            "x" * (prompts.PROJECT_CONTEXT_TEXT_CLIP + 20)
         )
         prompt = self.one_prompt(
             make_context(
@@ -293,10 +293,12 @@ class TestSafeguardRendering(unittest.TestCase):
         )
 
     def test_long_operator_text_clips_like_amendments(self):
-        long_text = "x" * (prompts.AMENDMENT_TEXT_CLIP + 500)
+        long_text = "x" * (prompts.PROJECT_CONTEXT_TEXT_CLIP + 500)
         ctx = make_context(safeguards=[policy_value(prompt=long_text)])
         flat = normalized(self.one_prompt(ctx))
-        self.assertIn("x" * (prompts.AMENDMENT_TEXT_CLIP - 3) + "...", flat)
+        self.assertIn(
+            "x" * (prompts.PROJECT_CONTEXT_TEXT_CLIP - 3) + "...", flat
+        )
         self.assertNotIn(long_text, flat)
 
     def test_none_in_scope_renders_map_alone(self):

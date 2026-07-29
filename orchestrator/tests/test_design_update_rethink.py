@@ -107,7 +107,7 @@ class DesignUpdateRethinkTest(unittest.TestCase):
             "question": "Which in-goal design should govern?",
             "finding": {"id": "F1", "summary": "the design conflicts"},
             "target_path": "docs/skeleton.md",
-            "max_rounds": 2,
+            "max_rounds": 5,
             "result_mode": contracts.RETHINK_RESULT_DESIGN_AMENDMENT,
         }
         if failure is not None:

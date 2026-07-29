@@ -159,7 +159,7 @@ class TestNaturalRethinkExit(unittest.TestCase):
         self.assertIn("one concrete in-goal inconsistency", prompt)
         self.assertIn("current design baseline", prompt)
         self.assertIn("result_mode `design_amendment`", prompt)
-        self.assertIn("at most five rounds", prompt)
+        self.assertIn("set `max_rounds` to exactly 5", prompt)
         self.assertIn("Establish workspace facts yourself", prompt)
         self.assertIn("GOAL itself is contradictory", prompt)
 
@@ -1022,19 +1022,32 @@ class TestPortedCanonContentRules(unittest.TestCase):
         self.assertIn("Never reject P0/P1 without a clear resolution", prompt)
 
     def test_modern_contract_scrubs_legacy_round_wording(self):
+        fixed_rounds = (
+            "Set `max_rounds` to 5; the session may close earlier on "
+            "agreement."
+        )
         cases = (
             (
                 "`design_amendment` is limited to two rounds and requires a "
                 "fits_remodel\nfailure_gap.",
-                "`design_amendment` is limited to five rounds.",
+                fixed_rounds,
             ),
             (
                 "`design_amendment` is limited to two rounds.",
-                "`design_amendment` is limited to five rounds.",
+                fixed_rounds,
             ),
             (
                 "A design amendment is limited to at most 2 rounds.",
-                "A design amendment is limited to at most 5 rounds.",
+                fixed_rounds,
+            ),
+            (
+                '"max_rounds": <any positive integer chosen for this '
+                'discussion>',
+                '"max_rounds": 5',
+            ),
+            (
+                '"max_rounds":<positive integer>',
+                '"max_rounds":5',
             ),
         )
         for legacy, expected in cases:
@@ -1246,12 +1259,12 @@ class TestOperatorAmendments(unittest.TestCase):
             with self.subTest(builder=name):
                 self.assertNotIn("OPERATOR AMENDMENTS", prompt)
 
-    def test_long_amendment_text_is_clipped(self):
-        a = [{"id": "A1", "text": "x" * 5000}]
+    def test_long_amendment_text_is_preserved(self):
+        text = "BEGIN-" + ("x" * 5000) + "-END"
+        a = [{"id": "A1", "text": text}]
         prompt = prompts.build_review_round(
             FAMILY, WORKSPACE, GOAL, UNIT, "docs/x.md", [], amendments=a)
-        self.assertNotIn("x" * (prompts.AMENDMENT_TEXT_CLIP + 1), prompt)
-        self.assertIn("...", prompt)
+        self.assertIn(text, prompt)
 
     def test_brainstorming_amendment_has_narrower_explicit_authority(self):
         amendments = self.AMENDMENTS + [

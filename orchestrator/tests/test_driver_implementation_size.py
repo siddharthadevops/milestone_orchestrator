@@ -543,7 +543,7 @@ class DriverImplementationSizeTest(unittest.TestCase):
                     "summary": "the implementation choice needs agreement",
                 },
                 "target_path": "docs/slice-01.md",
-                "max_rounds": 2,
+                "max_rounds": 5,
                 "result_mode": contracts.RETHINK_RESULT_PROPOSAL,
             },
             "references": ["docs/slice-01.md"],

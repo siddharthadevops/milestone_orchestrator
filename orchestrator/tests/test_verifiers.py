@@ -880,7 +880,7 @@ class TestMergedOutputValidation(FilesystemCase):
             "question": "Which compatible behavior should the design select?",
             "finding": {"id": "BUILD", "summary": "choice is unsettled"},
             "target_path": "proposals/rethink.md",
-            "max_rounds": 3,
+            "max_rounds": 5,
             "failure_gap": {
                 "classification": "fits_remodel",
                 "missing_or_conflict": "the design leaves one choice open",

@@ -22,12 +22,25 @@ class OperationalTerminalError(AdapterError):
     """The attached discussion ended because its execution failed."""
 
 
+DESIGN_AMENDMENT_LENGTH_GUIDANCE = (
+    "Keep it concise and preferably under 3,000 characters, but never omit "
+    "necessary meaning merely to meet that preference."
+)
 DESIGN_AMENDMENT_PLACEHOLDER = (
+    "Replace this placeholder with one self-contained design amendment that "
+    "resolves the stated question without changing the goal. %s\n"
+    % DESIGN_AMENDMENT_LENGTH_GUIDANCE
+)
+LEGACY_DESIGN_AMENDMENT_PLACEHOLDER = (
     "Replace this placeholder with one concise, self-contained design "
     "amendment that resolves the stated question without changing the goal.\n"
 )
+DESIGN_AMENDMENT_PLACEHOLDERS = (
+    DESIGN_AMENDMENT_PLACEHOLDER,
+    LEGACY_DESIGN_AMENDMENT_PLACEHOLDER,
+)
 
-GUARANTEE_CALIBRATION_MAX_ROUNDS = 5
+GUARANTEE_CALIBRATION_MAX_ROUNDS = contracts.MILESTONE_BRAINSTORMING_ROUNDS
 GUARANTEE_CALIBRATION_QUESTION = (
     "Does this skeleton declare each guarantee at the right level and within "
     "the right observable scope, no stronger or weaker than its authority "
@@ -358,7 +371,8 @@ def create_session(
                         "A milestone worker paused on one focused, in-goal "
                         "design contradiction. The target is a new concise "
                         "design amendment, not a copy of the source. Replace "
-                        "its placeholder with only the agreed amendment. "
+                        "its placeholder with only the agreed amendment. %s "
+                        % DESIGN_AMENDMENT_LENGTH_GUIDANCE
                     )
                     if amendment_mode else
                     "A milestone worker paused on one focused design question. "
@@ -367,7 +381,7 @@ def create_session(
                 "references": context_references,
                 "source_payload": source_payload,
             },
-            "max_rounds": signal["max_rounds"],
+            "max_rounds": contracts.MILESTONE_BRAINSTORMING_ROUNDS,
         },
         "participants": participants,
         "closure_policy": "unanimity",
