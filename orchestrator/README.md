@@ -27,7 +27,7 @@ those rules is enforced here structurally.
 | The fixer triages exactly what was queued | `contracts.validate_fix_coverage()` (same ids, nothing invented) |
 | Round/final-verify-fix caps | driver executors fail the run with the explanation in the event log |
 | Blocked -> stop with explanation, no silent retries | `status: "blocked"` or a `blocked` disposition ends the run; the reason is in `state.failure` and the events |
-| No prose parsing of reviewer output | workers must return contract JSON (`contracts.py`); one repair retry, then the run fails |
+| No prose parsing of reviewer output | workers must return contract JSON (`contracts.py`); one repair retry, then the run fails, except cutoff stabilization starts a fresh stabilizer while preserving its work |
 
 ## Layout
 
@@ -135,13 +135,20 @@ advanced config for a deliberate pure-state run.
 
 Git-enabled implementation calls also keep reviews bounded. At 1,000
 reviewable changed lines the active worker is asked to finish one coherent
-functional cut; beyond 1,500 it is stopped and a fresh worker must reduce and
-stabilize that cut. The meter is additions plus deletions from the fixed
+functional cut and to acknowledge that request explicitly. Crossing 1,500
+starts a three-minute grace; a real model acknowledgement extends it to ten
+minutes. Transport acceptance alone is not an acknowledgement. During the
+grace the delta is not judged again. On expiry, a fresh worker closes the work
+already in progress as a coherent delivery. Stabilization has no further size
+cutoff and never rewrites sound work merely to hit a number. A malformed
+stabilizer handoff starts another fresh stabilization instead of failing the
+run. The meter is additions plus deletions from the fixed
 pre-call Git tree, including non-ignored untracked files and excluding
 Markdown, text, and runtime bookkeeping. A cut becomes part `a`, completes
 its own commit and ordinary review cycle, and only then opens part `b`; later
-parts repeat the same strictly sequential flow. Override the thresholds with
-`implementation_size_control.soft_lines` and `.hard_lines`.
+parts repeat the same strictly sequential flow. Override the thresholds and
+graces with `implementation_size_control.soft_lines`, `.hard_lines`,
+`.unconfirmed_grace_s`, and `.confirmed_grace_s`.
 
 Both path fields
 have a Browse… picker (`GET /api/fs`, read-only listings; a typed path that

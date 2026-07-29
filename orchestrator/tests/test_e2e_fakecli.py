@@ -237,6 +237,7 @@ class TestCalculatorE2E(unittest.TestCase):
                 "events_total",
                 "last_events",
                 "malformed",
+                "implementation_stabilization",
                 "acts_config",
                 "model_defaults",
             },
@@ -248,6 +249,7 @@ class TestCalculatorE2E(unittest.TestCase):
         self.assertIsInstance(summ["last_events"], list)
         self.assertLessEqual(len(summ["last_events"]), 30)
         self.assertGreaterEqual(summ["events_total"], len(summ["last_events"]))
+        self.assertFalse(summ["implementation_stabilization"])
         for u in summ["units"]:
             self.assertEqual(
                 set(u.keys()),

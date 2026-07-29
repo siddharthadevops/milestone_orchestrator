@@ -146,6 +146,7 @@ class ServiceApiTest(unittest.TestCase):
         self.assertIn(".activity-line { display: flex", text)
         self.assertIn(".dot.running { background:", text)
         self.assertIn("function currentWorkplace", text)
+        self.assertIn("stabilization pending", text)
         self.assertIn("function itemStateRank", text)
         self.assertIn("function projectStateRank", text)
         # Launching is a project act: the standing "+ New milestone"
@@ -554,6 +555,32 @@ class ServiceApiTest(unittest.TestCase):
         _, detail = self.request_json("GET", "/api/runs/%s" % run_id)
         self.assertEqual(detail["status"]["slices_total"], 2)
 
+    def test_run_status_surfaces_pending_implementation_stabilization(self):
+        ws = self.workspace("ws-pending-stabilization")
+        _, body = self.create_run(ws)
+        run_id = body["run"]["id"]
+        entry = registry.get(registry.load(self.home), run_id)
+        state = st.load(entry["state_path"])
+        st.current_unit(state)["implementation_stabilization"] = {
+            "implementation_size": {
+                "interrupt_reason": "hard implementation size cutoff",
+            }
+        }
+        st.save(entry["state_path"], state)
+
+        _, listing = self.request_json("GET", "/api/runs")
+        run = next(item for item in listing["runs"] if item["id"] == run_id)
+        self.assertEqual(run["process"], "stopped")
+        self.assertIs(run["implementation_stabilization"], True)
+
+        _, detail = self.request_json("GET", "/api/runs/%s" % run_id)
+        self.assertIs(
+            detail["summary"]["implementation_stabilization"], True
+        )
+        self.assertIs(
+            detail["status"]["implementation_stabilization"], True
+        )
+
     def test_run_display_name_can_be_renamed_without_mutating_driver_state(self):
         ws = self.workspace("ws-rename")
         _, created = self.create_run(ws, name="Typo name")
@@ -948,6 +975,61 @@ class StoryApiTest(ServiceApiTest):
         self.assertEqual(body["raw_text"],
                          "I'll review this thoroughly next turn!")
         self.assertEqual(body["raw_text2"], "second attempt, still prose")
+
+    def test_stabilizer_retry_story_carries_both_attempts(self):
+        ws = self.workspace("ws-stabilizer-retry")
+        rid = self._seed(ws)
+        entry = registry.get(registry.load(self.home), rid)
+        state = st.load(entry["state_path"])
+        raw1 = os.path.join(ws, "stabilizer-attempt-1.txt")
+        raw2 = os.path.join(ws, "stabilizer-attempt-2.txt")
+        with open(raw1, "w", encoding="utf-8") as fh:
+            fh.write("first empty delivery transport")
+        with open(raw2, "w", encoding="utf-8") as fh:
+            fh.write("second empty delivery transport")
+        state["events"].append({
+            "seq": 1002, "at": "2026-07-05T10:45:00+0200",
+            "type": "worker_malformed", "label": "slice_impl-06-stabilize",
+            "kind": "implement", "family": "codex", "fatal": False,
+            "stabilizer_retry": True,
+            "error": "contract-violating output twice",
+            "duration_s": None, "raw_path": raw1, "raw_path2": raw2,
+        })
+        st.save(entry["state_path"], state)
+
+        status, body = self.request_json(
+            "GET", "/api/runs/%s/story?item=malformed:1002" % rid)
+
+        self.assertEqual(status, 200)
+        self.assertFalse(body["fatal"])
+        self.assertTrue(body["stabilizer_retry"])
+        self.assertEqual(body["raw_text"], "first empty delivery transport")
+        self.assertEqual(body["raw_text2"],
+                         "second empty delivery transport")
+
+    def test_transport_incident_story_keeps_type_without_raw(self):
+        ws = self.workspace("ws-transport-incident")
+        rid = self._seed(ws)
+        entry = registry.get(registry.load(self.home), rid)
+        state = st.load(entry["state_path"])
+        state["events"].append({
+            "seq": 1003, "at": "2026-07-05T10:50:00+0200",
+            "type": "worker_malformed", "label": "slice_impl-06-draft",
+            "kind": "implement", "family": "codex", "fatal": False,
+            "controlled_interruption": True,
+            "error": "connection reset after accepted cutoff",
+            "duration_s": None, "raw_path": None, "raw_path2": None,
+        })
+        st.save(entry["state_path"], state)
+
+        status, body = self.request_json(
+            "GET", "/api/runs/%s/story?item=malformed:1003" % rid)
+
+        self.assertEqual(status, 200)
+        self.assertTrue(body["controlled_interruption"])
+        self.assertFalse(body["infra_retry"])
+        self.assertIn("connection reset", body["error"])
+        self.assertIsNone(body["raw_text"])
 
     def test_malformed_story_and_summary_trail(self):
         ws = self.workspace("ws-malformed")

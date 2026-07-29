@@ -265,6 +265,7 @@ def assert_append_only(old_state, new_state_):
             )
         for transient in (
             "implementation_attempt_snapshot",
+            "implementation_stabilization",
             "pending_wip",
         ):
             old_value = old_unit.get(transient)
@@ -1321,6 +1322,7 @@ def reset_for_redraft(state, unit, reason):
     unit.pop("baseline_verification", None)
     unit.pop("baseline_unstable_runs", None)
     unit.pop("implementation_attempt_snapshot", None)
+    unit.pop("implementation_stabilization", None)
     unit.pop("pending_wip", None)
     discarded_handoff = unit.pop("brainstorming_review_handoff", None)
     unit["fix_loop_rounds"] = 0
@@ -2070,6 +2072,13 @@ def summary(state):
         "current_unit": unit_key(unit) if unit else None,
         "display_current_unit": display_unit_key(unit) if unit else None,
         "current_unit_status": unit["status"] if unit else None,
+        # A cutoff interrupt is persisted before the transport is stopped.
+        # Keep that crash-gap truth visible without exposing the internal
+        # timing/transport marker through the summary contract.
+        "implementation_stabilization": bool(
+            unit is not None
+            and unit.get("implementation_stabilization") is not None
+        ),
         "current_family": current_fam,
         "current_model": current_model,
         "suite_command": state.get("suite_command"),

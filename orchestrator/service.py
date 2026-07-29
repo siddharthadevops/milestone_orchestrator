@@ -1338,6 +1338,7 @@ def run_status(entry, home=None):
         "current_unit": None,
         "display_current_unit": None,
         "current_unit_status": None,
+        "implementation_stabilization": False,
         "slices_total": 0,
         "current_family": None,
         "current_model": None,
@@ -1356,6 +1357,9 @@ def run_status(entry, home=None):
             "display_current_unit", summ["current_unit"]
         )
         info["current_unit_status"] = summ["current_unit_status"]
+        info["implementation_stabilization"] = bool(
+            summ.get("implementation_stabilization")
+        )
         info["slices_total"] = len(summ.get("slices") or [])
         info["current_family"] = summ.get("current_family")
         info["current_model"] = summ.get("current_model")
@@ -2320,7 +2324,7 @@ def run_story(home, run_id, item):
                     }
         raise ApiError(404, "unknown repair episode %r" % ref)
     if kind == "malformed":
-        # The repaired-first-strike viewer: the raw path comes from the
+        # Worker-contract incident viewer: the raw path comes from the
         # run's OWN ledger event (never from the request), so this reads
         # only files the driver itself recorded.
         def _read_raw(rel):
@@ -2352,9 +2356,14 @@ def run_story(home, run_id, item):
                 "duration_s": e.get("duration_s"),
                 "error": e.get("error"),
                 "fatal": bool(e.get("fatal")),
+                "stabilizer_retry": bool(e.get("stabilizer_retry")),
+                "controlled_interruption": bool(
+                    e.get("controlled_interruption")
+                ),
+                "infra_retry": bool(e.get("infra_retry")),
                 "raw_path": e.get("raw_path"),
                 "raw_text": _read_raw(e.get("raw_path")),
-                # A FATAL strike has a second attempt: the repair's text.
+                # Fatal and stabilizer-retry strikes carry both attempts.
                 "raw_text2": _read_raw(e.get("raw_path2")),
             }
         raise ApiError(404, "unknown malformed event %r" % ref)

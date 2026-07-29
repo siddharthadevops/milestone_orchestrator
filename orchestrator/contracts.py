@@ -1215,7 +1215,7 @@ Kind implement adds:
                             deliberately delegated to the next sequential
                             implementation part>"}
    Include `implementation_cut` ONLY after the driver sends its live size
-   steer (or in the bounded stabilizing continuation after a forced cutoff).
+   steer (or in the stabilizing continuation after a forced cutoff).
    Omit it when the original slice scope is complete. Both strings must be
    concrete and non-empty. This field reports the boundary; it does not let
    you choose labels or create/renumber design slices. The orchestrator derives

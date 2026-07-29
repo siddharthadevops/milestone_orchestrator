@@ -1290,6 +1290,8 @@ class TestVerificationProtocol(unittest.TestCase):
         self.assertIn("exact candidate bytes and commands still matched",
                       prompt)
         self.assertIn("after every configured reviewer is clean", prompt)
+        self.assertIn("near 1,000 Git lines", prompt)
+        self.assertIn("open the next part automatically", prompt)
         self.assertIn("Report the repo's official full-suite command",
                       prompt)
         self.assertIn("your suite_command will arm the final boundary", prompt)

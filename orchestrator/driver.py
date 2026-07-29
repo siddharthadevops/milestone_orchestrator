@@ -21,6 +21,7 @@ import contextlib
 import copy
 import hashlib
 import json
+import math
 import os
 import re
 import signal
@@ -28,6 +29,7 @@ import subprocess
 import sys
 import threading
 import time
+import uuid
 
 try:
     import fcntl
@@ -38,6 +40,8 @@ from . import brainstorming, brainstorming_milestone
 from . import contracts, errclass, gitops, interpreter, kvstore, ledgers
 from . import projects, prompts, runners, verifiers, workareas
 from . import state as st
+
+IMPLEMENTATION_SIZE_ACK = "IMPLEMENTATION_SIZE_CUTOFF_ACK"
 
 DEFAULT_CONFIG = {
     "families_order": ["codex", "claude"],
@@ -102,14 +106,17 @@ DEFAULT_CONFIG = {
     "worker_stall_window_s": 900,
     "worker_stall_min_cpu_s": 1.0,
     # Keep implementation commits reviewable.  The live worker is first
-    # asked to close one coherent functional cut; only continued growth past
-    # the hard boundary is interrupted and handed to a fresh stabilizer.
+    # asked to acknowledge and close one coherent functional cut. Crossing
+    # the hard boundary starts a 3-minute grace, extended to 10 minutes by a
+    # real model acknowledgement; expiry hands the work to a stabilizer.
     # Git is the sole meter.  Markdown/text and runtime bookkeeping are
     # excluded by gitops.reviewable_line_count().
     "implementation_size_control": {
         "soft_lines": 1000,
         "hard_lines": 1500,
         "poll_interval_s": 2,
+        "unconfirmed_grace_s": 180,
+        "confirmed_grace_s": 600,
     },
     "verification": [],
     # Unlimited by default, same philosophy as worker timeouts: a real
@@ -839,15 +846,14 @@ class Driver(object):
     def _implementation_scope(self, unit):
         return st.implementation_scope(self.state, unit)
 
-    def _implementation_size_control(self, base_tree,
-                                     recovery_start_lines=None):
+    def _implementation_size_control(self, base_tree):
         """Live Git budget monitor for one implementation call.
 
-        The observer never mutates Git or state.  It asks once for a coherent
-        cut at the soft boundary.  A hard stop follows when the worker remains
-        beyond the hard boundary after that request.  Recovery workers start
-        above that boundary by definition, so they are stopped only if they
-        expand the already-oversized delta instead of reducing it.
+        The observer never mutates Git. It asks once for a coherent cut at the
+        soft boundary. A hard stop follows when the worker remains beyond the
+        hard boundary after that request; accepting that stop durably records
+        stabilization. Stabilizers never use this monitor: once recovery
+        starts, they must close coherently without another size interruption.
         """
         if not base_tree or not gitops.enabled(self.config):
             return None, None
@@ -860,37 +866,94 @@ class Driver(object):
             soft = int(configured.get("soft_lines", 1000))
             hard = int(configured.get("hard_lines", 1500))
             poll = float(configured.get("poll_interval_s", 2))
+            unconfirmed_grace = float(
+                configured.get("unconfirmed_grace_s", 180)
+            )
+            confirmed_grace = float(
+                configured.get("confirmed_grace_s", 600)
+            )
         except (TypeError, ValueError):
             return None, None
-        if soft <= 0 or hard <= soft or poll <= 0:
+        if (
+            soft <= 0 or hard <= soft
+            or not all(math.isfinite(value) and value > 0 for value in (
+                poll, unconfirmed_grace, confirmed_grace
+            ))
+        ):
             return None, None
         marker = {
+            "episode_id": uuid.uuid4().hex,
             "soft_lines": soft,
             "hard_lines": hard,
+            "unconfirmed_grace_s": unconfirmed_grace,
+            "confirmed_grace_s": confirmed_grace,
             "steer_attempted": False,
             "steer_delivered": False,
+            "steer_confirmed": False,
             "steer_lines": None,
+            "hard_crossed_lines": None,
+            "grace_kind": None,
             "interrupt_lines": None,
             "last_lines": 0,
-            "recovery_start_lines": recovery_start_lines,
-            "recovery_ceiling": (
-                recovery_start_lines + max(1, hard - soft)
-                if recovery_start_lines is not None else None
-            ),
         }
         steer_text = (
-            "CONTROLLED SIZE CUTOFF: stop expanding the slice now. Bring the "
+            "CONTROLLED SIZE CUTOFF: before any further tool call or edit, "
+            "send one standalone commentary line containing exactly "
+            "%s. Then stop expanding the slice and bring the "
             "current changes to one coherent, functional and reviewable cut; "
             "run only focused checks needed for that cut. Do not implement "
             "the remaining obligations in this turn. If obligations remain, "
             "return implementation_cut with concise non-empty cut_scope and "
             "remaining_scope. If the complete original slice is already "
             "finished, omit implementation_cut and return the normal result."
+            % IMPLEMENTATION_SIZE_ACK
         )
 
         def observe(control):
             call_steered = False
+            hard_crossed_at = None
+            grace_deadline = None
             while not control.closed:
+                if hard_crossed_at is not None:
+                    confirmed_at = control.model_confirmation_at
+                    if confirmed_at is not None \
+                            and marker["grace_kind"] != "confirmed":
+                        # The exact model-authored token is stronger delivery
+                        # evidence than a missing/timed-out steer RPC reply.
+                        marker["steer_delivered"] = True
+                        marker["steer_confirmed"] = True
+                        marker["grace_kind"] = "confirmed"
+                        grace_deadline = confirmed_at + confirmed_grace
+                    now = time.monotonic()
+                    if now >= grace_deadline:
+                        marker["interrupt_lines"] = marker["last_lines"]
+                        accepted = control.interrupt(
+                            "implementation exceeded the controlled size "
+                            "cutoff and did not close within %g seconds "
+                            "(%s model confirmation)"
+                            % (
+                                marker[
+                                    "confirmed_grace_s"
+                                    if marker["grace_kind"] == "confirmed"
+                                    else "unconfirmed_grace_s"
+                                ],
+                                "with" if marker["grace_kind"] == "confirmed"
+                                else "without",
+                            )
+                        )
+                        if accepted:
+                            return
+                        # Write-ahead persistence or transport delivery may
+                        # fail transiently. Keep watching and retry instead of
+                        # silently leaving an oversized live worker unbounded.
+                        if control.wait_closed(poll):
+                            return
+                        continue
+                    if control.wait_closed(
+                        min(poll, max(0.001, grace_deadline - now))
+                    ):
+                        return
+                    continue
                 try:
                     lines = gitops.reviewable_line_count(
                         self.workspace,
@@ -903,71 +966,185 @@ class Driver(object):
                     if control.wait_closed(poll):
                         return
                     continue
+                observed_at = time.monotonic()
                 marker["last_lines"] = lines
-                if recovery_start_lines is not None:
-                    if lines > marker["recovery_ceiling"]:
-                        marker["interrupt_lines"] = lines
-                        control.interrupt(
-                            "cutoff recovery expanded the implementation "
-                            "delta (%d reviewable Git lines)" % lines
-                        )
-                        return
-                    if control.wait_closed(poll):
-                        return
-                    continue
                 if not call_steered and lines >= soft:
                     call_steered = True
                     marker["steer_attempted"] = True
                     marker["steer_lines"] = lines
+                    control.expect_model_confirmation(
+                        IMPLEMENTATION_SIZE_ACK
+                    )
                     delivered = bool(control.steer(steer_text))
                     marker["steer_delivered"] = bool(
                         marker["steer_delivered"] or delivered
                     )
-                    if lines > hard and not delivered:
-                        marker["interrupt_lines"] = lines
-                        control.interrupt(
-                            "implementation exceeded the controlled size "
-                            "cutoff (%d reviewable Git lines)" % lines
+                confirmed_at = control.model_confirmation_at
+                if confirmed_at is not None:
+                    # Codex may consume the steer and answer it after the
+                    # app-server RPC acknowledgement has timed out.
+                    marker["steer_delivered"] = True
+                    marker["steer_confirmed"] = True
+                if call_steered and lines > hard:
+                    hard_crossed_at = observed_at
+                    marker["hard_crossed_lines"] = lines
+                    if confirmed_at is not None:
+                        marker["grace_kind"] = "confirmed"
+                        grace_deadline = (
+                            hard_crossed_at + confirmed_grace
+                            if confirmed_at <= hard_crossed_at
+                            else confirmed_at + confirmed_grace
                         )
-                        return
-                elif (
-                    call_steered
-                    and lines > hard
-                ):
-                    marker["interrupt_lines"] = lines
-                    control.interrupt(
-                        "implementation continued beyond the controlled "
-                        "size cutoff (%d reviewable Git lines)" % lines
-                    )
-                    return
+                    else:
+                        marker["grace_kind"] = "unconfirmed"
+                        grace_deadline = hard_crossed_at + unconfirmed_grace
                 if control.wait_closed(poll):
                     return
 
-        return runners.ActiveCallControl(observer=observe), marker
+        return runners.ActiveCallControl(
+            observer=observe,
+            on_interrupt=lambda reason: (
+                self._persist_implementation_stabilization(
+                    marker, interrupt_reason=reason
+                )
+            ),
+            on_interrupt_rejected=lambda _reason: (
+                self._clear_rejected_implementation_stabilization(marker)
+            ),
+        ), marker
+
+    def _persist_implementation_stabilization(
+        self, marker, interrupt_reason=None
+    ):
+        """Durably cross the cutoff boundary before exposing interruption."""
+        unit = st.current_unit(self.state)
+        created = unit.get("implementation_stabilization") is None
+        if created:
+            durable_marker = copy.deepcopy(marker)
+            if interrupt_reason:
+                durable_marker["interrupt_reason"] = interrupt_reason
+            unit["implementation_stabilization"] = {
+                "implementation_size": durable_marker,
+            }
+        try:
+            self._save()
+        except Exception:
+            if created:
+                unit.pop("implementation_stabilization", None)
+            raise
+
+    def _clear_rejected_implementation_stabilization(self, marker):
+        """Clear this episode's write-ahead marker after transport refusal."""
+        unit = st.current_unit(self.state)
+        pending = unit.get("implementation_stabilization")
+        durable = (
+            pending.get("implementation_size")
+            if isinstance(pending, dict) else None
+        )
+        if not isinstance(durable, dict) or durable.get("episode_id") \
+                != marker.get("episode_id"):
+            return
+        removed = unit.pop("implementation_stabilization")
+        try:
+            self._save()
+        except Exception:
+            unit["implementation_stabilization"] = removed
+            raise
+
+    def _ensure_implementation_stabilization_events(self, unit, marker):
+        """Repair a crash gap between an accepted stop and runner return."""
+        unit_key = st.unit_key(unit)
+        episode_id = marker.get("episode_id")
+
+        def already_recorded(event_type, fields):
+            candidates = (
+                event for event in self.state.get("events", [])
+                if event.get("unit") == unit_key
+                and event.get("type") == event_type
+            )
+            if episode_id:
+                return any(
+                    event.get("episode_id") == episode_id
+                    for event in candidates
+                )
+            # Legacy markers cannot name their episode. Match only an
+            # untagged event with the same observable cutoff evidence.
+            return any(
+                event.get("episode_id") is None
+                and all(event.get(key) == value
+                        for key, value in fields.items())
+                for event in candidates
+            )
+
+        steer_fields = {
+            "lines": marker.get("steer_lines"),
+            "delivered": marker.get("steer_delivered"),
+            "confirmed": marker.get("steer_confirmed"),
+            "grace_kind": marker.get("grace_kind"),
+            "soft_lines": marker.get("soft_lines"),
+            "hard_lines": marker.get("hard_lines"),
+        }
+        interrupt_fields = {
+            "lines": marker.get("interrupt_lines"),
+            "reason": (
+                marker.get("interrupt_reason")
+                or "implementation size cutoff accepted before restart"
+            ),
+            "confirmed": marker.get("steer_confirmed"),
+            "grace_kind": marker.get("grace_kind"),
+            "hard_crossed_lines": marker.get("hard_crossed_lines"),
+        }
+        added = False
+        if (
+            marker.get("steer_attempted")
+            and not already_recorded(
+                "implementation_size_steer", steer_fields
+            )
+        ):
+            st.append_event(
+                self.state,
+                "implementation_size_steer",
+                unit=unit_key,
+                episode_id=episode_id,
+                **steer_fields,
+            )
+            added = True
+        if (
+            marker.get("interrupt_lines") is not None
+            and not already_recorded(
+                "implementation_size_interrupted", interrupt_fields
+            )
+        ):
+            st.append_event(
+                self.state,
+                "implementation_size_interrupted",
+                unit=unit_key,
+                episode_id=episode_id,
+                duration_s=None,
+                raw_path=None,
+                **interrupt_fields,
+            )
+            added = True
+        if added:
+            self._save()
 
     @staticmethod
     def _implementation_stabilizer_prompt(prompt, marker):
+        del marker
         return (
-            prompt
+            prompt.replace(prompts.IMPLEMENTATION_SIZE_GUIDANCE, "")
             + "\n\nFORCED CONTROLLED-CUTOFF RECOVERY\n"
             "A previous implementer was stopped after continuing beyond the "
             "size limit. Its uncommitted workspace changes are intentionally "
-            "present. Inspect and preserve sound work. Do not expand toward "
-            "the full remaining slice: reduce the current reviewable Git "
-            "delta to at most %(hard)s lines, make that cut coherent and "
-            "functional, and run focused checks only. Defer or revert excess "
-            "work rather than preserving an oversized cut. If the "
+            "present. Inspect and preserve sound work. Close the work already "
+            "in progress as one coherent, functional delivery and run focused "
+            "checks only. Do not continue into the full remaining slice, but "
+            "also do not compress, rewrite, discard, or reimplement sound work "
+            "merely to meet a line count. No further size cutoff applies to "
+            "this stabilization. If the "
             "original slice still has obligations, return implementation_cut "
             "with concise non-empty cut_scope and remaining_scope; otherwise "
             "omit it. Return the ordinary implement envelope.\n"
-            "Observed reviewable Git lines: %(observed)s.\n"
-            % {
-                "hard": marker["hard_lines"],
-                "observed": (
-                    marker.get("interrupt_lines")
-                    or marker.get("last_lines")
-                ),
-            }
         )
 
     def _implementation_line_count(self, base_tree):
@@ -1001,7 +1178,25 @@ class Driver(object):
     def _call_implementation(
         self, family, prompt, raw_name, model, effort, extensions, roots,
         validate_opts, start_session, base_tree, session_ref=None,
+        stabilizing=False,
     ):
+        if stabilizing:
+            output, result, raw_path = self._call(
+                family,
+                prompt,
+                contracts.KIND_IMPLEMENT,
+                raw_name,
+                model=model,
+                effort=effort,
+                extensions=extensions,
+                roots=roots,
+                validate_opts=validate_opts,
+                start_session=start_session,
+                session_ref=session_ref,
+                active_control=None,
+                repeat_protocol=True,
+            )
+            return output, result, raw_path, None, True
         control, marker = self._implementation_size_control(base_tree)
         if marker is None and gitops.enabled(self.config):
             st.fail_run(
@@ -1030,13 +1225,22 @@ class Driver(object):
         )
         if marker is None:
             return output, result, raw_path, None, False
+        # The exact ACK may arrive immediately before provider completion;
+        # consolidate it even if closing the control woke the observer before
+        # its next polling iteration.
+        if control.model_confirmation_at is not None:
+            marker["steer_delivered"] = True
+            marker["steer_confirmed"] = True
         if marker.get("steer_attempted"):
             st.append_event(
                 self.state,
                 "implementation_size_steer",
                 unit=st.unit_key(st.current_unit(self.state)),
+                episode_id=marker.get("episode_id"),
                 lines=marker.get("steer_lines"),
                 delivered=marker.get("steer_delivered"),
+                confirmed=marker.get("steer_confirmed"),
+                grace_kind=marker.get("grace_kind"),
                 soft_lines=marker.get("soft_lines"),
                 hard_lines=marker.get("hard_lines"),
             )
@@ -1048,6 +1252,21 @@ class Driver(object):
             not interrupted
             and output is not None
             and output.get("status") == "ok"
+            and not control.interrupted
+            and marker.get("interrupt_lines") is not None
+            and final_lines is not None
+            and final_lines > marker["hard_lines"]
+        ):
+            self._fail_implementation_size(
+                final_lines,
+                marker["hard_lines"],
+                "the controlled cutoff could not be accepted before the "
+                "worker completed",
+            )
+        if (
+            not interrupted
+            and output is not None
+            and output.get("status") == "ok"
             and final_lines is None
         ):
             self._fail_implementation_size(
@@ -1055,40 +1274,50 @@ class Driver(object):
                 marker["hard_lines"],
                 "the final implementation size could not be measured",
             )
-        over_hard = bool(
-            not interrupted
-            and output is not None
-            and output.get("status") == "ok"
-            and final_lines is not None
-            and final_lines > marker["hard_lines"]
-        )
-        if not interrupted and not over_hard:
+        if not interrupted:
+            # The monitor controls a call while it is live. If a valid worker
+            # delivery jumps over the hard boundary between the last poll and
+            # process completion, there is nothing left to interrupt: accept
+            # that ordinary envelope and send it into the normal review flow.
+            # Keep the oversize observation as telemetry; never re-run a
+            # completed implementer merely to manufacture a cutoff.
+            if (
+                output is not None
+                and output.get("status") == "ok"
+                and final_lines is not None
+                and final_lines > marker["hard_lines"]
+                and marker.get("hard_crossed_lines") is None
+            ):
+                st.append_event(
+                    self.state,
+                    "implementation_size_overflow",
+                    unit=st.unit_key(st.current_unit(self.state)),
+                    lines=final_lines,
+                    hard_lines=marker["hard_lines"],
+                    completed=True,
+                )
             return output, result, raw_path, marker, False
-        if interrupted:
-            st.append_event(
-                self.state,
-                "implementation_size_interrupted",
-                unit=st.unit_key(st.current_unit(self.state)),
-                lines=marker.get("interrupt_lines"),
-                reason=result.interrupt_reason,
-                duration_s=result.duration_s,
-                raw_path=raw_path,
-            )
-        else:
-            st.append_event(
-                self.state,
-                "implementation_size_overflow",
-                unit=st.unit_key(st.current_unit(self.state)),
-                lines=final_lines,
-                hard_lines=marker["hard_lines"],
-            )
+        st.append_event(
+            self.state,
+            "implementation_size_interrupted",
+            unit=st.unit_key(st.current_unit(self.state)),
+            episode_id=marker.get("episode_id"),
+            lines=marker.get("interrupt_lines"),
+            reason=result.interrupt_reason,
+            duration_s=result.duration_s,
+            raw_path=raw_path,
+            confirmed=marker.get("steer_confirmed"),
+            grace_kind=marker.get("grace_kind"),
+            hard_crossed_lines=marker.get("hard_crossed_lines"),
+        )
         recovery_prompt = self._implementation_stabilizer_prompt(
             prompt, marker
         )
-        recovery_start = self._implementation_line_count(base_tree)
-        recovery_control, recovery_marker = self._implementation_size_control(
-            base_tree, recovery_start_lines=recovery_start
-        )
+        # Crossing into stabilization is a durable process boundary.  Save it
+        # before the fresh worker starts so a provider failure or driver crash
+        # cannot send Resume back through the ordinary size-monitored draft.
+        # The marker stays until a valid implementation delivery is recorded.
+        self._persist_implementation_stabilization(marker)
         output, result, raw_path = self._call(
             family,
             recovery_prompt,
@@ -1102,41 +1331,11 @@ class Driver(object):
             # An interrupted continuation cannot safely reuse its provider
             # turn.  The stabilizer is deliberately a fresh conversation.
             start_session=True,
-            active_control=recovery_control,
+            # Recovery owns the delivery boundary now.  It is neither
+            # size-monitored nor failed for an oversized coherent result.
+            active_control=None,
+            repeat_protocol=True,
         )
-        if isinstance(result, runners.ControlledInterruptionResult):
-            st.append_event(
-                self.state,
-                "implementation_size_recovery_interrupted",
-                unit=st.unit_key(st.current_unit(self.state)),
-                lines=(recovery_marker or {}).get("interrupt_lines"),
-                reason=result.interrupt_reason,
-                duration_s=result.duration_s,
-                raw_path=raw_path,
-            )
-            self._fail_implementation_size(
-                self._implementation_line_count(base_tree),
-                marker["hard_lines"],
-                "the fresh cutoff worker continued expanding the delta",
-            )
-        recovered_lines = self._implementation_line_count(base_tree)
-        if (
-            output is not None
-            and output.get("status") == "ok"
-            and (
-                recovered_lines is None
-                or recovered_lines > marker["hard_lines"]
-            )
-        ):
-            self._fail_implementation_size(
-                recovered_lines,
-                marker["hard_lines"],
-                (
-                    "the stabilized implementation size could not be measured"
-                    if recovered_lines is None
-                    else "the fresh cutoff worker returned an oversized cut"
-                ),
-            )
         return output, result, raw_path, marker, True
 
     def _artifact(self, unit):
@@ -1212,7 +1411,9 @@ class Driver(object):
         paths = []
         for i, text in enumerate(getattr(exc, "raw_texts", []) or [], 1):
             paths.append(
-                self._save_raw("%s-protoerr%d" % (raw_name, i), text)
+                self._save_raw_noclobber(
+                    "%s-protoerr%d" % (raw_name, i), text
+                )
             )
         return paths
 
@@ -1547,7 +1748,8 @@ class Driver(object):
 
     def _call(self, family, prompt, kind, raw_name, model=None, effort=None,
               extensions=None, roots=None, validate_opts=None,
-              start_session=False, session_ref=None, active_control=None):
+              start_session=False, session_ref=None, active_control=None,
+              repeat_protocol=False):
         """Validated worker call; on protocol/runner failure, fail the run
         with the explanation recorded, then re-raise as StopStep.
 
@@ -1567,6 +1769,7 @@ class Driver(object):
             self._mark_busy(
                 raw_name, kind, family, model=model, effort=effort
             )
+            physical_started = time.time()
             try:
                 call_control = (
                     active_control
@@ -1598,12 +1801,97 @@ class Driver(object):
             except (runners.RunnerError, runners.WorkerProtocolError) as exc:
                 self._clear_busy()
                 proto_paths = self._save_protocol_raws(raw_name, exc)
+                if call_control is not None and call_control.interrupted:
+                    # The transport accepted the hard stop. A late transport
+                    # or parsing error cannot turn that boundary back into an
+                    # initial-draft retry or a run failure: hand the accepted
+                    # interruption to the ordinary stabilizer path.
+                    st.append_event(
+                        self.state,
+                        "worker_malformed",
+                        unit=self._worker_event_unit(),
+                        label=raw_name,
+                        kind=kind,
+                        family=family,
+                        fatal=False,
+                        controlled_interruption=True,
+                        error=str(exc)[:300],
+                        duration_s=None,
+                        raw_path=(proto_paths or [None])[0],
+                        raw_path2=(
+                            proto_paths[1]
+                            if len(proto_paths) > 1 else None
+                        ),
+                    )
+                    self._save()
+                    raw_texts = list(
+                        getattr(exc, "raw_texts", []) or []
+                    )
+                    result = runners.ControlledInterruptionResult(
+                        raw_texts[-1] if raw_texts else "",
+                        1,
+                        time.time() - physical_started,
+                        call_control.interrupt_reason,
+                    )
+                    break
+                if (
+                    repeat_protocol
+                    and isinstance(exc, runners.WorkerProtocolError)
+                ):
+                    # A cutoff stabilizer owns an already-interrupted delivery.
+                    # A malformed handoff cannot safely open review, but it is
+                    # also not a reason to abandon the preserved work. Record
+                    # the strike and retry in a fresh provider session until a
+                    # valid ordinary implementation envelope is delivered.
+                    st.append_event(
+                        self.state,
+                        "worker_malformed",
+                        unit=self._worker_event_unit(),
+                        label=raw_name,
+                        kind=kind,
+                        family=family,
+                        fatal=False,
+                        stabilizer_retry=True,
+                        error=str(exc)[:300],
+                        duration_s=None,
+                        raw_path=(proto_paths or [None])[0],
+                        raw_path2=(
+                            proto_paths[1] if len(proto_paths) > 1 else None
+                        ),
+                    )
+                    self._save()
+                    # A repeated stabilization is a new worker, not another
+                    # continuation of the session that already failed twice.
+                    if session_ref is not None:
+                        session_ref = None
+                        start_session = True
+                    continue
                 etype, resume_at, evidence = self._classify_failure(
                     family, exc, raw_name=raw_name
                 )
                 if etype in ("network", "busy") and attempt < len(retries):
                     # Short in-place retries BEFORE failing: transient
                     # blips should not cost a run failure + resume cycle.
+                    incident = {
+                        "unit": self._worker_event_unit(),
+                        "label": raw_name,
+                        "kind": kind,
+                        "family": family,
+                        "fatal": False,
+                        "infra_retry": True,
+                        "error": str(exc)[:300],
+                        "duration_s": None,
+                        "raw_path": (proto_paths or [None])[0],
+                        "raw_path2": (
+                            proto_paths[1]
+                            if len(proto_paths) > 1 else None
+                        ),
+                    }
+                    if repeat_protocol:
+                        incident["stabilizer_retry"] = True
+                    st.append_event(
+                        self.state, "worker_malformed", **incident
+                    )
                     st.append_event(
                         self.state, "infra_retry", kind=kind, family=family,
                         failure_type=etype, attempt=attempt + 1,
@@ -1614,8 +1902,9 @@ class Driver(object):
                     attempt += 1
                     continue
                 # The call is now definitively FAILING the run: the red
-                # incident chip (an in-place-absorbed infra blip above
-                # records only its infra_retry event, no chip).
+                # incident chip. An absorbed infrastructure blip above gets a
+                # non-fatal incident even when the provider exposed no raw
+                # bytes, so every retry remains visible and truthful.
                 self._record_fatal_malformed(
                     raw_name, kind, family, exc, proto_paths
                 )
@@ -1641,9 +1930,13 @@ class Driver(object):
             break
         self._clear_busy()
         if isinstance(result, runners.ControlledInterruptionResult):
+            raw_text = getattr(result, "transport_text", None)
+            if not isinstance(raw_text, str) or not raw_text:
+                raw_text = result.text
             raw_path = self._save_raw_noclobber(
-                raw_name + "-controlled-interruption", result.text
+                raw_name + "-controlled-interruption", raw_text
             )
+            self._record_repair(raw_name, kind, family, result)
             result.raw_path = raw_path
             return None, result, raw_path
         raw_path = self._save_raw(raw_name, result.text)
@@ -3138,6 +3431,44 @@ class Driver(object):
                     if verification_repair else False
                 ),
             )
+            durable_stabilization_size = None
+            if kind == contracts.KIND_IMPLEMENT:
+                durable_stabilization = unit.get(
+                    "implementation_stabilization"
+                )
+                if durable_stabilization is not None:
+                    durable_stabilization_size = (
+                        copy.deepcopy(durable_stabilization.get(
+                            "implementation_size"
+                        ))
+                        if isinstance(durable_stabilization, dict)
+                        and isinstance(durable_stabilization.get(
+                            "implementation_size"
+                        ), dict)
+                        else None
+                    )
+                    if durable_stabilization_size is None:
+                        st.fail_run(
+                            self.state,
+                            "implementation stabilization metadata is "
+                            "incomplete",
+                            unit=unit,
+                            type_="orchestrator",
+                        )
+                        self._save()
+                        raise StopStep(
+                            "implementation stabilization metadata incomplete"
+                        )
+                    self._ensure_implementation_stabilization_events(
+                        unit, durable_stabilization_size
+                    )
+                    # The unit marker is current process truth. Brainstorming's
+                    # origin snapshot is retained history and may predate a
+                    # cutoff or a crash; it cannot reopen the size-monitored
+                    # draft or drop the stabilizer's closing instruction.
+                    prompt = self._implementation_stabilizer_prompt(
+                        prompt, durable_stabilization_size
+                    )
             raw_name = "%s-rethink-return" % origin["raw_name"]
             design_before = (
                 self._snapshot() if unit.get("design_update") else None
@@ -3166,6 +3497,13 @@ class Driver(object):
             implementation_size = None
             implementation_stabilized = False
             if kind == contracts.KIND_IMPLEMENT:
+                origin_pre_snapshot = origin.get("pre_snapshot") or {}
+                fresh_stabilizer_session = bool(
+                    durable_stabilization_size is not None
+                    and not origin_pre_snapshot.get(
+                        "implementation_stabilized"
+                    )
+                )
                 (
                     output,
                     result,
@@ -3181,13 +3519,25 @@ class Driver(object):
                     extensions,
                     roots,
                     validate_opts,
-                    False,
+                    fresh_stabilizer_session,
                     (
                         unit.get("implementation_attempt_snapshot") or {}
                     ).get("tree")
-                    or (origin.get("pre_snapshot") or {}).get("tree"),
-                    session_ref=origin["provider_session_ref"],
+                    or origin_pre_snapshot.get("tree"),
+                    session_ref=(
+                        None if fresh_stabilizer_session
+                        else origin["provider_session_ref"]
+                    ),
+                    stabilizing=bool(
+                        durable_stabilization_size is not None
+                        or origin_pre_snapshot.get(
+                            "implementation_stabilized"
+                        )
+                    ),
                 )
+                if durable_stabilization_size is not None:
+                    implementation_size = durable_stabilization_size
+                    implementation_stabilized = True
             else:
                 output, result, raw_path = self._call(
                     family,
@@ -3802,6 +4152,33 @@ class Driver(object):
                 pre_tree = implementation_attempt.get("tree")
                 pre_stash = copy.deepcopy(implementation_attempt.get("stash"))
         raw_name = "%s-draft" % st.unit_key(unit)
+        stabilization = (
+            unit.get("implementation_stabilization")
+            if kind == contracts.KIND_IMPLEMENT else None
+        )
+        stabilization_size = (
+            copy.deepcopy(stabilization.get("implementation_size"))
+            if isinstance(stabilization, dict)
+            and isinstance(stabilization.get("implementation_size"), dict)
+            else None
+        )
+        if stabilization is not None and stabilization_size is None:
+            st.fail_run(
+                self.state,
+                "implementation stabilization metadata is incomplete",
+                unit=unit,
+                type_="orchestrator",
+            )
+            self._save()
+            raise StopStep("implementation stabilization metadata incomplete")
+        if stabilization_size is not None:
+            self._ensure_implementation_stabilization_events(
+                unit, stabilization_size
+            )
+            prompt = self._implementation_stabilizer_prompt(
+                prompt, stabilization_size
+            )
+            raw_name += "-stabilize"
         resumed = self._take_brainstorming_resume(unit, kind)
         implementation_size = None
         implementation_stabilized = False
@@ -3860,7 +4237,10 @@ class Driver(object):
                     validate_opts,
                     start_session,
                     (implementation_attempt or {}).get("tree") or pre_tree,
+                    stabilizing=stabilization_size is not None,
                 )
+                if stabilization_size is not None:
+                    implementation_size = stabilization_size
             else:
                 output, result, raw_path = self._call(
                     family, prompt, kind, raw_name,
@@ -3900,6 +4280,12 @@ class Driver(object):
                             implementation_size
                             and implementation_size.get("steer_delivered")
                         )
+                    ),
+                    "implementation_size": copy.deepcopy(
+                        implementation_size
+                    ),
+                    "implementation_stabilized": bool(
+                        implementation_stabilized
                     ),
                 },
             )
@@ -3963,6 +4349,8 @@ class Driver(object):
                     "interrupt_lines"
                 ),
             )
+        if kind == contracts.KIND_IMPLEMENT:
+            unit.pop("implementation_stabilization", None)
         st.record_draft(self.state, unit, kind, output, raw_path,
                         family=family, duration=result.duration_s,
                         model=model, effort=effort)
@@ -4255,6 +4643,7 @@ class Driver(object):
             # Cleanup proved that this builder attempt has been abandoned.
             # A later re-draft must establish a fresh size baseline.
             unit.pop("implementation_attempt_snapshot", None)
+            unit.pop("implementation_stabilization", None)
         operator_gaps = [
             g for g in gaps
             if g.get("classification") == contracts.CLASSIFY_NEEDS_OPERATOR

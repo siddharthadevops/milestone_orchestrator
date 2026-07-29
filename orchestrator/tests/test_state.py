@@ -2218,6 +2218,7 @@ class TestSummary(TempWorkspaceCase):
                 "current_unit",
                 "display_current_unit",
                 "current_unit_status",
+                "implementation_stabilization",
                 "current_family",
                 "current_model",
                 "created_epoch",
@@ -2242,6 +2243,7 @@ class TestSummary(TempWorkspaceCase):
         self.assertEqual(summ["current_unit"], "slice_doc-01")
         self.assertEqual(summ["display_current_unit"], "slice_doc-01")
         self.assertEqual(summ["current_unit_status"], st.U_FAILED)
+        self.assertFalse(summ["implementation_stabilization"])
         self.assertEqual(summ["failure"]["reason"], "round cap")
         self.assertEqual(summ["events_total"], len(state["events"]))
         self.assertLessEqual(len(summ["last_events"]), 30)
@@ -2268,6 +2270,7 @@ class TestSummary(TempWorkspaceCase):
         self.assertEqual(len(skel_view["drafts"]), 1)
         self.assertTrue(skel_view["drafts"][0]["current"])
         self.assertEqual(skel_view["status"], st.U_SEALED)
+
         self.assertEqual(skel_view["artifact"], "docs/skeleton.md")
         # rounds view: one clean round per family
         self.assertEqual(len(skel_view["rounds"]), 2)
@@ -2304,6 +2307,21 @@ class TestSummary(TempWorkspaceCase):
         # doc view carries the dirty round's finding count
         self.assertEqual(doc_view["rounds"][0]["findings"], 2)
         self.assertEqual(doc_view["seals"], [])
+
+    def test_summary_surfaces_pending_implementation_stabilization_compactly(self):
+        state = make_state(self.workspace)
+        unit = st.current_unit(state)
+        unit["implementation_stabilization"] = {
+            "implementation_size": {
+                "interrupt_reason": "hard implementation size cutoff",
+                "interrupt_lines": 1600,
+            }
+        }
+
+        summ = st.summary(state)
+
+        self.assertIs(summ["implementation_stabilization"], True)
+        self.assertNotIn("hard implementation size cutoff", repr(summ))
 
     def test_brainstormings_keep_every_detour_with_its_routed_outcome(self):
         state = make_state(self.workspace)

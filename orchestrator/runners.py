@@ -257,15 +257,35 @@ class ControlledInterruptionResult(RunnerResult):
 
 
 class ActiveCallControl(object):
-    def __init__(self, observer=None):
+    def __init__(self, observer=None, on_interrupt=None,
+                 _interrupt_state=None, _confirmation_state=None,
+                 on_interrupt_rejected=None):
         if observer is not None and not callable(observer):
             raise RunnerError("active-call observer must be callable")
+        if on_interrupt is not None and not callable(on_interrupt):
+            raise RunnerError("active-call interrupt callback must be callable")
+        if (on_interrupt_rejected is not None
+                and not callable(on_interrupt_rejected)):
+            raise RunnerError(
+                "active-call interrupt rejection callback must be callable"
+            )
         self._observer = observer
+        self._on_interrupt = on_interrupt
+        self._on_interrupt_rejected = on_interrupt_rejected
         self._lock = threading.Lock()
         self._closed = threading.Event()
         self._functions = {}
         self._thread = None
-        self._steers, self._interrupt_reason, self._error = [], None, None
+        self._steers, self._error = [], None
+        self._confirmation_state = _confirmation_state or {
+            "lock": threading.Lock(),
+            "token": None,
+            "at": None,
+        }
+        self._interrupt_state = _interrupt_state or {
+            "lock": threading.Lock(),
+            "reason": None,
+        }
 
     @property
     def closed(self):
@@ -277,15 +297,50 @@ class ActiveCallControl(object):
 
     @property
     def interrupt_reason(self):
-        return self._interrupt_reason
+        with self._interrupt_state["lock"]:
+            return self._interrupt_state["reason"]
 
     @property
     def interrupted(self):
-        return self._interrupt_reason is not None
+        return self.interrupt_reason is not None
 
     @property
     def error(self):
         return self._error
+
+    @property
+    def model_confirmation_at(self):
+        with self._confirmation_state["lock"]:
+            return self._confirmation_state["at"]
+
+    def expect_model_confirmation(self, token):
+        """Arm one exact model-authored acknowledgement before steering."""
+        token = str(token or "").strip()
+        if not token:
+            raise ValueError("model confirmation token must be non-empty")
+        with self._lock:
+            if self.closed:
+                return False
+        with self._confirmation_state["lock"]:
+            # A repair is another physical call in the same logical episode.
+            # Re-arming the same token must not erase an ACK already observed
+            # by either physical call; a different token starts a new proof.
+            if self._confirmation_state["token"] != token:
+                self._confirmation_state["token"] = token
+                self._confirmation_state["at"] = None
+        return True
+
+    def observe_model_message(self, text):
+        """Accept only the exact armed message; transports select its role."""
+        if not isinstance(text, str):
+            return False
+        with self._confirmation_state["lock"]:
+            if self._confirmation_state["at"] is not None:
+                return False
+            if text.strip() != self._confirmation_state["token"]:
+                return False
+            self._confirmation_state["at"] = time.monotonic()
+        return True
 
     def wait_closed(self, timeout=None):
         return self._closed.wait(timeout)
@@ -296,7 +351,13 @@ class ActiveCallControl(object):
         A provider call closes its controller. Contract repair is a second
         physical call and must not silently reuse that closed instance.
         """
-        return ActiveCallControl(observer=self._observer)
+        return ActiveCallControl(
+            observer=self._observer,
+            on_interrupt=self._on_interrupt,
+            _interrupt_state=self._interrupt_state,
+            _confirmation_state=self._confirmation_state,
+            on_interrupt_rejected=self._on_interrupt_rejected,
+        )
 
     def steer(self, text):
         text = str(text or "").strip()
@@ -315,18 +376,50 @@ class ActiveCallControl(object):
             fn = self._functions.get(kind)
         if fn is None:
             return False
+        if kind == "interrupt" and self._on_interrupt is not None:
+            # Write the durable cutoff intent before the transport can observe
+            # the interrupt. If persistence fails, do not send a stop that a
+            # restarted driver would be unable to distinguish from a crash in
+            # the ordinary draft.
+            try:
+                self._on_interrupt(value)
+            except Exception as exc:
+                self._error = str(exc)
+                return False
         try:
             accepted = fn(value) is not False
         except Exception as exc:
-            self._error = str(exc)
+            self._reject_persisted_interrupt(kind, value, exc)
             return False
         if not accepted:
+            self._reject_persisted_interrupt(kind, value)
             return False
         if kind == "steer":
             self._steers.append(value)
         else:
-            self._interrupt_reason = value
+            # Renewed physical calls share the same state, so a transport
+            # error from a contract-repair call remains visible to the outer
+            # driver as the accepted interruption it is.
+            with self._interrupt_state["lock"]:
+                self._interrupt_state["reason"] = value
         return True
+
+    def _reject_persisted_interrupt(self, kind, value, transport_error=None):
+        """Undo write-ahead intent after an explicit transport rejection."""
+        rollback_error = None
+        if kind == "interrupt" and self._on_interrupt_rejected is not None:
+            try:
+                self._on_interrupt_rejected(value)
+            except Exception as exc:
+                rollback_error = exc
+        if transport_error is not None and rollback_error is not None:
+            self._error = "%s; interrupt rollback failed: %s" % (
+                transport_error, rollback_error
+            )
+        elif transport_error is not None:
+            self._error = str(transport_error)
+        elif rollback_error is not None:
+            self._error = "interrupt rollback failed: %s" % rollback_error
 
     def _bind(self, steer_fn, interrupt_fn):
         with self._lock:
@@ -1282,7 +1375,10 @@ class SubprocessRunner(object):
             diagnostics = err.read()
             text = outcome.get("text") or ""
             exit_code = 0 if outcome.get("ok", True) else 1
-            if active_control.interrupted:
+            provider_completed_ok = bool(
+                outcome.get("complete") and outcome.get("ok")
+            )
+            if active_control.interrupted and not provider_completed_ok:
                 result = ControlledInterruptionResult(
                     text, exit_code, time.time() - started,
                     active_control.interrupt_reason,
@@ -1317,6 +1413,21 @@ class SubprocessRunner(object):
             return result
         except BaseException as exc:
             cleanup()
+            if family in ("codex", "claude") \
+                    and isinstance(exc, RunnerError):
+                transport = "".join(raw)
+                if transport:
+                    exc.transport_text = transport
+                    existing = getattr(exc, "raw_texts", None)
+                    if isinstance(existing, (list, tuple)):
+                        raw_texts = list(existing)
+                    elif isinstance(existing, str) and existing:
+                        raw_texts = [existing]
+                    else:
+                        raw_texts = []
+                    if transport not in raw_texts:
+                        raw_texts.append(transport)
+                    exc.raw_texts = raw_texts
             if quiescent:
                 try:
                     exc.worker_quiescent = True
@@ -1347,6 +1458,8 @@ class SubprocessRunner(object):
         read_event,
         no_event,
     ):
+        deferred_events = []
+
         def next_id():
             return str(uuid.uuid4())
 
@@ -1363,6 +1476,7 @@ class SubprocessRunner(object):
                         "codex app-server exited during %s" % method
                     )
                 if event.get("id") != ident:
+                    deferred_events.append(event)
                     continue
                 if "error" in event:
                     raise RunnerError(
@@ -1454,6 +1568,9 @@ class SubprocessRunner(object):
         response_lock = threading.Lock()
         active_control._bind(steer, interrupt)
         completed = None
+        completed_final_messages = []
+        completed_unphased_messages = []
+        completed_commentary_messages = []
         stop_deadline = None
         while True:
             if active_control.interrupted:
@@ -1461,7 +1578,7 @@ class SubprocessRunner(object):
                 if time.monotonic() >= stop_deadline:
                     _kill_group(proc)
                     break
-            event = read_event()
+            event = deferred_events.pop(0) if deferred_events else read_event()
             if event is no_event:
                 continue
             if event is None:
@@ -1473,15 +1590,58 @@ class SubprocessRunner(object):
                 if reply is not None:
                     reply.put(event)
                     continue
+            if event.get("method") == "item/completed":
+                params = event.get("params") or {}
+                if params.get("threadId") != thread_id \
+                        or params.get("turnId") != turn_id:
+                    continue
+                item = params.get("item") or {}
+                if not isinstance(item, dict):
+                    continue
+                text = item.get("text")
+                if item.get("type") == "agentMessage" \
+                        and isinstance(text, str):
+                    phase = item.get("phase")
+                    if phase == "final_answer":
+                        completed_final_messages.append(text)
+                    elif phase == "commentary":
+                        completed_commentary_messages.append(text)
+                        active_control.observe_model_message(text)
+                    else:
+                        completed_unphased_messages.append(text)
+                continue
             if event.get("method") == "turn/completed":
-                candidate = (event.get("params") or {}).get("turn") or {}
-                if candidate.get("id") == turn_id:
+                params = event.get("params") or {}
+                candidate = params.get("turn") or {}
+                if params.get("threadId") == thread_id \
+                        and candidate.get("id") == turn_id:
                     completed = candidate
                     break
         turn = completed or {}
-        texts = [item.get("text") for item in turn.get("items") or []
-                 if isinstance(item, dict) and item.get("type") == "agentMessage"
-                 and isinstance(item.get("text"), str)]
+        fallback_items = turn.get("items") or []
+        fallback_final = [
+            item.get("text") for item in fallback_items
+            if isinstance(item, dict) and item.get("type") == "agentMessage"
+            and item.get("phase") == "final_answer"
+            and isinstance(item.get("text"), str)
+        ]
+        fallback_unphased = [
+            item.get("text") for item in fallback_items
+            if isinstance(item, dict) and item.get("type") == "agentMessage"
+            and item.get("phase") not in ("final_answer", "commentary")
+            and isinstance(item.get("text"), str)
+        ]
+        fallback_commentary = [
+            item.get("text") for item in fallback_items
+            if isinstance(item, dict) and item.get("type") == "agentMessage"
+            and item.get("phase") == "commentary"
+            and isinstance(item.get("text"), str)
+        ]
+        texts = (
+            completed_final_messages or fallback_final
+            or completed_unphased_messages or fallback_unphased
+            or completed_commentary_messages or fallback_commentary
+        )
         return {
             "text": texts[-1] if texts else "",
             "session_ref": thread_id,
@@ -1525,6 +1685,15 @@ class SubprocessRunner(object):
                 break
             if isinstance(event.get("session_id"), str):
                 observed_session = event["session_id"]
+            if event.get("type") == "assistant":
+                message = event.get("message") or {}
+                content = message.get("content") or []
+                if isinstance(content, list):
+                    for block in content:
+                        if not isinstance(block, dict) \
+                                or block.get("type") != "text":
+                            continue
+                        active_control.observe_model_message(block.get("text"))
             if event.get("type") == "result":
                 return {
                     "text": event.get("result") or "",
@@ -2107,6 +2276,14 @@ def call_worker(runner, family, prompt, kind, workspace,
         def _validate(obj):
             return contracts.validate_worker_output(obj, kind, **opts)
 
+    def diagnostic_text(result):
+        """Keep app-server evidence when the selected final text is empty."""
+        text = result.text
+        if isinstance(text, str) and text.strip():
+            return text
+        transport = getattr(result, "transport_text", None)
+        return transport if isinstance(transport, str) and transport else text
+
     def invoke(call_prompt, continuation_ref=None,
                call_control=active_control):
         def compatible_call(method, *args):
@@ -2192,12 +2369,33 @@ def call_worker(runner, family, prompt, kind, workspace,
     repair_control = (
         active_control.renew() if active_control is not None else None
     )
-    result2 = invoke(
-        repair_prompt,
-        continuation_ref=repair_ref,
-        call_control=repair_control,
-    )
+    try:
+        result2 = invoke(
+            repair_prompt,
+            continuation_ref=repair_ref,
+            call_control=repair_control,
+        )
+    except RunnerError as exc:
+        raw_texts = [diagnostic_text(result)]
+        existing = getattr(exc, "raw_texts", None)
+        if isinstance(existing, (list, tuple)):
+            raw_texts.extend(existing)
+        elif isinstance(existing, str) and existing:
+            raw_texts.append(existing)
+        else:
+            second = getattr(exc, "transport_text", None)
+            if not isinstance(second, str) or not second:
+                second = getattr(exc, "raw_text", None)
+            if isinstance(second, str) and second:
+                raw_texts.append(second)
+        exc.raw_texts = raw_texts
+        raise
     if isinstance(result2, ControlledInterruptionResult):
+        result2.repair = {
+            "error": first_error,
+            "raw_text": diagnostic_text(result),
+            "duration_s": result.duration_s,
+        }
         return None, result2
     try:
         validated, closers = _extract_contract_output(
@@ -2209,7 +2407,7 @@ def call_worker(runner, family, prompt, kind, workspace,
         # the malformed text and its cost, not just the happy ending).
         result2.repair = {
             "error": first_error,
-            "raw_text": result.text,
+            "raw_text": diagnostic_text(result),
             "duration_s": result.duration_s,
         }
         return validated, result2
@@ -2218,7 +2416,7 @@ def call_worker(runner, family, prompt, kind, workspace,
             "family %s produced contract-violating output twice for kind %s: "
             "first error: %s; second error: %s"
             % (family, kind, first_error, exc),
-            raw_texts=[result.text, result2.text],
+            raw_texts=[diagnostic_text(result), diagnostic_text(result2)],
         )
 
 

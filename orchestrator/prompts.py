@@ -453,6 +453,14 @@ SLICE_SIZING_LINE = (
     "  reason in the slice note.\n"
 )
 
+IMPLEMENTATION_SIZE_GUIDANCE = (
+    "Keep the current reviewable code delivery near 1,000 Git lines.\n"
+    "If the remaining obligations are larger, do not compress or\n"
+    "reimplement them to force everything into this delivery: the driver\n"
+    "can close the current coherent work as one sequential part, complete\n"
+    "its commit and reviews, and then open the next part automatically.\n"
+)
+
 SLICE_NOTE_CONTENT_BLOCK = (
     "SLICE NOTE CONTENT\n"
     "- A complete slice note covers: scope, non-goals, dependencies,\n"
@@ -1429,7 +1437,8 @@ def build_implement(family, workspace, goal, slice_info, note_path, verification
         "what you touch while working, but do NOT run the repo's full\n"
         "test suite at the end. The driver runs it once, after every\n"
         "configured reviewer is clean at the final boundary.\n"
-        "Report the repo's official full-suite command (as run from the\n"
+        + IMPLEMENTATION_SIZE_GUIDANCE
+        + "Report the repo's official full-suite command (as run from the\n"
         "workspace root) in `suite_command` — it must be non-interactive\n"
         "and run the suite exactly once and exit (never a watch mode).\n"
         "Final-suite commands currently armed:\n"

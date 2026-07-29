@@ -41,12 +41,21 @@ class LiveControlRunner(runners.MockRunner):
     """
 
     def __init__(self, mode, response, recovery_response=None,
-                 recovery_lines=4):
+                 recovery_lines=4, recovery_script=None,
+                 interrupt_error=None, confirm_delay_s=None):
         super().__init__([])
         self.mode = mode
         self.response = response
         self.recovery_response = recovery_response
         self.recovery_lines = recovery_lines
+        self.recovery_script = list(recovery_script or [])
+        self.interrupt_error = interrupt_error
+        self.confirm_delay_s = confirm_delay_s
+        self.controls = []
+        self.stabilization_seen_before_error = False
+        self.steer_at = None
+        self.confirmed_at = None
+        self.interrupt_at = None
         self.steer_seen = threading.Event()
         self.interrupt_seen = threading.Event()
 
@@ -75,18 +84,38 @@ class LiveControlRunner(runners.MockRunner):
             "model": model,
             "effort": effort,
         })
+        self.controls.append(active_control)
 
         if active_control is None:
-            if self.recovery_response is None:
-                raise AssertionError("unexpected uncontrolled worker call")
-            return runners.RunnerResult(
-                json.dumps(self.recovery_response), 0, 0.02
+            response = (
+                self.recovery_script.pop(0)
+                if self.recovery_script else self.recovery_response
             )
+            if response is None:
+                raise AssertionError("unexpected uncontrolled worker call")
+            if isinstance(response, BaseException):
+                raise response
+            self._write_lines(workspace, self.recovery_lines)
+            text = json.dumps(response) if isinstance(response, dict) \
+                else response
+            return runners.RunnerResult(text, 0, 0.02)
 
-        active_control._bind(
-            lambda _text: (self.steer_seen.set() or True),
-            lambda _reason: (self.interrupt_seen.set() or True),
-        )
+        def receive_steer(_text):
+            self.steer_at = time.monotonic()
+            self.steer_seen.set()
+            if self.confirm_delay_s == 0:
+                if active_control.observe_model_message(
+                    drv.IMPLEMENTATION_SIZE_ACK
+                ):
+                    self.confirmed_at = active_control.model_confirmation_at
+            return True
+
+        def receive_interrupt(_reason):
+            self.interrupt_at = time.monotonic()
+            self.interrupt_seen.set()
+            return True
+
+        active_control._bind(receive_steer, receive_interrupt)
         try:
             if "FORCED CONTROLLED-CUTOFF RECOVERY" in prompt:
                 if self.recovery_response is None:
@@ -122,12 +151,52 @@ class LiveControlRunner(runners.MockRunner):
                     lambda: bool(active_control.steers),
                     "soft size steer was not delivered",
                 )
-                if self.mode == "hard":
+                if self.mode in (
+                    "hard", "error_after_interrupt", "crash_after_interrupt",
+                    "complete_after_failed_interrupt",
+                    "complete_after_accepted_interrupt",
+                ):
                     self._write_lines(workspace, 8)
+                    if self.confirm_delay_s not in (None, 0):
+                        time.sleep(self.confirm_delay_s)
+                        if active_control.observe_model_message(
+                            drv.IMPLEMENTATION_SIZE_ACK
+                        ):
+                            self.confirmed_at = (
+                                active_control.model_confirmation_at
+                            )
+                    if self.mode == "complete_after_failed_interrupt":
+                        self._wait_for(
+                            lambda: bool(active_control.error),
+                            "cutoff persistence failure was not observed",
+                        )
+                        result = runners.RunnerResult(
+                            json.dumps(self.response), 0, 0.02
+                        )
+                        result.steers = active_control.steers
+                        return result
                     self._wait_for(
                         lambda: active_control.interrupted,
                         "hard size interruption was not delivered",
                     )
+                    if self.mode == "complete_after_accepted_interrupt":
+                        result = runners.RunnerResult(
+                            json.dumps(self.response), 0, 0.02
+                        )
+                        result.steers = active_control.steers
+                        return result
+                    if self.mode == "crash_after_interrupt":
+                        raise _PromptReached(
+                            "crash after interrupt delivery"
+                        )
+                    if self.mode == "error_after_interrupt":
+                        persisted = st.load(drv.default_state_path(workspace))
+                        self.stabilization_seen_before_error = bool(
+                            st.current_unit(persisted).get(
+                                "implementation_stabilization"
+                            )
+                        )
+                        raise self.interrupt_error
                     result = runners.ControlledInterruptionResult(
                         "partial worker output",
                         -9,
@@ -141,6 +210,34 @@ class LiveControlRunner(runners.MockRunner):
             return result
         finally:
             active_control._close()
+
+
+class PersistedEventProbeRunner(LiveControlRunner):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.events_at_stabilizer_entry = []
+
+    def call(self, family, prompt, workspace, model=None, effort=None,
+             timeout_override=None, active_control=None):
+        if active_control is None:
+            persisted = st.load(drv.default_state_path(workspace))
+            self.events_at_stabilizer_entry = [
+                event for event in persisted["events"]
+                if event.get("unit") == "slice_impl-01"
+                and event.get("type") in {
+                    "implementation_size_steer",
+                    "implementation_size_interrupted",
+                }
+            ]
+        return super().call(
+            family,
+            prompt,
+            workspace,
+            model=model,
+            effort=effort,
+            timeout_override=timeout_override,
+            active_control=active_control,
+        )
 
 
 class ContinuationControlProbeRunner(runners.MockRunner):
@@ -171,16 +268,23 @@ class ContinuationControlProbeRunner(runners.MockRunner):
 
 
 class InfraRetryControlRunner(object):
-    def __init__(self):
+    def __init__(self, raw_texts=None):
         self.controls = []
+        self.raw_texts = list(raw_texts or [])
 
     def call(self, _family, _prompt, _workspace, model=None, effort=None,
              active_control=None):
         del model, effort
-        self.controls.append((active_control, active_control.closed))
-        active_control._close()
+        self.controls.append((
+            active_control,
+            active_control.closed if active_control is not None else None,
+        ))
+        if active_control is not None:
+            active_control._close()
         if len(self.controls) == 1:
-            raise runners.RunnerError("temporary network failure")
+            error = runners.RunnerError("temporary network failure")
+            error.raw_texts = list(self.raw_texts)
+            raise error
         return runners.RunnerResult(
             json.dumps(ok(contracts.KIND_IMPLEMENT, files_changed=[])),
             0,
@@ -207,16 +311,135 @@ class StagedCrashRunner(object):
         raise runners.RunnerError("provider failed after staging its work")
 
 
+class InterruptedRepairRunner(object):
+    def __init__(self):
+        self.calls = 0
+
+    def call(self, _family, _prompt, _workspace, model=None, effort=None):
+        del model, effort
+        self.calls += 1
+        if self.calls == 1:
+            return runners.RunnerResult(
+                "", 0, 0.01, transport_text="malformed draft transport"
+            )
+        return runners.ControlledInterruptionResult(
+            "partial repair output", -9, 0.02, "controlled size cutoff",
+            transport_text="full interrupted repair transport",
+        )
+
+
+class TimedOutSteerConfirmedRunner(runners.MockRunner):
+    """The steer RPC times out, then the model proves it received the text."""
+
+    def __init__(self, response):
+        super().__init__([])
+        self.response = response
+        self.controls = []
+
+    def call(self, family, prompt, workspace, model=None, effort=None,
+             timeout_override=None, active_control=None):
+        del timeout_override
+        self.calls.append((family, runners.prompt_kind(prompt), prompt))
+        self.call_meta.append({
+            "family": family,
+            "kind": runners.prompt_kind(prompt),
+            "model": model,
+            "effort": effort,
+        })
+        self.controls.append(active_control)
+        confirmed = threading.Event()
+
+        def steer_timeout(_text):
+            def confirm_later():
+                time.sleep(0.005)
+                active_control.observe_model_message(
+                    drv.IMPLEMENTATION_SIZE_ACK
+                )
+                confirmed.set()
+
+            threading.Thread(target=confirm_later, daemon=True).start()
+            return False
+
+        active_control._bind(steer_timeout, lambda _reason: True)
+        try:
+            LiveControlRunner._write_lines(workspace, 3)
+            self.assert_confirmation(confirmed)
+            return runners.RunnerResult(
+                json.dumps(self.response), 0, 0.02
+            )
+        finally:
+            active_control._close()
+
+    @staticmethod
+    def assert_confirmation(confirmed):
+        if not confirmed.wait(1):
+            raise AssertionError("model confirmation was not observed")
+
+
+class RepairAckCutRunner(runners.MockRunner):
+    """Only the renewed contract-repair call emits the exact model ACK."""
+
+    def __init__(self, response):
+        super().__init__([])
+        self.response = response
+        self.controls = []
+        self.physical_calls = 0
+
+    def call(self, family, prompt, workspace, model=None, effort=None,
+             timeout_override=None, active_control=None):
+        del timeout_override
+        self.physical_calls += 1
+        current_call = self.physical_calls
+        self.calls.append((family, runners.prompt_kind(prompt), prompt))
+        self.call_meta.append({
+            "family": family,
+            "kind": runners.prompt_kind(prompt),
+            "model": model,
+            "effort": effort,
+        })
+        self.controls.append(active_control)
+        steer_seen = threading.Event()
+        confirmed = threading.Event()
+
+        def steer_timeout(_text):
+            steer_seen.set()
+            if current_call == 2:
+                active_control.observe_model_message(
+                    drv.IMPLEMENTATION_SIZE_ACK
+                )
+                confirmed.set()
+            return False
+
+        active_control._bind(steer_timeout, lambda _reason: True)
+        try:
+            LiveControlRunner._write_lines(workspace, 3)
+            if not steer_seen.wait(1):
+                raise AssertionError("size steer was not attempted")
+            if current_call == 1:
+                return runners.RunnerResult("not json", 0, 0.01)
+            if not confirmed.wait(1):
+                raise AssertionError("repair ACK was not observed")
+            return runners.RunnerResult(
+                json.dumps(self.response), 0, 0.02
+            )
+        finally:
+            active_control._close()
+
+
 class DriverImplementationSizeTest(unittest.TestCase):
     def _ready_driver(self, workspace, runner, size_control=None,
                       git_enabled=True):
+        effective_size_control = {
+            "soft_lines": 1000,
+            "hard_lines": 1500,
+            "poll_interval_s": 0.005,
+            "unconfirmed_grace_s": 0.03,
+            "confirmed_grace_s": 0.08,
+        }
+        effective_size_control.update(size_control or {})
         config = make_config(
             git={"enabled": git_enabled},
-            implementation_size_control=(
-                size_control
-                or {"soft_lines": 1000, "hard_lines": 1500,
-                    "poll_interval_s": 0.005}
-            ),
+            implementation_size_control=effective_size_control,
         )
         if git_enabled:
             git_init_workspace(workspace)
@@ -332,7 +555,6 @@ class DriverImplementationSizeTest(unittest.TestCase):
                     "implementation_size_steer",
                     "implementation_size_interrupted",
                     "implementation_size_overflow",
-                    "implementation_size_recovery_interrupted",
                 }
                 for event in driver.state["events"]
             ))
@@ -495,7 +717,7 @@ class DriverImplementationSizeTest(unittest.TestCase):
             _path, driver, _unit = self._ready_driver(
                 ws, runners.MockRunner([]), git_enabled=False
             )
-            runner = InfraRetryControlRunner()
+            runner = InfraRetryControlRunner(["captured network diagnostic"])
             driver.runner = runner
             driver.config["infra_retry_backoff_s"] = [0]
 
@@ -516,6 +738,92 @@ class DriverImplementationSizeTest(unittest.TestCase):
             self.assertEqual([closed for _control, closed in runner.controls],
                              [False, False])
             self.assertIsNot(runner.controls[0][0], runner.controls[1][0])
+            incidents = [
+                event for event in driver.state["events"]
+                if event.get("type") == "worker_malformed"
+                and event.get("label") == "controlled-infra-retry"
+            ]
+            self.assertEqual(len(incidents), 1)
+            self.assertFalse(incidents[0]["fatal"])
+            self.assertTrue(incidents[0]["infra_retry"])
+            self.assertNotIn("stabilizer_retry", incidents[0])
+            self.assertTrue(os.path.exists(os.path.join(
+                ws, incidents[0]["raw_path"]
+            )))
+
+    def test_absorbed_stabilizer_infra_retry_keeps_raw_evidence(self):
+        with tempfile.TemporaryDirectory(prefix="orch-stable-infra-retry-") \
+                as ws:
+            _path, driver, _unit = self._ready_driver(
+                ws, runners.MockRunner([]), git_enabled=False
+            )
+            runner = InfraRetryControlRunner([
+                "stabilizer network diagnostic one",
+                "stabilizer network diagnostic two",
+            ])
+            driver.runner = runner
+            driver.config["infra_retry_backoff_s"] = [0]
+
+            with mock.patch.object(
+                driver,
+                "_classify_failure",
+                return_value=("network", None, None),
+            ), mock.patch.object(time, "sleep"):
+                output, _result, _raw = driver._call(
+                    "codex",
+                    "KIND: implement\n",
+                    contracts.KIND_IMPLEMENT,
+                    "stabilizer-infra-retry",
+                    repeat_protocol=True,
+                )
+
+            self.assertEqual(output["status"], "ok")
+            incidents = [
+                event for event in driver.state["events"]
+                if event.get("type") == "worker_malformed"
+                and event.get("label") == "stabilizer-infra-retry"
+            ]
+            self.assertEqual(len(incidents), 1)
+            self.assertFalse(incidents[0]["fatal"])
+            self.assertTrue(incidents[0]["infra_retry"])
+            self.assertTrue(incidents[0]["stabilizer_retry"])
+            for key in ("raw_path", "raw_path2"):
+                self.assertTrue(os.path.exists(os.path.join(
+                    ws, incidents[0][key]
+                )))
+
+    def test_absorbed_infrastructure_retry_records_error_without_raw(self):
+        with tempfile.TemporaryDirectory(prefix="orch-infra-no-raw-") as ws:
+            _path, driver, _unit = self._ready_driver(
+                ws, runners.MockRunner([]), git_enabled=False
+            )
+            driver.runner = InfraRetryControlRunner()
+            driver.config["infra_retry_backoff_s"] = [0]
+
+            with mock.patch.object(
+                driver,
+                "_classify_failure",
+                return_value=("network", None, None),
+            ), mock.patch.object(time, "sleep"):
+                output, _result, _raw = driver._call(
+                    "codex",
+                    "KIND: implement\n",
+                    contracts.KIND_IMPLEMENT,
+                    "infra-no-raw",
+                    active_control=runners.ActiveCallControl(),
+                )
+
+            self.assertEqual(output["status"], "ok")
+            incidents = [
+                event for event in driver.state["events"]
+                if event.get("type") == "worker_malformed"
+                and event.get("label") == "infra-no-raw"
+            ]
+            self.assertEqual(len(incidents), 1)
+            self.assertTrue(incidents[0]["infra_retry"])
+            self.assertIn("temporary network failure", incidents[0]["error"])
+            self.assertIsNone(incidents[0]["raw_path"])
+            self.assertIsNone(incidents[0]["raw_path2"])
 
     def test_missing_fixed_git_baseline_stops_before_worker_call(self):
         with tempfile.TemporaryDirectory(prefix="orch-size-no-base-") as ws:
@@ -540,6 +848,200 @@ class DriverImplementationSizeTest(unittest.TestCase):
 
             self.assertEqual(runner.calls, [])
             self.assertEqual(driver.state["failure"]["type"], "orchestrator")
+
+    def test_failed_cutoff_persistence_does_not_send_interrupt(self):
+        with tempfile.TemporaryDirectory(prefix="orch-size-persist-fail-") \
+                as ws:
+            _path, driver, unit = self._ready_driver(
+                ws, runners.MockRunner([])
+            )
+            marker = {
+                "soft_lines": 2,
+                "hard_lines": 6,
+                "steer_lines": 3,
+                "interrupt_lines": 8,
+            }
+            sent = []
+            control = runners.ActiveCallControl(
+                on_interrupt=lambda _reason: (
+                    driver._persist_implementation_stabilization(marker)
+                )
+            )
+            control._bind(
+                lambda _text: True,
+                lambda _reason: (sent.append(True) or True),
+            )
+
+            with mock.patch.object(
+                driver, "_save", side_effect=OSError("state write failed")
+            ):
+                self.assertFalse(control.interrupt("hard size limit"))
+
+            self.assertEqual(sent, [])
+            self.assertFalse(control.interrupted)
+            self.assertNotIn("implementation_stabilization", unit)
+            control._close()
+
+    def test_rejected_cutoff_transport_resumes_as_an_ordinary_draft(self):
+        def return_false(_reason):
+            return False
+
+        def raise_error(_reason):
+            raise OSError("interrupt transport rejected")
+
+        for label, reject in (
+            ("false", return_false),
+            ("exception", raise_error),
+        ):
+            with self.subTest(transport=label), tempfile.TemporaryDirectory(
+                prefix="orch-size-rejected-%s-" % label
+            ) as ws:
+                path, driver, _unit = self._ready_driver(
+                    ws, runners.MockRunner([])
+                )
+                base_tree = gitops.snapshot_index_tree(ws)
+                control, _marker = driver._implementation_size_control(
+                    base_tree
+                )
+                control._bind(lambda _text: True, reject)
+
+                self.assertFalse(control.interrupt("hard size limit"))
+                control._close()
+                persisted = st.load(path)
+                self.assertNotIn(
+                    "implementation_stabilization",
+                    st.current_unit(persisted),
+                )
+
+                resumed_runner = LiveControlRunner(
+                    "normal",
+                    ok(contracts.KIND_IMPLEMENT,
+                       files_changed=["implementation.py"]),
+                )
+                resumed = drv.Driver(path, runner=resumed_runner)
+                resumed.step()
+
+                self.assertIsNotNone(resumed_runner.controls[0])
+                self.assertNotIn(
+                    "FORCED CONTROLLED-CUTOFF RECOVERY",
+                    resumed_runner.calls[0][2],
+                )
+
+    def test_cutoff_monitor_retries_after_transient_state_write_failure(self):
+        with tempfile.TemporaryDirectory(prefix="orch-size-save-retry-") as ws:
+            runner = LiveControlRunner(
+                "hard",
+                ok(contracts.KIND_IMPLEMENT,
+                   files_changed=["implementation.py"]),
+                recovery_response=self._cut_response(
+                    "coherent retry recovery", "remaining wiring"
+                ),
+                recovery_lines=8,
+            )
+            path, driver, _unit = self._ready_driver(
+                ws,
+                runner,
+                {"soft_lines": 2, "hard_lines": 6,
+                 "poll_interval_s": 0.005},
+            )
+            real_save = driver._save
+            failures = []
+
+            def fail_first_cutoff_save():
+                if (
+                    not failures
+                    and st.current_unit(driver.state).get(
+                        "implementation_stabilization"
+                    )
+                ):
+                    failures.append("state write failed")
+                    raise OSError("state write failed")
+                return real_save()
+
+            with mock.patch.object(
+                driver, "_save", side_effect=fail_first_cutoff_save
+            ):
+                action, _note = driver.step()
+
+            self.assertEqual(action.type, drv.A_DRAFT)
+            self.assertEqual(failures, ["state write failed"])
+            self.assertTrue(runner.interrupt_seen.is_set())
+            self.assertIsNotNone(runner.controls[0].interrupt_reason)
+            recovered = st.load(path)
+            unit = st.current_unit(recovered)
+            self.assertIsNone(recovered["failure"])
+            self.assertEqual(unit["status"], st.U_PRE_REVIEW_VERIFY)
+            self.assertNotIn("implementation_stabilization", unit)
+            self.assertEqual(len([
+                event for event in recovered["events"]
+                if event.get("type") == "implementation_size_interrupted"
+            ]), 1)
+
+    def test_unpersisted_cutoff_cannot_open_oversized_review(self):
+        with tempfile.TemporaryDirectory(prefix="orch-size-save-block-") as ws:
+            runner = LiveControlRunner(
+                "complete_after_failed_interrupt",
+                ok(contracts.KIND_IMPLEMENT,
+                   files_changed=["implementation.py"]),
+            )
+            path, driver, _unit = self._ready_driver(
+                ws,
+                runner,
+                {"soft_lines": 2, "hard_lines": 6,
+                 "poll_interval_s": 0.005},
+            )
+            real_save = driver._save
+
+            def reject_cutoff_save():
+                if st.current_unit(driver.state).get(
+                    "implementation_stabilization"
+                ):
+                    raise OSError("state write remains unavailable")
+                return real_save()
+
+            with mock.patch.object(
+                driver, "_save", side_effect=reject_cutoff_save
+            ):
+                action, _note = driver.step()
+
+            self.assertEqual(action.type, drv.A_DRAFT)
+            blocked = st.load(path)
+            unit = st.current_unit(blocked)
+            self.assertIsNotNone(blocked["failure"])
+            self.assertEqual(blocked["failure"]["type"], "worker_protocol")
+            self.assertIsNone(unit["draft"])
+            self.assertNotEqual(unit["status"], st.U_PRE_REVIEW_VERIFY)
+            self.assertFalse(runner.controls[0].interrupted)
+
+    def test_completed_ok_wins_after_accepted_interrupt(self):
+        with tempfile.TemporaryDirectory(prefix="orch-size-stop-race-") as ws:
+            runner = LiveControlRunner(
+                "complete_after_accepted_interrupt",
+                ok(contracts.KIND_IMPLEMENT,
+                   files_changed=["implementation.py"]),
+            )
+            path, driver, _unit = self._ready_driver(
+                ws,
+                runner,
+                {"soft_lines": 2, "hard_lines": 6,
+                 "poll_interval_s": 0.005},
+            )
+
+            action, _note = driver.step()
+
+            self.assertEqual(action.type, drv.A_DRAFT)
+            completed = st.load(path)
+            unit = st.current_unit(completed)
+            self.assertIsNone(completed["failure"])
+            self.assertEqual(unit["status"], st.U_PRE_REVIEW_VERIFY)
+            self.assertIsNotNone(unit["draft"])
+            self.assertNotIn("implementation_stabilization", unit)
+            self.assertTrue(runner.controls[0].interrupted)
+            self.assertEqual(len(runner.calls), 1)
+            self.assertFalse(any(
+                event.get("type") == "implementation_size_interrupted"
+                for event in completed["events"]
+            ))
 
     def test_resume_keeps_pre_crash_tree_for_staged_oversized_work(self):
         with tempfile.TemporaryDirectory(prefix="orch-size-staged-resume-") as ws:
@@ -744,13 +1246,257 @@ class DriverImplementationSizeTest(unittest.TestCase):
             self.assertGreaterEqual(cut["interrupt_lines"], 6)
             events = {event["type"]: event for event in state["events"]}
             self.assertTrue(events["implementation_size_steer"]["delivered"])
+            self.assertFalse(
+                events["implementation_size_steer"]["confirmed"]
+            )
+            self.assertEqual(
+                events["implementation_size_steer"]["grace_kind"],
+                "unconfirmed",
+            )
+            self.assertGreaterEqual(
+                runner.interrupt_at - runner.steer_at, 0.02
+            )
             self.assertGreaterEqual(
                 events["implementation_size_interrupted"]["lines"], 6
             )
             self.assertIn("controlled size cutoff",
                           events["implementation_size_interrupted"]["reason"])
 
-    def test_hard_jump_before_next_poll_forces_stabilization(self):
+    def test_real_model_ack_uses_confirmed_grace_and_is_armed_before_send(self):
+        with tempfile.TemporaryDirectory(prefix="orch-size-confirmed-") as ws:
+            runner = LiveControlRunner(
+                "hard",
+                self._cut_response(),
+                recovery_response=self._cut_response(
+                    "confirmed coherent work", "remaining wiring"
+                ),
+                confirm_delay_s=0,
+            )
+            path, driver, _unit = self._ready_driver(
+                ws,
+                runner,
+                {
+                    "soft_lines": 2, "hard_lines": 6,
+                    "poll_interval_s": 0.002,
+                    "unconfirmed_grace_s": 0.02,
+                    "confirmed_grace_s": 0.08,
+                },
+            )
+
+            driver.step()
+
+            event = next(
+                event for event in st.load(path)["events"]
+                if event["type"] == "implementation_size_steer"
+            )
+            self.assertTrue(event["delivered"])
+            self.assertTrue(event["confirmed"])
+            self.assertEqual(event["grace_kind"], "confirmed")
+            self.assertIsNotNone(runner.confirmed_at)
+            self.assertGreaterEqual(
+                runner.interrupt_at - runner.steer_at, 0.065
+            )
+            self.assertTrue(any(
+                drv.IMPLEMENTATION_SIZE_ACK in steer
+                for steer in runner.controls[0].steers
+            ))
+
+    def test_ack_during_unconfirmed_grace_extends_from_confirmation(self):
+        with tempfile.TemporaryDirectory(prefix="orch-size-late-confirm-") \
+                as ws:
+            runner = LiveControlRunner(
+                "hard",
+                self._cut_response(),
+                recovery_response=self._cut_response(
+                    "late confirmed work", "remaining wiring"
+                ),
+                confirm_delay_s=0.03,
+            )
+            path, driver, _unit = self._ready_driver(
+                ws,
+                runner,
+                {
+                    "soft_lines": 2, "hard_lines": 6,
+                    "poll_interval_s": 0.002,
+                    "unconfirmed_grace_s": 0.06,
+                    "confirmed_grace_s": 0.07,
+                },
+            )
+
+            driver.step()
+
+            event = next(
+                event for event in st.load(path)["events"]
+                if event["type"] == "implementation_size_steer"
+            )
+            self.assertTrue(event["confirmed"])
+            self.assertEqual(event["grace_kind"], "confirmed")
+            self.assertGreaterEqual(
+                runner.interrupt_at - runner.confirmed_at, 0.06
+            )
+
+    def test_late_ack_authorizes_cut_after_codex_steer_rpc_timeout(self):
+        with tempfile.TemporaryDirectory(prefix="orch-size-ack-timeout-") \
+                as ws:
+            runner = TimedOutSteerConfirmedRunner(self._cut_response())
+            path, driver, _unit = self._ready_driver(
+                ws,
+                runner,
+                {"soft_lines": 2, "hard_lines": 6,
+                 "poll_interval_s": 0.002},
+            )
+
+            action, _note = driver.step()
+
+            self.assertEqual(action.type, drv.A_DRAFT)
+            state = st.load(path)
+            self.assertIsNone(state["failure"])
+            unit = st.current_unit(state)
+            self.assertEqual(
+                unit["implementation_cut"]["cut_scope"], "coherent core"
+            )
+            event = next(
+                event for event in state["events"]
+                if event["type"] == "implementation_size_steer"
+            )
+            self.assertTrue(event["confirmed"])
+            self.assertTrue(event["delivered"])
+            self.assertEqual(
+                runner.controls[0].steers, [],
+                "the timed-out RPC itself did not report delivery",
+            )
+
+    def test_repair_ack_is_visible_to_original_control_and_authorizes_cut(self):
+        with tempfile.TemporaryDirectory(prefix="orch-size-repair-ack-") as ws:
+            runner = RepairAckCutRunner(self._cut_response())
+            path, driver, _unit = self._ready_driver(
+                ws,
+                runner,
+                {"soft_lines": 2, "hard_lines": 6,
+                 "poll_interval_s": 0.002},
+            )
+
+            action, _note = driver.step()
+
+            self.assertEqual(action.type, drv.A_DRAFT)
+            state = st.load(path)
+            self.assertIsNone(state["failure"])
+            unit = st.current_unit(state)
+            self.assertEqual(
+                unit["implementation_cut"]["cut_scope"], "coherent core"
+            )
+            self.assertIsNot(runner.controls[0], runner.controls[1])
+            self.assertIsNotNone(runner.controls[0].model_confirmation_at)
+            self.assertEqual(
+                runner.controls[0].model_confirmation_at,
+                runner.controls[1].model_confirmation_at,
+            )
+            event = next(
+                event for event in state["events"]
+                if event["type"] == "implementation_size_steer"
+            )
+            self.assertTrue(event["confirmed"])
+            self.assertTrue(event["delivered"])
+
+    def test_controlled_repair_persists_first_malformed_output(self):
+        with tempfile.TemporaryDirectory(prefix="orch-size-repair-cut-") as ws:
+            runner = InterruptedRepairRunner()
+            _path, driver, _unit = self._ready_driver(
+                ws, runner, git_enabled=False
+            )
+
+            output, result, controlled_raw_path = driver._call(
+                "codex",
+                "KIND: implement\nFAMILY: codex\nWORKSPACE: %s\n" % ws,
+                contracts.KIND_IMPLEMENT,
+                "slice_impl-01-draft",
+            )
+
+            self.assertIsNone(output)
+            self.assertIsInstance(
+                result, runners.ControlledInterruptionResult
+            )
+            strikes = [
+                event for event in driver.state["events"]
+                if event.get("type") == "worker_malformed"
+            ]
+            self.assertEqual(len(strikes), 1)
+            raw_path = os.path.join(ws, strikes[0]["raw_path"])
+            with open(raw_path, encoding="utf-8") as handle:
+                self.assertEqual(handle.read(), "malformed draft transport")
+            with open(os.path.join(ws, controlled_raw_path),
+                      encoding="utf-8") as handle:
+                self.assertEqual(
+                    handle.read(), "full interrupted repair transport"
+                )
+
+    def test_error_after_accepted_interrupt_enters_stabilizer_without_retry(
+        self,
+    ):
+        errors = (
+            runners.RunnerError("connection reset after accepted interrupt"),
+            runners.WorkerProtocolError(
+                "malformed output after accepted interrupt",
+                raw_texts=["bad output one", "bad output two"],
+            ),
+        )
+        for error in errors:
+            with self.subTest(error=type(error).__name__), \
+                    tempfile.TemporaryDirectory(
+                        prefix="orch-size-interrupt-error-"
+                    ) as ws:
+                runner = LiveControlRunner(
+                    "error_after_interrupt",
+                    ok(contracts.KIND_IMPLEMENT,
+                       files_changed=["implementation.py"]),
+                    recovery_response=self._cut_response(
+                        "stable after transport error", "remaining wiring"
+                    ),
+                    recovery_lines=8,
+                    interrupt_error=error,
+                )
+                path, driver, _unit = self._ready_driver(
+                    ws,
+                    runner,
+                    {"soft_lines": 2, "hard_lines": 6,
+                     "poll_interval_s": 0.005},
+                )
+                driver.config["infra_retry_backoff_s"] = [0]
+
+                action, _note = driver.step()
+
+                self.assertEqual(action.type, drv.A_DRAFT)
+                state = st.load(path)
+                unit = st.current_unit(state)
+                self.assertTrue(runner.stabilization_seen_before_error)
+                self.assertIsNone(state["failure"])
+                self.assertEqual(unit["status"], st.U_PRE_REVIEW_VERIFY)
+                self.assertNotIn("implementation_stabilization", unit)
+                self.assertEqual(len(runner.calls), 2)
+                self.assertIsNotNone(runner.controls[0])
+                self.assertIsNone(runner.controls[1])
+                self.assertIn(
+                    "FORCED CONTROLLED-CUTOFF RECOVERY",
+                    runner.calls[1][2],
+                )
+                self.assertFalse(any(
+                    event.get("type") in ("infra_retry", "run_failed")
+                    for event in state["events"]
+                ))
+                incidents = [
+                    event for event in state["events"]
+                    if event.get("type") == "worker_malformed"
+                    and event.get("controlled_interruption")
+                ]
+                self.assertEqual(len(incidents), 1)
+                self.assertIn(str(error), incidents[0]["error"])
+                if getattr(error, "raw_texts", None):
+                    self.assertIsNotNone(incidents[0]["raw_path"])
+                else:
+                    self.assertIsNone(incidents[0]["raw_path"])
+                    self.assertIsNone(incidents[0]["raw_path2"])
+
+    def test_hard_jump_that_finishes_during_grace_is_accepted(self):
         with tempfile.TemporaryDirectory(prefix="orch-size-jump-") as ws:
             runner = LiveControlRunner(
                 "jump",
@@ -770,23 +1516,52 @@ class DriverImplementationSizeTest(unittest.TestCase):
             action, _note = driver.step()
 
             self.assertEqual(action.type, drv.A_DRAFT)
-            self.assertEqual(
-                len(runner.calls), 2,
-                "an over-hard result must be stabilized even when the "
-                "worker exits before the monitor's next poll",
-            )
-            self.assertIn("FORCED CONTROLLED-CUTOFF RECOVERY",
-                          runner.calls[1][2])
+            self.assertEqual(len(runner.calls), 1)
             unit = st.current_unit(st.load(path))
-            self.assertEqual(st.display_unit_key(unit), "slice_impl-01-a")
-            self.assertEqual(
-                unit["implementation_cut"]["cut_scope"], "stabilized jump"
+            self.assertEqual(st.display_unit_key(unit), "slice_impl-01")
+            self.assertEqual(unit["status"], st.U_PRE_REVIEW_VERIFY)
+
+    def test_valid_completion_between_polls_is_reviewed_without_stabilizer(
+        self,
+    ):
+        with tempfile.TemporaryDirectory(prefix="orch-size-fast-finish-") as ws:
+            runner = LiveControlRunner(
+                "steer",
+                ok(contracts.KIND_IMPLEMENT,
+                   files_changed=["implementation.py"]),
+            )
+            path, driver, _unit = self._ready_driver(
+                ws,
+                runner,
+                {"soft_lines": 2, "hard_lines": 6,
+                 "poll_interval_s": 0.05},
             )
 
-    def test_oversized_stabilizer_fails_before_review_opens(self):
+            # The live observer saw the soft-sized delta and delivered its
+            # steer. The worker then completed with a valid envelope before
+            # another poll could observe the final over-hard size.
+            with mock.patch.object(
+                driver, "_implementation_line_count", return_value=8
+            ):
+                action, _note = driver.step()
+
+            self.assertEqual(action.type, drv.A_DRAFT)
+            self.assertEqual(len(runner.calls), 1)
+            state = st.load(path)
+            unit = st.current_unit(state)
+            self.assertEqual(unit["status"], st.U_PRE_REVIEW_VERIFY)
+            self.assertNotIn("implementation_stabilization", unit)
+            overflow = [
+                event for event in state["events"]
+                if event.get("type") == "implementation_size_overflow"
+            ]
+            self.assertEqual(len(overflow), 1)
+            self.assertTrue(overflow[0]["completed"])
+
+    def test_stabilizer_can_close_an_oversized_coherent_delivery(self):
         with tempfile.TemporaryDirectory(prefix="orch-size-bad-recovery-") as ws:
             runner = LiveControlRunner(
-                "jump",
+                "hard",
                 ok(contracts.KIND_IMPLEMENT,
                    files_changed=["implementation.py"]),
                 recovery_response=self._cut_response(
@@ -801,20 +1576,340 @@ class DriverImplementationSizeTest(unittest.TestCase):
                  "poll_interval_s": 0.05},
             )
 
-            action, note = driver.step()
+            action, _note = driver.step()
 
             self.assertEqual(action.type, drv.A_DRAFT)
-            self.assertIn("cutoff recovery failed", note)
             state = st.load(path)
             unit = st.current_unit(state)
-            self.assertEqual(state["milestone"]["status"], st.M_FAILED)
-            self.assertEqual(state["failure"]["type"], "worker_protocol")
-            self.assertEqual(unit["status"], st.U_FAILED)
-            self.assertIsNone(unit["draft"])
-            self.assertFalse(any(
+            self.assertIsNone(state["failure"])
+            self.assertEqual(unit["status"], st.U_PRE_REVIEW_VERIFY)
+            self.assertIsNotNone(unit["draft"])
+            self.assertTrue(any(
                 event["type"] == "wip_commit" for event in state["events"]
             ))
             self.assertEqual(len(runner.calls), 2)
+            self.assertIsNotNone(runner.controls[0])
+            self.assertIsNone(runner.controls[1])
+            self.assertIn(
+                "No further size cutoff applies to this stabilization",
+                runner.calls[1][2],
+            )
+            self.assertNotIn("reduce the current reviewable Git delta",
+                             runner.calls[1][2])
+            self.assertNotIn("near 1,000 Git lines", runner.calls[1][2])
+            self.assertNotIn("force everything into this delivery",
+                             runner.calls[1][2])
+            self.assertNotIn("Observed reviewable Git lines",
+                             runner.calls[1][2])
+
+    def test_malformed_stabilizer_retries_fresh_until_valid(self):
+        with tempfile.TemporaryDirectory(prefix="orch-size-retry-recovery-") \
+                as ws:
+            runner = LiveControlRunner(
+                "hard",
+                ok(contracts.KIND_IMPLEMENT,
+                   files_changed=["implementation.py"]),
+                recovery_lines=8,
+                recovery_script=[
+                    "",
+                    "still not json",
+                    "not json in the next fresh stabilizer",
+                    "still malformed in its repair",
+                    self._cut_response(
+                        "coherent preserved work", "remaining wiring"
+                    ),
+                ],
+            )
+            path, driver, _unit = self._ready_driver(
+                ws,
+                runner,
+                {"soft_lines": 2, "hard_lines": 6,
+                 "poll_interval_s": 0.05},
+            )
+
+            action, _note = driver.step()
+
+            self.assertEqual(action.type, drv.A_DRAFT)
+            state = st.load(path)
+            unit = st.current_unit(state)
+            self.assertIsNone(state["failure"])
+            self.assertEqual(unit["status"], st.U_PRE_REVIEW_VERIFY)
+            self.assertEqual(
+                unit["implementation_cut"]["cut_scope"],
+                "coherent preserved work",
+            )
+            self.assertEqual(len(runner.calls), 6)
+            self.assertTrue(all(control is None
+                                for control in runner.controls[1:]))
+            self.assertEqual(
+                [kind for kind, _family, _session in runner.session_calls],
+                ["start", "start", "continue", "start", "continue",
+                 "start"],
+            )
+            strikes = [
+                event for event in state["events"]
+                if event.get("type") == "worker_malformed"
+                and event.get("label") == "slice_impl-01-draft-stabilize"
+            ]
+            self.assertEqual(len(strikes), 2)
+            self.assertTrue(all(not strike["fatal"] for strike in strikes))
+            raw_paths = [
+                strike[key] for strike in strikes
+                for key in ("raw_path", "raw_path2")
+            ]
+            self.assertEqual(len(set(raw_paths)), 4)
+            self.assertTrue(all(os.path.exists(os.path.join(ws, path))
+                                for path in raw_paths))
+
+    def test_failed_stabilizer_resume_returns_to_uncontrolled_stabilization(
+        self,
+    ):
+        with tempfile.TemporaryDirectory(prefix="orch-size-failed-recovery-") \
+                as ws:
+            failed_runner = LiveControlRunner(
+                "hard",
+                ok(contracts.KIND_IMPLEMENT,
+                   files_changed=["implementation.py"]),
+                recovery_lines=8,
+                recovery_script=[runners.RunnerError("provider failed")],
+            )
+            path, driver, _unit = self._ready_driver(
+                ws,
+                failed_runner,
+                {"soft_lines": 2, "hard_lines": 6,
+                 "poll_interval_s": 0.05},
+            )
+
+            action, _note = driver.step()
+
+            self.assertEqual(action.type, drv.A_DRAFT)
+            failed = st.load(path)
+            unit = st.current_unit(failed)
+            self.assertIsNotNone(failed["failure"])
+            self.assertIsNone(unit["draft"])
+            marker = unit["implementation_stabilization"]
+            self.assertGreater(
+                marker["implementation_size"]["last_lines"], 6
+            )
+            self.assertIsNotNone(failed_runner.controls[0])
+            self.assertIsNone(failed_runner.controls[1])
+
+            st.resume_run(failed)
+            st.save(path, failed)
+            resumed_runner = LiveControlRunner(
+                "normal",
+                ok(contracts.KIND_IMPLEMENT, files_changed=[]),
+                recovery_response=self._cut_response(
+                    "resumed coherent work", "remaining wiring"
+                ),
+                recovery_lines=8,
+            )
+            resumed = drv.Driver(path, runner=resumed_runner)
+
+            resumed_action, _resumed_note = resumed.step()
+
+            self.assertEqual(resumed_action.type, drv.A_DRAFT)
+            recovered = st.load(path)
+            unit = st.current_unit(recovered)
+            self.assertIsNone(recovered["failure"])
+            self.assertEqual(unit["status"], st.U_PRE_REVIEW_VERIFY)
+            self.assertNotIn("implementation_stabilization", unit)
+            self.assertEqual(resumed_runner.controls, [None])
+            self.assertEqual(len(resumed_runner.calls), 1)
+            self.assertIn(
+                "FORCED CONTROLLED-CUTOFF RECOVERY",
+                resumed_runner.calls[0][2],
+            )
+            self.assertEqual(
+                unit["implementation_cut"]["cut_scope"],
+                "resumed coherent work",
+            )
+
+    def test_crash_before_stabilizer_output_keeps_stabilization_mode(self):
+        with tempfile.TemporaryDirectory(prefix="orch-size-crash-recovery-") \
+                as ws:
+            crashed_runner = LiveControlRunner(
+                "hard",
+                ok(contracts.KIND_IMPLEMENT,
+                   files_changed=["implementation.py"]),
+                recovery_lines=8,
+                recovery_script=[_PromptReached("simulated driver crash")],
+            )
+            path, driver, _unit = self._ready_driver(
+                ws,
+                crashed_runner,
+                {"soft_lines": 2, "hard_lines": 6,
+                 "poll_interval_s": 0.05},
+            )
+
+            with self.assertRaisesRegex(_PromptReached, "driver crash"):
+                driver.step()
+
+            persisted = st.load(path)
+            self.assertIsNone(persisted["failure"])
+            persisted_unit = st.current_unit(persisted)
+            self.assertIn("implementation_stabilization", persisted_unit)
+            events = {
+                event["type"]: event for event in persisted["events"]
+                if event["type"] in {
+                    "implementation_size_steer",
+                    "implementation_size_interrupted",
+                }
+            }
+            self.assertEqual(set(events), {
+                "implementation_size_steer",
+                "implementation_size_interrupted",
+            })
+            durable_size = persisted_unit[
+                "implementation_stabilization"
+            ]["implementation_size"]
+            self.assertEqual(
+                durable_size["steer_lines"],
+                events["implementation_size_steer"]["lines"],
+            )
+            self.assertEqual(
+                durable_size["interrupt_lines"],
+                events["implementation_size_interrupted"]["lines"],
+            )
+            self.assertEqual(
+                durable_size["grace_kind"],
+                events["implementation_size_interrupted"]["grace_kind"],
+            )
+
+            resumed_runner = LiveControlRunner(
+                "normal",
+                ok(contracts.KIND_IMPLEMENT, files_changed=[]),
+                recovery_response=self._cut_response(
+                    "post-crash coherent work", "remaining wiring"
+                ),
+                recovery_lines=8,
+            )
+            resumed = drv.Driver(path, runner=resumed_runner)
+
+            resumed.step()
+
+            recovered = st.load(path)
+            unit = st.current_unit(recovered)
+            self.assertIsNone(recovered["failure"])
+            self.assertEqual(unit["status"], st.U_PRE_REVIEW_VERIFY)
+            self.assertNotIn("implementation_stabilization", unit)
+            self.assertEqual(resumed_runner.controls, [None])
+            self.assertEqual(len(resumed_runner.calls), 1)
+            self.assertIn(
+                "FORCED CONTROLLED-CUTOFF RECOVERY",
+                resumed_runner.calls[0][2],
+            )
+
+    def test_resume_repairs_events_after_crash_on_interrupt_delivery(self):
+        with tempfile.TemporaryDirectory(prefix="orch-size-stop-crash-") as ws:
+            crashed_runner = LiveControlRunner(
+                "crash_after_interrupt",
+                ok(contracts.KIND_IMPLEMENT,
+                   files_changed=["implementation.py"]),
+            )
+            path, driver, _unit = self._ready_driver(
+                ws,
+                crashed_runner,
+                {"soft_lines": 2, "hard_lines": 6,
+                 "poll_interval_s": 0.005},
+            )
+            old_episode = "older-cutoff-episode"
+            st.append_event(
+                driver.state,
+                "implementation_size_steer",
+                unit="slice_impl-01",
+                episode_id=old_episode,
+                lines=3,
+                delivered=True,
+            )
+            st.append_event(
+                driver.state,
+                "implementation_size_interrupted",
+                unit="slice_impl-01",
+                episode_id=old_episode,
+                lines=7,
+                reason="older accepted cutoff",
+            )
+            driver._save()
+
+            with self.assertRaisesRegex(
+                _PromptReached, "crash after interrupt delivery"
+            ):
+                driver.step()
+
+            interrupted = st.load(path)
+            marker = st.current_unit(interrupted)[
+                "implementation_stabilization"
+            ]["implementation_size"]
+            self.assertEqual(
+                marker["interrupt_reason"],
+                crashed_runner.controls[0].interrupt_reason,
+            )
+            self.assertNotEqual(marker["episode_id"], old_episode)
+            pre_resume_events = [
+                event for event in interrupted["events"]
+                if event.get("type") in {
+                    "implementation_size_steer",
+                    "implementation_size_interrupted",
+                }
+            ]
+            self.assertEqual(len(pre_resume_events), 2)
+            self.assertEqual(
+                {event.get("episode_id") for event in pre_resume_events},
+                {old_episode},
+            )
+
+            resumed_runner = PersistedEventProbeRunner(
+                "normal",
+                ok(contracts.KIND_IMPLEMENT, files_changed=[]),
+                recovery_response=self._cut_response(
+                    "post-stop coherent work", "remaining wiring"
+                ),
+                recovery_lines=8,
+            )
+            resumed = drv.Driver(path, runner=resumed_runner)
+
+            resumed.step()
+
+            current_at_entry = [
+                event
+                for event in resumed_runner.events_at_stabilizer_entry
+                if event.get("episode_id") == marker["episode_id"]
+            ]
+            self.assertEqual(len(current_at_entry), 2)
+            self.assertEqual(
+                {event["type"] for event in current_at_entry},
+                {
+                    "implementation_size_steer",
+                    "implementation_size_interrupted",
+                },
+            )
+            recovered = st.load(path)
+            size_events = [
+                event for event in recovered["events"]
+                if event.get("unit") == "slice_impl-01"
+                and event.get("type") in {
+                    "implementation_size_steer",
+                    "implementation_size_interrupted",
+                }
+            ]
+            self.assertEqual(len(size_events), 4)
+            self.assertEqual(
+                len([event for event in size_events
+                     if event.get("episode_id") == old_episode]),
+                2,
+            )
+            current_events = [
+                event for event in size_events
+                if event.get("episode_id") == marker["episode_id"]
+            ]
+            self.assertEqual(len(current_events), 2)
+            by_type = {event["type"]: event for event in current_events}
+            self.assertEqual(
+                by_type["implementation_size_interrupted"]["reason"],
+                marker["interrupt_reason"],
+            )
+            self.assertEqual(resumed_runner.controls, [None])
 
     def test_brainstorming_implementation_continuation_keeps_size_control(self):
         with tempfile.TemporaryDirectory(prefix="orch-size-brainstorm-") as ws:
@@ -846,6 +1941,165 @@ class DriverImplementationSizeTest(unittest.TestCase):
             self.assertEqual(runner.controlled_calls, 1)
             self.assertIn("origin conversation continued", note)
             self.assertIn("brainstorming_resume", unit)
+
+    def test_brainstorming_continuation_uses_durable_stabilizer_after_crash(
+        self,
+    ):
+        with tempfile.TemporaryDirectory(prefix="orch-size-brain-stable-") \
+                as ws:
+            crashed_runner = LiveControlRunner(
+                "normal",
+                ok(contracts.KIND_IMPLEMENT, files_changed=[]),
+                recovery_lines=8,
+                recovery_script=[_PromptReached("continuation crash")],
+            )
+            path, driver, unit = self._ready_driver(
+                ws,
+                crashed_runner,
+                {"soft_lines": 2, "hard_lines": 6,
+                 "poll_interval_s": 0.005},
+            )
+            base_tree = gitops.snapshot_index_tree(ws)
+            handoff = self._brainstorming_handoff()
+            self._attach_brainstorming_wait(unit, base_tree, handoff)
+            origin_pre = unit["brainstorming_wait"]["origin"]["pre_snapshot"]
+            origin_pre["implementation_stabilized"] = False
+            durable_size = {
+                "soft_lines": 2,
+                "hard_lines": 6,
+                "steer_delivered": True,
+                "steer_lines": 3,
+                "interrupt_lines": 8,
+                "last_lines": 8,
+            }
+            unit["implementation_stabilization"] = {
+                "implementation_size": durable_size,
+            }
+            driver._save()
+
+            with mock.patch.object(
+                brainstorming_milestone,
+                "terminal_handoff",
+                return_value=handoff,
+            ), mock.patch.object(
+                brainstorming_milestone,
+                "prompt_handoff",
+                return_value=handoff,
+            ):
+                with self.assertRaisesRegex(_PromptReached, "continuation"):
+                    driver._do_brainstorming_wait()
+
+            self.assertEqual(
+                crashed_runner.session_calls,
+                [("start", "codex", "mock-session-1")],
+            )
+
+            persisted = st.load(path)
+            persisted_unit = st.current_unit(persisted)
+            self.assertIn("brainstorming_wait", persisted_unit)
+            self.assertEqual(
+                persisted_unit["implementation_stabilization"]
+                ["implementation_size"],
+                durable_size,
+            )
+
+            runner = LiveControlRunner(
+                "normal",
+                ok(contracts.KIND_IMPLEMENT, files_changed=[]),
+                recovery_response=self._cut_response(
+                    "continued coherent work", "remaining wiring"
+                ),
+                recovery_lines=8,
+            )
+            resumed = drv.Driver(path, runner=runner)
+            unit = st.current_unit(resumed.state)
+            with mock.patch.object(
+                brainstorming_milestone,
+                "terminal_handoff",
+                return_value=handoff,
+            ), mock.patch.object(
+                brainstorming_milestone,
+                "prompt_handoff",
+                return_value=handoff,
+            ):
+                note = resumed._do_brainstorming_wait()
+
+            self.assertIn("origin conversation continued", note)
+            self.assertEqual(runner.controls, [None])
+            self.assertIn(
+                "FORCED CONTROLLED-CUTOFF RECOVERY", runner.calls[0][2]
+            )
+            self.assertEqual(
+                runner.session_calls,
+                [("start", "codex", "mock-session-1")],
+            )
+            self.assertNotIn(
+                prompts.IMPLEMENTATION_SIZE_GUIDANCE, runner.calls[0][2]
+            )
+            resumed_pre = unit["brainstorming_resume"]["pre_snapshot"]
+            self.assertTrue(resumed_pre["implementation_stabilized"])
+            self.assertEqual(
+                resumed_pre["implementation_size"], durable_size
+            )
+
+    def test_brainstorming_rethink_from_stabilizer_continues_its_session(self):
+        with tempfile.TemporaryDirectory(prefix="orch-size-brain-resume-") \
+                as ws:
+            runner = LiveControlRunner(
+                "normal",
+                ok(contracts.KIND_IMPLEMENT, files_changed=[]),
+                recovery_response=self._cut_response(
+                    "continued stabilizer work", "remaining wiring"
+                ),
+                recovery_lines=8,
+            )
+            _path, driver, unit = self._ready_driver(
+                ws,
+                runner,
+                {"soft_lines": 2, "hard_lines": 6,
+                 "poll_interval_s": 0.005},
+            )
+            base_tree = gitops.snapshot_index_tree(ws)
+            handoff = self._brainstorming_handoff()
+            self._attach_brainstorming_wait(unit, base_tree, handoff)
+            origin_pre = unit["brainstorming_wait"]["origin"]["pre_snapshot"]
+            origin_pre["implementation_stabilized"] = True
+            durable_size = {
+                "soft_lines": 2,
+                "hard_lines": 6,
+                "steer_delivered": True,
+                "steer_lines": 3,
+                "interrupt_lines": 8,
+                "last_lines": 8,
+            }
+            unit["implementation_stabilization"] = {
+                "implementation_size": durable_size,
+            }
+            driver._save()
+
+            with mock.patch.object(
+                brainstorming_milestone,
+                "terminal_handoff",
+                return_value=handoff,
+            ), mock.patch.object(
+                brainstorming_milestone,
+                "prompt_handoff",
+                return_value=handoff,
+            ):
+                note = driver._do_brainstorming_wait()
+
+            self.assertIn("origin conversation continued", note)
+            self.assertEqual(
+                runner.session_calls,
+                [("continue", "codex", "codex-thread-7")],
+            )
+            self.assertIn(
+                "FORCED CONTROLLED-CUTOFF RECOVERY", runner.calls[0][2]
+            )
+            self.assertEqual(
+                unit["brainstorming_resume"]["provider_session_ref"],
+                "codex-thread-7",
+            )
 
     def test_brainstorming_soft_steer_cut_keeps_authority_and_metrics_on_resume(
         self,
