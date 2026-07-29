@@ -328,6 +328,150 @@ def snapshot_paths(workspace):
     return sorted({rel for rel in proc.stdout.split("\0") if rel})
 
 
+_NON_REVIEWABLE_EXTENSIONS = frozenset((".md", ".txt"))
+_BOOKKEEPING_DIR_NAMES = frozenset((".orchestrator", ".run"))
+
+
+def _bookkeeping_relpath(workspace, bookkeeping_dir):
+    if not bookkeeping_dir:
+        return None
+    workspace_real = os.path.realpath(workspace)
+    candidate = bookkeeping_dir
+    if not os.path.isabs(candidate):
+        candidate = os.path.join(workspace_real, candidate)
+    candidate_real = os.path.realpath(candidate)
+    try:
+        if os.path.commonpath((workspace_real, candidate_real)) != workspace_real:
+            return None
+    except ValueError:
+        return None
+    relative = os.path.normpath(os.path.relpath(candidate_real, workspace_real))
+    if relative == ".":
+        raise GitError("bookkeeping directory cannot be the workspace root")
+    return relative
+
+
+def _reviewable_path(path, bookkeeping_relpath):
+    relative = os.path.normpath(path)
+    if os.path.isabs(relative) or relative == ".." \
+            or relative.startswith(".." + os.sep):
+        return False
+    if os.path.splitext(relative)[1].lower() in _NON_REVIEWABLE_EXTENSIONS:
+        return False
+    if any(part in _BOOKKEEPING_DIR_NAMES for part in relative.split(os.sep)):
+        return False
+    if bookkeeping_relpath and (
+        relative == bookkeeping_relpath
+        or relative.startswith(bookkeeping_relpath + os.sep)
+    ):
+        return False
+    return True
+
+
+def _numstat_record(record):
+    fields = record.split("\t", 2)
+    if len(fields) != 3:
+        return None
+    added, deleted, path = fields
+    if added == "-" and deleted == "-":
+        return 0, path
+    try:
+        added_count = int(added)
+        deleted_count = int(deleted)
+    except ValueError:
+        raise GitError("git numstat returned malformed counts: %r" % record[:200])
+    if added_count < 0 or deleted_count < 0:
+        raise GitError("git numstat returned negative counts: %r" % record[:200])
+    return added_count + deleted_count, path
+
+
+def reviewable_line_count(workspace, base, bookkeeping_dir=None):
+    """Count the current reviewable Git delta from ``base``.
+
+    The count is additions plus deletions.  It includes committed, staged,
+    unstaged, and non-ignored untracked files, while excluding Markdown/text
+    documents and runtime bookkeeping.  The inspection never changes the
+    index, which makes it safe to poll while an implementation worker runs.
+
+    ``base`` should be the index-tree snapshot captured immediately before
+    the worker starts.  ``bookkeeping_dir`` may be absolute or relative to the
+    workspace; a directory outside the repository needs no exclusion because
+    Git cannot see it.
+    """
+    _assert_workspace_root(workspace)
+    bookkeeping_relpath = _bookkeeping_relpath(workspace, bookkeeping_dir)
+    tracked = _run(
+        workspace,
+        "diff",
+        "--no-ext-diff",
+        "--no-textconv",
+        "--no-color",
+        "--numstat",
+        "--no-renames",
+        "-z",
+        base,
+        "--",
+    )
+    total = 0
+    for record in tracked.stdout.split("\0"):
+        if not record:
+            continue
+        parsed = _numstat_record(record)
+        if parsed is None:
+            raise GitError("git numstat returned a malformed record")
+        changed, path = parsed
+        if _reviewable_path(path, bookkeeping_relpath):
+            total += changed
+
+    untracked = _run(
+        workspace, "ls-files", "-z", "--others", "--exclude-standard"
+    )
+    for relative in (path for path in untracked.stdout.split("\0") if path):
+        if not _reviewable_path(relative, bookkeeping_relpath):
+            continue
+        absolute = os.path.join(workspace, relative)
+        proc = _run(
+            workspace,
+            "diff",
+            "--no-index",
+            "--no-ext-diff",
+            "--no-textconv",
+            "--no-color",
+            "--numstat",
+            "--no-renames",
+            "-z",
+            "--",
+            os.devnull,
+            absolute,
+            check=False,
+        )
+        if proc.returncode not in (0, 1):
+            raise GitError(
+                "git could not count untracked path %r: %s"
+                % (relative, (proc.stderr or proc.stdout)[-800:])
+            )
+        saw_numstat = False
+        for record in proc.stdout.split("\0"):
+            if not record:
+                continue
+            parsed = _numstat_record(record)
+            # --no-index -z emits the two pathnames as separate records.
+            if parsed is None:
+                continue
+            saw_numstat = True
+            total += parsed[0]
+        if proc.stdout and not saw_numstat:
+            raise GitError(
+                "git numstat returned no counts for untracked path %r" % relative
+            )
+        if proc.returncode == 1 and not proc.stdout and os.path.lexists(absolute):
+            raise GitError(
+                "git could not count untracked path %r: %s"
+                % (relative, (proc.stderr or "no numstat output")[-800:])
+            )
+    return total
+
+
 def worktree_diff(workspace, max_chars=DIFF_MAX_CHARS):
     """The pending (not yet amended) delta: worktree vs HEAD, including new
     files.
@@ -363,6 +507,29 @@ def commit_wip(workspace, message):
     _run(workspace, "add", "-A")
     _run(workspace, "commit", "-q", "--allow-empty", "-m", message)
     return _run(workspace, "rev-parse", "--short", "HEAD").stdout.strip()
+
+
+def head_matches_wip(workspace, parent, tree, message):
+    """Whether HEAD is exactly the WIP described by a durable intent.
+
+    Used only after a crash/failure around ``commit_wip``: adopting this exact
+    child is idempotent; any other HEAD shape must be inspected rather than
+    receiving another commit on top.
+    """
+    _assert_workspace_root(workspace)
+    try:
+        actual_parent = _run(workspace, "rev-parse", "HEAD^").stdout.strip()
+        actual_tree = _run(workspace, "rev-parse", "HEAD^{tree}").stdout.strip()
+        actual_message = _run(
+            workspace, "log", "-1", "--format=%B", "HEAD"
+        ).stdout.rstrip("\n")
+    except GitError:
+        return False
+    return (
+        actual_parent == parent
+        and actual_tree == tree
+        and actual_message == message
+    )
 
 
 def amend(workspace):

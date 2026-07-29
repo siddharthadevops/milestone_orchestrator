@@ -290,7 +290,7 @@ class TestFieldCollisions(unittest.TestCase):
             {"status", "kind", "blocked_reason", "notes", "gaps",
              "question", "finding", "target_path", "max_rounds",
              "result_mode", "failure_gap", "files_changed",
-             "suite_command", "slices"},
+             "suite_command", "slices", "implementation_cut"},
         )
         self.assertIn(
             "suite_command_finding_id",

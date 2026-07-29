@@ -492,6 +492,155 @@ class TestPlanOrderNavigation(TempWorkspaceCase):
         self.assertTrue(st.maybe_close_milestone(state))
 
 
+class TestSequentialImplementationParts(TempWorkspaceCase):
+    def _pending_impl(self, n_slices=1):
+        state = make_state(self.workspace)
+        seal_current_unit(state, skeleton_draft(n_slices))
+        st.ensure_next_unit(state)
+        seal_current_unit(state)  # slice_doc-01
+        return state, st.ensure_next_unit(state)
+
+    @staticmethod
+    def _cut_result(cut_scope, remaining_scope):
+        result = {
+            "status": "ok",
+            "kind": contracts.KIND_IMPLEMENT,
+            "files_changed": ["calc.py"],
+            "implementation_cut": {
+                "cut_scope": cut_scope,
+                "remaining_scope": remaining_scope,
+            },
+        }
+        contracts.validate_worker_output(result, contracts.KIND_IMPLEMENT)
+        return result
+
+    def test_cut_keeps_original_identity_and_only_derives_b_in_plan(self):
+        state, impl = self._pending_impl()
+
+        st.record_draft(
+            state,
+            impl,
+            contracts.KIND_IMPLEMENT,
+            self._cut_result("calculator core", "CLI integration"),
+        )
+
+        self.assertNotIn("part", impl)
+        self.assertEqual(st.unit_key(impl), "slice_impl-01")
+        self.assertEqual(st.display_unit_key(impl), "slice_impl-01-a")
+        self.assertEqual(st.slice_token(impl), "01-a")
+        self.assertEqual(
+            st.planned_units(state),
+            [
+                (st.UNIT_SKELETON, None),
+                (st.UNIT_SLICE_DOC, 1),
+                (st.UNIT_SLICE_IMPL, 1),
+            ],
+        )
+        self.assertEqual(
+            st.planned_execution_units(state)[-2:],
+            [
+                (st.UNIT_SLICE_IMPL, 1, None),
+                (st.UNIT_SLICE_IMPL, 1, "b"),
+            ],
+        )
+        self.assertFalse(
+            any(unit.get("part") == "b" for unit in state["units"])
+        )
+        self.assertIs(st.current_unit(state), impl)
+        self.assertEqual(
+            st.implementation_scope(state, impl),
+            {
+                "part": "a",
+                "scope": "calculator core",
+                "delegated_remaining": "CLI integration",
+                "source_unit": "slice_impl-01",
+            },
+        )
+
+    def test_b_opens_only_after_a_seals_and_inherits_delegated_scope(self):
+        state, impl = self._pending_impl()
+        seal_current_unit(
+            state,
+            self._cut_result("calculator core", "CLI integration"),
+        )
+
+        self.assertIs(st.current_unit(state), None)
+        self.assertFalse(st.maybe_close_milestone(state))
+        self.assertFalse(
+            any(unit.get("part") == "b" for unit in state["units"])
+        )
+
+        continuation = st.ensure_next_unit(state)
+
+        self.assertEqual(st.unit_key(continuation), "slice_impl-01-b")
+        self.assertEqual(st.display_unit_key(continuation), "slice_impl-01-b")
+        self.assertIs(st.current_unit(state), continuation)
+        self.assertEqual(
+            st.implementation_scope(state, continuation),
+            {
+                "part": "b",
+                "scope": "CLI integration",
+                "delegated_remaining": None,
+                "source_unit": "slice_impl-01",
+            },
+        )
+
+    def test_each_cut_derives_exactly_one_later_part_before_next_slice(self):
+        state, first = self._pending_impl(n_slices=2)
+        seal_current_unit(
+            state,
+            self._cut_result("core", "CLI and packaging"),
+        )
+        second = st.ensure_next_unit(state)
+        seal_current_unit(
+            state,
+            self._cut_result("CLI", "packaging"),
+        )
+
+        self.assertEqual(
+            st.planned_execution_units(state),
+            [
+                (st.UNIT_SKELETON, None, None),
+                (st.UNIT_SLICE_DOC, 1, None),
+                (st.UNIT_SLICE_IMPL, 1, None),
+                (st.UNIT_SLICE_IMPL, 1, "b"),
+                (st.UNIT_SLICE_IMPL, 1, "c"),
+                (st.UNIT_SLICE_DOC, 2, None),
+                (st.UNIT_SLICE_IMPL, 2, None),
+            ],
+        )
+        third = st.ensure_next_unit(state)
+        self.assertEqual(st.unit_key(third), "slice_impl-01-c")
+        self.assertEqual(
+            st.implementation_scope(state, third)["scope"], "packaging"
+        )
+        self.assertNotEqual(st.unit_identity(first), st.unit_identity(second))
+        self.assertNotEqual(st.unit_identity(second), st.unit_identity(third))
+
+    def test_cut_and_part_identity_are_append_only(self):
+        state, impl = self._pending_impl()
+        st.record_draft(
+            state,
+            impl,
+            contracts.KIND_IMPLEMENT,
+            self._cut_result("core", "CLI"),
+        )
+        old = copy.deepcopy(state)
+        rewritten = copy.deepcopy(state)
+        rewritten["units"][-1]["implementation_cut"]["remaining_scope"] = "other"
+        with self.assertRaisesRegex(st.HistoryRewriteError, "implementation_cut"):
+            st.assert_append_only(old, rewritten)
+
+        impl["status"] = st.U_SEALED
+        continuation = st.ensure_next_unit(state)
+        old = copy.deepcopy(state)
+        rewritten = copy.deepcopy(state)
+        rewritten["units"][-1]["part"] = "c"
+        with self.assertRaisesRegex(st.HistoryRewriteError, "identity changed"):
+            st.assert_append_only(old, rewritten)
+        self.assertEqual(st.unit_key(continuation), "slice_impl-01-b")
+
+
 class TestUnitLifecycle(TempWorkspaceCase):
     def test_skeleton_happy_path(self):
         state = make_state(self.workspace)
@@ -2067,6 +2216,7 @@ class TestSummary(TempWorkspaceCase):
                 "milestone_status",
                 "slices",
                 "current_unit",
+                "display_current_unit",
                 "current_unit_status",
                 "current_family",
                 "current_model",
@@ -2090,6 +2240,7 @@ class TestSummary(TempWorkspaceCase):
         self.assertEqual(summ["milestone_status"], st.M_FAILED)
         self.assertEqual(summ["slices"], [{"id": 1, "title": "slice 1"}])
         self.assertEqual(summ["current_unit"], "slice_doc-01")
+        self.assertEqual(summ["display_current_unit"], "slice_doc-01")
         self.assertEqual(summ["current_unit_status"], st.U_FAILED)
         self.assertEqual(summ["failure"]["reason"], "round cap")
         self.assertEqual(summ["events_total"], len(state["events"]))
@@ -2100,10 +2251,14 @@ class TestSummary(TempWorkspaceCase):
         skel_view, doc_view = summ["units"]
         self.assertEqual(
             set(skel_view.keys()),
-            {"unit", "status", "artifact", "gate_sha", "wip_sha", "draft", "drafts",
+            {"unit", "display_unit", "slice_id", "part", "status", "artifact",
+             "gate_sha", "wip_sha", "draft", "drafts",
              "rounds", "seals", "opened_epoch", "closed_epoch", "debt",
              "reclassify", "repairs", "brainstormings", "work_duration_s"},
         )
+        self.assertEqual(skel_view["display_unit"], "skeleton")
+        self.assertIsNone(skel_view["slice_id"])
+        self.assertIsNone(skel_view["part"])
         # The draft chip data: write-once record surfaced for the panel.
         self.assertEqual(
             set(skel_view["draft"].keys()),

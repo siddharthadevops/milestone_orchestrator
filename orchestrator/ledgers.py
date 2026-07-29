@@ -75,6 +75,13 @@ def slice_note_path(state, slice_id):
     return os.path.join(docs_dir(state), "slices", "slice-%02d.md" % slice_id)
 
 
+def closure_path(state, unit):
+    """Unique closure path for ordinary slices and runtime parts alike."""
+    return os.path.join(
+        closures_dir(state), "slice-%s.md" % st.slice_token(unit)
+    )
+
+
 def index_path(state):
     """The parent directory's milestone index (canonical layout only —
     the legacy layout has no meaningful parent to write into)."""
@@ -111,12 +118,7 @@ def generated_paths(state):
         if unit.get("kind") == st.UNIT_SLICE_IMPL and unit.get(
             "closed_record"
         ):
-            paths.add(
-                os.path.join(
-                    closures_dir(state),
-                    "slice-%02d.md" % unit["slice_id"],
-                )
-            )
+            paths.add(closure_path(state, unit))
     return paths
 
 _GENERATED = (
@@ -135,8 +137,8 @@ def _slice_title(state, slice_id):
 def _unit_label(state, unit):
     if unit["kind"] == "skeleton":
         return "skeleton"
-    return "%s-%02d (%s)" % (
-        unit["kind"], unit["slice_id"], _slice_title(state, unit["slice_id"])
+    return "%s (%s)" % (
+        st.display_unit_key(unit), _slice_title(state, unit["slice_id"])
     )
 
 
@@ -385,7 +387,8 @@ def render_closure(state, unit):
     closed = unit.get("closed_record") or {}
     return (
         _GENERATED
-        + "# Closure — slice %02d (%s)\n\n" % (unit["slice_id"], _slice_title(state, unit["slice_id"]))
+        + "# Closure — slice %s (%s)\n\n"
+        % (st.slice_token(unit), _slice_title(state, unit["slice_id"]))
         + "- closed at: %s\n" % closed.get("at")
         + "- rounds: %s\n" % closed.get("rounds")
         + "- review completion records: %s\n" % closed.get("seal_attempts")
@@ -519,9 +522,7 @@ def generate(state, workspace):
         written.append(rel)
     for unit in state["units"]:
         if unit["kind"] == "slice_impl" and unit.get("closed_record"):
-            rel = os.path.join(
-                closures_dir(state), "slice-%02d.md" % unit["slice_id"]
-            )
+            rel = closure_path(state, unit)
             os.makedirs(
                 os.path.join(workspace, closures_dir(state)), exist_ok=True
             )

@@ -16,9 +16,11 @@ explanation in the log — no prose parsing, ever.
 
 import fnmatch
 import hashlib
+import inspect
 import json
 import math
 import os
+import queue
 import signal
 import subprocess
 import tempfile
@@ -241,6 +243,119 @@ class RunnerResult(object):
         # emit their explicit thread id here while keeping the final answer in
         # the historical last-message file.
         self.transport_text = text if transport_text is None else transport_text
+
+
+class ControlledInterruptionResult(RunnerResult):
+    def __init__(self, text, exit_code, duration_s, reason,
+                 transport_text=None):
+        RunnerResult.__init__(
+            self, text, exit_code, duration_s,
+            transport_text=transport_text,
+        )
+        self.controlled_interruption = True
+        self.interrupt_reason = str(reason or "controlled interruption")
+
+
+class ActiveCallControl(object):
+    def __init__(self, observer=None):
+        if observer is not None and not callable(observer):
+            raise RunnerError("active-call observer must be callable")
+        self._observer = observer
+        self._lock = threading.Lock()
+        self._closed = threading.Event()
+        self._functions = {}
+        self._thread = None
+        self._steers, self._interrupt_reason, self._error = [], None, None
+
+    @property
+    def closed(self):
+        return self._closed.is_set()
+
+    @property
+    def steers(self):
+        return list(self._steers)
+
+    @property
+    def interrupt_reason(self):
+        return self._interrupt_reason
+
+    @property
+    def interrupted(self):
+        return self._interrupt_reason is not None
+
+    @property
+    def error(self):
+        return self._error
+
+    def wait_closed(self, timeout=None):
+        return self._closed.wait(timeout)
+
+    def renew(self):
+        """Return a fresh physical-call control with the same observer.
+
+        A provider call closes its controller. Contract repair is a second
+        physical call and must not silently reuse that closed instance.
+        """
+        return ActiveCallControl(observer=self._observer)
+
+    def steer(self, text):
+        text = str(text or "").strip()
+        if not text:
+            raise ValueError("steer text must be non-empty")
+        return self._request("steer", text)
+
+    def interrupt(self, reason="controlled interruption"):
+        reason = str(reason or "controlled interruption").strip()
+        return self._request("interrupt", reason)
+
+    def _request(self, kind, value):
+        with self._lock:
+            if self.closed:
+                return False
+            fn = self._functions.get(kind)
+        if fn is None:
+            return False
+        try:
+            accepted = fn(value) is not False
+        except Exception as exc:
+            self._error = str(exc)
+            return False
+        if not accepted:
+            return False
+        if kind == "steer":
+            self._steers.append(value)
+        else:
+            self._interrupt_reason = value
+        return True
+
+    def _bind(self, steer_fn, interrupt_fn):
+        with self._lock:
+            if self.closed:
+                return
+            self._functions = {"steer": steer_fn, "interrupt": interrupt_fn}
+        if self._observer is None:
+            return
+        self._thread = threading.Thread(
+            target=self._run_observer, name="worker-control-observer",
+            daemon=True,
+        )
+        try:
+            self._thread.start()
+        except RuntimeError as exc:
+            self._error = str(exc)
+
+    def _run_observer(self):
+        try:
+            self._observer(self)
+        except Exception as exc:
+            self._error = str(exc)
+
+    def _close(self):
+        with self._lock:
+            self._functions = {}
+            self._closed.set()
+        if self._thread is not None and self._thread is not threading.current_thread():
+            self._thread.join(timeout=PS_SAMPLE_TIMEOUT)
 
 
 # ---------------------------------------------------------------------------
@@ -743,16 +858,13 @@ class SubprocessRunner(object):
         return t
 
     def call(self, family, prompt, workspace, model=None, effort=None,
-             timeout_override=None):
+             timeout_override=None, active_control=None):
         if family not in self.commands:
             raise RunnerError("no command configured for family %r" % family)
         template = apply_model_effort(self.commands[family], model, effort)
-        return self._call_template(
-            family,
-            prompt,
-            workspace,
-            template,
-            timeout_override=timeout_override,
+        return self._call_prepared(
+            family, prompt, workspace, template, model, effort,
+            timeout_override, _AMBIENT_EXECUTION, active_control,
         )
 
     def supports_session_continuation(self, family, ambient=False):
@@ -800,6 +912,7 @@ class SubprocessRunner(object):
         model=None,
         effort=None,
         timeout_override=None,
+        active_control=None,
     ):
         """Start one provider conversation and return its explicit reference."""
         try:
@@ -828,15 +941,14 @@ class SubprocessRunner(object):
             except (AttributeError, TypeError):
                 pass
             raise
-        if family == "codex":
-            result = self._call_template(
-                family,
-                prompt,
-                workspace,
-                template,
-                timeout_override=timeout_override,
-                execution_context=execution_context,
-            )
+        result = self._call_prepared(
+            family, prompt, workspace, template, model, effort,
+            timeout_override, execution_context, active_control,
+            session_ref=session_ref, persist_session=True,
+        )
+        if isinstance(result, ControlledInterruptionResult):
+            return result
+        if family == "codex" and not getattr(result, "session_ref", None):
             try:
                 result.session_ref = _codex_session_ref(
                     result.transport_text
@@ -848,17 +960,8 @@ class SubprocessRunner(object):
                     except (AttributeError, TypeError):
                         pass
                 raise
-            return result
-
-        result = self._call_template(
-            family,
-            prompt,
-            workspace,
-            template,
-            timeout_override=timeout_override,
-            execution_context=execution_context,
-        )
-        result.session_ref = session_ref
+        elif not getattr(result, "session_ref", None):
+            result.session_ref = session_ref
         return result
 
     def continue_session(
@@ -871,6 +974,7 @@ class SubprocessRunner(object):
         model=None,
         effort=None,
         timeout_override=None,
+        active_control=None,
     ):
         """Continue exactly ``session_ref``; there is no recency fallback."""
         try:
@@ -903,16 +1007,539 @@ class SubprocessRunner(object):
             except (AttributeError, TypeError):
                 pass
             raise
-        result = self._call_template(
-            family,
-            prompt,
-            workspace,
-            template,
-            timeout_override=timeout_override,
-            execution_context=execution_context,
+        result = self._call_prepared(
+            family, prompt, workspace, template, model, effort,
+            timeout_override, execution_context, active_control,
+            session_ref=session_ref, persist_session=True,
         )
         result.session_ref = session_ref
         return result
+
+    def _call_prepared(
+        self, family, prompt, workspace, template, model, effort, timeout,
+        execution_context, control, session_ref=None, persist_session=False,
+    ):
+        live_argv = (
+            self._live_argv(family, template, session_ref=session_ref)
+            if control else None
+        )
+        if live_argv:
+            live_argv = [
+                arg.replace("{workspace}", workspace) for arg in live_argv
+            ]
+            return self._call_live_transport(
+                family, prompt, workspace, live_argv, template,
+                model=model, effort=effort,
+                timeout_override=timeout, execution_context=execution_context,
+                active_control=control, session_ref=session_ref,
+                persist_session=persist_session,
+            )
+        return self._call_template(
+            family, prompt, workspace, template, timeout_override=timeout,
+            execution_context=execution_context, active_control=control,
+        )
+
+    @staticmethod
+    def _live_argv(family, template, session_ref=None):
+        if not isinstance(template, list) or not template:
+            return None
+        if family == "codex" and len(template) >= 2 and template[1] == "exec":
+            # app-server receives policy/cwd through its request schema, not
+            # through `codex exec` flags. Use it only when every semantic
+            # option is represented below; otherwise keep the configured CLI
+            # command intact and retain hard-interrupt control without steer.
+            if "--dangerously-bypass-approvals-and-sandbox" not in template:
+                return None
+            argv = [template[0], "app-server", "--stdio"]
+            index = 2
+            while index < len(template):
+                arg = template[index]
+                if arg in ("-c", "--config", "--enable", "--disable") \
+                        and index + 1 < len(template):
+                    argv.extend([arg, template[index + 1]])
+                    index += 2
+                    continue
+                if arg == "--strict-config" or arg.startswith(
+                    ("--config=", "--enable=", "--disable=")
+                ):
+                    argv.append(arg)
+                    index += 1
+                    continue
+                if arg in ("-m", "--model", "--output-last-message") \
+                        and index + 1 < len(template):
+                    index += 2
+                    continue
+                if arg.startswith(("--model=", "--output-last-message=")) \
+                        or arg in (
+                            "--dangerously-bypass-approvals-and-sandbox",
+                            "--json",
+                            "resume",
+                            "-",
+                        ) \
+                        or (session_ref is not None and arg == session_ref):
+                    index += 1
+                    continue
+                return None
+            return argv
+        if family == "claude" and ("-p" in template or "--print" in template):
+            argv = []
+            skip_value = False
+            for arg in template:
+                if skip_value:
+                    skip_value = False
+                    continue
+                if arg in ("--input-format", "--output-format"):
+                    skip_value = True
+                    continue
+                if arg.startswith(("--input-format=", "--output-format=")) \
+                        or arg == "--verbose":
+                    continue
+                argv.append(arg)
+            argv.extend(["--input-format", "stream-json",
+                         "--output-format", "stream-json", "--verbose"])
+            return argv
+        return None
+
+    @staticmethod
+    def _option_value(argv, *flags):
+        for index, arg in enumerate(argv[:-1]):
+            if arg in flags:
+                return argv[index + 1]
+        return None
+
+    def _call_live_transport(
+        self,
+        family,
+        prompt,
+        workspace,
+        argv,
+        original_template,
+        model=None,
+        effort=None,
+        timeout_override=None,
+        execution_context=_AMBIENT_EXECUTION,
+        active_control=None,
+        session_ref=None,
+        persist_session=False,
+    ):
+        timeout = timeout_override or self.timeouts.get(family)
+        started = time.time()
+        deadline = started + timeout if timeout else None
+        proc = reader = watchdog = None
+        tracked = cleaned = False
+        quiescent = True
+        raw, steer_paths = [], []
+        events, eof, idle = queue.Queue(), object(), object()
+        done, stalled, kill_lock, write_lock = (
+            threading.Event(), {"stalled": False}, threading.Lock(),
+            threading.Lock(),
+        )
+        out = err = None
+
+        def record(text, steer=False):
+            if self.prompt_recorder is None:
+                return None
+            try:
+                path = self.prompt_recorder(family, text)
+            except Exception as exc:
+                label = " steer" if steer else ""
+                raise RunnerError(
+                    "could not persist the exact %s%s prompt: %s"
+                    % (family, label, exc)
+                )
+            if steer:
+                steer_paths.append(path)
+            return path
+
+        def send(message):
+            line = json.dumps(message, separators=(",", ":")) + "\n"
+            with write_lock:
+                try:
+                    if proc.poll() is not None:
+                        return False
+                    proc.stdin.write(line)
+                    proc.stdin.flush()
+                    return True
+                except (BrokenPipeError, OSError, ValueError):
+                    return False
+
+        def receive():
+            if deadline is not None and time.time() >= deadline:
+                raise RunnerError(
+                    "family %s timed out after %ss" % (family, timeout)
+                )
+            wait = min(0.2, max(0, deadline - time.time())) if deadline else 0.2
+            try:
+                item = events.get(timeout=wait)
+                return None if item is eof else item
+            except queue.Empty:
+                # The process can exit a few microseconds before the reader
+                # drains its last JSONL records.  Do not turn that ordinary
+                # race into an incomplete provider result.
+                if proc.poll() is not None \
+                        and (reader is None or not reader.is_alive()):
+                    return None
+                return idle
+
+        def read_stdout():
+            try:
+                for line in proc.stdout:
+                    raw.append(line)
+                    out.write(line)
+                    out.flush()
+                    try:
+                        item = json.loads(line)
+                    except (TypeError, json.JSONDecodeError):
+                        item = idle
+                    events.put(item if isinstance(item, dict) else idle)
+            finally:
+                events.put(eof)
+
+        def cleanup():
+            nonlocal tracked, cleaned, quiescent
+            if cleaned:
+                return
+            cleaned = True
+            active_control._close()
+            done.set()
+            if proc is not None:
+                try:
+                    proc.stdin.close()
+                except (OSError, ValueError):
+                    pass
+                with kill_lock:
+                    _kill_group(proc)
+                    try:
+                        proc.wait(timeout=PS_SAMPLE_TIMEOUT)
+                    except Exception:
+                        pass
+                    if tracked:
+                        _untrack_worker(proc)
+                        tracked = False
+                    quiescent = _wait_for_process_group_quiescence(proc.pid)
+                if reader is not None:
+                    reader.join(timeout=PS_SAMPLE_TIMEOUT)
+                if proc.stdout is not None:
+                    try:
+                        proc.stdout.close()
+                    except (OSError, ValueError):
+                        pass
+            if watchdog is not None:
+                watchdog.join(timeout=PS_SAMPLE_TIMEOUT)
+
+        prompt_path = None
+        try:
+            prompt_path = record(prompt)
+            out = tempfile.NamedTemporaryFile(
+                mode="w+", encoding="utf-8", prefix="orch-live-", delete=False
+            )
+            err = tempfile.NamedTemporaryFile(
+                mode="w+", encoding="utf-8", prefix="orch-live-err-",
+                delete=False,
+            )
+            kwargs = dict(
+                stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=err,
+                cwd=self.cwd or workspace, env=_worker_env(self.env, family),
+                start_new_session=True, text=True, encoding="utf-8",
+                errors="replace", bufsize=1,
+            )
+            quiescent = False
+            try:
+                proc = (
+                    subprocess.Popen(argv, **kwargs)
+                    if execution_context is _AMBIENT_EXECUTION
+                    else self.participant_process_factory(
+                        execution_context, argv, kwargs
+                    )
+                )
+            except Exception as exc:
+                raise RunnerError("failed to spawn %r: %s" % (argv[0], exc))
+            _track_worker(proc)
+            tracked = True
+            reader = threading.Thread(
+                target=read_stdout, name="worker-live-stdout", daemon=True
+            )
+            reader.start()
+            watchdog = self._start_stall_watchdog(
+                proc, family, done, stalled, kill_lock,
+                output_paths=(out.name, err.name),
+            )
+            driver = (
+                self._drive_codex_app_server
+                if family == "codex" else self._drive_claude_stream
+            )
+            common = (active_control, proc, send,
+                      lambda text: record(text, steer=True), receive, idle)
+            args = (
+                (prompt, workspace, original_template, model, effort,
+                 session_ref, persist_session) + common
+                if family == "codex" else (prompt, session_ref) + common
+            )
+            outcome = driver(*args)
+            cleanup()
+            err.flush()
+            err.seek(0)
+            diagnostics = err.read()
+            text = outcome.get("text") or ""
+            exit_code = 0 if outcome.get("ok", True) else 1
+            if active_control.interrupted:
+                result = ControlledInterruptionResult(
+                    text, exit_code, time.time() - started,
+                    active_control.interrupt_reason,
+                    transport_text="".join(raw),
+                )
+            else:
+                detail = outcome.get("error") or diagnostics[-500:]
+                if stalled["stalled"] and not text.strip():
+                    raise WorkerStalled("family %s stalled" % family)
+                if not outcome.get("complete"):
+                    raise RunnerError(
+                        "family %s live transport ended before a result: %s"
+                        % (family, detail or "no provider result")
+                    )
+                if exit_code and not text.strip():
+                    raise RunnerError(
+                        "family %s failed with no output: %s"
+                        % (family, detail or "provider turn failed")
+                    )
+                result = RunnerResult(
+                    text, exit_code, time.time() - started,
+                    transport_text="".join(raw),
+                )
+            result.prompt_path = prompt_path
+            result.session_ref = None
+            if persist_session or session_ref is not None:
+                result.session_ref = outcome.get("session_ref") or session_ref
+            result.steers = active_control.steers
+            result.steer_prompt_paths = steer_paths
+            if quiescent:
+                result.worker_quiescent = True
+            return result
+        except BaseException as exc:
+            cleanup()
+            if quiescent:
+                try:
+                    exc.worker_quiescent = True
+                except (AttributeError, TypeError):
+                    pass
+            raise
+        finally:
+            cleanup()
+            for handle in (out, err):
+                if handle is not None:
+                    path = handle.name
+                    handle.close()
+                    _unlink_quiet(path)
+
+    @staticmethod
+    def _drive_codex_app_server(
+        prompt,
+        workspace,
+        template,
+        model,
+        effort,
+        session_ref,
+        persist_session,
+        active_control,
+        proc,
+        send,
+        record_steer,
+        read_event,
+        no_event,
+    ):
+        def next_id():
+            return str(uuid.uuid4())
+
+        def request(method, params):
+            ident = next_id()
+            if not send({"id": ident, "method": method, "params": params}):
+                raise RunnerError("codex app-server closed during %s" % method)
+            while True:
+                event = read_event()
+                if event is no_event:
+                    continue
+                if event is None:
+                    raise RunnerError(
+                        "codex app-server exited during %s" % method
+                    )
+                if event.get("id") != ident:
+                    continue
+                if "error" in event:
+                    raise RunnerError(
+                        "codex app-server %s failed: %s" % (method, event["error"])
+                    )
+                return event.get("result") or {}
+
+        request(
+            "initialize",
+            {"clientInfo": {"name": "milestone-orchestrator", "version": "1"}},
+        )
+        send({"method": "initialized", "params": {}})
+        requested_model = model or SubprocessRunner._option_value(
+            template, "-m", "--model"
+        )
+        requested_effort = effort or SubprocessRunner._option_value(
+            template, "--effort"
+        )
+        if requested_effort is None:
+            requested_effort = next(
+                (template[i + 1].split("=", 1)[1]
+                 for i, arg in enumerate(template[:-1])
+                 if arg in ("-c", "--config")
+                 and template[i + 1].startswith("model_reasoning_effort=")),
+                None,
+            )
+        common = dict(cwd=workspace, approvalPolicy="never",
+                      sandbox="danger-full-access")
+        if requested_model:
+            common["model"] = requested_model
+        method = "thread/resume" if session_ref else "thread/start"
+        params = dict(common, **(
+            {"threadId": session_ref} if session_ref
+            else {"ephemeral": not persist_session}
+        ))
+        thread_id = (request(method, params).get("thread") or {}).get("id")
+        thread_id = thread_id or session_ref
+        if not isinstance(thread_id, str) or not thread_id.strip():
+            raise RunnerError("codex app-server did not expose a thread id")
+        input_items = lambda text: [{"type": "text", "text": text}]
+        turn_params = {
+            "threadId": thread_id,
+            "input": input_items(prompt),
+            "cwd": workspace,
+            "approvalPolicy": "never",
+            "sandboxPolicy": {"type": "dangerFullAccess"},
+        }
+        if requested_model:
+            turn_params["model"] = requested_model
+        if requested_effort:
+            turn_params["effort"] = requested_effort
+        turn_id = (request("turn/start", turn_params).get("turn") or {}).get("id")
+        if not isinstance(turn_id, str) or not turn_id.strip():
+            raise RunnerError("codex app-server did not expose a turn id")
+
+        def steer(text):
+            record_steer(text)
+            ident = next_id()
+            reply = queue.Queue(maxsize=1)
+            with response_lock:
+                pending_responses[ident] = reply
+            params = dict(threadId=thread_id, expectedTurnId=turn_id,
+                          input=input_items(text))
+            if not send({"id": ident, "method": "turn/steer",
+                         "params": params}):
+                with response_lock:
+                    pending_responses.pop(ident, None)
+                return False
+            deadline = time.monotonic() + 2
+            while not active_control.closed and time.monotonic() < deadline:
+                try:
+                    response = reply.get(timeout=0.1)
+                except queue.Empty:
+                    continue
+                return "error" not in response
+            with response_lock:
+                pending_responses.pop(ident, None)
+            return False
+
+        def interrupt(_reason):
+            if not send({
+                "id": next_id(), "method": "turn/interrupt",
+                "params": {"threadId": thread_id, "turnId": turn_id},
+            }):
+                _kill_group(proc)
+            return True
+
+        pending_responses = {}
+        response_lock = threading.Lock()
+        active_control._bind(steer, interrupt)
+        completed = None
+        stop_deadline = None
+        while True:
+            if active_control.interrupted:
+                stop_deadline = stop_deadline or time.monotonic() + 3
+                if time.monotonic() >= stop_deadline:
+                    _kill_group(proc)
+                    break
+            event = read_event()
+            if event is no_event:
+                continue
+            if event is None:
+                break
+            ident = event.get("id")
+            if ident is not None:
+                with response_lock:
+                    reply = pending_responses.pop(ident, None)
+                if reply is not None:
+                    reply.put(event)
+                    continue
+            if event.get("method") == "turn/completed":
+                candidate = (event.get("params") or {}).get("turn") or {}
+                if candidate.get("id") == turn_id:
+                    completed = candidate
+                    break
+        turn = completed or {}
+        texts = [item.get("text") for item in turn.get("items") or []
+                 if isinstance(item, dict) and item.get("type") == "agentMessage"
+                 and isinstance(item.get("text"), str)]
+        return {
+            "text": texts[-1] if texts else "",
+            "session_ref": thread_id,
+            "complete": completed is not None,
+            "ok": turn.get("status") == "completed",
+            "error": turn.get("error"),
+        }
+
+    @staticmethod
+    def _drive_claude_stream(
+        prompt,
+        session_ref,
+        active_control,
+        proc,
+        send,
+        record_steer,
+        read_event,
+        no_event,
+    ):
+        def user_message(text):
+            content = [{"type": "text", "text": text}]
+            return {"type": "user",
+                    "message": {"role": "user", "content": content}}
+
+        if not send(user_message(prompt)):
+            raise RunnerError("claude stream closed before the initial prompt")
+
+        def steer(text):
+            record_steer(text)
+            return send(user_message(text))
+
+        active_control._bind(
+            steer, lambda _reason: (_kill_group(proc) or True)
+        )
+        observed_session = session_ref
+        while True:
+            event = read_event()
+            if event is no_event:
+                continue
+            if event is None:
+                break
+            if isinstance(event.get("session_id"), str):
+                observed_session = event["session_id"]
+            if event.get("type") == "result":
+                return {
+                    "text": event.get("result") or "",
+                    "session_ref": observed_session,
+                    "complete": True,
+                    "ok": not bool(event.get("is_error")),
+                    "error": event.get("subtype"),
+                }
+        return {
+            "text": "",
+            "session_ref": observed_session,
+            "complete": False,
+            "ok": False,
+            "error": None,
+        }
 
     def _call_template(
         self,
@@ -922,6 +1549,7 @@ class SubprocessRunner(object):
         template,
         timeout_override=None,
         execution_context=_AMBIENT_EXECUTION,
+        active_control=None,
     ):
         """Run one prepared argv through the shared supervised call path."""
         timeout = timeout_override or self.timeouts.get(family)
@@ -1070,6 +1698,11 @@ class SubprocessRunner(object):
                 raise RunnerError("failed to spawn %r: %s" % (argv[0], exc))
 
             _track_worker(proc)
+            if active_control is not None:
+                active_control._bind(
+                    lambda _text: False,
+                    lambda _reason: (_kill_group(proc) or True),
+                )
             try:
                 # Start the watchdog INSIDE the try so a Thread.start()
                 # failure cannot leak the tracked worker. wd_done/wd_state
@@ -1122,6 +1755,19 @@ class SubprocessRunner(object):
                         text = file_text
                 except OSError:
                     pass
+            if active_control is not None and active_control.interrupted:
+                result = ControlledInterruptionResult(
+                    text,
+                    proc.returncode,
+                    duration,
+                    active_control.interrupt_reason,
+                    transport_text=stdout_text,
+                )
+                result.prompt_path = prompt_path
+                result.steers = active_control.steers
+                if worker_quiescent:
+                    result.worker_quiescent = True
+                return result
             # The watchdog sets "stalled" only after a full flat window, then
             # kills the group. Classify that as an auto-resumable stall
             # whenever the kill defined the outcome: the leader died by our
@@ -1164,6 +1810,8 @@ class SubprocessRunner(object):
                 transport_text=stdout_text,
             )
             result.prompt_path = prompt_path
+            if active_control is not None:
+                result.steers = active_control.steers
             # Ordered Brainstorming coordination consumes this positive
             # evidence before accepting a turn. Plain participant exchanges
             # retain the existing fail-open delivery posture when process
@@ -1175,6 +1823,8 @@ class SubprocessRunner(object):
             failure = exc
             raise
         finally:
+            if active_control is not None:
+                active_control._close()
             # Single cleanup site, reached on EVERY exit. Set wd_done, then
             # reap a spawned-but-not-yet-reaped worker under kill_lock (so the
             # watchdog rechecking wd_done under the same lock never kills after
@@ -1249,7 +1899,7 @@ class MockRunner(object):
         self._session_seq = 0
 
     def call(self, family, prompt, workspace, model=None, effort=None,
-             timeout_override=None):
+             timeout_override=None, active_control=None):
         kind = prompt_kind(prompt)
         self.calls.append((family, kind, prompt))
         self.call_meta.append(
@@ -1293,18 +1943,19 @@ class MockRunner(object):
         model=None,
         effort=None,
         timeout_override=None,
+        active_control=None,
     ):
         self._session_seq += 1
         session_ref = "mock-session-%d" % self._session_seq
         self.session_calls.append(("start", family, session_ref))
-        result = self.call(
-            family,
-            prompt,
-            workspace,
-            model=model,
-            effort=effort,
-            timeout_override=timeout_override,
-        )
+        call_kwargs = {
+            "model": model,
+            "effort": effort,
+            "timeout_override": timeout_override,
+        }
+        if active_control is not None:
+            call_kwargs["active_control"] = active_control
+        result = self.call(family, prompt, workspace, **call_kwargs)
         result.session_ref = session_ref
         return result
 
@@ -1318,18 +1969,19 @@ class MockRunner(object):
         model=None,
         effort=None,
         timeout_override=None,
+        active_control=None,
     ):
         if not isinstance(session_ref, str) or not session_ref.strip():
             raise RunnerError("session_ref must be a non-empty string")
         self.session_calls.append(("continue", family, session_ref))
-        result = self.call(
-            family,
-            prompt,
-            workspace,
-            model=model,
-            effort=effort,
-            timeout_override=timeout_override,
-        )
+        call_kwargs = {
+            "model": model,
+            "effort": effort,
+            "timeout_override": timeout_override,
+        }
+        if active_control is not None:
+            call_kwargs["active_control"] = active_control
+        result = self.call(family, prompt, workspace, **call_kwargs)
         result.session_ref = session_ref
         return result
 
@@ -1416,7 +2068,8 @@ def _note_recovery(result, closers):
 def call_worker(runner, family, prompt, kind, workspace,
                 model=None, effort=None, extensions=None, roots=None,
                 validate_opts=None, start_session=False, session_ref=None,
-                execution_context=_AMBIENT_EXECUTION):
+                execution_context=_AMBIENT_EXECUTION,
+                active_control=None):
     """Run the CLI and return (validated_output, RunnerResult).
 
     Exactly one repair retry on contract violation; then
@@ -1454,21 +2107,47 @@ def call_worker(runner, family, prompt, kind, workspace,
         def _validate(obj):
             return contracts.validate_worker_output(obj, kind, **opts)
 
-    def invoke(call_prompt, continuation_ref=None):
+    def invoke(call_prompt, continuation_ref=None,
+               call_control=active_control):
+        def compatible_call(method, *args):
+            kwargs = {"model": model, "effort": effort}
+            accepts_control = False
+            if call_control is not None:
+                try:
+                    signature = inspect.signature(method)
+                    parameters = signature.parameters.values()
+                    accepts_control = (
+                        "active_control" in signature.parameters
+                        or any(
+                            parameter.kind == inspect.Parameter.VAR_KEYWORD
+                            for parameter in parameters
+                        )
+                    )
+                except (TypeError, ValueError):
+                    accepts_control = False
+                if accepts_control:
+                    kwargs["active_control"] = call_control
+            try:
+                return method(*args, **kwargs)
+            finally:
+                if call_control is not None and not accepts_control:
+                    # Historical injected runners remain valid. They cannot
+                    # be steered live, but the driver's post-call hard-size
+                    # check still enforces the boundary.
+                    call_control._close()
         if continuation_ref is not None:
             continuation = getattr(runner, "continue_session", None)
             if not callable(continuation):
                 raise RunnerError(
                     "the runner cannot continue an explicit provider session"
                 )
-            return continuation(
+            return compatible_call(
+                continuation,
                 family,
                 continuation_ref,
                 call_prompt,
                 workspace,
                 execution_context,
-                model=model,
-                effort=effort,
             )
         if start_session:
             starter = getattr(runner, "start_session", None)
@@ -1479,27 +2158,27 @@ def call_worker(runner, family, prompt, kind, workspace,
                 except TypeError:
                     supported = support(family)
                 if not supported:
-                    return runner.call(
+                    return compatible_call(
+                        runner.call,
                         family,
                         call_prompt,
                         workspace,
-                        model=model,
-                        effort=effort,
                     )
             if callable(starter):
-                return starter(
+                return compatible_call(
+                    starter,
                     family,
                     call_prompt,
                     workspace,
                     execution_context,
-                    model=model,
-                    effort=effort,
                 )
-        return runner.call(
-            family, call_prompt, workspace, model=model, effort=effort
+        return compatible_call(
+            runner.call, family, call_prompt, workspace
         )
 
     result = invoke(prompt, continuation_ref=session_ref)
+    if isinstance(result, ControlledInterruptionResult):
+        return None, result
     try:
         validated, closers = _extract_contract_output(
             result.text, _validate, kind
@@ -1510,7 +2189,16 @@ def call_worker(runner, family, prompt, kind, workspace,
         first_error = str(exc)
     repair_prompt = prompt + (REPAIR_SUFFIX % first_error)
     repair_ref = getattr(result, "session_ref", None) or session_ref
-    result2 = invoke(repair_prompt, continuation_ref=repair_ref)
+    repair_control = (
+        active_control.renew() if active_control is not None else None
+    )
+    result2 = invoke(
+        repair_prompt,
+        continuation_ref=repair_ref,
+        call_control=repair_control,
+    )
+    if isinstance(result2, ControlledInterruptionResult):
+        return None, result2
     try:
         validated, closers = _extract_contract_output(
             result2.text, _validate, kind

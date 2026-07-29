@@ -1306,6 +1306,64 @@ class TestVerificationProtocol(unittest.TestCase):
         self.assertIn("the driver runs it at the final boundary", prompt)
 
 
+class TestSequentialImplementationScope(unittest.TestCase):
+    def _surfaces(self, scope):
+        return {
+            "implement": prompts.build_implement(
+                FAMILY, WORKSPACE, GOAL, SLICE, "docs/slice-01.md",
+                ["make test"], implementation_scope=scope,
+            ),
+            "review": prompts.build_review_round(
+                FAMILY, WORKSPACE, GOAL, UNIT, "docs/slice-01.md", [],
+                implementation_scope=scope,
+            ),
+            "delta": prompts.build_delta_review(
+                FAMILY, WORKSPACE, GOAL, UNIT, [],
+                implementation_scope=scope,
+            ),
+            "fix": prompts.build_fix_findings(
+                FAMILY, WORKSPACE, GOAL, UNIT, FINDINGS, [], "claude", [],
+                implementation_scope=scope,
+            ),
+        }
+
+    def test_all_four_surfaces_share_the_same_part_boundary(self):
+        scope = {
+            "part": "a",
+            "scope": "calculator core and focused tests",
+            "delegated_remaining": "CLI integration",
+            "source_unit": "slice_impl-01",
+        }
+        for name, prompt in self._surfaces(scope).items():
+            with self.subTest(surface=name):
+                text = normalized(prompt)
+                self.assertIn("SEQUENTIAL IMPLEMENTATION PART", text)
+                self.assertIn("SAME reviewed design slice", text)
+                self.assertIn("calculator core and focused tests", text)
+                self.assertIn("CLI integration", text)
+                self.assertIn("intentionally OUTSIDE this unit", text)
+                self.assertIn("not a defect", text)
+
+    def test_final_continuation_has_no_invented_remainder(self):
+        scope = {
+            "part": "b",
+            "scope": "CLI integration",
+            "delegated_remaining": None,
+            "source_unit": "slice_impl-01",
+        }
+        for name, prompt in self._surfaces(scope).items():
+            with self.subTest(surface=name):
+                text = normalized(prompt)
+                self.assertIn("CLI integration", text)
+                self.assertIn("No later remainder is delegated", text)
+                self.assertNotIn("DELEGATED REMAINDER", text)
+
+    def test_legacy_calls_have_no_part_boundary(self):
+        for name, prompt in build_all().items():
+            with self.subTest(surface=name):
+                self.assertNotIn("SEQUENTIAL IMPLEMENTATION PART", prompt)
+
+
 class TestPromptCompression(unittest.TestCase):
     """Keep static instructions small; run data is deliberately excluded."""
 

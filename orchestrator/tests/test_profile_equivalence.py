@@ -57,6 +57,7 @@ NONDET_FIELDS = frozenset({
     "review_evidence_fingerprint", "evidence_fingerprint",
     # git object ids — different repos, different shas
     "sha", "wip_sha", "gate_sha", "gate_commit", "commit", "parent", "head",
+    "tree",
 })
 
 

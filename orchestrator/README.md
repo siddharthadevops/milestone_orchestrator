@@ -131,7 +131,19 @@ lands in the ledger, and `verification_timeout` defaults to unlimited —
 suites may legitimately run for hours. Panel launches
 enable `git.enabled` by default — the full gate/amend/delta-review
 discipline described above; pass `{"git": {"enabled": false}}` in the
-advanced config for a deliberate pure-state run. Both path fields
+advanced config for a deliberate pure-state run.
+
+Git-enabled implementation calls also keep reviews bounded. At 1,000
+reviewable changed lines the active worker is asked to finish one coherent
+functional cut; beyond 1,500 it is stopped and a fresh worker must reduce and
+stabilize that cut. The meter is additions plus deletions from the fixed
+pre-call Git tree, including non-ignored untracked files and excluding
+Markdown, text, and runtime bookkeeping. A cut becomes part `a`, completes
+its own commit and ordinary review cycle, and only then opens part `b`; later
+parts repeat the same strictly sequential flow. Override the thresholds with
+`implementation_size_control.soft_lines` and `.hard_lines`.
+
+Both path fields
 have a Browse… picker (`GET /api/fs`, read-only listings; a typed path that
 does not exist yet opens at its nearest existing ancestor) and a dropdown of
 previously used paths (`GET /api/recents`, best-effort form memory in

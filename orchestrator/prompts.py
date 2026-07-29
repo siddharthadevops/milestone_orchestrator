@@ -1342,10 +1342,47 @@ def build_draft_slice_note(family, workspace, goal, slice_info, skeleton_path,
     )
 
 
+def _implementation_scope_block(implementation_scope):
+    """One scope boundary shared by implement, review, delta and fixer."""
+    if not implementation_scope:
+        return ""
+    part = str(implementation_scope.get("part") or "?")
+    scope = str(implementation_scope.get("scope") or "").strip()
+    delegated = implementation_scope.get("delegated_remaining")
+    delegated = str(delegated).strip() if delegated else ""
+    source = str(implementation_scope.get("source_unit") or "").strip()
+    block = (
+        "SEQUENTIAL IMPLEMENTATION PART — %s\n"
+        "- This is a runtime size cut of the SAME reviewed design slice, not a\n"
+        "  new design slice. The original slice note remains authoritative.\n"
+        "- CURRENT PART SCOPE (JSON quoted): %s\n"
+        % (part, json.dumps(scope, ensure_ascii=False))
+    )
+    if source:
+        block += "- Scope source unit: %s\n" % _oneline(source, 300)
+    if delegated:
+        block += (
+            "- DELEGATED REMAINDER (JSON quoted): %s\n"
+            "- That remainder is intentionally OUTSIDE this unit and becomes\n"
+            "  the next sequential implementation part only after this unit\n"
+            "  completes review. Its absence here is not a defect. This cut\n"
+            "  must still be coherent, functional, tested, and compatible\n"
+            "  with work\n"
+            "  that will build on its approved commit.\n"
+            % json.dumps(delegated, ensure_ascii=False)
+        )
+    else:
+        block += (
+            "- Complete exactly the current part scope. No later remainder is\n"
+            "  delegated by the current unit record.\n"
+        )
+    return block + "\n"
+
+
 def build_implement(family, workspace, goal, slice_info, note_path, verification,
                     amendments=None, project_context=None, gap_enabled=False,
                     skeleton_path=None, remodeled=False,
-                    editable_design_paths=None):
+                    editable_design_paths=None, implementation_scope=None):
     ver = "\n".join("  %s" % c for c in verification) or (
         "  (none yet — your suite_command will arm the final boundary)"
     )
@@ -1381,6 +1418,7 @@ def build_implement(family, workspace, goal, slice_info, note_path, verification
         + "GOAL: %s\n" % goal
         + "SLICE NOTE: %s\n\n" % note_path
         + remodel_block
+        + _implementation_scope_block(implementation_scope)
         + _amendments_block(amendments)
         + _project_context_block(project_context)
         + "The driver handled the pre-implementation baseline before this\n"
@@ -1584,7 +1622,7 @@ def build_review_round(family, workspace, goal, unit_desc, artifact, registry,
                        unit_kind=None, governing=None, amendments=None,
                        project_context=None, battery=None, debt=None,
                        gap_enabled=False, wave_docs=None,
-                       editable_design_paths=None):
+                       editable_design_paths=None, implementation_scope=None):
     return (
         _header(contracts.KIND_REVIEW_ROUND, family, workspace)
         + "\nTASK: full review round of %s. REPORT ONLY.\n" % unit_desc
@@ -1592,6 +1630,7 @@ def build_review_round(family, workspace, goal, unit_desc, artifact, registry,
         + "TARGET: %s (plus any code/tests it governs)\n\n" % artifact
         + (_wave_full_review_block(wave_docs) if gap_enabled else "")
         + _amendment_review_scope(editable_design_paths)
+        + _implementation_scope_block(implementation_scope)
         + _amendments_block(amendments)
         + _project_context_block(project_context)
         + _governing_line(governing)
@@ -1621,7 +1660,7 @@ def build_delta_review(family, workspace, goal, unit_desc, registry,
                        unit_kind=None, governing=None, amendments=None,
                        project_context=None, debt=None, wave_docs=None,
                        gap_enabled=False, design_correction=None,
-                       editable_design_paths=None):
+                       editable_design_paths=None, implementation_scope=None):
     # During a re-documentation wave the fixer legitimately edits SEVERAL
     # milestone documents at once (they are co-reopened, not sealed); the
     # delta reviewer must judge the multi-document diff as one coherent
@@ -1709,6 +1748,7 @@ def build_delta_review(family, workspace, goal, unit_desc, registry,
         + wave_block
         + correction_block
         + _amendment_review_scope(editable_design_paths, delta=True)
+        + _implementation_scope_block(implementation_scope)
         + _amendments_block(amendments)
         + _project_context_block(project_context)
         + _delta_governing_line(governing)
@@ -1911,6 +1951,7 @@ def build_fix_findings(
     editable_design_paths=None,
     verification_repair=False,
     verification_commands=None,
+    implementation_scope=None,
 ):
     # `gap_enabled` answers only whether THIS fixer may emit a new gap.  A
     # legacy repair fixer deliberately cannot open a nested gap, but it still
@@ -2234,6 +2275,7 @@ def build_fix_findings(
         _header(contracts.KIND_FIX_FINDINGS, family, workspace)
         + task_line
         + "GOAL: %s\n\n" % goal
+        + _implementation_scope_block(implementation_scope)
         + design_baseline_block
         + correction_block
         + rethink_block

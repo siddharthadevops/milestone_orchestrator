@@ -101,6 +101,16 @@ DEFAULT_CONFIG = {
     # ~7x below the lightest real work. Set the window to 0 to disable.
     "worker_stall_window_s": 900,
     "worker_stall_min_cpu_s": 1.0,
+    # Keep implementation commits reviewable.  The live worker is first
+    # asked to close one coherent functional cut; only continued growth past
+    # the hard boundary is interrupted and handed to a fresh stabilizer.
+    # Git is the sole meter.  Markdown/text and runtime bookkeeping are
+    # excluded by gitops.reviewable_line_count().
+    "implementation_size_control": {
+        "soft_lines": 1000,
+        "hard_lines": 1500,
+        "poll_interval_s": 2,
+    },
     "verification": [],
     # Unlimited by default, same philosophy as worker timeouts: a real
     # suite may take 15+ minutes and a gate that kills it converts honest
@@ -420,6 +430,7 @@ class Driver(object):
                 with self._exclusive():
                     self.state = st.load(self.state_path)
                     if self.state.get("failure") is None:
+                        closure_recovered = self._consume_pending_closure()
                         materialized = st.ensure_due_unit(self.state) is not None
                         try:
                             # A parked implementation must remain assigned to
@@ -432,10 +443,37 @@ class Driver(object):
                         except StopStep:
                             pass  # the guard persisted the typed failure
                         else:
-                            if materialized:
+                            closed_now = False
+                            final_committed = False
+                            if (
+                                st.current_unit(self.state) is None
+                                and self.state.get("failure") is None
+                            ):
+                                was_closed = (
+                                    self.state["milestone"]["status"]
+                                    == st.M_CLOSED
+                                )
+                                if st.maybe_close_milestone(self.state):
+                                    closed_now = not was_closed
+                                    if (
+                                        closed_now
+                                        or self.state.get(
+                                            "pending_final_commit"
+                                        )
+                                    ):
+                                        self._final_commit()
+                                        final_committed = True
+                            if (
+                                materialized
+                                or closure_recovered
+                                or closed_now
+                                or final_committed
+                            ):
                                 self._save()
             except ConcurrentRunError:
                 pass
+            except StopStep:
+                pass  # closure/final-commit recovery persisted its failure
 
     # -- helpers ----------------------------------------------------------
 
@@ -647,6 +685,7 @@ class Driver(object):
                 "candidate": self._candidate_fingerprint(snapshot),
                 "amendments": amendments,
                 "project_context": project_context,
+                "implementation_scope": self._implementation_scope(unit),
                 # Bind approvals to the exact execution plan, including
                 # command boundaries. Joining with ``&&`` is only a prompt
                 # rendering: separate list items run in separate shells and
@@ -791,7 +830,314 @@ class Driver(object):
                        # consistent with _slice_info
         if unit["kind"] == st.UNIT_SLICE_DOC:
             return "the slice %d note (%s)" % (unit["slice_id"], title)
-        return "the slice %d implementation (%s)" % (unit["slice_id"], title)
+        part = st.implementation_part(unit)
+        token = "%d%s" % (
+            unit["slice_id"], "-%s" % part if part else ""
+        )
+        return "the slice %s implementation (%s)" % (token, title)
+
+    def _implementation_scope(self, unit):
+        return st.implementation_scope(self.state, unit)
+
+    def _implementation_size_control(self, base_tree,
+                                     recovery_start_lines=None):
+        """Live Git budget monitor for one implementation call.
+
+        The observer never mutates Git or state.  It asks once for a coherent
+        cut at the soft boundary.  A hard stop follows when the worker remains
+        beyond the hard boundary after that request.  Recovery workers start
+        above that boundary by definition, so they are stopped only if they
+        expand the already-oversized delta instead of reducing it.
+        """
+        if not base_tree or not gitops.enabled(self.config):
+            return None, None
+        configured = self.config.get("implementation_size_control")
+        if configured is None:
+            configured = DEFAULT_CONFIG["implementation_size_control"]
+        if not isinstance(configured, dict):
+            return None, None
+        try:
+            soft = int(configured.get("soft_lines", 1000))
+            hard = int(configured.get("hard_lines", 1500))
+            poll = float(configured.get("poll_interval_s", 2))
+        except (TypeError, ValueError):
+            return None, None
+        if soft <= 0 or hard <= soft or poll <= 0:
+            return None, None
+        marker = {
+            "soft_lines": soft,
+            "hard_lines": hard,
+            "steer_attempted": False,
+            "steer_delivered": False,
+            "steer_lines": None,
+            "interrupt_lines": None,
+            "last_lines": 0,
+            "recovery_start_lines": recovery_start_lines,
+            "recovery_ceiling": (
+                recovery_start_lines + max(1, hard - soft)
+                if recovery_start_lines is not None else None
+            ),
+        }
+        steer_text = (
+            "CONTROLLED SIZE CUTOFF: stop expanding the slice now. Bring the "
+            "current changes to one coherent, functional and reviewable cut; "
+            "run only focused checks needed for that cut. Do not implement "
+            "the remaining obligations in this turn. If obligations remain, "
+            "return implementation_cut with concise non-empty cut_scope and "
+            "remaining_scope. If the complete original slice is already "
+            "finished, omit implementation_cut and return the normal result."
+        )
+
+        def observe(control):
+            call_steered = False
+            while not control.closed:
+                try:
+                    lines = gitops.reviewable_line_count(
+                        self.workspace,
+                        base_tree,
+                        bookkeeping_dir=self._runtime_dir(),
+                    )
+                except gitops.GitError:
+                    # A checkout race while files are being replaced is not a
+                    # reason to kill useful work.  The next poll tries again.
+                    if control.wait_closed(poll):
+                        return
+                    continue
+                marker["last_lines"] = lines
+                if recovery_start_lines is not None:
+                    if lines > marker["recovery_ceiling"]:
+                        marker["interrupt_lines"] = lines
+                        control.interrupt(
+                            "cutoff recovery expanded the implementation "
+                            "delta (%d reviewable Git lines)" % lines
+                        )
+                        return
+                    if control.wait_closed(poll):
+                        return
+                    continue
+                if not call_steered and lines >= soft:
+                    call_steered = True
+                    marker["steer_attempted"] = True
+                    marker["steer_lines"] = lines
+                    delivered = bool(control.steer(steer_text))
+                    marker["steer_delivered"] = bool(
+                        marker["steer_delivered"] or delivered
+                    )
+                    if lines > hard and not delivered:
+                        marker["interrupt_lines"] = lines
+                        control.interrupt(
+                            "implementation exceeded the controlled size "
+                            "cutoff (%d reviewable Git lines)" % lines
+                        )
+                        return
+                elif (
+                    call_steered
+                    and lines > hard
+                ):
+                    marker["interrupt_lines"] = lines
+                    control.interrupt(
+                        "implementation continued beyond the controlled "
+                        "size cutoff (%d reviewable Git lines)" % lines
+                    )
+                    return
+                if control.wait_closed(poll):
+                    return
+
+        return runners.ActiveCallControl(observer=observe), marker
+
+    @staticmethod
+    def _implementation_stabilizer_prompt(prompt, marker):
+        return (
+            prompt
+            + "\n\nFORCED CONTROLLED-CUTOFF RECOVERY\n"
+            "A previous implementer was stopped after continuing beyond the "
+            "size limit. Its uncommitted workspace changes are intentionally "
+            "present. Inspect and preserve sound work. Do not expand toward "
+            "the full remaining slice: reduce the current reviewable Git "
+            "delta to at most %(hard)s lines, make that cut coherent and "
+            "functional, and run focused checks only. Defer or revert excess "
+            "work rather than preserving an oversized cut. If the "
+            "original slice still has obligations, return implementation_cut "
+            "with concise non-empty cut_scope and remaining_scope; otherwise "
+            "omit it. Return the ordinary implement envelope.\n"
+            "Observed reviewable Git lines: %(observed)s.\n"
+            % {
+                "hard": marker["hard_lines"],
+                "observed": (
+                    marker.get("interrupt_lines")
+                    or marker.get("last_lines")
+                ),
+            }
+        )
+
+    def _implementation_line_count(self, base_tree):
+        for attempt in range(3):
+            try:
+                return gitops.reviewable_line_count(
+                    self.workspace,
+                    base_tree,
+                    bookkeeping_dir=self._runtime_dir(),
+                )
+            except gitops.GitError:
+                if attempt < 2:
+                    time.sleep(0.05)
+        return None
+
+    def _fail_implementation_size(self, lines, hard, reason):
+        detail = (
+            "%s; the current implementation delta is %s reviewable Git "
+            "lines and must be at most %d"
+            % (reason, "unknown" if lines is None else lines, hard)
+        )
+        st.fail_run(
+            self.state,
+            detail,
+            unit=st.current_unit(self.state),
+            type_="worker_protocol",
+        )
+        self._save()
+        raise StopStep("implementation size cutoff recovery failed")
+
+    def _call_implementation(
+        self, family, prompt, raw_name, model, effort, extensions, roots,
+        validate_opts, start_session, base_tree, session_ref=None,
+    ):
+        control, marker = self._implementation_size_control(base_tree)
+        if marker is None and gitops.enabled(self.config):
+            st.fail_run(
+                self.state,
+                "implementation size control is unavailable: the fixed Git "
+                "baseline is missing or implementation_size_control is "
+                "invalid",
+                unit=st.current_unit(self.state),
+                type_="orchestrator",
+            )
+            self._save()
+            raise StopStep("implementation size control unavailable")
+        output, result, raw_path = self._call(
+            family,
+            prompt,
+            contracts.KIND_IMPLEMENT,
+            raw_name,
+            model=model,
+            effort=effort,
+            extensions=extensions,
+            roots=roots,
+            validate_opts=validate_opts,
+            start_session=start_session,
+            session_ref=session_ref,
+            active_control=control,
+        )
+        if marker is None:
+            return output, result, raw_path, None, False
+        if marker.get("steer_attempted"):
+            st.append_event(
+                self.state,
+                "implementation_size_steer",
+                unit=st.unit_key(st.current_unit(self.state)),
+                lines=marker.get("steer_lines"),
+                delivered=marker.get("steer_delivered"),
+                soft_lines=marker.get("soft_lines"),
+                hard_lines=marker.get("hard_lines"),
+            )
+        interrupted = isinstance(result, runners.ControlledInterruptionResult)
+        final_lines = self._implementation_line_count(base_tree)
+        if final_lines is not None:
+            marker["last_lines"] = final_lines
+        if (
+            not interrupted
+            and output is not None
+            and output.get("status") == "ok"
+            and final_lines is None
+        ):
+            self._fail_implementation_size(
+                None,
+                marker["hard_lines"],
+                "the final implementation size could not be measured",
+            )
+        over_hard = bool(
+            not interrupted
+            and output is not None
+            and output.get("status") == "ok"
+            and final_lines is not None
+            and final_lines > marker["hard_lines"]
+        )
+        if not interrupted and not over_hard:
+            return output, result, raw_path, marker, False
+        if interrupted:
+            st.append_event(
+                self.state,
+                "implementation_size_interrupted",
+                unit=st.unit_key(st.current_unit(self.state)),
+                lines=marker.get("interrupt_lines"),
+                reason=result.interrupt_reason,
+                duration_s=result.duration_s,
+                raw_path=raw_path,
+            )
+        else:
+            st.append_event(
+                self.state,
+                "implementation_size_overflow",
+                unit=st.unit_key(st.current_unit(self.state)),
+                lines=final_lines,
+                hard_lines=marker["hard_lines"],
+            )
+        recovery_prompt = self._implementation_stabilizer_prompt(
+            prompt, marker
+        )
+        recovery_start = self._implementation_line_count(base_tree)
+        recovery_control, recovery_marker = self._implementation_size_control(
+            base_tree, recovery_start_lines=recovery_start
+        )
+        output, result, raw_path = self._call(
+            family,
+            recovery_prompt,
+            contracts.KIND_IMPLEMENT,
+            raw_name + "-stabilize",
+            model=model,
+            effort=effort,
+            extensions=extensions,
+            roots=roots,
+            validate_opts=validate_opts,
+            # An interrupted continuation cannot safely reuse its provider
+            # turn.  The stabilizer is deliberately a fresh conversation.
+            start_session=True,
+            active_control=recovery_control,
+        )
+        if isinstance(result, runners.ControlledInterruptionResult):
+            st.append_event(
+                self.state,
+                "implementation_size_recovery_interrupted",
+                unit=st.unit_key(st.current_unit(self.state)),
+                lines=(recovery_marker or {}).get("interrupt_lines"),
+                reason=result.interrupt_reason,
+                duration_s=result.duration_s,
+                raw_path=raw_path,
+            )
+            self._fail_implementation_size(
+                self._implementation_line_count(base_tree),
+                marker["hard_lines"],
+                "the fresh cutoff worker continued expanding the delta",
+            )
+        recovered_lines = self._implementation_line_count(base_tree)
+        if (
+            output is not None
+            and output.get("status") == "ok"
+            and (
+                recovered_lines is None
+                or recovered_lines > marker["hard_lines"]
+            )
+        ):
+            self._fail_implementation_size(
+                recovered_lines,
+                marker["hard_lines"],
+                (
+                    "the stabilized implementation size could not be measured"
+                    if recovered_lines is None
+                    else "the fresh cutoff worker returned an oversized cut"
+                ),
+            )
+        return output, result, raw_path, marker, True
 
     def _artifact(self, unit):
         return unit["artifact"] or "(workspace)"
@@ -1201,7 +1547,7 @@ class Driver(object):
 
     def _call(self, family, prompt, kind, raw_name, model=None, effort=None,
               extensions=None, roots=None, validate_opts=None,
-              start_session=False, session_ref=None):
+              start_session=False, session_ref=None, active_control=None):
         """Validated worker call; on protocol/runner failure, fail the run
         with the explanation recorded, then re-raise as StopStep.
 
@@ -1222,13 +1568,18 @@ class Driver(object):
                 raw_name, kind, family, model=model, effort=effort
             )
             try:
+                call_control = (
+                    active_control
+                    if attempt == 0 or active_control is None
+                    else active_control.renew()
+                )
                 output, result = runners.call_worker(
                     self.runner, family, prompt, kind, self.workspace,
                     model=model, effort=effort,
                     extensions=extensions, roots=roots,
                     validate_opts=validate_opts,
-                    start_session=start_session,
-                    session_ref=session_ref,
+                    start_session=start_session, session_ref=session_ref,
+                    active_control=call_control,
                 )
             except verifiers.VerifierError as exc:
                 # Slice 4's non-repairable family (the operator's policy or
@@ -1289,6 +1640,12 @@ class Driver(object):
                 raise StopStep(str(exc))
             break
         self._clear_busy()
+        if isinstance(result, runners.ControlledInterruptionResult):
+            raw_path = self._save_raw_noclobber(
+                raw_name + "-controlled-interruption", result.text
+            )
+            result.raw_path = raw_path
+            return None, result, raw_path
         raw_path = self._save_raw(raw_name, result.text)
         self._record_repair(raw_name, kind, family, result)
         return output, result, raw_path
@@ -2430,18 +2787,69 @@ class Driver(object):
     def _finish_draft(self, unit, reason):
         if gitops.enabled(self.config):
             try:
-                sha = gitops.commit_wip(
-                    self.workspace, "wip: %s" % st.unit_key(unit)
-                )
+                pending = unit.get("pending_wip")
+                if pending is None:
+                    pending = {
+                        "parent": gitops.head_full_sha(self.workspace),
+                        "tree": gitops.snapshot_worktree_tree(self.workspace),
+                        "message": "wip: %s" % st.display_unit_key(unit),
+                        "reason": reason,
+                    }
+                    unit["pending_wip"] = pending
+                    self._save()
+                return self._complete_pending_wip(unit)
             except gitops.GitError as exc:
                 st.fail_run(
                     self.state, "wip commit failed: %s" % exc, unit=unit
                 )
                 self._save()
                 raise StopStep(str(exc))
-            st.append_event(
-                self.state, "wip_commit", unit=st.unit_key(unit), sha=sha
+        st.transition_unit(
+            self.state, unit, st.U_PRE_REVIEW_VERIFY, reason=reason
+        )
+        unit.pop("implementation_attempt_snapshot", None)
+        return "drafted %s" % (unit["artifact"] or "(implementation)")
+
+    def _complete_pending_wip(self, unit):
+        """Create or adopt exactly one durable WIP before reviews open."""
+        pending = unit.get("pending_wip")
+        if not isinstance(pending, dict):
+            raise st.IllegalTransition("pending WIP metadata is missing")
+        parent = pending.get("parent")
+        tree = pending.get("tree")
+        message = pending.get("message")
+        reason = pending.get("reason") or "drafted"
+        try:
+            head = gitops.head_full_sha(self.workspace)
+            if head == parent:
+                if gitops.snapshot_worktree_tree(self.workspace) != tree:
+                    raise gitops.GitError(
+                        "the pending WIP candidate changed before recovery"
+                    )
+                sha = gitops.commit_wip(self.workspace, message)
+            elif gitops.head_matches_wip(
+                self.workspace, parent, tree, message
+            ):
+                sha = gitops.head_sha(self.workspace)
+            else:
+                raise gitops.GitError(
+                    "HEAD no longer matches the pending WIP parent or its "
+                    "already-created commit"
+                )
+        except gitops.GitError as exc:
+            st.fail_run(
+                self.state,
+                "wip commit failed: %s" % exc,
+                unit=unit,
+                type_="wip_recovery",
             )
+            self._save()
+            raise StopStep(str(exc))
+        st.append_event(
+            self.state, "wip_commit", unit=st.unit_key(unit), sha=sha
+        )
+        unit.pop("pending_wip", None)
+        unit.pop("implementation_attempt_snapshot", None)
         st.transition_unit(
             self.state, unit, st.U_PRE_REVIEW_VERIFY, reason=reason
         )
@@ -2734,38 +3142,93 @@ class Driver(object):
             design_before = (
                 self._snapshot() if unit.get("design_update") else None
             )
-            output, result, raw_path = self._call(
-                family,
-                prompt,
-                kind,
-                raw_name,
-                model=origin.get("model"),
-                effort=origin.get("effort"),
-                extensions=extensions,
-                roots=roots,
-                validate_opts={
-                    **(
-                        {"allow_design_correction": True}
-                        if design_context
-                        and design_context.get("mode") == "offer"
-                        else {}
-                    ),
-                    **(
-                        {"battery_questions": battery}
-                        if battery else {}
-                    ),
-                    **(
-                        {"require_failure_gap": True}
-                        if self._legacy_failure_gap_required(unit, kind)
-                        else {}
-                    ),
-                    **(
-                        {"verification_repair": True}
-                        if verification_repair else {}
-                    ),
-                } or None,
-                session_ref=origin["provider_session_ref"],
+            validate_opts = {
+                **(
+                    {"allow_design_correction": True}
+                    if design_context
+                    and design_context.get("mode") == "offer"
+                    else {}
+                ),
+                **(
+                    {"battery_questions": battery}
+                    if battery else {}
+                ),
+                **(
+                    {"require_failure_gap": True}
+                    if self._legacy_failure_gap_required(unit, kind)
+                    else {}
+                ),
+                **(
+                    {"verification_repair": True}
+                    if verification_repair else {}
+                ),
+            } or None
+            implementation_size = None
+            implementation_stabilized = False
+            if kind == contracts.KIND_IMPLEMENT:
+                (
+                    output,
+                    result,
+                    raw_path,
+                    implementation_size,
+                    implementation_stabilized,
+                ) = self._call_implementation(
+                    family,
+                    prompt,
+                    raw_name,
+                    origin.get("model"),
+                    origin.get("effort"),
+                    extensions,
+                    roots,
+                    validate_opts,
+                    False,
+                    (
+                        unit.get("implementation_attempt_snapshot") or {}
+                    ).get("tree")
+                    or (origin.get("pre_snapshot") or {}).get("tree"),
+                    session_ref=origin["provider_session_ref"],
+                )
+            else:
+                output, result, raw_path = self._call(
+                    family,
+                    prompt,
+                    kind,
+                    raw_name,
+                    model=origin.get("model"),
+                    effort=origin.get("effort"),
+                    extensions=extensions,
+                    roots=roots,
+                    validate_opts=validate_opts,
+                    session_ref=origin["provider_session_ref"],
+                )
+            continued_pre_snapshot = copy.deepcopy(
+                origin.get("pre_snapshot") or {}
             )
+            if kind == contracts.KIND_IMPLEMENT:
+                continued_pre_snapshot["implementation_cut_authorized"] = (
+                    bool(continued_pre_snapshot.get(
+                        "implementation_cut_authorized"
+                    ))
+                    or implementation_stabilized
+                    or bool(
+                        implementation_size
+                        and implementation_size.get("steer_delivered")
+                    )
+                )
+                if (
+                    implementation_size
+                    and (
+                        implementation_size.get("steer_delivered")
+                        or implementation_size.get("interrupt_lines")
+                    )
+                ) or "implementation_size" not in continued_pre_snapshot:
+                    continued_pre_snapshot["implementation_size"] = (
+                        copy.deepcopy(implementation_size)
+                    )
+                continued_pre_snapshot["implementation_stabilized"] = bool(
+                    continued_pre_snapshot.get("implementation_stabilized")
+                    or implementation_stabilized
+                )
             if design_before is not None:
                 self._record_design_changes(
                     unit,
@@ -2783,7 +3246,7 @@ class Driver(object):
                     result,
                     raw_path,
                     raw_name,
-                    pre_snapshot=origin.get("pre_snapshot"),
+                    pre_snapshot=continued_pre_snapshot,
                 )
             unit["brainstorming_resume"] = {
                 "kind": kind,
@@ -2791,12 +3254,15 @@ class Driver(object):
                 "raw_path": raw_path,
                 "duration_s": result.duration_s,
                 "text": result.text,
-                "provider_session_ref": origin["provider_session_ref"],
+                "provider_session_ref": (
+                    getattr(result, "session_ref", None)
+                    or origin["provider_session_ref"]
+                ),
                 "handoff": copy.deepcopy(handoff),
                 "family": family,
                 "model": origin.get("model"),
                 "effort": origin.get("effort"),
-                "pre_snapshot": copy.deepcopy(origin.get("pre_snapshot")),
+                "pre_snapshot": continued_pre_snapshot,
             }
             st.append_event(
                 self.state,
@@ -3157,6 +3623,20 @@ class Driver(object):
             if prepared is not None:
                 return prepared
         if unit.get("draft") is not None:
+            if unit.get("pending_wip"):
+                return self._complete_pending_wip(unit)
+            if (
+                unit["kind"] == st.UNIT_SLICE_IMPL
+                and unit.get("implementation_attempt_snapshot")
+                and gitops.enabled(self.config)
+            ):
+                # The WIP-intent snapshot itself may have failed before its
+                # marker was saved.  New size-controlled implementations
+                # retain their attempt baseline, so retry WIP preparation;
+                # never fall through to the historical no-marker shortcut.
+                return self._finish_draft(
+                    unit, "recovered implementation draft"
+                )
             if (
                 unit["kind"] == st.UNIT_SKELETON
                 and self._guarantee_calibration_config() is not None
@@ -3177,6 +3657,7 @@ class Driver(object):
             return "recorded draft recovered; review cycle opened"
         if (
             unit["kind"] == st.UNIT_SLICE_IMPL
+            and not unit.get("implementation_attempt_snapshot")
             and not self._baseline_verification_current(unit)
         ):
             # The baseline action and the implementer call are separate
@@ -3260,6 +3741,7 @@ class Driver(object):
                                 or self._note_predates_skeleton(
                                     unit["slice_id"]))),
                 editable_design_paths=self._editable_design_paths(unit),
+                implementation_scope=self._implementation_scope(unit),
             )
         # The reviewed baseline as it stands BEFORE the builder runs: the local
         # ref map, HEAD's branch identity and commit tip, and the index tree
@@ -3277,8 +3759,53 @@ class Driver(object):
                 pre_stash = gitops.snapshot_stash(self.workspace)
             except gitops.GitError:
                 pre_refs = pre_sym = pre_head = pre_tree = pre_stash = None
+        implementation_attempt = unit.get("implementation_attempt_snapshot")
+        if kind == contracts.KIND_IMPLEMENT and gitops.enabled(self.config):
+            # One implementation attempt may span provider failure, Resume,
+            # Brainstorming, contract repair and cutoff recovery.  Freeze its
+            # original Git baseline before the first worker call; never let
+            # staged scratch from a dead worker become the next call's zero.
+            if not implementation_attempt:
+                queued = unit.get("brainstorming_resume") or {}
+                queued_pre = queued.get("pre_snapshot") or {}
+                source = queued_pre if queued_pre.get("tree") else {
+                    "refs": pre_refs,
+                    "sym": pre_sym,
+                    "head": pre_head,
+                    "tree": pre_tree,
+                    "stash": pre_stash,
+                }
+                if (
+                    source.get("refs") is not None
+                    and source.get("sym") is not None
+                    and source.get("head") is not None
+                    and source.get("tree") is not None
+                ):
+                    implementation_attempt = {
+                        key: copy.deepcopy(source.get(key))
+                        for key in ("refs", "sym", "head", "tree", "stash")
+                    }
+                    unit["implementation_attempt_snapshot"] = (
+                        implementation_attempt
+                    )
+                    st.append_event(
+                        self.state,
+                        "implementation_size_baseline_recorded",
+                        unit=st.unit_key(unit),
+                        tree=implementation_attempt["tree"],
+                    )
+                    self._save()
+            if implementation_attempt:
+                pre_refs = copy.deepcopy(implementation_attempt.get("refs"))
+                pre_sym = implementation_attempt.get("sym")
+                pre_head = implementation_attempt.get("head")
+                pre_tree = implementation_attempt.get("tree")
+                pre_stash = copy.deepcopy(implementation_attempt.get("stash"))
         raw_name = "%s-draft" % st.unit_key(unit)
         resumed = self._take_brainstorming_resume(unit, kind)
+        implementation_size = None
+        implementation_stabilized = False
+        implementation_cut_resumed_authorized = False
         design_before = None
         if resumed is not None:
             output, result, raw_path = resumed
@@ -3291,29 +3818,56 @@ class Driver(object):
             pre_head = original_pre.get("head")
             pre_tree = original_pre.get("tree")
             pre_stash = original_pre.get("stash")
+            implementation_cut_resumed_authorized = bool(
+                original_pre.get("implementation_cut_authorized")
+            )
+            implementation_size = copy.deepcopy(
+                original_pre.get("implementation_size")
+            )
+            implementation_stabilized = bool(
+                original_pre.get("implementation_stabilized")
+            )
         else:
             if unit.get("design_update"):
                 design_before = self._snapshot()
-            output, result, raw_path = self._call(
-                family, prompt, kind, raw_name,
-                model=model, effort=effort, extensions=extensions, roots=roots,
-                validate_opts=(
-                    {
-                        **(
-                            {"battery_questions": battery}
-                            if battery else {}
-                        ),
-                        **(
-                            {"require_failure_gap": True}
-                            if self._legacy_failure_gap_required(unit, kind)
-                            else {}
-                        ),
-                    } or None
+            validate_opts = {
+                **(
+                    {"battery_questions": battery}
+                    if battery else {}
                 ),
-                start_session=(
-                    kind in contracts.RETHINK_CONTINUATION_KINDS
+                **(
+                    {"require_failure_gap": True}
+                    if self._legacy_failure_gap_required(unit, kind)
+                    else {}
                 ),
-            )
+            } or None
+            start_session = kind in contracts.RETHINK_CONTINUATION_KINDS
+            if kind == contracts.KIND_IMPLEMENT:
+                (
+                    output,
+                    result,
+                    raw_path,
+                    implementation_size,
+                    implementation_stabilized,
+                ) = self._call_implementation(
+                    family,
+                    prompt,
+                    raw_name,
+                    model,
+                    effort,
+                    extensions,
+                    roots,
+                    validate_opts,
+                    start_session,
+                    (implementation_attempt or {}).get("tree") or pre_tree,
+                )
+            else:
+                output, result, raw_path = self._call(
+                    family, prompt, kind, raw_name,
+                    model=model, effort=effort, extensions=extensions,
+                    roots=roots, validate_opts=validate_opts,
+                    start_session=start_session,
+                )
         if design_before is not None:
             self._record_design_changes(
                 unit,
@@ -3340,6 +3894,13 @@ class Driver(object):
                     "head": pre_head,
                     "tree": pre_tree,
                     "stash": pre_stash,
+                    "implementation_cut_authorized": bool(
+                        implementation_stabilized
+                        or (
+                            implementation_size
+                            and implementation_size.get("steer_delivered")
+                        )
+                    ),
                 },
             )
         if output.get("status") == "gap":
@@ -3372,6 +3933,36 @@ class Driver(object):
             editable_sealed=self._editable_design_paths(unit),
         )
         self._check_worker_blocked(unit, output, kind)
+        implementation_cut = output.get("implementation_cut")
+        if implementation_cut is not None:
+            cut_authorized = bool(
+                implementation_cut_resumed_authorized
+                or implementation_stabilized
+                or (
+                    implementation_size
+                    and implementation_size.get("steer_delivered")
+                )
+            )
+            if not cut_authorized:
+                st.fail_run(
+                    self.state,
+                    "implement returned implementation_cut without a "
+                    "delivered live size steer or cutoff recovery",
+                    unit=unit,
+                    type_="worker_protocol",
+                )
+                self._save()
+                raise StopStep("unauthorized implementation cut")
+            st.record_implementation_cut(
+                self.state,
+                unit,
+                implementation_cut["cut_scope"],
+                implementation_cut["remaining_scope"],
+                steer_lines=(implementation_size or {}).get("steer_lines"),
+                interrupt_lines=(implementation_size or {}).get(
+                    "interrupt_lines"
+                ),
+            )
         st.record_draft(self.state, unit, kind, output, raw_path,
                         family=family, duration=result.duration_s,
                         model=model, effort=effort)
@@ -3660,6 +4251,10 @@ class Driver(object):
                 )
                 self._save()
                 raise StopStep("gap cleanup failed")
+        if not pending.get("from_fixer"):
+            # Cleanup proved that this builder attempt has been abandoned.
+            # A later re-draft must establish a fresh size baseline.
+            unit.pop("implementation_attempt_snapshot", None)
         operator_gaps = [
             g for g in gaps
             if g.get("classification") == contracts.CLASSIFY_NEEDS_OPERATOR
@@ -4495,6 +5090,7 @@ class Driver(object):
             editable_design_paths=self._editable_design_paths(unit),
             verification_repair=verification_repair,
             verification_commands=verification_commands,
+            implementation_scope=self._implementation_scope(unit),
         )
         n_fix = 1 + len(
             [r for r in unit["rounds"] if r["kind"] == contracts.KIND_FIX_FINDINGS]
@@ -5147,6 +5743,7 @@ class Driver(object):
             gap_enabled=self._legacy_gap_enabled(),
             design_correction=review_correction,
             editable_design_paths=self._design_review_paths(unit),
+            implementation_scope=self._implementation_scope(unit),
         )
         rethink_handoff = self._brainstorming_review_handoff(
             unit, contracts.KIND_DELTA_REVIEW
@@ -5870,6 +6467,7 @@ class Driver(object):
             gap_enabled=self._legacy_gap_enabled(),
             wave_docs=self._wave_doc_paths(unit),
             editable_design_paths=self._design_review_paths(unit),
+            implementation_scope=self._implementation_scope(unit),
         )
         rethink_handoff = self._brainstorming_review_handoff(
             unit, contracts.KIND_REVIEW_ROUND
@@ -6090,7 +6688,39 @@ class Driver(object):
             return "Complete review of milestone skeleton"
         if unit["kind"] == st.UNIT_SLICE_DOC:
             return "Complete review of slice %02d note" % unit["slice_id"]
-        return "Complete review of slice %02d implementation" % unit["slice_id"]
+        return "Complete review of slice %s implementation" % st.slice_token(
+            unit
+        )
+
+    def _consume_pending_closure(self):
+        """Finish a reviewed unit's missing Git gate before opening another.
+
+        The explicit marker is written before Git is touched.  This avoids
+        guessing from old/synthetic sealed units that legitimately have no
+        gate metadata, while ensuring a failed gate is retried before the
+        next implementation part can be materialized.
+        """
+        if not gitops.enabled(self.config):
+            return False
+        pending = self.state.get("pending_gate_unit")
+        if not pending:
+            return False
+        unit = self._unit_by_key(pending)
+        if unit is None or unit.get("status") != st.U_SEALED:
+            st.fail_run(
+                self.state,
+                "cannot recover the pending gate for %s" % pending,
+                unit=unit,
+                type_="gate_recovery",
+            )
+            self._save()
+            raise StopStep("pending gate unit is unavailable")
+        if unit.get("gate_commit"):
+            self.state.pop("pending_gate_unit", None)
+            return True
+        self._gate_commit(unit)
+        unit.pop("design_update", None)
+        return True
 
     def _gate_commit(self, unit):
         """The canon's commit-the-sealed-unit rule, executed by code: the
@@ -6098,6 +6728,8 @@ class Driver(object):
         is finalized under the canonical gate message."""
         if not gitops.enabled(self.config):
             return
+        self.state["pending_gate_unit"] = st.unit_key(unit)
+        self._save()
         try:
             ledgers.generate(self.state, self.workspace)
             sha = gitops.finalize_gate(self.workspace, self._gate_message(unit))
@@ -6109,6 +6741,7 @@ class Driver(object):
             self._save()
             raise StopStep(str(exc))
         unit["gate_commit"] = sha
+        self.state.pop("pending_gate_unit", None)
         design_paths = set(self._design_review_paths(unit))
         if design_paths:
             for candidate in self.state.get("units") or []:
@@ -6129,7 +6762,13 @@ class Driver(object):
 
     def _final_commit(self):
         if not gitops.enabled(self.config):
+            self.state.pop("pending_final_commit", None)
             return
+        # Persist intent before touching Git. A crash or commit failure can
+        # then resume this idempotent close instead of leaving a closed
+        # milestone whose final ledger commit was never attempted again.
+        self.state["pending_final_commit"] = True
+        self._save()
         try:
             ledgers.generate(self.state, self.workspace)
             sha = gitops.commit_plain(self.workspace, "Close milestone")
@@ -6140,6 +6779,7 @@ class Driver(object):
         if sha:
             st.append_event(self.state, "gate_commit", unit=None, sha=sha,
                             message="Close milestone")
+        self.state.pop("pending_final_commit", None)
 
 
 class StopStep(RuntimeError):

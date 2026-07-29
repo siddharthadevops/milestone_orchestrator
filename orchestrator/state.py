@@ -169,8 +169,8 @@ def new_state(goal, workspace, config, name=None, slug=None, project=None):
     return state
 
 
-def _new_unit(kind, slice_id):
-    return {
+def _new_unit(kind, slice_id, part=None):
+    unit = {
         "kind": kind,
         "slice_id": slice_id,
         "status": U_PENDING,
@@ -208,6 +208,13 @@ def _new_unit(kind, slice_id):
         "fix_loop_rounds": 0,       # fixer+delta iterations on this episode
         "debt": [],                 # rated findings deferred as debt (append-only)
     }
+    # Implementation continuations share the original slice's reviewed note
+    # and integer slice_id.  `part` is therefore the third component of unit
+    # identity, not a new design-slice id.  Omit it for every historical and
+    # ordinary unit so pre-feature state keeps its exact shape.
+    if part is not None:
+        unit["part"] = part
+    return unit
 
 
 # ---------------------------------------------------------------------------
@@ -245,8 +252,27 @@ def assert_append_only(old_state, new_state_):
     for i, old_unit in enumerate(old_units):
         nu = new_units[i]
         uctx = "units[%d]" % i
-        if (nu.get("kind"), nu.get("slice_id")) != (old_unit.get("kind"), old_unit.get("slice_id")):
+        if unit_identity(nu) != unit_identity(old_unit):
             raise HistoryRewriteError("%s: identity changed" % uctx)
+        # Once a budget cut has assigned the current coherent part and the
+        # delegated remainder, that boundary is immutable evidence.  Future
+        # parts are derived from it; rewriting it would silently change the
+        # execution plan and the scope earlier reviews judged.
+        old_cut = old_unit.get("implementation_cut")
+        if old_cut is not None and nu.get("implementation_cut") != old_cut:
+            raise HistoryRewriteError(
+                "%s.implementation_cut: recorded boundary was modified" % uctx
+            )
+        for transient in (
+            "implementation_attempt_snapshot",
+            "pending_wip",
+        ):
+            old_value = old_unit.get(transient)
+            new_value = nu.get(transient)
+            if old_value is not None and new_value not in (old_value, None):
+                raise HistoryRewriteError(
+                    "%s.%s: pending intent was modified" % (uctx, transient)
+                )
         _assert_list_prefix(old_unit.get("rounds", []), nu.get("rounds", []), uctx + ".rounds")
         _assert_list_prefix(old_unit.get("seals", []), nu.get("seals", []), uctx + ".seals")
         _assert_list_prefix(old_unit.get("debt", []), nu.get("debt", []), uctx + ".debt")
@@ -338,22 +364,183 @@ def current_unit(state):
     whose slice is no longer in the plan is never current, mirroring
     closure (it does not block the milestone). None when the plan is
     fully sealed."""
-    by_key = {(u["kind"], u["slice_id"]): u for u in state["units"]}
-    for key in planned_units(state):
+    by_key = {unit_identity(u): u for u in state["units"]}
+    for key in planned_execution_units(state):
         unit = by_key.get(key)
         if unit is not None and unit["status"] != U_SEALED:
             return unit
     return None
 
 
+def unit_identity(unit):
+    """Stable structural identity, compatible with all pre-part states."""
+    return (unit.get("kind"), unit.get("slice_id"), unit.get("part"))
+
+
+def _slice_token(slice_id, part=None):
+    token = "%02d" % slice_id
+    return "%s-%s" % (token, part) if part else token
+
+
+def implementation_part(unit):
+    """Visible implementation part, without changing historical identity.
+
+    The original implementation unit keeps ``part`` absent forever so all of
+    its already-recorded event/raw/API keys remain stable.  When it is cut, its
+    immutable cut record gives it the visible label ``a``.  Continuations carry
+    their part as identity from creation.
+    """
+    part = unit.get("part")
+    if part is None and unit.get("kind") == UNIT_SLICE_IMPL:
+        part = (unit.get("implementation_cut") or {}).get("part")
+    return part
+
+
+def slice_token(unit):
+    if unit.get("slice_id") is None:
+        return None
+    return _slice_token(unit["slice_id"], implementation_part(unit))
+
+
 def unit_key(unit):
     if unit["slice_id"] is None:
         return unit["kind"]
-    return "%s-%02d" % (unit["kind"], unit["slice_id"])
+    # Canonical identity keys never retroactively gain "-a": events emitted
+    # before the live cut must keep resolving to the same unit.  Newly-created
+    # continuation units are born with part b/c/... and are unambiguous.
+    return "%s-%s" % (
+        unit["kind"], _slice_token(unit["slice_id"], unit.get("part"))
+    )
+
+
+def display_unit_key(unit):
+    """Human label; unlike unit_key, the original cut is rendered as -a."""
+    if unit["slice_id"] is None:
+        return unit["kind"]
+    return "%s-%s" % (unit["kind"], slice_token(unit))
+
+
+def _next_part(part):
+    """a -> b, z -> aa; labels are generated by code, never by a worker."""
+    if not isinstance(part, str) or not part or not part.isalpha() \
+            or part.lower() != part or not part.isascii():
+        raise ValueError("implementation part must be lowercase ASCII letters")
+    digits = [ord(ch) - ord("a") + 1 for ch in part]
+    index = len(digits) - 1
+    while index >= 0 and digits[index] == 26:
+        digits[index] = 1
+        index -= 1
+    if index < 0:
+        digits.insert(0, 1)
+    else:
+        digits[index] += 1
+    return "".join(chr(ord("a") + digit - 1) for digit in digits)
+
+
+def record_implementation_cut(state, unit, cut_scope, remaining_scope,
+                              steer_lines=None, interrupt_lines=None):
+    """Freeze one coherent implementation cut and its delegated remainder.
+
+    The current unit remains the only in-flight unit.  Its immutable record is
+    enough for planned_execution_units to derive the next part; no skeleton
+    row, new slice note, or separately mutable execution-plan list is needed.
+    """
+    if unit.get("kind") != UNIT_SLICE_IMPL:
+        raise IllegalTransition("only a slice_impl can record an implementation cut")
+    if unit.get("status") != U_PENDING or unit.get("draft") is not None:
+        raise IllegalTransition(
+            "implementation cut must be recorded before the unit draft"
+        )
+    for name, value in (
+        ("cut_scope", cut_scope), ("remaining_scope", remaining_scope)
+    ):
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError("%s must be a non-empty string" % name)
+    current_part = unit.get("part") or "a"
+    cut = {
+        "part": current_part,
+        "next_part": _next_part(current_part),
+        "cut_scope": cut_scope.strip(),
+        "remaining_scope": remaining_scope.strip(),
+    }
+    if steer_lines is not None:
+        if type(steer_lines) is not int or steer_lines < 0:
+            raise ValueError("steer_lines must be a non-negative integer")
+        cut["steer_lines"] = steer_lines
+    if interrupt_lines is not None:
+        if type(interrupt_lines) is not int or interrupt_lines < 0:
+            raise ValueError("interrupt_lines must be a non-negative integer")
+        cut["interrupt_lines"] = interrupt_lines
+    existing = unit.get("implementation_cut")
+    if existing is not None:
+        if (
+            existing.get("cut_scope") == cut["cut_scope"]
+            and existing.get("remaining_scope") == cut["remaining_scope"]
+        ):
+            return existing
+        raise IllegalTransition("implementation cut is already recorded")
+    unit["implementation_cut"] = cut
+    append_event(
+        state,
+        "implementation_cut_recorded",
+        unit=unit_key(unit),
+        display_unit=display_unit_key(unit),
+        part=current_part,
+        next_part=cut["next_part"],
+        steer_lines=steer_lines,
+        interrupt_lines=interrupt_lines,
+    )
+    return cut
+
+
+def implementation_scope(state, unit):
+    """Prompt-ready scope for one implementation part, or None when whole.
+
+    A unit's own cut governs its review/fix cycle.  An uncut continuation gets
+    its assigned scope from the predecessor that delegated it.
+    """
+    if unit.get("kind") != UNIT_SLICE_IMPL:
+        return None
+    own = unit.get("implementation_cut")
+    if own:
+        return {
+            "part": own["part"],
+            "scope": own["cut_scope"],
+            "delegated_remaining": own["remaining_scope"],
+            "source_unit": unit_key(unit),
+        }
+    part = unit.get("part")
+    if not part:
+        return None
+    predecessors = [
+        candidate
+        for candidate in state.get("units", [])
+        if candidate.get("kind") == UNIT_SLICE_IMPL
+        and candidate.get("slice_id") == unit.get("slice_id")
+        and (candidate.get("implementation_cut") or {}).get("next_part") == part
+    ]
+    if len(predecessors) != 1:
+        raise IllegalTransition(
+            "implementation part %s has %d predecessors"
+            % (display_unit_key(unit), len(predecessors))
+        )
+    predecessor = predecessors[0]
+    cut = predecessor["implementation_cut"]
+    return {
+        "part": part,
+        "scope": cut["remaining_scope"],
+        "delegated_remaining": None,
+        "source_unit": unit_key(predecessor),
+    }
 
 
 def planned_units(state):
-    """Full unit plan: skeleton plus doc+impl per known slice."""
+    """Canonical DESIGN plan: skeleton plus doc+impl per known slice.
+
+    Kept as the historical pair-shaped API for callers that enumerate design
+    documents.  Runtime implementation cuts do not rewrite the sealed slice
+    table; state navigation uses planned_execution_units below.
+    """
     plan = [(UNIT_SKELETON, None)]
     for sl in state["milestone"]["slices"]:
         plan.append((UNIT_SLICE_DOC, sl["id"]))
@@ -361,14 +548,47 @@ def planned_units(state):
     return plan
 
 
+def planned_execution_units(state):
+    """Runtime plan identities, including sequential implementation parts.
+
+    Each next part is derived solely from its predecessor unit's immutable
+    ``implementation_cut``.  Merely recording a cut makes the continuation due
+    in plan order, but the driver calls ensure_next_unit only after the
+    predecessor seals, so no continuation record/commit coexists in flight.
+    """
+    plan = [(UNIT_SKELETON, None, None)]
+    by_identity = {unit_identity(u): u for u in state.get("units", [])}
+    for sl in state["milestone"]["slices"]:
+        slice_id = sl["id"]
+        plan.append((UNIT_SLICE_DOC, slice_id, None))
+        identity = (UNIT_SLICE_IMPL, slice_id, None)
+        plan.append(identity)
+        seen_parts = set()
+        while True:
+            predecessor = by_identity.get(identity)
+            cut = (predecessor or {}).get("implementation_cut") or {}
+            next_part = cut.get("next_part")
+            if not next_part:
+                break
+            if next_part in seen_parts:
+                raise IllegalTransition(
+                    "implementation part cycle on slice %02d at %s"
+                    % (slice_id, next_part)
+                )
+            seen_parts.add(next_part)
+            identity = (UNIT_SLICE_IMPL, slice_id, next_part)
+            plan.append(identity)
+    return plan
+
+
 def ensure_next_unit(state):
     """After a unit seals, append the next planned unit record (if any).
 
     Returns the appended unit or None when the plan is complete."""
-    existing = [(u["kind"], u["slice_id"]) for u in state["units"]]
-    for kind, slice_id in planned_units(state):
-        if (kind, slice_id) not in existing:
-            unit = _new_unit(kind, slice_id)
+    existing = [unit_identity(u) for u in state["units"]]
+    for kind, slice_id, part in planned_execution_units(state):
+        if (kind, slice_id, part) not in existing:
+            unit = _new_unit(kind, slice_id, part=part)
             state["units"].append(unit)
             append_event(state, "unit_opened", unit=unit_key(unit))
             return unit
@@ -386,8 +606,8 @@ def ensure_due_unit(state):
     (an earlier planned unit still in flight, or no record missing), so
     it never pre-creates future records. Returns the appended unit or
     None."""
-    by_key = {(u["kind"], u["slice_id"]): u for u in state["units"]}
-    for key in planned_units(state):
+    by_key = {unit_identity(u): u for u in state["units"]}
+    for key in planned_execution_units(state):
         unit = by_key.get(key)
         if unit is None:
             return ensure_next_unit(state)  # appends exactly this key
@@ -486,6 +706,18 @@ def record_draft(state, unit, kind, result, raw_path=None, family=None,
         )
     if unit["draft"] is not None:
         raise IllegalTransition("unit %s: draft already recorded" % unit_key(unit))
+    implementation_cut = result.get("implementation_cut")
+    if implementation_cut is not None:
+        if kind != "implement":
+            raise IllegalTransition(
+                "implementation_cut is valid only on an implement draft"
+            )
+        record_implementation_cut(
+            state,
+            unit,
+            implementation_cut["cut_scope"],
+            implementation_cut["remaining_scope"],
+        )
     unit["draft"] = {
         "kind": kind,
         "family": family,
@@ -923,17 +1155,27 @@ def close_slice(state, unit):
     unit["closed_record"] = {
         "at": now_iso(),
         "slice_id": unit["slice_id"],
+        "part": implementation_part(unit),
+        "slice": slice_token(unit),
         "rounds": len(unit["rounds"]),
         "seal_attempts": len(unit["seals"]),
     }
-    append_event(state, "slice_closed", slice_id=unit["slice_id"])
+    append_event(
+        state,
+        "slice_closed",
+        slice_id=unit["slice_id"],
+        part=implementation_part(unit),
+        slice=slice_token(unit),
+        unit=unit_key(unit),
+        display_unit=display_unit_key(unit),
+    )
 
 
 def maybe_close_milestone(state):
     if state["milestone"]["status"] == M_CLOSED:
         return True  # idempotent: never records milestone_closed twice
-    plan = planned_units(state)
-    have = {(u["kind"], u["slice_id"]): u for u in state["units"]}
+    plan = planned_execution_units(state)
+    have = {unit_identity(u): u for u in state["units"]}
     for key in plan:
         unit = have.get(key)
         if unit is None or unit["status"] != U_SEALED:
@@ -1078,6 +1320,8 @@ def reset_for_redraft(state, unit, reason):
     unit.pop("design_correction_attempted", None)
     unit.pop("baseline_verification", None)
     unit.pop("baseline_unstable_runs", None)
+    unit.pop("implementation_attempt_snapshot", None)
+    unit.pop("pending_wip", None)
     discarded_handoff = unit.pop("brainstorming_review_handoff", None)
     unit["fix_loop_rounds"] = 0
     unit["verify_fix_attempts"] = {"pre_review": 0, "pre_seal": 0}
@@ -1306,8 +1550,8 @@ def requeue_implementation_debt(state, target_unit=None):
             original_id = str(debt.get("id") or "unknown")
             refs.append({"unit": key, "index": index, "id": original_id})
             findings.append({
-                "id": "IMPL-DEBT-%02d-%02d"
-                      % (int(unit.get("slice_id") or 0), index + 1),
+                "id": "IMPL-DEBT-%s-%02d"
+                      % (slice_token(unit) or "00", index + 1),
                 "severity": debt.get("severity") or "P3",
                 "summary": (
                     "[reopened from %s/%s] %s"
@@ -1663,6 +1907,11 @@ def summary(state):
         units_view.append(
             {
                 "unit": unit_key(u),
+                # `unit` remains the stable API/history key. The visible key
+                # may add -a once the original implementation is cut.
+                "display_unit": display_unit_key(u),
+                "slice_id": u.get("slice_id"),
+                "part": implementation_part(u),
                 "status": u["status"],
                 "artifact": u["artifact"],
                 # Short sha of the unit's finalized seal gate commit — the
@@ -1819,6 +2068,7 @@ def summary(state):
         "milestone_status": state["milestone"]["status"],
         "slices": state["milestone"]["slices"],
         "current_unit": unit_key(unit) if unit else None,
+        "display_current_unit": display_unit_key(unit) if unit else None,
         "current_unit_status": unit["status"] if unit else None,
         "current_family": current_fam,
         "current_model": current_model,

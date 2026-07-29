@@ -628,6 +628,43 @@ class TestRenderClosure(unittest.TestCase):
         text = ledgers.render_closure(state, state["units"][2])
         self.assertIn("- gate commit: fff9999", text)
 
+    def test_sequential_parts_have_distinct_closure_paths_and_labels(self):
+        state = copy.deepcopy(self.state)
+        first = state["units"][2]
+        first["implementation_cut"] = {
+            "part": "a",
+            "next_part": "b",
+            "cut_scope": "calculator core",
+            "remaining_scope": "CLI integration",
+        }
+        first["closed_record"]["part"] = "a"
+        first["closed_record"]["slice"] = "01-a"
+        second = copy.deepcopy(first)
+        second["part"] = "b"
+        second.pop("implementation_cut")
+        second["closed_record"] = dict(
+            second["closed_record"], part="b", slice="01-b"
+        )
+        state["units"].append(second)
+
+        self.assertEqual(
+            ledgers.closure_path(state, first),
+            os.path.join("docs", "closures", "slice-01-a.md"),
+        )
+        self.assertEqual(
+            ledgers.closure_path(state, second),
+            os.path.join("docs", "closures", "slice-01-b.md"),
+        )
+        self.assertIn(
+            "# Closure — slice 01-a", ledgers.render_closure(state, first)
+        )
+        self.assertIn(
+            "# Closure — slice 01-b", ledgers.render_closure(state, second)
+        )
+        milestone = ledgers.render_milestone(state)
+        self.assertIn("slice_impl-01-a (Calculator core)", milestone)
+        self.assertIn("slice_impl-01-b (Calculator core)", milestone)
+
 
 class TestGenerate(unittest.TestCase):
     def setUp(self):

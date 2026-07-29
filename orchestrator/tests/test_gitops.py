@@ -652,6 +652,100 @@ class WorktreeDiffTests(GitopsTestCase):
         self.assertTrue(delta.startswith("diff --git"))
 
 
+class ReviewableLineCountTests(GitopsTestCase):
+    def test_counts_tracked_deletions_and_nonignored_untracked(self):
+        ws = self.make_repo(files={
+            ".gitignore": "build/\n",
+            "edit.py": "one\ntwo\nthree\n",
+            "delete.py": "gone one\ngone two\n",
+            "notes.md": "old note\n",
+        })
+        gitops.ensure_repo(ws)
+        base = gitops.snapshot_index_tree(ws)
+
+        _write(os.path.join(ws, "edit.py"), "one\nchanged\nthree\nadded\n")
+        os.remove(os.path.join(ws, "delete.py"))
+        _write(os.path.join(ws, "new.py"), "a\nb\nc\n")
+        _write(os.path.join(ws, "notes.md"), "new note\nmore prose\n")
+        _write(os.path.join(ws, "NEW.TXT"), "ignored prose\n")
+        _write(os.path.join(ws, "build", "generated.py"), "x\ny\nz\n")
+
+        self.assertEqual(gitops.reviewable_line_count(ws, base), 8)
+
+    def test_excludes_builtin_and_actual_bookkeeping_directories(self):
+        ws = self.make_repo(files={"app.py": "old\n"})
+        gitops.ensure_repo(ws)
+        runtime = os.path.join(ws, "implementation", "milestone", ".run")
+        _write(os.path.join(runtime, "counter.py"), "old\n")
+        _write(os.path.join(ws, ".orchestrator", "tracked.py"), "old\n")
+        self.git(
+            ws,
+            "add",
+            "-f",
+            os.path.relpath(os.path.join(runtime, "counter.py"), ws),
+            ".orchestrator/tracked.py",
+        )
+        self.git(ws, "commit", "-qm", "tracked bookkeeping fixture")
+        base = gitops.snapshot_index_tree(ws)
+
+        _write(os.path.join(ws, "app.py"), "new\n")
+        _write(os.path.join(runtime, "counter.py"), "new\nmore\n")
+        _write(os.path.join(ws, ".orchestrator", "tracked.py"), "new\nmore\n")
+
+        self.assertEqual(
+            gitops.reviewable_line_count(ws, base, bookkeeping_dir=runtime),
+            2,
+        )
+
+    def test_uses_fixed_base_across_an_intervening_commit(self):
+        ws = self.make_repo(files={"seed.py": "seed\n"})
+        gitops.ensure_repo(ws)
+        base = gitops.snapshot_index_tree(ws)
+        _write(os.path.join(ws, "committed.py"), "one\ntwo\n")
+        self.git(ws, "add", "committed.py")
+        self.git(ws, "commit", "-qm", "worker-created commit")
+
+        self.assertEqual(gitops.reviewable_line_count(ws, base), 2)
+
+    def test_code_document_renames_count_only_code_side(self):
+        ws = self.make_repo(files={
+            "source.py": "one\ntwo\n",
+            "prose.md": "a\nb\nc\n",
+        })
+        gitops.ensure_repo(ws)
+        base = gitops.snapshot_index_tree(ws)
+        self.git(ws, "mv", "source.py", "source.md")
+        self.git(ws, "mv", "prose.md", "prose.py")
+
+        self.assertEqual(gitops.reviewable_line_count(ws, base), 5)
+
+    def test_inspection_does_not_add_untracked_files_to_the_index(self):
+        ws = self.make_repo(files={"seed.py": "seed\n"})
+        gitops.ensure_repo(ws)
+        base = gitops.snapshot_index_tree(ws)
+        _write(os.path.join(ws, "odd\tname.py"), "one\ntwo\n")
+        index_before = gitops.snapshot_index_tree(ws)
+
+        self.assertEqual(gitops.reviewable_line_count(ws, base), 2)
+        self.assertEqual(gitops.snapshot_index_tree(ws), index_before)
+        self.assertIn(
+            "odd\tname.py",
+            self.git(ws, "ls-files", "-z", "--others").split("\0"),
+        )
+
+    def test_binary_delta_is_not_misreported_as_text_lines(self):
+        ws = self.make_repo(files={"seed.py": "seed\n"})
+        binary = os.path.join(ws, "image.bin")
+        with open(binary, "wb") as handle:
+            handle.write(b"before\x00bytes")
+        gitops.ensure_repo(ws)
+        base = gitops.snapshot_index_tree(ws)
+        with open(binary, "wb") as handle:
+            handle.write(b"after\x00different\x00bytes")
+
+        self.assertEqual(gitops.reviewable_line_count(ws, base), 0)
+
+
 class HasPendingDeltaTests(GitopsTestCase):
     def test_tracks_every_change_shape_and_clears_on_commit(self):
         ws = self.make_repo(files={"seed.txt": "seed\n"})

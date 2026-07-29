@@ -206,6 +206,32 @@ def validate_slices(slices, ctx):
     return slices
 
 
+def validate_implementation_cut(cut, ctx):
+    """Validate the implementer's post-steer coherent-cut account.
+
+    Labels and sequencing are deliberately absent: the state machine derives
+    a/b/c from the current unit, so a worker cannot rename units or insert an
+    arbitrary execution plan.
+    """
+    if not isinstance(cut, dict):
+        raise ContractError("%s: must be an object" % ctx)
+    expected = {"cut_scope", "remaining_scope"}
+    if set(cut) != expected:
+        raise ContractError(
+            "%s: must contain exactly %s" % (ctx, sorted(expected))
+        )
+    for key in sorted(expected):
+        value = _require(cut, key, str, ctx)
+        if not value.strip():
+            raise ContractError("%s: key %r must be non-empty" % (ctx, key))
+        if len(value) > FINDING_TEXT_MAX:
+            raise ContractError(
+                "%s: key %r must be <=%d chars"
+                % (ctx, key, FINDING_TEXT_MAX)
+            )
+    return cut
+
+
 def validate_report_finding(finding, ctx, require_plain=False):
     """A reviewer finding: id/severity/summary, NO disposition (reviewers
     do not triage), optional `contests` referencing an adjudicated
@@ -843,6 +869,7 @@ def validate_worker_output(obj, kind, require_plain=False,
             "findings", "files_changed", "slices", "artifact", "gaps",
             "battery", "suite_command", "suite_command_finding_id",
             "design_correction", "design_correction_verdict",
+            "implementation_cut",
         ):
             if claim in obj:
                 raise ContractError(
@@ -867,6 +894,7 @@ def validate_worker_output(obj, kind, require_plain=False,
         for claim in (
             "artifact", "files_changed", "slices", "battery",
             "design_correction", "design_correction_verdict",
+            "implementation_cut",
         ):
             if obj.get(claim):
                 raise ContractError(
@@ -898,6 +926,9 @@ def validate_worker_output(obj, kind, require_plain=False,
             validate_battery(obj["battery"], battery_questions, ctx)
     elif kind == KIND_IMPLEMENT:
         _require(obj, "files_changed", list, ctx)
+        cut = _optional(obj, "implementation_cut", dict, ctx)
+        if cut is not None:
+            validate_implementation_cut(cut, "%s.implementation_cut" % ctx)
         slices = _optional(obj, "slices", list, ctx)
         if slices is not None:
             if not slices:
@@ -1040,7 +1071,9 @@ KIND_OUTPUT_KEYS = {
     # question battery's output field.
     KIND_DRAFT_SKELETON: frozenset({"artifact", "slices", "battery"}),
     KIND_DRAFT_SLICE_NOTE: frozenset({"artifact", "battery", "slices"}),
-    KIND_IMPLEMENT: frozenset({"files_changed", "suite_command", "slices"}),
+    KIND_IMPLEMENT: frozenset(
+        {"files_changed", "suite_command", "slices", "implementation_cut"}
+    ),
     KIND_REVIEW_ROUND: frozenset({"findings", "files_changed"}),
     KIND_DELTA_REVIEW: frozenset(
         {"findings", "files_changed", "design_correction_verdict"}
@@ -1176,6 +1209,18 @@ Kind implement adds:
    as you would run it from the workspace root; it must
    be non-interactive and run the suite exactly ONCE and exit — never a
    watch mode; null or omitted if the repo has no suite>"
+  "implementation_cut": {"cut_scope": "<the coherent functional cut now
+                            complete and ready for review>",
+                         "remaining_scope": "<the original slice obligations
+                            deliberately delegated to the next sequential
+                            implementation part>"}
+   Include `implementation_cut` ONLY after the driver sends its live size
+   steer (or in the bounded stabilizing continuation after a forced cutoff).
+   Omit it when the original slice scope is complete. Both strings must be
+   concrete and non-empty. This field reports the boundary; it does not let
+   you choose labels or create/renumber design slices. The orchestrator derives
+   a/b/c sequentially and opens the next part only after this one completes
+   its full review cycle.
 
 Kind fix_findings may ALSO include "suite_command" when a queued finding
 identifies a missing, narrowed, or wrong final verification command — whether the

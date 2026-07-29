@@ -1725,12 +1725,13 @@ function modelEffort(model, effort) {
   return `${name}-${EFFORT_LABELS[effort] || String(effort).toUpperCase()}`;
 }
 function currentWorkplace(r) {
-  const unit = String(r.current_unit || "");
+  const unit = String(r.display_current_unit || r.current_unit || "");
   if (unit === "skeleton") return "Skeleton";
-  const match = unit.match(/^slice_(doc|impl)-(\d+)$/);
+  const match = unit.match(/^slice_(doc|impl)-(\d+)(?:-([a-z]+))?$/);
   if (match) {
     const total = Number(r.slices_total || 0);
-    return `Slice ${Number(match[2])}${total ? ` / ${total}` : ""} · ${match[1]}`;
+    const part = match[3] ? `-${match[3]}` : "";
+    return `Slice ${Number(match[2])}${part}${total ? ` / ${total}` : ""} · ${match[1]}`;
   }
   return unit;
 }
@@ -1931,8 +1932,8 @@ function reclassifyChip(ev, unitKey) {
   return `<span class="chip ${ev.defer_ok ? "clean" : "sev23"} clicky" title="${esc(title)}" onclick="showStory('debt:${esc(unitKey)}')">${esc(label)}${fmtDur(ev.duration_s)}</span>`;
 }
 function repairSourceLabel(unitKey) {
-  const match = String(unitKey || "").match(/^slice_(?:doc|impl)-(\d+)$/);
-  if (match) return `Slice ${match[1]}`;
+  const match = String(unitKey || "").match(/^slice_(?:doc|impl)-(\d+)(?:-([a-z]+))?$/);
+  if (match) return `Slice ${match[1]}${match[2] ? `-${match[2]}` : ""}`;
   return unitKey === "skeleton" ? "Skeleton" : (unitKey || "downstream work");
 }
 function repairChip(repair, unitKey) {
@@ -2479,12 +2480,13 @@ async function refreshDetail() {
       const unitRow = u => {
         const time = u.work_duration_s != null
           ? ` · ${fmtDHMS(u.work_duration_s)}` : "";
-        const slicePhase = u.unit.match(/^slice_(doc|impl)-\d+$/);
+        const slicePhase = u.unit.match(/^slice_(doc|impl)-\d+(?:-[a-z]+)?$/);
         const phase = u.unit === "skeleton" || slicePhase;
         const label = u.unit === "skeleton"
           ? "Milestone architecture"
           : slicePhase
-            ? (slicePhase[1] === "doc" ? "Documentation" : "Implementation")
+            ? (slicePhase[1] === "doc" ? "Documentation"
+              : `Implementation${u.part ? ` ${u.part}` : ""}`)
             : u.unit;
         return `
         <div class="unit${phase ? " phase" : ""}">
@@ -2520,19 +2522,26 @@ async function refreshDetail() {
       // the panel lists it in its numeric place).
       [...(sum.slices || [])].sort((a, b) => a.id - b.id).forEach(sl => {
         const pad = String(sl.id).padStart(2, "0");
-        const doc = byKey[`slice_doc-${pad}`], impl = byKey[`slice_impl-${pad}`];
+        const doc = byKey[`slice_doc-${pad}`];
+        const impls = (sum.units || []).filter(u =>
+          u.unit === `slice_impl-${pad}` ||
+          u.unit.startsWith(`slice_impl-${pad}-`));
+        const impl = impls.length ? impls[impls.length - 1] : null;
         const slStat = impl ? impl.status
           : (doc && doc.status !== "sealed") ? doc.status : "pending";
-        const present = [doc, impl].filter(Boolean);
+        const present = [doc].concat(impls).filter(Boolean);
         const sliceDuration = present.length
           ? present.reduce((total, u) => total + (u.work_duration_s || 0), 0)
           : null;
         rows += catRow(`Slice ${pad}`, sliceTitle(sl.id), slStat,
                        sliceDuration, "slice-cat");
-        [`slice_doc-${pad}`, `slice_impl-${pad}`].forEach(k => {
-          if (byKey[k]) { rows += unitRow(byKey[k]); seen[k] = 1; }
-          else rows += ghostRow(k);
+        const docKey = `slice_doc-${pad}`;
+        if (doc) { rows += unitRow(doc); seen[docKey] = 1; }
+        else rows += ghostRow(docKey);
+        if (impls.length) impls.forEach(u => {
+          rows += unitRow(u); seen[u.unit] = 1;
         });
+        else rows += ghostRow(`slice_impl-${pad}`);
       });
       (sum.units || []).forEach(u => { if (!seen[u.unit]) rows += unitRow(u); });
       html += `<div class="card"><h3>Pipeline</h3>` + rows + `</div>`;

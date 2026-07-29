@@ -220,6 +220,19 @@ class TestValidateWorkerOutputHappy(unittest.TestCase):
             contracts.validate_worker_output(obj, contracts.KIND_IMPLEMENT), obj
         )
 
+    def test_implement_may_report_a_driver_requested_coherent_cut(self):
+        obj = ok_output(
+            contracts.KIND_IMPLEMENT,
+            files_changed=["calc.py"],
+            implementation_cut={
+                "cut_scope": "calculator core and focused tests",
+                "remaining_scope": "CLI integration",
+            },
+        )
+        self.assertIs(
+            contracts.validate_worker_output(obj, contracts.KIND_IMPLEMENT), obj
+        )
+
     def test_review_round_clean(self):
         obj = ok_output(contracts.KIND_REVIEW_ROUND, findings=[])
         contracts.validate_worker_output(obj, contracts.KIND_REVIEW_ROUND)
@@ -620,6 +633,29 @@ class TestValidateWorkerOutputViolations(unittest.TestCase):
             {"status": "maybe", "kind": contracts.KIND_IMPLEMENT},
             contracts.KIND_IMPLEMENT,
         )
+
+    def test_implementation_cut_requires_exact_non_empty_scopes(self):
+        cases = (
+            {},
+            {"cut_scope": "core"},
+            {"cut_scope": "core", "remaining_scope": "  "},
+            {
+                "cut_scope": "core",
+                "remaining_scope": "CLI",
+                "next_part": "b",
+            },
+        )
+        for cut in cases:
+            with self.subTest(cut=cut):
+                self.assertContract(
+                    ok_output(
+                        contracts.KIND_IMPLEMENT,
+                        files_changed=["calc.py"],
+                        implementation_cut=cut,
+                    ),
+                    contracts.KIND_IMPLEMENT,
+                    "implementation_cut",
+                )
 
     def test_output_not_an_object(self):
         self.assertContract(["not", "a", "dict"], contracts.KIND_IMPLEMENT)
@@ -2405,6 +2441,537 @@ class TestSnapshotChangesFormatting(unittest.TestCase):
         self.assertIn("f07", out)
         self.assertNotIn("f08", out)
         self.assertIn("(+4 more)", out)
+
+
+class TestActiveProviderControl(unittest.TestCase):
+    def setUp(self):
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.workspace = os.path.join(self._tmp.name, "ws")
+        os.makedirs(self.workspace)
+
+    def _executable(self, name, body):
+        path = os.path.join(self._tmp.name, name)
+        with open(path, "w", encoding="utf-8") as handle:
+            handle.write("#!%s\n" % sys.executable)
+            handle.write(textwrap.dedent(body))
+        os.chmod(path, 0o755)
+        return path
+
+    def _recorded(self):
+        calls = []
+
+        def record(family, prompt):
+            calls.append((family, prompt))
+            return "prompt-%d" % len(calls)
+
+        return calls, record
+
+    def test_codex_app_server_steers_the_active_turn_and_records_it(self):
+        fake = self._executable(
+            "codex-fake",
+            r'''
+            import json, os, sys
+
+            log = os.path.join(os.getcwd(), "codex-input.jsonl")
+            answer = json.dumps({
+                "status": "ok", "kind": "implement",
+                "files_changed": ["coherent.py"],
+            })
+            for line in sys.stdin:
+                message = json.loads(line)
+                with open(log, "a", encoding="utf-8") as handle:
+                    handle.write(json.dumps(message) + "\n")
+                method = message.get("method")
+                ident = message.get("id")
+                if method == "initialize":
+                    print(json.dumps({"id": ident, "result": {}}), flush=True)
+                elif method == "thread/start":
+                    print(json.dumps({
+                        "id": ident,
+                        "result": {"thread": {"id": "thread-1"}},
+                    }), flush=True)
+                elif method == "turn/start":
+                    print(json.dumps({
+                        "id": ident,
+                        "result": {"turn": {"id": "turn-1"}},
+                    }), flush=True)
+                elif method == "turn/steer":
+                    print(json.dumps({"id": ident, "result": {
+                        "turnId": "turn-1",
+                    }}), flush=True)
+                    print(json.dumps({
+                        "method": "item/agentMessage/delta",
+                        "params": {
+                            "threadId": "thread-1", "turnId": "turn-1",
+                            "itemId": "answer", "delta": answer,
+                        },
+                    }), flush=True)
+                    print(json.dumps({
+                        "method": "turn/completed",
+                        "params": {
+                            "threadId": "thread-1",
+                            "turn": {
+                                "id": "turn-1", "status": "completed",
+                                "items": [{
+                                    "type": "agentMessage", "text": answer,
+                                }],
+                            },
+                        },
+                    }), flush=True)
+            ''',
+        )
+        recorded, recorder = self._recorded()
+        runner = SubprocessRunner(
+            {"codex": [
+                fake, "exec", "--dangerously-bypass-approvals-and-sandbox",
+                "-m", "{model}", "-c",
+                "model_reasoning_effort={effort}",
+                "--output-last-message", "{output_file}",
+            ]},
+            {"codex": 5},
+            prompt_recorder=recorder,
+        )
+        control = runners.ActiveCallControl(
+            observer=lambda channel: channel.steer("finish this coherent cut")
+        )
+
+        result = runner.start_session(
+            "codex",
+            make_prompt("implement"),
+            self.workspace,
+            model="gpt-test",
+            effort="xhigh",
+            active_control=control,
+        )
+
+        self.assertEqual(json.loads(result.text), VALID_IMPLEMENT | {
+            "files_changed": ["coherent.py"]
+        })
+        self.assertEqual(result.session_ref, "thread-1")
+        self.assertEqual(result.steers, ["finish this coherent cut"])
+        self.assertEqual(
+            recorded,
+            [
+                ("codex", make_prompt("implement")),
+                ("codex", "finish this coherent cut"),
+            ],
+        )
+        with open(os.path.join(self.workspace, "codex-input.jsonl"),
+                  encoding="utf-8") as handle:
+            messages = [json.loads(line) for line in handle]
+        by_method = {message.get("method"): message for message in messages}
+        self.assertIn("turn/steer", by_method)
+        self.assertEqual(
+            by_method["turn/steer"]["params"]["expectedTurnId"], "turn-1"
+        )
+        self.assertEqual(by_method["turn/start"]["params"]["model"], "gpt-test")
+        self.assertEqual(by_method["turn/start"]["params"]["effort"], "xhigh")
+        self.assertFalse(by_method["thread/start"]["params"]["ephemeral"])
+        live_argv = runners.SubprocessRunner._live_argv(
+            "codex",
+            [fake, "exec", "--dangerously-bypass-approvals-and-sandbox",
+             "-c", "feature=true", "--enable", "search", "--strict-config",
+             "--output-last-message", "ignored"],
+        )
+        self.assertIn("feature=true", live_argv)
+        self.assertIn("search", live_argv)
+        self.assertIn("--strict-config", live_argv)
+        self.assertNotIn("--output-last-message", live_argv)
+
+    def test_codex_live_transport_never_drops_custom_execution_policy(self):
+        self.assertIsNone(runners.SubprocessRunner._live_argv(
+            "codex",
+            ["codex", "exec", "--profile", "restricted"],
+        ))
+        self.assertIsNone(runners.SubprocessRunner._live_argv(
+            "codex",
+            ["codex", "exec",
+             "--dangerously-bypass-approvals-and-sandbox",
+             "--add-dir", "/tmp/extra"],
+        ))
+
+    def test_live_transport_expands_workspace_placeholder(self):
+        fake = self._executable(
+            "codex-workspace-fake",
+            r'''
+            import json, sys
+            answer = json.dumps({
+                "status": "ok", "kind": "implement",
+                "files_changed": ["calc.py"],
+            })
+            for line in sys.stdin:
+                message = json.loads(line)
+                method, ident = message.get("method"), message.get("id")
+                if method == "initialize":
+                    print(json.dumps({"id": ident, "result": {}}), flush=True)
+                elif method == "thread/start":
+                    print(json.dumps({"id": ident, "result": {
+                        "thread": {"id": "thread-workspace"},
+                    }}), flush=True)
+                elif method == "turn/start":
+                    print(json.dumps({"id": ident, "result": {
+                        "turn": {"id": "turn-workspace"},
+                    }}), flush=True)
+                elif method == "turn/steer":
+                    print(json.dumps({"id": ident, "result": {}}), flush=True)
+                    print(json.dumps({
+                        "method": "turn/completed",
+                        "params": {"threadId": "thread-workspace", "turn": {
+                            "id": "turn-workspace", "status": "completed",
+                            "items": [{"type": "agentMessage", "text": answer}],
+                        }},
+                    }), flush=True)
+            ''',
+        )
+        workspace_fake = os.path.join(self.workspace, "codex-workspace-fake")
+        os.link(fake, workspace_fake)
+        runner = SubprocessRunner(
+            {"codex": [
+                "{workspace}/codex-workspace-fake", "exec",
+                "--dangerously-bypass-approvals-and-sandbox",
+            ]},
+            {"codex": 5},
+        )
+        control = runners.ActiveCallControl(
+            observer=lambda channel: channel.steer("finish the cut")
+        )
+
+        result = runner.call(
+            "codex", make_prompt("implement"), self.workspace,
+            active_control=control,
+        )
+
+        self.assertEqual(json.loads(result.text), VALID_IMPLEMENT)
+
+    def test_historical_runner_without_active_control_still_runs(self):
+        class HistoricalRunner(object):
+            def call(self, _family, _prompt, _workspace,
+                     model=None, effort=None):
+                del model, effort
+                return runners.RunnerResult(
+                    json.dumps(VALID_IMPLEMENT), 0, 0.01
+                )
+
+        control = runners.ActiveCallControl()
+        output, _result = call_worker(
+            HistoricalRunner(), "codex", make_prompt("implement"),
+            "implement", self.workspace, active_control=control,
+        )
+
+        self.assertEqual(output, VALID_IMPLEMENT)
+        self.assertTrue(control.closed)
+
+    def test_codex_rejected_steer_is_not_delivered_or_resumable(self):
+        fake = self._executable(
+            "codex-reject-steer-fake",
+            r'''
+            import json, sys
+            answer = json.dumps({
+                "status": "ok", "kind": "implement",
+                "files_changed": ["calc.py"],
+            })
+            for line in sys.stdin:
+                message = json.loads(line)
+                method, ident = message.get("method"), message.get("id")
+                if method == "initialize":
+                    print(json.dumps({"id": ident, "result": {}}), flush=True)
+                elif method == "thread/start":
+                    print(json.dumps({"id": ident, "result": {
+                        "thread": {"id": "ephemeral-thread"},
+                    }}), flush=True)
+                elif method == "turn/start":
+                    print(json.dumps({"id": ident, "result": {
+                        "turn": {"id": "turn-1"},
+                    }}), flush=True)
+                elif method == "turn/steer":
+                    print(json.dumps({"id": ident, "error": {
+                        "code": -32000, "message": "turn already complete",
+                    }}), flush=True)
+                    print(json.dumps({
+                        "method": "turn/completed",
+                        "params": {"threadId": "ephemeral-thread", "turn": {
+                            "id": "turn-1", "status": "completed",
+                            "items": [{"type": "agentMessage", "text": answer}],
+                        }},
+                    }), flush=True)
+            ''',
+        )
+        runner = SubprocessRunner(
+            {"codex": [
+                fake, "exec", "--dangerously-bypass-approvals-and-sandbox",
+            ]},
+            {"codex": 5},
+        )
+        control = runners.ActiveCallControl(
+            observer=lambda channel: channel.steer("finish the cut")
+        )
+
+        output, result = call_worker(
+            runner, "codex", make_prompt("implement"), "implement",
+            self.workspace, start_session=True, active_control=control,
+        )
+
+        self.assertEqual(output, VALID_IMPLEMENT)
+        self.assertEqual(result.steers, [])
+        self.assertIsNone(result.session_ref)
+
+    def test_codex_missing_steer_ack_does_not_block_hard_interrupt(self):
+        fake = self._executable(
+            "codex-no-steer-ack-fake",
+            r'''
+            import json, sys
+            for line in sys.stdin:
+                message = json.loads(line)
+                method, ident = message.get("method"), message.get("id")
+                if method == "initialize":
+                    print(json.dumps({"id": ident, "result": {}}), flush=True)
+                elif method == "thread/start":
+                    print(json.dumps({"id": ident, "result": {
+                        "thread": {"id": "thread-stuck"},
+                    }}), flush=True)
+                elif method == "turn/start":
+                    print(json.dumps({"id": ident, "result": {
+                        "turn": {"id": "turn-stuck"},
+                    }}), flush=True)
+                elif method == "turn/steer":
+                    pass
+                elif method == "turn/interrupt":
+                    print(json.dumps({"id": ident, "result": {}}), flush=True)
+                    print(json.dumps({
+                        "method": "turn/completed",
+                        "params": {"threadId": "thread-stuck", "turn": {
+                            "id": "turn-stuck", "status": "interrupted",
+                            "items": [],
+                        }},
+                    }), flush=True)
+            ''',
+        )
+        runner = SubprocessRunner(
+            {"codex": [
+                fake, "exec", "--dangerously-bypass-approvals-and-sandbox",
+                "--output-last-message", "{output_file}",
+            ]},
+            {"codex": 6},
+        )
+
+        def observe(channel):
+            self.assertFalse(channel.steer("finish the cut"))
+            self.assertTrue(channel.interrupt("hard size limit"))
+
+        control = runners.ActiveCallControl(observer=observe)
+        output, result = call_worker(
+            runner, "codex", make_prompt("implement"), "implement",
+            self.workspace, start_session=True, active_control=control,
+        )
+
+        self.assertIsNone(output)
+        self.assertIsInstance(result, runners.ControlledInterruptionResult)
+        self.assertEqual(result.steers, [])
+        self.assertEqual(result.interrupt_reason, "hard size limit")
+
+    def test_contract_repair_renews_live_control(self):
+        class RepairRunner(object):
+            def __init__(self):
+                self.controls = []
+
+            def call(self, _family, _prompt, _workspace, model=None,
+                     effort=None, active_control=None):
+                del model, effort
+                self.controls.append(
+                    (active_control, active_control.closed)
+                )
+                active_control._bind(lambda _text: True,
+                                     lambda _reason: True)
+                active_control._close()
+                text = "not json" if len(self.controls) == 1 else json.dumps(
+                    VALID_IMPLEMENT
+                )
+                return runners.RunnerResult(text, 0, 0.01)
+
+        runner = RepairRunner()
+        control = runners.ActiveCallControl()
+
+        output, _result = call_worker(
+            runner,
+            "codex",
+            make_prompt("implement"),
+            "implement",
+            self.workspace,
+            active_control=control,
+        )
+
+        self.assertEqual(output, VALID_IMPLEMENT)
+        self.assertEqual([closed for _control, closed in runner.controls],
+                         [False, False])
+        self.assertIsNot(runner.controls[0][0], runner.controls[1][0])
+
+    def test_codex_hard_stop_is_a_typed_controlled_interruption(self):
+        fake = self._executable(
+            "codex-interrupt-fake",
+            r'''
+            import json, sys
+            for line in sys.stdin:
+                message = json.loads(line)
+                method = message.get("method")
+                ident = message.get("id")
+                if method == "initialize":
+                    print(json.dumps({"id": ident, "result": {}}), flush=True)
+                elif method == "thread/start":
+                    print(json.dumps({"id": ident, "result": {
+                        "thread": {"id": "thread-stop"},
+                    }}), flush=True)
+                elif method == "turn/start":
+                    print(json.dumps({"id": ident, "result": {
+                        "turn": {"id": "turn-stop"},
+                    }}), flush=True)
+                elif method == "turn/interrupt":
+                    print(json.dumps({"id": ident, "result": {}}), flush=True)
+                    print(json.dumps({
+                        "method": "turn/completed",
+                        "params": {
+                            "threadId": "thread-stop",
+                            "turn": {"id": "turn-stop", "status": "interrupted",
+                                     "items": []},
+                        },
+                    }), flush=True)
+            ''',
+        )
+        runner = SubprocessRunner(
+            {"codex": [
+                fake, "exec", "--dangerously-bypass-approvals-and-sandbox",
+                "--output-last-message", "{output_file}",
+            ]},
+            {"codex": 5},
+        )
+        control = runners.ActiveCallControl(
+            observer=lambda channel: channel.interrupt("hard size limit")
+        )
+
+        output, result = call_worker(
+            runner,
+            "codex",
+            make_prompt("implement"),
+            "implement",
+            self.workspace,
+            start_session=True,
+            active_control=control,
+        )
+
+        self.assertIsNone(output)
+        self.assertIsInstance(result, runners.ControlledInterruptionResult)
+        self.assertEqual(result.interrupt_reason, "hard size limit")
+        self.assertTrue(result.worker_quiescent)
+
+    def test_claude_stream_accepts_realtime_steer_and_records_it(self):
+        fake = self._executable(
+            "claude-fake",
+            r'''
+            import json, os, sys
+
+            log = os.path.join(os.getcwd(), "claude-input.jsonl")
+            count = 0
+            session = "session-from-argv"
+            if "--session-id" in sys.argv:
+                session = sys.argv[sys.argv.index("--session-id") + 1]
+            print(json.dumps({
+                "type": "system", "subtype": "init", "session_id": session,
+            }), flush=True)
+            for line in sys.stdin:
+                message = json.loads(line)
+                with open(log, "a", encoding="utf-8") as handle:
+                    handle.write(json.dumps(message) + "\n")
+                if message.get("type") != "user":
+                    continue
+                count += 1
+                if count == 2:
+                    print(json.dumps({
+                        "type": "result", "subtype": "success",
+                        "is_error": False, "session_id": session,
+                        "result": json.dumps({
+                            "status": "ok", "kind": "implement",
+                            "files_changed": ["coherent.py"],
+                        }),
+                    }), flush=True)
+            ''',
+        )
+        recorded, recorder = self._recorded()
+        runner = SubprocessRunner(
+            {"claude": [
+                fake, "-p", "--model", "{model}", "--effort", "{effort}",
+            ]},
+            {"claude": 5},
+            prompt_recorder=recorder,
+        )
+        control = runners.ActiveCallControl(
+            observer=lambda channel: channel.steer("close the current cut")
+        )
+
+        result = runner.start_session(
+            "claude",
+            make_prompt("implement", family="claude"),
+            self.workspace,
+            model="claude-test",
+            effort="max",
+            active_control=control,
+        )
+
+        self.assertEqual(result.steers, ["close the current cut"])
+        self.assertEqual(recorded[-1], ("claude", "close the current cut"))
+        with open(os.path.join(self.workspace, "claude-input.jsonl"),
+                  encoding="utf-8") as handle:
+            messages = [json.loads(line) for line in handle]
+        self.assertEqual(len(messages), 2)
+        self.assertEqual(
+            messages[1]["message"]["content"][0]["text"],
+            "close the current cut",
+        )
+        argv = runners.SubprocessRunner._live_argv(
+            "claude",
+            [fake, "-p", "--input-format=text", "--output-format", "json"],
+        )
+        self.assertIn("stream-json", argv)
+        self.assertEqual(argv.count("--input-format"), 1)
+        self.assertEqual(argv.count("--output-format"), 1)
+
+    def test_unrecordable_steer_is_not_sent(self):
+        fake = self._executable(
+            "claude-no-steer-fake",
+            r'''
+            import json, sys
+            print(json.dumps({"type": "system", "subtype": "init",
+                              "session_id": "session-1"}), flush=True)
+            for line in sys.stdin:
+                json.loads(line)
+            ''',
+        )
+        recorded = []
+
+        def recorder(_family, prompt):
+            recorded.append(prompt)
+            if prompt == "do not send":
+                raise OSError("trace unavailable")
+            return "initial"
+
+        runner = SubprocessRunner(
+            {"claude": [fake, "-p"]},
+            {"claude": 5},
+            prompt_recorder=recorder,
+        )
+        def observe(channel):
+            channel.steer("do not send")
+            channel.interrupt("hard size limit")
+
+        control = runners.ActiveCallControl(observer=observe)
+
+        result = runner.call(
+            "claude", make_prompt("implement"), self.workspace,
+            active_control=control,
+        )
+
+        self.assertEqual(result.steers, [])
+        self.assertIsInstance(result, runners.ControlledInterruptionResult)
+        self.assertIn("trace unavailable", control.error)
 
 
 class TestWorkflowDisable(unittest.TestCase):
