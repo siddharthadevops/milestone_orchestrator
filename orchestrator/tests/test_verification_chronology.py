@@ -13,6 +13,7 @@ fixtures so the new contract is pinned before those fixtures are rewritten.
 """
 
 import os
+import subprocess
 import tempfile
 import unittest
 
@@ -504,6 +505,95 @@ class TestVerificationChronology(DriverTestCase):
             # One deferral after the draft and one after the accepted fix;
             # neither executes the full suite.
             self.assertEqual(len(deferred), 2)
+
+    def test_final_suite_fixer_commit_is_folded_into_the_reviewed_wip(self):
+        marker = "suite-green.marker"
+        command = (
+            "test -f %s && test -z \"$(git status --porcelain)\"" % marker
+        )
+
+        def commit_repair(workspace):
+            write_file(marker, "green\n")(workspace)
+            subprocess.run(
+                ["git", "add", "-A"], cwd=workspace, check=True,
+                capture_output=True, text=True, timeout=60,
+            )
+            subprocess.run(
+                ["git", "commit", "-qm", "fixer-owned repair"],
+                cwd=workspace, check=True, capture_output=True, text=True,
+                timeout=60,
+            )
+            self.assertEqual(
+                subprocess.run(
+                    ["git", "status", "--porcelain"], cwd=workspace,
+                    check=True, capture_output=True, text=True, timeout=60,
+                ).stdout,
+                "",
+            )
+
+        script = [
+            _skeleton_step(),
+            step(contracts.KIND_REVIEW_ROUND,
+                 report(contracts.KIND_REVIEW_ROUND), family="codex"),
+            step(contracts.KIND_REVIEW_ROUND,
+                 report(contracts.KIND_REVIEW_ROUND), family="claude"),
+            step(
+                contracts.KIND_FIX_FINDINGS,
+                fix_ok([], files_changed=[marker]),
+                family="codex",
+                side_effect=commit_repair,
+            ),
+            step(contracts.KIND_DELTA_REVIEW,
+                 report(contracts.KIND_DELTA_REVIEW), family="codex"),
+            step(contracts.KIND_REVIEW_ROUND,
+                 report(contracts.KIND_REVIEW_ROUND), family="codex"),
+            step(contracts.KIND_REVIEW_ROUND,
+                 report(contracts.KIND_REVIEW_ROUND), family="claude"),
+        ]
+        with tempfile.TemporaryDirectory(prefix="orch-verify-commit-fix-") as ws:
+            path = init_state(ws, make_config(verification=[command]))
+            mock = runners.MockRunner(script)
+            driver = drv.Driver(path, runner=mock)
+
+            self.step_until(
+                driver,
+                lambda state: state["units"][0]["status"] == st.U_SEALED,
+                max_steps=30,
+            )
+
+            self.assertEqual(mock.script, [])
+            state = st.load(path)
+            self.assertFalse(any(
+                event["type"] == "phantom_fix_retry"
+                for event in state["events"]
+            ))
+            folded = [
+                event for event in state["events"]
+                if event["type"] == "fixer_commits_folded"
+            ]
+            self.assertEqual(len(folded), 1)
+            self.assertEqual(folded[0]["commit_count"], 1)
+            reviews = [
+                round_info for round_info in state["units"][0]["rounds"]
+                if round_info["kind"] == contracts.KIND_REVIEW_ROUND
+            ]
+            self.assertEqual(
+                [round_info["family"] for round_info in reviews],
+                ["codex", "claude", "codex", "claude"],
+            )
+            self.assertTrue(os.path.isfile(os.path.join(ws, marker)))
+            self.assertEqual(
+                subprocess.run(
+                    ["git", "status", "--porcelain"], cwd=ws, check=True,
+                    capture_output=True, text=True, timeout=60,
+                ).stdout,
+                "",
+            )
+            subjects = subprocess.run(
+                ["git", "log", "--format=%s"], cwd=ws, check=True,
+                capture_output=True, text=True, timeout=60,
+            ).stdout
+            self.assertNotIn("fixer-owned repair", subjects)
 
 
 if __name__ == "__main__":

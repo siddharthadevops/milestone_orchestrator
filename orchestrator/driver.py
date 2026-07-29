@@ -5194,6 +5194,7 @@ class Driver(object):
         fix_workspace_changed = self._snapshot_diff(
             fix_workspace_before, self._snapshot()
         )
+        folded_commits = None
         self._record_design_changes(unit, fix_workspace_changed)
         if output.get("status") == "need_rethink":
             if restored:
@@ -5273,6 +5274,39 @@ class Driver(object):
                                     pre_stash=pre_stash,
                                     pre_worktree_tree=pre_worktree_tree,
                                     from_fixer=True)
+        if (
+            gitops.enabled(self.config)
+            and pre_refs is not None
+            and pre_sym is not None
+            and pre_head is not None
+            and pre_tree is not None
+        ):
+            try:
+                folded_commits = gitops.fold_worker_commits_to_delta(
+                    self.workspace,
+                    pre_refs,
+                    pre_sym,
+                    pre_head,
+                    pre_tree,
+                    pre_stash,
+                )
+            except gitops.GitError as exc:
+                reason = "fixer left an unsupported git mutation: %s" % exc
+                st.fail_run(
+                    self.state, reason, unit=unit,
+                    type_="worker_git_mutation",
+                )
+                self._save()
+                raise StopStep(reason)
+            if folded_commits:
+                st.append_event(
+                    self.state,
+                    "fixer_commits_folded",
+                    unit=st.unit_key(unit),
+                    baseline_head=folded_commits["baseline_head"],
+                    worker_head=folded_commits["worker_head"],
+                    commit_count=folded_commits["commit_count"],
+                )
         self._check_worker_blocked(unit, output, contracts.KIND_FIX_FINDINGS)
         if verification_repair:
             if output.get("findings") != []:
@@ -5428,7 +5462,11 @@ class Driver(object):
             unit["verify_fix_attempts"]["pre_seal"] = 0
         self._maybe_update_slices(unit, output)
         unit["fix_loop_rounds"] = unit.get("fix_loop_rounds", 0) + 1
-        if verification_repair and not fix_workspace_changed:
+        if (
+            verification_repair
+            and not fix_workspace_changed
+            and not folded_commits
+        ):
             target = source.get("return_to") or st.U_PRE_SEAL_VERIFY
             if (
                 target == st.U_PRE_SEAL_VERIFY
