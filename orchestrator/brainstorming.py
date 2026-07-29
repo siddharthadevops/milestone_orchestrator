@@ -12,10 +12,12 @@ import contextlib
 import copy
 import hashlib
 import json
+import math
 import os
 import re
 import tempfile
 import threading
+import time
 import unicodedata
 from dataclasses import dataclass
 
@@ -43,6 +45,7 @@ _ALLOWED_TRANSITIONS = {
 _SESSION_KEY_PREFIX = "brainstorming/session:"
 _TARGET_REVISION_KEY_PREFIX = "brainstorming/target_revision:"
 _TURN_ATTEMPT_KEY_PREFIX = "brainstorming/turn_attempt:"
+_ACTIVITY_KEY_PREFIX = "brainstorming/activity:"
 _TARGET_REVISION_ID_PREFIX = "brainstorming-sha256:"
 _TARGET_REVISION_ID_RE = re.compile(
     r"^brainstorming-sha256:[0-9a-f]{64}$"
@@ -55,6 +58,10 @@ _COORDINATION_FIELDS = (
 )
 _TRANSCRIPT_LOCKS = {}
 _TRANSCRIPT_LOCKS_GUARD = threading.Lock()
+
+ACTIVITY_SCHEMA_VERSION = 1
+ACTIVITY_STATUSES = ("completed", "failed")
+ACTIVITY_FAILURE_TYPES = ("protocol", "execution")
 
 
 class ContractError(contracts.ContractError):
@@ -444,6 +451,8 @@ def validate_turn_attempt(turn_attempt):
         (
             "target_parent",
             "kind",
+            "started_at",
+            "provider_attempt",
             "target_mutation_corrections",
             "envelope_repair_used",
             "retry_pending",
@@ -505,6 +514,25 @@ def validate_turn_attempt(turn_attempt):
         )
     if type(checked["quiescent"]) is not bool:
         raise ContractError("turn_attempt.quiescent must be a boolean")
+    started_at = turn_attempt.get("started_at")
+    if started_at is not None:
+        if (
+            isinstance(started_at, bool)
+            or not isinstance(started_at, (int, float))
+            or not math.isfinite(float(started_at))
+            or float(started_at) <= 0
+        ):
+            raise ContractError(
+                "turn_attempt.started_at must be a positive finite number"
+            )
+        checked["started_at"] = float(started_at)
+    provider_attempt = turn_attempt.get("provider_attempt")
+    if provider_attempt is not None:
+        if type(provider_attempt) is not int or provider_attempt <= 0:
+            raise ContractError(
+                "turn_attempt.provider_attempt must be a positive integer"
+            )
+        checked["provider_attempt"] = provider_attempt
     corrections = turn_attempt.get("target_mutation_corrections", 0)
     if type(corrections) is not int or corrections not in (0, 1):
         raise ContractError(
@@ -563,6 +591,139 @@ def validate_turn_attempt(turn_attempt):
             action_context, "turn_attempt.action_context"
         )
     return checked
+
+
+def validate_activity_event(event):
+    """Validate one immutable provider call in the operational ledger."""
+    _exact_keys(
+        event,
+        (
+            "id",
+            "action_id",
+            "provider_attempt",
+            "at",
+            "started_at",
+            "duration_s",
+            "kind",
+            "stage",
+            "round",
+            "participant_id",
+            "model_family",
+            "model",
+            "effort",
+            "status",
+        ),
+        ("failure_type", "error", "raw_ref", "prompt_ref"),
+        "activity_event",
+    )
+    checked = {
+        "id": _text(event["id"], "activity_event.id"),
+        "action_id": _text(
+            event["action_id"], "activity_event.action_id"
+        ),
+        "provider_attempt": event["provider_attempt"],
+        "at": _text(event["at"], "activity_event.at"),
+        "started_at": event["started_at"],
+        "duration_s": event["duration_s"],
+        "kind": event["kind"],
+        "stage": event["stage"],
+        "round": event["round"],
+        "participant_id": _text(
+            event["participant_id"], "activity_event.participant_id"
+        ),
+        "model_family": _text(
+            event["model_family"], "activity_event.model_family"
+        ),
+        "model": event["model"],
+        "effort": event["effort"],
+        "status": event["status"],
+    }
+    if type(checked["provider_attempt"]) is not int \
+            or checked["provider_attempt"] <= 0:
+        raise ContractError(
+            "activity_event.provider_attempt must be a positive integer"
+        )
+    for field in ("started_at", "duration_s"):
+        value = checked[field]
+        if (
+            isinstance(value, bool)
+            or not isinstance(value, (int, float))
+            or not math.isfinite(float(value))
+            or float(value) < 0
+        ):
+            raise ContractError(
+                "activity_event.%s must be a non-negative finite number"
+                % field
+            )
+        checked[field] = float(value)
+    if checked["started_at"] <= 0:
+        raise ContractError(
+            "activity_event.started_at must be a positive finite number"
+        )
+    if checked["kind"] not in ("discussion_turn", "closure"):
+        raise ContractError("activity_event.kind is invalid")
+    if checked["stage"] not in ("discussion", "proposal", "vote"):
+        raise ContractError("activity_event.stage is invalid")
+    if checked["kind"] == "discussion_turn" \
+            and checked["stage"] != "discussion":
+        raise ContractError(
+            "discussion activity must use the discussion stage"
+        )
+    if checked["kind"] == "closure" \
+            and checked["stage"] not in ("proposal", "vote"):
+        raise ContractError("closure activity must name its control stage")
+    if type(checked["round"]) is not int or checked["round"] <= 0:
+        raise ContractError(
+            "activity_event.round must be a positive integer"
+        )
+    for field in ("model", "effort"):
+        value = checked[field]
+        if value is not None:
+            checked[field] = _text(value, "activity_event.%s" % field)
+    if checked["status"] not in ACTIVITY_STATUSES:
+        raise ContractError("activity_event.status is invalid")
+    failure_type = event.get("failure_type")
+    error = event.get("error")
+    if checked["status"] == "failed":
+        if failure_type not in ACTIVITY_FAILURE_TYPES:
+            raise ContractError(
+                "failed activity requires a valid failure_type"
+            )
+        checked["failure_type"] = failure_type
+        checked["error"] = _text(error, "activity_event.error")
+    elif failure_type is not None or error is not None:
+        raise ContractError(
+            "completed activity cannot carry failure details"
+        )
+    for field in ("raw_ref", "prompt_ref"):
+        value = event.get(field)
+        if value is not None:
+            checked[field] = _text(value, "activity_event.%s" % field)
+    return checked
+
+
+def validate_activity_log(activity):
+    _exact_keys(
+        activity,
+        ("schema_version", "events"),
+        (),
+        "activity",
+    )
+    if activity["schema_version"] != ACTIVITY_SCHEMA_VERSION:
+        raise ContractError("activity.schema_version is unsupported")
+    if not isinstance(activity["events"], list):
+        raise ContractError("activity.events must be a list")
+    events = [validate_activity_event(item) for item in activity["events"]]
+    ids = [item["id"] for item in events]
+    call_keys = [
+        (item["action_id"], item["provider_attempt"]) for item in events
+    ]
+    if len(ids) != len(set(ids)) or len(call_keys) != len(set(call_keys)):
+        raise ContractError("activity events must be unique")
+    return {
+        "schema_version": ACTIVITY_SCHEMA_VERSION,
+        "events": events,
+    }
 
 
 def _validate_participant(participant, ctx):
@@ -2102,6 +2263,12 @@ def _turn_attempt_key(session_id):
     )
 
 
+def _activity_key(session_id):
+    return _ACTIVITY_KEY_PREFIX + kvstore.validate_fragment(
+        session_id, "session_id"
+    )
+
+
 class SessionStore:
     """CAS-backed authority for independent brainstorming session records."""
 
@@ -2130,6 +2297,59 @@ class SessionStore:
         return os.path.join(
             os.path.dirname(self.transcript_ref(session_id)), "prompts"
         )
+
+    def output_directory(self, session_id):
+        """Brainstorming-owned runtime directory for exact LLM outputs."""
+        return os.path.join(
+            os.path.dirname(self.transcript_ref(session_id)), "outputs"
+        )
+
+    def save_activity_output(self, session_id, event_id, text):
+        """Persist one immutable provider output and return its safe name."""
+        if not isinstance(text, str):
+            raise ContractError("activity output must be text")
+        safe = "".join(
+            char
+            if char.isascii() and (char.isalnum() or char in "._-")
+            else "_"
+            for char in _text(event_id, "activity_event.id")
+        ).strip("._-")[:96] or "activity"
+        directory = self.output_directory(session_id)
+        os.makedirs(directory, exist_ok=True)
+        candidate = safe
+        counter = 1
+        while True:
+            name = candidate + ".txt"
+            path = os.path.join(directory, name)
+            try:
+                fd = os.open(
+                    path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o666
+                )
+            except FileExistsError:
+                candidate = "%s-%d" % (safe, counter)
+                counter += 1
+                continue
+            try:
+                with os.fdopen(fd, "wb") as handle:
+                    handle.write(text.encode("utf-8"))
+            except BaseException:
+                try:
+                    os.unlink(path)
+                except OSError:
+                    pass
+                raise
+            return name
+
+    def read_activity_output(self, session_id, raw_ref):
+        """Read one session-owned output without following path fragments."""
+        raw_ref = _text(raw_ref, "activity_event.raw_ref")
+        if os.path.basename(raw_ref) != raw_ref:
+            raise ContractError("activity_event.raw_ref is invalid")
+        path = os.path.join(self.output_directory(session_id), raw_ref)
+        if os.path.islink(path):
+            raise ContractError("activity output must not be a symbolic link")
+        with open(path, "r", encoding="utf-8", errors="replace") as handle:
+            return handle.read()
 
     @staticmethod
     def _snapshot(record):
@@ -2230,6 +2450,8 @@ class SessionStore:
     def begin_turn_attempt(self, session_id, turn_attempt):
         """Persist worker admission before invoking one target-aware control."""
         checked = validate_turn_attempt(turn_attempt)
+        checked["started_at"] = time.time()
+        checked["provider_attempt"] = 1
         if "target_parent" not in checked:
             raise ContractError(
                 "new turn attempts require a pinned target_parent"
@@ -2334,6 +2556,8 @@ class SessionStore:
         checked["target_mutation_corrections"] = 1
         if prior.get("envelope_repair_used", False):
             checked["envelope_repair_used"] = True
+        checked["started_at"] = time.time()
+        checked["provider_attempt"] = prior.get("provider_attempt", 1) + 1
         checked["retry_pending"] = False
         result = self._store.cas(key, current["revision"], checked)
         if not result.ok:
@@ -2409,6 +2633,8 @@ class SessionStore:
         if attempt.get("envelope_repair_used", False):
             return False
         attempt["envelope_repair_used"] = True
+        attempt["started_at"] = time.time()
+        attempt["provider_attempt"] = attempt.get("provider_attempt", 1) + 1
         result = self._store.cas(key, current["revision"], attempt)
         if not result.ok:
             raise HistoryRewriteError(
@@ -2522,7 +2748,78 @@ class SessionStore:
         result = self._store.cas(_session_key(session_id), None, state)
         if not result.ok:
             raise SessionAlreadyExists("session already exists")
+        activity = {
+            "schema_version": ACTIVITY_SCHEMA_VERSION,
+            "events": [],
+        }
+        activity_result = self._store.cas(
+            _activity_key(session_id), None, activity
+        )
+        if not activity_result.ok:
+            self._store.delete(
+                _session_key(session_id),
+                expected_revision=result.record["revision"],
+            )
+            raise SessionAlreadyExists(
+                "session activity already exists"
+            )
         return self._publish_current(session_id)
+
+    def read_activity(self, session_id):
+        """Read the append-only operational ledger, if this session has one."""
+        record = self._store.read(_activity_key(session_id))
+        if not record["exists?"]:
+            return None
+        return validate_activity_log(record["value"])
+
+    def append_activity(self, session_id, event):
+        """Append one provider call exactly once across crash recovery."""
+        checked = validate_activity_event(event)
+        key = _activity_key(session_id)
+        for _attempt in range(8):
+            current = self._store.read(key)
+            if not current["exists?"]:
+                # Sessions created by an older runtime have no activity key.
+                # Create it lazily so they can continue after an upgrade; the
+                # ledger then covers every provider call made by this runtime.
+                if self.read(session_id) is None:
+                    raise SessionNotFound(session_id)
+                created = self._store.cas(
+                    key,
+                    current["revision"],
+                    {
+                        "schema_version": ACTIVITY_SCHEMA_VERSION,
+                        "events": [],
+                    },
+                )
+                if not created.ok:
+                    continue
+                current = created.record
+            activity = validate_activity_log(current["value"])
+            for existing in activity["events"]:
+                if (
+                    existing["id"] == checked["id"]
+                    or (
+                        existing["action_id"] == checked["action_id"]
+                        and existing["provider_attempt"]
+                        == checked["provider_attempt"]
+                    )
+                ):
+                    if not _same_json_value(existing, checked):
+                        raise HistoryRewriteError(
+                            "activity call identity was reused with new facts"
+                        )
+                    return activity
+            successor = copy.deepcopy(activity)
+            successor["events"].append(checked)
+            result = self._store.cas(
+                key, current["revision"], successor
+            )
+            if result.ok:
+                return validate_activity_log(result.record["value"])
+        raise HistoryRewriteError(
+            "session activity changed too often to append safely"
+        )
 
     def discard_unlaunched(self, session_id, recovery_revision=None):
         """Remove only a create-time session that no worker could have used.
@@ -2535,6 +2832,7 @@ class SessionStore:
         work.
         """
         key = _session_key(session_id)
+        activity_key = _activity_key(session_id)
         supplied_baseline_key = None
         if recovery_revision is not None:
             supplied_baseline_key = _target_revision_key(
@@ -2542,12 +2840,13 @@ class SessionStore:
             )
         current = self._store.read(key)
         if not current["exists?"]:
-            if supplied_baseline_key is not None:
-                def remove_orphan(document):
+            def remove_orphan(document):
+                if supplied_baseline_key is not None:
                     document["entries"].pop(supplied_baseline_key, None)
-                    return True, True
+                document["entries"].pop(activity_key, None)
+                return True, True
 
-                self._store.client._mutate(remove_orphan)
+            self._store.client._mutate(remove_orphan)
             return
         state = validate_session_state(current["value"])
         progress = coordination_projection(state)
@@ -2599,6 +2898,7 @@ class SessionStore:
                 ):
                     return False, False
                 del document["entries"][key]
+                document["entries"].pop(activity_key, None)
                 if baseline_key is not None:
                     document["entries"].pop(baseline_key, None)
                 return True, True
@@ -2628,6 +2928,7 @@ class SessionStore:
         session_id = kvstore.validate_fragment(session_id, "session_id")
         key = _session_key(session_id)
         attempt_key = _turn_attempt_key(session_id)
+        activity_key = _activity_key(session_id)
         revision_prefix = "%s%s:" % (
             _TARGET_REVISION_KEY_PREFIX, session_id
         )
@@ -2638,33 +2939,36 @@ class SessionStore:
             except FileNotFoundError:
                 pass
 
-            # Exact prompt traces are session-owned just like chat.md. Public
-            # deletion removes them without following directories or links.
-            prompt_directory = self.prompt_directory(session_id)
-            if os.path.islink(prompt_directory):
-                try:
-                    os.unlink(prompt_directory)
-                except FileNotFoundError:
-                    pass
-                prompt_entries = None
-            else:
-                try:
-                    prompt_entries = os.scandir(prompt_directory)
-                except (FileNotFoundError, NotADirectoryError):
-                    prompt_entries = None
-            if prompt_entries is not None:
-                with prompt_entries:
-                    for entry in prompt_entries:
-                        if entry.is_file(follow_symlinks=False) \
-                                or entry.is_symlink():
-                            try:
-                                os.unlink(entry.path)
-                            except FileNotFoundError:
-                                pass
-                try:
-                    os.rmdir(prompt_directory)
-                except OSError:
-                    pass
+            # Exact prompts and outputs are session-owned just like chat.md.
+            # Public deletion removes them without following links.
+            for runtime_directory in (
+                self.prompt_directory(session_id),
+                self.output_directory(session_id),
+            ):
+                if os.path.islink(runtime_directory):
+                    try:
+                        os.unlink(runtime_directory)
+                    except FileNotFoundError:
+                        pass
+                    runtime_entries = None
+                else:
+                    try:
+                        runtime_entries = os.scandir(runtime_directory)
+                    except (FileNotFoundError, NotADirectoryError):
+                        runtime_entries = None
+                if runtime_entries is not None:
+                    with runtime_entries:
+                        for entry in runtime_entries:
+                            if entry.is_file(follow_symlinks=False) \
+                                    or entry.is_symlink():
+                                try:
+                                    os.unlink(entry.path)
+                                except FileNotFoundError:
+                                    pass
+                    try:
+                        os.rmdir(runtime_directory)
+                    except OSError:
+                        pass
 
             def remove(document):
                 doomed = [
@@ -2672,6 +2976,7 @@ class SessionStore:
                     for stored in document["entries"]
                     if stored == key
                     or stored == attempt_key
+                    or stored == activity_key
                     or stored.startswith(revision_prefix)
                 ]
                 for stored in doomed:

@@ -951,6 +951,67 @@ def _authorize_record(record, authorize):
     authorize(copy.deepcopy(record))
 
 
+def _activity_projection(store, record, state):
+    activity = store.read_activity(record["id"])
+    events = [] if activity is None else copy.deepcopy(activity["events"])
+    completed_actions = {
+        event["action_id"]
+        for event in events
+        if event["status"] == "completed"
+    }
+    for event in events:
+        event["recovered"] = (
+            event["status"] == "failed"
+            and event["action_id"] in completed_actions
+        )
+    attempt = store.read_turn_attempt(record["id"])
+    in_flight = None
+    if (
+        _process_alive(record)
+        and attempt is not None
+        and not attempt["quiescent"]
+    ):
+        participants = {
+            participant["id"]: participant
+            for participant in _view_participants(record, state)
+        }
+        participant = participants.get(attempt["participant_id"]) or {}
+        kind = attempt.get("kind", "discussion_turn")
+        stage = (
+            (attempt.get("action_context") or {}).get("stage")
+            if kind == "closure"
+            else "discussion"
+        )
+        roster_size = len(state["run_config"]["participants"])
+        completed = attempt["completed_turn_count"]
+        round_number = (
+            completed // roster_size + 1
+            if kind == "discussion_turn"
+            else max(1, completed // roster_size)
+        )
+        in_flight = {
+            "action_id": attempt["token"],
+            "provider_attempt": attempt.get("provider_attempt", 1),
+            "started_at": attempt.get("started_at"),
+            "kind": kind,
+            "stage": stage,
+            "round": round_number,
+            "participant_id": attempt["participant_id"],
+            "model_family": participant.get("model_family"),
+            "model": participant.get("model"),
+            "effort": participant.get("effort"),
+        }
+    return {
+        "activity": events,
+        "work_duration_s": (
+            None
+            if activity is None
+            else sum(event["duration_s"] for event in events)
+        ),
+        "in_flight": in_flight,
+    }
+
+
 def _projection(home, record):
     store = brainstorming.SessionStore(state_directory(home))
     try:
@@ -959,7 +1020,7 @@ def _projection(home, record):
         raise PublicLifecycleError(503, UNAVAILABLE) from exc
     if snapshot is None:
         raise PublicLifecycleError(503, UNAVAILABLE)
-    return {
+    projected = {
         "id": record["id"],
         "caller": record["caller"],
         "project": record["project"],
@@ -968,6 +1029,8 @@ def _projection(home, record):
         "revision": snapshot.revision,
         "state": snapshot.state,
     }
+    projected.update(_activity_projection(store, record, snapshot.state))
+    return projected
 
 
 def _rollback_unreleased_creation(
@@ -1284,6 +1347,8 @@ def _list_projection(store, record):
         "revision": None,
         "rounds_used": None,
         "max_rounds": None,
+        "work_duration_s": None,
+        "in_flight": None,
         "state_error": None,
     }
     try:
@@ -1303,6 +1368,9 @@ def _list_projection(store, record):
                 "max_rounds": state["request"]["max_rounds"],
             }
         )
+        activity = _activity_projection(store, record, state)
+        row["work_duration_s"] = activity["work_duration_s"]
+        row["in_flight"] = activity["in_flight"]
     except Exception as exc:  # one row's fault is not the list's fault
         row["state_error"] = str(exc)
     return row
@@ -1441,6 +1509,7 @@ def view_session(home, session_id, authorize, preview_limit):
                     target["content"] = text[:preview_limit]
                     target["truncated"] = len(text) > preview_limit
         turns = [] if progress is None else progress["completed_turns"]
+        activity = _activity_projection(store, record, state)
         return {
             "id": record["id"],
             "caller": record["caller"],
@@ -1466,6 +1535,47 @@ def view_session(home, session_id, authorize, preview_limit):
             },
             "transcript_markdown": brainstorming.render_transcript(state),
             "result": copy.deepcopy(state.get("result")),
+            "activity": activity["activity"],
+            "work_duration_s": activity["work_duration_s"],
+            "in_flight": activity["in_flight"],
+        }
+    except PublicLifecycleError:
+        raise
+    except Exception as exc:
+        raise PublicLifecycleError(503, UNAVAILABLE) from exc
+
+
+def view_activity(home, session_id, activity_id, authorize, preview_limit):
+    """Return one authorized provider-call record and its bounded raw text."""
+    record = _record_by_id(home, session_id)
+    _authorize_record(record, authorize)
+    try:
+        store = brainstorming.SessionStore(state_directory(home))
+        activity = store.read_activity(record["id"])
+        if activity is None:
+            raise PublicLifecycleError(404, UNKNOWN_SESSION)
+        selected = next(
+            (
+                item
+                for item in activity["events"]
+                if item["id"] == activity_id
+            ),
+            None,
+        )
+        if selected is None:
+            raise PublicLifecycleError(404, UNKNOWN_SESSION)
+        raw_text = None
+        truncated = False
+        if selected.get("raw_ref"):
+            raw_text = store.read_activity_output(
+                record["id"], selected["raw_ref"]
+            )
+            truncated = len(raw_text) > preview_limit
+            raw_text = raw_text[:preview_limit]
+        return {
+            "event": copy.deepcopy(selected),
+            "raw_text": raw_text,
+            "truncated": truncated,
         }
     except PublicLifecycleError:
         raise

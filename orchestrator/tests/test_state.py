@@ -2402,6 +2402,19 @@ class TestSummary(TempWorkspaceCase):
             state, "reclassify_recorded", unit="skeleton",
             finding_id="codex-F1", defer_ok=False, duration_s=60,
         )
+        st.append_event(
+            state, "brainstorming_origin_recorded", unit="skeleton",
+            origin_key="raw/rethink.txt", duration_s=11,
+        )
+        st.append_event(
+            state, "brainstorming_wait_started", unit="skeleton",
+            kind=contracts.KIND_REVIEW_ROUND, family="codex",
+            session_id="brainstorming-1", target_path="docs/decision.md",
+        )
+        st.append_event(
+            state, "brainstorming_work_recorded", unit="skeleton",
+            session_id="brainstorming-1", duration_s=12,
+        )
         # Explicit unit + matching label must be counted once, not once by
         # each attribution route.
         st.append_event(
@@ -2429,10 +2442,13 @@ class TestSummary(TempWorkspaceCase):
 
         summ = st.summary(state)
 
-        self.assertEqual(summ["units"][0]["work_duration_s"], 360.0)
-        self.assertEqual(summ["work_duration_s"], 450.0)
+        self.assertEqual(summ["units"][0]["work_duration_s"], 383.0)
+        self.assertEqual(summ["work_duration_s"], 473.0)
         self.assertEqual(
             summ["units"][0]["reclassify"][0]["duration_s"], 60
+        )
+        self.assertEqual(
+            summ["units"][0]["brainstormings"][0]["duration_s"], 12
         )
 
     def test_summary_preserves_implementation_history_after_redraft(self):

@@ -407,6 +407,48 @@ class BrainstormingCoordinationTest(unittest.TestCase):
         final = self.store.read(session_id)
         self.assertEqual(len(final.state["completed_turns"]), 4)
         self.assertEqual(final.state["rounds_used"], 2)
+        activity = self.store.read_activity(session_id)
+        self.assertEqual(len(activity["events"]), 5)
+        self.assertEqual(
+            [item["status"] for item in activity["events"]],
+            ["failed", "completed", "completed", "completed", "completed"],
+        )
+        self.assertEqual(
+            [item["provider_attempt"] for item in activity["events"][:2]],
+            [1, 2],
+        )
+        self.assertEqual(
+            activity["events"][0]["action_id"],
+            activity["events"][1]["action_id"],
+        )
+        self.assertAlmostEqual(
+            sum(item["duration_s"] for item in activity["events"]),
+            0.05,
+        )
+        self.assertEqual(
+            self.store.read_activity_output(
+                session_id, activity["events"][0]["raw_ref"]
+            ),
+            "not json",
+        )
+
+    def test_old_session_lazily_starts_activity_ledger(self):
+        session_id = "activity-upgrade"
+        roster = participants()
+        self._create_running(session_id, roster=roster)
+        key = bs._activity_key(session_id)
+        existing = self.store._store.read(key)
+        self.store._store.delete(key, existing["revision"])
+        subject, _executors = self._subject(
+            roster,
+            {"lead": [envelope("accepted after upgrade")], "critic": []},
+        )
+
+        subject.run_next_turn(session_id, object())
+
+        activity = self.store.read_activity(session_id)
+        self.assertEqual(len(activity["events"]), 1)
+        self.assertEqual(activity["events"][0]["status"], "completed")
 
     def test_completed_lead_turn_creates_or_advances_target_revision_atomically(
         self,
@@ -965,6 +1007,15 @@ class BrainstormingCoordinationTest(unittest.TestCase):
                 )
                 with self.assertRaises(exception_type):
                     subject.run_next_turn(session_id, object())
+                activity = self.store.read_activity(session_id)
+                self.assertEqual(len(activity["events"]), 1)
+                self.assertEqual(activity["events"][0]["status"], "failed")
+                self.assertEqual(
+                    activity["events"][0]["failure_type"], "execution"
+                )
+                self.assertEqual(
+                    activity["events"][0]["error"], exception_type.__name__
+                )
                 with open(target, "rb") as handle:
                     self.assertEqual(handle.read(), b"initial target")
                 self.assertIsNone(self.store.read_turn_attempt(session_id))

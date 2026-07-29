@@ -1707,7 +1707,12 @@ def _work_durations(state):
     unassigned = 0.0
     for event in state.get("events") or []:
         etype = event.get("type")
-        if etype in ("reclassify_recorded", "gap_reported"):
+        if etype in (
+            "reclassify_recorded",
+            "gap_reported",
+            "brainstorming_origin_recorded",
+            "brainstorming_work_recorded",
+        ):
             key = event.get("unit")
             if key in totals:
                 totals[key] += _completed_duration(event.get("duration_s"))
@@ -1872,6 +1877,7 @@ def summary(state):
                 "at": e.get("at"),
                 "outcome": "waiting",
                 "outcome_at": None,
+                "duration_s": None,
             }
             brainstorming_by_unit.setdefault(uk, []).append(entry)
             brainstorming_index[(uk, e.get("session_id"))] = entry
@@ -1880,6 +1886,10 @@ def summary(state):
             if entry is not None:
                 entry["outcome"] = _BRAINSTORMING_OUTCOMES[e.get("type")]
                 entry["outcome_at"] = e.get("at")
+        elif e.get("type") == "brainstorming_work_recorded":
+            entry = brainstorming_index.get((uk, e.get("session_id")))
+            if entry is not None:
+                entry["duration_s"] = e.get("duration_s")
         if e.get("type") == "unit_opened" and uk not in opened_at:
             opened_at[uk] = _epoch(e.get("at"))
         if e.get("type") == "unit_transition" and e.get("to_status") == U_SEALED:

@@ -1096,6 +1096,9 @@ function sessionRow(s) {
   if (origin) bits.push(origin);
   const line = bits.join(" · ");
   const indicator = sessionStatusIndicator(s);
+  const total = s.work_duration_s != null
+    ? liveClock(s.work_duration_s, running ? s.in_flight : null,
+        "run-total", "LLM work consumed") : "";
   const info = (line || indicator)
     ? `<div class="run-info-row">${line
         ? `<div class="activity-line sidebar">${running ? spinEl() : ""}<span>${esc(line)}</span></div>`
@@ -1109,6 +1112,7 @@ function sessionRow(s) {
         <div class="run-copy">
           <div class="run-name-row">
             <span class="name">${esc(sessionLabel(s))}</span>
+            ${total}
           </div>
           ${info}
         </div>
@@ -1223,7 +1227,9 @@ function sessionChips(view) {
     ballotsAfter[b.after_completed_rounds] = b;
   const chips = [];
   for (let r = 1; r <= (view.round.completed || 0); r += 1) {
-    chips.push(`<span class="chip clean">Round ${r} &#10003;</span>`);
+    const activity = (view.activity || []).filter(item => item.round === r);
+    if (activity.length) chips.push(...activity.map(sessionActivityChip));
+    else chips.push(`<span class="chip clean">Round ${r} &#10003;</span>`);
     const ballot = ballotsAfter[r];
     if (ballot) {
       const votes = Object.entries(ballot.votes || {})
@@ -1232,13 +1238,14 @@ function sessionChips(view) {
         title="${esc(votes)}">Ballot · ${ballot.approved ? "approved &#10003;" : "not approved"}</span>`);
     }
   }
+  const pendingActivity = (view.activity || []).filter(item =>
+    item.round > (view.round.completed || 0));
+  chips.push(...pendingActivity.map(sessionActivityChip));
   if (view.target.revision !== null)
     chips.push(`<span class="chip doc clicky"
       title="${esc(view.target.ref)} — open Info" onclick="openSessionInfo()">&#128196; accepted target</span>`);
   if (running && !terminal)
-    chips.push(`<span class="chip working">${spinEl()}round ${
-      Math.max(view.round.current || 0, (view.round.completed || 0) + 1)
-      }/${view.round.maximum} · discussing</span>`);
+    chips.push(sessionInFlightChip(view));
   else if (view.status === "success")
     chips.push(`<span class="chip pass">closed &#10003; success</span>`);
   else if (view.status === "failure")
@@ -1246,6 +1253,33 @@ function sessionChips(view) {
   else if (!running)
     chips.push(`<span class="chip">stopped</span>`);
   return `<div class="history-chips">${chips.join("")}</div>`;
+}
+function sessionActivityChip(item) {
+  const who = item.model
+    ? modelEffort(item.model, item.effort)
+    : (item.model_family || item.participant_id || "LLM");
+  const phase = item.stage === "discussion" ? "turn" : item.stage;
+  const repaired = item.status === "failed" && item.recovered;
+  const cls = item.status === "failed" ? (repaired ? "sev23" : "fail") : "clean";
+  const outcome = item.status === "failed"
+    ? (repaired ? "repaired" : "failed") : "done";
+  return `<span class="chip ${cls} clicky"
+    onclick="showSessionActivity('${esc(escJsSq(item.id))}')"
+    title="${esc(item.participant_id || "")}">${esc(who)} ${esc(phase)} · ${esc(outcome)}${fmtDur(item.duration_s)}</span>`;
+}
+function sessionInFlightChip(view) {
+  const active = view.in_flight;
+  if (!active) {
+    return `<span class="chip working">${spinEl()}round ${
+      Math.max(view.round.current || 0, (view.round.completed || 0) + 1)
+      }/${view.round.maximum} · coordinating</span>`;
+  }
+  const who = active.model
+    ? modelEffort(active.model, active.effort)
+    : (active.model_family || active.participant_id || "LLM");
+  const phase = active.stage === "discussion" ? "turn" : active.stage;
+  const elapsed = active.started_at ? ` · ${elapsedClock(active.started_at)}` : "";
+  return `<span class="chip working">${spinEl()}${esc(who)} ${esc(phase)}${elapsed}</span>`;
 }
 function paintSessionDetail(html) {
   // The pane's own scroll survives an innerHTML swap, but preserve it
@@ -1313,7 +1347,10 @@ function renderSessionDetail(view) {
     `round ${view.round.current || 0}/${view.round.maximum}` +
       ` · ${view.round.completed} complete`,
     view.closure_policy,
-  ];
+    view.work_duration_s != null
+      ? `LLM ${fmtDHMS(liveWorkSeconds(view.work_duration_s,
+          running ? view.in_flight : null))}` : "",
+  ].filter(Boolean);
   html += `<div class="activity-line detail">` +
     (running ? spinEl() : "") +
     `<span>${esc(bits.join(" · "))}</span></div>`;
@@ -1335,6 +1372,39 @@ function renderSessionDetail(view) {
       : `<pre class="log mono flow">${esc(JSON.stringify(view.result, null, 2))}</pre>`) +
     `</div>`;
   paintSessionDetail(html);
+}
+async function showSessionActivity(activityId) {
+  if (!selectedSession) return;
+  let data;
+  try {
+    data = await api("/api/brainstorming/sessions/" +
+      encodeURIComponent(selectedSession) + "/activity/" +
+      encodeURIComponent(activityId));
+  } catch (e) { alert(e.message); return; }
+  const item = data.event || {};
+  const who = item.model
+    ? item.model + (item.effort ? "/" + item.effort : "")
+    : (item.model_family || item.participant_id || "LLM");
+  const meta = [
+    who,
+    `round ${item.round || "?"}`,
+    item.stage,
+    item.duration_s != null ? fmtDHMS(item.duration_s) : "",
+    item.at ? item.at.slice(0, 16).replace("T", " ") : "",
+  ].filter(Boolean).join(" · ");
+  let body = `<div class="story-meta">${esc(meta)}</div>`;
+  if (item.status === "failed")
+    body += `<div class="story-note"><b>${esc(item.failure_type || "failed")}</b> · ${esc(item.error || "")}</div>`;
+  else
+    body += `<div class="story-note">provider call completed</div>`;
+  body += `<pre class="log mono" style="max-height:55vh;overflow:auto">${
+    esc(data.raw_text != null ? data.raw_text : "(raw output unavailable)")}</pre>`;
+  if (data.truncated)
+    body += `<div class="amend-hint">raw output truncated for display</div>`;
+  document.getElementById("storyTitle").textContent =
+    `${item.participant_id || "participant"} — ${item.stage || item.kind || "activity"}`;
+  document.getElementById("storyBody").innerHTML = body;
+  document.getElementById("story").showModal();
 }
 async function discardSelectedSession() {
   // The latch survives the 2s repaints (both render sites disable the
@@ -1685,7 +1755,12 @@ function elapsedClock(startedAt) {
 function runStatusClock(r) {
   if (!r || r.work_duration_s == null) return "";
   return liveClock(r.work_duration_s,
-    r.process === "running" ? r.in_flight : null, "run-total", "");
+    activeRunClockInput(r.process === "running", r.in_flight),
+    "run-total", "");
+}
+function activeRunClockInput(running, inFlight) {
+  return running || (inFlight && inFlight.kind === "brainstorming")
+    ? inFlight : null;
 }
 function tickLiveClocks() {
   document.querySelectorAll(".live-clock").forEach((clock) => {
@@ -1966,7 +2041,7 @@ function brainstormChip(b) {
     "click to open the discussion",
   ].filter(Boolean).join(" · ");
   return `<span class="chip brainstorm clicky ${bad ? "fail" : ""}"
-    title="${esc(title)}" onclick="openSession('${esc(escJsSq(b.session_id))}')">&#128161; brainstorming · ${esc(outcome)}</span>`;
+    title="${esc(title)}" onclick="openSession('${esc(escJsSq(b.session_id))}')">&#128161; brainstorming · ${esc(outcome)}${fmtDur(b.duration_s)}</span>`;
 }
 function unitHistory(u, activity, running) {
   const drafts = Array.isArray(u.drafts) && u.drafts.length
@@ -2349,7 +2424,8 @@ async function refreshDetail() {
       html += `<div class="run-sticky-head">`;
       if (s.project) html += `<div class="proj-title">${esc(s.project)}</div>`;
       const totalTime = sum && sum.work_duration_s != null
-        ? liveClock(sum.work_duration_s, running ? s.in_flight : null, "run-clock",
+        ? liveClock(sum.work_duration_s,
+          activeRunClockInput(running, s.in_flight), "run-clock",
           "total LLM work including the active call")
         : "";
       html += `<div class="run-title-row"><h2>${esc(s.name)}<span class="title-sep">·</span>${msChip(s.milestone_status)}</h2>` +

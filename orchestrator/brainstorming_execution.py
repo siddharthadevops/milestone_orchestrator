@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import hashlib
+import os
+import time
+
 from orchestrator import brainstorming, runners
 
 
@@ -211,9 +215,139 @@ class ParticipantExecution:
             )
             raise
         if require_quiescence:
-            self._wait_for_quiescence(executor, result)
+            try:
+                self._wait_for_quiescence(executor, result)
+            except BaseException as exc:
+                try:
+                    exc.runner_result = result
+                except (AttributeError, TypeError):
+                    pass
+                raise
             evidence["quiescent"] = True
         return result
+
+    def _record_activity(
+        self,
+        session_id,
+        participant,
+        executor,
+        started_at,
+        result=None,
+        status="completed",
+        failure_type=None,
+        error=None,
+    ):
+        attempt = self.store.read_turn_attempt(session_id)
+        if attempt is None:
+            # Low-level callers may exercise ParticipantExecution without the
+            # lifecycle coordinator. Orchestrated calls always have an
+            # admitted turn attempt, which is the durable identity required
+            # by the operational ledger.
+            return None
+        action_id = attempt["token"]
+        provider_attempt = attempt.get("provider_attempt", 1)
+        digest = hashlib.sha256(
+            ("%s:%d" % (action_id, provider_attempt)).encode("utf-8")
+        ).hexdigest()[:20]
+        event_id = "activity-%s" % digest
+        duration = (
+            getattr(result, "duration_s", None)
+            if result is not None
+            else None
+        )
+        if isinstance(duration, bool) or not isinstance(duration, (int, float)):
+            duration = max(0.0, time.time() - started_at)
+        raw_text = None
+        if result is not None:
+            raw_text = getattr(result, "text", None)
+        if raw_text is None and error is not None:
+            raw_texts = getattr(error, "raw_texts", None)
+            if isinstance(raw_texts, (list, tuple)) and raw_texts:
+                raw_text = "\n\n--- provider output ---\n\n".join(
+                    str(item) for item in raw_texts
+                )
+            else:
+                raw_text = str(error)
+        raw_ref = self.store.save_activity_output(
+            session_id, event_id, raw_text or ""
+        )
+        state = self.store.read(session_id)
+        if state is None:
+            raise brainstorming.SessionNotFound(session_id)
+        participants = state.state["run_config"]["participants"]
+        completed = attempt["completed_turn_count"]
+        kind = attempt.get("kind", "discussion_turn")
+        stage = (
+            (attempt.get("action_context") or {}).get("stage")
+            if kind == "closure"
+            else "discussion"
+        )
+        round_number = (
+            completed // len(participants) + 1
+            if kind == "discussion_turn"
+            else max(1, completed // len(participants))
+        )
+        event = {
+            "id": event_id,
+            "action_id": action_id,
+            "provider_attempt": provider_attempt,
+            "at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+            "started_at": float(started_at),
+            "duration_s": float(duration),
+            "kind": kind,
+            "stage": stage,
+            "round": round_number,
+            "participant_id": participant["id"],
+            "model_family": participant["model_family"],
+            "model": getattr(executor, "model", None),
+            "effort": getattr(executor, "effort", None),
+            "status": status,
+            "raw_ref": raw_ref,
+        }
+        prompt_path = getattr(result, "prompt_path", None)
+        if isinstance(prompt_path, str) and prompt_path:
+            event["prompt_ref"] = os.path.basename(prompt_path)
+        if status == "failed":
+            event["failure_type"] = failure_type
+            error_text = str(error).strip() if error is not None else ""
+            event["error"] = (
+                error_text or type(error).__name__ or "Unknown failure"
+            )[:4000]
+        self.store.append_activity(session_id, event)
+        return event
+
+    def _invoke_tracked(
+        self,
+        session_id,
+        participant,
+        executor,
+        operation,
+        args,
+        require_quiescence,
+        evidence,
+    ):
+        started_at = time.time()
+        try:
+            result = self._invoke_executor(
+                operation,
+                args,
+                executor,
+                require_quiescence,
+                evidence,
+            )
+        except BaseException as exc:
+            self._record_activity(
+                session_id,
+                participant,
+                executor,
+                started_at,
+                result=getattr(exc, "runner_result", None),
+                status="failed",
+                failure_type="execution",
+                error=exc,
+            )
+            raise
+        return result, started_at
 
     def exchange(
         self,
@@ -336,23 +470,36 @@ class ParticipantExecution:
         provider_ref = self._durable_provider_ref(snapshot, participant)
 
         if provider_ref is None:
-            result = self._invoke_executor(
+            result, started_at = self._invoke_tracked(
+                session_id,
+                participant,
+                executor,
                 executor.start,
                 (prompt, workspace_path, execution_context),
-                executor,
                 require_quiescence,
                 evidence,
             )
-            provider_ref = self._result_session_ref(result)
-            bound = self.store.bind_participant_session(
-                session_id,
-                snapshot.revision,
-                participant_id,
-                provider_ref,
-            )
-            provider_ref = self._durable_provider_ref(bound, participant)
+            try:
+                provider_ref = self._result_session_ref(result)
+                bound = self.store.bind_participant_session(
+                    session_id,
+                    snapshot.revision,
+                    participant_id,
+                    provider_ref,
+                )
+                provider_ref = self._durable_provider_ref(bound, participant)
+            except BaseException as exc:
+                self._record_activity(
+                    session_id, participant, executor, started_at,
+                    result=result, status="failed",
+                    failure_type="execution", error=exc,
+                )
+                raise
         else:
-            result = self._invoke_executor(
+            result, started_at = self._invoke_tracked(
+                session_id,
+                participant,
+                executor,
                 executor.continue_session,
                 (
                     provider_ref,
@@ -360,20 +507,44 @@ class ParticipantExecution:
                     workspace_path,
                     execution_context,
                 ),
-                executor,
                 require_quiescence,
                 evidence,
             )
-            self._result_session_ref(result, expected=provider_ref)
+            try:
+                self._result_session_ref(result, expected=provider_ref)
+            except BaseException as exc:
+                self._record_activity(
+                    session_id, participant, executor, started_at,
+                    result=result, status="failed",
+                    failure_type="execution", error=exc,
+                )
+                raise
 
         try:
             envelope = self._parse(result, validator)
             self._require_current_binding(
                 session_id, participant, provider_ref
             )
-            return envelope, result
         except (ValueError, brainstorming.ContractError) as exc:
+            self._record_activity(
+                session_id, participant, executor, started_at,
+                result=result, status="failed",
+                failure_type="protocol", error=exc,
+            )
             first_error = str(exc)
+        except BaseException as exc:
+            self._record_activity(
+                session_id, participant, executor, started_at,
+                result=result, status="failed",
+                failure_type="execution", error=exc,
+            )
+            raise
+        else:
+            self._record_activity(
+                session_id, participant, executor, started_at,
+                result=result,
+            )
+            return envelope, result
 
         # The first strike is repaired only after re-reading the exact durable
         # binding and lifecycle. A terminalized session receives no control
@@ -384,7 +555,10 @@ class ParticipantExecution:
             session_id, participant, provider_ref
         )
         repair_prompt = prompt + (runners.REPAIR_SUFFIX % first_error)
-        result2 = self._invoke_executor(
+        result2, started_at2 = self._invoke_tracked(
+            session_id,
+            participant,
+            executor,
             executor.continue_session,
             (
                 provider_ref,
@@ -392,15 +566,46 @@ class ParticipantExecution:
                 workspace_path,
                 execution_context,
             ),
-            executor,
             require_quiescence,
             evidence,
         )
-        self._result_session_ref(result2, expected=provider_ref)
+        try:
+            self._result_session_ref(result2, expected=provider_ref)
+        except BaseException as exc:
+            self._record_activity(
+                session_id, participant, executor, started_at2,
+                result=result2, status="failed",
+                failure_type="execution", error=exc,
+            )
+            raise
         try:
             envelope = self._parse(result2, validator)
             self._require_current_binding(
                 session_id, participant, provider_ref
+            )
+        except (ValueError, brainstorming.ContractError) as exc:
+            self._record_activity(
+                session_id, participant, executor, started_at2,
+                result=result2, status="failed",
+                failure_type="protocol", error=exc,
+            )
+            raise runners.WorkerProtocolError(
+                "executor %s produced a contract-violating participant envelope "
+                "twice: first error: %s; second error: %s"
+                % (participant["executor_ref"], first_error, exc),
+                raw_texts=[result.text, result2.text],
+            )
+        except BaseException as exc:
+            self._record_activity(
+                session_id, participant, executor, started_at2,
+                result=result2, status="failed",
+                failure_type="execution", error=exc,
+            )
+            raise
+        else:
+            self._record_activity(
+                session_id, participant, executor, started_at2,
+                result=result2,
             )
             result2.repair = {
                 "error": first_error,
@@ -408,10 +613,3 @@ class ParticipantExecution:
                 "duration_s": result.duration_s,
             }
             return envelope, result2
-        except (ValueError, brainstorming.ContractError) as exc:
-            raise runners.WorkerProtocolError(
-                "executor %s produced a contract-violating participant envelope "
-                "twice: first error: %s; second error: %s"
-                % (participant["executor_ref"], first_error, exc),
-                raw_texts=[result.text, result2.text],
-            )

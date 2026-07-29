@@ -2706,6 +2706,21 @@ class Driver(object):
         pre_snapshot=None,
     ):
         """Attach one non-completing worker signal to an independent session."""
+        st.append_event(
+            self.state,
+            "brainstorming_origin_recorded",
+            unit=st.unit_key(unit),
+            kind=kind,
+            family=family,
+            model=model,
+            effort=effort,
+            raw_path=raw_path,
+            duration_s=result.duration_s,
+        )
+        # The paid origin call is complete before session creation begins.
+        # Persist its time now so a crash in the independent-session handoff
+        # cannot erase the call and make a later at-least-once retry hide it.
+        self._save()
         try:
             checked = brainstorming_milestone.validate_origin_signal(
                 signal,
@@ -2804,6 +2819,10 @@ class Driver(object):
             session_id=created["id"],
             target_path=checked["target_path"],
         )
+        # The independent process is already live. Persist its attachment
+        # before returning to the outer step so a later crash cannot leave a
+        # successfully launched session invisible to its milestone.
+        self._save()
         return "started Brainstorming session %s" % created["id"]
 
     @staticmethod
@@ -3157,6 +3176,24 @@ class Driver(object):
         )
         return "drafted %s" % (unit["artifact"] or "(implementation)")
 
+    def _record_brainstorming_work(self, unit, session_id, duration_s):
+        """Attach one independent session's consumed LLM work exactly once."""
+        if duration_s is None:
+            return
+        if any(
+            event.get("type") == "brainstorming_work_recorded"
+            and event.get("session_id") == session_id
+            for event in self.state.get("events", [])
+        ):
+            return
+        st.append_event(
+            self.state,
+            "brainstorming_work_recorded",
+            unit=st.unit_key(unit),
+            session_id=session_id,
+            duration_s=duration_s,
+        )
+
     def _do_brainstorming_wait(self):
         unit = st.current_unit(self.state)
         wait = copy.deepcopy(unit.get("brainstorming_wait") or {})
@@ -3177,6 +3214,9 @@ class Driver(object):
             # The terminal session remains retained evidence, but it must no
             # longer monopolize the unit's next action. Operator resume now
             # retries the unchanged originating milestone call.
+            self._record_brainstorming_work(
+                unit, session_id, exc.work_duration_s
+            )
             unit.pop("brainstorming_wait", None)
             if (wait.get("origin") or {}).get("kind") \
                     == "guarantee_calibration":
@@ -3212,6 +3252,10 @@ class Driver(object):
             raise StopStep("Brainstorming inspection failed")
         if handoff is None:
             return "waiting for Brainstorming session %s" % session_id
+
+        self._record_brainstorming_work(
+            unit, session_id, handoff.get("work_duration_s")
+        )
 
         origin = wait["origin"]
         kind = origin["kind"]
@@ -3325,7 +3369,7 @@ class Driver(object):
                 return self._handle_gap(
                     unit,
                     {"gaps": [copy.deepcopy(failure_gap)]},
-                    origin.get("duration_s"),
+                    None,
                     pre_tree=pre.get("tree"),
                     pre_head=pre.get("head"),
                     pre_sym=pre.get("sym"),

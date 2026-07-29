@@ -18,6 +18,7 @@ import threading
 import unittest
 import urllib.error
 import urllib.request
+from unittest import mock
 
 from orchestrator import driver, profiles, registry, service, state as st
 
@@ -292,7 +293,7 @@ class ServiceApiTest(unittest.TestCase):
         self.assertIn('class="title-sep">·</span>${msChip', text)
         self.assertIn('class="run-name-row"', text)
         self.assertIn('class="run-info-row"', text)
-        self.assertIn('liveClock(sum.work_duration_s, running ? s.in_flight : null, "run-clock"', text)
+        self.assertIn("activeRunClockInput(running, s.in_flight)", text)
         self.assertIn("const sliceDuration = present.length", text)
         self.assertIn("u.work_duration_s != null", text)
         self.assertNotIn("sum.last_event_epoch - sum.created_epoch", text)
@@ -558,6 +559,78 @@ class ServiceApiTest(unittest.TestCase):
         self.assertEqual(run["work_duration_s"], 0.0)
         _, detail = self.request_json("GET", "/api/runs/%s" % run_id)
         self.assertEqual(detail["status"]["slices_total"], 2)
+
+    def test_run_status_includes_active_brainstorming_work_once(self):
+        ws = self.workspace("ws-brainstorming-clock")
+        _, body = self.create_run(ws)
+        run_id = body["run"]["id"]
+        entry = registry.get(registry.load(self.home), run_id)
+        state = st.load(entry["state_path"])
+        unit = st.current_unit(state)
+        st.append_event(
+            state,
+            "brainstorming_wait_started",
+            unit=st.unit_key(unit),
+            kind="review_round",
+            family="codex",
+            session_id="brainstorming-live",
+            target_path="docs/decision.md",
+        )
+        st.save(entry["state_path"], state)
+        process = self.spawn_fake_driver()
+        registry.update(self.home, run_id, pid=process.pid)
+        session = {
+            "work_duration_s": 7.5,
+            "in_flight": {
+                "stage": "discussion",
+                "kind": "discussion_turn",
+                "model_family": "codex",
+                "model": "gpt-5.6-sol",
+                "effort": "max",
+                "started_at": 100.0,
+            },
+        }
+        with mock.patch.object(
+            service.brainstorming_lifecycle,
+            "inspect_session",
+            return_value=session,
+        ):
+            _, listing = self.request_json("GET", "/api/runs")
+        run = next(item for item in listing["runs"] if item["id"] == run_id)
+        self.assertEqual(run["work_duration_s"], 7.5)
+
+        process.terminate()
+        process.wait(timeout=5)
+        registry.update(self.home, run_id, pid=None)
+        with mock.patch.object(
+            service.brainstorming_lifecycle,
+            "inspect_session",
+            return_value=session,
+        ):
+            _, listing = self.request_json("GET", "/api/runs")
+        run = next(item for item in listing["runs"] if item["id"] == run_id)
+        self.assertEqual(run["process"], "stopped")
+        self.assertEqual(run["work_duration_s"], 7.5)
+        self.assertEqual(run["in_flight"]["kind"], "brainstorming")
+        self.assertEqual(run["in_flight"]["started_at"], 100.0)
+
+        state = st.load(entry["state_path"])
+        st.append_event(
+            state,
+            "brainstorming_work_recorded",
+            unit=st.unit_key(st.current_unit(state)),
+            session_id="brainstorming-live",
+            duration_s=7.5,
+        )
+        st.save(entry["state_path"], state)
+        with mock.patch.object(
+            service.brainstorming_lifecycle,
+            "inspect_session",
+            return_value=session,
+        ):
+            _, listing = self.request_json("GET", "/api/runs")
+        run = next(item for item in listing["runs"] if item["id"] == run_id)
+        self.assertEqual(run["work_duration_s"], 7.5)
 
     def test_run_status_surfaces_pending_implementation_stabilization(self):
         ws = self.workspace("ws-pending-stabilization")

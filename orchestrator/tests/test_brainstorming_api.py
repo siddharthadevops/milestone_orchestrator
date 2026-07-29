@@ -412,8 +412,14 @@ class StandaloneBrainstormingApiTest(unittest.TestCase):
                     "process",
                     "revision",
                     "state",
+                    "activity",
+                    "work_duration_s",
+                    "in_flight",
                 },
             )
+            self.assertEqual(session["activity"], [])
+            self.assertEqual(session["work_duration_s"], 0)
+            self.assertIsNone(session["in_flight"])
             self.assertEqual(session["process"], "running")
             self.assertIsNone(session["project"])
             self.assertIsNone(session["work_area"])

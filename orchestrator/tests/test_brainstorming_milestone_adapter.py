@@ -1352,8 +1352,10 @@ class BrainstormingMilestoneAdapterTest(unittest.TestCase):
                     "result",
                     "accepted_target_revision",
                     "retained_target",
+                    "work_duration_s",
                 },
             )
+            self.assertEqual(handoff["work_duration_s"], 0)
             self.assertEqual(
                 handoff["accepted_target_revision"],
                 retained["revision"],
@@ -1427,16 +1429,33 @@ class BrainstormingMilestoneAdapterTest(unittest.TestCase):
         stopped = self._create(
             "proposals/stopped.md", launcher=stopped_launcher
         )
+        store.append_activity(stopped["id"], {
+            "id": "activity-before-stop",
+            "action_id": "turn-before-stop",
+            "provider_attempt": 1,
+            "at": "2026-07-29T10:00:00+0200",
+            "started_at": 100.0,
+            "duration_s": 3.5,
+            "kind": "discussion_turn",
+            "stage": "discussion",
+            "round": 1,
+            "participant_id": "lead",
+            "model_family": "codex",
+            "model": None,
+            "effort": None,
+            "status": "completed",
+        })
         stopped_launcher.calls[0][2].terminate()
         with (
             mock.patch.object(
                 adapter, "service_home", return_value=self.home
             ),
-            self.assertRaises(adapter.OperationalTerminalError),
+            self.assertRaises(adapter.OperationalTerminalError) as caught,
         ):
             adapter.terminal_handoff(
                 {"workspace": self.workspace}, stopped["id"]
             )
+        self.assertEqual(caught.exception.work_duration_s, 3.5)
 
     def test_materialized_target_survives_operational_failure(self):
         source = os.path.join(
@@ -1951,8 +1970,10 @@ class MilestoneDriverRethinkTest(unittest.TestCase):
         )
         self.assertEqual(len(runner.calls), 1)
 
+        handoff = self._handoff()
+        handoff["work_duration_s"] = 2.5
         with mock.patch.object(
-            adapter, "terminal_handoff", return_value=self._handoff()
+            adapter, "terminal_handoff", return_value=handoff
         ):
             resumed = drv.Driver(path, runner=runner)
             resumed.step()
@@ -1965,6 +1986,14 @@ class MilestoneDriverRethinkTest(unittest.TestCase):
             runner.session_calls[-1],
             ("continue", "codex", "mock-session-1"),
         )
+        self.assertEqual(
+            [
+                event["duration_s"]
+                for event in returned["events"]
+                if event["type"] == "brainstorming_work_recorded"
+            ],
+            [2.5],
+        )
 
         completed = drv.Driver(path, runner=runner)
         completed.step()
@@ -1972,6 +2001,93 @@ class MilestoneDriverRethinkTest(unittest.TestCase):
         self.assertEqual(unit["status"], st.U_PRE_REVIEW_VERIFY)
         self.assertIsNotNone(unit["draft"])
         self.assertEqual(len(runner.calls), 2)
+
+    def test_retried_rethink_counts_reused_raw_path_again(self):
+        path = self._state_path()
+        runner = runners.MockRunner([
+            {
+                "expect_kind": contracts.KIND_IMPLEMENT,
+                "response": rethink(contracts.KIND_IMPLEMENT),
+            },
+            {
+                "expect_kind": contracts.KIND_IMPLEMENT,
+                "response": rethink(contracts.KIND_IMPLEMENT),
+            },
+        ])
+        self._advance_impl_baseline(path, runner)
+        durable_before_create = []
+
+        def fail_create(*_args, **_kwargs):
+            durable_before_create.extend(
+                event for event in st.load(path)["events"]
+                if event["type"] == "brainstorming_origin_recorded"
+            )
+            raise adapter.AdapterError("creation unavailable")
+
+        with mock.patch.object(
+            adapter,
+            "create_session",
+            side_effect=fail_create,
+        ):
+            _action, note = drv.Driver(path, runner=runner).step()
+        self.assertIn("run failed", note)
+        self.assertEqual(len(durable_before_create), 1)
+
+        failed = st.load(path)
+        st.resume_run(failed)
+        st.save(path, failed)
+        with mock.patch.object(
+            adapter, "create_session", return_value=self._created()
+        ):
+            drv.Driver(path, runner=runner).step()
+
+        resumed = st.load(path)
+        origins = [
+            event for event in resumed["events"]
+            if event["type"] == "brainstorming_origin_recorded"
+        ]
+        self.assertEqual(len(origins), 2)
+        self.assertEqual(origins[0]["raw_path"], origins[1]["raw_path"])
+        self.assertEqual(
+            st.summary(resumed)["work_duration_s"], 0.02
+        )
+
+    def test_successful_rethink_attachment_survives_outer_step_crash(self):
+        path = self._state_path()
+        runner = runners.MockRunner([{
+            "expect_kind": contracts.KIND_IMPLEMENT,
+            "response": rethink(contracts.KIND_IMPLEMENT),
+        }])
+        self._advance_impl_baseline(path, runner)
+        driver = drv.Driver(path, runner=runner)
+        original_save = driver._save
+        saves = []
+
+        def crash_on_outer_save():
+            saves.append(len(saves) + 1)
+            if len(saves) == 3:
+                raise KeyboardInterrupt()
+            original_save()
+
+        with (
+            mock.patch.object(
+                adapter, "create_session", return_value=self._created()
+            ),
+            mock.patch.object(driver, "_save", side_effect=crash_on_outer_save),
+            self.assertRaises(KeyboardInterrupt),
+        ):
+            driver.step()
+
+        durable = st.load(path)
+        wait = st.current_unit(durable)["brainstorming_wait"]
+        self.assertEqual(wait["session_id"], "brainstorming-session")
+        self.assertEqual(
+            [
+                event["type"] for event in durable["events"]
+                if event["type"].startswith("brainstorming_")
+            ],
+            ["brainstorming_origin_recorded", "brainstorming_wait_started"],
+        )
 
     def test_run_waits_for_brainstorming_and_continues_without_manual_start(self):
         path = self._state_path()
@@ -2049,7 +2165,8 @@ class MilestoneDriverRethinkTest(unittest.TestCase):
                 side_effect=[
                     None,
                     adapter.OperationalTerminalError(
-                        "participant execution failed"
+                        "participant execution failed",
+                        work_duration_s=4.0,
                     ),
                 ],
             ),
@@ -2066,6 +2183,7 @@ class MilestoneDriverRethinkTest(unittest.TestCase):
         self.assertNotIn(
             "brainstorming_wait", st.current_unit(state)
         )
+        self.assertEqual(st.summary(state)["work_duration_s"], 4.01)
 
     def test_run_observes_brainstorming_started_on_last_allowed_step(self):
         path = self._state_path()

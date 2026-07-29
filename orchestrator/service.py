@@ -1373,6 +1373,57 @@ def run_status(entry, home=None):
         info["failure_reason"] = (summ["failure"] or {}).get("reason")
         info["events_total"] = summ["events_total"]
         info["work_duration_s"] = summ.get("work_duration_s")
+        if home is not None and not info.get("in_flight"):
+            current_view = next(
+                (
+                    unit
+                    for unit in summ.get("units") or []
+                    if unit.get("unit") == summ.get("current_unit")
+                ),
+                None,
+            )
+            waiting = next(
+                (
+                    item
+                    for item in reversed(
+                        (current_view or {}).get("brainstormings") or []
+                    )
+                    if item.get("outcome") == "waiting"
+                ),
+                None,
+            )
+            if waiting is not None:
+                try:
+                    session = brainstorming_lifecycle.inspect_session(
+                        home, waiting["session_id"], lambda _record: None
+                    )
+                    session_work = session.get("work_duration_s")
+                    if (
+                        waiting.get("duration_s") is None
+                        and session_work is not None
+                    ):
+                        info["work_duration_s"] = (
+                            (info.get("work_duration_s") or 0)
+                            + session_work
+                        )
+                    active = session.get("in_flight")
+                    if active is not None:
+                        info["in_flight"] = {
+                            "label": "Brainstorming %s · %s"
+                            % (
+                                waiting["session_id"],
+                                active.get("stage") or active.get("kind"),
+                            ),
+                            "kind": "brainstorming",
+                            "family": active.get("model_family"),
+                            "model": active.get("model"),
+                            "effort": active.get("effort"),
+                            "started_at": active.get("started_at"),
+                        }
+                except Exception:
+                    # The milestone driver remains the authority for routing
+                    # session failures. A list poll must not fail the run.
+                    pass
         if home is not None:
             _pump_projection(home, entry, summ)
     except Exception as exc:
@@ -2879,6 +2930,22 @@ def make_handler(home):
                 elif route.startswith("/api/brainstorming/sessions/"):
                     parts = route.rstrip("/").split("/")
                     if (
+                        len(parts) == 7
+                        and parts[4]
+                        and parts[5] == "activity"
+                        and parts[6]
+                    ):
+                        activity = brainstorming_lifecycle.view_activity(
+                            home,
+                            parts[4],
+                            parts[6],
+                            lambda record: require_brainstorming_access(
+                                home, who, record
+                            ),
+                            ARTIFACT_MAX,
+                        )
+                        self._json(200, {"ok": True, **activity})
+                    elif (
                         len(parts) == 6
                         and parts[4]
                         and parts[5] == "view"

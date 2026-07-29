@@ -106,6 +106,12 @@ offers Discard from its failure screen — deletion needs only the
 service record. There is no separate session
 page — the panel is the only viewer.
 
+Brainstorming activity is operational evidence separate from `chat.md`:
+every physical provider call keeps its model, phase, duration and outcome,
+including a malformed first response, its repair, and execution failures.
+The session view shows those calls as clickable chips with raw output on
+demand, a live clock for the call in progress, and accumulated LLM work.
+
 Work starts from a project's **⋯ menu**, never from a standing button:
 "New milestone" and "New brainstorming" are the first two items (every user
 who can see the project gets them; Configure and Admin users stay
@@ -190,6 +196,14 @@ live session leader — which a real driver always is and an OS-recycled pid
 almost never is — so stale pids neither wedge start/delete nor let stop
 signal an innocent process group.
 
+Update/restart protocol: inspect every active milestone or Brainstorming
+worker immediately before stopping it. A call at or below two minutes may be
+stopped; if it has already exceeded two minutes, let that exact call finish
+and inspect again. Any replacement call has then only just begun and may be
+stopped under the same two-minute rule. Restart on the new runtime. This
+avoids throwing away substantial completed model work merely to load an
+update.
+
 Standalone Brainstorming uses a separate service record and state store under
 `~/.impl_roadmap/brainstorming/`; it never creates a milestone run or registry
 entry. `POST /api/brainstorming/sessions` accepts the exact generic request,
@@ -209,6 +223,8 @@ any durable state is read, so a session in a project you are not assigned
 to is simply absent rather than refused; a project-less session is
 administrative. Each row carries the service metadata plus a cheap state
 projection (`status`, `question`, `rounds_used`/`max_rounds`, `revision`);
+a row also carries accumulated `work_duration_s` and any active `in_flight`
+call;
 a session whose state store cannot be read still lists, with those fields
 null and the fault in `state_error`, because one broken session must never
 hide the others.
@@ -256,7 +272,8 @@ in the unit's chronology
 (the `brainstormings` array of each unit in the run summary, derived from
 the ledger's `brainstorming_wait_started` event and whichever event routed
 its result back — `continued`, `restarted`, `failed`, `detached`, or still
-`waiting`). The chip opens that session's page.
+`waiting`). The chip opens that session's page and carries its consumed LLM
+time; the same time is added once to the milestone total.
 
 Panel time is completed LLM work derived from the append-only ledger, not
 driver wall time: draft/implement calls, review/fix/delta rounds, reported

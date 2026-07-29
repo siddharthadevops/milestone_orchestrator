@@ -1,5 +1,6 @@
 """Focused executable evidence for Brainstorming Slice 07."""
 import os
+import time
 import unittest
 from unittest import mock
 from orchestrator import access
@@ -12,6 +13,7 @@ VIEW_KEYS = {
     "id", "caller", "status", "question", "process", "revision", "target",
     "participants", "same_family_fallback", "closure_policy",
     "closure_ballots", "round", "transcript_markdown", "result",
+    "activity", "work_duration_s", "in_flight",
 }
 class BrainstormingVisualizationTest(unittest.TestCase):
     def setUp(self):
@@ -107,6 +109,73 @@ class BrainstormingVisualizationTest(unittest.TestCase):
             "GET", "/api/brainstorming/sessions/%s/view/extra" % session_id
         )
         self.assertEqual((status, missing["error"]), (404, "not found"))
+
+    def test_activity_failures_times_and_raw_output_are_visible(self):
+        session_id, store = self._create("activity.md")
+        common = {
+            "action_id": "turn-1",
+            "at": "2026-07-29T10:00:00+0200",
+            "started_at": 100.0,
+            "kind": "discussion_turn",
+            "stage": "discussion",
+            "round": 1,
+            "participant_id": "lead",
+            "model_family": "codex",
+            "model": "gpt-5.6-sol",
+            "effort": "max",
+        }
+        failed_ref = store.save_activity_output(
+            session_id, "activity-failed", "not valid json"
+        )
+        store.append_activity(session_id, {
+            **common,
+            "id": "activity-failed",
+            "provider_attempt": 1,
+            "duration_s": 1.25,
+            "status": "failed",
+            "failure_type": "protocol",
+            "error": "invalid envelope",
+            "raw_ref": failed_ref,
+        })
+        store.append_activity(session_id, {
+            **common,
+            "id": "activity-repaired",
+            "provider_attempt": 2,
+            "duration_s": 2.25,
+            "status": "completed",
+        })
+
+        view = self._view(session_id)
+        self.assertEqual(view["work_duration_s"], 3.5)
+        self.assertTrue(view["activity"][0]["recovered"])
+        self.assertFalse(view["activity"][1]["recovered"])
+        status, detail = self.api._request(
+            "GET",
+            "/api/brainstorming/sessions/%s/activity/activity-failed"
+            % session_id,
+        )
+        self.assertEqual(status, 200, detail)
+        self.assertEqual(detail["raw_text"], "not valid json")
+        self.assertFalse(detail["truncated"])
+
+    def test_active_provider_call_exposes_its_live_clock(self):
+        session_id, store = self._create("active-clock.md", live=True)
+        started_at = time.time() - 5
+        store._store.put(bs._turn_attempt_key(session_id), {
+            "token": "active-turn",
+            "participant_id": "lead",
+            "completed_turn_count": 0,
+            "target_revision": None,
+            "quiescent": False,
+            "started_at": started_at,
+            "provider_attempt": 1,
+        })
+
+        view = self._view(session_id)
+
+        self.assertEqual(view["in_flight"]["action_id"], "active-turn")
+        self.assertEqual(view["in_flight"]["participant_id"], "lead")
+        self.assertEqual(view["in_flight"]["started_at"], started_at)
     def test_view_projection_is_authorized_exact_and_revision_coherent(self):
         project = self.api._ready_project(users=[access.USER_EMAILS[0]])
         self.api._target("authorized-view.md")

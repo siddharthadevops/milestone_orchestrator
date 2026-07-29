@@ -203,6 +203,20 @@ class DesignUpdateRethinkTest(unittest.TestCase):
         self.assertIn("brainstorming_design_update_authorized", event_types)
         self.assertIn("brainstorming_builder_continued", event_types)
 
+    def test_brainstorming_work_is_recorded_once(self):
+        state, unit = self._state(st.U_FIXING)
+        driver = self._driver(state, modern=True)
+
+        driver._record_brainstorming_work(unit, "brainstorming-1", 12.5)
+        driver._record_brainstorming_work(unit, "brainstorming-1", 12.5)
+
+        events = [
+            event for event in state["events"]
+            if event["type"] == "brainstorming_work_recorded"
+        ]
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0]["duration_s"], 12.5)
+
     def test_guard_allows_design_docs_but_still_restores_other_work(self):
         state, current = self._state(st.U_FIXING)
         # Move the current pointer to slice 2 so slice 1 implementation is a
