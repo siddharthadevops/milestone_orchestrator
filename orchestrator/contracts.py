@@ -766,10 +766,10 @@ def validate_need_rethink(
         )
     if (
         result_mode == RETHINK_RESULT_DESIGN_AMENDMENT
-        and obj["max_rounds"] > 2
+        and obj["max_rounds"] > 5
     ):
         raise ContractError(
-            "%s: design_amendment is a fast path limited to 2 rounds" % ctx
+            "%s: design_amendment is a fast path limited to 5 rounds" % ctx
         )
     if "failure_gap" in obj:
         if kind not in RETHINK_CONTINUATION_KINDS:
@@ -1185,7 +1185,7 @@ skeleton and affected slice notes and may assign bounded repair work to the
 current slice or a new future slice. In that mode
 `target_path` names the smallest source artifact for context; Brainstorming
 constructs a separate concise amendment target. Use `proposal` for an ordinary
-focused question. A design amendment is limited to at most 2 rounds. Review
+focused question. A design amendment is limited to at most 5 rounds. Review
 kinds may use only `proposal`. The validator accepts
 an omitted result_mode as `proposal` solely for in-flight run compatibility.
 Do not mix need_rethink with notes, ordinary findings/results, work/file claims,
@@ -1398,7 +1398,7 @@ Focused discussion before deciding one queued finding:
  "finding":{<one complete queued finding>},
  "target_path":"<normalized workspace-relative path>",
  "max_rounds":<positive integer>,"result_mode":"proposal|design_amendment"}
-`design_amendment` is limited to two rounds. Return no work claims or sibling
+`design_amendment` is limited to five rounds. Return no work claims or sibling
 findings with this status.
 """
 
@@ -1424,7 +1424,7 @@ Focused discussion before completing a required in-goal design change:
  "finding":{<copy the complete SOURCE SIGNAL from the prompt>},
  "target_path":"<normalized workspace-relative path>",
  "max_rounds":<positive integer>,"result_mode":"proposal|design_amendment"}
-`design_amendment` is limited to two rounds. Return no work claims with this
+`design_amendment` is limited to five rounds. Return no work claims with this
 status.
 """
 

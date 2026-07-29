@@ -277,7 +277,7 @@ class BrainstormingMilestoneAdapterTest(unittest.TestCase):
         amendment = rethink(
             contracts.KIND_FIX_FINDINGS,
             finding=report_finding(),
-            rounds=2,
+            rounds=5,
             result_mode="design_amendment",
         )
         self.assertIs(
@@ -329,7 +329,7 @@ class BrainstormingMilestoneAdapterTest(unittest.TestCase):
             amendment,
         )
         too_long = copy.deepcopy(amendment)
-        too_long["max_rounds"] = 3
+        too_long["max_rounds"] = 6
         with self.assertRaises(contracts.ContractError):
             contracts.validate_worker_output(
                 too_long, contracts.KIND_FIX_FINDINGS

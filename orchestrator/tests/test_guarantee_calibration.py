@@ -197,7 +197,18 @@ class GuaranteeCalibrationDriverTest(unittest.TestCase):
                 "effort": "max",
             },
         )
-        self.assertEqual(captured["kwargs"]["max_rounds"], 2)
+        self.assertEqual(captured["kwargs"]["max_rounds"], 5)
+
+    def test_explicit_round_override_is_preserved(self):
+        config = self._config()
+        config["guarantee_calibration"] = {
+            "enabled": True,
+            "max_rounds": 7,
+        }
+
+        *_prefix, captured, _action, _note = self._start(config=config)
+
+        self.assertEqual(captured["kwargs"]["max_rounds"], 7)
 
     def test_success_without_changes_commits_and_opens_normal_flow(self):
         workspace, state_path, runner, base_head, *_rest = self._start()

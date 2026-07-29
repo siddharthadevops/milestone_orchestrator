@@ -78,9 +78,19 @@ def _modern_contract(kind):
         "",
     )
     text = re.sub(
-        r"`design_amendment` is limited to two rounds and requires a .*?\n"
+        r"`design_amendment` is limited to (?:two|five) rounds and requires a .*?\n"
         r"failure_gap\.",
-        "`design_amendment` is limited to two rounds.",
+        "`design_amendment` is limited to five rounds.",
+        text,
+    )
+    text = re.sub(
+        r"`design_amendment` is limited to (?:two|five) rounds\.",
+        "`design_amendment` is limited to five rounds.",
+        text,
+    )
+    text = re.sub(
+        r"A design amendment is limited to at most (?:2|5) rounds\.",
+        "A design amendment is limited to at most 5 rounds.",
         text,
     )
     text = re.sub(r"\bfits_remodel\b", "in-goal design change", text,
@@ -231,7 +241,7 @@ def _consultation_block(opposite_family, opposite_cmd):
         "Command (prompt on stdin):\n"
         "  %s\n"
         "Save the transcript under WORKSPACE/.orchestrator/scratch/; summarize\n"
-        "it in consultation.resolution. Run at most two dialogue rounds,\n"
+        "it in consultation.resolution. Run at most five dialogue rounds,\n"
         "stopping earlier on clear agreement. Never reject P0/P1 without a\n"
         "clear resolution. If consultation is unavailable or unresolved, do\n"
         "not block, concede, or reject: return only the retry envelope; the\n"
@@ -1065,7 +1075,7 @@ def _rethink_before_gap_block():
         "- For that narrow in-goal contradiction, set result_mode to\n"
         "  `design_amendment`. Brainstorming then writes a separate concise\n"
         "  amendment; target_path is only its smallest relevant source/context.\n"
-        "  This fast path permits at most two rounds.\n"
+        "  This fast path permits at most five rounds.\n"
         "  Use result_mode `proposal` for an unresolved focused question.\n"
         "- Do NOT use it for facts you can establish from the workspace,\n"
         "  missing investigation, an ordinary defect or fix, broad\n"
@@ -1099,7 +1109,7 @@ def _design_rethink_block(fixer=False):
         "  `design_amendment`; do not code around it, silently rewrite design\n"
         "  documents, or stop the run merely because those documents need an\n"
         "  edit. %s Ask one decision-shaped question, select the smallest\n"
-        "  useful source artifact, and use at most two rounds.\n"
+        "  useful source artifact, and use at most five rounds.\n"
         "- The accepted amendment will return to this same task with an\n"
         "  explicit list of editable design paths. Apply only the agreed\n"
         "  change, then continue normally; the resulting delta and complete\n"
@@ -1245,7 +1255,7 @@ def _fix_gap_block():
         "- Prefer `need_rethink` when one bounded question or obvious in-goal\n"
         "  contradiction can be settled by a short discussion. Use `proposal`\n"
         "  for an open question; use `design_amendment` for one conservative\n"
-        "  clarification (at most two rounds). Choose one finding, one\n"
+        "  clarification (at most five rounds). Choose one finding, one\n"
         "  decision-shaped question, and the smallest relevant target.\n"
         "- Do not rethink workspace facts, missing investigation, ordinary\n"
         "  defects, broad exploration, or preference.\n"

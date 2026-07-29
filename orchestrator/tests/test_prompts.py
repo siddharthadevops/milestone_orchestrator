@@ -21,6 +21,7 @@ every one of the 7 prompt builders inherits. These tests pin:
 import json
 import re
 import unittest
+from unittest import mock
 
 from orchestrator import contracts, prompts
 
@@ -158,7 +159,7 @@ class TestNaturalRethinkExit(unittest.TestCase):
         self.assertIn("one concrete in-goal inconsistency", prompt)
         self.assertIn("current design baseline", prompt)
         self.assertIn("result_mode `design_amendment`", prompt)
-        self.assertIn("at most two rounds", prompt)
+        self.assertIn("at most five rounds", prompt)
         self.assertIn("Establish workspace facts yourself", prompt)
         self.assertIn("GOAL itself is contradictory", prompt)
 
@@ -1016,9 +1017,34 @@ class TestPortedCanonContentRules(unittest.TestCase):
 
     def test_consultation_cap_and_severity_gate(self):
         prompt = self.fix("slice_impl")
-        self.assertIn("Run at most two dialogue rounds, stopping earlier on "
+        self.assertIn("Run at most five dialogue rounds, stopping earlier on "
                       "clear agreement", prompt)
         self.assertIn("Never reject P0/P1 without a clear resolution", prompt)
+
+    def test_modern_contract_scrubs_legacy_round_wording(self):
+        cases = (
+            (
+                "`design_amendment` is limited to two rounds and requires a "
+                "fits_remodel\nfailure_gap.",
+                "`design_amendment` is limited to five rounds.",
+            ),
+            (
+                "`design_amendment` is limited to two rounds.",
+                "`design_amendment` is limited to five rounds.",
+            ),
+            (
+                "A design amendment is limited to at most 2 rounds.",
+                "A design amendment is limited to at most 5 rounds.",
+            ),
+        )
+        for legacy, expected in cases:
+            with self.subTest(legacy=legacy), mock.patch.object(
+                prompts.contracts, "prompt_contract", return_value=legacy
+            ):
+                self.assertEqual(
+                    prompts._modern_contract(contracts.KIND_FIX_FINDINGS),
+                    expected,
+                )
 
     def test_unresolved_consultation_retries_never_concedes(self):
         # An unresolved dispute is a transient CALL failure, not evidence

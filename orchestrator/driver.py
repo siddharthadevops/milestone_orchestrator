@@ -185,7 +185,10 @@ DEFAULT_CONFIG = {
     # New runs calibrate the skeleton's declared guarantees once, before its
     # ordinary review cycle. Persisted runs created before this key existed
     # continue without inserting a new stage into their chronology.
-    "guarantee_calibration": {"enabled": True, "max_rounds": 2},
+    "guarantee_calibration": {
+        "enabled": True,
+        "max_rounds": 5,
+    },
     # New design contradictions use a focused discussion and an ordinary
     # reviewed amendment. Runs whose frozen config predates this flag retain
     # their historical gap/re-documentation recovery semantics.
@@ -2949,10 +2952,13 @@ class Driver(object):
         value = self.config.get("guarantee_calibration")
         if not isinstance(value, dict) or value.get("enabled") is not True:
             return None
-        rounds = value.get("max_rounds", 2)
+        rounds = value.get(
+            "max_rounds",
+            5,
+        )
         if isinstance(rounds, bool) or not isinstance(rounds, int) \
                 or rounds <= 0:
-            rounds = 2
+            rounds = 5
         return {"max_rounds": rounds}
 
     def _start_guarantee_calibration(self, unit):

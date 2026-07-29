@@ -157,6 +157,10 @@ class ServiceApiTest(unittest.TestCase):
         self.assertIn('onclick="newBrainstorming(event,', text)
         self.assertIn("<span>New milestone</span>", text)
         self.assertIn("<span>New brainstorming</span>", text)
+        self.assertIn(
+            'id="b_rounds" type="number" min="1" step="1" value="5"',
+            text,
+        )
         self.assertIn("function openForm(preselect)", text)
         self.assertIn("function selectProjectSlug", text)
         # Brainstorming sessions share the sidebar list with milestones,

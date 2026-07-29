@@ -27,7 +27,7 @@ DESIGN_AMENDMENT_PLACEHOLDER = (
     "amendment that resolves the stated question without changing the goal.\n"
 )
 
-GUARANTEE_CALIBRATION_MAX_ROUNDS = 2
+GUARANTEE_CALIBRATION_MAX_ROUNDS = 5
 GUARANTEE_CALIBRATION_QUESTION = (
     "Does this skeleton declare each guarantee at the right level and within "
     "the right observable scope, no stronger or weaker than its authority "
