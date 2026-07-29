@@ -426,6 +426,37 @@ class RepairAckCutRunner(runners.MockRunner):
             active_control._close()
 
 
+class ProactiveRepairCutRunner(runners.MockRunner):
+    """Repair a malformed sub-threshold draft with a proactive cut."""
+
+    def __init__(self, response):
+        super().__init__([])
+        self.response = response
+        self.controls = []
+
+    def call(self, family, prompt, workspace, model=None, effort=None,
+             timeout_override=None, active_control=None):
+        del timeout_override
+        self.calls.append((family, runners.prompt_kind(prompt), prompt))
+        self.call_meta.append({
+            "family": family,
+            "kind": runners.prompt_kind(prompt),
+            "model": model,
+            "effort": effort,
+        })
+        self.controls.append(active_control)
+        active_control._bind(lambda _text: True, lambda _reason: True)
+        try:
+            LiveControlRunner._write_lines(workspace, 2)
+            if len(self.calls) == 1:
+                return runners.RunnerResult("not json", 0, 0.01)
+            return runners.RunnerResult(
+                json.dumps(self.response), 0, 0.02
+            )
+        finally:
+            active_control._close()
+
+
 class DriverImplementationSizeTest(unittest.TestCase):
     def _ready_driver(self, workspace, runner, size_control=None,
                       git_enabled=True):
@@ -528,7 +559,6 @@ class DriverImplementationSizeTest(unittest.TestCase):
                 "duration_s": 0.02,
                 "pre_snapshot": {
                     "tree": base_tree,
-                    "implementation_cut_authorized": False,
                 },
             },
         }
@@ -1111,7 +1141,7 @@ class DriverImplementationSizeTest(unittest.TestCase):
             self.assertTrue(interrupted)
             self.assertGreaterEqual(interrupted[-1]["lines"], 8)
 
-    def test_delivered_soft_steer_authorizes_part_a_cut(self):
+    def test_delivered_soft_steer_records_metrics_on_part_a_cut(self):
         with tempfile.TemporaryDirectory(prefix="orch-size-steer-") as ws:
             runner = LiveControlRunner("steer", self._cut_response())
             path, driver, _unit = self._ready_driver(
@@ -1136,54 +1166,33 @@ class DriverImplementationSizeTest(unittest.TestCase):
             subject = gitops._run(ws, "log", "-1", "--format=%s").stdout.strip()
             self.assertEqual(subject, "wip: slice_impl-01-a")
 
-    def test_spontaneous_cut_without_a_live_steer_fails_the_run(self):
-        with tempfile.TemporaryDirectory(prefix="orch-size-reject-") as ws:
+    def test_proactive_cut_without_a_live_steer_opens_part_a(self):
+        with tempfile.TemporaryDirectory(prefix="orch-size-proactive-") as ws:
             runner = LiveControlRunner("normal", self._cut_response())
             path, driver, _unit = self._ready_driver(ws, runner)
 
             action, note = driver.step()
 
             self.assertEqual(action.type, drv.A_DRAFT)
-            self.assertIn("unauthorized implementation cut", note)
+            self.assertIn("drafted", note)
             state = st.load(path)
-            self.assertEqual(state["milestone"]["status"], st.M_FAILED)
-            self.assertEqual(state["failure"]["type"], "worker_protocol")
-            self.assertIn("without a delivered live size steer",
-                          state["failure"]["reason"])
+            self.assertIsNone(state["failure"])
+            unit = st.current_unit(state)
+            self.assertEqual(unit["status"], st.U_PRE_REVIEW_VERIFY)
+            self.assertEqual(st.display_unit_key(unit), "slice_impl-01-a")
+            self.assertEqual(unit["implementation_cut"]["part"], "a")
+            self.assertNotIn("steer_lines", unit["implementation_cut"])
+            self.assertFalse(any(
+                event["type"] == "implementation_size_steer"
+                for event in state["events"]
+            ))
+            subject = gitops._run(
+                ws, "log", "-1", "--format=%s"
+            ).stdout.strip()
+            self.assertEqual(subject, "wip: slice_impl-01-a")
 
-    def test_rethink_resume_cannot_invent_a_cut_without_origin_authority(self):
-        with tempfile.TemporaryDirectory(prefix="orch-size-rethink-no-") as ws:
-            _path, driver, _unit = self._ready_driver(
-                ws, runners.MockRunner([]), git_enabled=False
-            )
-            output = self._cut_response()
-            result = runners.RunnerResult(json.dumps(output), 0, 0.02)
-            result.origin_family = "codex"
-            result.origin_model = "gpt-5.6-sol"
-            result.origin_effort = "max"
-            result.origin_pre_snapshot = {
-                "implementation_cut_authorized": False,
-            }
-
-            with mock.patch.object(
-                driver, "_baseline_verification_current", return_value=True
-            ), mock.patch.object(
-                driver,
-                "_take_brainstorming_resume",
-                return_value=(output, result, "raw/resumed.txt"),
-            ):
-                with self.assertRaisesRegex(
-                    drv.StopStep, "unauthorized implementation cut"
-                ):
-                    driver._do_draft()
-
-            self.assertEqual(driver.state["milestone"]["status"], st.M_FAILED)
-            self.assertEqual(
-                driver.state["failure"]["type"], "worker_protocol"
-            )
-
-    def test_rethink_resume_preserves_origin_cut_authority(self):
-        with tempfile.TemporaryDirectory(prefix="orch-size-rethink-yes-") as ws:
+    def test_rethink_resume_may_return_a_proactive_cut(self):
+        with tempfile.TemporaryDirectory(prefix="orch-size-rethink-") as ws:
             _path, driver, unit = self._ready_driver(
                 ws, runners.MockRunner([]), git_enabled=False
             )
@@ -1192,9 +1201,7 @@ class DriverImplementationSizeTest(unittest.TestCase):
             result.origin_family = "codex"
             result.origin_model = "gpt-5.6-sol"
             result.origin_effort = "max"
-            result.origin_pre_snapshot = {
-                "implementation_cut_authorized": True,
-            }
+            result.origin_pre_snapshot = {}
 
             with mock.patch.object(
                 driver, "_baseline_verification_current", return_value=True
@@ -1216,6 +1223,29 @@ class DriverImplementationSizeTest(unittest.TestCase):
                 "remaining wiring",
             )
             self.assertIsNotNone(unit["draft"])
+
+    def test_contract_repair_may_return_a_proactive_cut(self):
+        with tempfile.TemporaryDirectory(prefix="orch-size-repair-") as ws:
+            runner = ProactiveRepairCutRunner(self._cut_response())
+            path, driver, _unit = self._ready_driver(ws, runner)
+
+            action, _note = driver.step()
+
+            self.assertEqual(action.type, drv.A_DRAFT)
+            state = st.load(path)
+            self.assertIsNone(state["failure"])
+            unit = st.current_unit(state)
+            self.assertEqual(st.display_unit_key(unit), "slice_impl-01-a")
+            self.assertEqual(
+                unit["implementation_cut"]["cut_scope"], "coherent core"
+            )
+            self.assertEqual(len(runner.calls), 2)
+            self.assertTrue(all(control is not None
+                                for control in runner.controls))
+            self.assertFalse(any(
+                event["type"] == "implementation_size_steer"
+                for event in state["events"]
+            ))
 
     def test_hard_interruption_runs_stabilizer_and_records_metrics(self):
         with tempfile.TemporaryDirectory(prefix="orch-size-hard-") as ws:
@@ -1335,7 +1365,7 @@ class DriverImplementationSizeTest(unittest.TestCase):
                 runner.interrupt_at - runner.confirmed_at, 0.06
             )
 
-    def test_late_ack_authorizes_cut_after_codex_steer_rpc_timeout(self):
+    def test_late_ack_records_cut_after_codex_steer_rpc_timeout(self):
         with tempfile.TemporaryDirectory(prefix="orch-size-ack-timeout-") \
                 as ws:
             runner = TimedOutSteerConfirmedRunner(self._cut_response())
@@ -1366,7 +1396,7 @@ class DriverImplementationSizeTest(unittest.TestCase):
                 "the timed-out RPC itself did not report delivery",
             )
 
-    def test_repair_ack_is_visible_to_original_control_and_authorizes_cut(self):
+    def test_repair_ack_is_visible_to_original_control_and_cut(self):
         with tempfile.TemporaryDirectory(prefix="orch-size-repair-ack-") as ws:
             runner = RepairAckCutRunner(self._cut_response())
             path, driver, _unit = self._ready_driver(
@@ -1596,8 +1626,8 @@ class DriverImplementationSizeTest(unittest.TestCase):
             )
             self.assertNotIn("reduce the current reviewable Git delta",
                              runner.calls[1][2])
-            self.assertNotIn("near 1,000 Git lines", runner.calls[1][2])
-            self.assertNotIn("force everything into this delivery",
+            self.assertNotIn("below approximately 750", runner.calls[1][2])
+            self.assertNotIn("Do not compress, omit, distort",
                              runner.calls[1][2])
             self.assertNotIn("Observed reviewable Git lines",
                              runner.calls[1][2])
@@ -2101,7 +2131,7 @@ class DriverImplementationSizeTest(unittest.TestCase):
                 "codex-thread-7",
             )
 
-    def test_brainstorming_soft_steer_cut_keeps_authority_and_metrics_on_resume(
+    def test_brainstorming_soft_steer_cut_keeps_metrics_on_resume(
         self,
     ):
         with tempfile.TemporaryDirectory(prefix="orch-size-brain-cut-") as ws:
@@ -2135,7 +2165,7 @@ class DriverImplementationSizeTest(unittest.TestCase):
             self.assertEqual(wait_action.type, drv.A_BRAINSTORM_WAIT)
 
             resume_pre = unit["brainstorming_resume"]["pre_snapshot"]
-            self.assertTrue(resume_pre["implementation_cut_authorized"])
+            self.assertNotIn("implementation_cut_authorized", resume_pre)
             self.assertFalse(resume_pre["implementation_stabilized"])
             self.assertTrue(
                 resume_pre["implementation_size"]["steer_delivered"]

@@ -133,16 +133,18 @@ enable `git.enabled` by default — the full gate/amend/delta-review
 discipline described above; pass `{"git": {"enabled": false}}` in the
 advanced config for a deliberate pure-state run.
 
-Git-enabled implementation calls also keep reviews bounded. At 1,000
-reviewable changed lines the active worker is asked to finish one coherent
-functional cut and to acknowledge that request explicitly. Crossing 1,500
-starts a three-minute grace; a real model acknowledgement extends it to ten
-minutes. Transport acceptance alone is not an acknowledgement. During the
-grace the delta is not judged again. On expiry, a fresh worker closes the work
-already in progress as a coherent delivery. Stabilization has no further size
-cutoff and never rewrites sound work merely to hit a number. A malformed
-stabilizer handoff starts another fresh stabilization instead of failing the
-run. The meter is additions plus deletions from the fixed
+Git-enabled implementation calls also keep reviews bounded. Implementers aim
+to close coherent sequential units below approximately 750 reviewable changed
+lines and may proactively return a cut whenever original slice work remains.
+At 1,000 lines the active worker receives a mandatory close instruction and
+must acknowledge it explicitly. Crossing 1,500 starts a three-minute grace; a
+real model acknowledgement extends it to ten minutes. Transport acceptance
+alone is not an acknowledgement. During the grace the delta is not judged
+again. On expiry, a fresh worker closes the work already in progress as a
+coherent delivery. Stabilization has no further size cutoff and never rewrites
+sound work merely to hit a number. A malformed stabilizer handoff starts
+another fresh stabilization instead of failing the run. The meter is
+additions plus deletions from the fixed
 pre-call Git tree, including non-ignored untracked files and excluding
 Markdown, text, and runtime bookkeeping. A cut becomes part `a`, completes
 its own commit and ordinary review cycle, and only then opens part `b`; later

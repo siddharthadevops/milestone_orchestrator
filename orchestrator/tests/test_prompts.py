@@ -1290,8 +1290,12 @@ class TestVerificationProtocol(unittest.TestCase):
         self.assertIn("exact candidate bytes and commands still matched",
                       prompt)
         self.assertIn("after every configured reviewer is clean", prompt)
-        self.assertIn("near 1,000 Git lines", prompt)
-        self.assertIn("open the next part automatically", prompt)
+        self.assertIn("below approximately 750", prompt)
+        self.assertIn("Do not compress, omit, distort, or reimplement", prompt)
+        self.assertIn("return `implementation_cut`", prompt)
+        self.assertIn("Include `implementation_cut` proactively", prompt)
+        self.assertIn("before opening the next part", prompt)
+        self.assertIn("reaches 1,000 reviewable Git lines", prompt)
         self.assertIn("Report the repo's official full-suite command",
                       prompt)
         self.assertIn("your suite_command will arm the final boundary", prompt)

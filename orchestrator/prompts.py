@@ -454,11 +454,17 @@ SLICE_SIZING_LINE = (
 )
 
 IMPLEMENTATION_SIZE_GUIDANCE = (
-    "Keep the current reviewable code delivery near 1,000 Git lines.\n"
-    "If the remaining obligations are larger, do not compress or\n"
-    "reimplement them to force everything into this delivery: the driver\n"
-    "can close the current coherent work as one sequential part, complete\n"
-    "its commit and reviews, and then open the next part automatically.\n"
+    "Split the slice into coherent sequential implementation units, aiming\n"
+    "where reasonably possible to keep each unit below approximately 750\n"
+    "reviewable Git lines. Do not compress, omit, distort, or reimplement\n"
+    "sound work merely to fit that target.\n"
+    "As you approach it, stop expanding scope and close the current unit in\n"
+    "a coherent, functional, and reviewable state. If original slice work\n"
+    "remains, return `implementation_cut` with concise `cut_scope` and\n"
+    "`remaining_scope`; the driver will finish this unit's commit and full\n"
+    "review cycle before opening the next part. If the slice is complete,\n"
+    "omit `implementation_cut`. A mandatory live close instruction is only\n"
+    "a backstop if the delivery reaches 1,000 reviewable Git lines.\n"
 )
 
 SLICE_NOTE_CONTENT_BLOCK = (

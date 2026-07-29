@@ -207,7 +207,7 @@ def validate_slices(slices, ctx):
 
 
 def validate_implementation_cut(cut, ctx):
-    """Validate the implementer's post-steer coherent-cut account.
+    """Validate the implementer's coherent-cut account.
 
     Labels and sequencing are deliberately absent: the state machine derives
     a/b/c from the current unit, so a worker cannot rename units or insert an
@@ -1214,13 +1214,13 @@ Kind implement adds:
                          "remaining_scope": "<the original slice obligations
                             deliberately delegated to the next sequential
                             implementation part>"}
-   Include `implementation_cut` ONLY after the driver sends its live size
-   steer (or in the stabilizing continuation after a forced cutoff).
-   Omit it when the original slice scope is complete. Both strings must be
-   concrete and non-empty. This field reports the boundary; it does not let
-   you choose labels or create/renumber design slices. The orchestrator derives
-   a/b/c sequentially and opens the next part only after this one completes
-   its full review cycle.
+   Include `implementation_cut` proactively when you close a coherent unit
+   while original slice work remains, or when responding to the driver's live
+   close instruction or forced-cutoff stabilization. Omit it when the original
+   slice scope is complete. Both strings must be concrete and non-empty. This
+   field reports the boundary; it does not let you choose labels or
+   create/renumber design slices. The orchestrator derives a/b/c sequentially
+   and opens the next part only after this one completes its full review cycle.
 
 Kind fix_findings may ALSO include "suite_command" when a queued finding
 identifies a missing, narrowed, or wrong final verification command — whether the

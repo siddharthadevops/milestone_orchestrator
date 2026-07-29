@@ -3555,16 +3555,6 @@ class Driver(object):
                 origin.get("pre_snapshot") or {}
             )
             if kind == contracts.KIND_IMPLEMENT:
-                continued_pre_snapshot["implementation_cut_authorized"] = (
-                    bool(continued_pre_snapshot.get(
-                        "implementation_cut_authorized"
-                    ))
-                    or implementation_stabilized
-                    or bool(
-                        implementation_size
-                        and implementation_size.get("steer_delivered")
-                    )
-                )
                 if (
                     implementation_size
                     and (
@@ -4182,7 +4172,6 @@ class Driver(object):
         resumed = self._take_brainstorming_resume(unit, kind)
         implementation_size = None
         implementation_stabilized = False
-        implementation_cut_resumed_authorized = False
         design_before = None
         if resumed is not None:
             output, result, raw_path = resumed
@@ -4195,9 +4184,6 @@ class Driver(object):
             pre_head = original_pre.get("head")
             pre_tree = original_pre.get("tree")
             pre_stash = original_pre.get("stash")
-            implementation_cut_resumed_authorized = bool(
-                original_pre.get("implementation_cut_authorized")
-            )
             implementation_size = copy.deepcopy(
                 original_pre.get("implementation_size")
             )
@@ -4274,13 +4260,6 @@ class Driver(object):
                     "head": pre_head,
                     "tree": pre_tree,
                     "stash": pre_stash,
-                    "implementation_cut_authorized": bool(
-                        implementation_stabilized
-                        or (
-                            implementation_size
-                            and implementation_size.get("steer_delivered")
-                        )
-                    ),
                     "implementation_size": copy.deepcopy(
                         implementation_size
                     ),
@@ -4321,24 +4300,6 @@ class Driver(object):
         self._check_worker_blocked(unit, output, kind)
         implementation_cut = output.get("implementation_cut")
         if implementation_cut is not None:
-            cut_authorized = bool(
-                implementation_cut_resumed_authorized
-                or implementation_stabilized
-                or (
-                    implementation_size
-                    and implementation_size.get("steer_delivered")
-                )
-            )
-            if not cut_authorized:
-                st.fail_run(
-                    self.state,
-                    "implement returned implementation_cut without a "
-                    "delivered live size steer or cutoff recovery",
-                    unit=unit,
-                    type_="worker_protocol",
-                )
-                self._save()
-                raise StopStep("unauthorized implementation cut")
             st.record_implementation_cut(
                 self.state,
                 unit,
