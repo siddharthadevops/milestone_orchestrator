@@ -104,7 +104,7 @@ class DesignUpdateRethinkTest(unittest.TestCase):
         signal = {
             "status": "need_rethink",
             "kind": kind,
-            "question": "Which in-goal design should govern?",
+            "request": "Choose the in-goal design that should govern.",
             "finding": {"id": "F1", "summary": "the design conflicts"},
             "target_path": "docs/skeleton.md",
             "max_rounds": 5,
@@ -395,7 +395,7 @@ class DesignUpdateRethinkTest(unittest.TestCase):
         anchor["under_repair"] = True
         live_wait = {
             "session_id": "brainstorming-live",
-            "signal": {"question": "keep this discussion"},
+            "signal": {"request": "keep this discussion"},
         }
         anchor["brainstorming_wait"] = live_wait
         note["status"] = st.U_REPAIRING

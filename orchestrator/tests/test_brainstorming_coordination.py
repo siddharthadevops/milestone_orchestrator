@@ -26,12 +26,14 @@ def participants(same_family=False):
         {
             "id": "lead",
             "role": "lead",
+            "delivery": "llm",
             "executor_ref": "codex-lead",
             "model_family": "codex",
         },
         {
             "id": "critic",
             "role": "interlocutor",
+            "delivery": "llm",
             "executor_ref": "claude-critic",
             "model_family": "claude",
         },
@@ -147,9 +149,9 @@ class BrainstormingCoordinationTest(unittest.TestCase):
         request = {
             "workspace_path": workspace,
             "target_path": "docs/decision.md",
-            "question": "Which compatible option should be adopted?",
+            "request": "Choose the compatible option to adopt.",
             "context": {
-                "brief": "Resolve one bounded design question.",
+                "brief": "Resolve one bounded design request.",
                 "references": ["requirements.md"],
                 "source_payload": {"opaque": True},
             },
@@ -160,6 +162,69 @@ class BrainstormingCoordinationTest(unittest.TestCase):
         )
         self.store.transition(session_id, created.revision, "running")
         return target
+
+    def test_dante_closure_prompt_contains_the_proposition_and_prior_votes(self):
+        roster = participants() + [
+            {
+                "id": "dante",
+                "role": "interlocutor",
+                "delivery": "external",
+                "external_ref": "external-dante",
+            }
+        ]
+        request = {
+            "workspace_path": self.root,
+            "target_path": "decision.md",
+            "request": "Choose a practical result.",
+            "context": {"brief": "Keep the decision human-sized."},
+            "max_rounds": 1,
+        }
+        state = bs.new_session_state(
+            request,
+            run_config(roster),
+            os.path.join(self.root, "chat.md"),
+        )
+        intervention = {
+            "token": "dante-closure",
+            "participant_id": "dante",
+            "action_kind": "closure_vote",
+            "completed_turn_count": 3,
+            "round": 1,
+            "target_revision": None,
+            "input": {
+                "request": request["request"],
+                "context": request["context"],
+                "workspace_path": request["workspace_path"],
+                "target_path": request["target_path"],
+                "transcript_ref": state["transcript_ref"],
+            },
+            "created_at": 100.0,
+            "provider_attempt": 0,
+            "provider_quiescent": True,
+            "response": None,
+            "closure_context": {
+                "closing_summary": {
+                    "reason": "Adopt the deliberately small solution.",
+                    "unresolved_objections": [],
+                    "affected_parties": "The project's ordinary users.",
+                    "damage_altitude": "A reversible local inconvenience.",
+                    "proportionality": "No larger machinery is justified.",
+                    "escalation_evidence": None,
+                },
+                "votes": [
+                    {"participant_id": "lead", "vote": "accept"},
+                    {"participant_id": "critic", "vote": "object"},
+                ],
+            },
+        }
+
+        prompt = coordination.build_external_narrator_prompt(
+            state, intervention
+        )
+
+        self.assertIn("Adopt the deliberately small solution.", prompt)
+        self.assertIn('\"participant_id\": \"critic\"', prompt)
+        self.assertIn('\"vote\": \"object\"', prompt)
 
     def _subject(self, roster, scripts, store=None, failure_classifier=None):
         store = store or self.store
@@ -774,8 +839,8 @@ class BrainstormingCoordinationTest(unittest.TestCase):
         request = {
             "workspace_path": linked_workspace,
             "target_path": "docs/decision.md",
-            "question": "Which compatible option should be adopted?",
-            "context": {"brief": "Resolve one bounded design question."},
+            "request": "Choose the compatible option to adopt.",
+            "context": {"brief": "Resolve one bounded design request."},
             "max_rounds": 2,
         }
         created = self.store.create(
@@ -1402,7 +1467,7 @@ class BrainstormingCoordinationTest(unittest.TestCase):
         request = {
             "workspace_path": workspace,
             "target_path": self.store.path,
-            "question": "Should the target overwrite the session authority?",
+            "request": "Decide whether the target may overwrite session authority.",
             "context": {"brief": "Keep target and session state independent."},
             "max_rounds": 1,
         }
@@ -1428,7 +1493,7 @@ class BrainstormingCoordinationTest(unittest.TestCase):
         request = {
             "workspace_path": workspace,
             "target_path": lock_path,
-            "question": "Should the target replace the state lock?",
+            "request": "Decide whether the target may replace the state lock.",
             "context": {"brief": "Keep target and session locking independent."},
             "max_rounds": 1,
         }
@@ -1459,7 +1524,7 @@ class BrainstormingCoordinationTest(unittest.TestCase):
         request = {
             "workspace_path": workspace,
             "target_path": reserved_lock,
-            "question": "Should a target replace a coordination lock?",
+            "request": "Decide whether a target may replace a coordination lock.",
             "context": {
                 "brief": "Keep target artifacts separate from control locks."
             },

@@ -33,6 +33,7 @@ STATUSES = ("created", "running", "success", "failure")
 TERMINAL_STATUSES = ("success", "failure")
 CLOSURE_POLICIES = ("unanimity", "majority_with_lead_tiebreak")
 ROLES = ("lead", "interlocutor")
+DELIVERIES = ("llm", "external")
 TRANSCRIPT_EVENT_KINDS = ("material_interruption", "closure_ballot")
 TRANSCRIPT_FORMAT_VERSION = 1
 
@@ -45,6 +46,7 @@ _ALLOWED_TRANSITIONS = {
 _SESSION_KEY_PREFIX = "brainstorming/session:"
 _TARGET_REVISION_KEY_PREFIX = "brainstorming/target_revision:"
 _TURN_ATTEMPT_KEY_PREFIX = "brainstorming/turn_attempt:"
+_EXTERNAL_INTERVENTION_KEY_PREFIX = "brainstorming/external_intervention:"
 _ACTIVITY_KEY_PREFIX = "brainstorming/activity:"
 _TARGET_REVISION_ID_PREFIX = "brainstorming-sha256:"
 _TARGET_REVISION_ID_RE = re.compile(
@@ -438,6 +440,207 @@ def target_revision_mode(target_revision):
     return validate_target_revision(target_revision)["mode"]
 
 
+def validate_external_intervention(intervention):
+    """Validate one durable request for a response outside worker control."""
+    _exact_keys(
+        intervention,
+        (
+            "token",
+            "participant_id",
+            "action_kind",
+            "completed_turn_count",
+            "round",
+            "target_revision",
+            "input",
+            "created_at",
+            "provider_attempt",
+            "provider_quiescent",
+            "response",
+        ),
+        ("closure_context",),
+        "external_intervention",
+    )
+    checked = {
+        "token": _text(
+            intervention["token"], "external_intervention.token"
+        ),
+        "participant_id": _text(
+            intervention["participant_id"],
+            "external_intervention.participant_id",
+        ),
+        "action_kind": intervention["action_kind"],
+        "completed_turn_count": intervention["completed_turn_count"],
+        "round": intervention["round"],
+        "target_revision": (
+            None
+            if intervention["target_revision"] is None
+            else validate_target_revision_id(
+                intervention["target_revision"]
+            )
+        ),
+        "created_at": intervention["created_at"],
+        "provider_attempt": intervention["provider_attempt"],
+        "provider_quiescent": intervention["provider_quiescent"],
+        "response": None,
+    }
+    if checked["action_kind"] not in ("discussion_turn", "closure_vote"):
+        raise ContractError("external_intervention.action_kind is invalid")
+    for field in ("completed_turn_count", "provider_attempt"):
+        value = checked[field]
+        if type(value) is not int or value < 0:
+            raise ContractError(
+                "external_intervention.%s must be a non-negative integer"
+                % field
+            )
+    if not isinstance(checked["provider_quiescent"], bool):
+        raise ContractError(
+            "external_intervention.provider_quiescent must be boolean"
+        )
+    if (
+        checked["provider_attempt"] == 0
+        and not checked["provider_quiescent"]
+    ):
+        raise ContractError(
+            "an unclaimed external provider must be quiescent"
+        )
+    if type(checked["round"]) is not int or checked["round"] <= 0:
+        raise ContractError(
+            "external_intervention.round must be a positive integer"
+        )
+    if (
+        isinstance(checked["created_at"], bool)
+        or not isinstance(checked["created_at"], (int, float))
+        or not math.isfinite(float(checked["created_at"]))
+        or float(checked["created_at"]) <= 0
+    ):
+        raise ContractError(
+            "external_intervention.created_at must be a positive finite number"
+        )
+    checked["created_at"] = float(checked["created_at"])
+
+    supplied = intervention["input"]
+    _exact_keys(
+        supplied,
+        (
+            "request",
+            "context",
+            "workspace_path",
+            "target_path",
+            "transcript_ref",
+        ),
+        (),
+        "external_intervention.input",
+    )
+    checked["input"] = {
+        "request": _text(
+            supplied["request"], "external_intervention.input.request"
+        ),
+        "context": _json_copy(
+            supplied["context"], "external_intervention.input.context"
+        ),
+        "workspace_path": _text(
+            supplied["workspace_path"],
+            "external_intervention.input.workspace_path",
+        ),
+        "target_path": _text(
+            supplied["target_path"],
+            "external_intervention.input.target_path",
+        ),
+        "transcript_ref": validate_transcript_ref(
+            supplied["transcript_ref"]
+        ),
+    }
+
+    closure_context = intervention.get("closure_context")
+    if checked["action_kind"] == "closure_vote":
+        _exact_keys(
+            closure_context,
+            ("closing_summary", "votes"),
+            (),
+            "external_intervention.closure_context",
+        )
+        summary = validate_closing_summary_shape(
+            closure_context["closing_summary"]
+        )
+        votes = closure_context["votes"]
+        if not isinstance(votes, list) or not votes:
+            raise ContractError(
+                "external_intervention.closure_context.votes must be non-empty"
+            )
+        checked_votes = []
+        for index, vote in enumerate(votes):
+            ctx = "external_intervention.closure_context.votes[%d]" % index
+            _exact_keys(vote, ("participant_id", "vote"), (), ctx)
+            participant_id = _text(vote["participant_id"], "%s.participant_id" % ctx)
+            if vote["vote"] not in ("accept", "object"):
+                raise ContractError("%s.vote must be accept or object" % ctx)
+            checked_votes.append(
+                {"participant_id": participant_id, "vote": vote["vote"]}
+            )
+        checked["closure_context"] = {
+            "closing_summary": summary,
+            "votes": checked_votes,
+        }
+    elif closure_context is not None:
+        raise ContractError(
+            "discussion interventions cannot carry closure_context"
+        )
+
+    response = intervention["response"]
+    if response is not None:
+        if not checked["provider_quiescent"]:
+            raise ContractError(
+                "an answered external intervention must be quiescent"
+            )
+        _exact_keys(
+            response,
+            ("received_at", "payload"),
+            (),
+            "external_intervention.response",
+        )
+        received_at = response["received_at"]
+        if (
+            isinstance(received_at, bool)
+            or not isinstance(received_at, (int, float))
+            or not math.isfinite(float(received_at))
+            or float(received_at) <= 0
+        ):
+            raise ContractError(
+                "external_intervention.response.received_at must be positive"
+            )
+        payload = response["payload"]
+        if checked["action_kind"] == "discussion_turn":
+            _exact_keys(
+                payload,
+                ("markdown",),
+                (),
+                "external_intervention.response.payload",
+            )
+            payload = {
+                "markdown": _text(
+                    payload["markdown"],
+                    "external_intervention.response.payload.markdown",
+                )
+            }
+        else:
+            _exact_keys(
+                payload,
+                ("vote",),
+                (),
+                "external_intervention.response.payload",
+            )
+            if payload["vote"] not in ("accept", "object"):
+                raise ContractError(
+                    "external_intervention.response.payload.vote is invalid"
+                )
+            payload = {"vote": payload["vote"]}
+        checked["response"] = {
+            "received_at": float(received_at),
+            "payload": payload,
+        }
+    return checked
+
+
 def validate_turn_attempt(turn_attempt):
     """Validate crash-surviving control state for one exclusive worker."""
     _exact_keys(
@@ -784,24 +987,48 @@ def validate_activity_log(activity):
 
 
 def _validate_participant(participant, ctx):
-    _exact_keys(
-        participant,
-        ("id", "role", "executor_ref", "model_family"),
-        (),
-        ctx,
-    )
+    _object(participant, ctx)
+    delivery = participant.get("delivery")
+    if delivery == "llm":
+        _exact_keys(
+            participant,
+            ("id", "role", "delivery", "executor_ref", "model_family"),
+            (),
+            ctx,
+        )
+    elif delivery == "external":
+        _exact_keys(
+            participant,
+            ("id", "role", "delivery", "external_ref"),
+            (),
+            ctx,
+        )
+    else:
+        raise ContractError("%s.delivery must be one of %s" % (ctx, DELIVERIES))
     checked = {
         "id": _text(participant["id"], "%s.id" % ctx),
         "role": participant["role"],
-        "executor_ref": _text(
-            participant["executor_ref"], "%s.executor_ref" % ctx
-        ),
-        "model_family": _text(
-            participant["model_family"], "%s.model_family" % ctx
-        ),
+        "delivery": delivery,
     }
+    if delivery == "llm":
+        checked.update(
+            {
+                "executor_ref": _text(
+                    participant["executor_ref"], "%s.executor_ref" % ctx
+                ),
+                "model_family": _text(
+                    participant["model_family"], "%s.model_family" % ctx
+                ),
+            }
+        )
+    else:
+        checked["external_ref"] = _text(
+            participant["external_ref"], "%s.external_ref" % ctx
+        )
     if checked["role"] not in ROLES:
         raise ContractError("%s.role must be one of %s" % (ctx, ROLES))
+    if delivery == "external" and checked["role"] == "lead":
+        raise ContractError("an external participant cannot own the target")
     return checked
 
 
@@ -809,11 +1036,11 @@ def validate_request(request):
     """Validate and return a detached JSON-compatible request copy."""
     _exact_keys(
         request,
-        ("workspace_path", "target_path", "question", "context", "max_rounds"),
+        ("workspace_path", "target_path", "request", "context", "max_rounds"),
         (),
         "request",
     )
-    for key in ("workspace_path", "target_path", "question"):
+    for key in ("workspace_path", "target_path", "request"):
         _text(request[key], "request.%s" % key)
     if type(request["max_rounds"]) is not int or request["max_rounds"] <= 0:
         raise ContractError("request.max_rounds must be a positive integer")
@@ -860,7 +1087,8 @@ def validate_run_config(run_config):
         role = checked["role"]
         lead_count += role == "lead"
         interlocutor_count += role == "interlocutor"
-        families.add(checked["model_family"])
+        if checked["delivery"] == "llm":
+            families.add(checked["model_family"])
 
     if lead_count != 1:
         raise ContractError("run_config must contain exactly one lead")
@@ -899,7 +1127,12 @@ def validate_participant_sessions(participant_sessions, run_config):
     seen = set()
     for participant_id, session_ref in participant_sessions.items():
         _text(session_ref, "participant_sessions.%s" % participant_id)
-        executor_ref = participants[participant_id]["executor_ref"]
+        participant = participants[participant_id]
+        executor_ref = (
+            participant["executor_ref"]
+            if participant["delivery"] == "llm"
+            else participant["external_ref"]
+        )
         prefix = executor_ref + ":"
         if (
             not session_ref.startswith(prefix)
@@ -1065,9 +1298,13 @@ def _validate_eligible_participants(eligible_participants):
 
 
 def _cross_family_roster_available(eligible, interlocutor_count):
-    leads = [item for item in eligible if item["role"] == "lead"]
+    leads = [
+        item for item in eligible
+        if item["role"] == "lead" and item["delivery"] == "llm"
+    ]
     interlocutors = [
-        item for item in eligible if item["role"] == "interlocutor"
+        item for item in eligible
+        if item["role"] == "interlocutor" and item["delivery"] == "llm"
     ]
     for lead in leads:
         available_ids = {
@@ -1092,6 +1329,7 @@ def resolve_run_config(participants, closure_policy, eligible_participants):
         for participant in participants
         if (
             isinstance(participant, dict)
+            and participant.get("delivery") == "llm"
             and isinstance(participant.get("model_family"), str)
         )
     } if isinstance(participants, list) else set()
@@ -1116,6 +1354,7 @@ def resolve_run_config(participants, closure_policy, eligible_participants):
             eligible,
             sum(
                 item["role"] == "interlocutor"
+                and item["delivery"] == "llm"
                 for item in checked["participants"]
             ),
         )
@@ -2078,8 +2317,16 @@ def assert_transcript_event_successor(old_state, new_state, kind, fact):
 def _human_labels(run_config):
     labels = {}
     interlocutor = 0
+    external = 0
     for participant in run_config["participants"]:
-        if participant["role"] == "lead":
+        if participant["delivery"] == "external":
+            external += 1
+            labels[participant["id"]] = (
+                "Dante"
+                if participant["id"].lower() == "dante"
+                else "External participant %d" % external
+            )
+        elif participant["role"] == "lead":
             labels[participant["id"]] = "Lead"
         else:
             interlocutor += 1
@@ -2118,18 +2365,19 @@ def _render_opening(state, labels):
     roster = []
     for participant in state["run_config"]["participants"]:
         label = labels[participant["id"]]
-        role = (
-            "leads the session"
-            if participant["role"] == "lead"
-            else "participates as an interlocutor"
-        )
+        if participant["delivery"] == "external":
+            role = "contributes through an external intervention"
+        elif participant["role"] == "lead":
+            role = "leads the session"
+        else:
+            role = "participates as an interlocutor"
         roster.append("- **%s** — %s." % (label, role))
     rounds = state["request"]["max_rounds"]
     return _entry(
         "Opening",
         _field(
-            "What is being discussed",
-            _quoted_markdown(state["request"]["question"]),
+            "Requested outcome",
+            _quoted_markdown(state["request"]["request"]),
         ),
         _field(
             "Why this discussion is needed",
@@ -2320,6 +2568,12 @@ def _turn_attempt_key(session_id):
     )
 
 
+def _external_intervention_key(session_id):
+    return _EXTERNAL_INTERVENTION_KEY_PREFIX + kvstore.validate_fragment(
+        session_id, "session_id"
+    )
+
+
 def _activity_key(session_id):
     return _ACTIVITY_KEY_PREFIX + kvstore.validate_fragment(
         session_id, "session_id"
@@ -2496,6 +2750,381 @@ class SessionStore:
                 "retained target revision has the wrong identifier"
             )
         return checked
+
+    def read_external_intervention(self, session_id):
+        """Read the one ordered external response request, if present."""
+        record = self._store.read(_external_intervention_key(session_id))
+        if not record["exists?"]:
+            return None
+        return validate_external_intervention(record["value"])
+
+    def publish_external_intervention(self, session_id, intervention):
+        """Publish an external turn only for the exact durable next action."""
+        checked = validate_external_intervention(intervention)
+        if (
+            checked["provider_attempt"] != 0
+            or not checked["provider_quiescent"]
+            or checked["response"] is not None
+        ):
+            raise ContractError(
+                "a new external intervention must be unanswered and unclaimed"
+            )
+        snapshot = self.read(session_id)
+        if snapshot is None:
+            raise SessionNotFound(session_id)
+        if snapshot.state["status"] != "running":
+            raise IllegalTransition(
+                "external interventions require a running session"
+            )
+        projection = coordination_projection(snapshot.state)
+        if projection is None:
+            raise HistoryRewriteError(
+                "external intervention requires initialized coordination"
+            )
+        participants = snapshot.state["run_config"]["participants"]
+        participant = next(
+            (
+                item
+                for item in participants
+                if item["id"] == checked["participant_id"]
+            ),
+            None,
+        )
+        if participant is None or participant["delivery"] != "external":
+            raise HistoryRewriteError(
+                "external intervention participant is not an external seat"
+            )
+        turns = projection["completed_turns"]
+        if checked["action_kind"] == "discussion_turn":
+            expected = participants[len(turns) % len(participants)]
+            expected_round = len(turns) // len(participants) + 1
+            valid_action = (
+                expected["id"] == checked["participant_id"]
+                and checked["round"] == expected_round
+            )
+        else:
+            valid_action = (
+                bool(turns)
+                and len(turns) == projection["rounds_used"] * len(participants)
+                and checked["round"] == projection["rounds_used"]
+                and not any(
+                    event["kind"] == "closure_ballot"
+                    and event["fact"]["after_completed_rounds"]
+                    == projection["rounds_used"]
+                    for event in snapshot.state["transcript_events"]
+                )
+            )
+        request = snapshot.state["request"]
+        expected_input = {
+            "request": request["request"],
+            "context": request["context"],
+            "workspace_path": request["workspace_path"],
+            "target_path": request["target_path"],
+            "transcript_ref": snapshot.state["transcript_ref"],
+        }
+        if (
+            not valid_action
+            or checked["completed_turn_count"] != len(turns)
+            or checked["target_revision"]
+            != projection["accepted_target_revision"]
+            or not _same_json_value(checked["input"], expected_input)
+        ):
+            raise HistoryRewriteError(
+                "external intervention does not match durable accepted progress"
+            )
+        if self.read_turn_attempt(session_id) is not None:
+            raise HistoryRewriteError(
+                "external intervention cannot overlap a worker attempt"
+            )
+        key = _external_intervention_key(session_id)
+        current = self._store.read(key)
+        if current["exists?"]:
+            raise HistoryRewriteError(
+                "an external intervention is already pending"
+            )
+        result = self._store.cas(key, current["revision"], checked)
+        if not result.ok:
+            raise HistoryRewriteError(
+                "an external intervention is already pending"
+            )
+        return validate_external_intervention(result.record["value"])
+
+    def advance_external_intervention(
+        self, session_id, consumed_token, intervention
+    ):
+        """Atomically carry one external closure vote into the next seat."""
+        consumed_token = _text(
+            consumed_token, "external_intervention.token"
+        )
+        checked = validate_external_intervention(intervention)
+        if (
+            checked["action_kind"] != "closure_vote"
+            or checked["provider_attempt"] != 0
+            or not checked["provider_quiescent"]
+            or checked["response"] is not None
+        ):
+            raise ContractError(
+                "the next external closure intervention must be unclaimed"
+            )
+        key = _external_intervention_key(session_id)
+        current = self._store.read(key)
+        if not current["exists?"]:
+            raise HistoryRewriteError("external intervention is missing")
+        prior = validate_external_intervention(current["value"])
+        if prior["token"] != consumed_token:
+            raise HistoryRewriteError("external intervention token changed")
+        if (
+            prior["action_kind"] != "closure_vote"
+            or prior["response"] is None
+            or not prior["provider_quiescent"]
+        ):
+            raise HistoryRewriteError(
+                "only an answered closure intervention can advance"
+            )
+        for field in (
+            "action_kind",
+            "completed_turn_count",
+            "round",
+            "target_revision",
+            "input",
+        ):
+            if not _same_json_value(prior[field], checked[field]):
+                raise HistoryRewriteError(
+                    "advanced external closure changed %s" % field
+                )
+        if not _same_json_value(
+            prior["closure_context"]["closing_summary"],
+            checked["closure_context"]["closing_summary"],
+        ):
+            raise HistoryRewriteError(
+                "advanced external closure changed its closing summary"
+            )
+
+        snapshot = self.read(session_id)
+        if snapshot is None or snapshot.state["status"] != "running":
+            raise HistoryRewriteError(
+                "external intervention no longer belongs to a running session"
+            )
+        participants = snapshot.state["run_config"]["participants"]
+        positions = {item["id"]: index for index, item in enumerate(participants)}
+        old_index = positions.get(prior["participant_id"])
+        new_index = positions.get(checked["participant_id"])
+        if (
+            old_index is None
+            or new_index is None
+            or new_index <= old_index
+            or participants[new_index]["delivery"] != "external"
+        ):
+            raise HistoryRewriteError(
+                "advanced external closure does not select a later external seat"
+            )
+
+        def expected_vote_ids(before_index):
+            included = {
+                item["id"]
+                for index, item in enumerate(participants)
+                if item["role"] == "lead"
+                or (item["role"] == "interlocutor" and index < before_index)
+            }
+            return [
+                item["id"] for item in participants if item["id"] in included
+            ]
+
+        prior_votes = prior["closure_context"]["votes"]
+        next_votes = checked["closure_context"]["votes"]
+        if (
+            [item["participant_id"] for item in prior_votes]
+            != expected_vote_ids(old_index)
+            or [item["participant_id"] for item in next_votes]
+            != expected_vote_ids(new_index)
+        ):
+            raise HistoryRewriteError(
+                "advanced external closure has an invalid vote prefix"
+            )
+        next_by_id = {
+            item["participant_id"]: item["vote"] for item in next_votes
+        }
+        if any(
+            next_by_id.get(item["participant_id"]) != item["vote"]
+            for item in prior_votes
+        ) or next_by_id.get(prior["participant_id"]) != prior["response"][
+            "payload"
+        ]["vote"]:
+            raise HistoryRewriteError(
+                "advanced external closure did not retain the consumed vote"
+            )
+        if self.read_turn_attempt(session_id) is not None:
+            raise HistoryRewriteError(
+                "external intervention cannot overlap a worker attempt"
+            )
+        result = self._store.cas(key, current["revision"], checked)
+        if not result.ok:
+            raise HistoryRewriteError(
+                "external intervention changed before advancing"
+            )
+        return validate_external_intervention(result.record["value"])
+
+    def claim_external_intervention(self, session_id, token):
+        """Record one automatic provider attempt before invoking it."""
+        token = _text(token, "external_intervention.token")
+        key = _external_intervention_key(session_id)
+        current = self._store.read(key)
+        if not current["exists?"]:
+            raise HistoryRewriteError("external intervention is missing")
+        intervention = validate_external_intervention(current["value"])
+        if intervention["token"] != token:
+            raise HistoryRewriteError("external intervention token changed")
+        if intervention["response"] is not None:
+            raise HistoryRewriteError("external intervention is already answered")
+        if not intervention["provider_quiescent"]:
+            raise HistoryRewriteError(
+                "the prior external provider attempt is not confirmed finished"
+            )
+        intervention["provider_attempt"] += 1
+        intervention["provider_quiescent"] = False
+        result = self._store.cas(key, current["revision"], intervention)
+        if not result.ok:
+            raise HistoryRewriteError(
+                "external intervention changed before provider claim"
+            )
+        return validate_external_intervention(result.record["value"])
+
+    def mark_external_provider_quiescent(self, session_id, token):
+        """Record that one claimed automatic provider can no longer act."""
+        token = _text(token, "external_intervention.token")
+        key = _external_intervention_key(session_id)
+        current = self._store.read(key)
+        if not current["exists?"]:
+            raise HistoryRewriteError("external intervention is missing")
+        intervention = validate_external_intervention(current["value"])
+        if intervention["token"] != token:
+            raise HistoryRewriteError("external intervention token changed")
+        if intervention["response"] is not None:
+            raise HistoryRewriteError("external intervention is already answered")
+        if intervention["provider_quiescent"]:
+            return intervention
+        intervention["provider_quiescent"] = True
+        result = self._store.cas(key, current["revision"], intervention)
+        if not result.ok:
+            raise HistoryRewriteError(
+                "external intervention changed before provider quiescence"
+            )
+        return validate_external_intervention(result.record["value"])
+
+    def retry_external_provider(self, session_id, token):
+        """Start one repair after the prior provider call became quiescent."""
+        token = _text(token, "external_intervention.token")
+        key = _external_intervention_key(session_id)
+        current = self._store.read(key)
+        if not current["exists?"]:
+            raise HistoryRewriteError("external intervention is missing")
+        intervention = validate_external_intervention(current["value"])
+        if intervention["token"] != token:
+            raise HistoryRewriteError("external intervention token changed")
+        if intervention["response"] is not None:
+            raise HistoryRewriteError("external intervention is already answered")
+        if intervention["provider_quiescent"]:
+            raise HistoryRewriteError(
+                "external provider repair has no active prior attempt"
+            )
+        intervention["provider_attempt"] += 1
+        result = self._store.cas(key, current["revision"], intervention)
+        if not result.ok:
+            raise HistoryRewriteError(
+                "external intervention changed before provider repair"
+            )
+        return validate_external_intervention(result.record["value"])
+
+    def _deliver_external_response(
+        self, session_id, token, payload, automatic
+    ):
+        token = _text(token, "external_intervention.token")
+        payload = _json_copy(payload, "external intervention response")
+        session_key = _session_key(session_id)
+        intervention_key = _external_intervention_key(session_id)
+
+        def deliver(document):
+            session_raw = self._store._raw_from_doc(document, session_key)
+            session_public = self._store._public_from_raw(session_raw)
+            if (
+                not session_public["exists?"]
+                or validate_session_state(session_public["value"])["status"]
+                != "running"
+            ):
+                return (False, "session is no longer running"), False
+            raw = self._store._raw_from_doc(document, intervention_key)
+            public = self._store._public_from_raw(raw)
+            if not public["exists?"]:
+                return (False, "external intervention is missing"), False
+            intervention = validate_external_intervention(public["value"])
+            if intervention["token"] != token:
+                return (False, "external intervention token changed"), False
+            if intervention["response"] is not None:
+                return (False, "external intervention is already answered"), False
+            if automatic:
+                if (
+                    intervention["provider_attempt"] <= 0
+                    or intervention["provider_quiescent"]
+                ):
+                    return (False, "automatic provider is not active"), False
+                intervention["provider_quiescent"] = True
+            elif not intervention["provider_quiescent"]:
+                return (False, "automatic provider is still active"), False
+            intervention["response"] = {
+                "received_at": time.time(),
+                "payload": payload,
+            }
+            intervention = validate_external_intervention(intervention)
+            envelope = {
+                "revision": raw["revision"] + 1,
+                "value": intervention,
+                "deleted?": False,
+            }
+            native = document["entries"].get(intervention_key)
+            self._store.client._set_entry(
+                document,
+                intervention_key,
+                envelope,
+                native["rev"] + 1,
+            )
+            return (True, intervention), True
+
+        accepted, value = self._store.client._mutate(deliver)
+        if not accepted:
+            raise HistoryRewriteError(value)
+        return value
+
+    def submit_external_intervention(self, session_id, token, payload):
+        """Accept one external response exactly once while the run is live."""
+        return self._deliver_external_response(
+            session_id, token, payload, automatic=False
+        )
+
+    def complete_external_provider(self, session_id, token, payload):
+        """Atomically finish one automatic provider and accept its response."""
+        return self._deliver_external_response(
+            session_id, token, payload, automatic=True
+        )
+
+    def finish_external_intervention(self, session_id, token):
+        """Remove one response only after its turn or vote was consumed."""
+        token = _text(token, "external_intervention.token")
+        key = _external_intervention_key(session_id)
+        current = self._store.read(key)
+        if not current["exists?"]:
+            return
+        intervention = validate_external_intervention(current["value"])
+        if intervention["token"] != token:
+            raise HistoryRewriteError("external intervention token changed")
+        if intervention["response"] is None:
+            raise HistoryRewriteError(
+                "an unanswered external intervention cannot finish"
+            )
+        result = self._store.delete(key, expected_revision=current["revision"])
+        if not result.ok:
+            raise HistoryRewriteError(
+                "external intervention changed before completion"
+            )
 
     def read_turn_attempt(self, session_id):
         """Read the exclusive in-flight control record, if one remains."""
@@ -2840,17 +3469,67 @@ class SessionStore:
             raise RevisionConflict(current)
         candidate = validate_session_state(candidate)
         assertion(current.state, candidate)
-        result = self._store.cas(
-            _session_key(session_id), expected_revision, candidate
-        )
-        if not result.ok:
+        key = _session_key(session_id)
+        if candidate["status"] in TERMINAL_STATUSES:
+            intervention_key = _external_intervention_key(session_id)
+
+            def accept_terminal(document):
+                raw = self._store._raw_from_doc(document, key)
+                public = self._store._public_from_raw(raw)
+                if (
+                    not public["exists?"]
+                    or public["revision"] != expected_revision
+                ):
+                    return (False, public), False
+                assertion(validate_session_state(public["value"]), candidate)
+                envelope = {
+                    "revision": raw["revision"] + 1,
+                    "value": candidate,
+                    "deleted?": False,
+                }
+                native = document["entries"].get(key)
+                self._store.client._set_entry(
+                    document, key, envelope, native["rev"] + 1
+                )
+
+                external_raw = self._store._raw_from_doc(
+                    document, intervention_key
+                )
+                external_envelope = {
+                    "revision": (
+                        1
+                        if external_raw is kvstore.ABSENT
+                        else external_raw["revision"] + 1
+                    ),
+                    "value": None,
+                    "deleted?": True,
+                }
+                external_native = document["entries"].get(intervention_key)
+                self._store.client._set_entry(
+                    document,
+                    intervention_key,
+                    external_envelope,
+                    1
+                    if external_native is None
+                    else external_native["rev"] + 1,
+                )
+                return (
+                    True,
+                    self._store._public_from_raw(envelope),
+                ), True
+
+            accepted, record = self._store.client._mutate(accept_terminal)
+        else:
+            result = self._store.cas(key, expected_revision, candidate)
+            accepted, record = result.ok, result.record
+        if not accepted:
             latest = self._publish_current(session_id)
             if latest is None:
                 raise SessionNotFound(session_id)
             raise RevisionConflict(latest)
         if publish:
             return self._publish_current(session_id)
-        return self._snapshot(result.record)
+        return self._snapshot(record)
 
     def create(self, session_id, request, run_config, eligible_participants):
         checked_config = validate_run_config(run_config)
@@ -2971,6 +3650,7 @@ class SessionStore:
         """
         key = _session_key(session_id)
         activity_key = _activity_key(session_id)
+        intervention_key = _external_intervention_key(session_id)
         supplied_baseline_key = None
         if recovery_revision is not None:
             supplied_baseline_key = _target_revision_key(
@@ -2982,6 +3662,7 @@ class SessionStore:
                 if supplied_baseline_key is not None:
                     document["entries"].pop(supplied_baseline_key, None)
                 document["entries"].pop(activity_key, None)
+                document["entries"].pop(intervention_key, None)
                 return True, True
 
             self._store.client._mutate(remove_orphan)
@@ -3037,6 +3718,7 @@ class SessionStore:
                     return False, False
                 del document["entries"][key]
                 document["entries"].pop(activity_key, None)
+                document["entries"].pop(intervention_key, None)
                 if baseline_key is not None:
                     document["entries"].pop(baseline_key, None)
                 return True, True
@@ -3066,6 +3748,7 @@ class SessionStore:
         session_id = kvstore.validate_fragment(session_id, "session_id")
         key = _session_key(session_id)
         attempt_key = _turn_attempt_key(session_id)
+        intervention_key = _external_intervention_key(session_id)
         activity_key = _activity_key(session_id)
         revision_prefix = "%s%s:" % (
             _TARGET_REVISION_KEY_PREFIX, session_id
@@ -3114,6 +3797,7 @@ class SessionStore:
                     for stored in document["entries"]
                     if stored == key
                     or stored == attempt_key
+                    or stored == intervention_key
                     or stored == activity_key
                     or stored.startswith(revision_prefix)
                 ]
@@ -3149,6 +3833,13 @@ class SessionStore:
             raise RevisionConflict(current)
         candidate = validate_session_state(state)
         assert_session_successor(current.state, candidate)
+        if candidate["status"] in TERMINAL_STATUSES:
+            return self._cas_coordination(
+                session_id,
+                expected_revision,
+                candidate,
+                assert_session_successor,
+            )
         result = self._store.cas(
             _session_key(session_id), expected_revision, candidate
         )
@@ -3395,9 +4086,12 @@ class SessionStore:
             raise ContractError(
                 "participant_id is not in the persisted roster"
             )
-        session_ref = make_participant_session_ref(
-            participant["executor_ref"], provider_ref
+        binding_ref = (
+            participant["executor_ref"]
+            if participant["delivery"] == "llm"
+            else participant["external_ref"]
         )
+        session_ref = make_participant_session_ref(binding_ref, provider_ref)
         candidate = copy.deepcopy(current.state)
         candidate.setdefault("participant_sessions", {})
         if participant_id in candidate["participant_sessions"]:

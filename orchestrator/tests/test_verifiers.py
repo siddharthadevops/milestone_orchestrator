@@ -288,7 +288,7 @@ class TestFieldCollisions(unittest.TestCase):
         self.assertEqual(
             contracts.reserved_output_keys("implement"),
             {"status", "kind", "blocked_reason", "notes", "gaps",
-             "question", "finding", "target_path", "max_rounds",
+             "request", "finding", "target_path", "max_rounds",
              "result_mode", "failure_gap", "files_changed",
              "suite_command", "slices", "implementation_cut"},
         )
@@ -877,7 +877,7 @@ class TestMergedOutputValidation(FilesystemCase):
         obj = {
             "status": "need_rethink",
             "kind": "implement",
-            "question": "Which compatible behavior should the design select?",
+            "request": "Choose the compatible behavior for the design.",
             "finding": {"id": "BUILD", "summary": "choice is unsettled"},
             "target_path": "proposals/rethink.md",
             "max_rounds": 5,

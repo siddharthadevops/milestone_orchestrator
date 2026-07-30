@@ -48,6 +48,10 @@ sessions render in the panel's right pane — there is no separate page):
                                    poll one complete durable session snapshot
     GET    /api/brainstorming/sessions/<id>/view
                                    render one coherent authorized view revision
+    GET    /api/brainstorming/sessions/<id>/intervention
+                                   inspect the pending external turn, if any
+    POST   /api/brainstorming/sessions/<id>/intervention
+                                   submit its exact token and response once
     POST   /api/brainstorming/sessions/<id>/stop
                                    stop participant work and publish failure
     DELETE /api/brainstorming/sessions/<id>
@@ -2948,6 +2952,24 @@ def make_handler(home):
                     elif (
                         len(parts) == 6
                         and parts[4]
+                        and parts[5] == "intervention"
+                    ):
+                        intervention = (
+                            brainstorming_lifecycle.view_external_intervention(
+                                home,
+                                parts[4],
+                                lambda record: require_brainstorming_access(
+                                    home, who, record
+                                ),
+                            )
+                        )
+                        self._json(
+                            200,
+                            {"ok": True, "intervention": intervention},
+                        )
+                    elif (
+                        len(parts) == 6
+                        and parts[4]
                         and parts[5] == "view"
                     ):
                         view = brainstorming_lifecycle.view_session(
@@ -3043,6 +3065,26 @@ def make_handler(home):
                 elif route.startswith("/api/brainstorming/sessions/"):
                     parts = route.rstrip("/").split("/")
                     if (
+                        len(parts) == 6
+                        and parts[4]
+                        and parts[5] == "intervention"
+                    ):
+                        body = self._brainstorming_body()
+                        intervention = (
+                            brainstorming_lifecycle.submit_external_intervention(
+                                home,
+                                parts[4],
+                                body,
+                                lambda record: require_brainstorming_access(
+                                    home, who, record
+                                ),
+                            )
+                        )
+                        self._json(
+                            200,
+                            {"ok": True, "intervention": intervention},
+                        )
+                    elif (
                         len(parts) == 6
                         and parts[4]
                         and parts[5] == "stop"

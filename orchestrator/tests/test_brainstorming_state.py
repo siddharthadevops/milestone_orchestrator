@@ -13,14 +13,14 @@ from orchestrator import brainstorming as bs
 
 
 def request(source_payload=None, include_optional=True):
-    context = {"brief": "Resolve one bounded design question."}
+    context = {"brief": "Resolve one bounded design request."}
     if include_optional:
         context["references"] = ["docs/current.md", "https://example.test/fact"]
         context["source_payload"] = source_payload
     return {
         "workspace_path": "/workspace",
         "target_path": "docs/decision.md",
-        "question": "Which compatible option should be adopted?",
+        "request": "Choose the compatible option to adopt.",
         "context": context,
         "max_rounds": 2,
     }
@@ -31,12 +31,14 @@ def cross_family_participants():
         {
             "id": "editor",
             "role": "lead",
+            "delivery": "llm",
             "executor_ref": "codex-primary",
             "model_family": "codex",
         },
         {
             "id": "critic",
             "role": "interlocutor",
+            "delivery": "llm",
             "executor_ref": "claude-reviewer",
             "model_family": "claude",
         },
@@ -48,6 +50,18 @@ def same_family_participants():
     participants[1]["executor_ref"] = "codex-secondary"
     participants[1]["model_family"] = "codex"
     return participants
+
+
+def external_participants():
+    return [
+        copy.deepcopy(cross_family_participants()[0]),
+        {
+            "id": "dante",
+            "role": "interlocutor",
+            "delivery": "external",
+            "external_ref": "external-dante",
+        },
+    ]
 
 
 def run_config(participants=None, policy="unanimity",
@@ -135,6 +149,139 @@ class BrainstormingStateTestCase(unittest.TestCase):
             closing_summary(reason),
         )
 
+    def _external_turn_ready(self, session_id):
+        roster = external_participants()
+        created = self.store.create(
+            session_id,
+            request(),
+            run_config(roster, eligible_participants=roster),
+            roster,
+        )
+        running = self.store.transition(
+            session_id, created.revision, "running"
+        )
+        target = bs.make_target_revision(True, b"accepted target", 0o644)
+        initialized = self.store.initialize_coordination(
+            session_id, running.revision, target
+        )
+        ready = self.store.record_completed_turn(
+            session_id,
+            initialized.revision,
+            "editor",
+            "The technical lead presents the case.",
+            target,
+        )
+        req = ready.state["request"]
+        intervention = {
+            "token": "external-token-1",
+            "participant_id": "dante",
+            "action_kind": "discussion_turn",
+            "completed_turn_count": 1,
+            "round": 1,
+            "target_revision": ready.state["accepted_target_revision"],
+            "input": {
+                "request": req["request"],
+                "context": req["context"],
+                "workspace_path": req["workspace_path"],
+                "target_path": req["target_path"],
+                "transcript_ref": ready.state["transcript_ref"],
+            },
+            "created_at": 100.0,
+            "provider_attempt": 0,
+            "provider_quiescent": True,
+            "response": None,
+        }
+        return ready, intervention
+
+    def test_external_intervention_is_published_for_the_exact_next_turn(self):
+        _ready, intervention = self._external_turn_ready("external-publish")
+        published = self.store.publish_external_intervention(
+            "external-publish", intervention
+        )
+        self.assertEqual(published, intervention)
+        self.assertEqual(
+            self.store.read_external_intervention("external-publish"),
+            intervention,
+        )
+
+    def test_external_intervention_accepts_a_late_durable_response(self):
+        _ready, intervention = self._external_turn_ready("external-late")
+        self.store.publish_external_intervention("external-late", intervention)
+        reopened = bs.SessionStore(self.root)
+        with mock.patch("orchestrator.brainstorming.time.time", return_value=900.0):
+            answered = reopened.submit_external_intervention(
+                "external-late",
+                intervention["token"],
+                {"markdown": "Dante accepts the ordinary residual risk."},
+            )
+        self.assertEqual(answered["response"], {
+            "received_at": 900.0,
+            "payload": {
+                "markdown": "Dante accepts the ordinary residual risk."
+            },
+        })
+
+    def test_external_intervention_rejects_a_duplicate_response(self):
+        _ready, intervention = self._external_turn_ready("external-duplicate")
+        self.store.publish_external_intervention(
+            "external-duplicate", intervention
+        )
+        self.store.submit_external_intervention(
+            "external-duplicate",
+            intervention["token"],
+            {"markdown": "Dante chooses the simple option."},
+        )
+        with self.assertRaises(bs.HistoryRewriteError):
+            self.store.submit_external_intervention(
+                "external-duplicate",
+                intervention["token"],
+                {"markdown": "A conflicting second answer."},
+            )
+
+    def test_terminal_transition_atomically_invalidates_external_response(self):
+        ready, intervention = self._external_turn_ready("external-terminal")
+        self.store.publish_external_intervention(
+            "external-terminal", intervention
+        )
+        terminal = self.store.transition(
+            "external-terminal",
+            ready.revision,
+            "failure",
+            failure_result(ready.state["transcript_ref"]),
+            closing_summary(),
+        )
+
+        self.assertEqual(terminal.state["status"], "failure")
+        self.assertIsNone(
+            self.store.read_external_intervention("external-terminal")
+        )
+        with self.assertRaises(bs.HistoryRewriteError):
+            self.store.submit_external_intervention(
+                "external-terminal",
+                intervention["token"],
+                {"markdown": "Too late."},
+            )
+
+    def test_unconfirmed_provider_attempt_cannot_be_claimed_or_answered(self):
+        _ready, intervention = self._external_turn_ready("external-active")
+        self.store.publish_external_intervention(
+            "external-active", intervention
+        )
+        claimed = self.store.claim_external_intervention(
+            "external-active", intervention["token"]
+        )
+        self.assertFalse(claimed["provider_quiescent"])
+        with self.assertRaises(bs.HistoryRewriteError):
+            self.store.claim_external_intervention(
+                "external-active", intervention["token"]
+            )
+        with self.assertRaises(bs.HistoryRewriteError):
+            self.store.submit_external_intervention(
+                "external-active",
+                intervention["token"],
+                {"markdown": "Racing answer."},
+            )
+
     def _assert_create_rejected(self, session_id, req=None, config=None):
         with self.assertRaises((bs.ContractError, ValueError)):
             self.store.create(
@@ -164,12 +311,12 @@ class BrainstormingStateTestCase(unittest.TestCase):
         self.assertEqual(created.state["request"], full)
 
         invalid = []
-        for key in ("workspace_path", "target_path", "question", "context",
+        for key in ("workspace_path", "target_path", "request", "context",
                     "max_rounds"):
             candidate = request()
             del candidate[key]
             invalid.append(candidate)
-        for key in ("workspace_path", "target_path", "question"):
+        for key in ("workspace_path", "target_path", "request"):
             for value in ("", "   ", 7):
                 candidate = request()
                 candidate[key] = value
@@ -277,6 +424,7 @@ class BrainstormingStateTestCase(unittest.TestCase):
         eligible.append({
             "id": "critic",
             "role": "interlocutor",
+            "delivery": "llm",
             "executor_ref": "claude-reviewer",
             "model_family": "claude",
         })
@@ -376,7 +524,7 @@ class BrainstormingStateTestCase(unittest.TestCase):
 
         mutations = []
         candidate = copy.deepcopy(created.state)
-        candidate["request"]["question"] = "A different question"
+        candidate["request"]["request"] = "A different request"
         mutations.append(candidate)
         candidate = copy.deepcopy(created.state)
         candidate["request"]["context"]["source_payload"] = {"changed": True}

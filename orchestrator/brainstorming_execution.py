@@ -104,6 +104,14 @@ class ParticipantExecution:
         )
 
     @staticmethod
+    def _binding_ref(participant):
+        return (
+            participant["executor_ref"]
+            if participant["delivery"] == "llm"
+            else participant["external_ref"]
+        )
+
+    @staticmethod
     def _require_running(snapshot):
         if snapshot is None:
             raise brainstorming.SessionNotFound("brainstorming session")
@@ -113,12 +121,16 @@ class ParticipantExecution:
             )
 
     def _executor(self, participant):
-        binding = self.executors.get(participant["executor_ref"])
+        binding = self.executors.get(self._binding_ref(participant))
         if binding is None:
             raise ExecutionRejected(
                 "the persisted executor_ref has no configured binding"
             )
-        if getattr(binding, "model_family", None) != participant["model_family"]:
+        if (
+            participant["delivery"] == "llm"
+            and getattr(binding, "model_family", None)
+            != participant["model_family"]
+        ):
             raise ExecutionRejected(
                 "the executor binding model_family does not match the roster"
             )
@@ -142,7 +154,7 @@ class ParticipantExecution:
         if session_ref is None:
             return None
         return brainstorming.provider_session_ref(
-            participant["executor_ref"], session_ref
+            self._binding_ref(participant), session_ref
         )
 
     def _require_current_binding(
@@ -240,13 +252,33 @@ class ParticipantExecution:
     ):
         attempt = self.store.read_turn_attempt(session_id)
         if attempt is None:
-            # Low-level callers may exercise ParticipantExecution without the
-            # lifecycle coordinator. Orchestrated calls always have an
-            # admitted turn attempt, which is the durable identity required
-            # by the operational ledger.
-            return None
-        action_id = attempt["token"]
-        provider_attempt = attempt.get("provider_attempt", 1)
+            intervention = self.store.read_external_intervention(session_id)
+            if (
+                intervention is None
+                or intervention["participant_id"] != participant["id"]
+            ):
+                # Low-level callers may exercise ParticipantExecution without
+                # either coordinator seam.
+                return None
+            action_id = intervention["token"]
+            provider_attempt = intervention["provider_attempt"]
+            completed = intervention["completed_turn_count"]
+            kind = (
+                "discussion_turn"
+                if intervention["action_kind"] == "discussion_turn"
+                else "closure"
+            )
+            stage = "discussion" if kind == "discussion_turn" else "vote"
+        else:
+            action_id = attempt["token"]
+            provider_attempt = attempt.get("provider_attempt", 1)
+            completed = attempt["completed_turn_count"]
+            kind = attempt.get("kind", "discussion_turn")
+            stage = (
+                (attempt.get("action_context") or {}).get("stage")
+                if kind == "closure"
+                else "discussion"
+            )
         digest = hashlib.sha256(
             ("%s:%d" % (action_id, provider_attempt)).encode("utf-8")
         ).hexdigest()[:20]
@@ -276,13 +308,6 @@ class ParticipantExecution:
         if state is None:
             raise brainstorming.SessionNotFound(session_id)
         participants = state.state["run_config"]["participants"]
-        completed = attempt["completed_turn_count"]
-        kind = attempt.get("kind", "discussion_turn")
-        stage = (
-            (attempt.get("action_context") or {}).get("stage")
-            if kind == "closure"
-            else "discussion"
-        )
         round_number = (
             completed // len(participants) + 1
             if kind == "discussion_turn"
@@ -299,7 +324,7 @@ class ParticipantExecution:
             "stage": stage,
             "round": round_number,
             "participant_id": participant["id"],
-            "model_family": participant["model_family"],
+            "model_family": executor.model_family,
             "model": getattr(executor, "model", None),
             "effort": getattr(executor, "effort", None),
             "status": status,
@@ -374,6 +399,7 @@ class ParticipantExecution:
         prompt,
         execution_context,
         before_repair=None,
+        after_validate=None,
     ):
         """Return an envelope only after all supervised local work is quiet."""
         return self._exchange(
@@ -384,6 +410,7 @@ class ParticipantExecution:
             require_quiescence=True,
             validator=validate_discussion_turn_envelope,
             before_repair=before_repair,
+            after_validate=after_validate,
         )
 
     def exchange_control_quiescent(
@@ -394,6 +421,7 @@ class ParticipantExecution:
         execution_context,
         validator,
         before_repair=None,
+        after_validate=None,
     ):
         """Continue one participant session with a supplied control contract."""
         if not callable(validator):
@@ -404,6 +432,10 @@ class ParticipantExecution:
             raise brainstorming.ContractError(
                 "control before_repair check must be callable"
             )
+        if after_validate is not None and not callable(after_validate):
+            raise brainstorming.ContractError(
+                "control after_validate check must be callable"
+            )
         return self._exchange(
             session_id,
             participant_id,
@@ -412,6 +444,7 @@ class ParticipantExecution:
             require_quiescence=True,
             validator=validator,
             before_repair=before_repair,
+            after_validate=after_validate,
         )
 
     def _exchange(
@@ -423,7 +456,12 @@ class ParticipantExecution:
         require_quiescence,
         validator,
         before_repair=None,
+        after_validate=None,
     ):
+        if after_validate is not None and not callable(after_validate):
+            raise brainstorming.ContractError(
+                "after_validate check must be callable"
+            )
         evidence = {"quiescent": True}
         try:
             return self._exchange_with_evidence(
@@ -435,6 +473,7 @@ class ParticipantExecution:
                 validator,
                 evidence,
                 before_repair,
+                after_validate,
             )
         except BaseException as exc:
             if require_quiescence and evidence["quiescent"]:
@@ -478,6 +517,7 @@ class ParticipantExecution:
         validator,
         evidence,
         before_repair,
+        after_validate,
     ):
         brainstorming._text(participant_id, "participant_id")
         brainstorming._text(prompt, "prompt")
@@ -565,9 +605,23 @@ class ParticipantExecution:
             )
             raise
         else:
+            try:
+                if after_validate is not None:
+                    after_validate(envelope)
+            except BaseException as exc:
+                self._record_activity(
+                    session_id,
+                    participant,
+                    executor,
+                    started_at,
+                    result=result,
+                    status="failed",
+                    failure_type="acceptance",
+                    error=exc,
+                )
+                raise
             self._record_activity(
-                session_id, participant, executor, started_at,
-                result=result,
+                session_id, participant, executor, started_at, result=result
             )
             return envelope, result
 
@@ -622,7 +676,7 @@ class ParticipantExecution:
             raise runners.WorkerProtocolError(
                 "executor %s produced a contract-violating participant envelope "
                 "twice: first error: %s; second error: %s"
-                % (participant["executor_ref"], first_error, exc),
+                % (self._binding_ref(participant), first_error, exc),
                 raw_texts=[result.text, result2.text],
             )
         except BaseException as exc:
@@ -633,9 +687,23 @@ class ParticipantExecution:
             )
             raise
         else:
+            try:
+                if after_validate is not None:
+                    after_validate(envelope)
+            except BaseException as exc:
+                self._record_activity(
+                    session_id,
+                    participant,
+                    executor,
+                    started_at2,
+                    result=result2,
+                    status="failed",
+                    failure_type="acceptance",
+                    error=exc,
+                )
+                raise
             self._record_activity(
-                session_id, participant, executor, started_at2,
-                result=result2,
+                session_id, participant, executor, started_at2, result=result2
             )
             result2.repair = {
                 "error": first_error,

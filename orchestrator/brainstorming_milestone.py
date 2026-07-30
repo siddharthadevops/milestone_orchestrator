@@ -32,12 +32,12 @@ DESIGN_AMENDMENT_LENGTH_GUIDANCE = (
 )
 DESIGN_AMENDMENT_PLACEHOLDER = (
     "Replace this placeholder with one self-contained design amendment that "
-    "resolves the stated question without changing the goal. %s\n"
+    "fulfils the stated request without changing the goal. %s\n"
     % DESIGN_AMENDMENT_LENGTH_GUIDANCE
 )
 LEGACY_DESIGN_AMENDMENT_PLACEHOLDER = (
     "Replace this placeholder with one concise, self-contained design "
-    "amendment that resolves the stated question without changing the goal.\n"
+    "amendment that fulfils the stated request without changing the goal.\n"
 )
 DESIGN_AMENDMENT_PLACEHOLDERS = (
     DESIGN_AMENDMENT_PLACEHOLDER,
@@ -45,7 +45,7 @@ DESIGN_AMENDMENT_PLACEHOLDERS = (
 )
 
 GUARANTEE_CALIBRATION_MAX_ROUNDS = contracts.MILESTONE_BRAINSTORMING_ROUNDS
-GUARANTEE_CALIBRATION_QUESTION = (
+GUARANTEE_CALIBRATION_REQUEST = (
     "Does this skeleton declare each guarantee at the right level and within "
     "the right observable scope, no stronger or weaker than its authority "
     "requires?"
@@ -257,7 +257,7 @@ def _materialize_target(state, signal, references):
 
 def _participant(participant_id, role, profile, label):
     """Translate one optional act-style profile into a pinned session seat."""
-    participant = {"id": participant_id, "role": role}
+    participant = {"id": participant_id, "role": role, "delivery": "llm"}
     if profile is None:
         return participant
     try:
@@ -288,6 +288,25 @@ def _participant(participant_id, role, profile, label):
     return participant
 
 
+def _narrator(profile):
+    participant = {
+        "id": "dante",
+        "role": "interlocutor",
+        "delivery": "external",
+        "external_provider": "narrator",
+    }
+    if profile is None:
+        return participant
+    pinned = _participant("dante", "interlocutor", profile, "lead_profile")
+    participant.update(
+        {
+            key: pinned[key]
+            for key in ("model_family", "model", "effort")
+        }
+    )
+    return participant
+
+
 def _participants(lead_profile=None, counterpart_profile=None):
     return [
         _participant("lead", "lead", lead_profile, "lead_profile"),
@@ -297,6 +316,7 @@ def _participants(lead_profile=None, counterpart_profile=None):
             counterpart_profile,
             "counterpart_profile",
         ),
+        _narrator(lead_profile),
     ]
 
 
@@ -368,7 +388,7 @@ def create_session(
         "request": {
             "workspace_path": state["workspace"],
             "target_path": target,
-            "question": signal["question"],
+            "request": signal["request"],
             "context": {
                 "brief": (
                     (
@@ -379,7 +399,7 @@ def create_session(
                         % DESIGN_AMENDMENT_LENGTH_GUIDANCE
                     )
                     if amendment_mode else
-                    "A milestone worker paused on one focused design question. "
+                    "A milestone worker paused with one focused design request. "
                     "The source finding below is preserved unchanged."
                 ),
                 "references": context_references,
@@ -434,7 +454,7 @@ def create_guarantee_calibration_session(
         "request": {
             "workspace_path": state["workspace"],
             "target_path": target,
-            "question": GUARANTEE_CALIBRATION_QUESTION,
+            "request": GUARANTEE_CALIBRATION_REQUEST,
             "context": {
                 "brief": GUARANTEE_CALIBRATION_BRIEF,
                 "references": context_references,

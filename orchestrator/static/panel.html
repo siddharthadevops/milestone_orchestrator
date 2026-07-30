@@ -650,8 +650,9 @@
       exactly like a milestone. The target document must live inside that
       directory: it is the ONE artifact the discussion may write, and the
       only thing a stop restores.</p>
-    <p><b>Question</b> — the single bounded decision the participants must
-      settle. <b>Brief</b> is the standing context every turn receives.</p>
+    <p><b>Request</b> — the focused result the participants should produce;
+      it may include a question, but does not have to be one. <b>Brief</b> is
+      the standing context every turn receives.</p>
     <p><b>Target document</b> — path relative to the work directory (an
       absolute path inside it also works). The file itself may not exist
       yet; the lead writes it. <b>Browse…</b> picks an existing document;
@@ -660,12 +661,10 @@
       editable) — the missing folders are created at launch, so no
       directory ever has to be made by hand. Without New…, the target's
       parent folder must already exist.</p>
-    <p><b>Participants</b> — exactly one lead plus at least one
-      interlocutor, every seat an AI worker configured like a milestone
-      act: agent family, model, effort. Anything left at default is
-      resolved by the service — family by rotation over what this host
-      offers, model/effort from the family's defaults. Pinning every seat
-      to one family is honored as a deliberate choice.</p>
+    <p><b>Participants</b> — the technical lead and interlocutors use the
+      ordinary AI configuration. Dante is an external seat served today by a
+      cinematic narrator; the same durable turn can later wait for a Persona
+      or a real person without changing the discussion flow.</p>
     <p><b>Closure</b> — <b>unanimity</b> needs every participant to accept
       the lead's closing proposal; <b>majority with lead tiebreak</b>
       closes on a majority and lets the lead break a tie.</p>
@@ -678,8 +677,8 @@
       <select id="b_area" onchange="onBsArea()" style="display:none"></select>
     </div>
     <div class="hint" id="b_resolved"></div></div>
-  <div class="field"><label>Question *</label>
-    <textarea id="b_question" placeholder="Which bounded result should be accepted…"></textarea></div>
+  <div class="field"><label>Request *</label>
+    <textarea id="b_request" placeholder="Describe the focused result to produce…"></textarea></div>
   <div class="field"><label>Brief (standing context) *</label>
     <textarea id="b_brief" placeholder="What the participants need to know to settle it…"></textarea></div>
   <div class="field"><label>Target document *</label>
@@ -1079,7 +1078,7 @@ function sessionOrigin(s) {
   return parts.slice(1).filter(Boolean).join(" · ");
 }
 function sessionLabel(s) {
-  return s.question || s.target_path || s.id;
+  return s.request || s.target_path || s.id;
 }
 function sessionRow(s) {
   const terminal = BS_TERMINAL.has(s.status);
@@ -1278,6 +1277,15 @@ function sessionInFlightChip(view) {
     return `<span class="chip working">${spinEl()}retry ${
       esc(view.retry.error_type)} in ${esc(remaining)}</span>`;
   }
+  if (view.external_intervention) {
+    const intervention = view.external_intervention;
+    const uncertain = !intervention.provider_quiescent;
+    const state = uncertain ? "provider state unknown"
+      : intervention.answered ? "answered · resuming" : "waiting";
+    return `<span class="chip ${uncertain ? "bad" : "working"}">${
+      uncertain ? "" : spinEl()}${
+      esc(intervention.participant_id)} external turn · ${esc(state)}</span>`;
+  }
   if (!active) {
     return `<span class="chip working">${spinEl()}round ${
       Math.max(view.round.current || 0, (view.round.completed || 0) + 1)
@@ -1312,7 +1320,7 @@ function renderSessionDetail(view) {
     // monitoring screen (the run view's Edit… precedent).
     html += `<div class="toolbar">
       <button class="btn" onclick="closeSessionInfo()">&#8592; back</button>
-      <h2 style="margin:0">${esc(view.question)} <span class="st">· session info</span></h2></div>`;
+      <h2 style="margin:0">${esc(view.request)} <span class="st">· session info</span></h2></div>`;
     html += `<div class="card"><h3>Session</h3>
       <div class="amend-hint mono">session: ${esc(view.id)} · revision ${esc(String(view.revision))}</div>
       <div class="amend-hint mono">caller: ${esc(view.caller)}</div>
@@ -1322,8 +1330,9 @@ function renderSessionDetail(view) {
       <div class="amend-hint mono">rounds: ${view.round.completed} complete · ${view.round.maximum} maximum</div></div>`;
     html += `<div class="card"><h3>Participants</h3>` +
       view.participants.map(p =>
-        `<div class="amend-hint mono"><b>${esc(p.role)}</b>: ${esc(p.id)} · ` +
-        `family ${esc(p.model_family)} · model ${esc(p.model || "—")} · ` +
+        `<div class="amend-hint mono"><b>${esc(p.delivery)}</b>: ${esc(p.id)} · ` +
+        `${p.external_provider ? `provider ${esc(p.external_provider)} · ` : ""}` +
+        `family ${esc(p.model_family || "—")} · model ${esc(p.model || "—")} · ` +
         `effort ${esc(p.effort || "—")}</div>`
       ).join("") + `</div>`;
     html += `<div class="card"><h3>Accepted target</h3>
@@ -1351,7 +1360,7 @@ function renderSessionDetail(view) {
   html += `<div class="run-sticky-head">`;
   if (listed && listed.project)
     html += `<div class="proj-title">${esc(listed.project)}</div>`;
-  html += `<div class="run-title-row"><h2>${esc(view.question)}<span class="title-sep">·</span><span class="chip ${statusCls}">${esc(view.status)}</span></h2></div>`;
+  html += `<div class="run-title-row"><h2>${esc(view.request)}<span class="title-sep">·</span><span class="chip ${statusCls}">${esc(view.status)}</span></h2></div>`;
   const bits = [
     `round ${view.round.current || 0}/${view.round.maximum}` +
       ` · ${view.round.completed} complete`,
@@ -1424,7 +1433,7 @@ async function discardSelectedSession() {
   // into a spurious unknown-session refusal.
   if (!selectedSession || sessionDiscarding) return;
   const label = lastSessionView
-    ? lastSessionView.question : selectedSession;
+    ? lastSessionView.request : selectedSession;
   if (!confirm(`Discard brainstorming “${label}”? This removes it from the `
       + "panel and deletes its stored discussion state; the target "
       + "document is untouched.")) return;
@@ -3435,11 +3444,14 @@ let bsRefs = [];
 function defaultBsRoster() {
   // The standing roster the dialog opens with — visible, armed, and
   // editable in place (an operator decision, not a hidden resolution):
-  // lead claude-fable-5/max against a codex gpt-5.6-sol/max interlocutor.
+  // Codex leads, Claude challenges, and Dante speaks through the narrator.
   return [
-    {role: "lead", agent: "claude", model: "claude-fable-5", effort: "max"},
-    {role: "interlocutor", agent: "codex", model: "gpt-5.6-sol",
-     effort: "max"},
+    {role: "lead", delivery: "llm", agent: "codex",
+     model: "gpt-5.6-sol", effort: "max"},
+    {role: "interlocutor", delivery: "llm", agent: "claude",
+     model: "claude-fable-5", effort: "max"},
+    {role: "interlocutor", delivery: "external", externalProvider: "narrator",
+     agent: "codex", model: "gpt-5.6-sol", effort: "max"},
   ];
 }
 function snapshotBsRoster() {
@@ -3453,13 +3465,15 @@ function snapshotBsRoster() {
   });
 }
 function bsSeatLabel(seat, index) {
+  if (seat.delivery === "external") return "Dante · external narrator";
   if (seat.role === "lead") return "Lead";
   const nth = bsRoster.slice(0, index)
-    .filter(s => s.role === "interlocutor").length + 1;
+    .filter(s => s.role === "interlocutor" && s.delivery === "llm").length + 1;
   return `Interlocutor ${nth}`;
 }
 function renderBsRoster() {
-  const interlocutors = bsRoster.filter(s => s.role === "interlocutor").length;
+  const interlocutors = bsRoster.filter(
+    s => s.role === "interlocutor" && s.delivery === "llm").length;
   document.getElementById("b_roster").innerHTML =
     `<div class="rosterrow"><span></span><span class="acthead">agent</span>
        <span class="acthead">model</span><span class="acthead">effort</span><span></span></div>` +
@@ -3477,7 +3491,7 @@ function renderBsRoster() {
       <datalist id="dl_b_p${i}"></datalist>
       <button class="roster-x" type="button" title="Remove participant"
         onclick="removeBsSeat(${i})"
-        ${seat.role === "lead" || interlocutors <= 1 ? "disabled" : ""}>×</button>
+        ${seat.role === "lead" || seat.delivery === "external" || interlocutors <= 1 ? "disabled" : ""}>×</button>
     </div>`).join("");
   // Populate each seat's datalist and effort options for its family —
   // the exact machinery the milestone acts grid uses (prefix "b_p",
@@ -3496,12 +3510,12 @@ function onBsAgentChange(i) {
 }
 function addBsSeat() {
   snapshotBsRoster();
-  bsRoster.push({role: "interlocutor", agent: "", model: "", effort: ""});
+  bsRoster.push({role: "interlocutor", delivery: "llm", agent: "", model: "", effort: ""});
   renderBsRoster();
 }
 function removeBsSeat(i) {
   snapshotBsRoster();
-  if (bsRoster[i].role === "lead") return;
+  if (bsRoster[i].role === "lead" || bsRoster[i].delivery === "external") return;
   bsRoster.splice(i, 1);
   renderBsRoster();
 }
@@ -3661,11 +3675,11 @@ async function submitBrainstorming() {
     return;
   }
   const project = bsProjects[+document.getElementById("b_project").value];
-  const question = document.getElementById("b_question").value.trim();
+  const request = document.getElementById("b_request").value.trim();
   const brief = document.getElementById("b_brief").value.trim();
   const target = document.getElementById("b_target").value.trim();
-  if (!question || !brief || !target) {
-    err.textContent = "question, brief and target document are all required";
+  if (!request || !brief || !target) {
+    err.textContent = "request, brief and target document are all required";
     return;
   }
   const rounds = Number(document.getElementById("b_rounds").value);
@@ -3680,9 +3694,13 @@ async function submitBrainstorming() {
   let critics = 0;
   const participants = bsRoster.map(seat => {
     const entry = {
-      id: seat.role === "lead" ? "lead" : `critic-${++critics}`,
+      id: seat.role === "lead" ? "lead"
+        : seat.delivery === "external" ? "dante" : `critic-${++critics}`,
       role: seat.role,
+      delivery: seat.delivery,
     };
+    if (seat.delivery === "external")
+      entry.external_provider = seat.externalProvider;
     if (seat.agent) entry.model_family = seat.agent;
     if (seat.model) entry.model = seat.model;
     if (seat.effort) entry.effort = seat.effort;
@@ -3694,7 +3712,7 @@ async function submitBrainstorming() {
     request: {
       workspace_path: area.record.primary.path,
       target_path: target,
-      question,
+      request,
       context,
       max_rounds: rounds,
     },
@@ -3721,7 +3739,7 @@ async function submitBrainstorming() {
     button.disabled = false;
   }
   document.getElementById("bsform").close();
-  document.getElementById("b_question").value = "";
+  document.getElementById("b_request").value = "";
   document.getElementById("b_target").value = "";
   refreshRuns();
 }

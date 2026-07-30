@@ -80,7 +80,7 @@ def rethink(
     value = {
         "status": "need_rethink",
         "kind": kind,
-        "question": "Which of the two compatible behaviors should be used?",
+        "request": "Choose which compatible behavior should be used.",
         "finding": copy.deepcopy(finding or {"id": "BUILD", "summary": "choice"}),
         "target_path": target,
         "max_rounds": rounds,
@@ -198,8 +198,12 @@ class BrainstormingMilestoneAdapterTest(unittest.TestCase):
 
     @staticmethod
     def _roster(interlocutor_first=False):
-        lead = {"id": "lead", "role": "lead"}
-        critic = {"id": "critic", "role": "interlocutor"}
+        lead = {"id": "lead", "role": "lead", "delivery": "llm"}
+        critic = {
+            "id": "critic",
+            "role": "interlocutor",
+            "delivery": "llm",
+        }
         return [critic, lead] if interlocutor_first else [lead, critic]
 
     def _body(self, target, rounds=17, interlocutor_first=False):
@@ -207,9 +211,9 @@ class BrainstormingMilestoneAdapterTest(unittest.TestCase):
             "request": {
                 "workspace_path": self.workspace,
                 "target_path": target,
-                "question": "Which compatible behavior should be used?",
+                "request": "Choose which compatible behavior should be used.",
                 "context": {
-                    "brief": "Resolve one focused milestone design question.",
+                    "brief": "Resolve one focused milestone design request.",
                     "references": ["docs/context.md"],
                     "source_payload": {"id": "F1", "summary": "choice"},
                 },
@@ -494,12 +498,14 @@ class BrainstormingMilestoneAdapterTest(unittest.TestCase):
             {
                 "id": "critic",
                 "role": "interlocutor",
+                "delivery": "llm",
                 "executor_ref": "critic-executor",
                 "model_family": "claude",
             },
             {
                 "id": "lead",
                 "role": "lead",
+                "delivery": "llm",
                 "executor_ref": "lead-executor",
                 "model_family": "codex",
             },
@@ -652,12 +658,14 @@ class BrainstormingMilestoneAdapterTest(unittest.TestCase):
             {
                 "id": "lead",
                 "role": "lead",
+                "delivery": "llm",
                 "executor_ref": "lead-executor",
                 "model_family": "codex",
             },
             {
                 "id": "critic",
                 "role": "interlocutor",
+                "delivery": "llm",
                 "executor_ref": "critic-executor",
                 "model_family": "claude",
             },
@@ -779,7 +787,7 @@ class BrainstormingMilestoneAdapterTest(unittest.TestCase):
                 references,
             )
         request = captured["body"]["request"]
-        self.assertEqual(request["question"], signal["question"])
+        self.assertEqual(request["request"], signal["request"])
         self.assertEqual(
             request["target_path"], captured["owned_target_path"]
         )
@@ -798,8 +806,18 @@ class BrainstormingMilestoneAdapterTest(unittest.TestCase):
         self.assertEqual(
             captured["body"]["participants"],
             [
-                {"id": "lead", "role": "lead"},
-                {"id": "interlocutor", "role": "interlocutor"},
+                {"id": "lead", "role": "lead", "delivery": "llm"},
+                {
+                    "id": "interlocutor",
+                    "role": "interlocutor",
+                    "delivery": "llm",
+                },
+                {
+                    "id": "dante",
+                    "role": "interlocutor",
+                    "delivery": "external",
+                    "external_provider": "narrator",
+                },
             ],
         )
         self.assertEqual(captured["body"]["closure_policy"], "unanimity")
@@ -856,6 +874,7 @@ class BrainstormingMilestoneAdapterTest(unittest.TestCase):
                 {
                     "id": "lead",
                     "role": "lead",
+                    "delivery": "llm",
                     "model_family": "codex",
                     "model": "gpt-5.6-sol",
                     "effort": "max",
@@ -863,8 +882,18 @@ class BrainstormingMilestoneAdapterTest(unittest.TestCase):
                 {
                     "id": "interlocutor",
                     "role": "interlocutor",
+                    "delivery": "llm",
                     "model_family": "claude",
                     "model": "claude-fable-5",
+                    "effort": "max",
+                },
+                {
+                    "id": "dante",
+                    "role": "interlocutor",
+                    "delivery": "external",
+                    "external_provider": "narrator",
+                    "model_family": "codex",
+                    "model": "gpt-5.6-sol",
                     "effort": "max",
                 },
             ],
@@ -959,7 +988,7 @@ class BrainstormingMilestoneAdapterTest(unittest.TestCase):
             request["max_rounds"], adapter.GUARANTEE_CALIBRATION_MAX_ROUNDS
         )
         self.assertEqual(
-            request["question"], adapter.GUARANTEE_CALIBRATION_QUESTION
+            request["request"], adapter.GUARANTEE_CALIBRATION_REQUEST
         )
         self.assertIn("affected party", request["context"]["brief"])
         self.assertIn("complete agreed skeleton", request["context"]["brief"])
@@ -991,6 +1020,7 @@ class BrainstormingMilestoneAdapterTest(unittest.TestCase):
                 {
                     "id": "lead",
                     "role": "lead",
+                    "delivery": "llm",
                     "model_family": "codex",
                     "model": "gpt-5.6-sol",
                     "effort": "max",
@@ -998,8 +1028,18 @@ class BrainstormingMilestoneAdapterTest(unittest.TestCase):
                 {
                     "id": "interlocutor",
                     "role": "interlocutor",
+                    "delivery": "llm",
                     "model_family": "claude",
                     "model": "claude-fable-5",
+                    "effort": "max",
+                },
+                {
+                    "id": "dante",
+                    "role": "interlocutor",
+                    "delivery": "external",
+                    "external_provider": "narrator",
+                    "model_family": "codex",
+                    "model": "gpt-5.6-sol",
                     "effort": "max",
                 },
             ],
@@ -1170,7 +1210,9 @@ class BrainstormingMilestoneAdapterTest(unittest.TestCase):
             session_id, accepted.state["accepted_target_revision"]
         )
         record = lifecycle._record_by_id(self.home, session_id)
-        lead, interlocutor = accepted.state["run_config"]["participants"]
+        lead, interlocutor, _dante = accepted.state["run_config"][
+            "participants"
+        ]
         prompts = (
             coordination.build_turn_prompt(
                 accepted.state,
@@ -1311,6 +1353,13 @@ class BrainstormingMilestoneAdapterTest(unittest.TestCase):
             "The proposal is coherent.",
             accepted,
         )
+        snapshot = store.record_completed_turn(
+            created["id"],
+            snapshot.revision,
+            "dante",
+            "Dante accepts the proportionate proposal.",
+            accepted,
+        )
         ballot = {
             "after_completed_rounds": 1,
             "target_revision": snapshot.state[
@@ -1319,6 +1368,7 @@ class BrainstormingMilestoneAdapterTest(unittest.TestCase):
             "votes": [
                 {"participant_id": "lead", "vote": "accept"},
                 {"participant_id": "interlocutor", "vote": "accept"},
+                {"participant_id": "dante", "vote": "accept"},
             ],
             "approved": True,
         }

@@ -214,7 +214,7 @@ update.
 Standalone Brainstorming uses a separate service record and state store under
 `~/.impl_roadmap/brainstorming/`; it never creates a milestone run or registry
 entry. `POST /api/brainstorming/sessions` accepts the exact generic request,
-ordered `{id, role}` participants, and closure policy, with an optional
+ordered participants with independent `role` and `delivery`, and closure policy, with an optional
 `project`/`work_area` pair. `GET /api/brainstorming/sessions/<id>` is the
 polling/follow surface, and
 `POST /api/brainstorming/sessions/<id>/stop` accepts no fields. All three
@@ -223,22 +223,31 @@ be quiet, restores only the accepted target artifact, and publishes a coherent
 failure; if that safety evidence is unavailable it returns
 `brainstorming_stop_incomplete` without inventing a result.
 
+An external participant publishes one durable intervention and releases the
+target lock while waiting. `GET .../<id>/intervention` returns that request;
+`POST .../<id>/intervention` accepts exactly its token and one response.
+Restarting preserves the wait; authorized polling relaunches a quiet local
+lifecycle so an accepted response continues automatically. A stale, duplicate,
+or late response conflicts instead of entering another turn. The `narrator`
+provider uses this same channel today; `manual` leaves it waiting for an
+external UI.
+
 `GET /api/brainstorming/sessions` lists every session the caller may see
 (`{"ok": true, "sessions": [...]}`), newest creation first — the sidebar's
 source. Authorization is decided from the immutable service record before
 any durable state is read, so a session in a project you are not assigned
 to is simply absent rather than refused; a project-less session is
 administrative. Each row carries the service metadata plus a cheap state
-projection (`status`, `question`, `rounds_used`/`max_rounds`, `revision`);
+projection (`status`, `request`, `rounds_used`/`max_rounds`, `revision`);
 a row also carries accumulated `work_duration_s` and any active `in_flight`
-call;
+call or `external_intervention`;
 a session whose state store cannot be read still lists, with those fields
 null and the fault in `state_error`, because one broken session must never
 hide the others.
 
 The panel's **New brainstorming** dialog assembles exactly that create body:
 project and work area (the posted `workspace_path` is the bound area's own
-primary root — the seam refuses any other value), question, brief, target
+primary root — the seam refuses any other value), request, brief, target
 document (relative to the work directory), a managed reference-document
 list (add/remove, Browse for the administrator), closure policy, and the
 round ceiling. Beside the target's Browse, **New…** picks an existing
@@ -251,11 +260,10 @@ concurrent create adopted is never removed). Absent or false keeps the
 historical refusal for a missing parent. Panel pickers open at the bound
 work area's directory when one is chosen and fall back to
 `~/Development/source` (walked up to the nearest existing ancestor on
-other hosts). Participants are AI seats configured like milestone acts —
-one lead plus one or more interlocutors, each with agent family, model and
-effort, rows added and removed in place; seat ids are generated, never
-typed. Every dial left at default is resolved by the service exactly as
-before: family by rotation over what this host offers, model/effort from
+other hosts). The default roster is a Codex lead, a Claude interlocutor, and
+Dante as an external narrator. AI seats keep the ordinary family, model and
+effort controls; Dante's turn enters through the durable external contract.
+Every dial left at default is resolved by the service: family by rotation over what this host offers, model/effort from
 the family's defaults — and when pins would herd every seat onto one
 family while another is available, the last default seat takes the other
 family instead, so a partially pinned roster is never refused for a shape
@@ -268,10 +276,8 @@ resolved model/effort is recorded once in the service record's
 `runtime.executors` (keyed by per-seat `executor_ref`), which the
 lifecycle child replays without re-deriving; the session's **Info** view
 shows the resolved family, model, and effort for every seat without exposing
-runtime commands. Records created before seats
-carried their own settings keep family-default behavior byte-identical.
-Refusal tokens surface verbatim; the panel validates only form
-completeness.
+runtime commands. Refusal tokens surface verbatim; the panel validates only
+form completeness.
 
 A milestone that opens a session remains alive, observes it until terminal,
 and then routes the result without a manual restart. It chips the discussion

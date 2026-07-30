@@ -537,7 +537,7 @@ class DriverImplementationSizeTest(unittest.TestCase):
             "signal": {
                 "status": "need_rethink",
                 "kind": contracts.KIND_IMPLEMENT,
-                "question": "Which bounded implementation should proceed?",
+                "request": "Choose the bounded implementation to continue.",
                 "finding": {
                     "id": "F1",
                     "summary": "the implementation choice needs agreement",

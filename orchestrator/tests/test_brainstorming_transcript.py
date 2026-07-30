@@ -21,12 +21,14 @@ def participants(same_family=False, three=False):
         {
             "id": "lead-machine",
             "role": "lead",
+            "delivery": "llm",
             "executor_ref": "codex-machine",
             "model_family": "codex",
         },
         {
             "id": "critic-machine",
             "role": "interlocutor",
+            "delivery": "llm",
             "executor_ref": "claude-machine",
             "model_family": "claude",
         },
@@ -40,6 +42,7 @@ def participants(same_family=False, three=False):
             {
                 "id": "reader-machine",
                 "role": "interlocutor",
+                "delivery": "llm",
                 "executor_ref": "gemini-machine",
                 "model_family": "gemini",
             }
@@ -79,8 +82,8 @@ class BrainstormingTranscriptTest(unittest.TestCase):
         policy="unanimity",
         max_rounds=2,
         status="running",
-        question="Which compatible option should be adopted?",
-        brief="Resolve one bounded design question.",
+        request_text="Which compatible option should be adopted?",
+        brief="Resolve one bounded design request.",
         target_path="docs/decision.md",
         payload=None,
     ):
@@ -90,7 +93,7 @@ class BrainstormingTranscriptTest(unittest.TestCase):
         request = {
             "workspace_path": workspace,
             "target_path": target_path,
-            "question": question,
+            "request": request_text,
             "context": {
                 "brief": brief,
                 "source_payload": payload,
@@ -218,7 +221,7 @@ class BrainstormingTranscriptTest(unittest.TestCase):
         second = self._create(
             "opening-b",
             policy="majority_with_lead_tiebreak",
-            question="Choose the smaller option.",
+            request_text="Choose the smaller option.",
         )
         one = self._read(first)
         two = self._read(second)
@@ -236,7 +239,7 @@ class BrainstormingTranscriptTest(unittest.TestCase):
         self.assertEqual(self._headings(one), ["Opening"])
         for expected in (
             "Which compatible option",
-            "Resolve one bounded design question",
+            "Resolve one bounded design request",
             "docs/decision.md",
             "Lead",
             "Interlocutor 1",
@@ -380,7 +383,7 @@ class BrainstormingTranscriptTest(unittest.TestCase):
         session_id = "contained"
         snapshot = self._create(
             session_id,
-            question="Question\n## Closing",
+            request_text="Request\n## Closing",
             brief="Reason\n## Material interruption",
             target_path="docs/decision.md\n## Opening",
         )
@@ -741,11 +744,8 @@ class BrainstormingTranscriptTest(unittest.TestCase):
                 )
         self.assertEqual(before, self._read(snapshot))
         original = bs._atomic_replace_utf8
-        calls = []
-
         def fail_final_publication(path, content):
-            calls.append(path)
-            if len(calls) == 3:
+            if "\n## Closing\n" in content:
                 raise OSError("simulated transcript publication failure")
             return original(path, content)
 
@@ -884,7 +884,7 @@ class BrainstormingTranscriptTest(unittest.TestCase):
         request = {
             "workspace_path": self.root,
             "target_path": transcript,
-            "question": "Should this target change?",
+            "request": "Change this target if the discussion supports it.",
             "context": {"brief": "Protect the existing target."},
             "max_rounds": 1,
         }
@@ -909,7 +909,7 @@ class BrainstormingTranscriptTest(unittest.TestCase):
         request = {
             "workspace_path": self.root,
             "target_path": target,
-            "question": "Should this target change?",
+            "request": "Change this target if the discussion supports it.",
             "context": {"brief": "Protect the target authority."},
             "max_rounds": 1,
         }
@@ -941,7 +941,7 @@ class BrainstormingTranscriptTest(unittest.TestCase):
         request = {
             "workspace_path": self.root,
             "target_path": target,
-            "question": "Should this target change?",
+            "request": "Change this target if the discussion supports it.",
             "context": {"brief": "Protect durable session state."},
             "max_rounds": 1,
         }
@@ -966,7 +966,7 @@ class BrainstormingTranscriptTest(unittest.TestCase):
         request = {
             "workspace_path": self.root,
             "target_path": target,
-            "question": "Should this target change?",
+            "request": "Change this target if the discussion supports it.",
             "context": {"brief": "Protect the target authority."},
             "max_rounds": 1,
         }
@@ -992,7 +992,7 @@ class BrainstormingTranscriptTest(unittest.TestCase):
         request = {
             "workspace_path": self.root,
             "target_path": target,
-            "question": "Should this target change?",
+            "request": "Change this target if the discussion supports it.",
             "context": {"brief": "Protect the target authority."},
             "max_rounds": 1,
         }
@@ -1021,7 +1021,7 @@ class BrainstormingTranscriptTest(unittest.TestCase):
         request = {
             "workspace_path": self.root,
             "target_path": target,
-            "question": "Should this target change?",
+            "request": "Change this target if the discussion supports it.",
             "context": {"brief": "Protect the target from non-lead creation."},
             "max_rounds": 1,
         }
@@ -1074,7 +1074,7 @@ class BrainstormingTranscriptTest(unittest.TestCase):
         request = {
             "workspace_path": self.root,
             "target_path": target,
-            "question": "Should this target change?",
+            "request": "Change this target if the discussion supports it.",
             "context": {"brief": "Protect durable session state."},
             "max_rounds": 1,
         }
@@ -1123,7 +1123,7 @@ class BrainstormingTranscriptTest(unittest.TestCase):
         request = {
             "workspace_path": workspace,
             "target_path": target,
-            "question": "Can transcript storage be used as the target?",
+            "request": "Use transcript storage as the target if allowed.",
             "context": {"brief": "Keep transcript storage isolated."},
             "max_rounds": 1,
         }
@@ -1206,7 +1206,7 @@ class BrainstormingTranscriptTest(unittest.TestCase):
         request = {
             "workspace_path": workspace,
             "target_path": target,
-            "question": "Can this distinct target be used?",
+            "request": "Use this distinct target.",
             "context": {"brief": "Keep transcript storage isolated."},
             "max_rounds": 1,
         }

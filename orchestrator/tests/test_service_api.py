@@ -175,11 +175,19 @@ class ServiceApiTest(unittest.TestCase):
         self.assertIn("function renderBsRoster", text)
         self.assertIn("function addBsSeat", text)
         self.assertIn("function removeBsSeat", text)
-        # The dialog opens pre-staffed with the standing roster; the
+        # The dialog opens pre-staffed with Codex, Claude, and Dante; the
         # retired claude id is gone from every option list.
         self.assertIn(
-            '{role: "lead", agent: "claude", model: "claude-fable-5", '
-            'effort: "max"}', text)
+            '{role: "lead", delivery: "llm", agent: "codex",', text)
+        self.assertIn(
+            '{role: "interlocutor", delivery: "llm", agent: "claude",',
+            text,
+        )
+        self.assertIn(
+            '{role: "interlocutor", delivery: "external", '
+            'externalProvider: "narrator",',
+            text,
+        )
         self.assertIn('"claude-opus-5"', text)
         self.assertNotIn("opus-4-8", text)
         self.assertIn(".rosterrow { display: grid", text)
@@ -208,7 +216,7 @@ class ServiceApiTest(unittest.TestCase):
         self.assertIn("function sessionChips", text)
         self.assertIn('onclick="openSessionInfo()">Info', text)
         self.assertIn("function closeSessionInfo", text)
-        self.assertIn('family ${esc(p.model_family)}', text)
+        self.assertIn('family ${esc(p.model_family || "—")}', text)
         self.assertIn('model ${esc(p.model || "—")}', text)
         self.assertIn('effort ${esc(p.effort || "—")}', text)
         # Session content flows with the page — one scroll, preserved

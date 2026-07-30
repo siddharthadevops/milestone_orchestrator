@@ -260,16 +260,20 @@ class StandaloneBrainstormingApiTest(unittest.TestCase):
             "request": {
                 "workspace_path": workspace or self.workspace,
                 "target_path": "docs/%s" % target_name,
-                "question": "Which bounded result should be accepted?",
+                "request": "Select the bounded result to accept.",
                 "context": {
-                    "brief": "Resolve one bounded question.",
+                    "brief": "Resolve one bounded request.",
                     "source_payload": {"opaque": ["preserved", 7]},
                 },
                 "max_rounds": max_rounds,
             },
             "participants": [
-                {"id": "lead", "role": "lead"},
-                {"id": "critic", "role": "interlocutor"},
+                {"id": "lead", "role": "lead", "delivery": "llm"},
+                {
+                    "id": "critic",
+                    "role": "interlocutor",
+                    "delivery": "llm",
+                },
             ],
             "closure_policy": "unanimity",
         }
@@ -439,12 +443,14 @@ class StandaloneBrainstormingApiTest(unittest.TestCase):
                     "work_duration_s",
                     "in_flight",
                     "retry",
+                    "external_intervention",
                 },
             )
             self.assertEqual(session["activity"], [])
             self.assertEqual(session["work_duration_s"], 0)
             self.assertIsNone(session["in_flight"])
             self.assertIsNone(session["retry"])
+            self.assertIsNone(session["external_intervention"])
             self.assertEqual(session["process"], "running")
             self.assertIsNone(session["project"])
             self.assertIsNone(session["work_area"])
@@ -528,14 +534,24 @@ class StandaloneBrainstormingApiTest(unittest.TestCase):
             {
                 "id": "lead",
                 "role": "lead",
+                "delivery": "llm",
                 "model_family": "claude",
                 # Deliberately NOT the claude family default (opus-5), so
                 # the pinned seat stays distinguishable from a default one.
                 "model": "claude-fable-5",
                 "effort": "max",
             },
-            {"id": "critic-1", "role": "interlocutor", "model_family": "claude"},
-            {"id": "critic-2", "role": "interlocutor"},
+            {
+                "id": "critic-1",
+                "role": "interlocutor",
+                "delivery": "llm",
+                "model_family": "claude",
+            },
+            {
+                "id": "critic-2",
+                "role": "interlocutor",
+                "delivery": "llm",
+            },
         ]
         with mock.patch.object(
             lifecycle,
@@ -581,10 +597,16 @@ class StandaloneBrainstormingApiTest(unittest.TestCase):
             # is a deliberate roster, not an invalid fallback.
             mono = self._payload("mono.md")
             mono["participants"] = [
-                {"id": "lead", "role": "lead", "model_family": "claude"},
+                {
+                    "id": "lead",
+                    "role": "lead",
+                    "delivery": "llm",
+                    "model_family": "claude",
+                },
                 {
                     "id": "critic",
                     "role": "interlocutor",
+                    "delivery": "llm",
                     "model_family": "claude",
                 },
             ]
@@ -602,8 +624,17 @@ class StandaloneBrainstormingApiTest(unittest.TestCase):
         # side-effect free.
         bad = self._payload("pinned.md")
         bad["participants"] = [
-            {"id": "lead", "role": "lead", "model_family": "gemini"},
-            {"id": "critic", "role": "interlocutor"},
+            {
+                "id": "lead",
+                "role": "lead",
+                "delivery": "llm",
+                "model_family": "gemini",
+            },
+            {
+                "id": "critic",
+                "role": "interlocutor",
+                "delivery": "llm",
+            },
         ]
         status, refusal = self._request(
             "POST", "/api/brainstorming/sessions", bad
@@ -621,12 +652,21 @@ class StandaloneBrainstormingApiTest(unittest.TestCase):
         """
         for index, (name, roster) in enumerate((
             ("codex-lead.md", [
-                {"id": "lead", "role": "lead", "model_family": "codex"},
-                {"id": "critic", "role": "interlocutor"},
+                {
+                    "id": "lead",
+                    "role": "lead",
+                    "delivery": "llm",
+                    "model_family": "codex",
+                },
+                {
+                    "id": "critic",
+                    "role": "interlocutor",
+                    "delivery": "llm",
+                },
             ]),
             ("codex-critic.md", [
-                {"id": "lead", "role": "lead"},
-                {"id": "critic", "role": "interlocutor",
+                {"id": "lead", "role": "lead", "delivery": "llm"},
+                {"id": "critic", "role": "interlocutor", "delivery": "llm",
                  "model_family": "codex"},
             ]),
         )):
@@ -1248,7 +1288,7 @@ class StandaloneBrainstormingApiTest(unittest.TestCase):
             encoding="utf-8",
         ) as handle:
             recorded_prompt = handle.read()
-        self.assertIn("Question:", recorded_prompt)
+        self.assertIn("Request:", recorded_prompt)
         self.assertIn("role: lead", recorded_prompt)
         self.assertFalse(os.path.samefile(target, unrelated))
         real_identity = lifecycle._target_identity
@@ -1526,6 +1566,343 @@ class StandaloneBrainstormingApiTest(unittest.TestCase):
                         transcript.index("## Closing"),
                     )
         self.assertEqual(registry.load(self.home)["runs"], [])
+
+    def test_dante_narrator_enters_through_the_external_turn_contract(self):
+        self._target("dante.md")
+        payload = self._payload("dante.md")
+        payload["participants"].append(
+            {
+                "id": "dante",
+                "role": "interlocutor",
+                "delivery": "external",
+                "external_provider": "narrator",
+                "model_family": "codex",
+            }
+        )
+        status, body = self._request(
+            "POST", "/api/brainstorming/sessions", payload
+        )
+        self.assertEqual(status, 201, body)
+        terminal = self._poll_terminal(body["session"]["id"])
+        self.assertEqual(terminal["state"]["status"], "success")
+        self.assertEqual(
+            [
+                turn["participant_id"]
+                for turn in terminal["state"]["completed_turns"]
+            ],
+            ["lead", "critic", "dante"],
+        )
+        self.assertIsNone(terminal["external_intervention"])
+        dante_calls = [
+            event
+            for event in terminal["activity"]
+            if event["participant_id"] == "dante"
+        ]
+        self.assertEqual(
+            [event["stage"] for event in dante_calls],
+            ["discussion", "vote"],
+        )
+
+    def test_manual_external_turn_waits_and_accepts_each_response_once(self):
+        self._target("manual-external.md")
+        payload = self._payload("manual-external.md")
+        payload["participants"].append(
+            {
+                "id": "human",
+                "role": "interlocutor",
+                "delivery": "external",
+                "external_provider": "manual",
+            }
+        )
+        status, body = self._request(
+            "POST", "/api/brainstorming/sessions", payload
+        )
+        self.assertEqual(status, 201, body)
+        session_id = body["session"]["id"]
+
+        def pending(action_kind):
+            deadline = time.monotonic() + 20
+            while time.monotonic() < deadline:
+                code, response = self._request(
+                    "GET",
+                    "/api/brainstorming/sessions/%s/intervention"
+                    % session_id,
+                )
+                self.assertEqual(code, 200, response)
+                intervention = response["intervention"]
+                if (
+                    intervention is not None
+                    and intervention["action_kind"] == action_kind
+                ):
+                    return intervention
+                time.sleep(0.05)
+            self.fail("external intervention did not become pending")
+
+        discussion = pending("discussion_turn")
+        code, response = self._request(
+            "POST",
+            "/api/brainstorming/sessions/%s/intervention" % session_id,
+            {
+                "token": discussion["token"],
+                "response": {"markdown": "The human chooses simplicity."},
+            },
+        )
+        self.assertEqual(code, 200, response)
+        duplicate, refusal = self._request(
+            "POST",
+            "/api/brainstorming/sessions/%s/intervention" % session_id,
+            {
+                "token": discussion["token"],
+                "response": {"markdown": "A duplicate answer."},
+            },
+        )
+        self.assertEqual(duplicate, 409, refusal)
+        self.assertEqual(
+            refusal["error"], lifecycle.EXTERNAL_INTERVENTION_CONFLICT
+        )
+
+        closure = pending("closure_vote")
+        code, response = self._request(
+            "POST",
+            "/api/brainstorming/sessions/%s/intervention" % session_id,
+            {
+                "token": closure["token"],
+                "response": {"vote": "accept"},
+            },
+        )
+        self.assertEqual(code, 200, response)
+        terminal = self._poll_terminal(session_id)
+        self.assertEqual(terminal["state"]["status"], "success")
+
+    def test_external_wait_relaunches_after_its_lifecycle_dies(self):
+        self._target("external-relaunch.md")
+        payload = self._payload("external-relaunch.md")
+        payload["participants"].append(
+            {
+                "id": "human",
+                "role": "interlocutor",
+                "delivery": "external",
+                "external_provider": "manual",
+            }
+        )
+        status, body = self._request(
+            "POST", "/api/brainstorming/sessions", payload
+        )
+        self.assertEqual(status, 201, body)
+        session_id = body["session"]["id"]
+
+        def pending(action_kind):
+            deadline = time.monotonic() + 20
+            while time.monotonic() < deadline:
+                code, response = self._request(
+                    "GET",
+                    "/api/brainstorming/sessions/%s/intervention"
+                    % session_id,
+                )
+                self.assertEqual(code, 200, response)
+                intervention = response["intervention"]
+                if (
+                    intervention is not None
+                    and intervention["action_kind"] == action_kind
+                ):
+                    return intervention
+                time.sleep(0.05)
+            self.fail("external intervention did not become pending")
+
+        discussion = pending("discussion_turn")
+        old_pid = lifecycle._record_by_id(self.home, session_id)["pid"]
+        self._kill_pid(old_pid)
+        code, response = self._request(
+            "POST",
+            "/api/brainstorming/sessions/%s/intervention" % session_id,
+            {
+                "token": discussion["token"],
+                "response": {"markdown": "The delayed human answered."},
+            },
+        )
+        self.assertEqual(code, 200, response)
+        new_pid = lifecycle._record_by_id(self.home, session_id)["pid"]
+        self.assertNotEqual(new_pid, old_pid)
+        self.assertTrue(lifecycle._process_alive(
+            lifecycle._record_by_id(self.home, session_id)
+        ))
+
+        closure = pending("closure_vote")
+        code, response = self._request(
+            "POST",
+            "/api/brainstorming/sessions/%s/intervention" % session_id,
+            {"token": closure["token"], "response": {"vote": "accept"}},
+        )
+        self.assertEqual(code, 200, response)
+        self.assertEqual(
+            self._poll_terminal(session_id)["state"]["status"], "success"
+        )
+
+    def test_stop_invalidates_a_pending_external_turn(self):
+        self._target("external-stop.md")
+        payload = self._payload("external-stop.md")
+        payload["participants"].append(
+            {
+                "id": "human",
+                "role": "interlocutor",
+                "delivery": "external",
+                "external_provider": "manual",
+            }
+        )
+        status, body = self._request(
+            "POST", "/api/brainstorming/sessions", payload
+        )
+        self.assertEqual(status, 201, body)
+        session_id = body["session"]["id"]
+        deadline = time.monotonic() + 20
+        intervention = None
+        while time.monotonic() < deadline:
+            code, response = self._request(
+                "GET",
+                "/api/brainstorming/sessions/%s/intervention" % session_id,
+            )
+            self.assertEqual(code, 200, response)
+            intervention = response["intervention"]
+            if intervention is not None:
+                break
+            time.sleep(0.05)
+        self.assertIsNotNone(intervention)
+
+        code, stopped = self._request(
+            "POST", "/api/brainstorming/sessions/%s/stop" % session_id, {}
+        )
+        self.assertEqual(code, 200, stopped)
+        self.assertEqual(stopped["session"]["state"]["status"], "failure")
+        self.assertIsNone(stopped["session"]["external_intervention"])
+        code, followed = self._request(
+            "GET",
+            "/api/brainstorming/sessions/%s/intervention" % session_id,
+        )
+        self.assertEqual(code, 200, followed)
+        self.assertIsNone(followed["intervention"])
+        code, refused = self._request(
+            "POST",
+            "/api/brainstorming/sessions/%s/intervention" % session_id,
+            {
+                "token": intervention["token"],
+                "response": {"markdown": "Too late."},
+            },
+        )
+        self.assertEqual(code, 409, refused)
+
+    def test_two_external_participants_chain_their_closure_votes(self):
+        self._target("two-external.md")
+        payload = self._payload("two-external.md")
+        payload["participants"].extend(
+            [
+                {
+                    "id": participant_id,
+                    "role": "interlocutor",
+                    "delivery": "external",
+                    "external_provider": "manual",
+                }
+                for participant_id in ("human-a", "human-b")
+            ]
+        )
+        status, body = self._request(
+            "POST", "/api/brainstorming/sessions", payload
+        )
+        self.assertEqual(status, 201, body)
+        session_id = body["session"]["id"]
+
+        for action_kind, expected_id, response in (
+            ("discussion_turn", "human-a", {"markdown": "A speaks."}),
+            ("discussion_turn", "human-b", {"markdown": "B speaks."}),
+            ("closure_vote", "human-a", {"vote": "accept"}),
+            ("closure_vote", "human-b", {"vote": "accept"}),
+        ):
+            deadline = time.monotonic() + 20
+            while time.monotonic() < deadline:
+                code, viewed = self._request(
+                    "GET",
+                    "/api/brainstorming/sessions/%s/intervention"
+                    % session_id,
+                )
+                self.assertEqual(code, 200, viewed)
+                intervention = viewed["intervention"]
+                if (
+                    intervention is not None
+                    and intervention["action_kind"] == action_kind
+                    and intervention["participant_id"] == expected_id
+                ):
+                    break
+                time.sleep(0.05)
+            else:
+                self.fail("ordered external intervention did not appear")
+            code, delivered = self._request(
+                "POST",
+                "/api/brainstorming/sessions/%s/intervention" % session_id,
+                {"token": intervention["token"], "response": response},
+            )
+            self.assertEqual(code, 200, delivered)
+
+        terminal = self._poll_terminal(session_id)
+        self.assertEqual(terminal["state"]["status"], "success")
+
+    def test_unknown_narrator_quiescence_never_relaunches_or_terminalizes(self):
+        self._target("uncertain-narrator.md")
+        payload = self._payload("uncertain-narrator.md")
+        payload["participants"].append(
+            {
+                "id": "dante",
+                "role": "interlocutor",
+                "delivery": "external",
+                "external_provider": "narrator",
+                "model_family": "codex",
+            }
+        )
+        created = lifecycle.create_session(
+            self.home,
+            payload,
+            access.ADMIN_EMAIL,
+            launcher=self._sleeper_launcher,
+        )
+        session_id = created["id"]
+        record = self._stop_sleeper_record(session_id)
+        store = bs.SessionStore(lifecycle.state_directory(self.home))
+        execution = lifecycle._participant_execution(
+            store, record, lifecycle._spawn_participant
+        )
+        coordinator = coordination.BrainstormingCoordinator(store, execution)
+        coordinator.prepare(session_id)
+        coordinator.run_next_turn(session_id, record["execution_context"])
+        coordinator.run_next_turn(session_id, record["execution_context"])
+        with self.assertRaises(coordination.ExternalInterventionPending):
+            coordinator.run_next_turn(
+                session_id, record["execution_context"]
+            )
+        intervention = store.read_external_intervention(session_id)
+        store.claim_external_intervention(
+            session_id, intervention["token"]
+        )
+
+        self.assertEqual(
+            lifecycle.run_lifecycle(
+                self.home, session_id, require_pid_claim=False
+            ),
+            3,
+        )
+        followed = lifecycle.inspect_session(
+            self.home, session_id, lambda _record: None
+        )
+        self.assertEqual(followed["state"]["status"], "running")
+        self.assertEqual(followed["process"], "stopped")
+        self.assertFalse(
+            followed["external_intervention"]["provider_quiescent"]
+        )
+        with self.assertRaises(lifecycle.PublicLifecycleError) as refused:
+            lifecycle.stop_session(
+                self.home, session_id, lambda _record: None
+            )
+        self.assertEqual(
+            (refused.exception.status, refused.exception.code),
+            (409, lifecycle.STOP_INCOMPLETE),
+        )
 
     def test_recoverable_provider_failure_retries_the_same_turn(self):
         self._target("recoverable.md")
@@ -2137,8 +2514,8 @@ class StandaloneBrainstormingApiTest(unittest.TestCase):
         self.assertEqual(listed_bound["process"], "running")
         self.assertEqual(listed_bound["status"], "running")
         self.assertEqual(
-            listed_bound["question"],
-            "Which bounded result should be accepted?",
+            listed_bound["request"],
+            "Select the bounded result to accept.",
         )
         self.assertEqual(listed_bound["max_rounds"], 1)
         self.assertIsNone(listed_bound["state_error"])
@@ -2178,7 +2555,7 @@ class StandaloneBrainstormingApiTest(unittest.TestCase):
         self.assertEqual(len(broken["sessions"]), 2)
         for row in broken["sessions"]:
             self.assertIsNone(row["status"])
-            self.assertIsNone(row["question"])
+            self.assertIsNone(row["request"])
             self.assertEqual(
                 row["state_error"], "state store is unavailable"
             )

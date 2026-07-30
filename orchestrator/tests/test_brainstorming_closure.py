@@ -7,6 +7,7 @@ import tempfile
 import threading
 import unittest
 from concurrent.futures import ThreadPoolExecutor
+from unittest import mock
 
 from orchestrator import brainstorming as bs
 from orchestrator import brainstorming_coordination as coordination
@@ -19,6 +20,7 @@ def participants(count=2):
         {
             "id": "lead",
             "role": "lead",
+            "delivery": "llm",
             "executor_ref": "codex-lead",
             "model_family": "codex",
         }
@@ -29,6 +31,7 @@ def participants(count=2):
             {
                 "id": "critic-%d" % index,
                 "role": "interlocutor",
+                "delivery": "llm",
                 "executor_ref": "%s-critic-%d" % (family, index),
                 "model_family": family,
             }
@@ -165,9 +168,9 @@ class BrainstormingClosureTest(unittest.TestCase):
         request = {
             "workspace_path": workspace,
             "target_path": "docs/decision.md",
-            "question": "Which compatible option should be adopted?",
+            "request": "Choose the compatible option to adopt.",
             "context": {
-                "brief": "Resolve one bounded design question.",
+                "brief": "Resolve one bounded design request.",
                 "source_payload": {"opaque": ["kept", 7]},
             },
             "max_rounds": max_rounds,
@@ -180,12 +183,76 @@ class BrainstormingClosureTest(unittest.TestCase):
                 participant["model_family"], scripts[participant["id"]]
             )
             for participant in roster
+            if participant["delivery"] == "llm"
         }
         subject = coordination.BrainstormingCoordinator(
             self.store,
             execution.ParticipantExecution(self.store, executors),
         )
         return subject, roster, executors, target, sibling
+
+    def test_external_closure_vote_survives_crash_before_ballot(self):
+        roster = participants() + [
+            {
+                "id": "dante",
+                "role": "interlocutor",
+                "delivery": "external",
+                "external_ref": "external-dante",
+            }
+        ]
+        subject, _roster, _executors, _target, _sibling = self._make(
+            "external-closure-crash",
+            {
+                "lead": [discussion("Lead turn."), proposal()],
+                "critic-1": [discussion("Critic turn."), vote("accept")],
+            },
+            roster=roster,
+            max_rounds=1,
+        )
+        context = object()
+        subject.run_next_turn("external-closure-crash", context)
+        subject.run_next_turn("external-closure-crash", context)
+        with self.assertRaises(coordination.ExternalInterventionPending):
+            subject.run_next_turn("external-closure-crash", context)
+        pending = self.store.read_external_intervention(
+            "external-closure-crash"
+        )
+        self.store.submit_external_intervention(
+            "external-closure-crash",
+            pending["token"],
+            {"markdown": "Dante's discussion turn."},
+        )
+        subject.run_next_turn("external-closure-crash", context)
+
+        with self.assertRaises(coordination.ExternalInterventionPending):
+            subject.run_closure("external-closure-crash", context)
+        pending = self.store.read_external_intervention(
+            "external-closure-crash"
+        )
+        self.store.submit_external_intervention(
+            "external-closure-crash",
+            pending["token"],
+            {"vote": "accept"},
+        )
+        with (
+            mock.patch.object(
+                self.store,
+                "close_with_ballot",
+                side_effect=RuntimeError("simulated crash before ballot"),
+            ),
+            self.assertRaisesRegex(RuntimeError, "simulated crash"),
+        ):
+            subject.run_closure("external-closure-crash", context)
+
+        retained = self.store.read_external_intervention(
+            "external-closure-crash"
+        )
+        self.assertEqual(retained["response"]["payload"], {"vote": "accept"})
+        terminal = subject.run_closure("external-closure-crash", context)
+        self.assertEqual(terminal.state["status"], "success")
+        self.assertIsNone(
+            self.store.read_external_intervention("external-closure-crash")
+        )
 
     @staticmethod
     def _complete_round(subject, session_id, roster, context=None):
@@ -1040,7 +1107,7 @@ class BrainstormingClosureTest(unittest.TestCase):
         request = {
             "workspace_path": workspace,
             "target_path": "decision.md",
-            "question": "Can this run start?",
+            "request": "Decide whether this run can start.",
             "context": {"brief": "The provider failed before speaking."},
             "max_rounds": 1,
         }

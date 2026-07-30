@@ -20,8 +20,8 @@ def request(workspace_path="/workspace"):
     return {
         "workspace_path": workspace_path,
         "target_path": "docs/decision.md",
-        "question": "Which compatible option should be adopted?",
-        "context": {"brief": "Resolve one bounded design question."},
+        "request": "Choose the compatible option to adopt.",
+        "context": {"brief": "Resolve one bounded design request."},
         "max_rounds": 2,
     }
 
@@ -31,12 +31,14 @@ def cross_family_participants():
         {
             "id": "editor",
             "role": "lead",
+            "delivery": "llm",
             "executor_ref": "codex-primary",
             "model_family": "codex",
         },
         {
             "id": "critic",
             "role": "interlocutor",
+            "delivery": "llm",
             "executor_ref": "claude-reviewer",
             "model_family": "claude",
         },
@@ -278,6 +280,93 @@ class BrainstormingExecutionTest(unittest.TestCase):
             commands,
             {},
             participant_process_factory=participant_process_factory,
+        )
+
+    def test_validated_external_envelope_is_durable_before_activity_failure(self):
+        roster = [
+            cross_family_participants()[0],
+            {
+                "id": "dante",
+                "role": "interlocutor",
+                "delivery": "external",
+                "external_ref": "external-dante",
+            },
+        ]
+        running = self._create_running("external-acceptance", roster)
+        target = bs.make_target_revision(True, b"accepted target", 0o644)
+        initialized = self.store.initialize_coordination(
+            "external-acceptance", running.revision, target
+        )
+        ready = self.store.record_completed_turn(
+            "external-acceptance",
+            initialized.revision,
+            "editor",
+            "The lead has spoken.",
+            target,
+        )
+        req = ready.state["request"]
+        intervention = {
+            "token": "external-acceptance-token",
+            "participant_id": "dante",
+            "action_kind": "discussion_turn",
+            "completed_turn_count": 1,
+            "round": 1,
+            "target_revision": ready.state["accepted_target_revision"],
+            "input": {
+                "request": req["request"],
+                "context": req["context"],
+                "workspace_path": req["workspace_path"],
+                "target_path": req["target_path"],
+                "transcript_ref": ready.state["transcript_ref"],
+            },
+            "created_at": 100.0,
+            "provider_attempt": 0,
+            "provider_quiescent": True,
+            "response": None,
+        }
+        self.store.publish_external_intervention(
+            "external-acceptance", intervention
+        )
+        self.store.claim_external_intervention(
+            "external-acceptance", intervention["token"]
+        )
+        executor = RecordingExecutor(
+            "codex", [envelope("Dante chooses the practical option.")]
+        )
+        executor.wait_for_quiescence = lambda _result: True
+        participant_execution = execution.ParticipantExecution(
+            self.store, {"external-dante": executor}
+        )
+
+        with (
+            mock.patch.object(
+                participant_execution,
+                "_record_activity",
+                side_effect=RuntimeError("activity store unavailable"),
+            ),
+            self.assertRaisesRegex(RuntimeError, "activity store unavailable"),
+        ):
+            participant_execution.exchange_quiescent(
+                "external-acceptance",
+                "dante",
+                "Narrate Dante's turn.",
+                {},
+                after_validate=lambda accepted: (
+                    self.store.complete_external_provider(
+                        "external-acceptance",
+                        intervention["token"],
+                        {"markdown": accepted["markdown"]},
+                    )
+                ),
+            )
+
+        accepted = self.store.read_external_intervention(
+            "external-acceptance"
+        )
+        self.assertTrue(accepted["provider_quiescent"])
+        self.assertEqual(
+            accepted["response"]["payload"],
+            {"markdown": "Dante chooses the practical option."},
         )
 
     def _bindings(self, provider_runner, participants):

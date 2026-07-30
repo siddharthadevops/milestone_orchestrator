@@ -10,10 +10,11 @@ from orchestrator import brainstorming_lifecycle as lifecycle
 from orchestrator import registry, service
 from orchestrator.tests import test_brainstorming_api as api_tests
 VIEW_KEYS = {
-    "id", "caller", "status", "question", "process", "revision", "target",
+    "id", "caller", "status", "request", "process", "revision", "target",
     "participants", "same_family_fallback", "closure_policy",
     "closure_ballots", "round", "transcript_markdown", "result",
     "activity", "work_duration_s", "in_flight", "retry",
+    "external_intervention",
 }
 class BrainstormingVisualizationTest(unittest.TestCase):
     def setUp(self):
@@ -273,6 +274,8 @@ class BrainstormingVisualizationTest(unittest.TestCase):
             expected_participants.append({
                 "id": participant["id"],
                 "role": participant["role"],
+                "delivery": "llm",
+                "external_provider": None,
                 "model_family": participant["model_family"],
                 "model": binding["model"],
                 "effort": binding["effort"],

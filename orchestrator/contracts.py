@@ -708,7 +708,7 @@ def validate_need_rethink(
     required = {
         "status",
         "kind",
-        "question",
+        "request",
         "finding",
         "target_path",
         "max_rounds",
@@ -726,10 +726,10 @@ def validate_need_rethink(
             "%s: need_rethink.result_mode %r not in %r"
             % (ctx, result_mode, RETHINK_RESULT_MODES)
         )
-    question = obj["question"]
-    if not isinstance(question, str) or not question.strip():
+    request = obj["request"]
+    if not isinstance(request, str) or not request.strip():
         raise ContractError(
-            "%s: need_rethink.question must be non-empty" % ctx
+            "%s: need_rethink.request must be non-empty" % ctx
         )
     finding = obj["finding"]
     if not isinstance(finding, dict) or not finding:
@@ -1055,7 +1055,7 @@ COMMON_OUTPUT_KEYS = frozenset(
         "blocked_reason",
         "notes",
         "gaps",
-        "question",
+        "request",
         "finding",
         "target_path",
         "max_rounds",
@@ -1165,13 +1165,13 @@ Return no findings or work claims with it. The driver records a transient
 failure and the process guard retries the same fix episode after 15 minutes.
 
 `status: "need_rethink"` is allowed ONLY for draft_slice_note, implement,
-fix_findings, review_round and delta_review when one focused design question
+fix_findings, review_round and delta_review when one focused design request
 should be resolved by the independent Brainstorming process before this worker
 can finish its current judgment. It is help-seeking, not completion. Return
 EXACTLY:
   "status": "need_rethink"
   "kind": "<echo the current eligible kind>"
-  "question": "<one non-empty focused question>"
+  "request": "<one non-empty focused request or desired outcome>"
   "finding": {<the one current finding, preserved as source evidence>}
   "target_path": "<normalized workspace-relative source artifact to isolate>"
   "max_rounds": 5
@@ -1183,7 +1183,7 @@ skeleton and affected slice notes and may assign bounded repair work to the
 current slice or a new future slice. In that mode
 `target_path` names the smallest source artifact for context; Brainstorming
 constructs a separate concise amendment target. Use `proposal` for an ordinary
-focused question. Set max_rounds to 5; the session may close earlier on
+focused request. Set max_rounds to 5; the session may close earlier on
 agreement. Review
 kinds may use only `proposal`. The validator accepts
 an omitted result_mode as `proposal` solely for in-flight run compatibility.
@@ -1350,7 +1350,7 @@ Impossible task:
 {"status":"blocked","kind":"<echo KIND>","blocked_reason":"..."}
 
 Focused discussion before finishing this judgment:
-{"status":"need_rethink","kind":"<echo KIND>","question":"...",
+{"status":"need_rethink","kind":"<echo KIND>","request":"...",
  "finding":{<one complete current finding>},
  "target_path":"<normalized workspace-relative path>",
  "max_rounds":5,"result_mode":"proposal"}
@@ -1394,7 +1394,7 @@ Unavailable or unresolved mandatory consultation:
  "retry_reason":"consultation_unavailable","notes":"<optional>"}
 
 Focused discussion before deciding one queued finding:
-{"status":"need_rethink","kind":"fix_findings","question":"...",
+{"status":"need_rethink","kind":"fix_findings","request":"...",
  "finding":{<one complete queued finding>},
  "target_path":"<normalized workspace-relative path>",
  "max_rounds":5,"result_mode":"proposal|design_amendment"}
@@ -1420,7 +1420,7 @@ Impossible worker task:
 {"status":"blocked","kind":"fix_findings","blocked_reason":"..."}
 
 Focused discussion before completing a required in-goal design change:
-{"status":"need_rethink","kind":"fix_findings","question":"...",
+{"status":"need_rethink","kind":"fix_findings","request":"...",
  "finding":{<copy the complete SOURCE SIGNAL from the prompt>},
  "target_path":"<normalized workspace-relative path>",
  "max_rounds":5,"result_mode":"proposal|design_amendment"}

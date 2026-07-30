@@ -49,6 +49,7 @@ UNKNOWN_SESSION = "unknown_brainstorming_session"
 TARGET_IN_USE = "brainstorming_target_in_use"
 STOP_INCOMPLETE = "brainstorming_stop_incomplete"
 SESSION_RUNNING = "brainstorming_session_running"
+EXTERNAL_INTERVENTION_CONFLICT = "brainstorming_external_intervention_conflict"
 UNAVAILABLE = "brainstorming_unavailable"
 _PROJECT_REQUEST_ERRORS = {
     "invalid_project",
@@ -299,12 +300,42 @@ def validate_create_body(body):
             # family, and the model/effort that seat runs at. All three
             # stay OPTIONAL: omitted, the service resolves the family by
             # rotation and the family's own defaults, exactly as before.
-            brainstorming._exact_keys(
-                participant,
-                ("id", "role"),
-                ("model_family", "model", "effort"),
-                context,
-            )
+            delivery = participant.get("delivery")
+            if delivery == "llm":
+                brainstorming._exact_keys(
+                    participant,
+                    ("id", "role", "delivery"),
+                    ("model_family", "model", "effort"),
+                    context,
+                )
+            elif delivery == "external":
+                brainstorming._exact_keys(
+                    participant,
+                    ("id", "role", "delivery", "external_provider"),
+                    ("model_family", "model", "effort"),
+                    context,
+                )
+                if participant["external_provider"] not in (
+                    "narrator",
+                    "manual",
+                ):
+                    raise brainstorming.ContractError(
+                        "%s.external_provider is invalid" % context
+                    )
+                if (
+                    participant["external_provider"] == "manual"
+                    and any(
+                        field in participant
+                        for field in ("model_family", "model", "effort")
+                    )
+                ):
+                    raise brainstorming.ContractError(
+                        "%s manual delivery cannot configure a model" % context
+                    )
+            else:
+                raise brainstorming.ContractError(
+                    "%s.delivery is invalid" % context
+                )
             participant_id = brainstorming._text(
                 participant["id"], "%s.id" % context
             )
@@ -320,8 +351,18 @@ def validate_create_body(body):
             lead_count += participant["role"] == "lead"
             interlocutor_count += participant["role"] == "interlocutor"
             checked_participant = {
-                "id": participant_id, "role": participant["role"]
+                "id": participant_id,
+                "role": participant["role"],
+                "delivery": delivery,
             }
+            if delivery == "external":
+                if participant["role"] == "lead":
+                    raise brainstorming.ContractError(
+                        "an external participant cannot own the target"
+                    )
+                checked_participant["external_provider"] = participant[
+                    "external_provider"
+                ]
             for field in ("model_family", "model", "effort"):
                 if field in participant:
                     checked_participant[field] = brainstorming._text(
@@ -474,13 +515,23 @@ def _runtime_and_roster(config, participants, closure_policy, workspace):
     def seat_ref(family, participant_id):
         return "brainstorming-%s-%s" % (family, participant_id)
 
-    # Eligibility is what the caller ALLOWS a seat to be staffed with: an
-    # unpinned seat may take any available family, a pinned seat only its
-    # pin. The sealed cross-family rule then judges the roster against the
-    # caller's real degrees of freedom — an all-one-family roster the
-    # operator pinned on purpose is legitimate, not a fallback.
+    # Delivery and role are independent. LLM seats are resolved against the
+    # installed families; external seats receive one stable connector ref.
     eligible = []
+    selected = []
+    rotation = 0
     for participant in participants:
+        if participant["delivery"] == "external":
+            external_ref = "brainstorming-external-%s" % participant["id"]
+            entry = {
+                "id": participant["id"],
+                "role": participant["role"],
+                "delivery": "external",
+                "external_ref": external_ref,
+            }
+            selected.append(entry)
+            eligible.append(copy.deepcopy(entry))
+            continue
         seat_families = (
             [participant["model_family"]]
             if participant.get("model_family") is not None
@@ -493,29 +544,24 @@ def _runtime_and_roster(config, participants, closure_policy, workspace):
                 {
                     "id": participant["id"],
                     "role": participant["role"],
+                    "delivery": "llm",
                     "executor_ref": seat_ref(family, participant["id"]),
                     "model_family": family,
                 }
             )
-    selected = []
-    rotation = 0
-    for participant in participants:
         pinned = participant.get("model_family")
         if pinned is None:
-            # Unpinned seats keep the historical rotation over available
-            # families; a roster with no pins resolves exactly as before.
             family = families[rotation % len(families)]
             rotation += 1
         elif pinned in families:
             family = pinned
         else:
-            # The caller asked for a family this host cannot staff. That
-            # is a request fault, not a service fault.
             raise PublicLifecycleError(400, INVALID_REQUEST)
         selected.append(
             {
                 "id": participant["id"],
                 "role": participant["role"],
+                "delivery": "llm",
                 "executor_ref": seat_ref(family, participant["id"]),
                 "model_family": family,
             }
@@ -528,14 +574,20 @@ def _runtime_and_roster(config, participants, closure_policy, workspace):
     # the first other available family; a roster with no pins is never
     # herded (indexes 0 and 1 already differ), so this changes nothing
     # for the historical path.
-    if len(families) > 1 and len(
-        {entry["model_family"] for entry in selected}
+    selected_llms = [
+        entry for entry in selected if entry["delivery"] == "llm"
+    ]
+    if len(families) > 1 and selected_llms and len(
+        {entry["model_family"] for entry in selected_llms}
     ) == 1:
-        mono = selected[0]["model_family"]
+        mono = selected_llms[0]["model_family"]
         for participant, entry in zip(
             reversed(participants), reversed(selected)
         ):
-            if participant.get("model_family") is None:
+            if (
+                participant["delivery"] == "llm"
+                and participant.get("model_family") is None
+            ):
                 family = next(f for f in families if f != mono)
                 entry["model_family"] = family
                 entry["executor_ref"] = seat_ref(family, entry["id"])
@@ -558,13 +610,30 @@ def _runtime_and_roster(config, participants, closure_policy, workspace):
     # Each seat's resolved model/effort, recorded once so the lifecycle
     # child rebuilds the exact same bindings without re-deriving them.
     executors = {}
+    external_providers = {}
     for participant, entry in zip(participants, selected):
-        defaults = model_defaults.get(entry["model_family"]) or {}
-        executors[entry["executor_ref"]] = {
-            "model_family": entry["model_family"],
+        if entry["delivery"] == "llm":
+            family = entry["model_family"]
+            binding_ref = entry["executor_ref"]
+        elif participant["external_provider"] == "narrator":
+            family = participant.get("model_family") or families[0]
+            if family not in families:
+                raise PublicLifecycleError(400, INVALID_REQUEST)
+            binding_ref = entry["external_ref"]
+        else:
+            external_providers[entry["external_ref"]] = {"kind": "manual"}
+            continue
+        defaults = model_defaults.get(family) or {}
+        executors[binding_ref] = {
+            "model_family": family,
             "model": participant.get("model") or defaults.get("model"),
             "effort": participant.get("effort") or defaults.get("effort"),
         }
+        if entry["delivery"] == "external":
+            external_providers[entry["external_ref"]] = {
+                "kind": "narrator",
+                "model_family": family,
+            }
     runtime = {
         "families_order": families,
         "commands": {
@@ -580,6 +649,7 @@ def _runtime_and_roster(config, participants, closure_policy, workspace):
             for family in families
         },
         "executors": executors,
+        "external_providers": external_providers,
         "worker_stall_window_s": config.get("worker_stall_window_s"),
         "worker_stall_min_cpu_s": config.get("worker_stall_min_cpu_s"),
         "error_classifier": bool(config.get("error_classifier", True)),
@@ -947,6 +1017,55 @@ def _record_by_id(home, session_id):
         raise PublicLifecycleError(503, UNAVAILABLE) from exc
 
 
+def _recover_external_wait(home, record):
+    """Relaunch a stopped lifecycle that owns a durable external turn."""
+    if _process_alive(record):
+        return record
+    token = (os.path.abspath(home), record["id"])
+    with _STOPS_GUARD:
+        if token in _STOPS_IN_FLIGHT:
+            return record
+    store = brainstorming.SessionStore(state_directory(home))
+    snapshot = store.read(record["id"])
+    intervention = store.read_external_intervention(record["id"])
+    if (
+        snapshot is None
+        or snapshot.state["status"] != "running"
+        or intervention is None
+        or not intervention["provider_quiescent"]
+    ):
+        return record
+
+    launch = None
+    try:
+        with _locked_registry(home):
+            document = _load_registry(home)
+            current = _find_record(document, record["id"])
+            if current is None or _process_alive(current):
+                return copy.deepcopy(current or record)
+            snapshot = store.read(record["id"])
+            intervention = store.read_external_intervention(record["id"])
+            if (
+                snapshot is None
+                or snapshot.state["status"] != "running"
+                or intervention is None
+                or not intervention["provider_quiescent"]
+            ):
+                return copy.deepcopy(current)
+            launch = _launch_lifecycle_process(home, record["id"])
+            current["pid"] = launch.process.pid
+            _save_registry(home, document)
+            recovered = copy.deepcopy(current)
+        _track_child(home, record["id"], launch.process)
+        launch.release()
+        return recovered
+    except Exception as exc:
+        if launch is not None:
+            launch.abort()
+            _clear_pid(home, record["id"], launch.process.pid)
+        raise PublicLifecycleError(503, UNAVAILABLE) from exc
+
+
 def _authorize_record(record, authorize):
     if not callable(authorize):
         raise PublicLifecycleError(503, UNAVAILABLE)
@@ -967,6 +1086,7 @@ def _activity_projection(store, record, state):
             and event["action_id"] in completed_actions
         )
     attempt = store.read_turn_attempt(record["id"])
+    intervention = store.read_external_intervention(record["id"])
     attempt_call_recorded = bool(
         attempt is not None
         and any(
@@ -1018,6 +1138,18 @@ def _activity_projection(store, record, state):
             "model": participant.get("model"),
             "effort": participant.get("effort"),
         }
+    external = None
+    if intervention is not None:
+        external = {
+            "token": intervention["token"],
+            "participant_id": intervention["participant_id"],
+            "action_kind": intervention["action_kind"],
+            "round": intervention["round"],
+            "created_at": intervention["created_at"],
+            "provider_attempt": intervention["provider_attempt"],
+            "provider_quiescent": intervention["provider_quiescent"],
+            "answered": intervention["response"] is not None,
+        }
     return {
         "activity": events,
         "work_duration_s": (
@@ -1027,6 +1159,7 @@ def _activity_projection(store, record, state):
         ),
         "in_flight": in_flight,
         "retry": retry,
+        "external_intervention": external,
     }
 
 
@@ -1342,7 +1475,63 @@ def inspect_session(home, session_id, authorize):
     """Authorize from immutable service metadata, then read durable state."""
     record = _record_by_id(home, session_id)
     _authorize_record(record, authorize)
+    record = _recover_external_wait(home, record)
     return _projection(home, record)
+
+
+def view_external_intervention(home, session_id, authorize):
+    """Expose the pending transport-neutral turn after session authorization."""
+    record = _record_by_id(home, session_id)
+    _authorize_record(record, authorize)
+    record = _recover_external_wait(home, record)
+    try:
+        store = brainstorming.SessionStore(state_directory(home))
+        return store.read_external_intervention(session_id)
+    except Exception as exc:
+        raise PublicLifecycleError(503, UNAVAILABLE) from exc
+
+
+def submit_external_intervention(home, session_id, body, authorize):
+    """Deliver one external response; stale and duplicate tokens conflict."""
+    record = _record_by_id(home, session_id)
+    _authorize_record(record, authorize)
+    try:
+        brainstorming._exact_keys(
+            body,
+            ("token", "response"),
+            (),
+            "external intervention submission",
+        )
+        token = brainstorming._text(
+            body["token"], "external intervention submission.token"
+        )
+        if not isinstance(body["response"], dict):
+            raise brainstorming.ContractError(
+                "external intervention submission.response must be an object"
+            )
+    except (TypeError, ValueError, brainstorming.ContractError) as exc:
+        raise PublicLifecycleError(400, INVALID_REQUEST) from exc
+    try:
+        store = brainstorming.SessionStore(state_directory(home))
+        delivered = store.submit_external_intervention(
+            session_id, token, body["response"]
+        )
+        try:
+            _recover_external_wait(home, record)
+        except PublicLifecycleError:
+            pass
+        return delivered
+    except (
+        brainstorming.HistoryRewriteError,
+        brainstorming.SessionNotFound,
+    ) as exc:
+        raise PublicLifecycleError(
+            409, EXTERNAL_INTERVENTION_CONFLICT
+        ) from exc
+    except (TypeError, ValueError, brainstorming.ContractError) as exc:
+        raise PublicLifecycleError(400, INVALID_REQUEST) from exc
+    except Exception as exc:
+        raise PublicLifecycleError(503, UNAVAILABLE) from exc
 
 
 def _list_projection(store, record):
@@ -1361,13 +1550,14 @@ def _list_projection(store, record):
         "created_at": record["created_at"],
         "process": "running" if _process_alive(record) else "stopped",
         "status": None,
-        "question": None,
+        "request": None,
         "revision": None,
         "rounds_used": None,
         "max_rounds": None,
         "work_duration_s": None,
         "in_flight": None,
         "retry": None,
+        "external_intervention": None,
         "state_error": None,
     }
     try:
@@ -1379,7 +1569,7 @@ def _list_projection(store, record):
         row.update(
             {
                 "status": state["status"],
-                "question": state["request"]["question"],
+                "request": state["request"]["request"],
                 "revision": snapshot.revision,
                 "rounds_used": (
                     0 if progress is None else progress["rounds_used"]
@@ -1391,6 +1581,7 @@ def _list_projection(store, record):
         row["work_duration_s"] = activity["work_duration_s"]
         row["in_flight"] = activity["in_flight"]
         row["retry"] = activity["retry"]
+        row["external_intervention"] = activity["external_intervention"]
     except Exception as exc:  # one row's fault is not the list's fault
         row["state_error"] = str(exc)
     return row
@@ -1411,12 +1602,23 @@ def list_sessions(home, visible):
             records = _load_registry(home)["sessions"]
     except Exception as exc:
         raise PublicLifecycleError(503, UNAVAILABLE) from exc
-    store = brainstorming.SessionStore(state_directory(home))
-    rows = [
-        _list_projection(store, record)
+    visible_records = [
+        copy.deepcopy(record)
         for record in records
         if visible(copy.deepcopy(record))
     ]
+    store = brainstorming.SessionStore(state_directory(home))
+    rows = []
+    for record in visible_records:
+        recovery_error = None
+        try:
+            record = _recover_external_wait(home, record)
+        except PublicLifecycleError as exc:
+            recovery_error = exc.code
+        row = _list_projection(store, record)
+        if recovery_error is not None and row["state_error"] is None:
+            row["state_error"] = "lifecycle recovery: %s" % recovery_error
+        rows.append(row)
     rows.sort(key=lambda row: row["created_at"], reverse=True)
     return rows
 
@@ -1471,15 +1673,29 @@ def _view_participants(record, state):
     runtime = record.get("runtime") or {}
     executors = runtime.get("executors") or {}
     defaults = runtime.get("model_defaults") or {}
+    external_providers = runtime.get("external_providers") or {}
     projected = []
     for participant in state["run_config"]["participants"]:
-        binding = executors.get(participant["executor_ref"]) or {}
-        family_defaults = defaults.get(participant["model_family"]) or {}
+        binding_ref = (
+            participant["executor_ref"]
+            if participant["delivery"] == "llm"
+            else participant["external_ref"]
+        )
+        binding = executors.get(binding_ref) or {}
+        model_family = binding.get("model_family") or participant.get(
+            "model_family"
+        )
+        family_defaults = defaults.get(model_family) or {}
+        provider = external_providers.get(participant.get("external_ref"))
         projected.append(
             {
                 "id": participant["id"],
                 "role": participant["role"],
-                "model_family": participant["model_family"],
+                "delivery": participant["delivery"],
+                "external_provider": (
+                    None if provider is None else provider["kind"]
+                ),
+                "model_family": model_family,
                 "model": (
                     binding.get("model") or family_defaults.get("model")
                 ),
@@ -1495,6 +1711,7 @@ def view_session(home, session_id, authorize, preview_limit):
     """Project one authorized durable revision for the dedicated view."""
     record = _record_by_id(home, session_id)
     _authorize_record(record, authorize)
+    record = _recover_external_wait(home, record)
     try:
         store = brainstorming.SessionStore(state_directory(home))
         snapshot = store.read(record["id"])
@@ -1534,7 +1751,7 @@ def view_session(home, session_id, authorize, preview_limit):
             "id": record["id"],
             "caller": record["caller"],
             "status": state["status"],
-            "question": state["request"]["question"],
+            "request": state["request"]["request"],
             "process": "running" if _process_alive(record) else "stopped",
             "revision": snapshot.revision,
             "target": target,
@@ -1559,6 +1776,7 @@ def view_session(home, session_id, authorize, preview_limit):
             "work_duration_s": activity["work_duration_s"],
             "in_flight": activity["in_flight"],
             "retry": activity["retry"],
+            "external_intervention": activity["external_intervention"],
         }
     except PublicLifecycleError:
         raise
@@ -1739,6 +1957,12 @@ def _stop_authorized(home, session_id, record):
         raise PublicLifecycleError(503, UNAVAILABLE)
     if snapshot.state["status"] in brainstorming.TERMINAL_STATUSES:
         return _projection(home, record)
+    intervention = store.read_external_intervention(session_id)
+    if (
+        intervention is not None
+        and not intervention["provider_quiescent"]
+    ):
+        raise PublicLifecycleError(409, STOP_INCOMPLETE)
 
     if not _signal_lifecycle(record):
         raise PublicLifecycleError(409, STOP_INCOMPLETE)
@@ -1877,16 +2101,20 @@ def _participant_execution(store, record, participant_process_factory):
         raise brainstorming.SessionNotFound(record["id"])
     bindings = {}
     for participant in snapshot.state["run_config"]["participants"]:
-        family = participant["model_family"]
-        # Per-seat resolution recorded at creation; records written before
-        # seats carried their own model/effort fall back to the family
-        # defaults, which is byte-identical to their original behavior.
-        seat = (runtime.get("executors") or {}).get(
+        binding_ref = (
             participant["executor_ref"]
+            if participant["delivery"] == "llm"
+            else participant["external_ref"]
         )
+        seat = (runtime.get("executors") or {}).get(binding_ref)
         if seat is None:
+            if participant["delivery"] == "external":
+                continue
+            family = participant["model_family"]
             seat = runtime.get("model_defaults", {}).get(family) or {}
-        bindings[participant["executor_ref"]] = (
+        else:
+            family = seat["model_family"]
+        bindings[binding_ref] = (
             execution.RunnerParticipantExecutor(
                 family,
                 provider,
@@ -1896,7 +2124,7 @@ def _participant_execution(store, record, participant_process_factory):
         )
 
     def classify_failure(session_id, participant, _executor, exc):
-        failed_family = participant["model_family"]
+        failed_family = _executor.model_family
         families = runtime.get("families_order") or [failed_family]
         opposite = next(
             (family for family in families if family != failed_family),
@@ -1930,6 +2158,12 @@ def _safe_operational_failure(store, coordinator, session_id):
     """Record the stopped discussion and fail after exact target recovery."""
     reason = "The discussion stopped because participant execution failed."
     try:
+        intervention = store.read_external_intervention(session_id)
+        if (
+            intervention is not None
+            and not intervention["provider_quiescent"]
+        ):
+            return False
         for _attempt in range(8):
             snapshot = store.read(session_id)
             if snapshot is None:
@@ -1984,6 +2218,118 @@ def _wait_operational_retry(pending):
         time.sleep(min(60.0, remaining))
 
 
+def _wait_for_external_response(
+    store,
+    participant_execution,
+    record,
+    pending,
+    execution_context,
+):
+    """Wait without a target lock; optionally let the narrator answer."""
+    token = pending.intervention["token"]
+    while True:
+        intervention = store.read_external_intervention(record["id"])
+        if intervention is None:
+            return
+        if intervention["token"] != token:
+            raise brainstorming.HistoryRewriteError(
+                "external intervention changed while waiting"
+            )
+        if intervention["response"] is not None:
+            return
+        provider = (record["runtime"].get("external_providers") or {}).get(
+            next(
+                participant["external_ref"]
+                for participant in store.read(record["id"]).state[
+                    "run_config"
+                ]["participants"]
+                if participant["id"] == intervention["participant_id"]
+            )
+        )
+        if provider is None:
+            raise brainstorming.HistoryRewriteError(
+                "external participant has no provider binding"
+            )
+        if not intervention["provider_quiescent"]:
+            raise brainstorming.HistoryRewriteError(
+                "an earlier external provider call is not confirmed finished"
+            )
+        if provider["kind"] == "manual":
+            time.sleep(1.0)
+            continue
+
+        claimed = store.claim_external_intervention(record["id"], token)
+        snapshot = store.read(record["id"])
+        prompt = coordination.build_external_narrator_prompt(
+            snapshot.state, claimed
+        )
+        try:
+            if claimed["action_kind"] == "discussion_turn":
+                envelope, _result = participant_execution.exchange_quiescent(
+                    record["id"],
+                    claimed["participant_id"],
+                    prompt,
+                    execution_context,
+                    before_repair=lambda: store.retry_external_provider(
+                        record["id"], token
+                    ),
+                    after_validate=lambda accepted: (
+                        store.complete_external_provider(
+                            record["id"],
+                            token,
+                            {"markdown": accepted["markdown"]},
+                        )
+                    ),
+                )
+            else:
+                envelope, _result = (
+                    participant_execution.exchange_control_quiescent(
+                        record["id"],
+                        claimed["participant_id"],
+                        prompt,
+                        execution_context,
+                        coordination.validate_closure_vote_envelope,
+                        before_repair=lambda: store.retry_external_provider(
+                            record["id"], token
+                        ),
+                        after_validate=lambda accepted: (
+                            store.complete_external_provider(
+                                record["id"],
+                                token,
+                                {"vote": accepted["vote"]},
+                            )
+                        ),
+                    )
+                )
+        except BaseException as exc:
+            latest = store.read_external_intervention(record["id"])
+            if latest is not None and latest["response"] is not None:
+                return
+            if getattr(exc, "worker_quiescent", None) is True:
+                store.mark_external_provider_quiescent(
+                    record["id"], token
+                )
+            classification = getattr(
+                exc, "brainstorming_failure_classification", None
+            )
+            if (
+                not isinstance(classification, dict)
+                or classification.get("error_type")
+                not in brainstorming.RECOVERABLE_FAILURE_TYPES
+            ):
+                raise
+            print(
+                "[recovery] %s; retrying the external narrator in 5 minutes"
+                % classification["error_type"],
+                flush=True,
+            )
+            deadline = time.monotonic() + coordination.OPERATIONAL_RETRY_S
+            while time.monotonic() < deadline:
+                time.sleep(min(60.0, deadline - time.monotonic()))
+            continue
+        return
+
+
 def run_lifecycle(
     home,
     session_id,
@@ -2008,6 +2354,9 @@ def run_lifecycle(
         coordinator = coordination.BrainstormingCoordinator(
             store, participant_execution
         )
+        resumed = coordinator.reconcile_external_intervention(session_id)
+        if resumed.state["status"] in brainstorming.TERMINAL_STATUSES:
+            return 0
         while True:
             try:
                 prepared = coordinator.prepare(session_id)
@@ -2025,15 +2374,41 @@ def run_lifecycle(
             if snapshot.state["status"] in brainstorming.TERMINAL_STATUSES:
                 return 0
             pending_attempt = store.read_turn_attempt(session_id)
+            projection = brainstorming.coordination_projection(snapshot.state)
+            participant_count = len(snapshot.state["run_config"]["participants"])
+            closure_due = (
+                projection is not None
+                and projection["rounds_used"] > 0
+                and len(projection["completed_turns"])
+                == projection["rounds_used"] * participant_count
+                and not any(
+                    event["kind"] == "closure_ballot"
+                    and event["fact"]["after_completed_rounds"]
+                    == projection["rounds_used"]
+                    for event in snapshot.state["transcript_events"]
+                )
+            )
             if (
-                pending_attempt is not None
-                and pending_attempt.get("kind", "discussion_turn")
-                == "closure"
+                closure_due
+                or (
+                    pending_attempt is not None
+                    and pending_attempt.get("kind", "discussion_turn")
+                    == "closure"
+                )
             ):
                 try:
                     snapshot = coordinator.run_closure(
                         session_id, execution_context
                     )
+                except coordination.ExternalInterventionPending as pending:
+                    _wait_for_external_response(
+                        store,
+                        participant_execution,
+                        record,
+                        pending,
+                        execution_context,
+                    )
+                    continue
                 except coordination.OperationalRetryPending as pending:
                     _wait_operational_retry(pending)
                     continue
@@ -2046,6 +2421,15 @@ def run_lifecycle(
                     snapshot = coordinator.run_next_turn(
                         session_id, execution_context
                     )
+                except coordination.ExternalInterventionPending as pending:
+                    _wait_for_external_response(
+                        store,
+                        participant_execution,
+                        record,
+                        pending,
+                        execution_context,
+                    )
+                    continue
                 except coordination.OperationalRetryPending as pending:
                     _wait_operational_retry(pending)
                     continue
@@ -2067,6 +2451,15 @@ def run_lifecycle(
                 snapshot = coordinator.run_closure(
                     session_id, execution_context
                 )
+            except coordination.ExternalInterventionPending as pending:
+                _wait_for_external_response(
+                    store,
+                    participant_execution,
+                    record,
+                    pending,
+                    execution_context,
+                )
+                continue
             except coordination.OperationalRetryPending as pending:
                 _wait_operational_retry(pending)
                 continue
