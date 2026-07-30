@@ -106,6 +106,7 @@ def closing_summary(reason="The bounded discussion did not reach agreement."):
         "damage_altitude": "A bounded and reversible design consequence.",
         "proportionality": "The bounded discussion matched the decision.",
         "escalation_evidence": None,
+        "open_questions": [],
     }
 
 
@@ -140,6 +141,7 @@ class BrainstormingStateTestCase(unittest.TestCase):
             "target_revision": snapshot.state["accepted_target_revision"],
             "votes": votes,
             "approved": True,
+            "closing_summary": closing_summary(reason),
         }
         return self.store.close_with_ballot(
             session_id,

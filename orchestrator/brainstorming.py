@@ -1523,7 +1523,7 @@ def validate_closure_ballot(ballot, run_config):
     _exact_keys(
         ballot,
         ("after_completed_rounds", "target_revision", "votes", "approved"),
-        (),
+        ("closing_summary",),
         "closure_ballot",
     )
     after = ballot["after_completed_rounds"]
@@ -1545,6 +1545,10 @@ def validate_closure_ballot(ballot, run_config):
     checked = _json_copy(ballot, "closure_ballot")
     checked["votes"] = votes
     checked["approved"] = approved
+    if "closing_summary" in ballot:
+        checked["closing_summary"] = validate_closing_summary_shape(
+            ballot["closing_summary"]
+        )
     return checked
 
 
@@ -1560,7 +1564,7 @@ def validate_closing_summary_shape(summary):
             "proportionality",
             "escalation_evidence",
         ),
-        (),
+        ("open_questions",),
         "closing_summary",
     )
     for field in (
@@ -1580,6 +1584,17 @@ def validate_closing_summary_shape(summary):
             objection,
             "closing_summary.unresolved_objections[%d]" % index,
         )
+    questions = summary.get("open_questions")
+    if questions is not None:
+        if not isinstance(questions, list):
+            raise ContractError(
+                "closing_summary.open_questions must be a list"
+            )
+        for index, question in enumerate(questions):
+            _text(
+                question,
+                "closing_summary.open_questions[%d]" % index,
+            )
     evidence = summary["escalation_evidence"]
     if evidence is not None:
         _text(evidence, "closing_summary.escalation_evidence")
@@ -1823,12 +1838,16 @@ def validate_session_state(state):
             transcript_events, run_config, coordination
         )
         if terminal_ballot is not None:
+            proposed_summary = terminal_ballot.get(
+                "closing_summary", summary
+            )
             ballot_summary = closing_summary_with_ballot_facts(
-                summary, terminal_ballot, run_config
+                proposed_summary, terminal_ballot, run_config
             )
             if not _same_json_value(summary, ballot_summary):
                 raise ContractError(
-                    "closing_summary must record every terminal object vote"
+                    "closing_summary must match the voted closing account and "
+                    "record every terminal object vote"
                 )
         if not _same_json_value(
             summary, state["history"][-1]["closing_summary"]
@@ -2213,9 +2232,20 @@ def terminal_closure_successor(state, ballot, result, closing_summary):
         current["request"]["target_path"],
         current["transcript_ref"],
     )
+    if "closing_summary" not in checked_ballot:
+        raise ContractError(
+            "a new closure ballot must retain its closing summary"
+        )
+    proposed_summary = validate_closing_summary_shape(closing_summary)
+    if not _same_json_value(
+        checked_ballot["closing_summary"], proposed_summary
+    ):
+        raise ContractError(
+            "terminal closing summary must equal the account that was voted"
+        )
     checked_summary = validate_closing_summary(
         closing_summary_with_ballot_facts(
-            closing_summary, checked_ballot, current["run_config"]
+            proposed_summary, checked_ballot, current["run_config"]
         ),
         outcome,
         checked_result,
@@ -2434,16 +2464,39 @@ def _render_transcript_event(event, state, labels):
         )
     )
     round_number = fact["after_completed_rounds"]
-    return _entry(
-        "Closure ballot — After round %d" % round_number,
-        "The target considered was the target completed after round %d."
-        % round_number,
+    fields = [
         _field("Votes", "\n".join(votes)),
         _field(
             "Applied agreement rule",
             _closure_rule(state["run_config"]["closure_policy"]),
         ),
         _field("Result", decision),
+    ]
+    summary = fact.get("closing_summary")
+    if summary is not None:
+        questions = summary.get("open_questions", [])
+        fields[0:0] = [
+            _field(
+                "Proposed final agreement",
+                _quoted_markdown(summary["reason"]),
+            ),
+            _field(
+                "Open questions",
+                (
+                    "No open questions were recorded."
+                    if not questions
+                    else "\n\n".join(
+                        _quoted_markdown(question)
+                        for question in questions
+                    )
+                ),
+            ),
+        ]
+    return _entry(
+        "Closure ballot — After round %d" % round_number,
+        "The target considered was the target completed after round %d."
+        % round_number,
+        *fields,
     )
 
 
@@ -2476,10 +2529,24 @@ def _render_closing(state):
         if evidence is not None
         else "No concrete escalation evidence was recorded."
     )
+    questions = summary.get("open_questions", [])
+    questions_text = (
+        "No open questions were recorded."
+        if not questions
+        else "\n\n".join(
+            _quoted_markdown(question) for question in questions
+        )
+    )
     return _entry(
         "Closing",
         _field("Agreement", agreement),
-        _field("Reason", _quoted_markdown(summary["reason"])),
+        _field(
+            "Final agreement"
+            if result["outcome"] == "success"
+            else "Reason",
+            _quoted_markdown(summary["reason"]),
+        ),
+        _field("Open questions", questions_text),
         _field(
             "Target outcome",
             disposition + "\n\n" + _quoted_markdown(result["target_ref"]),

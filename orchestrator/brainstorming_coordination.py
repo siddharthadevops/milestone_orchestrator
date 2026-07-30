@@ -731,12 +731,17 @@ def validate_closure_proposal_envelope(envelope):
         raise brainstorming.ContractError(
             "closure_proposal.propose must be a boolean"
         )
+    summary = brainstorming.validate_closing_summary_shape(
+        envelope["closing_summary"]
+    )
+    if "open_questions" not in summary:
+        raise brainstorming.ContractError(
+            "closure_proposal.closing_summary requires open_questions"
+        )
     return {
         "kind": "closure_proposal",
         "propose": envelope["propose"],
-        "closing_summary": brainstorming.validate_closing_summary_shape(
-            envelope["closing_summary"]
-        ),
+        "closing_summary": summary,
     }
 
 
@@ -816,25 +821,32 @@ def build_closure_proposal_prompt(
 
 You are the lead. Decide whether to propose closure against this exact revision.
 Your proposal is your `accept` vote. Supply the complete plain-language closing
-account that will be used only if this attempt terminalizes. The coordinator
-will add a plain human-labeled record for every later `object` vote so the
-closing cannot contradict the accepted ballot. Return exactly one JSON object
-with:
+account that will be used only if this attempt terminalizes. Its reason must
+stand alone as the final agreement: cover the whole accepted outcome, every
+material target change or deliberate non-change, and anything intentionally
+left open. Do not summarize only the last objection. The coordinator will add a
+plain human-labeled record for every later `object` vote so the closing cannot
+contradict the accepted ballot. Return exactly one JSON object with:
 - kind: "closure_proposal"
 - propose: true or false
 - closing_summary: exactly reason, unresolved_objections, affected_parties,
-  damage_altitude, proportionality, and escalation_evidence
+  damage_altitude, proportionality, escalation_evidence, and open_questions
 
-The four prose fields are non-empty strings, unresolved_objections is a list of
-non-empty strings, and escalation_evidence is null or a non-empty string. Add no
-other fields.
+The four prose fields are non-empty strings. Use unresolved_objections only for
+unresolved objections, otherwise return an empty list. Open_questions is a list
+of questions deliberately deferred by agreement, otherwise an empty list.
+Escalation_evidence is null or a non-empty string. Add no other fields.
 """.format(
         proportionality_report=MACHINERY_PROPORTIONALITY_REPORT.rstrip()
     )
 
 
 def build_closure_vote_prompt(
-    state, participant, target_revision, execution_context=None
+    state,
+    participant,
+    target_revision,
+    closing_summary,
+    execution_context=None,
 ):
     """Ask one persisted interlocutor to vote against the lead's proposal."""
     checked_participant = brainstorming._validate_participant(
@@ -844,15 +856,26 @@ def build_closure_vote_prompt(
         raise brainstorming.ContractError(
             "ordinary closure prompts are only for llm delivery"
         )
+    summary = brainstorming.validate_closing_summary_shape(closing_summary)
     return _closure_common_prompt(
         state, target_revision, execution_context
     ) + """\
 
-The lead has proposed closure against this exact revision. You are interlocutor
-{participant_id}. Return exactly one JSON object with kind "closure_vote" and
-vote equal to "accept" or "object". Add no rationale or other fields to the
-control envelope, and do not edit target_path.
-""".format(participant_id=checked_participant["id"])
+The lead has proposed this final agreement against the exact target revision:
+{closing_summary}
+
+You are interlocutor {participant_id}. Accept only if both the target and this
+complete final agreement accurately represent the discussion, including what
+changed, what deliberately stayed unchanged, and what remains open. Return
+exactly one JSON object with kind "closure_vote" and vote equal to "accept" or
+"object". Add no rationale or other fields to the control envelope, and do not
+edit target_path.
+""".format(
+        participant_id=checked_participant["id"],
+        closing_summary=json.dumps(
+            summary, ensure_ascii=False, sort_keys=True, indent=2
+        ),
+    )
 
 
 def build_external_narrator_prompt(state, intervention):
@@ -883,13 +906,17 @@ This situation is being reconstructed as a credible contemporary novel scene
 so that Dante's judgment follows realistic human behavior. The fictional
 framing is only a perspective device and must not appear in the answer.
 
-Dante is the project lead in a brainstorming session. He has studied the
-project for a long time, understands its limits, and is listening to two AI
-participants discuss the matter. He knows that living and building require
-accepting ordinary risks; that not every imaginable case deserves machinery;
-and that unnecessary complexity also consumes time, creates defects, and can
-destroy a good project. He may simplify, accept residual risk, or demand more
-work when it is genuinely warranted.
+Dante is the human project lead in a live brainstorming conversation. He has
+studied the project for a long time, understands its limits, and is listening
+to two AI participants discuss the matter. He knows that living and building
+require accepting ordinary risks; that not every imaginable case deserves
+machinery; and that unnecessary complexity also consumes time, creates defects,
+and can destroy a good project. He may simplify, accept residual risk, or demand
+more work when it is genuinely warranted.
+
+Dante must sound human, not like an AI writing an analysis. He knows the subject
+deeply, but persuades through simple, clear language and says only what is
+needed to decide and move forward.
 
 Study these real sources silently before writing Dante's turn:
 
@@ -903,8 +930,7 @@ Request:
 Context:
 {context}
 
-Do not edit files. Apply Dante's human judgment to the issue. Do not turn it
-into a report or checklist.
+Do not edit files. Apply Dante's human judgment to the issue.
 """.format(
         chat_path=pending["input"]["transcript_ref"],
         target_path=pending["input"]["target_path"],
@@ -915,14 +941,9 @@ into a report or checklist.
     if pending["action_kind"] == "discussion_turn":
         return scene + """\
 
-The scene requires exactly one dialogue turn from Dante. Return exactly one
-JSON object with kind "discussion_turn" and a non-empty "markdown" field
-containing only that single intervention, in natural English and as direct
-speech. It may use several paragraphs, but it remains one turn. Do not narrate
-the scene, describe Dante's actions or thoughts, add dialogue tags or speaker
-labels, quote or simulate any other speaker, or place fictional prose around
-his words. Be concise, but do not omit substance needed to make the decision
-clear. Add no other fields.
+Return exactly one JSON object with kind "discussion_turn" and a non-empty
+"markdown" field with Dante's single spoken intervention, in natural English.
+Add no other fields.
 """
     closure_context = json.dumps(
         pending["closure_context"],
@@ -2181,6 +2202,7 @@ class BrainstormingCoordinator:
                         state,
                         participant,
                         accepted_target,
+                        summary,
                         execution_context,
                     )
                 ),
@@ -2212,6 +2234,7 @@ class BrainstormingCoordinator:
             "approved": brainstorming.evaluate_closure(
                 state["run_config"], votes
             ),
+            "closing_summary": summary,
         }
         self._require_closure_target(target, accepted_target)
         current = self._require_running(self.store.read(session_id))

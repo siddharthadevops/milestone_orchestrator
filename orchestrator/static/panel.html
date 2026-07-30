@@ -1356,7 +1356,7 @@ function renderSessionDetail(view) {
     paintSessionDetail(html);
     return;
   }
-  // The monitoring page: chips, the discussion, the result.
+  // The monitoring page: chips, the final agreement, then its audit trail.
   html += `<div class="run-sticky-head">`;
   if (listed && listed.project)
     html += `<div class="proj-title">${esc(listed.project)}</div>`;
@@ -1383,15 +1383,39 @@ function renderSessionDetail(view) {
       onclick="openSessionInfo()">Info&#8230;</button>
   </div>`;
   html += `<div class="card"><h3>Activity</h3>${sessionChips(view)}</div>`;
+  if (view.final_agreement) {
+    const agreement = view.final_agreement;
+    const targetName = String(view.target.ref || "target").split("/").pop();
+    const targetState = view.target.changed === true ? "changed"
+      : view.target.changed === false ? "unchanged" : "change unknown";
+    const questions = Array.isArray(agreement.open_questions)
+      ? agreement.open_questions : [];
+    const objections = Array.isArray(agreement.unresolved_objections)
+      ? agreement.unresolved_objections : [];
+    html += `<div class="card"><h3>Final agreement</h3>
+      <div class="mdbody flow">${mdRender(agreement.markdown)}</div>
+      <div class="amend-hint" style="margin-top:10px"><b>Accepted target:</b>
+        <span class="mono" title="${esc(view.target.ref)}">${esc(targetName)}</span>
+        · ${esc(targetState)}</div>
+      <div class="amend-hint" style="margin-top:6px"><b>Open questions:</b> ${
+        questions.length
+          ? questions.map(item => esc(item)).join(" · ")
+          : "none recorded"}</div>${objections.length
+        ? `<div class="amend-hint" style="margin-top:6px"><b>Unresolved objections:</b> ${
+            objections.map(item => esc(item)).join(" · ")}</div>`
+        : ""}</div>`;
+  }
   html += `<div class="card"><h3>Discussion</h3>` +
     (view.transcript_markdown
       ? `<div class="mdbody flow">${mdRender(view.transcript_markdown)}</div>`
       : `<div class="amend-hint">no accepted turns yet</div>`) + `</div>`;
-  html += `<div class="card"><h3>Result</h3>` +
-    (view.result === null
-      ? `<div class="amend-hint">pending</div>`
-      : `<pre class="log mono flow">${esc(JSON.stringify(view.result, null, 2))}</pre>`) +
-    `</div>`;
+  if (!view.final_agreement) {
+    html += `<div class="card"><h3>Result</h3>` +
+      (view.result === null
+        ? `<div class="amend-hint">pending</div>`
+        : `<pre class="log mono flow">${esc(JSON.stringify(view.result, null, 2))}</pre>`) +
+      `</div>`;
+  }
   paintSessionDetail(html);
 }
 async function showSessionActivity(activityId) {

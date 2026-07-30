@@ -13,6 +13,7 @@ VIEW_KEYS = {
     "id", "caller", "status", "request", "process", "revision", "target",
     "participants", "same_family_fallback", "closure_policy",
     "closure_ballots", "round", "transcript_markdown", "result",
+    "final_agreement",
     "activity", "work_duration_s", "in_flight", "retry",
     "external_intervention",
 }
@@ -69,6 +70,16 @@ class BrainstormingVisualizationTest(unittest.TestCase):
     @staticmethod
     def _close(store, session_id, snapshot, ballot):
         state = snapshot.state
+        closing = {
+            "reason": "The bounded result is agreed.",
+            "unresolved_objections": [],
+            "affected_parties": "The operator following this session.",
+            "damage_altitude": "The effect is limited to this target.",
+            "proportionality": "The accepted result is proportionate.",
+            "escalation_evidence": None,
+            "open_questions": [],
+        }
+        ballot = dict(ballot, closing_summary=closing)
         return store.close_with_ballot(
             session_id, snapshot.revision, ballot,
             {
@@ -76,14 +87,7 @@ class BrainstormingVisualizationTest(unittest.TestCase):
                 "transcript_ref": state["transcript_ref"],
                 "rounds_used": state["rounds_used"],
             },
-            {
-                "reason": "The bounded result is agreed.",
-                "unresolved_objections": [],
-                "affected_parties": "The operator following this session.",
-                "damage_altitude": "The effect is limited to this target.",
-                "proportionality": "The accepted result is proportionate.",
-                "escalation_evidence": None,
-            }
+            closing,
         )
     def test_dedicated_page_and_routes_are_brainstorming_only(self):
         # The standalone page is retired: the panel's right pane is the
@@ -100,7 +104,7 @@ class BrainstormingVisualizationTest(unittest.TestCase):
         session_id, _store = self._create("route.md")
         view = self._view(session_id)
         self.assertEqual(set(view["target"]), {
-            "ref", "revision", "exists", "content", "truncated"
+            "ref", "revision", "changed", "exists", "content", "truncated"
         })
         status, detail = self.api._request(
             "GET", "/api/brainstorming/sessions/%s" % session_id
@@ -305,6 +309,7 @@ class BrainstormingVisualizationTest(unittest.TestCase):
         snapshot = store.record_closure_ballot(session_id, snapshot.revision, rejected)
         view = self._view(session_id)
         self.assertEqual(view["closure_ballots"], [rejected])
+        self.assertIsNone(view["final_agreement"])
         self.assertEqual(view["target"]["content"], "<script>target one</script>")
         self.assertEqual(view["transcript_markdown"], bs.render_transcript(snapshot.state))
         second = self._revision(b"accepted target")
@@ -315,15 +320,32 @@ class BrainstormingVisualizationTest(unittest.TestCase):
         accepted = self._ballot(snapshot, True)
         terminal = self._close(store, session_id, snapshot, accepted)
         view = self._view(session_id)
-        self.assertEqual(view["closure_ballots"], [rejected, accepted])
+        self.assertEqual(
+            view["closure_ballots"],
+            [
+                event["fact"]
+                for event in terminal.state["transcript_events"]
+                if event["kind"] == "closure_ballot"
+            ],
+        )
         self.assertEqual(view["result"], terminal.state["result"])
+        self.assertEqual(
+            view["final_agreement"],
+            {
+                "markdown": "The bounded result is agreed.",
+                "open_questions": [],
+                "unresolved_objections": [],
+            },
+        )
+        self.assertTrue(view["target"]["changed"])
         self.assertEqual(view["round"], {"current": 2, "completed": 2, "maximum": 2})
     def test_coordination_without_lead_acceptance_is_not_yet_accepted(self):
         session_id, store = self._create("missing.md", content=None, rounds=4)
         self.assertEqual(
             self._view(session_id)["target"],
             {"ref": "docs/missing.md",
-             "revision": None, "exists": None, "content": None, "truncated": False},
+             "revision": None, "changed": None, "exists": None,
+             "content": None, "truncated": False},
         )
         snapshot = coordination.BrainstormingCoordinator(store, None).prepare(session_id)
         self.assertIsNone(self._view(session_id)["target"]["exists"])

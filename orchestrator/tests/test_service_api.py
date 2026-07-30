@@ -211,13 +211,17 @@ class ServiceApiTest(unittest.TestCase):
         self.assertIn("function sessionRow", text)
         self.assertIn("function openSession", text)
         # A session opens IN the right pane: the monitoring page leads
-        # with live chips, the discussion Markdown and the result;
+        # with live chips, the final agreement and its audit trail;
         # metadata/participants/accepted target live behind Info…. The
         # standalone page is gone entirely.
         self.assertIn("function refreshSessionDetail", text)
         self.assertIn("function renderSessionDetail", text)
         self.assertIn("function stopSelectedSession", text)
         self.assertIn("function sessionChips", text)
+        self.assertIn("view.final_agreement", text)
+        self.assertIn("Final agreement", text)
+        self.assertIn("Accepted target:", text)
+        self.assertIn("Open questions:", text)
         self.assertIn('onclick="openSessionInfo()">Info', text)
         self.assertIn("function closeSessionInfo", text)
         self.assertIn('family ${esc(p.model_family || "—")}', text)

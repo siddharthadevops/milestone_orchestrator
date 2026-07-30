@@ -1748,6 +1748,7 @@ def view_session(home, session_id, authorize, preview_limit):
         target = {
             "ref": state["request"]["target_path"],
             "revision": None,
+            "changed": None,
             "exists": None,
             "content": None,
             "truncated": False,
@@ -1761,7 +1762,12 @@ def view_session(home, session_id, authorize, preview_limit):
             )
             exists, content = brainstorming.target_revision_content(accepted)
             target.update(
-                {"revision": accepted["revision"], "exists": exists}
+                {
+                    "revision": accepted["revision"],
+                    "changed": accepted["revision"]
+                    != state.get("recovery_baseline_revision"),
+                    "exists": exists,
+                }
             )
             if exists:
                 try:
@@ -1773,6 +1779,18 @@ def view_session(home, session_id, authorize, preview_limit):
                     target["truncated"] = len(text) > preview_limit
         turns = [] if progress is None else progress["completed_turns"]
         activity = _activity_projection(store, record, state)
+        closing_summary = state.get("closing_summary")
+        final_agreement = None
+        if state["status"] == "success" and closing_summary is not None:
+            final_agreement = {
+                "markdown": closing_summary["reason"],
+                "open_questions": copy.deepcopy(
+                    closing_summary.get("open_questions", [])
+                ),
+                "unresolved_objections": copy.deepcopy(
+                    closing_summary["unresolved_objections"]
+                ),
+            }
         return {
             "id": record["id"],
             "caller": record["caller"],
@@ -1798,6 +1816,7 @@ def view_session(home, session_id, authorize, preview_limit):
             },
             "transcript_markdown": brainstorming.render_transcript(state),
             "result": copy.deepcopy(state.get("result")),
+            "final_agreement": final_agreement,
             "activity": activity["activity"],
             "work_duration_s": activity["work_duration_s"],
             "in_flight": activity["in_flight"],

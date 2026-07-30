@@ -52,6 +52,18 @@ def envelope(markdown):
     return {"kind": "discussion_turn", "markdown": markdown}
 
 
+def closing_summary():
+    return {
+        "reason": "Adopt the bounded result and leave no question open.",
+        "unresolved_objections": [],
+        "affected_parties": "The people using the requested target.",
+        "damage_altitude": "A bounded and reversible consequence.",
+        "proportionality": "The discussion matched the decision.",
+        "escalation_evidence": None,
+        "open_questions": [],
+    }
+
+
 class ScriptedExecutor:
     def __init__(self, model_family, responses):
         self.model_family = model_family
@@ -232,12 +244,14 @@ class BrainstormingCoordinationTest(unittest.TestCase):
         discussion_prompt = coordination.build_external_narrator_prompt(
             state, discussion
         )
-        self.assertIn("exactly one dialogue turn from Dante", discussion_prompt)
-        self.assertIn("only that single intervention", discussion_prompt)
+        self.assertIn("Dante must sound human", discussion_prompt)
+        self.assertIn("live brainstorming conversation", discussion_prompt)
+        self.assertIn("simple, clear language", discussion_prompt)
+        self.assertIn("decide and move forward", discussion_prompt)
+        self.assertIn("single spoken intervention", discussion_prompt)
         self.assertIn("natural English", discussion_prompt)
-        self.assertIn("as direct", discussion_prompt)
-        self.assertIn("Do not narrate", discussion_prompt)
-        self.assertIn("quote or simulate any other speaker", discussion_prompt)
+        self.assertNotIn("Do not narrate", discussion_prompt)
+        self.assertNotIn("report or checklist", discussion_prompt)
 
     def _subject(self, roster, scripts, store=None, failure_classifier=None):
         store = store or self.store
@@ -376,7 +390,10 @@ class BrainstormingCoordinationTest(unittest.TestCase):
                 snapshot.state, target_revision
             ),
             coordination.build_closure_vote_prompt(
-                snapshot.state, roster[1], target_revision
+                snapshot.state,
+                roster[1],
+                target_revision,
+                closing_summary(),
             ),
         )
         anchors = (
@@ -400,6 +417,11 @@ class BrainstormingCoordinationTest(unittest.TestCase):
 
         discussion_prompt, critic_prompt, proposal_prompt, vote_prompt = (
             prompts_under_test
+        )
+        self.assertIn("final agreement", proposal_prompt)
+        self.assertIn(
+            "Adopt the bounded result and leave no question open.",
+            vote_prompt,
         )
         report_instruction = "If no machinery is justified, say so briefly"
         rationale_instruction = "Explain why anything cheaper is insufficient"

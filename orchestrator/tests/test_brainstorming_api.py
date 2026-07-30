@@ -25,6 +25,18 @@ from orchestrator import brainstorming_lifecycle as lifecycle
 from orchestrator import registry, runners, service, workareas
 
 
+def closing_summary():
+    return {
+        "reason": "The participants completed the bounded discussion.",
+        "unresolved_objections": [],
+        "affected_parties": "The people using the requested target.",
+        "damage_altitude": "A bounded and reversible consequence.",
+        "proportionality": "The discussion matched the decision.",
+        "escalation_evidence": None,
+        "open_questions": [],
+    }
+
+
 class StandaloneBrainstormingApiTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory(prefix="brainstorming-api-")
@@ -185,6 +197,7 @@ class StandaloneBrainstormingApiTest(unittest.TestCase):
             "damage_altitude": "A bounded and reversible consequence.",
             "proportionality": "The discussion matched the decision.",
             "escalation_evidence": None,
+            "open_questions": [],
         }
         if discussion:
             answer = {"kind": "discussion_turn", "markdown": "Accepted turn."}
@@ -2057,7 +2070,11 @@ class StandaloneBrainstormingApiTest(unittest.TestCase):
                 unbound_state, accepted, expected
             ),
             coordination.build_closure_vote_prompt(
-                unbound_state, interlocutor, accepted, expected
+                unbound_state,
+                interlocutor,
+                accepted,
+                closing_summary(),
+                expected,
             ),
         )
         for prompt in unbound_prompts:

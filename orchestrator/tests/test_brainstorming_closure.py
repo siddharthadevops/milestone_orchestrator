@@ -51,6 +51,7 @@ def summary(reason="The participants reached a bounded decision."):
         "damage_altitude": "A bounded and reversible design consequence.",
         "proportionality": "The discussion matched the size of the decision.",
         "escalation_evidence": None,
+        "open_questions": [],
     }
 
 
@@ -264,7 +265,7 @@ class BrainstormingClosureTest(unittest.TestCase):
 
     @staticmethod
     def _ballot(state, values, *, approved=None, round_number=None,
-                target_revision=None):
+                target_revision=None, closing=None):
         votes = [
             {"participant_id": participant["id"], "vote": value}
             for participant, value in zip(
@@ -286,6 +287,7 @@ class BrainstormingClosureTest(unittest.TestCase):
             ),
             "votes": votes,
             "approved": approved,
+            "closing_summary": summary() if closing is None else closing,
         }
 
     @staticmethod
@@ -881,6 +883,13 @@ class BrainstormingClosureTest(unittest.TestCase):
             bs.terminal_closure_successor(
                 state, approved, result, bad_summary
             )
+        different_summary = dict(
+            closing, reason="A different account was not voted."
+        )
+        with self.assertRaises(bs.ContractError):
+            bs.terminal_closure_successor(
+                state, approved, result, different_summary
+            )
 
         executors["codex-lead"].responses.append(proposal())
         executors["claude-critic-1"].responses.append(vote("accept"))
@@ -953,10 +962,19 @@ class BrainstormingClosureTest(unittest.TestCase):
         snapshot, _subject, _roster, _executors, _target, _sibling = (
             self._boundary("interrupted-terminal-objection", max_rounds=2)
         )
+        reason = "The run stopped after the rejected ballot."
+        closing = summary(reason)
+        closing["unresolved_objections"] = [
+            "The participant's authored concern remains unresolved."
+        ]
         rejected = bs.transcript_event_successor(
             snapshot.state,
             "closure_ballot",
-            self._ballot(snapshot.state, ("accept", "object")),
+            self._ballot(
+                snapshot.state,
+                ("accept", "object"),
+                closing=closing,
+            ),
         )
         resumed = bs.completed_turn_successor(
             rejected,
@@ -972,12 +990,7 @@ class BrainstormingClosureTest(unittest.TestCase):
                 "plain": "The provider stopped before discussion resumed.",
             },
         )
-        reason = "The run stopped after the rejected ballot."
         result = self._result(interrupted, "failure", reason)
-        closing = summary(reason)
-        closing["unresolved_objections"] = [
-            "The participant's authored concern remains unresolved."
-        ]
         terminal = bs.transition_session(
             interrupted, "failure", result, closing
         )
@@ -1156,18 +1169,24 @@ class BrainstormingClosureTest(unittest.TestCase):
             self._boundary("contended", max_rounds=1)
         )
         state = snapshot.state
+        winning = summary("Winning success account.")
+        losing = summary("Losing failure account.")
         candidates = (
             (
-                self._ballot(state, ("accept", "accept")),
+                self._ballot(
+                    state, ("accept", "accept"), closing=winning
+                ),
                 self._result(state, "success"),
-                summary("Winning success account."),
+                winning,
             ),
             (
-                self._ballot(state, ("accept", "object")),
+                self._ballot(
+                    state, ("accept", "object"), closing=losing
+                ),
                 self._result(
                     state, "failure", "Losing failure account."
                 ),
-                summary("Losing failure account."),
+                losing,
             ),
         )
         barrier = threading.Barrier(2)

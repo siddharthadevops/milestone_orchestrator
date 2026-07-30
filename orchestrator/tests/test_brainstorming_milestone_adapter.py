@@ -21,6 +21,18 @@ from orchestrator import verifiers
 from orchestrator.tests.test_driver_fixes import make_config
 
 
+def closing_summary():
+    return {
+        "reason": "The bounded milestone result is agreed.",
+        "unresolved_objections": [],
+        "affected_parties": "The milestone workers using the result.",
+        "damage_altitude": "A bounded and reversible consequence.",
+        "proportionality": "The discussion matched the decision.",
+        "escalation_evidence": None,
+        "open_questions": [],
+    }
+
+
 def report_finding(fid="F1"):
     return {
         "id": fid,
@@ -1237,6 +1249,7 @@ class BrainstormingMilestoneAdapterTest(unittest.TestCase):
                 accepted.state,
                 interlocutor,
                 accepted_target,
+                closing_summary(),
                 record["execution_context"],
             ),
         )
@@ -1385,7 +1398,9 @@ class BrainstormingMilestoneAdapterTest(unittest.TestCase):
             "damage_altitude": "A bounded and reversible design decision.",
             "proportionality": "The discussion matched the decision.",
             "escalation_evidence": None,
+            "open_questions": [],
         }
+        ballot["closing_summary"] = closing
         store.close_with_ballot(
             created["id"],
             snapshot.revision,

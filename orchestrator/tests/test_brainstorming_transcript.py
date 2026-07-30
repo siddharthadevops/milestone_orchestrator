@@ -62,6 +62,7 @@ def closing_summary(reason, objections=None):
         "damage_altitude": "A bounded, reversible design consequence.",
         "proportionality": "The discussion effort matched the decision.",
         "escalation_evidence": None,
+        "open_questions": [],
     }
 
 
@@ -142,8 +143,8 @@ class BrainstormingTranscriptTest(unittest.TestCase):
         )
 
     @staticmethod
-    def _ballot_fact(snapshot, votes, approved):
-        return {
+    def _ballot_fact(snapshot, votes, approved, proposed_summary=None):
+        ballot = {
             "after_completed_rounds": snapshot.state["rounds_used"],
             "target_revision": snapshot.state["accepted_target_revision"],
             "votes": [
@@ -157,6 +158,9 @@ class BrainstormingTranscriptTest(unittest.TestCase):
             ],
             "approved": approved,
         }
+        if proposed_summary is not None:
+            ballot["closing_summary"] = proposed_summary
+        return ballot
 
     def _terminal_ballot(
         self, session_id, snapshot, votes, approved, reason
@@ -170,12 +174,17 @@ class BrainstormingTranscriptTest(unittest.TestCase):
         }
         if outcome == "failure":
             result["reason"] = reason
+        final_summary = closing_summary(
+            reason, ["One objection remains."]
+        )
         return self.store.close_with_ballot(
             session_id,
             snapshot.revision,
-            self._ballot_fact(snapshot, votes, approved),
+            self._ballot_fact(
+                snapshot, votes, approved, final_summary
+            ),
             result,
-            closing_summary(reason, ["One objection remains."]),
+            final_summary,
         )
 
     def _terminal(self, session_id, snapshot, outcome, reason):
@@ -421,7 +430,7 @@ class BrainstormingTranscriptTest(unittest.TestCase):
             session_id,
             snapshot.revision,
             self._ballot_fact(
-                snapshot, ("accept", "accept"), True
+                snapshot, ("accept", "accept"), True, summary
             ),
             result,
             summary,
