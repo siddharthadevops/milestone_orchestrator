@@ -225,6 +225,9 @@ class BrainstormingCoordinationTest(unittest.TestCase):
         self.assertIn("Adopt the deliberately small solution.", prompt)
         self.assertIn('\"participant_id\": \"critic\"', prompt)
         self.assertIn('\"vote\": \"object\"', prompt)
+        self.assertIn("Write only what Dante says", prompt)
+        self.assertIn("natural English and as direct speech", prompt)
+        self.assertIn("Do not narrate the scene", prompt)
 
     def _subject(self, roster, scripts, store=None, failure_classifier=None):
         store = store or self.store

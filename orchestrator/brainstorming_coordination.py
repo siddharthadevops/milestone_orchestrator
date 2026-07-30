@@ -856,7 +856,7 @@ control envelope, and do not edit target_path.
 
 
 def build_external_narrator_prompt(state, intervention):
-    """Render Dante's cinematic prompt from the external-turn contract."""
+    """Render Dante's direct-turn prompt from the external contract."""
     checked = brainstorming.validate_session_state(state)
     pending = brainstorming.validate_external_intervention(intervention)
     expected_input = {
@@ -879,35 +879,35 @@ def build_external_narrator_prompt(state, intervention):
         indent=2,
     )
     scene = """\
-Esta escena pertenece a una novela contemporánea. Está construida sobre un
-caso real: los hechos técnicos deben ser consistentes, concretos y creíbles.
+This situation is being reconstructed as a credible contemporary novel scene
+so that Dante's judgment follows realistic human behavior. The fictional
+framing is only a perspective device and must not appear in the answer.
 
-Dante participa en un sistema de brainstorming como jefe del proyecto. Lleva
-mucho tiempo estudiándolo, conoce sus limitaciones y escucha a dos
-inteligencias artificiales discutir la cuestión.
+Dante is the project lead in a brainstorming session. He has studied the
+project for a long time, understands its limits, and is listening to two AI
+participants discuss the matter. He knows that living and building require
+accepting ordinary risks; that not every imaginable case deserves machinery;
+and that unnecessary complexity also consumes time, creates defects, and can
+destroy a good project. He may simplify, accept residual risk, or demand more
+work when it is genuinely warranted.
 
-Dante sabe que vivir y construir implica aceptar riesgos normales; que no
-todos los casos imaginables merecen una solución; y que la complejidad
-innecesaria también cuesta tiempo, introduce fallos y puede destruir un buen
-proyecto. Puede simplificar, aceptar un riesgo residual o exigir más trabajo
-cuando realmente lo considere necesario.
-
-Tú eres el narrador, no Dante, ni un asesor ni otro participante. Antes de
-continuar la escena, estudia silenciosamente las fuentes reales:
+Study these real sources silently before writing Dante's turn:
 
 - Brainstorming: {chat_path}
-- Documento objetivo: {target_path}
-- Directorio de trabajo: {workspace}
+- Target document: {target_path}
+- Working directory: {workspace}
 
-Petición de la escena:
+Request:
 {request}
 
-Contexto aportado:
+Context:
 {context}
 
-No cambies archivos. Continúa la escena narrando la intervención de Dante: qué
-entiende, qué decide y qué les dice a los demás. No escribas un informe ni una
-lista de comprobación. Haz que actúe como una persona real.
+Do not edit files. Write only what Dante says to the other participants, in
+natural English and as direct speech. Do not narrate the scene, describe his
+actions or thoughts, add dialogue tags or speaker labels, or write fictional
+prose around his words. Do not produce a report or checklist. Be concise, but
+do not omit substance needed to make the decision clear.
 """.format(
         chat_path=pending["input"]["transcript_ref"],
         target_path=pending["input"]["target_path"],
@@ -918,8 +918,9 @@ lista de comprobación. Haz que actúe como una persona real.
     if pending["action_kind"] == "discussion_turn":
         return scene + """\
 
-Devuelve exactamente un objeto JSON con kind "discussion_turn" y un campo
-"markdown" no vacío con la continuación de la escena. No añadas otros campos.
+Return exactly one JSON object with kind "discussion_turn" and a non-empty
+"markdown" field containing only Dante's direct contribution. Add no other
+fields.
 """
     closure_context = json.dumps(
         pending["closure_context"],
@@ -929,12 +930,12 @@ Devuelve exactamente un objeto JSON con kind "discussion_turn" y un campo
     )
     return scene + """\
 
-Esta es la propuesta de cierre y los votos emitidos antes del turno de Dante:
+This is the closing proposal and the votes cast before Dante's turn:
 {closure_context}
 
-Narra internamente la decisión de Dante sobre esa propuesta, pero devuelve
-exactamente un objeto JSON con kind "closure_vote" y vote igual a "accept" u
-"object". No añadas otros campos.
+Decide privately how Dante responds to that proposal, then return exactly one
+JSON object with kind "closure_vote" and vote equal to "accept" or "object".
+Add no other fields.
 """.format(closure_context=closure_context)
 
 
