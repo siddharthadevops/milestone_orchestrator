@@ -183,6 +183,7 @@ class ServiceApiTest(unittest.TestCase):
             '{role: "interlocutor", delivery: "llm", agent: "claude",',
             text,
         )
+        self.assertIn('model: "claude-opus-5", effort: "max"', text)
         self.assertIn(
             '{role: "interlocutor", delivery: "external", '
             'externalProvider: "narrator",',
