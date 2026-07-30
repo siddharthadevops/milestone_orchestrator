@@ -2314,7 +2314,7 @@ class MilestoneDriverRethinkTest(unittest.TestCase):
             ],
         )
 
-    def test_slice_note_rethink_failure_reuses_its_gap_route(self):
+    def test_slice_note_rethink_failure_stops_without_redocumenting(self):
         path = self._slice_doc_path()
         runner = runners.MockRunner(
             [{
@@ -2342,16 +2342,15 @@ class MilestoneDriverRethinkTest(unittest.TestCase):
             unit for unit in state["units"]
             if st.unit_key(unit) == "skeleton"
         )
-        self.assertEqual(note["status"], st.U_PENDING)
+        self.assertEqual(note["status"], st.U_FAILED)
         self.assertIsNone(note["draft"])
         self.assertNotIn("brainstorming_wait", note)
-        self.assertEqual(skeleton["status"], st.U_FIXING)
-        self.assertTrue(
-            any(
-                event["type"] == "gap_reported"
-                and event["unit"] == "slice_doc-08"
-                for event in state["events"]
-            )
+        self.assertEqual(skeleton["status"], st.U_SEALED)
+        self.assertEqual(
+            state["failure"]["type"], "brainstorming_no_agreement"
+        )
+        self.assertFalse(
+            any(event["type"] == "gap_reported" for event in state["events"])
         )
 
     def test_implementer_and_fixer_continue_exact_origin_session(self):
@@ -2765,7 +2764,7 @@ class MilestoneDriverRethinkTest(unittest.TestCase):
             ("continue", "codex", "mock-session-1"),
         )
 
-    def test_failure_reuses_builder_gap_or_reviewer_finding_without_false_result(
+    def test_failure_stops_without_fabricating_gap_or_review_result(
         self,
     ):
         path = self._state_path()
@@ -2791,15 +2790,16 @@ class MilestoneDriverRethinkTest(unittest.TestCase):
             event for event in state["events"]
             if event["type"] == "gap_reported"
         ]
-        self.assertEqual(len(reported), 1)
-        self.assertEqual(
-            reported[0]["gaps"][0]["classification"], "fits_remodel"
-        )
+        self.assertEqual(reported, [])
         impl = next(
             unit for unit in state["units"]
             if st.unit_key(unit) == "slice_impl-08"
         )
         self.assertIsNone(impl["draft"])
+        self.assertEqual(impl["status"], st.U_FAILED)
+        self.assertEqual(
+            state["failure"]["type"], "brainstorming_no_agreement"
+        )
 
         review_workspace = os.path.join(self.tmp.name, "review")
         os.makedirs(os.path.join(review_workspace, "proposals"))
@@ -2829,10 +2829,13 @@ class MilestoneDriverRethinkTest(unittest.TestCase):
             drv.Driver(review_path, runner=review_runner).step()
         failed_review = st.load(review_path)
         review_unit = st.current_unit(failed_review)
-        self.assertEqual(review_unit["status"], st.U_FIXING)
-        self.assertEqual(review_unit["fix_queue"], [finding])
+        self.assertEqual(review_unit["status"], st.U_FAILED)
+        self.assertEqual(review_unit["fix_queue"], [])
         self.assertEqual(review_unit["rounds"], [])
-        self.assertIsNone(failed_review["failure"])
+        self.assertEqual(
+            failed_review["failure"]["type"],
+            "brainstorming_no_agreement",
+        )
 
         operational_workspace = os.path.join(
             self.tmp.name, "operational-wait"
@@ -3362,7 +3365,7 @@ class MilestoneDriverRethinkTest(unittest.TestCase):
         )
         self.assertEqual(current["family_index"], 0)
 
-    def test_retired_seal_wait_failure_queues_finding_after_restart(self):
+    def test_retired_seal_wait_failure_stops_without_synthetic_fix(self):
         path = self._state_path(status=st.U_SEALING)
         state = st.load(path)
         unit = st.current_unit(state)
@@ -3388,12 +3391,13 @@ class MilestoneDriverRethinkTest(unittest.TestCase):
 
         resumed = st.load(path)
         current = st.current_unit(resumed)
-        self.assertEqual(current["status"], st.U_FIXING)
+        self.assertEqual(current["status"], st.U_FAILED)
         self.assertNotIn("brainstorming_wait", current)
         self.assertEqual(current["family_index"], 0)
-        self.assertEqual([item["id"] for item in current["fix_queue"]],
-                         [source_finding["id"]])
-        self.assertEqual(current["fix_source"]["type"], "round")
+        self.assertEqual(current["fix_queue"], [])
+        self.assertEqual(
+            resumed["failure"]["type"], "brainstorming_no_agreement"
+        )
 
     def test_fresh_review_uses_retained_content_without_target_monitoring(self):
         workspace = os.path.join(self.tmp.name, "retained-target-review")
@@ -3463,7 +3467,7 @@ class MilestoneDriverRethinkTest(unittest.TestCase):
         self.assertIn('"source_finding": {', runner.calls[1][2])
         self.assertIn('"content": "accepted proposal"', runner.calls[1][2])
 
-    def test_ineligible_fixer_discussion_failure_preserves_fix_episode(self):
+    def test_fixer_discussion_failure_preserves_queue_and_stops(self):
         path = self._state_path(status=st.U_FIXING)
         state = st.load(path)
         unit = st.current_unit(state)
@@ -3508,7 +3512,9 @@ class MilestoneDriverRethinkTest(unittest.TestCase):
             drv.Driver(path, runner=runner).step()
         stopped = st.load(path)
         stopped_unit = st.current_unit(stopped)
-        self.assertEqual(stopped["failure"]["type"], "worker_blocked")
+        self.assertEqual(
+            stopped["failure"]["type"], "brainstorming_no_agreement"
+        )
         self.assertEqual(stopped_unit["failed_from"], st.U_FIXING)
         self.assertEqual(stopped_unit["fix_queue"], [finding])
         self.assertNotIn("brainstorming_wait", stopped_unit)

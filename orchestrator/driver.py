@@ -189,10 +189,6 @@ DEFAULT_CONFIG = {
         "enabled": True,
         "max_rounds": 5,
     },
-    # New design contradictions use a focused discussion and an ordinary
-    # reviewed amendment. Runs whose frozen config predates this flag retain
-    # their historical gap/re-documentation recovery semantics.
-    "rethink_design_updates": True,
     # A delta stops being meaningfully incremental after enough cumulative
     # fixes.  After this many fixes in one episode born from a review round
     # or a seal, amend the pending diff without fabricating a clean delta
@@ -426,7 +422,7 @@ class Driver(object):
                     self._save()
         self._consume_stale_marker()
         self._consume_pending_gap()
-        self._consume_pending_wave()
+        self._migrate_active_redoc_wave()
         # A crash between a seal and its _after_seal ensure_next_unit can
         # leave the DUE planned unit without a record; with a mid-table
         # remodel insert, navigation would fall through to a later
@@ -1571,14 +1567,17 @@ class Driver(object):
                 "id": event.get("amendment_id"),
                 "text": event.get("text"),
                 "at": event.get("at"),
-                "authority": "brainstorming_design",
+                "authority": event.get("authority") or "brainstorming_design",
                 "session_id": event.get("session_id"),
                 "accepted_target_revision": event.get(
                     "accepted_target_revision"
                 ),
             }
             for event in self.state.get("events", [])
-            if event.get("type") == "brainstorming_design_amendment_adopted"
+            if event.get("type") in (
+                "brainstorming_design_amendment_adopted",
+                "redoc_wave_migrated_to_design_update",
+            )
             and str(event.get("text") or "").strip()
         ]
         return operator + design
@@ -1990,19 +1989,10 @@ class Driver(object):
         classifier call itself failed) are persisted as a
         <raw_name>-classify-<family>.txt artifact so an "unknown" verdict is
         auditable after the fact."""
-        texts = list(getattr(exc, "raw_texts", []) or [])
-        texts.append(str(exc))
-        if isinstance(exc, runners.WorkerStalled):
-            # A frozen worker: recoverable near-term, exactly like a timeout
-            # (a fresh call re-issues the same work). No LLM classifier —
-            # there is nothing to classify, the process produced nothing.
-            return "timeout", None, "worker stalled (no CPU progress)"
-        if isinstance(exc, runners.RunnerError) and "timed out" in str(exc):
-            return "timeout", None, "runner timeout"
         opposite = self._opposite(family)
         cls_model, cls_effort = self._family_defaults(opposite)
-        return errclass.classify_failure(
-            texts,
+        return errclass.classify_worker_failure(
+            exc,
             runner=self.runner,
             opposite_family=opposite,
             workspace=self.workspace,
@@ -4322,22 +4312,6 @@ class Driver(object):
                 },
             )
         if output.get("status") == "gap":
-            if self._modern_design_updates() and not any(
-                gap.get("classification") == contracts.CLASSIFY_NEEDS_OPERATOR
-                for gap in output.get("gaps") or []
-            ):
-                self._enforce_sealed_artifacts(raw_name)
-                st.fail_run(
-                    self.state,
-                    "%s returned the retired in-goal gap route; retry this "
-                    "same task with need_rethink so a focused amendment can "
-                    "be discussed without rebuilding prior documentation"
-                    % kind,
-                    unit=unit,
-                    type_="worker_protocol",
-                )
-                self._save()
-                raise StopStep("retired in-goal gap route")
             # The builder met a build-changing hole/conflict and stopped
             # (reform §3). Route it upstream (repair) or to the operator
             # (goal). The unit finished NOTHING and stays pending; it
@@ -4662,6 +4636,59 @@ class Driver(object):
             g for g in gaps
             if g.get("classification") == contracts.CLASSIFY_NEEDS_OPERATOR
         ]
+        if (
+            not operator_gaps
+            and self._modern_design_updates()
+            and not gitops.enabled(self.config)
+        ):
+            # Only an already-running historical worker can still return this
+            # retired result. Without Git there is no exact pre-call snapshot,
+            # so retrying could adopt its abandoned scratch. Stop safely; never
+            # fall through to the old re-documentation route.
+            self.state["pending_gap"] = None
+            st.fail_run(
+                self.state,
+                "cannot retry the retired in-goal gap from %s without an "
+                "exact Git snapshot; inspect the preserved workspace and "
+                "resume explicitly"
+                % pending.get("reporter"),
+                unit=unit,
+                type_="gap_cleanup",
+            )
+            self._save()
+            raise StopStep("retired gap has no restorable snapshot")
+        if (
+            not pending.get("from_fixer")
+            and not operator_gaps
+            and self._modern_design_updates()
+        ):
+            if int(unit.get("retired_gap_retries") or 0) >= 1:
+                self.state["pending_gap"] = None
+                st.fail_run(
+                    self.state,
+                    "%s repeated the retired in-goal gap route; use "
+                    "need_rethink for the same design contradiction"
+                    % pending.get("reporter"),
+                    unit=unit,
+                    type_="worker_protocol",
+                )
+                self._save()
+                raise StopStep("retired in-goal gap route repeated")
+            unit["retired_gap_retries"] = int(
+                unit.get("retired_gap_retries") or 0
+            ) + 1
+            self.state["pending_gap"] = None
+            st.append_event(
+                self.state,
+                "legacy_gap_retried_as_rethink",
+                unit=st.unit_key(unit),
+                from_fixer=False,
+            )
+            self._save()
+            return (
+                "retired in-goal gap cleared; the same draft retries with "
+                "the rethink contract"
+            )
         # A fixer gap is taken AFTER the slice already has a candidate. Restore
         # the exact PRE-FIXER worktree tree: this discards only the gapping
         # call's scratch while retaining the implementation and any earlier
@@ -4721,6 +4748,34 @@ class Driver(object):
                     self.state, "gap_edits_discarded", unit=st.unit_key(unit),
                     scope="gapping fixer scratch only",
                 )
+                if not operator_gaps and self._modern_design_updates():
+                    if int(unit.get("retired_gap_retries") or 0) >= 1:
+                        self.state["pending_gap"] = None
+                        st.fail_run(
+                            self.state,
+                            "%s repeated the retired in-goal gap route; use "
+                            "need_rethink for the same design contradiction"
+                            % pending.get("reporter"),
+                            unit=unit,
+                            type_="worker_protocol",
+                        )
+                        self._save()
+                        raise StopStep("retired fixer gap route repeated")
+                    unit["retired_gap_retries"] = int(
+                        unit.get("retired_gap_retries") or 0
+                    ) + 1
+                    self.state["pending_gap"] = None
+                    st.append_event(
+                        self.state,
+                        "legacy_gap_retried_as_rethink",
+                        unit=st.unit_key(unit),
+                        from_fixer=True,
+                    )
+                    self._save()
+                    return (
+                        "retired fixer gap cleared; the same fix retries with "
+                        "the rethink contract"
+                    )
                 if operator_gaps:
                     return self._route_goal_gap(unit, operator_gaps[0])
                 refname = self._parked_candidate_ref(unit)
@@ -5001,61 +5056,166 @@ class Driver(object):
         except StopStep:
             pass  # a routing failure recorded a run failure; leave it be
 
-    def _consume_pending_wave(self):
-        """A re-documentation wave whose ANCHOR sealed but whose close never
-        ran (the anchor's gate commit failed after the seal transition saved:
-        failure recorded, wave record left open, notes stranded in bare
-        REPAIRING — navigation would pick one and decide() has no move for
-        it). On startup with the failure cleared: retry the missing gate
-        commit, then close the wave. Idempotent (a closed wave has no
-        record; an unsealed anchor means the episode is still in flight and
-        the normal path closes it). Same locking discipline as
-        _consume_pending_gap."""
-        wave = self.state.get("redoc_wave")
-        if not wave or self.state.get("failure"):
+    def _migrate_active_redoc_wave(self):
+        """Retire an in-flight historical redocumentation wave.
+
+        The current anchor keeps its ordinary fix/review position. Co-opened
+        notes return to their prior terminal state, while every existing design
+        document remains editable through one normal ``design_update`` owned by
+        the anchor. Any active Brainstorming attachment and any parked
+        implementation candidate are left untouched. The anchor's eventual
+        ordinary gate binds the actually changed design paths.
+        """
+        if not self.state.get("redoc_wave"):
             return
         try:
             with self._exclusive():
                 self.state = st.load(self.state_path)
                 wave = self.state.get("redoc_wave")
-                if not wave or self.state.get("failure"):
+                if not wave:
                     return
                 anchor = self._unit_by_key(wave.get("anchor"))
-                if anchor is None or anchor["status"] != st.U_SEALED:
-                    return  # episode still in flight; closes via _after_seal
-                # Presence of gate_commit is NOT enough: the reopen kept the
-                # anchor's PRE-WAVE gate sha, and closing against it would
-                # let the sealed-artifact guard restore pre-wave bytes. The
-                # reseal's gate exists only if a gate_commit event for the
-                # anchor POSTDATES its last transition to sealed; otherwise
-                # the crash was the gate itself — retry it (fails the run
-                # again if the cause persists; never close the wave on bytes
-                # no gate holds).
-                anchor_key = st.unit_key(anchor)
-                sealed_seq = gate_seq = -1
-                for e in self.state["events"]:
-                    if e.get("unit") != anchor_key:
+                if anchor is None:
+                    return
+                anchor_sealed = anchor.get("status") == st.U_SEALED
+                by_key = {
+                    st.unit_key(unit): unit
+                    for unit in self.state.get("units") or []
+                }
+                docs = [
+                    by_key.get(key) for key in wave.get("docs") or []
+                ]
+                if any(
+                    doc is None
+                    or doc.get("status") not in (st.U_REPAIRING, st.U_SEALED)
+                    for doc in docs
+                ):
+                    return
+
+                editable_paths = self._design_document_paths()
+                changed_paths = []
+                candidates = [anchor] + [doc for doc in docs if doc is not None]
+                for candidate in candidates:
+                    artifact = candidate.get("artifact")
+                    if not artifact or artifact not in editable_paths:
                         continue
-                    if e.get("type") == "unit_transition" \
-                            and e.get("to_status") == st.U_SEALED:
-                        sealed_seq = e.get("seq", -1)
-                    elif e.get("type") == "gate_commit":
-                        gate_seq = e.get("seq", -1)
-                # Same two phases as _after_seal: state close first (so a
-                # retried gate's ledgers render sealed notes), gate retry if
-                # the reseal's gate never ran, then stamp + clear.
-                st.close_redoc_wave(self.state, anchor)
-                if gitops.enabled(self.config) and gate_seq < sealed_seq:
-                    self._gate_commit(anchor)
-                st.stamp_redoc_wave_gate(
-                    self.state, anchor, anchor.get("gate_commit")
+                    changed = True
+                    if gitops.enabled(self.config) and candidate.get("gate_commit"):
+                        baseline = gitops.show_file(
+                            self.workspace,
+                            candidate["gate_commit"],
+                            artifact,
+                        )
+                        changed = baseline != self._workspace_bytes(artifact)
+                    if changed and artifact not in changed_paths:
+                        changed_paths.append(artifact)
+
+                for doc in docs:
+                    if doc["status"] == st.U_REPAIRING:
+                        st.transition_unit(
+                            self.state,
+                            doc,
+                            st.U_SEALED,
+                            reason=(
+                                "historical redocumentation retired; changes "
+                                "moved to the anchor's ordinary review"
+                            ),
+                        )
+
+                trigger = next(
+                    (
+                        event for event in reversed(self.state.get("events") or [])
+                        if event.get("type") == "reopened_for_repair"
+                        and event.get("unit") == st.unit_key(anchor)
+                    ),
+                    {},
                 )
-                self._guard_unplanned_preserved_candidates()
+                subject = (
+                    trigger.get("plain")
+                    or trigger.get("forced_decision")
+                    or "the reported in-goal design contradiction"
+                )
+                text = (
+                    "Apply the smallest coherent in-goal design update needed "
+                    "for: %s. Preserve completed implementation and review the "
+                    "changed design with the current unit's ordinary cycle."
+                    % subject
+                )
+                amendment_id = "legacy-redoc-%d" % (
+                    1
+                    + sum(
+                        event.get("type")
+                        == "redoc_wave_migrated_to_design_update"
+                        for event in self.state.get("events") or []
+                    )
+                )
+                previous = anchor.get("design_update") or {}
+                merged_editable = list(previous.get("editable_paths") or [])
+                for path in editable_paths:
+                    if path not in merged_editable:
+                        merged_editable.append(path)
+                merged_changed = list(previous.get("changed_paths") or [])
+                for path in changed_paths:
+                    if path not in merged_changed:
+                        merged_changed.append(path)
+                if not anchor_sealed:
+                    anchor["design_update"] = {
+                        **previous,
+                        "amendment_id": amendment_id,
+                        "amendment": text,
+                        "editable_paths": merged_editable,
+                        "changed_paths": merged_changed,
+                    }
+                anchor.pop("under_repair", None)
+                self.state["redoc_wave"] = None
+                st.append_event(
+                    self.state,
+                    (
+                        "redoc_wave_retired_after_review"
+                        if anchor_sealed
+                        else "redoc_wave_migrated_to_design_update"
+                    ),
+                    unit=st.unit_key(anchor),
+                    reporter=wave.get("reporter"),
+                    amendment_id=amendment_id,
+                    text=text,
+                    authority="historical_design_update",
+                    editable_paths=merged_editable,
+                    changed_paths=merged_changed,
+                )
+                if anchor_sealed:
+                    # The anchor's ordinary reviews already covered these
+                    # bytes. Recover its post-review gate only when the crash
+                    # occurred before that gate; never manufacture per-note
+                    # review/seal records.
+                    anchor_key = st.unit_key(anchor)
+                    sealed_seq = gate_seq = -1
+                    for event in self.state.get("events") or []:
+                        if event.get("unit") != anchor_key:
+                            continue
+                        if (
+                            event.get("type") == "unit_transition"
+                            and event.get("to_status") == st.U_SEALED
+                        ):
+                            sealed_seq = event.get("seq", -1)
+                        elif event.get("type") == "gate_commit":
+                            gate_seq = event.get("seq", -1)
+                    if gitops.enabled(self.config) and gate_seq < sealed_seq:
+                        self.state["retired_redoc_docs_pending_gate"] = {
+                            "anchor": anchor_key,
+                            "docs": [st.unit_key(doc) for doc in docs],
+                        }
+                        self._gate_commit(anchor)
+                    gate_sha = anchor.get("gate_commit")
+                    if gate_sha:
+                        for doc in docs:
+                            doc["gate_commit"] = gate_sha
+                    self._guard_unplanned_preserved_candidates()
                 self._save()
         except ConcurrentRunError:
             return
         except StopStep:
-            pass  # the retried gate failed again; failure is recorded
+            pass  # gate recovery recorded the failure and remains resumable
 
     def _slice_info(self, slice_id):
         for sl in self.state["milestone"]["slices"]:
@@ -5213,7 +5373,10 @@ class Driver(object):
         return lead, counterpart
 
     def _modern_design_updates(self):
-        return self.config.get("rethink_design_updates") is True
+        # Compatibility must never restore retired redocumentation machinery.
+        # Persisted runs with a missing or false historical flag use the same
+        # lightweight rethink/design-update path as newly created runs.
+        return True
 
     def _legacy_gap_enabled(self):
         return (
@@ -5512,15 +5675,12 @@ class Driver(object):
                 pre_sym = gitops.head_symbolic_ref(self.workspace)
                 pre_head = gitops.head_full_sha(self.workspace)
                 pre_tree = gitops.snapshot_index_tree(self.workspace)
-                pre_worktree_tree = (
-                    gitops.snapshot_worktree_tree(self.workspace)
-                    if self._fixer_gap_enabled(unit)
-                    or self._editable_design_paths(unit)
-                    or (
-                        design_context
-                        and design_context.get("mode") == "offer"
-                    )
-                    else pre_tree
+                # A persisted worker from an older driver may still return the
+                # retired gap result even though current prompts never offer
+                # it. Always retain the exact candidate so recovery cannot
+                # discard fixes accumulated in earlier rounds.
+                pre_worktree_tree = gitops.snapshot_worktree_tree(
+                    self.workspace
                 )
                 pre_stash = gitops.snapshot_stash(self.workspace)
             except gitops.GitError:
@@ -5640,15 +5800,22 @@ class Driver(object):
             # finishes NOTHING; its sound findings are re-surfaced and re-fixed
             # after the design is made coherent.
             #
-            # The fixer gap is advertised ONLY under a reform profile, with git
-            # on, on a normal slice (see gap_enabled above). This interception
-            # is the AUTHORITATIVE safety gate and must mirror that envelope
-            # EXACTLY (gap_semantics included): a gap arriving outside it — a
-            # legacy/profile-less run, git off, under_repair, or the skeleton —
-            # cannot be safely unwound, so it is a `blocked` operator stop, not
-            # routed. Keeping this in lockstep with gap_enabled prevents the
-            # prompt (no GAP EXIT) and the router (would route) from disagreeing.
-            if not self._fixer_gap_enabled(unit):
+            # In-goal fixer gaps are retired in favor of need_rethink. A
+            # persisted needs_operator gap remains recoverable so an old
+            # in-flight call cannot lose a genuine operator decision.
+            has_operator_gap = any(
+                gap.get("classification")
+                == contracts.CLASSIFY_NEEDS_OPERATOR
+                for gap in output.get("gaps") or []
+            )
+            recoverable_retired_gap = (
+                self._modern_design_updates() and gitops.enabled(self.config)
+            )
+            if (
+                not self._fixer_gap_enabled(unit)
+                and not has_operator_gap
+                and not recoverable_retired_gap
+            ):
                 st.fail_run(
                     self.state,
                     "%s returned a contradiction gap outside the supported "
@@ -6282,6 +6449,19 @@ class Driver(object):
                 self._rollback_design_correction(
                     unit, verdict.get("reason"), provisional
                 )
+                if decision == "needs_operator":
+                    return self._route_goal_gap(unit, gap)
+                if self._modern_design_updates():
+                    st.append_event(
+                        self.state,
+                        "legacy_remodel_retried_as_rethink",
+                        unit=st.unit_key(unit),
+                        reason=str(verdict.get("reason") or "")[:300],
+                    )
+                    return (
+                        "retired remodel verdict cleared; the same fixer "
+                        "retries with the rethink contract"
+                    )
                 return self._handle_gap(
                     unit,
                     {"gaps": [gap]},
@@ -7094,31 +7274,60 @@ class Driver(object):
                 paths.append(u["artifact"])
         return paths
 
+    def _retire_reviewed_redoc_wave(self, anchor):
+        """Close a historical reviewed wave without synthetic approvals."""
+        wave = self.state.get("redoc_wave") or {}
+        if wave.get("anchor") != st.unit_key(anchor):
+            return []
+        by_key = {
+            st.unit_key(candidate): candidate
+            for candidate in self.state.get("units") or []
+        }
+        docs = [
+            by_key[key] for key in wave.get("docs") or []
+            if key in by_key
+        ]
+        for doc in docs:
+            if doc.get("status") == st.U_REPAIRING:
+                st.transition_unit(
+                    self.state,
+                    doc,
+                    st.U_SEALED,
+                    reason="historical redocumentation retired after review",
+                )
+            doc.pop("under_repair", None)
+        if gitops.enabled(self.config):
+            self.state["retired_redoc_docs_pending_gate"] = {
+                "anchor": st.unit_key(anchor),
+                "docs": [st.unit_key(doc) for doc in docs],
+            }
+        self.state["redoc_wave"] = None
+        st.append_event(
+            self.state,
+            "redoc_wave_retired_after_review",
+            unit=st.unit_key(anchor),
+            reporter=wave.get("reporter"),
+            docs=[st.unit_key(doc) for doc in docs],
+            authority="historical_review_evidence",
+        )
+        return docs
+
     def _after_seal(self, unit):
         if unit["kind"] == st.UNIT_SLICE_IMPL:
             st.close_slice(self.state, unit)
-        # A re-documentation wave closes in two phases around the gate:
-        # PHASE 1 (before the gate) reseals every co-reopened note with the
-        # wave's seal record, so the gate's GENERATED LEDGERS render the
-        # truth — sealed notes with their wave seal, never "repairing";
-        # PHASE 2 (after the gate) stamps the wave gate's sha as the notes'
-        # baseline and clears the record. Both run in the same handler as
-        # the seal transition, so the close is atomic with it on disk; a
-        # crash between the phases leaves the record set and startup
-        # recovery completes it.
+        # A driver upgraded while a historical wave was still alive may reach
+        # this boundary without restarting. Retire it using the reviews that
+        # just completed; never synthesize approvals for the co-opened notes.
         is_anchor = bool(
             (self.state.get("redoc_wave") or {}).get("anchor")
             == st.unit_key(unit)
         )
         if is_anchor:
-            st.close_redoc_wave(self.state, unit)
+            self._retire_reviewed_redoc_wave(unit)
         self._gate_commit(unit)
         if unit.get("design_update"):
             unit.pop("design_update", None)
         if is_anchor:
-            st.stamp_redoc_wave_gate(
-                self.state, unit, unit.get("gate_commit")
-            )
             self._guard_unplanned_preserved_candidates()
         nxt = st.ensure_next_unit(self.state)
         if nxt is None and st.maybe_close_milestone(self.state):
@@ -7156,9 +7365,6 @@ class Driver(object):
             )
             self._save()
             raise StopStep("pending gate unit is unavailable")
-        if unit.get("gate_commit"):
-            self.state.pop("pending_gate_unit", None)
-            return True
         self._gate_commit(unit)
         unit.pop("design_update", None)
         return True
@@ -7193,6 +7399,13 @@ class Driver(object):
             note = self._unit_by_key(correction.get("note_unit"))
             if note is not None:
                 note["gate_commit"] = sha
+        retired = self.state.get("retired_redoc_docs_pending_gate") or {}
+        if retired.get("anchor") == st.unit_key(unit):
+            for key in retired.get("docs") or []:
+                note = self._unit_by_key(key)
+                if note is not None:
+                    note["gate_commit"] = sha
+            self.state.pop("retired_redoc_docs_pending_gate", None)
         st.append_event(
             self.state,
             "gate_commit",

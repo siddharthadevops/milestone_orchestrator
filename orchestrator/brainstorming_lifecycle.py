@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import contextlib
 import copy
+import hashlib
 import json
 import os
 import secrets
@@ -28,7 +29,7 @@ from dataclasses import dataclass
 from orchestrator import brainstorming
 from orchestrator import brainstorming_coordination as coordination
 from orchestrator import brainstorming_execution as execution
-from orchestrator import driver, kvstore, registry, runners
+from orchestrator import driver, errclass, kvstore, registry, runners
 
 try:
     import fcntl
@@ -581,6 +582,7 @@ def _runtime_and_roster(config, participants, closure_policy, workspace):
         "executors": executors,
         "worker_stall_window_s": config.get("worker_stall_window_s"),
         "worker_stall_min_cpu_s": config.get("worker_stall_min_cpu_s"),
+        "error_classifier": bool(config.get("error_classifier", True)),
     }
     try:
         runtime = brainstorming._json_copy(runtime, "runtime")
@@ -965,11 +967,26 @@ def _activity_projection(store, record, state):
             and event["action_id"] in completed_actions
         )
     attempt = store.read_turn_attempt(record["id"])
+    attempt_call_recorded = bool(
+        attempt is not None
+        and any(
+            event["action_id"] == attempt["token"]
+            and event["provider_attempt"]
+            == attempt.get("provider_attempt", 1)
+            for event in events
+        )
+    )
+    retry = (
+        None
+        if attempt is None
+        else copy.deepcopy(attempt.get("operational_retry"))
+    )
     in_flight = None
     if (
         _process_alive(record)
         and attempt is not None
         and not attempt["quiescent"]
+        and not attempt_call_recorded
     ):
         participants = {
             participant["id"]: participant
@@ -1009,6 +1026,7 @@ def _activity_projection(store, record, state):
             else sum(event["duration_s"] for event in events)
         ),
         "in_flight": in_flight,
+        "retry": retry,
     }
 
 
@@ -1349,6 +1367,7 @@ def _list_projection(store, record):
         "max_rounds": None,
         "work_duration_s": None,
         "in_flight": None,
+        "retry": None,
         "state_error": None,
     }
     try:
@@ -1371,6 +1390,7 @@ def _list_projection(store, record):
         activity = _activity_projection(store, record, state)
         row["work_duration_s"] = activity["work_duration_s"]
         row["in_flight"] = activity["in_flight"]
+        row["retry"] = activity["retry"]
     except Exception as exc:  # one row's fault is not the list's fault
         row["state_error"] = str(exc)
     return row
@@ -1538,6 +1558,7 @@ def view_session(home, session_id, authorize, preview_limit):
             "activity": activity["activity"],
             "work_duration_s": activity["work_duration_s"],
             "in_flight": activity["in_flight"],
+            "retry": activity["retry"],
         }
     except PublicLifecycleError:
         raise
@@ -1659,7 +1680,9 @@ def _reconcile_for_terminal(store, session_id):
         if snapshot.state["status"] in brainstorming.TERMINAL_STATUSES:
             return snapshot
         try:
-            return coordinator.prepare(session_id)
+            return coordinator.prepare(
+                session_id, cancel_operational_retry=True
+            )
         except brainstorming.RevisionConflict:
             continue
         except coordination.CoordinationRejected as exc:
@@ -1768,6 +1791,57 @@ def _stop_authorized(home, session_id, record):
     raise PublicLifecycleError(409, STOP_INCOMPLETE)
 
 
+def _record_classifier_activity(store, session_id, call):
+    """Record the classifier's physical LLM call without making it a turn."""
+    attempt = store.read_turn_attempt(session_id)
+    snapshot = store.read(session_id)
+    if attempt is None or snapshot is None:
+        return
+    provider_attempt = attempt.get("provider_attempt", 1)
+    action_id = "%s:classifier" % attempt["token"]
+    digest = hashlib.sha256(
+        ("%s:%d" % (action_id, provider_attempt)).encode("utf-8")
+    ).hexdigest()[:20]
+    event_id = "activity-%s" % digest
+    raw_ref = store.save_activity_output(
+        session_id, event_id, call.get("raw") or ""
+    )
+    participants = snapshot.state["run_config"]["participants"]
+    completed = attempt["completed_turn_count"]
+    kind = attempt.get("kind", "discussion_turn")
+    round_number = (
+        completed // len(participants) + 1
+        if kind == "discussion_turn"
+        else max(1, completed // len(participants))
+    )
+    event = {
+        "id": event_id,
+        "action_id": action_id,
+        "provider_attempt": provider_attempt,
+        "at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+        "started_at": float(call["started_at"]),
+        "duration_s": float(call["duration_s"]),
+        "kind": "classifier",
+        "stage": "classification",
+        "round": round_number,
+        "participant_id": "recovery-classifier",
+        "model_family": call["family"],
+        "model": call.get("model"),
+        "effort": call.get("effort"),
+        "status": call["status"],
+        "raw_ref": raw_ref,
+    }
+    prompt_path = call.get("prompt_path")
+    if isinstance(prompt_path, str) and prompt_path:
+        event["prompt_ref"] = os.path.basename(prompt_path)
+    if call["status"] == "failed":
+        event["failure_type"] = call.get("failure_type") or "execution"
+        event["error"] = str(
+            call.get("error") or "failure classifier call failed"
+        )[:4000]
+    store.append_activity(session_id, event)
+
+
 def _participant_execution(store, record, participant_process_factory):
     runtime = record["runtime"]
     session_id = record["id"]
@@ -1820,7 +1894,36 @@ def _participant_execution(store, record, participant_process_factory):
                 effort=seat.get("effort"),
             )
         )
-    return execution.ParticipantExecution(store, bindings)
+
+    def classify_failure(session_id, participant, _executor, exc):
+        failed_family = participant["model_family"]
+        families = runtime.get("families_order") or [failed_family]
+        opposite = next(
+            (family for family in families if family != failed_family),
+            failed_family,
+        )
+        defaults = (runtime.get("model_defaults") or {}).get(opposite) or {}
+        error_type, resume_at, evidence = errclass.classify_worker_failure(
+            exc,
+            runner=provider,
+            opposite_family=opposite,
+            workspace=snapshot.state["request"]["workspace_path"],
+            use_llm=bool(runtime.get("error_classifier", True)),
+            classifier_model=defaults.get("model"),
+            classifier_effort=defaults.get("effort"),
+            on_llm_call=lambda call: _record_classifier_activity(
+                store, session_id, call
+            ),
+        )
+        return {
+            "error_type": error_type,
+            "resume_at": resume_at,
+            "evidence": evidence,
+        }
+
+    return execution.ParticipantExecution(
+        store, bindings, failure_classifier=classify_failure
+    )
 
 
 def _safe_operational_failure(store, coordinator, session_id):
@@ -1867,6 +1970,20 @@ def _safe_operational_failure(store, coordinator, session_id):
         return False
 
 
+def _wait_operational_retry(pending):
+    retry = pending.retry
+    print(
+        "[recovery] %s; retrying the same Brainstorming action in 5 minutes"
+        % retry["error_type"],
+        flush=True,
+    )
+    while True:
+        remaining = retry["retry_at"] - time.time()
+        if remaining <= 0:
+            return
+        time.sleep(min(60.0, remaining))
+
+
 def run_lifecycle(
     home,
     session_id,
@@ -1891,7 +2008,12 @@ def run_lifecycle(
         coordinator = coordination.BrainstormingCoordinator(
             store, participant_execution
         )
-        prepared = coordinator.prepare(session_id)
+        while True:
+            try:
+                prepared = coordinator.prepare(session_id)
+                break
+            except coordination.OperationalRetryPending as pending:
+                _wait_operational_retry(pending)
         if prepared.state["status"] in brainstorming.TERMINAL_STATUSES:
             return 0
         execution_context = record["execution_context"]
@@ -1908,9 +2030,13 @@ def run_lifecycle(
                 and pending_attempt.get("kind", "discussion_turn")
                 == "closure"
             ):
-                snapshot = coordinator.run_closure(
-                    session_id, execution_context
-                )
+                try:
+                    snapshot = coordinator.run_closure(
+                        session_id, execution_context
+                    )
+                except coordination.OperationalRetryPending as pending:
+                    _wait_operational_retry(pending)
+                    continue
                 if snapshot.state["status"] in brainstorming.TERMINAL_STATUSES:
                     return 0
                 continue
@@ -1920,6 +2046,9 @@ def run_lifecycle(
                     snapshot = coordinator.run_next_turn(
                         session_id, execution_context
                     )
+                except coordination.OperationalRetryPending as pending:
+                    _wait_operational_retry(pending)
+                    continue
                 except brainstorming.RevisionConflict:
                     snapshot = store.read(session_id)
                     if (
@@ -1938,6 +2067,9 @@ def run_lifecycle(
                 snapshot = coordinator.run_closure(
                     session_id, execution_context
                 )
+            except coordination.OperationalRetryPending as pending:
+                _wait_operational_retry(pending)
+                continue
             except brainstorming.RevisionConflict:
                 continue
             if (

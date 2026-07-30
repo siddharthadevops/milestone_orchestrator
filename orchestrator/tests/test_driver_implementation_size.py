@@ -2438,12 +2438,13 @@ class DriverImplementationSizeTest(unittest.TestCase):
             ]
             self.assertEqual(len(final_events), 1)
 
-    def test_pending_gate_does_not_duplicate_a_redoc_wave_gate(self):
+    def test_pending_gate_retires_redoc_wave_without_synthetic_seal(self):
         with tempfile.TemporaryDirectory(prefix="orch-size-wave-gate-") as ws:
             path, driver, _implementation = self._ready_driver(
                 ws, runners.MockRunner([])
             )
             skeleton, note = driver.state["units"][:2]
+            note_seals = list(note["seals"])
             old_gate = gitops.head_sha(ws)
             skeleton["gate_commit"] = old_gate
             note["status"] = st.U_REPAIRING
@@ -2481,8 +2482,13 @@ class DriverImplementationSizeTest(unittest.TestCase):
 
             failed = st.load(path)
             self.assertEqual(failed["pending_gate_unit"], "skeleton")
-            self.assertIsNotNone(failed["redoc_wave"])
+            self.assertIsNone(failed["redoc_wave"])
             self.assertEqual(failed["units"][1]["status"], st.U_SEALED)
+            self.assertEqual(failed["units"][1]["seals"], note_seals)
+            self.assertEqual(
+                failed["retired_redoc_docs_pending_gate"]["docs"],
+                ["slice_doc-01"],
+            )
             st.resume_run(failed)
             st.save(path, failed)
 
@@ -2504,7 +2510,8 @@ class DriverImplementationSizeTest(unittest.TestCase):
                 event for event in recovered["events"]
                 if event.get("type") == "redoc_wave_closed"
             ]
-            self.assertEqual(len(wave_closes), 1)
+            self.assertEqual(len(wave_closes), 0)
+            self.assertNotIn("retired_redoc_docs_pending_gate", recovered)
             skeleton_gates = [
                 event for event in recovered["events"]
                 if event.get("type") == "gate_commit"

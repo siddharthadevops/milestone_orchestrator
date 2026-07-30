@@ -21,7 +21,7 @@ import time
 import unicodedata
 from dataclasses import dataclass
 
-from orchestrator import contracts, kvstore
+from orchestrator import contracts, errclass, kvstore
 
 try:
     import fcntl
@@ -62,6 +62,7 @@ _TRANSCRIPT_LOCKS_GUARD = threading.Lock()
 ACTIVITY_SCHEMA_VERSION = 1
 ACTIVITY_STATUSES = ("completed", "failed")
 ACTIVITY_FAILURE_TYPES = ("protocol", "execution")
+RECOVERABLE_FAILURE_TYPES = errclass.AUTO_RESUMABLE
 
 
 class ContractError(contracts.ContractError):
@@ -456,6 +457,7 @@ def validate_turn_attempt(turn_attempt):
             "target_mutation_corrections",
             "envelope_repair_used",
             "retry_pending",
+            "operational_retry",
             "target_mutation_failure_pending",
             "action_context",
         ),
@@ -548,6 +550,51 @@ def validate_turn_attempt(turn_attempt):
             "a retry-pending turn attempt must be quiescent with its one "
             "target-mutation correction already used"
         )
+    operational_retry = turn_attempt.get("operational_retry")
+    if operational_retry is not None:
+        _exact_keys(
+            operational_retry,
+            ("error_type", "resume_at", "evidence", "retry_at"),
+            (),
+            "turn_attempt.operational_retry",
+        )
+        error_type = operational_retry["error_type"]
+        if error_type not in RECOVERABLE_FAILURE_TYPES:
+            raise ContractError(
+                "turn_attempt.operational_retry.error_type is not recoverable"
+            )
+        resume_at = operational_retry["resume_at"]
+        if resume_at is not None:
+            resume_at = _text(
+                resume_at, "turn_attempt.operational_retry.resume_at"
+            )
+        evidence = operational_retry["evidence"]
+        if not isinstance(evidence, str):
+            raise ContractError(
+                "turn_attempt.operational_retry.evidence must be a string"
+            )
+        retry_at = operational_retry["retry_at"]
+        if (
+            isinstance(retry_at, bool)
+            or not isinstance(retry_at, (int, float))
+            or not math.isfinite(float(retry_at))
+            or float(retry_at) <= 0
+        ):
+            raise ContractError(
+                "turn_attempt.operational_retry.retry_at must be a positive "
+                "finite number"
+            )
+        if not checked["quiescent"] or retry_pending:
+            raise ContractError(
+                "an operational retry must be quiescent and independent of "
+                "target-mutation retry"
+            )
+        checked["operational_retry"] = {
+            "error_type": error_type,
+            "resume_at": resume_at,
+            "evidence": evidence,
+            "retry_at": float(retry_at),
+        }
     failure_pending = turn_attempt.get(
         "target_mutation_failure_pending", False
     )
@@ -559,6 +606,7 @@ def validate_turn_attempt(turn_attempt):
         not checked["quiescent"]
         or corrections != 1
         or retry_pending
+        or operational_retry is not None
     ):
         raise ContractError(
             "a target-mutation failure must be quiescent, corrected once, "
@@ -660,9 +708,13 @@ def validate_activity_event(event):
         raise ContractError(
             "activity_event.started_at must be a positive finite number"
         )
-    if checked["kind"] not in ("discussion_turn", "closure"):
+    if checked["kind"] not in (
+        "discussion_turn", "closure", "classifier"
+    ):
         raise ContractError("activity_event.kind is invalid")
-    if checked["stage"] not in ("discussion", "proposal", "vote"):
+    if checked["stage"] not in (
+        "discussion", "proposal", "vote", "classification"
+    ):
         raise ContractError("activity_event.stage is invalid")
     if checked["kind"] == "discussion_turn" \
             and checked["stage"] != "discussion":
@@ -672,6 +724,11 @@ def validate_activity_event(event):
     if checked["kind"] == "closure" \
             and checked["stage"] not in ("proposal", "vote"):
         raise ContractError("closure activity must name its control stage")
+    if checked["kind"] == "classifier" \
+            and checked["stage"] != "classification":
+        raise ContractError(
+            "classifier activity must use the classification stage"
+        )
     if type(checked["round"]) is not int or checked["round"] <= 0:
         raise ContractError(
             "activity_event.round must be a positive integer"
@@ -2563,6 +2620,87 @@ class SessionStore:
         if not result.ok:
             raise HistoryRewriteError(
                 "the pending worker action changed before its corrected retry"
+            )
+        return checked
+
+    def schedule_operational_retry(
+        self, session_id, token, classification, retry_at
+    ):
+        """Keep one quiescent action pending after a recoverable call fault."""
+        token = _text(token, "turn_attempt.token")
+        if not isinstance(classification, dict):
+            raise ContractError("operational classification must be an object")
+        candidate_retry = {
+            "error_type": classification.get("error_type"),
+            "resume_at": classification.get("resume_at"),
+            "evidence": classification.get("evidence"),
+            "retry_at": retry_at,
+        }
+        key = _turn_attempt_key(session_id)
+        current = self._store.read(key)
+        if not current["exists?"]:
+            raise HistoryRewriteError("the active turn attempt is missing")
+        attempt = validate_turn_attempt(current["value"])
+        if attempt["token"] != token:
+            raise HistoryRewriteError("the active turn attempt token changed")
+        if (
+            not attempt["quiescent"]
+            or attempt.get("retry_pending", False)
+            or attempt.get("target_mutation_failure_pending", False)
+            or attempt.get("operational_retry") is not None
+        ):
+            raise HistoryRewriteError(
+                "the turn attempt cannot enter operational retry"
+            )
+        attempt["operational_retry"] = candidate_retry
+        checked = validate_turn_attempt(attempt)
+        result = self._store.cas(key, current["revision"], checked)
+        if not result.ok:
+            raise HistoryRewriteError(
+                "the active turn attempt changed before operational retry"
+            )
+        return checked
+
+    def restart_operational_turn_attempt(self, session_id, turn_attempt):
+        """Retry the same logical action after its operational timer."""
+        checked = validate_turn_attempt(turn_attempt)
+        if checked["quiescent"] or checked.get("retry_pending"):
+            raise ContractError(
+                "a restarted operational attempt must begin active"
+            )
+        key = _turn_attempt_key(session_id)
+        current = self._store.read(key)
+        if not current["exists?"]:
+            raise HistoryRewriteError(
+                "the operationally pending turn attempt is missing"
+            )
+        prior = validate_turn_attempt(current["value"])
+        retry = prior.get("operational_retry")
+        if (
+            retry is None
+            or time.time() < retry["retry_at"]
+            or not _same_json_value(
+                self._turn_attempt_action(prior),
+                self._turn_attempt_action(checked),
+            )
+        ):
+            raise HistoryRewriteError(
+                "the operational retry is not due or does not match the "
+                "pending worker action"
+            )
+        checked["token"] = prior["token"]
+        if prior.get("target_mutation_corrections", 0):
+            checked["target_mutation_corrections"] = prior[
+                "target_mutation_corrections"
+            ]
+        if prior.get("envelope_repair_used", False):
+            checked["envelope_repair_used"] = True
+        checked["started_at"] = time.time()
+        checked["provider_attempt"] = prior.get("provider_attempt", 1) + 1
+        result = self._store.cas(key, current["revision"], checked)
+        if not result.ok:
+            raise HistoryRewriteError(
+                "the pending worker action changed before operational retry"
             )
         return checked
 

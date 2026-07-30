@@ -134,6 +134,29 @@ class StandaloneBrainstormingApiTest(unittest.TestCase):
 
         if (
             discussion
+            and target_name.endswith("recoverable.md")
+            and "- role: interlocutor" in prompt
+        ):
+            counter_path = os.path.join(os.getcwd(), ".recoverable-calls")
+            try:
+                with open(counter_path, "r", encoding="utf-8") as handle:
+                    count = int(handle.read())
+            except (OSError, ValueError):
+                count = 0
+            count += 1
+            with open(counter_path, "w", encoding="utf-8") as handle:
+                handle.write(str(count))
+            if count <= 3:
+                rendered = "API Error: 529 Overloaded"
+                if output_path:
+                    with open(output_path, "w", encoding="utf-8") as handle:
+                        handle.write(rendered)
+                else:
+                    print(rendered, flush=True)
+                sys.exit(0)
+
+        if (
+            discussion
             and target_name.endswith("slow.md")
             and "- role: lead" in prompt
         ):
@@ -415,11 +438,13 @@ class StandaloneBrainstormingApiTest(unittest.TestCase):
                     "activity",
                     "work_duration_s",
                     "in_flight",
+                    "retry",
                 },
             )
             self.assertEqual(session["activity"], [])
             self.assertEqual(session["work_duration_s"], 0)
             self.assertIsNone(session["in_flight"])
+            self.assertIsNone(session["retry"])
             self.assertEqual(session["process"], "running")
             self.assertIsNone(session["project"])
             self.assertIsNone(session["work_area"])
@@ -1502,6 +1527,50 @@ class StandaloneBrainstormingApiTest(unittest.TestCase):
                     )
         self.assertEqual(registry.load(self.home)["runs"], [])
 
+    def test_recoverable_provider_failure_retries_the_same_turn(self):
+        self._target("recoverable.md")
+        with mock.patch.object(
+            lifecycle,
+            "_launch_lifecycle_process",
+            side_effect=self._sleeper_launcher,
+        ):
+            status, body = self._request(
+                "POST",
+                "/api/brainstorming/sessions",
+                self._payload("recoverable.md"),
+            )
+        self.assertEqual(status, 201, body)
+        session_id = body["session"]["id"]
+        self._stop_sleeper_record(session_id)
+        with mock.patch.object(
+            coordination, "OPERATIONAL_RETRY_S", 0
+        ):
+            code = lifecycle.run_lifecycle(
+                self.home,
+                session_id,
+                require_pid_claim=False,
+            )
+        self.assertEqual(code, 0)
+        session = lifecycle.inspect_session(
+            self.home, session_id, lambda _record: None
+        )
+        self.assertEqual(session["state"]["status"], "success")
+        self.assertIsNone(session["retry"])
+        critic = [
+            event for event in session["activity"]
+            if event["participant_id"] == "critic"
+            and event["stage"] == "discussion"
+        ]
+        self.assertEqual(
+            [event["status"] for event in critic],
+            ["failed", "failed", "failed", "completed"],
+        )
+        self.assertEqual(
+            [event["provider_attempt"] for event in critic], [1, 2, 3, 4]
+        )
+        self.assertTrue(all(event["recovered"] for event in critic[:3]))
+        self.assertGreater(session["work_duration_s"], 0)
+
     def test_bound_and_unbound_execution_context_passes_through_unchanged(self):
         self._target("repair.md")
         contexts = []
@@ -1684,6 +1753,50 @@ class StandaloneBrainstormingApiTest(unittest.TestCase):
             "No unresolved objections were recorded.", transcript
         )
         self.assertIsNone(record["pid"])
+
+    def test_stop_cancels_a_pending_operational_retry(self):
+        target = self._target("stop-retry.md")
+        created = lifecycle.create_session(
+            self.home,
+            self._payload("stop-retry.md"),
+            access.ADMIN_EMAIL,
+            launcher=self._sleeper_launcher,
+        )
+        session_id = created["id"]
+        store = bs.SessionStore(lifecycle.state_directory(self.home))
+        prepared = coordination.BrainstormingCoordinator(
+            store, None
+        ).prepare(session_id)
+        with coordination._open_target_parent(target) as (
+            _descriptor, _name, parent_identity
+        ):
+            pass
+        attempt = store.begin_turn_attempt(session_id, {
+            "token": "pending-operational-retry",
+            "participant_id": "lead",
+            "completed_turn_count": 0,
+            "target_revision": prepared.state["accepted_target_revision"],
+            "quiescent": False,
+            "target_parent": parent_identity,
+        })
+        store.mark_turn_attempt_quiescent(session_id, attempt["token"])
+        store.schedule_operational_retry(
+            session_id,
+            attempt["token"],
+            {"error_type": "busy", "resume_at": None, "evidence": ""},
+            time.time() + 300,
+        )
+        with open(target, "wb") as handle:
+            handle.write(b"unaccepted bytes")
+
+        stopped = lifecycle.stop_session(
+            self.home, session_id, lambda _record: None
+        )
+
+        self.assertEqual(stopped["state"]["status"], "failure")
+        self.assertIsNone(store.read_turn_attempt(session_id))
+        with open(target, "rb") as handle:
+            self.assertEqual(handle.read(), b"initial target")
 
     def test_stop_waits_for_quiescence_recovers_only_target_and_records_failure(self):
         target = self._target("slow.md")

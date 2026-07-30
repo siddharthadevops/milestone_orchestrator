@@ -111,6 +111,13 @@ every physical provider call keeps its model, phase, duration and outcome,
 including a malformed first response, its repair, and execution failures.
 The session view shows those calls as clickable chips with raw output on
 demand, a live clock for the call in progress, and accumulated LLM work.
+Participant-call failures use the same classifier as milestones: it returns
+only the typed failure, optional resume time and evidence. Brainstorming owns
+the consequence. A recoverable diagnosis preserves the exact pending action,
+waits five minutes, and retries it without consuming a turn or round; other
+diagnoses close through the existing operational-failure path. Classifier LLM
+calls are separate activity, never discussion or target authority, and their
+time is included in accumulated LLM work.
 
 Work starts from a project's **⋯ menu**, never from a standing button:
 "New milestone" and "New brainstorming" are the first two items (every user

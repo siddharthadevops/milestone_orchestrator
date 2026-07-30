@@ -8,6 +8,7 @@ import json
 import os
 import stat
 import threading
+import time
 import uuid
 
 from orchestrator import brainstorming, runners
@@ -52,8 +53,22 @@ class TargetRecoveryError(CoordinationRejected):
     """The accepted target revision could not be re-established exactly."""
 
 
+class OperationalRetryPending(CoordinationRejected):
+    """A recoverable provider failure is waiting for its retry time."""
+
+    def __init__(self, retry):
+        self.retry = brainstorming._json_copy(
+            retry, "operational_retry"
+        )
+        super().__init__(
+            "recoverable participant failure; retry at %s"
+            % self.retry["retry_at"]
+        )
+
+
 _TARGET_LOCKS = {}
 _TARGET_LOCKS_GUARD = threading.Lock()
+OPERATIONAL_RETRY_S = 5 * 60
 
 
 def _thread_lock_for(path):
@@ -868,7 +883,9 @@ class BrainstormingCoordinator:
             _restore_target_at(*target, accepted)
         return snapshot
 
-    def _resolve_prior_attempt(self, session_id, snapshot, target):
+    def _resolve_prior_attempt(
+        self, session_id, snapshot, target, cancel_operational_retry=False
+    ):
         attempt = self.store.read_turn_attempt(session_id)
         if attempt is None:
             return self._reconcile_snapshot(session_id, snapshot, target)
@@ -902,6 +919,18 @@ class BrainstormingCoordinator:
                 session_id, attempt["token"]
             )
             raise TargetMutationFailed(failed)
+        if completed == expected and attempt.get("operational_retry"):
+            retry = attempt["operational_retry"]
+            if not cancel_operational_retry and time.time() < retry["retry_at"]:
+                raise OperationalRetryPending(retry)
+            reconciled = self._reconcile_snapshot(
+                session_id, snapshot, target
+            )
+            if cancel_operational_retry:
+                self.store.finish_turn_attempt(
+                    session_id, attempt["token"]
+                )
+            return reconciled
         if completed == expected and attempt.get("retry_pending", False):
             return self._reconcile_snapshot(session_id, snapshot, target)
         if completed == expected:
@@ -936,13 +965,18 @@ class BrainstormingCoordinator:
         self.store.finish_turn_attempt(session_id, attempt["token"])
         return reconciled
 
-    def _prepare_locked(self, session_id, target):
+    def _prepare_locked(
+        self, session_id, target, cancel_operational_retry=False
+    ):
         """Initialize target versioning and reconcile while holding its lock."""
         while True:
             snapshot = self._require_running(self.store.read(session_id))
             if brainstorming.coordination_projection(snapshot.state) is not None:
                 return self._resolve_prior_attempt(
-                    session_id, snapshot, target
+                    session_id,
+                    snapshot,
+                    target,
+                    cancel_operational_retry=cancel_operational_retry,
                 )
             if self.store.read_turn_attempt(session_id) is not None:
                 raise CoordinationRejected(
@@ -959,7 +993,7 @@ class BrainstormingCoordinator:
                 session_id, initialized, target
             )
 
-    def prepare(self, session_id):
+    def prepare(self, session_id, cancel_operational_retry=False):
         """Initialize target versioning and reconcile before any turn."""
         snapshot = self._require_running(self.store.read(session_id))
         path = resolve_target_path(snapshot.state["request"])
@@ -982,7 +1016,11 @@ class BrainstormingCoordinator:
                         name,
                         parent_identity,
                     )
-                    return self._prepare_locked(session_id, target)
+                    return self._prepare_locked(
+                        session_id,
+                        target,
+                        cancel_operational_retry=cancel_operational_retry,
+                    )
         except TargetMutationFailed as failed:
             return failed.snapshot
 
@@ -1037,6 +1075,30 @@ class BrainstormingCoordinator:
                 except CoordinationRejected:
                     observed = None
                 target_mutated = observed != authority
+        classification = getattr(
+            cause, "brainstorming_failure_classification", None
+        )
+        if (
+            isinstance(classification, dict)
+            and classification.get("error_type")
+            in brainstorming.RECOVERABLE_FAILURE_TYPES
+        ):
+            try:
+                self._recover_latest(session_id, target)
+                retry_at = time.time() + OPERATIONAL_RETRY_S
+                pending = self.store.schedule_operational_retry(
+                    session_id, token, classification, retry_at
+                )
+            except BaseException as recovery_error:
+                self._record_supervision_stop(
+                    session_id,
+                    "The discussion stopped because its recoverable worker "
+                    "failure could not be scheduled safely.",
+                )
+                raise TargetRecoveryError(
+                    "recoverable participant failure could not be retained"
+                ) from recovery_error
+            raise OperationalRetryPending(pending["operational_retry"])
         if target_mutated:
             repeated = self.store.mark_turn_attempt_target_mutation(
                 session_id, token
@@ -1122,6 +1184,10 @@ class BrainstormingCoordinator:
 
     def _begin_or_retry_attempt(self, session_id, attempt):
         prior = self.store.read_turn_attempt(session_id)
+        if prior is not None and prior.get("operational_retry"):
+            return self.store.restart_operational_turn_attempt(
+                session_id, attempt
+            )
         if prior is not None and prior.get("retry_pending", False):
             return self.store.restart_turn_attempt(session_id, attempt)
         return self.store.begin_turn_attempt(session_id, attempt)
@@ -1197,7 +1263,7 @@ class BrainstormingCoordinator:
             "kind": "closure",
             "action_context": action_context,
         }
-        self._begin_or_retry_attempt(session_id, attempt)
+        attempt = self._begin_or_retry_attempt(session_id, attempt)
         exchange = getattr(
             self.participant_execution, "exchange_control_quiescent", None
         )
@@ -1334,7 +1400,7 @@ class BrainstormingCoordinator:
             "quiescent": False,
             "target_parent": target[3],
         }
-        self._begin_or_retry_attempt(session_id, attempt)
+        attempt = self._begin_or_retry_attempt(session_id, attempt)
 
         exchange = getattr(
             self.participant_execution, "exchange_quiescent", None
@@ -1538,7 +1604,10 @@ class BrainstormingCoordinator:
         action_context = (
             pending.get("action_context")
             if pending is not None
-            and pending.get("retry_pending", False)
+            and (
+                pending.get("retry_pending", False)
+                or pending.get("operational_retry") is not None
+            )
             and pending.get("kind", "discussion_turn") == "closure"
             else None
         )

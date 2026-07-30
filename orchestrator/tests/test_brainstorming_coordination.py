@@ -161,7 +161,7 @@ class BrainstormingCoordinationTest(unittest.TestCase):
         self.store.transition(session_id, created.revision, "running")
         return target
 
-    def _subject(self, roster, scripts, store=None):
+    def _subject(self, roster, scripts, store=None, failure_classifier=None):
         store = store or self.store
         executors = {
             participant["executor_ref"]: ScriptedExecutor(
@@ -171,7 +171,7 @@ class BrainstormingCoordinationTest(unittest.TestCase):
             for participant in roster
         }
         participant_execution = execution.ParticipantExecution(
-            store, executors
+            store, executors, failure_classifier=failure_classifier
         )
         return (
             coordination.BrainstormingCoordinator(
@@ -1025,6 +1025,71 @@ class BrainstormingCoordinationTest(unittest.TestCase):
                     retried.state["completed_turns"][0]["markdown"],
                     "accepted retry",
                 )
+
+    def test_recoverable_failure_preserves_and_retries_the_same_action(self):
+        roster = participants()
+        session_id = "recoverable-provider-failure"
+        target = self._create_running(session_id, roster=roster)
+        classifications = []
+
+        def overloaded(_prompt, _workspace, _context):
+            with open(target, "wb") as handle:
+                handle.write(b"unaccepted partial work")
+            error = runners.WorkerProtocolError(
+                "participant envelope failed twice",
+                raw_texts=["API Error: 529 Overloaded"],
+            )
+            error.worker_quiescent = True
+            raise error
+
+        def classify(_session_id, participant, _executor, error):
+            classifications.append((participant["id"], error.raw_texts))
+            return {
+                "error_type": "busy",
+                "resume_at": None,
+                "evidence": "",
+            }
+
+        subject, _executors = self._subject(
+            roster,
+            {
+                "lead": [
+                    "not an envelope",
+                    overloaded,
+                    envelope("accepted after retry"),
+                ],
+                "critic": [],
+            },
+            failure_classifier=classify,
+        )
+        subject.prepare(session_id)
+        with self.assertRaises(coordination.OperationalRetryPending):
+            subject.run_next_turn(session_id, object())
+        pending = self.store.read_turn_attempt(session_id)
+        token = pending["token"]
+        self.assertTrue(pending["quiescent"])
+        self.assertEqual(
+            pending["operational_retry"]["error_type"], "busy"
+        )
+        self.assertTrue(pending["envelope_repair_used"])
+        self.assertEqual(classifications, [("lead", ["API Error: 529 Overloaded"])])
+        with open(target, "rb") as handle:
+            self.assertEqual(handle.read(), b"initial target")
+
+        due = pending["operational_retry"]["retry_at"] + 1
+        with mock.patch.object(coordination.time, "time", return_value=due), \
+                mock.patch.object(bs.time, "time", return_value=due):
+            accepted = subject.run_next_turn(session_id, object())
+        self.assertEqual(
+            accepted.state["completed_turns"][0]["markdown"],
+            "accepted after retry",
+        )
+        self.assertIsNone(self.store.read_turn_attempt(session_id))
+        activity = self.store.read_activity(session_id)["events"]
+        self.assertEqual(
+            [(item["action_id"], item["provider_attempt"]) for item in activity],
+            [(token, 1), (token, 2), (token, 3)],
+        )
 
     def test_other_quiescent_failure_uses_one_target_mutation_retry(self):
         roster = participants()

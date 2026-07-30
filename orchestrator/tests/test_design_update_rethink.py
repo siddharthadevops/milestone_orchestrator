@@ -311,47 +311,195 @@ class DesignUpdateRethinkTest(unittest.TestCase):
         self.assertEqual(state["failure"]["type"], "brainstorming_no_agreement")
         self.assertEqual(unit["status"], st.U_FAILED)
 
-    def test_historical_discussion_failure_keeps_gap_repair_route(self):
-        state, unit = self._state(st.U_FIXING)
+    def test_missing_or_false_flag_never_restores_legacy_gap_route(self):
+        for modern in (None, False):
+            with self.subTest(modern=modern):
+                state, unit = self._state(st.U_FIXING)
+                driver = self._driver(state, modern=modern)
+                failure = {
+                    "classification": "fits_remodel",
+                    "missing_or_conflict": "the old design is incomplete",
+                }
+                unit["brainstorming_wait"] = self._wait(
+                    unit, failure=failure
+                )
+                driver._save = mock.Mock()
+                driver._handle_gap = mock.Mock()
+
+                with mock.patch.object(
+                    brainstorming_milestone,
+                    "terminal_handoff",
+                    return_value=self._handoff("failure"),
+                ):
+                    with self.assertRaisesRegex(
+                        drv.StopStep, "ended without agreement"
+                    ):
+                        driver._do_brainstorming_wait()
+
+                self.assertTrue(driver._modern_design_updates())
+                driver._handle_gap.assert_not_called()
+                self.assertEqual(
+                    state["failure"]["type"], "brainstorming_no_agreement"
+                )
+
+    def test_persisted_in_goal_gap_without_git_stops_without_redoc_wave(self):
+        state, unit = self._state(st.U_PENDING)
         driver = self._driver(state, modern=None)
-        failure = {
-            "classification": "fits_remodel",
-            "missing_or_conflict": "the old design is incomplete",
-        }
-        unit["brainstorming_wait"] = self._wait(unit, failure=failure)
-        driver._handle_gap = mock.Mock(return_value="historical gap routed")
-
-        with mock.patch.object(
-            brainstorming_milestone,
-            "terminal_handoff",
-            return_value=self._handoff("failure"),
-        ):
-            note = driver._do_brainstorming_wait()
-
-        self.assertEqual(note, "historical gap routed")
-        self.assertFalse(driver._modern_design_updates())
-        routed = driver._handle_gap.call_args.args[1]
-        self.assertEqual(routed, {"gaps": [failure]})
-
-    def test_historical_discussion_without_failure_gap_stops_cleanly(self):
-        state, unit = self._state(st.U_FIXING)
-        driver = self._driver(state, modern=None)
-        wait = self._wait(unit, failure=None)
-        wait["signal"].pop("failure_gap", None)
-        unit["brainstorming_wait"] = wait
         driver._save = mock.Mock()
+        state["pending_gap"] = {
+            "reporter": st.unit_key(unit),
+            "gaps": [{
+                "classification": "fits_remodel",
+                "missing_or_conflict": "the old design is incomplete",
+            }],
+            "from_fixer": False,
+        }
 
-        with mock.patch.object(
-            brainstorming_milestone,
-            "terminal_handoff",
-            return_value=self._handoff("failure"),
+        with self.assertRaisesRegex(
+            drv.StopStep, "no restorable snapshot"
         ):
-            with self.assertRaisesRegex(
-                drv.StopStep, "missing legacy failure gap"
-            ):
-                driver._do_brainstorming_wait()
+            driver._route_pending_gap()
 
-        self.assertEqual(state["failure"]["type"], "worker_protocol")
+        self.assertIsNone(state["pending_gap"])
+        self.assertIsNone(state.get("redoc_wave"))
+        self.assertEqual(state["failure"]["type"], "gap_cleanup")
+        self.assertNotIn("retired_gap_retries", unit)
+
+    def test_needs_operator_gap_still_reaches_the_operator(self):
+        for modern in (None, False):
+            with self.subTest(modern=modern):
+                state, unit = self._state(st.U_PENDING)
+                driver = self._driver(state, modern=modern)
+                driver._save = mock.Mock()
+                state["pending_gap"] = {
+                    "reporter": st.unit_key(unit),
+                    "gaps": [{
+                        "classification": "needs_operator",
+                        "forced_decision": "the goal must choose one owner",
+                    }],
+                    "from_fixer": False,
+                }
+
+                with self.assertRaisesRegex(drv.StopStep, "goal gap"):
+                    driver._route_pending_gap()
+
+                self.assertEqual(state["failure"]["type"], "goal_gap")
+                self.assertIsNone(state["pending_gap"])
+                self.assertIsNone(state.get("redoc_wave"))
+
+    def test_active_redoc_wave_migrates_once_and_preserves_live_work(self):
+        state, reporter = self._state(st.U_PENDING)
+        anchor = state["units"][0]
+        note = state["units"][1]
+        anchor["status"] = st.U_ROUNDS
+        anchor["under_repair"] = True
+        live_wait = {
+            "session_id": "brainstorming-live",
+            "signal": {"question": "keep this discussion"},
+        }
+        anchor["brainstorming_wait"] = live_wait
+        note["status"] = st.U_REPAIRING
+        note["under_repair"] = True
+        seals_before = list(note["seals"])
+        reporter["preserved_candidate"] = {
+            "base": "base",
+            "tree": "tree",
+            "ref": "refs/orchestrator/parked/candidate",
+        }
+        state["redoc_wave"] = {
+            "anchor": st.unit_key(anchor),
+            "docs": [st.unit_key(note)],
+            "reporter": st.unit_key(reporter),
+        }
+        state["schema_version"] = st.SCHEMA_VERSION
+        st.append_event(
+            state,
+            "reopened_for_repair",
+            unit=st.unit_key(anchor),
+            reported_by=st.unit_key(reporter),
+            plain="one design contradiction",
+        )
+        driver = self._driver(state, modern=False)
+        st.save(driver.state_path, state)
+
+        driver._migrate_active_redoc_wave()
+        migrated = st.load(driver.state_path)
+
+        self.assertIsNone(migrated["redoc_wave"])
+        migrated_anchor = migrated["units"][0]
+        migrated_note = migrated["units"][1]
+        migrated_reporter = migrated["units"][2]
+        self.assertEqual(migrated_anchor["status"], st.U_ROUNDS)
+        self.assertNotIn("under_repair", migrated_anchor)
+        self.assertEqual(migrated_anchor["brainstorming_wait"], live_wait)
+        self.assertEqual(migrated_note["status"], st.U_SEALED)
+        self.assertEqual(migrated_note["seals"], seals_before)
+        self.assertEqual(
+            migrated_reporter["preserved_candidate"],
+            reporter["preserved_candidate"],
+        )
+        self.assertTrue(migrated_anchor["design_update"]["editable_paths"])
+        self.assertTrue(migrated_anchor["design_update"]["changed_paths"])
+        self.assertEqual(
+            sum(
+                event["type"] == "redoc_wave_migrated_to_design_update"
+                for event in migrated["events"]
+            ),
+            1,
+        )
+
+        driver.state = migrated
+        driver._migrate_active_redoc_wave()
+        after_retry = st.load(driver.state_path)
+        self.assertEqual(
+            sum(
+                event["type"] == "redoc_wave_migrated_to_design_update"
+                for event in after_retry["events"]
+            ),
+            1,
+        )
+
+    def test_reviewed_redoc_wave_retires_without_synthetic_note_seal(self):
+        state, reporter = self._state(st.U_PENDING)
+        anchor = state["units"][0]
+        note = state["units"][1]
+        anchor["status"] = st.U_SEALED
+        note["status"] = st.U_REPAIRING
+        note["under_repair"] = True
+        seals_before = list(note["seals"])
+        state["redoc_wave"] = {
+            "anchor": st.unit_key(anchor),
+            "docs": [st.unit_key(note)],
+            "reporter": st.unit_key(reporter),
+        }
+        state["schema_version"] = st.SCHEMA_VERSION
+        st.append_event(
+            state,
+            "unit_transition",
+            unit=st.unit_key(anchor),
+            to_status=st.U_SEALED,
+        )
+        driver = self._driver(state, modern=False)
+        st.save(driver.state_path, state)
+
+        driver._migrate_active_redoc_wave()
+        migrated = st.load(driver.state_path)
+
+        self.assertIsNone(migrated["redoc_wave"])
+        self.assertEqual(migrated["units"][1]["status"], st.U_SEALED)
+        self.assertEqual(migrated["units"][1]["seals"], seals_before)
+        self.assertNotIn("design_update", migrated["units"][0])
+        self.assertEqual(
+            sum(
+                event["type"] == "redoc_wave_retired_after_review"
+                for event in migrated["events"]
+            ),
+            1,
+        )
+        self.assertFalse(any(
+            event["type"] == "redoc_wave_closed"
+            for event in migrated["events"]
+        ))
 
     def _prepare_prompt_driver(self, status):
         state, unit = self._state(status)

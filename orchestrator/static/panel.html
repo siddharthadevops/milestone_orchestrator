@@ -1086,6 +1086,9 @@ function sessionRow(s) {
   const running = s.process === "running";
   const bits = [];
   if (s.state_error) bits.push("state unreadable");
+  else if (running && s.retry)
+    bits.push(`retry ${s.retry.error_type} in ${fmtDHMS(
+      Math.max(0, Number(s.retry.retry_at) - Date.now() / 1000))}`);
   else if (running && s.max_rounds != null)
     // rounds_used counts COMPLETED rounds, so the one under way is the
     // next — never past the ceiling the session may not exceed.
@@ -1269,6 +1272,12 @@ function sessionActivityChip(item) {
 }
 function sessionInFlightChip(view) {
   const active = view.in_flight;
+  if (view.retry) {
+    const remaining = fmtDHMS(Math.max(0,
+      Number(view.retry.retry_at) - Date.now() / 1000));
+    return `<span class="chip working">${spinEl()}retry ${
+      esc(view.retry.error_type)} in ${esc(remaining)}</span>`;
+  }
   if (!active) {
     return `<span class="chip working">${spinEl()}round ${
       Math.max(view.round.current || 0, (view.round.completed || 0) + 1)
@@ -1350,6 +1359,9 @@ function renderSessionDetail(view) {
     view.work_duration_s != null
       ? `LLM ${fmtDHMS(liveWorkSeconds(view.work_duration_s,
           running ? view.in_flight : null))}` : "",
+    view.retry
+      ? `retry ${view.retry.error_type} in ${fmtDHMS(Math.max(0,
+          Number(view.retry.retry_at) - Date.now() / 1000))}` : "",
   ].filter(Boolean);
   html += `<div class="activity-line detail">` +
     (running ? spinEl() : "") +

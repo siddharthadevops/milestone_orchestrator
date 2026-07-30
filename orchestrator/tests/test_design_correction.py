@@ -3,6 +3,7 @@
 import os
 import tempfile
 import unittest
+from unittest import mock
 
 from orchestrator import contracts
 from orchestrator import driver as drv
@@ -30,6 +31,13 @@ class DesignCorrectionTest(unittest.TestCase):
     SKELETON = "docs/skeleton.md"
 
     def setUp(self):
+        # Historical compatibility is tested in isolation; no production run
+        # can select this retired lane.
+        patcher = mock.patch.object(
+            drv.Driver, "_modern_design_updates", return_value=False
+        )
+        patcher.start()
+        self.addCleanup(patcher.stop)
         self.tmp = tempfile.TemporaryDirectory(prefix="orch-design-fix-")
         self.addCleanup(self.tmp.cleanup)
         self.ws = os.path.join(self.tmp.name, "ws")

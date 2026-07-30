@@ -31,6 +31,7 @@ service auto-resume guard):
 
 import json
 import re
+import time
 from datetime import datetime, timedelta
 
 from . import runners
@@ -262,7 +263,7 @@ _RAW_CLIP = 4000
 
 
 def llm_classify(runner, family, raw_texts, workspace, on_raw=None,
-                 model=None, effort=None):
+                 model=None, effort=None, on_call=None):
     """One opposite-family attempt at classifying noisy failure output.
     NEVER raises and never blocks beyond its own timeout: any problem
     returns ("unknown", None, <why>).
@@ -287,6 +288,10 @@ def llm_classify(runner, family, raw_texts, workspace, on_raw=None,
         return "unknown", None, "no raw output to classify"
     prompt = CLASSIFIER_PROMPT % joined
     raw = None
+    result = None
+    call_error = None
+    failure_type = None
+    started_at = time.time()
     try:
         result = runner.call(
             family, prompt, workspace,
@@ -294,10 +299,20 @@ def llm_classify(runner, family, raw_texts, workspace, on_raw=None,
             timeout_override=CLASSIFIER_TIMEOUT_S,
         )
         raw = result.text
-        objects = runners.extract_json_objects(result.text)
+        try:
+            objects = runners.extract_json_objects(result.text)
+        except Exception as exc:
+            call_error = exc
+            failure_type = "protocol"
+            return "unknown", None, "classifier unavailable: %s" % exc
         matches = [obj for obj in objects if obj.get("error_type") in TYPES]
         if len(matches) != 1:
             reported = [obj.get("error_type") for obj in objects]
+            call_error = RuntimeError(
+                "classifier returned %s valid classifications"
+                % len(matches)
+            )
+            failure_type = "protocol"
             if len(matches) > 1:
                 return "unknown", None, "classifier returned multiple valid classifications"
             return "unknown", None, "classifier returned %r" % (reported,)
@@ -306,10 +321,46 @@ def llm_classify(runner, family, raw_texts, workspace, on_raw=None,
         resume_at = normalize_resume_at(obj.get("resume_at"))
         return etype, resume_at, str(obj.get("evidence") or "")[:300]
     except Exception as exc:  # the classifier must never worsen a failure
+        call_error = exc
+        failure_type = "execution"
         if raw is None:
             raw = "CLASSIFIER CALL FAILED: %s" % exc
         return "unknown", None, "classifier unavailable: %s" % exc
+    except BaseException as exc:
+        # Process-control exceptions must keep propagating, but the physical
+        # classifier call still ended unsuccessfully and must be recorded as
+        # such by observers.
+        call_error = exc
+        failure_type = "execution"
+        if raw is None:
+            raw = "CLASSIFIER CALL INTERRUPTED: %s" % (
+                str(exc) or type(exc).__name__
+            )
+        raise
     finally:
+        if on_call is not None:
+            duration = getattr(result, "duration_s", None)
+            if isinstance(duration, bool) or not isinstance(
+                duration, (int, float)
+            ):
+                duration = max(0.0, time.time() - started_at)
+            event = {
+                "family": family,
+                "model": model,
+                "effort": effort,
+                "prompt": prompt,
+                "raw": raw,
+                "started_at": started_at,
+                "duration_s": float(duration),
+                "status": "failed" if call_error is not None else "completed",
+                "failure_type": failure_type,
+                "error": None if call_error is None else str(call_error),
+                "prompt_path": getattr(result, "prompt_path", None),
+            }
+            try:
+                on_call(event)
+            except Exception:
+                pass
         if on_raw is not None:
             try:
                 on_raw(family, prompt, raw)
@@ -319,7 +370,8 @@ def llm_classify(runner, family, raw_texts, workspace, on_raw=None,
 
 def classify_failure(raw_texts, runner=None, opposite_family=None,
                      workspace=None, use_llm=True, on_llm_raw=None,
-                     classifier_model=None, classifier_effort=None):
+                     classifier_model=None, classifier_effort=None,
+                     on_llm_call=None):
     """Full chain: patterns first, LLM fallback, unknown last.
 
     Returns (type, resume_at_iso_or_None, evidence). on_llm_raw is forwarded
@@ -338,5 +390,42 @@ def classify_failure(raw_texts, runner=None, opposite_family=None,
     if use_llm and runner is not None and opposite_family:
         return llm_classify(runner, opposite_family, raw_texts, workspace,
                             on_raw=on_llm_raw,
-                            model=classifier_model, effort=classifier_effort)
+                            model=classifier_model, effort=classifier_effort,
+                            on_call=on_llm_call)
     return "unknown", None, "no pattern matched"
+
+
+def classify_worker_failure(
+    exc,
+    runner=None,
+    opposite_family=None,
+    workspace=None,
+    use_llm=True,
+    on_llm_raw=None,
+    classifier_model=None,
+    classifier_effort=None,
+    on_llm_call=None,
+):
+    """Classify one failed worker exception through the shared procedure.
+
+    Recovery policy deliberately stays with the caller. Milestones may use
+    short retries and their service guard; Brainstorming may preserve one
+    pending turn and retry it later. Both receive the same typed diagnosis.
+    """
+    if isinstance(exc, runners.WorkerStalled):
+        return "timeout", None, "worker stalled (no CPU progress)"
+    if isinstance(exc, runners.RunnerError) and "timed out" in str(exc):
+        return "timeout", None, "runner timeout"
+    texts = list(getattr(exc, "raw_texts", []) or [])
+    texts.append(str(exc))
+    return classify_failure(
+        texts,
+        runner=runner,
+        opposite_family=opposite_family,
+        workspace=workspace,
+        use_llm=use_llm,
+        on_llm_raw=on_llm_raw,
+        classifier_model=classifier_model,
+        classifier_effort=classifier_effort,
+        on_llm_call=on_llm_call,
+    )

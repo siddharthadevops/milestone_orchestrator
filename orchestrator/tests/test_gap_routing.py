@@ -10,6 +10,7 @@ tested) machinery.
 import os
 import tempfile
 import unittest
+from unittest import mock
 
 from orchestrator import driver as drv
 from orchestrator import profiles
@@ -44,6 +45,13 @@ def _gap_output(kind, *gaps):
 
 class GapRoutingCase(unittest.TestCase):
     def setUp(self):
+        # Keep the removed router's internal recovery invariants covered
+        # without exposing any production switch that can activate it.
+        patcher = mock.patch.object(
+            drv.Driver, "_modern_design_updates", return_value=False
+        )
+        patcher.start()
+        self.addCleanup(patcher.stop)
         self.tmpdir = tempfile.TemporaryDirectory(prefix="orch-gaproute-")
         self.addCleanup(self.tmpdir.cleanup)
         self.ws = os.path.join(self.tmpdir.name, "ws")
@@ -202,6 +210,7 @@ class GapRoutingCase(unittest.TestCase):
                "plain": "p"}
         st.reopen_for_repair(state, by["slice_doc-01"], gap, "wave",
                              reported_by="slice_impl-01")
+        note_seals = list(by["slice_doc-01"]["seals"])
         skeleton = state["units"][0]
         st.reopen_for_repair(state, skeleton, gap, "gap",
                              reported_by="slice_impl-01")
@@ -219,15 +228,18 @@ class GapRoutingCase(unittest.TestCase):
         st.record_seal_attempt(state, skeleton, make_halves(), True)
         st.transition_unit(state, skeleton, st.U_SEALED)
         st.save(path, state)
-        # Startup recovery closes the stranded wave; navigation proceeds to
-        # the reporter's re-draft, never to a bare-repairing note.
+        # Startup retires the historical wave without inventing another note
+        # approval; navigation proceeds to the reporter.
         drv.Driver(path, runner=runners.MockRunner([]))
         state = st.load(path)
         by = {st.unit_key(u): u for u in state["units"]}
         self.assertIsNone(state.get("redoc_wave"))
         self.assertEqual(by["slice_doc-01"]["status"], st.U_SEALED)
-        self.assertEqual(by["slice_doc-01"]["seals"][-1]["wave"],
-                         "skeleton-a2")
+        self.assertEqual(by["slice_doc-01"]["seals"], note_seals)
+        self.assertFalse(any(
+            event["type"] == "redoc_wave_closed"
+            for event in state["events"]
+        ))
         self.assertEqual(st.unit_key(st.current_unit(state)),
                          "slice_impl-01")
 
@@ -335,16 +347,13 @@ class GapRoutingCase(unittest.TestCase):
         self.assertEqual(len(impl_prompts), 2)
         self.assertNotIn("UPDATED DESIGN ASSIGNMENT", impl_prompts[0])
         self.assertIn("UPDATED DESIGN ASSIGNMENT", impl_prompts[1])
-        # RE-DOCUMENTATION WAVE: doc-01 was co-reopened with the anchor and
-        # resealed by the wave when the anchor's seal passed — a WAVE seal
-        # record referencing the anchor's attempt, never its own episode.
+        # Even this isolated legacy fixture now retires the co-opened note
+        # without manufacturing another approval record.
         doc = units["slice_doc-01"]
         self.assertEqual(doc["status"], st.U_SEALED)
-        self.assertEqual(len(doc["seals"]), 2)
-        self.assertEqual(doc["seals"][-1]["wave"], "skeleton-a2")
-        self.assertTrue(doc["seals"][-1]["passed"])
+        self.assertEqual(len(doc["seals"]), 1)
         self.assertIsNone(state.get("redoc_wave"))
-        self.assertIn("redoc_wave_closed",
+        self.assertIn("redoc_wave_retired_after_review",
                       [e["type"] for e in state["events"]])
         # The wave's fixer declared the SET (re-documenter framing); the
         # resulting reviews certify the current documentation set.

@@ -6,6 +6,7 @@ import unittest
 from datetime import datetime, timedelta, timezone
 
 from orchestrator import errclass
+from orchestrator import runners
 from orchestrator.runners import RunnerResult
 
 
@@ -331,6 +332,59 @@ class TestClassifyChain(unittest.TestCase):
             on_llm_raw=lambda *a: seen.append(a),
         )
         self.assertEqual(seen, [])  # pattern matched; LLM never ran
+
+    def test_on_llm_call_reports_the_physical_classifier_call(self):
+        runner = _FakeRunner('{"error_type": "network"}')
+        seen = []
+        errclass.classify_failure(
+            ["mystery"], runner=runner, opposite_family="claude",
+            workspace="/ws", classifier_model="fable",
+            classifier_effort="max", on_llm_call=seen.append,
+        )
+        self.assertEqual(len(seen), 1)
+        self.assertEqual(seen[0]["family"], "claude")
+        self.assertEqual(seen[0]["model"], "fable")
+        self.assertEqual(seen[0]["effort"], "max")
+        self.assertEqual(seen[0]["status"], "completed")
+        self.assertEqual(seen[0]["duration_s"], 1.0)
+        self.assertIn("mystery", seen[0]["prompt"])
+        self.assertIn("network", seen[0]["raw"])
+
+    def test_process_control_interrupt_is_failed_and_keeps_propagating(self):
+        class Stop(BaseException):
+            pass
+
+        seen = []
+        with self.assertRaises(Stop):
+            errclass.classify_failure(
+                ["mystery"], runner=_FakeRunner(raise_exc=Stop()),
+                opposite_family="claude", workspace="/ws",
+                on_llm_call=seen.append,
+            )
+        self.assertEqual(len(seen), 1)
+        self.assertEqual(seen[0]["status"], "failed")
+        self.assertEqual(seen[0]["failure_type"], "execution")
+        self.assertIn("Stop", seen[0]["raw"])
+
+    def test_shared_worker_classifier_preserves_driver_special_cases(self):
+        stalled = runners.WorkerStalled("frozen")
+        self.assertEqual(
+            errclass.classify_worker_failure(stalled),
+            ("timeout", None, "worker stalled (no CPU progress)"),
+        )
+        timed_out = runners.RunnerError("family codex timed out after 90s")
+        self.assertEqual(
+            errclass.classify_worker_failure(timed_out),
+            ("timeout", None, "runner timeout"),
+        )
+
+    def test_shared_worker_classifier_uses_raw_worker_evidence(self):
+        failure = runners.WorkerProtocolError(
+            "invalid envelope", raw_texts=["Error: 529 overloaded"]
+        )
+        self.assertEqual(
+            errclass.classify_worker_failure(failure)[0], "busy"
+        )
 
 
 class TestHostileProse(unittest.TestCase):

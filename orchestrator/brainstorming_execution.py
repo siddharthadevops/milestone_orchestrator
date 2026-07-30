@@ -89,9 +89,10 @@ class RunnerParticipantExecutor:
 class ParticipantExecution:
     """Run validated exchanges for already-resolved durable participants."""
 
-    def __init__(self, store, executors):
+    def __init__(self, store, executors, failure_classifier=None):
         self.store = store
         self.executors = dict(executors)
+        self.failure_classifier = failure_classifier
 
     @staticmethod
     def _participant(snapshot, participant_id):
@@ -441,6 +442,30 @@ class ParticipantExecution:
                     exc.worker_quiescent = True
                 except (AttributeError, TypeError):
                     pass
+                if (
+                    callable(self.failure_classifier)
+                    and isinstance(
+                        exc,
+                        (runners.RunnerError, runners.WorkerProtocolError),
+                    )
+                ):
+                    try:
+                        snapshot = self.store.read(session_id)
+                        participant = self._participant(
+                            snapshot, participant_id
+                        )
+                        executor = self._executor(participant)
+                        classification = self.failure_classifier(
+                            session_id, participant, executor, exc
+                        )
+                        if isinstance(classification, dict):
+                            exc.brainstorming_failure_classification = (
+                                classification
+                            )
+                    except Exception:
+                        # Classification is advisory. Its own failure must not
+                        # replace the participant failure being recovered.
+                        pass
             raise
 
     def _exchange_with_evidence(
@@ -550,7 +575,12 @@ class ParticipantExecution:
         # binding and lifecycle. A terminalized session receives no control
         # exchange, and the repair can never select a fresh/latest session.
         if before_repair is not None:
-            before_repair()
+            try:
+                before_repair()
+            except runners.WorkerProtocolError as exc:
+                if not getattr(exc, "raw_texts", None):
+                    exc.raw_texts = [result.text]
+                raise
         self._require_current_binding(
             session_id, participant, provider_ref
         )

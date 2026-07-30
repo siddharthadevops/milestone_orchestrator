@@ -13,7 +13,7 @@ VIEW_KEYS = {
     "id", "caller", "status", "question", "process", "revision", "target",
     "participants", "same_family_fallback", "closure_policy",
     "closure_ballots", "round", "transcript_markdown", "result",
-    "activity", "work_duration_s", "in_flight",
+    "activity", "work_duration_s", "in_flight", "retry",
 }
 class BrainstormingVisualizationTest(unittest.TestCase):
     def setUp(self):
@@ -157,6 +157,65 @@ class BrainstormingVisualizationTest(unittest.TestCase):
         self.assertEqual(status, 200, detail)
         self.assertEqual(detail["raw_text"], "not valid json")
         self.assertFalse(detail["truncated"])
+
+    def test_classifier_call_is_visible_and_counts_as_work(self):
+        session_id, store = self._create("classifier.md", live=True)
+        target = os.path.join(self.api.workspace, "docs", "classifier.md")
+        prepared = coordination.BrainstormingCoordinator(
+            store, None
+        ).prepare(session_id)
+        with coordination._open_target_parent(target) as (
+            _descriptor, _name, parent_identity
+        ):
+            pass
+        store.begin_turn_attempt(session_id, {
+            "token": "classified-turn",
+            "participant_id": "lead",
+            "completed_turn_count": 0,
+            "target_revision": prepared.state["accepted_target_revision"],
+            "quiescent": False,
+            "target_parent": parent_identity,
+        })
+        store.append_activity(session_id, {
+            "id": "activity-failed-before-classification",
+            "action_id": "classified-turn",
+            "provider_attempt": 1,
+            "at": "2026-07-30T10:00:00+0200",
+            "started_at": 90.0,
+            "duration_s": 1.0,
+            "kind": "discussion_turn",
+            "stage": "discussion",
+            "round": 1,
+            "participant_id": "lead",
+            "model_family": "codex",
+            "model": "gpt-5.6-sol",
+            "effort": "max",
+            "status": "failed",
+            "failure_type": "execution",
+            "error": "provider call failed",
+        })
+        lifecycle._record_classifier_activity(store, session_id, {
+            "family": "claude",
+            "model": "claude-fable-5",
+            "effort": "max",
+            "prompt": "classify this failure",
+            "raw": '{"error_type":"network"}',
+            "started_at": 100.0,
+            "duration_s": 2.5,
+            "status": "completed",
+            "failure_type": None,
+            "error": None,
+            "prompt_path": None,
+        })
+
+        view = self._view(session_id)
+        self.assertEqual(view["work_duration_s"], 3.5)
+        self.assertIsNone(view["in_flight"])
+        self.assertEqual(view["activity"][1]["kind"], "classifier")
+        self.assertEqual(view["activity"][1]["stage"], "classification")
+        self.assertEqual(view["activity"][1]["model_family"], "claude")
+        self.assertEqual(view["activity"][1]["participant_id"],
+                         "recovery-classifier")
 
     def test_active_provider_call_exposes_its_live_clock(self):
         session_id, store = self._create("active-clock.md", live=True)

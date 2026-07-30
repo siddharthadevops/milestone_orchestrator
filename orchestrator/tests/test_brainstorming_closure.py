@@ -582,6 +582,69 @@ class BrainstormingClosureTest(unittest.TestCase):
             self.store.read_turn_attempt("closure-vote-restart")
         )
 
+    def test_operational_closure_vote_resumes_the_same_vote(self):
+        roster = participants()
+        scripts = {
+            "lead": [discussion("lead discussion")],
+            "critic-1": [
+                discussion("critic discussion"),
+                vote("accept"),
+            ],
+        }
+        subject, roster, executors, target, _sibling = self._make(
+            "closure-vote-operational-retry", scripts, roster=roster
+        )
+        completed = self._complete_round(
+            subject, "closure-vote-operational-retry", roster
+        )
+        with coordination._open_target_parent(target) as (
+            _descriptor, _name, parent_identity
+        ):
+            attempt = {
+                "token": "operational-vote",
+                "participant_id": "critic-1",
+                "completed_turn_count": len(
+                    completed.state["completed_turns"]
+                ),
+                "target_revision": completed.state[
+                    "accepted_target_revision"
+                ],
+                "quiescent": False,
+                "target_parent": parent_identity,
+                "kind": "closure",
+                "action_context": {
+                    "stage": "vote",
+                    "closing_summary": summary(),
+                    "votes_by_id": {"lead": "accept"},
+                },
+            }
+        self.store.begin_turn_attempt(
+            "closure-vote-operational-retry", attempt
+        )
+        self.store.mark_turn_attempt_quiescent(
+            "closure-vote-operational-retry", attempt["token"]
+        )
+        self.store.schedule_operational_retry(
+            "closure-vote-operational-retry",
+            attempt["token"],
+            {"error_type": "busy", "resume_at": None, "evidence": ""},
+            1.0,
+        )
+        lead_calls = len(executors["codex-lead"].calls)
+
+        terminal = subject.run_closure(
+            "closure-vote-operational-retry", object()
+        )
+
+        self.assertEqual(terminal.state["status"], "success")
+        self.assertEqual(len(executors["codex-lead"].calls), lead_calls)
+        self.assertEqual(
+            executors["claude-critic-1"].calls[-1]["mode"], "continue"
+        )
+        self.assertIsNone(
+            self.store.read_turn_attempt("closure-vote-operational-retry")
+        )
+
     def test_failed_ballot_requires_another_complete_round(self):
         roster = participants()
         scripts = {
