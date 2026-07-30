@@ -87,7 +87,8 @@ whatever is in progress first, then the rest newest-first. Both kinds open
 in the right pane. For a milestone that is the run view — pipeline,
 rounds, seal results, failure banner, event log, driver log — with Start / Stop /
 Forget. For a session it is the polled session view: status and round
-line, Stop session, an activity chip row (one chip per completed round
+line, Stop/Start for pausing and resuming the same session, an activity chip
+row (one chip per completed round
 and ballot, a live spinner chip for the round under way, the accepted
 target when one exists), the discussion transcript rendered as Markdown,
 and the result below. Session metadata, participants and the accepted
@@ -96,8 +97,8 @@ zone: **Discard session…** removes a stopped session from the panel and
 purges its stored discussion state (`DELETE
 /api/brainstorming/sessions/<id>?purge=1`; without `purge` only the
 service record is forgotten and the durable state stays as evidence — a
-milestone replaying a retained revision keeps working). A running
-session refuses deletion (`brainstorming_session_running`, 409 — the
+milestone replaying a retained revision keeps working). A session whose
+process is running refuses deletion (`brainstorming_session_running`, 409 — the
 same refusal covers a stop still reconciling, so a freed target can
 never be rewritten by a stale stop) — stop it first; the target document
 is never touched either way, and deleting frees its target for a new
@@ -216,19 +217,19 @@ Standalone Brainstorming uses a separate service record and state store under
 entry. `POST /api/brainstorming/sessions` accepts the exact generic request,
 ordered participants with independent `role` and `delivery`, and closure policy, with an optional
 `project`/`work_area` pair. `GET /api/brainstorming/sessions/<id>` is the
-polling/follow surface, and
-`POST /api/brainstorming/sessions/<id>/stop` accepts no fields. All three
-successes return `{"ok": true, "session": ...}`. Stop waits for local work to
-be quiet, restores only the accepted target artifact, and publishes a coherent
-failure; if that safety evidence is unavailable it returns
-`brainstorming_stop_incomplete` without inventing a result.
+polling/follow surface, and `POST /api/brainstorming/sessions/<id>/stop` and
+`/start` accept no fields. These successes return
+`{"ok": true, "session": ...}`. Stop halts the lifecycle without closing or
+discarding the session; Start resumes that same session. If the lifecycle does
+not stop within the existing shutdown window, Stop returns
+`brainstorming_stop_incomplete`.
 
 An external participant publishes one durable intervention and releases the
 target lock while waiting. `GET .../<id>/intervention` returns that request;
 `POST .../<id>/intervention` accepts exactly its token and one response.
-Restarting preserves the wait; authorized polling relaunches a quiet local
-lifecycle so an accepted response continues automatically. A stale, duplicate,
-or late response conflicts instead of entering another turn. The `narrator`
+Restarting preserves the wait; a stopped session resumes through its explicit
+Start action. A stale, duplicate, or late response conflicts instead of entering
+another turn. The `narrator`
 provider uses this same channel today; `manual` leaves it waiting for an
 external UI.
 
@@ -263,6 +264,9 @@ work area's directory when one is chosen and fall back to
 other hosts). The default roster is a Codex lead, a Claude interlocutor, and
 Dante as an external narrator. AI seats keep the ordinary family, model and
 effort controls; Dante's turn enters through the durable external contract.
+Participant prompts use the Markdown chat as shared memory, point to the target
+and reference documents, and carry only the applicable amendments instead of
+duplicating the full transcript and caller payload on every turn.
 Every dial left at default is resolved by the service: family by rotation over what this host offers, model/effort from
 the family's defaults — and when pins would herd every seat onto one
 family while another is available, the last default seat takes the other

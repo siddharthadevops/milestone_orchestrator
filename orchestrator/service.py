@@ -53,7 +53,9 @@ sessions render in the panel's right pane — there is no separate page):
     POST   /api/brainstorming/sessions/<id>/intervention
                                    submit its exact token and response once
     POST   /api/brainstorming/sessions/<id>/stop
-                                   stop participant work and publish failure
+                                   pause participant work, keeping the session
+    POST   /api/brainstorming/sessions/<id>/start
+                                   resume the same non-terminal session
     DELETE /api/brainstorming/sessions/<id>
                                    forget a stopped session (running: 409;
                                    ?purge=1 also removes its durable state
@@ -3100,7 +3102,7 @@ def make_handler(home):
                     elif (
                         len(parts) == 6
                         and parts[4]
-                        and parts[5] == "stop"
+                        and parts[5] in ("stop", "start")
                     ):
                         body = self._brainstorming_body()
                         if body:
@@ -3108,9 +3110,13 @@ def make_handler(home):
                                 400,
                                 brainstorming_lifecycle.INVALID_REQUEST,
                             )
-                        session = brainstorming_lifecycle.stop_session(
-                            home,
-                            parts[4],
+                        operation = (
+                            brainstorming_lifecycle.stop_session
+                            if parts[5] == "stop"
+                            else brainstorming_lifecycle.start_session
+                        )
+                        session = operation(
+                            home, parts[4],
                             lambda record: require_brainstorming_access(
                                 home, who, record
                             ),

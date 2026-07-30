@@ -388,6 +388,7 @@ class BrainstormingVisualizationTest(unittest.TestCase):
         for contract in (
             "seq !== sessionSeq", "showing last known revision, retrying",
             "function refreshSessionDetail", "function stopSelectedSession",
+            "function startSelectedSession",
             '{method: "POST"}',
         ):
             self.assertIn(contract, html)
@@ -397,7 +398,8 @@ class BrainstormingVisualizationTest(unittest.TestCase):
         )
         self.assertEqual(status, 200, stopped)
         view = self._view(session_id)
-        self.assertEqual((view["status"], view["result"]["outcome"]), ("failure", "failure"))
+        self.assertEqual((view["status"], view["process"]), ("running", "stopped"))
+        self.assertIsNone(view["result"])
     def test_milestone_panel_routes_and_state_remain_unchanged(self):
         status, panel_before = self.api._request("GET", "/")
         self.assertEqual(status, 200)

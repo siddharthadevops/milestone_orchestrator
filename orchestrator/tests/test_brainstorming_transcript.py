@@ -579,7 +579,7 @@ class BrainstormingTranscriptTest(unittest.TestCase):
                 session_id, snapshot.revision, malformed
             )
 
-    def test_next_turn_prompt_includes_ballots_and_material_interruptions(self):
+    def test_next_turn_prompt_points_to_chat_with_prior_session_history(self):
         session_id = "prompt-history"
         snapshot = self._initialize(
             session_id, self._create(session_id, max_rounds=2)
@@ -612,14 +612,20 @@ class BrainstormingTranscriptTest(unittest.TestCase):
             target_revision,
         )
 
-        self.assertIn("Earlier accepted session transcript", prompt)
+        self.assertIn(snapshot.state["transcript_ref"], prompt)
+        self.assertNotIn("Earlier accepted session transcript", prompt)
+        self.assertNotIn("Initial objection.", prompt)
+        with open(
+            snapshot.state["transcript_ref"], encoding="utf-8"
+        ) as handle:
+            transcript = handle.read()
         self.assertLess(
-            prompt.index("Initial objection."),
-            prompt.index("Closure ballot — After round 1"),
+            transcript.index("Initial objection."),
+            transcript.index("Closure ballot — After round 1"),
         )
         self.assertLess(
-            prompt.index("Closure ballot — After round 1"),
-            prompt.index("Supervision materially paused the discussion."),
+            transcript.index("Closure ballot — After round 1"),
+            transcript.index("Supervision materially paused the discussion."),
         )
 
     def test_final_round_failed_ballot_is_not_rendered_as_resumable(self):

@@ -403,6 +403,9 @@ def create_session(
                     "The source finding below is preserved unchanged."
                 ),
                 "references": context_references,
+                "amendments": copy.deepcopy(
+                    (authority_context or {}).get("amendments") or []
+                ),
                 "source_payload": source_payload,
             },
             "max_rounds": contracts.MILESTONE_BRAINSTORMING_ROUNDS,
@@ -458,6 +461,9 @@ def create_guarantee_calibration_session(
             "context": {
                 "brief": GUARANTEE_CALIBRATION_BRIEF,
                 "references": context_references,
+                "amendments": copy.deepcopy(
+                    (authority_context or {}).get("amendments") or []
+                ),
                 "source_payload": {
                     "goal": copy.deepcopy(state.get("goal")),
                     "authority_context": copy.deepcopy(
@@ -524,11 +530,6 @@ def terminal_handoff(state, session_id):
     projected = inspect_session(state, session_id)
     session_state = projected["state"]
     if session_state["status"] not in brainstorming.TERMINAL_STATUSES:
-        if projected["process"] != "running":
-            raise OperationalTerminalError(
-                "the Brainstorming lifecycle stopped before a terminal result",
-                work_duration_s=projected.get("work_duration_s"),
-            )
         return None
     if session_state.get("failure_origin") == "operational":
         raise OperationalTerminalError(

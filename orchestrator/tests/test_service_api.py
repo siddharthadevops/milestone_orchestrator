@@ -217,6 +217,8 @@ class ServiceApiTest(unittest.TestCase):
         self.assertIn("function refreshSessionDetail", text)
         self.assertIn("function renderSessionDetail", text)
         self.assertIn("function stopSelectedSession", text)
+        self.assertIn("function startSelectedSession", text)
+        self.assertIn('const displayStatus = !terminal && !running ? "stopped"', text)
         self.assertIn("function sessionChips", text)
         self.assertIn("view.final_agreement", text)
         self.assertIn("Final agreement", text)

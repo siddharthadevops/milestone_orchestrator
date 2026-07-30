@@ -1093,6 +1093,7 @@ function sessionRow(s) {
     // next — never past the ceiling the session may not exceed.
     bits.push(`round ${Math.min(Number(s.rounds_used || 0) + 1,
       s.max_rounds)}/${s.max_rounds}`);
+  else if (!terminal && !running) bits.push("stopped");
   else if (s.status) bits.push(s.status);
   const origin = sessionOrigin(s);
   if (origin) bits.push(origin);
@@ -1137,6 +1138,7 @@ function sessionStatusIndicator(s) {
 let selectedSession = null;
 let sessionSeq = 0;
 let sessionStopping = false;
+let sessionStarting = false;
 let sessionDiscarding = false;
 let lastSessionView = null;
 let sessionView = "main";  // "main" | "info"
@@ -1147,6 +1149,7 @@ function openSession(id) {
   sessionView = "main";
   goalOpen = false;
   sessionStopping = false;
+  sessionStarting = false;
   sessionDiscarding = false;
   lastSessionView = null;
   document.body.classList.add("m-detail");  // mobile: swap to detail page
@@ -1312,6 +1315,7 @@ function renderSessionDetail(view) {
   const terminal = BS_TERMINAL.has(view.status);
   const running = view.process === "running";
   const listed = lastSessions.find(s => s.id === view.id);
+  const displayStatus = !terminal && !running ? "stopped" : view.status;
   const statusCls = view.status === "success" ? "closed"
     : view.status === "failure" ? "failed" : "open";
   let html = "";
@@ -1344,10 +1348,7 @@ function renderSessionDetail(view) {
     html += `<div class="card danger-zone"><h3>Danger zone</h3>
       <div class="danger-copy">Discarding removes this session from the
         panel and deletes its stored discussion state. The target document
-        and repository files are untouched.${
-        String(view.caller || "").startsWith("milestone:")
-          ? " A milestone still waiting on this session will fail its resume."
-          : ""}</div>
+        and repository files are untouched.</div>
       <button class="btn danger" ${running || sessionDiscarding ? "disabled" : ""}
         onclick="discardSelectedSession()">${
         sessionDiscarding ? "Discarding…" : "Discard session…"}</button>
@@ -1360,7 +1361,7 @@ function renderSessionDetail(view) {
   html += `<div class="run-sticky-head">`;
   if (listed && listed.project)
     html += `<div class="proj-title">${esc(listed.project)}</div>`;
-  html += `<div class="run-title-row"><h2>${esc(view.request)}<span class="title-sep">·</span><span class="chip ${statusCls}">${esc(view.status)}</span></h2></div>`;
+  html += `<div class="run-title-row"><h2>${esc(view.request)}<span class="title-sep">·</span><span class="chip ${statusCls}">${esc(displayStatus)}</span></h2></div>`;
   const bits = [
     `round ${view.round.current || 0}/${view.round.maximum}` +
       ` · ${view.round.completed} complete`,
@@ -1377,8 +1378,13 @@ function renderSessionDetail(view) {
     `<span>${esc(bits.join(" · "))}</span></div>`;
   html += `</div>`;
   html += `<div class="toolbar">
-    <button class="btn danger" ${terminal || sessionStopping ? "disabled" : ""}
-      onclick="stopSelectedSession()">${sessionStopping ? "Stopping…" : "Stop session"}</button>
+    ${running
+      ? `<button class="btn danger" ${sessionStopping ? "disabled" : ""}
+          onclick="stopSelectedSession()">${sessionStopping ? "Stopping…" : "Stop session"}</button>`
+      : (!terminal
+          ? `<button class="btn primary" ${sessionStarting ? "disabled" : ""}
+              onclick="startSelectedSession()">${sessionStarting ? "Starting…" : "Start session"}</button>`
+          : "")}
     <button class="btn" style="margin-left:auto"
       onclick="openSessionInfo()">Info&#8230;</button>
   </div>`;
@@ -1496,6 +1502,26 @@ async function stopSelectedSession() {
     alert(e.message);  // sealed refusal token, verbatim
   } finally {
     sessionStopping = false;
+    refreshSessionDetail();
+  }
+}
+async function startSelectedSession() {
+  if (!selectedSession || sessionStarting) return;
+  if (lastSessionView && (
+      BS_TERMINAL.has(lastSessionView.status) ||
+      lastSessionView.process === "running")) return;
+  sessionStarting = true;
+  if (lastSessionView) renderSessionDetail(lastSessionView);
+  try {
+    await api(
+      "/api/brainstorming/sessions/" +
+        encodeURIComponent(selectedSession) + "/start",
+      {method: "POST"}
+    );
+  } catch (e) {
+    alert(e.message);
+  } finally {
+    sessionStarting = false;
     refreshSessionDetail();
   }
 }

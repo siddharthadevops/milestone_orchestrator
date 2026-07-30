@@ -149,6 +149,7 @@ class BrainstormingCoordinationTest(unittest.TestCase):
         roster=None,
         max_rounds=2,
         initial=b"initial target",
+        context=None,
     ):
         roster = roster or participants()
         workspace = os.path.join(self.root, session_id)
@@ -162,7 +163,7 @@ class BrainstormingCoordinationTest(unittest.TestCase):
             "workspace_path": workspace,
             "target_path": "docs/decision.md",
             "request": "Choose the compatible option to adopt.",
-            "context": {
+            "context": context or {
                 "brief": "Resolve one bounded design request.",
                 "references": ["requirements.md"],
                 "source_payload": {"opaque": True},
@@ -188,7 +189,17 @@ class BrainstormingCoordinationTest(unittest.TestCase):
             "workspace_path": self.root,
             "target_path": "decision.md",
             "request": "Choose a practical result.",
-            "context": {"brief": "Keep the decision human-sized."},
+            "context": {
+                "brief": "Keep the decision human-sized.",
+                "amendments": [
+                    {"id": "A1", "text": "Prefer the small path."}
+                ],
+                "source_payload": {
+                    "authority_context": {
+                        "project_context": "DO NOT INLINE THIS",
+                    }
+                },
+            },
             "max_rounds": 1,
         }
         state = bs.new_session_state(
@@ -244,14 +255,18 @@ class BrainstormingCoordinationTest(unittest.TestCase):
         discussion_prompt = coordination.build_external_narrator_prompt(
             state, discussion
         )
-        self.assertIn("Dante must sound human", discussion_prompt)
+        self.assertIn("Dante is a human project lead", discussion_prompt)
         self.assertIn("live brainstorming conversation", discussion_prompt)
-        self.assertIn("simple, clear language", discussion_prompt)
-        self.assertIn("decide and move forward", discussion_prompt)
+        self.assertIn("ordinary, clear language", discussion_prompt)
+        self.assertIn("Read the Brainstorming chat", discussion_prompt)
         self.assertIn("single spoken intervention", discussion_prompt)
         self.assertIn("natural English", discussion_prompt)
-        self.assertNotIn("Do not narrate", discussion_prompt)
-        self.assertNotIn("report or checklist", discussion_prompt)
+        self.assertTrue(
+            discussion_prompt.endswith(coordination.DANTE_MANDATORY_LINE)
+        )
+        self.assertIn("Dante amended the project", discussion_prompt)
+        self.assertIn("A1: Prefer the small path.", discussion_prompt)
+        self.assertNotIn("DO NOT INLINE THIS", discussion_prompt)
 
     def _subject(self, roster, scripts, store=None, failure_classifier=None):
         store = store or self.store
@@ -337,20 +352,33 @@ class BrainstormingCoordinationTest(unittest.TestCase):
                 critic_prompt = executors[
                     roster[1]["executor_ref"]
                 ].calls[0]["prompt"]
-                self.assertIn("lead one", critic_prompt)
+                self.assertNotIn("lead one", critic_prompt)
+                self.assertIn(third.state["transcript_ref"], critic_prompt)
                 self.assertIn(first_revision, critic_prompt)
-                self.assertIn("Do not edit target_path", critic_prompt)
+                self.assertIn("Do not edit the target document", critic_prompt)
                 lead_prompt = executors[
                     roster[0]["executor_ref"]
                 ].calls[1]["prompt"]
-                self.assertLess(
-                    lead_prompt.index("lead one"),
-                    lead_prompt.index("critic one"),
-                )
+                self.assertNotIn("lead one", lead_prompt)
+                self.assertNotIn("critic one", lead_prompt)
                 self.assertIn(
                     second.state["accepted_target_revision"], lead_prompt
                 )
-                self.assertIn("simplest sufficient response", lead_prompt)
+                self.assertIn("cheapest sufficient result", lead_prompt)
+                first_lead_prompt = executors[
+                    roster[0]["executor_ref"]
+                ].calls[0]["prompt"]
+                self.assertLess(
+                    abs(len(lead_prompt) - len(first_lead_prompt)), 300
+                )
+                with open(
+                    third.state["transcript_ref"], encoding="utf-8"
+                ) as handle:
+                    transcript = handle.read()
+                self.assertLess(
+                    transcript.index("lead one"),
+                    transcript.index("critic one"),
+                )
                 self.assertEqual(
                     [call["mode"] for call in executors[
                         roster[0]["executor_ref"]
@@ -397,23 +425,19 @@ class BrainstormingCoordinationTest(unittest.TestCase):
             ),
         )
         anchors = (
-            "independent authority establishing the need",
-            "existing code, contracts, dependencies",
-            "documentation, configuration, or no change",
-            "authorised outcome it serves",
-            "build, migration, operation, maintenance, and review cost",
-            "omission cost and reversibility",
-            '"opaque": true',
+            "Brainstorming chat is the shared record",
+            "identify real affected parties",
+            "realistic harm and reversibility",
+            "reuse existing mechanisms",
+            "cheapest sufficient result",
+            "Escalate only on concrete evidence",
         )
         for prompt in prompts_under_test:
             prompt = " ".join(prompt.split())
             for anchor in anchors:
                 self.assertIn(anchor, prompt)
-            self.assertIn("keep the decision in scope", prompt)
-            self.assertIn(
-                "Do not invent victims, guarantees, threats", prompt
-            )
-            self.assertIn("design gap, not a promise", prompt)
+            self.assertNotIn('"opaque": true', prompt)
+            self.assertNotIn("Earlier accepted session transcript", prompt)
 
         discussion_prompt, critic_prompt, proposal_prompt, vote_prompt = (
             prompts_under_test
@@ -423,16 +447,73 @@ class BrainstormingCoordinationTest(unittest.TestCase):
             "Adopt the bounded result and leave no question open.",
             vote_prompt,
         )
-        report_instruction = "If no machinery is justified, say so briefly"
-        rationale_instruction = "Explain why anything cheaper is insufficient"
-        self.assertIn(report_instruction, discussion_prompt)
-        self.assertIn(report_instruction, critic_prompt)
-        self.assertIn(report_instruction, proposal_prompt)
-        self.assertNotIn(report_instruction, vote_prompt)
-        self.assertIn(rationale_instruction, discussion_prompt)
-        self.assertIn(rationale_instruction, critic_prompt)
-        self.assertIn(rationale_instruction, proposal_prompt)
-        self.assertNotIn(rationale_instruction, vote_prompt)
+        self.assertLess(len(discussion_prompt), 6000)
+        self.assertLess(len(critic_prompt), 6000)
+        self.assertLess(len(proposal_prompt), 7000)
+
+    def test_prompts_project_only_paths_and_amendments_from_opaque_context(self):
+        session_id = "lean-context"
+        roster = participants()
+        self._create_running(
+            session_id,
+            roster=roster,
+            context={
+                "brief": "Resolve the bounded request.",
+                "references": [
+                    "goal.md",
+                    "docs/reference.md",
+                    "JIRA-123",
+                    "urn:case:7",
+                ],
+                "amendments": [
+                    {"id": "A7", "text": "Keep the result small."}
+                ],
+                "source_payload": {
+                    "finding": "DO NOT INLINE FINDING",
+                    "authority_context": {
+                        "project_context": "DO NOT INLINE PROJECT CONTEXT",
+                    },
+                },
+            },
+        )
+        subject, _executors = self._subject(
+            roster,
+            {"lead": [envelope("unused")], "critic": [envelope("unused")]},
+        )
+        snapshot = subject.prepare(session_id)
+        revision = snapshot.state["recovery_baseline_revision"]
+        target_revision = self.store.read_target_revision(
+            session_id, revision
+        )
+        prompts = (
+            coordination.build_turn_prompt(
+                snapshot.state, roster[0], 1, target_revision
+            ),
+            coordination.build_closure_proposal_prompt(
+                snapshot.state, target_revision
+            ),
+            coordination.build_closure_vote_prompt(
+                snapshot.state,
+                roster[1],
+                target_revision,
+                closing_summary(),
+            ),
+        )
+        for prompt in prompts:
+            self.assertIn("A7: Keep the result small.", prompt)
+            self.assertIn("goal.md", prompt)
+            self.assertIn("docs/reference.md", prompt)
+            self.assertIn("JIRA-123", prompt)
+            self.assertIn("urn:case:7", prompt)
+            self.assertNotIn(
+                os.path.join(
+                    snapshot.state["request"]["workspace_path"],
+                    "JIRA-123",
+                ),
+                prompt,
+            )
+            self.assertNotIn("DO NOT INLINE FINDING", prompt)
+            self.assertNotIn("DO NOT INLINE PROJECT CONTEXT", prompt)
 
     def test_coordination_without_exact_launch_baseline_is_rejected(self):
         session_id = "missing-launch-baseline"

@@ -3,7 +3,7 @@
 This module deliberately owns no milestone state.  It binds an authenticated
 caller to one Brainstorming SessionStore record, launches one independent
 lifecycle process, projects durable progress for polling, and composes a
-target-safe terminal failure for an explicit caller stop.
+target-safe pause that can resume under the same session identity.
 """
 
 from __future__ import annotations
@@ -1018,55 +1018,6 @@ def _record_by_id(home, session_id):
         raise PublicLifecycleError(503, UNAVAILABLE) from exc
 
 
-def _recover_external_wait(home, record):
-    """Relaunch a stopped lifecycle that owns a durable external turn."""
-    if _process_alive(record):
-        return record
-    token = (os.path.abspath(home), record["id"])
-    with _STOPS_GUARD:
-        if token in _STOPS_IN_FLIGHT:
-            return record
-    store = brainstorming.SessionStore(state_directory(home))
-    snapshot = store.read(record["id"])
-    intervention = store.read_external_intervention(record["id"])
-    if (
-        snapshot is None
-        or snapshot.state["status"] != "running"
-        or intervention is None
-        or not intervention["provider_quiescent"]
-    ):
-        return record
-
-    launch = None
-    try:
-        with _locked_registry(home):
-            document = _load_registry(home)
-            current = _find_record(document, record["id"])
-            if current is None or _process_alive(current):
-                return copy.deepcopy(current or record)
-            snapshot = store.read(record["id"])
-            intervention = store.read_external_intervention(record["id"])
-            if (
-                snapshot is None
-                or snapshot.state["status"] != "running"
-                or intervention is None
-                or not intervention["provider_quiescent"]
-            ):
-                return copy.deepcopy(current)
-            launch = _launch_lifecycle_process(home, record["id"])
-            current["pid"] = launch.process.pid
-            _save_registry(home, document)
-            recovered = copy.deepcopy(current)
-        _track_child(home, record["id"], launch.process)
-        launch.release()
-        return recovered
-    except Exception as exc:
-        if launch is not None:
-            launch.abort()
-            _clear_pid(home, record["id"], launch.process.pid)
-        raise PublicLifecycleError(503, UNAVAILABLE) from exc
-
-
 def _authorize_record(record, authorize):
     if not callable(authorize):
         raise PublicLifecycleError(503, UNAVAILABLE)
@@ -1499,7 +1450,6 @@ def inspect_session(home, session_id, authorize):
     """Authorize from immutable service metadata, then read durable state."""
     record = _record_by_id(home, session_id)
     _authorize_record(record, authorize)
-    record = _recover_external_wait(home, record)
     return _projection(home, record)
 
 
@@ -1507,7 +1457,6 @@ def view_external_intervention(home, session_id, authorize):
     """Expose the pending transport-neutral turn after session authorization."""
     record = _record_by_id(home, session_id)
     _authorize_record(record, authorize)
-    record = _recover_external_wait(home, record)
     try:
         store = brainstorming.SessionStore(state_directory(home))
         return store.read_external_intervention(session_id)
@@ -1540,10 +1489,6 @@ def submit_external_intervention(home, session_id, body, authorize):
         delivered = store.submit_external_intervention(
             session_id, token, body["response"]
         )
-        try:
-            _recover_external_wait(home, record)
-        except PublicLifecycleError:
-            pass
         return delivered
     except (
         brainstorming.HistoryRewriteError,
@@ -1636,14 +1581,7 @@ def list_sessions(home, visible):
     store = brainstorming.SessionStore(state_directory(home))
     rows = []
     for record in visible_records:
-        recovery_error = None
-        try:
-            record = _recover_external_wait(home, record)
-        except PublicLifecycleError as exc:
-            recovery_error = exc.code
         row = _list_projection(store, record)
-        if recovery_error is not None and row["state_error"] is None:
-            row["state_error"] = "lifecycle recovery: %s" % recovery_error
         rows.append(row)
     rows.sort(key=lambda row: row["created_at"], reverse=True)
     return rows
@@ -1652,8 +1590,8 @@ def list_sessions(home, visible):
 def delete_session(home, session_id, authorize, purge=False):
     """Forget one stopped session; with purge, drop its durable state too.
 
-    A running session refuses (stop it first) — deletion never signals a
-    process. Without purge only the service record is removed: the panel
+    A session with a running process refuses (stop it first) — deletion never
+    signals a process. Without purge only the service record is removed: the panel
     forgets the session, its target is freed for a new discussion, and
     the durable state stays on disk as evidence (a milestone replaying a
     retained revision keeps working). With purge the session's keys and
@@ -1674,9 +1612,7 @@ def delete_session(home, session_id, authorize, purge=False):
                     os.path.abspath(home), session_id
                 ) in _STOPS_IN_FLIGHT
             if stopping or _process_alive(record):
-                # A stop mid-reconcile still owns the target's recovery;
-                # freeing the target under it would let the stale
-                # reconcile rewrite a successor session's document.
+                # Stop still owns this service record until it finishes.
                 raise PublicLifecycleError(409, SESSION_RUNNING)
             if purge:
                 store = brainstorming.SessionStore(state_directory(home))
@@ -1737,7 +1673,6 @@ def view_session(home, session_id, authorize, preview_limit):
     """Project one authorized durable revision for the dedicated view."""
     record = _record_by_id(home, session_id)
     _authorize_record(record, authorize)
-    record = _recover_external_wait(home, record)
     try:
         store = brainstorming.SessionStore(state_directory(home))
         snapshot = store.read(record["id"])
@@ -1934,53 +1869,21 @@ def _closing_summary(state, reason, proportionality):
     }
 
 
-def _reconcile_for_terminal(store, session_id):
-    coordinator = coordination.BrainstormingCoordinator(store, None)
-    for _attempt in range(8):
-        snapshot = store.read(session_id)
-        if snapshot is None:
-            raise PublicLifecycleError(503, UNAVAILABLE)
-        if snapshot.state["status"] in brainstorming.TERMINAL_STATUSES:
-            return snapshot
-        try:
-            return coordinator.prepare(
-                session_id, cancel_operational_retry=True
-            )
-        except brainstorming.RevisionConflict:
-            continue
-        except coordination.CoordinationRejected as exc:
-            current = store.read(session_id)
-            if current is None:
-                raise PublicLifecycleError(503, UNAVAILABLE) from exc
-            if current.state["status"] in brainstorming.TERMINAL_STATUSES:
-                return current
-            raise PublicLifecycleError(409, STOP_INCOMPLETE) from exc
-        except brainstorming.HistoryRewriteError as exc:
-            raise PublicLifecycleError(409, STOP_INCOMPLETE) from exc
-    raise PublicLifecycleError(409, STOP_INCOMPLETE)
-
-
-# Stops currently reconciling, announced so deletion can refuse them: a
-# stop's reconcile-and-close phase runs for seconds without the registry
-# lock, and a delete that freed the target meanwhile would let the stale
-# reconcile rewrite a successor session's document. In-process like
-# _CHILDREN — one service instance owns a home.
+# Stops currently running. In-process like _CHILDREN — one service owns a home.
 _STOPS_IN_FLIGHT = set()
 _STOPS_GUARD = threading.Lock()
 
 
 def stop_session(home, session_id, authorize):
-    """Stop worker activity, reconcile only the target, and fail atomically."""
+    """Pause worker activity without closing or discarding the session."""
     record = _record_by_id(home, session_id)
     _authorize_record(record, authorize)
     token = (os.path.abspath(home), session_id)
     with _STOPS_GUARD:
         _STOPS_IN_FLIGHT.add(token)
     try:
-        # Re-read AFTER announcing the stop; _record_by_id serializes on
-        # the registry lock, so a delete lands strictly before this
-        # re-read (the record is gone: typed 404, nothing to reconcile)
-        # or strictly after the announcement (the delete refuses).
+        # Re-read after announcing the stop so deletion either wins first or
+        # observes the active stop and refuses.
         record = _record_by_id(home, session_id)
         return _stop_authorized(home, session_id, record)
     except PublicLifecycleError:
@@ -2002,62 +1905,57 @@ def _stop_authorized(home, session_id, record):
         raise PublicLifecycleError(503, UNAVAILABLE)
     if snapshot.state["status"] in brainstorming.TERMINAL_STATUSES:
         return _projection(home, record)
-    intervention = store.read_external_intervention(session_id)
-    if (
-        intervention is not None
-        and not intervention["provider_quiescent"]
-    ):
-        raise PublicLifecycleError(409, STOP_INCOMPLETE)
 
     if not _signal_lifecycle(record):
         raise PublicLifecycleError(409, STOP_INCOMPLETE)
     if record.get("pid"):
         _clear_pid(home, session_id, record["pid"])
         record["pid"] = None
+    current = _record_by_id(home, session_id)
+    return _projection(home, current)
 
-    reason = "The caller stopped the discussion."
-    for _attempt in range(8):
-        snapshot = _reconcile_for_terminal(store, session_id)
-        if snapshot.state["status"] in brainstorming.TERMINAL_STATUSES:
-            return _projection(home, record)
-        projection = brainstorming.coordination_projection(snapshot.state)
-        if projection is None:
-            raise PublicLifecycleError(409, STOP_INCOMPLETE)
-        interruption = {
-            "after_completed_turns": len(projection["completed_turns"]),
-            "plain": reason,
-        }
-        result = _failure_result(snapshot.state, reason)
-        summary = _closing_summary(
-            snapshot.state,
-            reason,
-            "Stopping follows the caller's explicit request.",
-        )
-        try:
-            store.close_with_interruption(
-                session_id,
-                snapshot.revision,
-                interruption,
-                result,
-                summary,
-            )
-            current = _record_by_id(home, session_id)
-            return _projection(home, current)
-        except brainstorming.RevisionConflict as conflict:
+
+def start_session(home, session_id, authorize):
+    """Resume one stopped non-terminal session under its existing identity."""
+    record = _record_by_id(home, session_id)
+    _authorize_record(record, authorize)
+    token = (os.path.abspath(home), session_id)
+    launch = None
+    try:
+        store = brainstorming.SessionStore(state_directory(home))
+        with _locked_registry(home):
+            with _STOPS_GUARD:
+                if token in _STOPS_IN_FLIGHT:
+                    raise PublicLifecycleError(409, STOP_INCOMPLETE)
+            document = _load_registry(home)
+            current = _find_record(document, session_id)
+            if current is None:
+                raise PublicLifecycleError(404, UNKNOWN_SESSION)
+            snapshot = store.read(session_id)
+            if snapshot is None:
+                raise PublicLifecycleError(503, UNAVAILABLE)
             if (
-                conflict.current.state["status"]
-                in brainstorming.TERMINAL_STATUSES
+                snapshot.state["status"] in brainstorming.TERMINAL_STATUSES
+                or _process_alive(current)
             ):
-                current = _record_by_id(home, session_id)
                 return _projection(home, current)
-            continue
-        except (
-            brainstorming.ContractError,
-            brainstorming.HistoryRewriteError,
-            coordination.CoordinationRejected,
-        ) as exc:
-            raise PublicLifecycleError(409, STOP_INCOMPLETE) from exc
-    raise PublicLifecycleError(409, STOP_INCOMPLETE)
+            launch = _launch_lifecycle_process(home, session_id)
+            current["pid"] = launch.process.pid
+            _save_registry(home, document)
+            resumed = copy.deepcopy(current)
+        _track_child(home, session_id, launch.process)
+        launch.release()
+        return _projection(home, resumed)
+    except PublicLifecycleError:
+        if launch is not None:
+            launch.abort()
+            _clear_pid(home, session_id, launch.process.pid)
+        raise
+    except Exception as exc:
+        if launch is not None:
+            launch.abort()
+            _clear_pid(home, session_id, launch.process.pid)
+        raise PublicLifecycleError(503, UNAVAILABLE) from exc
 
 
 def _record_classifier_activity(store, session_id, call):

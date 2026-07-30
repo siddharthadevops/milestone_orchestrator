@@ -1347,7 +1347,7 @@ class StandaloneBrainstormingApiTest(unittest.TestCase):
             encoding="utf-8",
         ) as handle:
             recorded_prompt = handle.read()
-        self.assertIn("Request:", recorded_prompt)
+        self.assertIn("Brainstorming chat is the shared record", recorded_prompt)
         self.assertIn("role: lead", recorded_prompt)
         self.assertFalse(os.path.samefile(target, unrelated))
         real_identity = lifecycle._target_identity
@@ -1733,7 +1733,7 @@ class StandaloneBrainstormingApiTest(unittest.TestCase):
         terminal = self._poll_terminal(session_id)
         self.assertEqual(terminal["state"]["status"], "success")
 
-    def test_external_wait_relaunches_after_its_lifecycle_dies(self):
+    def test_external_wait_requires_explicit_start_after_lifecycle_dies(self):
         self._target("external-relaunch.md")
         payload = self._payload("external-relaunch.md")
         payload["participants"].append(
@@ -1780,6 +1780,14 @@ class StandaloneBrainstormingApiTest(unittest.TestCase):
             },
         )
         self.assertEqual(code, 200, response)
+        paused = lifecycle._record_by_id(self.home, session_id)
+        self.assertFalse(lifecycle._process_alive(paused))
+        code, started = self._request(
+            "POST",
+            "/api/brainstorming/sessions/%s/start" % session_id,
+            {},
+        )
+        self.assertEqual(code, 200, started)
         new_pid = lifecycle._record_by_id(self.home, session_id)["pid"]
         self.assertNotEqual(new_pid, old_pid)
         self.assertTrue(lifecycle._process_alive(
@@ -1797,7 +1805,7 @@ class StandaloneBrainstormingApiTest(unittest.TestCase):
             self._poll_terminal(session_id)["state"]["status"], "success"
         )
 
-    def test_stop_invalidates_a_pending_external_turn(self):
+    def test_stop_preserves_a_pending_external_turn_for_resume(self):
         self._target("external-stop.md")
         payload = self._payload("external-stop.md")
         payload["participants"].append(
@@ -1831,15 +1839,16 @@ class StandaloneBrainstormingApiTest(unittest.TestCase):
             "POST", "/api/brainstorming/sessions/%s/stop" % session_id, {}
         )
         self.assertEqual(code, 200, stopped)
-        self.assertEqual(stopped["session"]["state"]["status"], "failure")
-        self.assertIsNone(stopped["session"]["external_intervention"])
+        self.assertEqual(stopped["session"]["state"]["status"], "running")
+        self.assertEqual(stopped["session"]["process"], "stopped")
+        self.assertIsNotNone(stopped["session"]["external_intervention"])
         code, followed = self._request(
             "GET",
             "/api/brainstorming/sessions/%s/intervention" % session_id,
         )
         self.assertEqual(code, 200, followed)
-        self.assertIsNone(followed["intervention"])
-        code, refused = self._request(
+        self.assertEqual(followed["intervention"]["token"], intervention["token"])
+        code, accepted = self._request(
             "POST",
             "/api/brainstorming/sessions/%s/intervention" % session_id,
             {
@@ -1847,7 +1856,69 @@ class StandaloneBrainstormingApiTest(unittest.TestCase):
                 "response": {"markdown": "Too late."},
             },
         )
-        self.assertEqual(code, 409, refused)
+        self.assertEqual(code, 200, accepted)
+        code, resumed = self._request(
+            "POST", "/api/brainstorming/sessions/%s/start" % session_id, {}
+        )
+        self.assertEqual(code, 200, resumed)
+        self.assertEqual(resumed["session"]["state"]["status"], "running")
+        self.assertEqual(resumed["session"]["process"], "running")
+
+    def test_start_rechecks_a_concurrent_stop_before_launch(self):
+        self._target("start-stop-race.md")
+        created = lifecycle.create_session(
+            self.home,
+            self._payload("start-stop-race.md"),
+            access.ADMIN_EMAIL,
+            launcher=self._sleeper_launcher,
+        )
+        session_id = created["id"]
+        self._stop_sleeper_record(session_id)
+        token = (os.path.abspath(self.home), session_id)
+        entered_launch_lock = threading.Event()
+        release_launch_lock = threading.Event()
+        lock_calls = 0
+        calls_guard = threading.Lock()
+        real_locked_registry = lifecycle._locked_registry
+
+        @contextlib.contextmanager
+        def interposed_registry(home):
+            nonlocal lock_calls
+            with real_locked_registry(home):
+                with calls_guard:
+                    lock_calls += 1
+                    this_call = lock_calls
+                if this_call == 2:
+                    entered_launch_lock.set()
+                    self.assertTrue(release_launch_lock.wait(5))
+                yield
+
+        def start():
+            try:
+                return lifecycle.start_session(
+                    self.home, session_id, lambda _record: None
+                )
+            except lifecycle.PublicLifecycleError as exc:
+                return exc
+
+        with mock.patch.object(
+            lifecycle, "_locked_registry", interposed_registry
+        ), mock.patch.object(
+            lifecycle, "_launch_lifecycle_process"
+        ) as launch:
+            with ThreadPoolExecutor(max_workers=1) as pool:
+                outcome = pool.submit(start)
+                self.assertTrue(entered_launch_lock.wait(5))
+                with lifecycle._STOPS_GUARD:
+                    lifecycle._STOPS_IN_FLIGHT.add(token)
+                release_launch_lock.set()
+                outcome = outcome.result()
+            with lifecycle._STOPS_GUARD:
+                lifecycle._STOPS_IN_FLIGHT.discard(token)
+
+        self.assertIsInstance(outcome, lifecycle.PublicLifecycleError)
+        self.assertEqual(outcome.code, lifecycle.STOP_INCOMPLETE)
+        launch.assert_not_called()
 
     def test_two_external_participants_chain_their_closure_votes(self):
         self._target("two-external.md")
@@ -1903,7 +1974,7 @@ class StandaloneBrainstormingApiTest(unittest.TestCase):
         terminal = self._poll_terminal(session_id)
         self.assertEqual(terminal["state"]["status"], "success")
 
-    def test_unknown_narrator_quiescence_never_relaunches_or_terminalizes(self):
+    def test_stop_leaves_an_ended_narrator_attempt_untouched(self):
         self._target("uncertain-narrator.md")
         payload = self._payload("uncertain-narrator.md")
         payload["participants"].append(
@@ -1954,13 +2025,13 @@ class StandaloneBrainstormingApiTest(unittest.TestCase):
         self.assertFalse(
             followed["external_intervention"]["provider_quiescent"]
         )
-        with self.assertRaises(lifecycle.PublicLifecycleError) as refused:
-            lifecycle.stop_session(
-                self.home, session_id, lambda _record: None
-            )
-        self.assertEqual(
-            (refused.exception.status, refused.exception.code),
-            (409, lifecycle.STOP_INCOMPLETE),
+        stopped = lifecycle.stop_session(
+            self.home, session_id, lambda _record: None
+        )
+        self.assertEqual(stopped["state"]["status"], "running")
+        self.assertEqual(stopped["process"], "stopped")
+        self.assertFalse(
+            stopped["external_intervention"]["provider_quiescent"]
         )
 
     def test_recoverable_provider_failure_retries_the_same_turn(self):
@@ -2158,7 +2229,7 @@ class StandaloneBrainstormingApiTest(unittest.TestCase):
         )
         self.assertFalse(os.path.exists(os.path.join(bound_workspace, ".git")))
 
-    def test_lifecycle_closing_keeps_accepted_concerns_honest(self):
+    def test_pause_keeps_accepted_concerns_without_fabricating_closure(self):
         self._target("concern.md")
         created = lifecycle.create_session(
             self.home,
@@ -2187,17 +2258,9 @@ class StandaloneBrainstormingApiTest(unittest.TestCase):
         stopped = lifecycle.stop_session(
             self.home, session_id, lambda _record: None
         )
-        summary = stopped["state"]["closing_summary"]
-        self.assertTrue(summary["unresolved_objections"])
-        self.assertIn(
-            "before accepted discussion turns and ballots were classified",
-            summary["unresolved_objections"][0],
-        )
-        self.assertIn(
-            "No participant-authored terminal account",
-            summary["affected_parties"],
-        )
-        self.assertIsNotNone(summary["escalation_evidence"])
+        self.assertEqual(stopped["state"]["status"], "running")
+        self.assertNotIn("result", stopped["state"])
+        self.assertNotIn("closing_summary", stopped["state"])
         with open(
             stopped["state"]["transcript_ref"], encoding="utf-8"
         ) as handle:
@@ -2208,7 +2271,7 @@ class StandaloneBrainstormingApiTest(unittest.TestCase):
         )
         self.assertIsNone(record["pid"])
 
-    def test_stop_cancels_a_pending_operational_retry(self):
+    def test_stop_preserves_a_pending_operational_retry_without_rewriting(self):
         target = self._target("stop-retry.md")
         created = lifecycle.create_session(
             self.home,
@@ -2247,12 +2310,15 @@ class StandaloneBrainstormingApiTest(unittest.TestCase):
             self.home, session_id, lambda _record: None
         )
 
-        self.assertEqual(stopped["state"]["status"], "failure")
-        self.assertIsNone(store.read_turn_attempt(session_id))
+        self.assertEqual(stopped["state"]["status"], "running")
+        self.assertIsNotNone(store.read_turn_attempt(session_id))
+        self.assertIsNotNone(
+            store.read_turn_attempt(session_id)["operational_retry"]
+        )
         with open(target, "rb") as handle:
-            self.assertEqual(handle.read(), b"initial target")
+            self.assertEqual(handle.read(), b"unaccepted bytes")
 
-    def test_stop_waits_for_quiescence_recovers_only_target_and_records_failure(self):
+    def test_stop_waits_for_quiescence_recovers_target_and_keeps_session(self):
         target = self._target("slow.md")
         os.chmod(target, 0o640)
         sibling = os.path.join(self.workspace, "sibling.sentinel")
@@ -2297,17 +2363,12 @@ class StandaloneBrainstormingApiTest(unittest.TestCase):
         )
         self.assertEqual(status, 200, stopped)
         session = stopped["session"]
-        self.assertEqual(session["state"]["status"], "failure")
+        self.assertEqual(session["state"]["status"], "running")
         self.assertEqual(session["process"], "stopped")
         self.assertEqual(session["state"]["rounds_used"], 0)
         self.assertEqual(session["state"]["completed_turns"], [])
-        self.assertEqual(
-            session["state"]["result"]["reason"],
-            "The caller stopped the discussion.",
-        )
-        events = session["state"]["transcript_events"]
-        self.assertEqual(len(events), 1)
-        self.assertEqual(events[0]["kind"], "material_interruption")
+        self.assertNotIn("result", session["state"])
+        self.assertEqual(session["state"]["transcript_events"], [])
         with open(target, "rb") as handle:
             self.assertEqual(handle.read(), b"initial target")
         self.assertEqual(stat.S_IMODE(os.stat(target).st_mode), 0o640)
@@ -2419,23 +2480,7 @@ class StandaloneBrainstormingApiTest(unittest.TestCase):
         )
         self.assertLessEqual(len(terminal.state["transcript_events"]), 1)
 
-    def test_stop_reconcile_accepts_completion_winning_during_prepare(self):
-        running = mock.Mock(state={"status": "running"})
-        terminal = mock.Mock(state={"status": "failure"})
-        store = mock.Mock()
-        store.read.side_effect = [running, terminal]
-        with mock.patch.object(
-            coordination.BrainstormingCoordinator,
-            "prepare",
-            side_effect=coordination.CoordinationRejected(
-                "the session became terminal"
-            ),
-        ):
-            reconciled = lifecycle._reconcile_for_terminal(store, "session")
-        self.assertIs(reconciled, terminal)
-        self.assertEqual(store.read.call_count, 2)
-
-    def test_unreconciled_process_exit_never_fabricates_terminal_state(self):
+    def test_stop_of_dead_process_leaves_durable_state_untouched(self):
         target = self._target("unreconciled.md")
         created = lifecycle.create_session(
             self.home,
@@ -2470,18 +2515,13 @@ class StandaloneBrainstormingApiTest(unittest.TestCase):
         with open(target, "wb") as handle:
             handle.write(b"unconfirmed worker mutation")
 
-        status, refused = self._request(
+        status, stopped = self._request(
             "POST",
             "/api/brainstorming/sessions/%s/stop" % session_id,
             {},
         )
-        self.assertEqual(
-            (status, refused),
-            (
-                409,
-                {"ok": False, "error": lifecycle.STOP_INCOMPLETE},
-            ),
-        )
+        self.assertEqual(status, 200, stopped)
+        self.assertEqual(stopped["session"]["process"], "stopped")
         status, followed = self._request(
             "GET", "/api/brainstorming/sessions/%s" % session_id
         )

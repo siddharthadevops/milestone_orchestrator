@@ -1047,7 +1047,10 @@ def validate_request(request):
 
     context = request["context"]
     _exact_keys(
-        context, ("brief",), ("references", "source_payload"), "request.context"
+        context,
+        ("brief",),
+        ("references", "source_payload", "amendments"),
+        "request.context",
     )
     _text(context["brief"], "request.context.brief")
     if "references" in context:
@@ -1058,6 +1061,24 @@ def validate_request(request):
             _text(reference, "request.context.references[%d]" % index)
     if "source_payload" in context:
         _json_copy(context["source_payload"], "request.context.source_payload")
+    if "amendments" in context:
+        amendments = context["amendments"]
+        if not isinstance(amendments, list):
+            raise ContractError("request.context.amendments must be a list")
+        for index, amendment in enumerate(amendments):
+            if not isinstance(amendment, dict):
+                raise ContractError(
+                    "request.context.amendments[%d] must be an object" % index
+                )
+            _text(
+                amendment.get("text"),
+                "request.context.amendments[%d].text" % index,
+            )
+            if "id" in amendment:
+                _text(
+                    amendment["id"],
+                    "request.context.amendments[%d].id" % index,
+                )
     return _json_copy(request, "request")
 
 

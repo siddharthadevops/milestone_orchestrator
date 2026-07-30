@@ -1016,6 +1016,7 @@ class BrainstormingMilestoneAdapterTest(unittest.TestCase):
             request["context"]["references"],
             ["docs/context.md", skeleton_rel],
         )
+        self.assertEqual(request["context"]["amendments"], [])
         self.assertEqual(captured["caller"],
                          "milestone:run:skeleton:guarantee-calibration")
         self.assertEqual(request["target_path"], captured["target"])
@@ -1146,6 +1147,7 @@ class BrainstormingMilestoneAdapterTest(unittest.TestCase):
         self.assertEqual(
             payload["source_payload"]["authority_context"], authority
         )
+        self.assertEqual(payload["amendments"], authority["amendments"])
 
         modern_signal = copy.deepcopy(signal)
         modern_signal.pop("failure_gap")
@@ -1511,16 +1513,14 @@ class BrainstormingMilestoneAdapterTest(unittest.TestCase):
             "status": "completed",
         })
         stopped_launcher.calls[0][2].terminate()
-        with (
-            mock.patch.object(
-                adapter, "service_home", return_value=self.home
-            ),
-            self.assertRaises(adapter.OperationalTerminalError) as caught,
+        with mock.patch.object(
+            adapter, "service_home", return_value=self.home
         ):
-            adapter.terminal_handoff(
-                {"workspace": self.workspace}, stopped["id"]
+            self.assertIsNone(
+                adapter.terminal_handoff(
+                    {"workspace": self.workspace}, stopped["id"]
+                )
             )
-        self.assertEqual(caught.exception.work_duration_s, 3.5)
 
     def test_materialized_target_survives_operational_failure(self):
         source = os.path.join(
@@ -2828,6 +2828,38 @@ class MilestoneDriverRethinkTest(unittest.TestCase):
             runner.session_calls[-1],
             ("continue", "codex", "mock-session-1"),
         )
+
+    def test_ordinary_rethink_supplies_current_amendments_to_brainstorming(self):
+        path = self._state_path()
+        runner = runners.MockRunner([
+            {
+                "expect_kind": contracts.KIND_IMPLEMENT,
+                "response": rethink(contracts.KIND_IMPLEMENT),
+            }
+        ])
+        self._advance_impl_baseline(path, runner)
+        driver = drv.Driver(path, runner=runner)
+        amendments_path = driver._amendments_path()
+        os.makedirs(os.path.dirname(amendments_path), exist_ok=True)
+        with open(amendments_path, "w", encoding="utf-8") as handle:
+            handle.write(
+                '{"amendments":[{"id":"A-live","text":'
+                '"Use the selected behavior."}]}'
+            )
+        captured = {}
+
+        def create(*args, **kwargs):
+            captured.update(copy.deepcopy(kwargs))
+            return self._created()
+
+        with mock.patch.object(adapter, "create_session", side_effect=create):
+            driver.step()
+
+        self.assertEqual(
+            captured["authority_context"]["amendments"],
+            [{"id": "A-live", "text": "Use the selected behavior."}],
+        )
+        self.assertNotIn("project_context", captured["authority_context"])
 
     def test_failure_stops_without_fabricating_gap_or_review_result(
         self,

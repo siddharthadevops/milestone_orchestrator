@@ -2517,6 +2517,7 @@ class Driver(object):
         return brainstorming_milestone.stable_references(
             self.state,
             [
+                ledgers.goal_path(self.state),
                 self._skeleton_artifact(),
                 self._governing(unit),
                 unit.get("artifact"),
@@ -2735,18 +2736,19 @@ class Driver(object):
                     "the origin provider exposed no explicit session reference"
                 )
             references = self._brainstorming_references(unit, checked)
-            authority_context = None
+            authority_context = {
+                "amendments": self._amendments(record_seen=False),
+            }
             if self._rethink_requests_design_amendment(checked):
                 project_context, _extensions, _roots = (
                     self._project_prompt_inputs(
                         unit, kind, record_seen=False
                     )
                 )
-                authority_context = {
+                authority_context.update({
                     "goal": self.state.get("goal"),
-                    "amendments": self._amendments(record_seen=False),
                     "project_context": project_context,
-                }
+                })
             lead_profile, counterpart_profile = (
                 self._brainstorming_profiles()
             )
@@ -3842,9 +3844,10 @@ class Driver(object):
     def _goal_for(self, unit):
         """The GOAL block a unit's prompts carry.
 
-        Reform runs, skeleton phase: the skeleton consumes the operator's
-        goal — but a LARGE goal (config goal_inline_max) rides as the
-        generated goal.md ledger with an ordered full read instead of
+        Reform runs preserve the operator's goal as generated goal.md before
+        the skeleton call. The skeleton consumes the goal inline when small;
+        a LARGE goal (config goal_inline_max) rides as that ledger with an
+        ordered full read instead of
         inline text: instructions must dominate a prompt (a 60K goal
         drowns the altitude rules and the output contract), and a file
         survives the worker's own context compaction where inline prose
@@ -3861,12 +3864,12 @@ class Driver(object):
         if not interpreter.reform_active(self.state):
             return self.state["goal"]
         if unit["kind"] == st.UNIT_SKELETON:
+            self._ensure_goal_ledger()
             limit = self.config.get("goal_inline_max")
             if not isinstance(limit, int) or limit <= 0:
                 limit = 8000
             if len(self.state["goal"]) <= limit:
                 return self.state["goal"]
-            self._ensure_goal_ledger()
             return (
                 "the operator's goal document is preserved VERBATIM at "
                 "%s (generated snapshot, frozen at launch — the live "

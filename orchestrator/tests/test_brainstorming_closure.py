@@ -750,7 +750,14 @@ class BrainstormingClosureTest(unittest.TestCase):
         second_round = self._complete_round(subject, "resume", roster)
         self.assertEqual(second_round.state["rounds_used"], 2)
         lead_round_two_prompt = executors["codex-lead"].calls[2]["prompt"]
-        self.assertIn("Closure ballot — After round 1", lead_round_two_prompt)
+        self.assertIn(second_round.state["transcript_ref"], lead_round_two_prompt)
+        self.assertNotIn(
+            "Closure ballot — After round 1", lead_round_two_prompt
+        )
+        with open(
+            second_round.state["transcript_ref"], encoding="utf-8"
+        ) as handle:
+            self.assertIn("Closure ballot — After round 1", handle.read())
         closed = subject.run_closure("resume", object())
         self.assertEqual(closed.state["status"], "success")
         self.assertEqual(
