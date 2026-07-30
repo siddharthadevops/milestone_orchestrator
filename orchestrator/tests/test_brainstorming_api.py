@@ -455,6 +455,7 @@ class StandaloneBrainstormingApiTest(unittest.TestCase):
                     "state",
                     "activity",
                     "work_duration_s",
+                    "last_action_epoch",
                     "in_flight",
                     "retry",
                     "external_intervention",
@@ -462,6 +463,7 @@ class StandaloneBrainstormingApiTest(unittest.TestCase):
             )
             self.assertEqual(session["activity"], [])
             self.assertEqual(session["work_duration_s"], 0)
+            self.assertGreater(session["last_action_epoch"], 0)
             self.assertIsNone(session["in_flight"])
             self.assertIsNone(session["retry"])
             self.assertIsNone(session["external_intervention"])
@@ -1991,6 +1993,20 @@ class StandaloneBrainstormingApiTest(unittest.TestCase):
         )
         self.assertTrue(all(event["recovered"] for event in critic[:3]))
         self.assertGreater(session["work_duration_s"], 0)
+        status, listed = self._request(
+            "GET", "/api/brainstorming/sessions"
+        )
+        self.assertEqual(status, 200, listed)
+        listed_session = next(
+            row for row in listed["sessions"] if row["id"] == session_id
+        )
+        self.assertEqual(
+            listed_session["last_action_epoch"],
+            max(
+                lifecycle._iso_epoch(event["at"])
+                for event in session["activity"]
+            ),
+        )
 
     def test_bound_and_unbound_execution_context_passes_through_unchanged(self):
         self._target("repair.md")

@@ -205,6 +205,9 @@ class ServiceApiTest(unittest.TestCase):
         self.assertIn('"~/Development/source"', text)
         self.assertIn("picker.transform", text)
         self.assertIn("function sidebarItems", text)
+        self.assertIn("last_action_epoch: r.last_action_epoch", text)
+        self.assertIn("last_action_epoch: s.last_action_epoch", text)
+        self.assertIn("const action = Number(item.last_action_epoch)", text)
         self.assertIn("function sessionRow", text)
         self.assertIn("function openSession", text)
         # A session opens IN the right pane: the monitoring page leads
@@ -566,6 +569,9 @@ class ServiceApiTest(unittest.TestCase):
         run = next(item for item in listing["runs"] if item["id"] == run_id)
         self.assertEqual(run["slices_total"], 2)
         self.assertEqual(run["work_duration_s"], 0.0)
+        self.assertEqual(
+            run["last_action_epoch"], st.summary(state)["last_event_epoch"]
+        )
         _, detail = self.request_json("GET", "/api/runs/%s" % run_id)
         self.assertEqual(detail["status"]["slices_total"], 2)
 

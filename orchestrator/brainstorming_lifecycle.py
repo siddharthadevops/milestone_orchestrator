@@ -25,6 +25,7 @@ import time
 import traceback
 import unicodedata
 from dataclasses import dataclass
+from datetime import datetime
 
 from orchestrator import brainstorming
 from orchestrator import brainstorming_coordination as coordination
@@ -1072,6 +1073,16 @@ def _authorize_record(record, authorize):
     authorize(copy.deepcopy(record))
 
 
+def _iso_epoch(value):
+    """Return epoch seconds for service timestamps, or None if malformed."""
+    if not value:
+        return None
+    try:
+        return datetime.strptime(value, "%Y-%m-%dT%H:%M:%S%z").timestamp()
+    except (TypeError, ValueError):
+        return None
+
+
 def _activity_projection(store, record, state):
     activity = store.read_activity(record["id"])
     events = [] if activity is None else copy.deepcopy(activity["events"])
@@ -1150,6 +1161,16 @@ def _activity_projection(store, record, state):
             "provider_quiescent": intervention["provider_quiescent"],
             "answered": intervention["response"] is not None,
         }
+    action_epochs = [_iso_epoch(record.get("created_at"))]
+    action_epochs.extend(
+        _iso_epoch(event["at"]) for event in events
+    )
+    if in_flight is not None:
+        action_epochs.append(in_flight["started_at"])
+    if intervention is not None:
+        action_epochs.append(intervention["created_at"])
+        if intervention["response"] is not None:
+            action_epochs.append(intervention["response"]["received_at"])
     return {
         "activity": events,
         "work_duration_s": (
@@ -1160,6 +1181,9 @@ def _activity_projection(store, record, state):
         "in_flight": in_flight,
         "retry": retry,
         "external_intervention": external,
+        "last_action_epoch": max(
+            epoch for epoch in action_epochs if epoch is not None
+        ),
     }
 
 
@@ -1555,6 +1579,7 @@ def _list_projection(store, record):
         "rounds_used": None,
         "max_rounds": None,
         "work_duration_s": None,
+        "last_action_epoch": _iso_epoch(record["created_at"]),
         "in_flight": None,
         "retry": None,
         "external_intervention": None,
@@ -1582,6 +1607,7 @@ def _list_projection(store, record):
         row["in_flight"] = activity["in_flight"]
         row["retry"] = activity["retry"]
         row["external_intervention"] = activity["external_intervention"]
+        row["last_action_epoch"] = activity["last_action_epoch"]
     except Exception as exc:  # one row's fault is not the list's fault
         row["state_error"] = str(exc)
     return row

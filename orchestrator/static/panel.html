@@ -1492,6 +1492,7 @@ function sidebarItems(runs, sessions) {
     kind: "run",
     project: r.project || null,
     created_at: r.created_at,
+    last_action_epoch: r.last_action_epoch,
     running: r.process === "running",
     closed: r.milestone_status === "closed",
     data: r,
@@ -1501,6 +1502,7 @@ function sidebarItems(runs, sessions) {
       kind: "brainstorm",
       project: s.project || null,
       created_at: s.created_at,
+      last_action_epoch: s.last_action_epoch,
       running: s.process === "running",
       closed: BS_TERMINAL.has(s.status),
       data: s,
@@ -1523,13 +1525,15 @@ function itemStateRank(item) {
   return 1;
 }
 function itemEpoch(item) {
-  // created_at is ISO-8601 with an offset; Date.parse honors the offset.
+  const action = Number(item.last_action_epoch);
+  if (Number.isFinite(action) && action > 0) return action * 1000;
+  // Older or unreadable rows still fall back safely to creation time.
   const t = Date.parse(item.created_at);
   return Number.isNaN(t) ? 0 : t;
 }
 function compareItemsForSidebar(a, b) {
   // Whatever is running leads — milestone or discussion alike; the rest
-  // follow newest-first.
+  // follow most-recent-action-first.
   const ra = a.running ? 0 : 1;
   const rb = b.running ? 0 : 1;
   if (ra !== rb) return ra - rb;

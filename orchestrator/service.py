@@ -1349,6 +1349,7 @@ def run_status(entry, home=None):
         "failure_reason": None,
         "events_total": 0,
         "work_duration_s": None,
+        "last_action_epoch": None,
         "state_error": None,
     }
     try:
@@ -1428,6 +1429,18 @@ def run_status(entry, home=None):
                     # The milestone driver remains the authority for routing
                     # session failures. A list poll must not fail the run.
                     pass
+        action_epochs = [
+            value
+            for value in (
+                summ.get("created_epoch"),
+                summ.get("last_event_epoch"),
+                (info.get("in_flight") or {}).get("started_at"),
+            )
+            if isinstance(value, (int, float))
+            and not isinstance(value, bool)
+        ]
+        if action_epochs:
+            info["last_action_epoch"] = max(action_epochs)
         if home is not None:
             _pump_projection(home, entry, summ)
     except Exception as exc:
