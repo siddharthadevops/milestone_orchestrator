@@ -147,7 +147,7 @@ class TestServicePanelE2E(unittest.TestCase):
                 "claude": list(worker_cmd),
             },
             "timeouts": {"codex": 60, "claude": 60},
-            # The skeleton defaults to claude/fable-5/max in real runs; in this
+            # The skeleton defaults to claude/opus-5/max in real runs; in this
             # fake-CLI scenario keep it on codex (the fake claude only scripts
             # review work, not skeleton drafting/fixing).
             "acts": {"skeletoner": "codex"},

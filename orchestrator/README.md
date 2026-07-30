@@ -429,7 +429,7 @@ episodes keep their real delta reviews. The threshold is configurable with
 Per-act family policy (config "acts"): fixer and consultation are a fixed
 family name, "self", or "opposite" (relative to the act's origin). The
 `skeletoner` act drives all skeleton content work — its draft, re-drafts, and
-fixes — with one operator-chosen model (default claude-fable-5/max); only
+fixes — with one operator-chosen model (default claude-opus-5/max); only
 skeleton reviews stay on the review families. Delta review has no independent
 policy: it always uses the latest fixer's family and the selected Review
 profile for that family. Whole-artifact review rounds keep their family

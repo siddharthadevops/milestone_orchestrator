@@ -175,7 +175,7 @@ class GuaranteeCalibrationDriverTest(unittest.TestCase):
             {
                 "family": "claude",
                 "kind": contracts.KIND_DRAFT_SKELETON,
-                "model": "claude-fable-5",
+                "model": "claude-opus-5",
                 "effort": "max",
             },
         )
@@ -193,7 +193,7 @@ class GuaranteeCalibrationDriverTest(unittest.TestCase):
             captured["counterpart"],
             {
                 "agent": "claude",
-                "model": "claude-fable-5",
+                "model": "claude-opus-5",
                 "effort": "max",
             },
         )

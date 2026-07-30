@@ -162,16 +162,16 @@ DEFAULT_CONFIG = {
         # the runtime can provide.
         "brainstorming_counterpart": {
             "agent": "claude",
-            "model": "claude-fable-5",
+            "model": "claude-opus-5",
             "effort": "max",
         },
         # The skeleton is drafted, re-drafted, and fixed by one chosen
         # model — skeleton work is high-leverage planning, so it defaults
-        # to claude-fable-5 at max effort. Reviews of the skeleton are
+        # to claude-opus-5 at max effort. Reviews of the skeleton are
         # unaffected (they use review_codex/review_claude).
         "skeletoner": {
             "agent": "claude",
-            "model": "claude-fable-5",
+            "model": "claude-opus-5",
             "effort": "max",
         },
         "consultation": "opposite",
@@ -4051,7 +4051,7 @@ class Driver(object):
             return "implementation baseline changed; verification required"
         # Skeleton drafts (and re-drafts on remodel) run the `skeletoner`
         # act — one operator-chosen model for all skeleton content work,
-        # default claude-fable-5/max; slice docs keep `drafter`, impl keeps
+        # default claude-opus-5/max; slice docs keep `drafter`, impl keeps
         # `implementer`. Only skeleton REVIEWS stay on the review families.
         if unit["kind"] == st.UNIT_SKELETON:
             act = "skeletoner"
@@ -5318,7 +5318,7 @@ class Driver(object):
         skeleton's OWN defaults re-asserted.
 
         The skeleton's declared defaults live in
-        DEFAULT_CONFIG["acts"]["skeletoner"] (claude / claude-fable-5 / max),
+        DEFAULT_CONFIG["acts"]["skeletoner"] (claude / claude-opus-5 / max),
         but merge_config replaces a whole act entry on a partial override —
         so a panel that customizes only the model drops the agent and
         effort. Left to the generic fallback, a model-only override would
@@ -5559,7 +5559,7 @@ class Driver(object):
         if unit["kind"] == st.UNIT_SKELETON:
             # The skeleton is drafted, fixed, and re-drafted by ONE
             # operator-chosen model (the `skeletoner` act, default
-            # claude-fable-5/max); only its reviews stay on the review
+            # claude-opus-5/max); only its reviews stay on the review
             # families. So a skeleton fix runs `skeletoner`, not `fixer`.
             family, fix_model, fix_effort = self._skeletoner_profile(
                 source.get("family")

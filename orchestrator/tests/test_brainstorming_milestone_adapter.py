@@ -863,7 +863,7 @@ class BrainstormingMilestoneAdapterTest(unittest.TestCase):
                 },
                 counterpart_profile={
                     "agent": "claude",
-                    "model": "claude-fable-5",
+                    "model": "claude-opus-5",
                     "effort": "max",
                 },
             )
@@ -884,7 +884,7 @@ class BrainstormingMilestoneAdapterTest(unittest.TestCase):
                     "role": "interlocutor",
                     "delivery": "llm",
                     "model_family": "claude",
-                    "model": "claude-fable-5",
+                    "model": "claude-opus-5",
                     "effort": "max",
                 },
                 {
@@ -892,8 +892,8 @@ class BrainstormingMilestoneAdapterTest(unittest.TestCase):
                     "role": "interlocutor",
                     "delivery": "external",
                     "external_provider": "narrator",
-                    "model_family": "codex",
-                    "model": "gpt-5.6-sol",
+                    "model_family": "claude",
+                    "model": "claude-opus-5",
                     "effort": "max",
                 },
             ],
@@ -963,7 +963,7 @@ class BrainstormingMilestoneAdapterTest(unittest.TestCase):
         }
         counterpart = {
             "agent": "claude",
-            "model": "claude-fable-5",
+            "model": "claude-opus-5",
             "effort": "max",
         }
         with (
@@ -1030,7 +1030,7 @@ class BrainstormingMilestoneAdapterTest(unittest.TestCase):
                     "role": "interlocutor",
                     "delivery": "llm",
                     "model_family": "claude",
-                    "model": "claude-fable-5",
+                    "model": "claude-opus-5",
                     "effort": "max",
                 },
                 {
@@ -1038,8 +1038,8 @@ class BrainstormingMilestoneAdapterTest(unittest.TestCase):
                     "role": "interlocutor",
                     "delivery": "external",
                     "external_provider": "narrator",
-                    "model_family": "codex",
-                    "model": "gpt-5.6-sol",
+                    "model_family": "claude",
+                    "model": "claude-opus-5",
                     "effort": "max",
                 },
             ],

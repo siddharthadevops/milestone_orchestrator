@@ -524,7 +524,7 @@
       other empty rows use their family default (claude: opus-5/high, codex:
       gpt-5.6-sol/xhigh). Model options adapt to the agent; editable mid-run
       from the run view. The Skeleton row drives all skeleton content work —
-      its draft, re-drafts and fixes (default: claude fable-5/max); only
+      its draft, re-drafts and fixes (default: claude opus-5/max); only
       skeleton reviews stay on the review rows. The two review rows tune each
       fixed family for review rounds and delta reviews; family rotation never
       changes. Sealing does not launch a model.</p>
@@ -561,7 +561,7 @@
         <option value="">default (claude)</option>
         <option>codex</option><option>claude</option></select>
       <input id="a_skeletoner_model" list="dl_a_skeletoner"
-        placeholder="default (fable-5)">
+        placeholder="default (opus-5)">
       <select id="a_skeletoner_effort"><option value="">default (max)</option>
         <option>low</option><option>medium</option><option>high</option>
         <option>xhigh</option><option>max</option></select>
@@ -697,7 +697,7 @@
       <button class="btn sm" type="button" onclick="addBsSeat()">+ Add interlocutor</button>
     </div>
     <div class="hint">opens pre-staffed: lead gpt-5.6-sol/max,
-      interlocutor claude-opus-5/max, and Dante — edit any seat; anything
+      interlocutor claude-opus-5/max, and Dante on claude-opus-5/max — edit any seat; anything
       set back to default is resolved by the service (family by rotation
       over this host's available agents, model/effort from the family's
       defaults)</div></div>
@@ -801,7 +801,7 @@
       <option value="">default (claude)</option>
       <option>codex</option><option>claude</option></select>
     <input id="ra_skeletoner_model" list="dl_ra_skeletoner"
-      placeholder="default (fable-5)">
+      placeholder="default (opus-5)">
     <select id="ra_skeletoner_effort">
       <option value="">default (max)</option></select>
     <label>Draft docs</label>
@@ -3451,7 +3451,7 @@ function defaultBsRoster() {
     {role: "interlocutor", delivery: "llm", agent: "claude",
      model: "claude-opus-5", effort: "max"},
     {role: "interlocutor", delivery: "external", externalProvider: "narrator",
-     agent: "codex", model: "gpt-5.6-sol", effort: "max"},
+     agent: "claude", model: "claude-opus-5", effort: "max"},
   ];
 }
 function snapshotBsRoster() {

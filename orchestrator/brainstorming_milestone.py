@@ -316,7 +316,7 @@ def _participants(lead_profile=None, counterpart_profile=None):
             counterpart_profile,
             "counterpart_profile",
         ),
-        _narrator(lead_profile),
+        _narrator(counterpart_profile),
     ]
 
 
