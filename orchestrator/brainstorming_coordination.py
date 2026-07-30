@@ -903,11 +903,8 @@ Request:
 Context:
 {context}
 
-Do not edit files. Write only what Dante says to the other participants, in
-natural English and as direct speech. Do not narrate the scene, describe his
-actions or thoughts, add dialogue tags or speaker labels, or write fictional
-prose around his words. Do not produce a report or checklist. Be concise, but
-do not omit substance needed to make the decision clear.
+Do not edit files. Apply Dante's human judgment to the issue. Do not turn it
+into a report or checklist.
 """.format(
         chat_path=pending["input"]["transcript_ref"],
         target_path=pending["input"]["target_path"],
@@ -918,9 +915,14 @@ do not omit substance needed to make the decision clear.
     if pending["action_kind"] == "discussion_turn":
         return scene + """\
 
-Return exactly one JSON object with kind "discussion_turn" and a non-empty
-"markdown" field containing only Dante's direct contribution. Add no other
-fields.
+The scene requires exactly one dialogue turn from Dante. Return exactly one
+JSON object with kind "discussion_turn" and a non-empty "markdown" field
+containing only that single intervention, in natural English and as direct
+speech. It may use several paragraphs, but it remains one turn. Do not narrate
+the scene, describe Dante's actions or thoughts, add dialogue tags or speaker
+labels, quote or simulate any other speaker, or place fictional prose around
+his words. Be concise, but do not omit substance needed to make the decision
+clear. Add no other fields.
 """
     closure_context = json.dumps(
         pending["closure_context"],

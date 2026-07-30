@@ -225,9 +225,19 @@ class BrainstormingCoordinationTest(unittest.TestCase):
         self.assertIn("Adopt the deliberately small solution.", prompt)
         self.assertIn('\"participant_id\": \"critic\"', prompt)
         self.assertIn('\"vote\": \"object\"', prompt)
-        self.assertIn("Write only what Dante says", prompt)
-        self.assertIn("natural English and as direct speech", prompt)
-        self.assertIn("Do not narrate the scene", prompt)
+
+        discussion = dict(intervention)
+        discussion["action_kind"] = "discussion_turn"
+        discussion.pop("closure_context")
+        discussion_prompt = coordination.build_external_narrator_prompt(
+            state, discussion
+        )
+        self.assertIn("exactly one dialogue turn from Dante", discussion_prompt)
+        self.assertIn("only that single intervention", discussion_prompt)
+        self.assertIn("natural English", discussion_prompt)
+        self.assertIn("as direct", discussion_prompt)
+        self.assertIn("Do not narrate", discussion_prompt)
+        self.assertIn("quote or simulate any other speaker", discussion_prompt)
 
     def _subject(self, roster, scripts, store=None, failure_classifier=None):
         store = store or self.store
