@@ -2367,6 +2367,7 @@ def run_lifecycle(
             return 0
         execution_context = record["execution_context"]
 
+        discussion_due_after_closure = False
         while True:
             snapshot = store.read(session_id)
             if snapshot is None:
@@ -2389,11 +2390,14 @@ def run_lifecycle(
                 )
             )
             if (
-                closure_due
-                or (
-                    pending_attempt is not None
-                    and pending_attempt.get("kind", "discussion_turn")
-                    == "closure"
+                not discussion_due_after_closure
+                and (
+                    closure_due
+                    or (
+                        pending_attempt is not None
+                        and pending_attempt.get("kind", "discussion_turn")
+                        == "closure"
+                    )
                 )
             ):
                 try:
@@ -2412,9 +2416,13 @@ def run_lifecycle(
                 except coordination.OperationalRetryPending as pending:
                     _wait_operational_retry(pending)
                     continue
+                except brainstorming.RevisionConflict:
+                    continue
                 if snapshot.state["status"] in brainstorming.TERMINAL_STATUSES:
                     return 0
+                discussion_due_after_closure = True
                 continue
+            discussion_due_after_closure = False
             starting_round = snapshot.state["rounds_used"]
             while snapshot.state["rounds_used"] == starting_round:
                 try:
@@ -2447,30 +2455,6 @@ def run_lifecycle(
                     in brainstorming.TERMINAL_STATUSES
                 ):
                     return 0
-            try:
-                snapshot = coordinator.run_closure(
-                    session_id, execution_context
-                )
-            except coordination.ExternalInterventionPending as pending:
-                _wait_for_external_response(
-                    store,
-                    participant_execution,
-                    record,
-                    pending,
-                    execution_context,
-                )
-                continue
-            except coordination.OperationalRetryPending as pending:
-                _wait_operational_retry(pending)
-                continue
-            except brainstorming.RevisionConflict:
-                continue
-            if (
-                snapshot is not None
-                and snapshot.state["status"]
-                in brainstorming.TERMINAL_STATUSES
-            ):
-                return 0
     except LifecycleStop:
         return 3
     except Exception:

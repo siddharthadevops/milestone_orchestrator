@@ -213,9 +213,23 @@ class StandaloneBrainstormingApiTest(unittest.TestCase):
                     handle.write(b"accepted replacement")
                 os.replace(temporary, target)
         elif proposal:
+            proposes = True
+            if target_name.endswith("decline-once.md"):
+                counter_path = os.path.join(
+                    os.getcwd(), ".decline-closure-calls"
+                )
+                try:
+                    with open(counter_path, "r", encoding="utf-8") as handle:
+                        count = int(handle.read())
+                except (OSError, ValueError):
+                    count = 0
+                count += 1
+                with open(counter_path, "w", encoding="utf-8") as handle:
+                    handle.write(str(count))
+                proposes = count > 1
             answer = {
                 "kind": "closure_proposal",
-                "propose": True,
+                "propose": proposes,
                 "closing_summary": summary,
             }
         elif vote:
@@ -1255,6 +1269,36 @@ class StandaloneBrainstormingApiTest(unittest.TestCase):
             self.assertEqual(handle.read(), b"accepted lead result")
         with open(wrong_target, "rb") as handle:
             self.assertEqual(handle.read(), b"unrelated artifact")
+
+    def test_declined_proposal_advances_to_the_next_round(self):
+        self._target("decline-once.md")
+        created = lifecycle.create_session(
+            self.home,
+            self._payload("decline-once.md", max_rounds=2),
+            access.ADMIN_EMAIL,
+            launcher=self._sleeper_launcher,
+        )
+        self._stop_sleeper_record(created["id"])
+
+        code = lifecycle.run_lifecycle(
+            self.home,
+            created["id"],
+            require_pid_claim=False,
+        )
+
+        self.assertEqual(code, 0)
+        state = lifecycle.inspect_session(
+            self.home, created["id"], lambda _record: None
+        )["state"]
+        self.assertEqual(state["status"], "success")
+        self.assertEqual(state["rounds_used"], 2)
+        self.assertEqual(len(state["completed_turns"]), 4)
+        with open(
+            os.path.join(self.workspace, ".decline-closure-calls"),
+            "r",
+            encoding="utf-8",
+        ) as handle:
+            self.assertEqual(handle.read(), "2")
 
     def test_active_target_identity_does_not_reserve_replaced_inode(self):
         target = self._target("replacement.md")
