@@ -79,28 +79,28 @@ def _modern_contract(kind):
     )
     text = re.sub(
         r'"max_rounds"\s*:\s*<any positive integer chosen for this discussion>',
-        '"max_rounds": 5',
+        '"max_rounds": 10',
         text,
     )
     text = re.sub(
         r'"max_rounds"\s*:\s*<positive integer>',
-        '"max_rounds":5',
+        '"max_rounds":10',
         text,
     )
     text = re.sub(
-        r"`design_amendment` is limited to (?:two|five) rounds and requires a .*?\n"
+        r"`design_amendment` is limited to (?:two|five|ten) rounds and requires a .*?\n"
         r"failure_gap\.",
-        "Set `max_rounds` to 5; the session may close earlier on agreement.",
+        "Set `max_rounds` to 10; the session may close earlier on agreement.",
         text,
     )
     text = re.sub(
-        r"`design_amendment` is limited to (?:two|five) rounds\.",
-        "Set `max_rounds` to 5; the session may close earlier on agreement.",
+        r"`design_amendment` is limited to (?:two|five|ten) rounds\.",
+        "Set `max_rounds` to 10; the session may close earlier on agreement.",
         text,
     )
     text = re.sub(
-        r"A design amendment is limited to at most (?:2|5) rounds\.",
-        "Set `max_rounds` to 5; the session may close earlier on agreement.",
+        r"A design amendment is limited to at most (?:2|5|10) rounds\.",
+        "Set `max_rounds` to 10; the session may close earlier on agreement.",
         text,
     )
     text = re.sub(r"\bfits_remodel\b", "in-goal design change", text,
@@ -1083,7 +1083,7 @@ def _rethink_before_gap_block():
         "- For that narrow in-goal contradiction, set result_mode to\n"
         "  `design_amendment`. Brainstorming then writes a separate concise\n"
         "  amendment; target_path is only its smallest relevant source/context.\n"
-        "  Set `max_rounds` to exactly 5; agreement may close the session\n"
+        "  Set `max_rounds` to exactly 10; agreement may close the session\n"
         "  earlier.\n"
         "  Use result_mode `proposal` for an unresolved focused request.\n"
         "- Do NOT use it for facts you can establish from the workspace,\n"
@@ -1095,7 +1095,7 @@ def _rethink_before_gap_block():
         "- State one focused request or desired outcome, preserve its concrete\n"
         "  evidence\n"
         "  in `finding`, choose the smallest relevant target, set\n"
-        "  `max_rounds` to exactly 5, and follow the exact `need_rethink`\n"
+        "  `max_rounds` to exactly 10, and follow the exact `need_rethink`\n"
         "  envelope in the OUTPUT CONTRACT.\n\n"
     )
 
@@ -1119,7 +1119,7 @@ def _design_rethink_block(fixer=False):
         "  `design_amendment`; do not code around it, silently rewrite design\n"
         "  documents, or stop the run merely because those documents need an\n"
         "  edit. %s State one focused request or desired outcome, select the smallest\n"
-        "  useful source artifact, and set `max_rounds` to exactly 5;\n"
+        "  useful source artifact, and set `max_rounds` to exactly 10;\n"
         "  agreement may close the session earlier.\n"
         "- The accepted amendment will return to this same task with an\n"
         "  explicit list of editable design paths. Apply only the agreed\n"
@@ -1266,7 +1266,7 @@ def _fix_gap_block():
         "- Prefer `need_rethink` when one bounded request or obvious in-goal\n"
         "  contradiction can be settled by a short discussion. Use `proposal`\n"
         "  for an open request; use `design_amendment` for one conservative\n"
-        "  clarification. Set `max_rounds` to exactly 5; agreement may close\n"
+        "  clarification. Set `max_rounds` to exactly 10; agreement may close\n"
         "  the session earlier. Choose one finding, one\n"
         "  focused request, and the smallest relevant target.\n"
         "- Do not rethink workspace facts, missing investigation, ordinary\n"

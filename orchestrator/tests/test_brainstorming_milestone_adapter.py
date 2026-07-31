@@ -86,7 +86,7 @@ def rethink(
     kind,
     finding=None,
     target="proposals/rethink.md",
-    rounds=5,
+    rounds=10,
     result_mode="proposal",
 ):
     value = {
@@ -261,7 +261,7 @@ class BrainstormingMilestoneAdapterTest(unittest.TestCase):
                 ),
                 value,
             )
-            self.assertEqual(value["max_rounds"], 5)
+            self.assertEqual(value["max_rounds"], 10)
 
         with self.assertRaises(contracts.ContractError):
             contracts.validate_worker_output(
@@ -298,7 +298,7 @@ class BrainstormingMilestoneAdapterTest(unittest.TestCase):
         amendment = rethink(
             contracts.KIND_FIX_FINDINGS,
             finding=report_finding(),
-            rounds=5,
+            rounds=10,
             result_mode="design_amendment",
         )
         self.assertIs(
@@ -350,7 +350,7 @@ class BrainstormingMilestoneAdapterTest(unittest.TestCase):
             amendment,
         )
         too_long = copy.deepcopy(amendment)
-        too_long["max_rounds"] = 6
+        too_long["max_rounds"] = 11
         with self.assertRaises(contracts.ContractError):
             contracts.validate_worker_output(
                 too_long, contracts.KIND_FIX_FINDINGS
@@ -1095,7 +1095,7 @@ class BrainstormingMilestoneAdapterTest(unittest.TestCase):
         signal = rethink(
             contracts.KIND_IMPLEMENT,
             target="docs/sealed.md",
-            rounds=5,
+            rounds=10,
             result_mode="design_amendment",
         )
         captured = {}
@@ -2656,7 +2656,7 @@ class MilestoneDriverRethinkTest(unittest.TestCase):
                     "response": rethink(
                         contracts.KIND_FIX_FINDINGS,
                         finding=finding,
-                        rounds=5,
+                        rounds=10,
                         result_mode="design_amendment",
                     ),
                 },

@@ -90,7 +90,7 @@ RETHINK_RESULT_MODES = (
     RETHINK_RESULT_PROPOSAL,
     RETHINK_RESULT_DESIGN_AMENDMENT,
 )
-MILESTONE_BRAINSTORMING_ROUNDS = 5
+MILESTONE_BRAINSTORMING_ROUNDS = 10
 
 # Kinds whose worker gets full edit permissions inside the workspace.
 EDIT_KINDS = (
@@ -1174,7 +1174,7 @@ EXACTLY:
   "request": "<one non-empty focused request or desired outcome>"
   "finding": {<the one current finding, preserved as source evidence>}
   "target_path": "<normalized workspace-relative source artifact to isolate>"
-  "max_rounds": 5
+  "max_rounds": 10
   "result_mode": "proposal" | "design_amendment"
 Use `design_amendment` only when one conservative, bounded clarification of
 the current reviewed design can resolve an in-goal contradiction without
@@ -1183,7 +1183,7 @@ skeleton and affected slice notes and may assign bounded repair work to the
 current slice or a new future slice. In that mode
 `target_path` names the smallest source artifact for context; Brainstorming
 constructs a separate concise amendment target. Use `proposal` for an ordinary
-focused request. Set max_rounds to 5; the session may close earlier on
+focused request. Set max_rounds to 10; the session may close earlier on
 agreement. Review
 kinds may use only `proposal`. The validator accepts
 an omitted result_mode as `proposal` solely for in-flight run compatibility.
@@ -1353,7 +1353,7 @@ Focused discussion before finishing this judgment:
 {"status":"need_rethink","kind":"<echo KIND>","request":"...",
  "finding":{<one complete current finding>},
  "target_path":"<normalized workspace-relative path>",
- "max_rounds":5,"result_mode":"proposal"}
+ "max_rounds":10,"result_mode":"proposal"}
 The session may close earlier on agreement.
 Return no other fields with `blocked` or `need_rethink`.
 """
@@ -1397,7 +1397,7 @@ Focused discussion before deciding one queued finding:
 {"status":"need_rethink","kind":"fix_findings","request":"...",
  "finding":{<one complete queued finding>},
  "target_path":"<normalized workspace-relative path>",
- "max_rounds":5,"result_mode":"proposal|design_amendment"}
+ "max_rounds":10,"result_mode":"proposal|design_amendment"}
 The session may close earlier on agreement. Return no work claims or sibling
 findings with this status.
 """
@@ -1423,7 +1423,7 @@ Focused discussion before completing a required in-goal design change:
 {"status":"need_rethink","kind":"fix_findings","request":"...",
  "finding":{<copy the complete SOURCE SIGNAL from the prompt>},
  "target_path":"<normalized workspace-relative path>",
- "max_rounds":5,"result_mode":"proposal|design_amendment"}
+ "max_rounds":10,"result_mode":"proposal|design_amendment"}
 The session may close earlier on agreement. Return no work claims with this
 status.
 """

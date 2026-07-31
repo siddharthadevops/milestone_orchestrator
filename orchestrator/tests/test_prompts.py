@@ -159,7 +159,7 @@ class TestNaturalRethinkExit(unittest.TestCase):
         self.assertIn("one concrete in-goal inconsistency", prompt)
         self.assertIn("current design baseline", prompt)
         self.assertIn("result_mode `design_amendment`", prompt)
-        self.assertIn("set `max_rounds` to exactly 5", prompt)
+        self.assertIn("set `max_rounds` to exactly 10", prompt)
         self.assertIn("Establish workspace facts yourself", prompt)
         self.assertIn("GOAL itself is contradictory", prompt)
 
@@ -1023,7 +1023,7 @@ class TestPortedCanonContentRules(unittest.TestCase):
 
     def test_modern_contract_scrubs_legacy_round_wording(self):
         fixed_rounds = (
-            "Set `max_rounds` to 5; the session may close earlier on "
+            "Set `max_rounds` to 10; the session may close earlier on "
             "agreement."
         )
         cases = (
@@ -1043,11 +1043,11 @@ class TestPortedCanonContentRules(unittest.TestCase):
             (
                 '"max_rounds": <any positive integer chosen for this '
                 'discussion>',
-                '"max_rounds": 5',
+                '"max_rounds": 10',
             ),
             (
                 '"max_rounds":<positive integer>',
-                '"max_rounds":5',
+                '"max_rounds":10',
             ),
         )
         for legacy, expected in cases:

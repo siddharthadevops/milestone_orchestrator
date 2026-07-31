@@ -221,6 +221,13 @@
   .story-note { background: #fafafa; border: 1px solid var(--line);
     border-radius: 6px; padding: 6px 8px; margin-top: 8px;
     white-space: pre-wrap; }
+  .closing-attempt { padding: 8px 0; border-top: 1px dashed var(--line); }
+  .closing-attempt:first-child { padding-top: 0; border-top: 0; }
+  .closing-line { display: flex; gap: 8px; align-items: baseline;
+    margin-top: 5px; font-size: 12px; }
+  .closing-label { width: 64px; flex: none; color: #a1a1aa;
+    font-size: 10px; text-transform: uppercase; letter-spacing: .04em; }
+  .final-agreement { border-color: #bbe7c9; background: #fbfefc; }
   .actgrid { display: grid; grid-template-columns: 90px 1fr 1fr 1fr;
     gap: 6px; align-items: center; }
   .actgrid label { font-size: 12px; color: #3f3f46; }
@@ -707,7 +714,7 @@
       <option value="majority">majority</option>
     </select></div>
   <div class="field"><label>Maximum rounds *</label>
-    <input id="b_rounds" type="number" min="1" step="1" value="5"></div>
+    <input id="b_rounds" type="number" min="1" step="1" value="10"></div>
   <div class="field"><label>Reference documents (optional)</label>
     <div id="b_refs_list"></div>
     <div class="pathrow">
@@ -1220,6 +1227,29 @@ function sessionTargetState(target) {
     ? "Text preview truncated at the display limit."
     : "Complete accepted text.";
 }
+function sessionParticipant(view, participantId) {
+  return (view.participants || []).find(p => p.id === participantId) || null;
+}
+function sessionRoleLabel(role) {
+  if (role === "initial_position") return "Initial Position";
+  if (role === "contrary_position") return "Contrary Position";
+  if (role === "common_sense") return "Dante";
+  return String(role || "participant").replaceAll("_", " ");
+}
+function sessionFamilyLabel(family) {
+  if (family === "codex") return "Codex";
+  if (family === "claude") return "Claude";
+  return family || "Participant";
+}
+function sessionActorLabel(view, participantId, includeRole = false) {
+  const participant = sessionParticipant(view, participantId);
+  if (!participant) return participantId || "Participant";
+  const family = sessionFamilyLabel(participant.model_family);
+  const model = participant.model
+    ? modelEffort(participant.model, participant.effort) : "";
+  const role = includeRole ? sessionRoleLabel(participant.role) : "";
+  return [family, model, role].filter(Boolean).join(" · ");
+}
 function sessionChips(view) {
   // The same chip vocabulary as a milestone unit's history: one chip per
   // completed round, one per closure ballot, the live spinner chip for
@@ -1233,19 +1263,21 @@ function sessionChips(view) {
   const chips = [];
   for (let r = 1; r <= (view.round.completed || 0); r += 1) {
     const activity = (view.activity || []).filter(item => item.round === r);
-    if (activity.length) chips.push(...activity.map(sessionActivityChip));
+    if (activity.length)
+      chips.push(...activity.map(item => sessionActivityChip(item, view)));
     else chips.push(`<span class="chip clean">Round ${r} &#10003;</span>`);
     const ballot = ballotsAfter[r];
     if (ballot) {
-      const votes = Object.entries(ballot.votes || {})
-        .map(([who, vote]) => `${who}: ${vote}`).join(" · ");
+      const votes = (ballot.votes || []).map(item =>
+        `${sessionActorLabel(view, item.participant_id)}: ${item.vote}`
+      ).join(" · ");
       chips.push(`<span class="chip ${ballot.approved ? "pass" : "sev23"}"
         title="${esc(votes)}">Ballot · ${ballot.approved ? "approved &#10003;" : "not approved"}</span>`);
     }
   }
   const pendingActivity = (view.activity || []).filter(item =>
     item.round > (view.round.completed || 0));
-  chips.push(...pendingActivity.map(sessionActivityChip));
+  chips.push(...pendingActivity.map(item => sessionActivityChip(item, view)));
   if (view.target.revision !== null)
     chips.push(`<span class="chip doc clicky"
       title="${esc(view.target.ref)} — open Info" onclick="openSessionInfo()">&#128196; accepted target</span>`);
@@ -1259,18 +1291,23 @@ function sessionChips(view) {
     chips.push(`<span class="chip">stopped</span>`);
   return `<div class="history-chips">${chips.join("")}</div>`;
 }
-function sessionActivityChip(item) {
+function sessionActivityChip(item, view) {
+  const actor = sessionActorLabel(view, item.participant_id);
   const who = item.model
     ? modelEffort(item.model, item.effort)
     : (item.model_family || item.participant_id || "LLM");
-  const phase = item.stage === "discussion" ? "turn" : item.stage;
+  const phase = item.stage === "discussion" ? "turn"
+    : item.stage === "proposal" ? "proposed closure"
+    : item.stage === "vote" ? "closure vote" : item.stage;
   const repaired = item.status === "failed" && item.recovered;
   const cls = item.status === "failed" ? (repaired ? "sev23" : "fail") : "clean";
   const outcome = item.status === "failed"
     ? (repaired ? "repaired" : "failed") : "done";
   return `<span class="chip ${cls} clicky"
     onclick="showSessionActivity('${esc(escJsSq(item.id))}')"
-    title="${esc(item.participant_id || "")}">${esc(who)} ${esc(phase)} · ${esc(outcome)}${fmtDur(item.duration_s)}</span>`;
+    title="${esc(sessionActorLabel(view, item.participant_id, true))}">${esc(
+      item.stage === "proposal" || item.stage === "vote" ? actor : who
+    )} · ${esc(phase)} · ${esc(outcome)}${fmtDur(item.duration_s)}</span>`;
 }
 function sessionInFlightChip(view) {
   const active = view.in_flight;
@@ -1282,12 +1319,13 @@ function sessionInFlightChip(view) {
   }
   if (view.external_intervention) {
     const intervention = view.external_intervention;
-    const uncertain = !intervention.provider_quiescent;
-    const state = uncertain ? "provider state unknown"
+    const thinking = !intervention.provider_quiescent;
+    const state = thinking ? "thinking"
       : intervention.answered ? "answered · resuming" : "waiting";
-    return `<span class="chip ${uncertain ? "bad" : "working"}">${
-      uncertain ? "" : spinEl()}${
-      esc(intervention.participant_id)} external turn · ${esc(state)}</span>`;
+    const phase = intervention.action_kind === "closure_vote"
+      ? "external closure vote" : "external turn";
+    return `<span class="chip working">${spinEl()}${
+      esc(intervention.participant_id)} ${phase} · ${esc(state)}</span>`;
   }
   if (!active) {
     return `<span class="chip working">${spinEl()}round ${
@@ -1300,6 +1338,63 @@ function sessionInFlightChip(view) {
   const phase = active.stage === "discussion" ? "turn" : active.stage;
   const elapsed = active.started_at ? ` · ${elapsedClock(active.started_at)}` : "";
   return `<span class="chip working">${spinEl()}${esc(who)} ${esc(phase)}${elapsed}</span>`;
+}
+function sessionClosingCard(view) {
+  const ballots = view.closure_ballots || [];
+  const closureActivity = (view.activity || []).filter(item =>
+    item.stage === "proposal" || item.stage === "vote");
+  const active = view.in_flight && view.in_flight.kind === "closure"
+    ? view.in_flight
+    : view.external_intervention &&
+        view.external_intervention.action_kind === "closure_vote"
+      ? {
+          kind: "closure",
+          stage: "vote",
+          round: view.external_intervention.round,
+          participant_id: view.external_intervention.participant_id,
+        }
+      : null;
+  if (!ballots.length && !closureActivity.length && !active) return "";
+  const lead = (view.participants || []).find(
+    participant => participant.role === "initial_position");
+  let body = "";
+  for (const ballot of ballots) {
+    const votes = (ballot.votes || []).map(vote =>
+      `<span class="chip ${vote.vote === "accept" ? "pass" : "sev23"}">${esc(
+        sessionActorLabel(view, vote.participant_id)
+      )} · ${vote.vote === "accept" ? "accepted" : "objected"}</span>`
+    ).join(" ");
+    body += `<div class="closing-attempt">
+      <div class="closing-line"><span class="closing-label">Proposal</span>
+        <span><b>${esc(sessionActorLabel(view, lead && lead.id))}</b>
+        proposed the final agreement after round ${esc(String(ballot.after_completed_rounds))}.</span></div>
+      <div class="closing-line"><span class="closing-label">Votes</span>
+        <span class="history-chips">${votes}</span></div>
+      <div class="closing-line"><span class="closing-label">Decision</span>
+        <span><b>${ballot.approved ? "Agreement accepted" : "Not accepted"}</b>
+        · ${esc(view.closure_policy)}${ballot.approved ? "" : " · discussion continued"}</span></div>
+      </div>`;
+  }
+  const latestBallot = ballots[ballots.length - 1];
+  const closureRound = active ? active.round
+    : closureActivity.length ? closureActivity[closureActivity.length - 1].round
+    : null;
+  const awaitingDecision = !latestBallot || latestBallot.after_completed_rounds < closureRound;
+  if (awaitingDecision) {
+    const proposalDone = closureActivity.some(item =>
+      item.round === closureRound && item.stage === "proposal" &&
+      item.status === "completed");
+    const voter = active && active.stage === "vote"
+      ? sessionActorLabel(view, active.participant_id) : null;
+    body += `<div class="closing-attempt">
+      <div class="closing-line"><span class="closing-label">Proposal</span>
+        <span><b>${esc(sessionActorLabel(view, lead && lead.id))}</b> ${
+          proposalDone ? "has proposed the final agreement" : "is drafting the final agreement"}.</span></div>
+      ${voter ? `<div class="closing-line"><span class="closing-label">Vote</span>
+        <span><b>${esc(voter)}</b> is reviewing that proposal.</span></div>` : ""}
+      </div>`;
+  }
+  return `<div class="card"><h3>Closing decision</h3>${body}</div>`;
 }
 function paintSessionDetail(html) {
   // The pane's own scroll survives an innerHTML swap, but preserve it
@@ -1389,6 +1484,7 @@ function renderSessionDetail(view) {
       onclick="openSessionInfo()">Info&#8230;</button>
   </div>`;
   html += `<div class="card"><h3>Activity</h3>${sessionChips(view)}</div>`;
+  html += sessionClosingCard(view);
   if (view.final_agreement) {
     const agreement = view.final_agreement;
     const targetName = String(view.target.ref || "target").split("/").pop();
@@ -1398,7 +1494,7 @@ function renderSessionDetail(view) {
       ? agreement.open_questions : [];
     const objections = Array.isArray(agreement.unresolved_objections)
       ? agreement.unresolved_objections : [];
-    html += `<div class="card"><h3>Final agreement</h3>
+    html += `<div class="card final-agreement"><h3>&#10003; Final agreement</h3>
       <div class="mdbody flow">${mdRender(agreement.markdown)}</div>
       <div class="amend-hint" style="margin-top:10px"><b>Accepted target:</b>
         <span class="mono" title="${esc(view.target.ref)}">${esc(targetName)}</span>

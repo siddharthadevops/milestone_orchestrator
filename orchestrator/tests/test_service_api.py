@@ -159,7 +159,7 @@ class ServiceApiTest(unittest.TestCase):
         self.assertIn("<span>New milestone</span>", text)
         self.assertIn("<span>New brainstorming</span>", text)
         self.assertIn(
-            'id="b_rounds" type="number" min="1" step="1" value="5"',
+            'id="b_rounds" type="number" min="1" step="1" value="10"',
             text,
         )
         self.assertIn("function openForm(preselect)", text)
@@ -222,6 +222,11 @@ class ServiceApiTest(unittest.TestCase):
         self.assertIn("function startSelectedSession", text)
         self.assertIn('const displayStatus = !terminal && !running ? "stopped"', text)
         self.assertIn("function sessionChips", text)
+        self.assertIn("function sessionClosingCard", text)
+        self.assertIn('closing-label">Proposal', text)
+        self.assertIn("sessionActorLabel(view, lead && lead.id)", text)
+        self.assertIn("is reviewing that proposal", text)
+        self.assertIn("Agreement accepted", text)
         self.assertIn("view.final_agreement", text)
         self.assertIn("Final agreement", text)
         self.assertIn("Accepted target:", text)

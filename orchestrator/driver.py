@@ -187,7 +187,7 @@ DEFAULT_CONFIG = {
     # continue without inserting a new stage into their chronology.
     "guarantee_calibration": {
         "enabled": True,
-        "max_rounds": 5,
+        "max_rounds": 10,
     },
     # A delta stops being meaningfully incremental after enough cumulative
     # fixes.  After this many fixes in one episode born from a review round
@@ -2968,11 +2968,11 @@ class Driver(object):
             return None
         rounds = value.get(
             "max_rounds",
-            5,
+            contracts.MILESTONE_BRAINSTORMING_ROUNDS,
         )
         if isinstance(rounds, bool) or not isinstance(rounds, int) \
                 or rounds <= 0:
-            rounds = 5
+            rounds = contracts.MILESTONE_BRAINSTORMING_ROUNDS
         return {"max_rounds": rounds}
 
     def _start_guarantee_calibration(self, unit):
