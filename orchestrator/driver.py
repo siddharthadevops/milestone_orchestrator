@@ -657,7 +657,6 @@ class Driver(object):
                 )
                 and event.get("ok") is True
                 and event.get("stable") is True
-                and not event.get("reused")
             ):
                 return event
         return None

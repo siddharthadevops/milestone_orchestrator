@@ -2255,7 +2255,7 @@ function unitHistory(u, activity, running) {
   const base = [].concat(
     (u.rounds || []).filter(r => !repairRoundIds.has(r.id))
       .map(r => ({at: r.at || "", type: "round", item: r})),
-    (u.verifications || [])
+    (u.verifications || []).filter(v => !withinRepair(v.at || ""))
       .map(v => ({at: v.at || "", type: "verify", item: v})),
     (u.reclassify || []).filter(item =>
       !item.source_round && !withinRepair(item.at || ""))

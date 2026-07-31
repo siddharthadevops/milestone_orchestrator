@@ -353,6 +353,54 @@ class TestVerificationChronology(DriverTestCase):
                 "milestone_final",
             )
 
+    def test_reused_scheduled_checkpoint_restarts_counter(self):
+        with tempfile.TemporaryDirectory(prefix="orch-verify-reused-") as ws:
+            path = init_state(ws, make_config())
+            driver = drv.Driver(path, runner=runners.MockRunner([]))
+            driver.state["milestone"]["slices"] = _slices(13)
+            driver.state["units"] = [
+                st._new_unit(st.UNIT_SLICE_IMPL, slice_id)
+                for slice_id in range(1, 14)
+            ]
+            for slice_id in (1, 2, 3):
+                st.append_event(
+                    driver.state, "slice_closed",
+                    unit="slice_impl-%02d" % slice_id,
+                )
+            st.append_event(
+                driver.state, "verification", unit="slice_impl-04",
+                ok=True, stable=True, cadence="four_slice_checkpoint",
+            )
+            st.append_event(
+                driver.state, "slice_closed", unit="slice_impl-04",
+            )
+            for slice_id in (5, 6, 7):
+                st.append_event(
+                    driver.state, "slice_closed",
+                    unit="slice_impl-%02d" % slice_id,
+                )
+            st.append_event(
+                driver.state, "verification", unit="slice_impl-08",
+                ok=True, stable=True, reused=True,
+                cadence="four_slice_checkpoint",
+            )
+            st.append_event(
+                driver.state, "slice_closed", unit="slice_impl-08",
+            )
+
+            self.assertIsNone(
+                driver._full_verification_cadence(driver.state["units"][8])
+            )
+            for slice_id in (9, 10, 11):
+                st.append_event(
+                    driver.state, "slice_closed",
+                    unit="slice_impl-%02d" % slice_id,
+                )
+            self.assertEqual(
+                driver._full_verification_cadence(driver.state["units"][11]),
+                "four_slice_checkpoint",
+            )
+
     def test_review_evidence_preserves_command_boundaries(self):
         split = ["export ORCH_FLAG=1", 'test "$ORCH_FLAG" = 1']
         joined = ['export ORCH_FLAG=1 && test "$ORCH_FLAG" = 1']

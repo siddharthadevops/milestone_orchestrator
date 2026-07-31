@@ -413,8 +413,8 @@ class TestRenderReviewLog(unittest.TestCase):
         self.assertEqual(
             self.text.count(
                 "- deterministic result: every configured family was clean "
-                "or debt-clean on the same current bytes; full verification "
-                "was not due at this boundary; no extra reviewer was called"
+                "or debt-clean on the same current bytes; legacy full "
+                "verification passed; no extra reviewer was called"
             ),
             2,
         )
@@ -435,6 +435,18 @@ class TestRenderReviewLog(unittest.TestCase):
             self.text,
         )
         self.assertIn("- scheduled verification event: `99`", self.text)
+
+    def test_present_null_verification_means_not_due(self):
+        state = make_state()
+        state["units"][0]["seals"][0]["verification_event_seq"] = None
+
+        text = ledgers.render_review_log(state)
+
+        self.assertIn(
+            "or debt-clean on the same current bytes; full verification "
+            "was not due at this boundary; no extra reviewer was called",
+            text,
+        )
 
     def test_requeued_implementation_debt_is_not_republished(self):
         state = make_state()

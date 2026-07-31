@@ -297,16 +297,17 @@ def render_review_log(state):
                     "unit did not run a separate completion check" % seal["wave"]
                 )
             elif deterministic:
-                verification = seal.get("verification_event_seq") is not None
+                if "verification_event_seq" not in seal:
+                    verification = "legacy full verification passed"
+                elif seal.get("verification_event_seq") is not None:
+                    verification = "the scheduled full verification passed"
+                else:
+                    verification = "full verification was not due at this boundary"
                 lines.append(
                     "- deterministic result: every configured family was "
                     "clean or debt-clean on the same current bytes; %s; no "
                     "extra reviewer was called"
-                    % (
-                        "the scheduled full verification passed"
-                        if verification
-                        else "full verification was not due at this boundary"
-                    )
+                    % verification
                 )
                 if seal.get("reviews"):
                     lines.append(

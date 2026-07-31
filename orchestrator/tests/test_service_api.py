@@ -289,6 +289,10 @@ class ServiceApiTest(unittest.TestCase):
         self.assertNotIn('<div class="card"><h3>Driver log</h3>', text)
         self.assertNotIn('<div class="card"><h3>Worker incidents (LLM)</h3>', text)
         self.assertIn("function verificationChip", text)
+        self.assertIn(
+            '(u.verifications || []).filter(v => !withinRepair(v.at || ""))',
+            text,
+        )
         self.assertIn("function reclassifyChip", text)
         self.assertIn("const reclassByRound = new Map()", text)
         self.assertIn('liveKind === "verification"', text)

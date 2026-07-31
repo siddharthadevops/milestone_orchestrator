@@ -2374,6 +2374,10 @@ class TestSummary(TempWorkspaceCase):
             kind=contracts.KIND_IMPLEMENT, session_id="bs-missing",
         )
         st.append_event(
+            state, "brainstorming_missing_detached", unit="skeleton",
+            kind=contracts.KIND_IMPLEMENT, session_id="bs-two",
+        )
+        st.append_event(
             state, "brainstorming_wait_started", unit=st.unit_key(doc),
             kind=contracts.KIND_REVIEW_ROUND, family="codex",
             session_id="bs-three", target_path="docs/three.md",
@@ -2385,13 +2389,13 @@ class TestSummary(TempWorkspaceCase):
             [(d["session_id"], d["kind"], d["outcome"]) for d in detours],
             [
                 ("bs-one", contracts.KIND_REVIEW_ROUND, "restarted"),
-                ("bs-two", contracts.KIND_IMPLEMENT, "waiting"),
+                ("bs-two", contracts.KIND_IMPLEMENT, "detached"),
             ],
         )
         self.assertEqual(detours[0]["family"], "codex")
         self.assertEqual(detours[0]["target_path"], "docs/one.md")
         self.assertIsNotNone(detours[0]["outcome_at"])
-        self.assertIsNone(detours[1]["outcome_at"])
+        self.assertIsNotNone(detours[1]["outcome_at"])
         # Each detour is filed against the unit that raised it.
         self.assertEqual(
             [d["session_id"] for d in views[st.unit_key(doc)]["brainstormings"]],
