@@ -85,8 +85,8 @@ DEFAULT_CONFIG = {
     # (runners.WORKFLOW_DISABLED_ENV): the async workflow model is
     # incompatible with the one-shot call contract.
     "model_defaults": {
-        "claude": {"model": "claude-opus-5", "effort": "high"},
-        "codex": {"model": "gpt-5.6-sol", "effort": "xhigh"},
+        "claude": {"model": "claude-opus-5", "effort": "max"},
+        "codex": {"model": "gpt-5.6-sol", "effort": "max"},
     },
     # No hard wall-clock timeout: worker calls run as long as the work needs
     # (an implement call may legitimately run hours of test suites). A fixed
@@ -149,7 +149,7 @@ DEFAULT_CONFIG = {
     # re-reads it before every act resolution.
     "acts": {
         "fixer": "codex",
-        # The normal implementation owner is also the lead voice in every
+        # The normal implementation owner also presents the Initial Position in every
         # milestone-owned Brainstorming session.  Pinning the profile here
         # avoids silently dropping from max effort to the family default.
         "implementer": {

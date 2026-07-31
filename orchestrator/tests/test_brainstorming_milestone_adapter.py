@@ -210,10 +210,10 @@ class BrainstormingMilestoneAdapterTest(unittest.TestCase):
 
     @staticmethod
     def _roster(interlocutor_first=False):
-        lead = {"id": "lead", "role": "lead", "delivery": "llm"}
+        lead = {"id": "lead", "role": "initial_position", "delivery": "llm"}
         critic = {
             "id": "critic",
-            "role": "interlocutor",
+            "role": "contrary_position",
             "delivery": "llm",
         }
         return [critic, lead] if interlocutor_first else [lead, critic]
@@ -509,14 +509,14 @@ class BrainstormingMilestoneAdapterTest(unittest.TestCase):
         roster = [
             {
                 "id": "critic",
-                "role": "interlocutor",
+                "role": "contrary_position",
                 "delivery": "llm",
                 "executor_ref": "critic-executor",
                 "model_family": "claude",
             },
             {
                 "id": "lead",
-                "role": "lead",
+                "role": "initial_position",
                 "delivery": "llm",
                 "executor_ref": "lead-executor",
                 "model_family": "codex",
@@ -669,14 +669,14 @@ class BrainstormingMilestoneAdapterTest(unittest.TestCase):
         roster = [
             {
                 "id": "lead",
-                "role": "lead",
+                "role": "initial_position",
                 "delivery": "llm",
                 "executor_ref": "lead-executor",
                 "model_family": "codex",
             },
             {
                 "id": "critic",
-                "role": "interlocutor",
+                "role": "contrary_position",
                 "delivery": "llm",
                 "executor_ref": "critic-executor",
                 "model_family": "claude",
@@ -818,15 +818,15 @@ class BrainstormingMilestoneAdapterTest(unittest.TestCase):
         self.assertEqual(
             captured["body"]["participants"],
             [
-                {"id": "lead", "role": "lead", "delivery": "llm"},
+                {"id": "initial-position", "role": "initial_position", "delivery": "llm"},
                 {
-                    "id": "interlocutor",
-                    "role": "interlocutor",
+                    "id": "contrary-position",
+                    "role": "contrary_position",
                     "delivery": "llm",
                 },
                 {
                     "id": "dante",
-                    "role": "interlocutor",
+                    "role": "common_sense",
                     "delivery": "external",
                     "external_provider": "narrator",
                 },
@@ -884,16 +884,16 @@ class BrainstormingMilestoneAdapterTest(unittest.TestCase):
             captured["participants"],
             [
                 {
-                    "id": "lead",
-                    "role": "lead",
+                    "id": "initial-position",
+                    "role": "initial_position",
                     "delivery": "llm",
                     "model_family": "codex",
                     "model": "gpt-5.6-sol",
                     "effort": "max",
                 },
                 {
-                    "id": "interlocutor",
-                    "role": "interlocutor",
+                    "id": "contrary-position",
+                    "role": "contrary_position",
                     "delivery": "llm",
                     "model_family": "claude",
                     "model": "claude-opus-5",
@@ -901,11 +901,11 @@ class BrainstormingMilestoneAdapterTest(unittest.TestCase):
                 },
                 {
                     "id": "dante",
-                    "role": "interlocutor",
+                    "role": "common_sense",
                     "delivery": "external",
                     "external_provider": "narrator",
-                    "model_family": "claude",
-                    "model": "claude-opus-5",
+                    "model_family": "codex",
+                    "model": "gpt-5.6-sol",
                     "effort": "max",
                 },
             ],
@@ -1031,16 +1031,16 @@ class BrainstormingMilestoneAdapterTest(unittest.TestCase):
             captured["body"]["participants"],
             [
                 {
-                    "id": "lead",
-                    "role": "lead",
+                    "id": "initial-position",
+                    "role": "initial_position",
                     "delivery": "llm",
                     "model_family": "codex",
                     "model": "gpt-5.6-sol",
                     "effort": "max",
                 },
                 {
-                    "id": "interlocutor",
-                    "role": "interlocutor",
+                    "id": "contrary-position",
+                    "role": "contrary_position",
                     "delivery": "llm",
                     "model_family": "claude",
                     "model": "claude-opus-5",
@@ -1048,11 +1048,11 @@ class BrainstormingMilestoneAdapterTest(unittest.TestCase):
                 },
                 {
                     "id": "dante",
-                    "role": "interlocutor",
+                    "role": "common_sense",
                     "delivery": "external",
                     "external_provider": "narrator",
-                    "model_family": "claude",
-                    "model": "claude-opus-5",
+                    "model_family": "codex",
+                    "model": "gpt-5.6-sol",
                     "effort": "max",
                 },
             ],
@@ -1216,7 +1216,7 @@ class BrainstormingMilestoneAdapterTest(unittest.TestCase):
         accepted = store.record_completed_turn(
             session_id,
             snapshot.revision,
-            "lead",
+            "initial-position",
             "Accept the materialized proposal.",
             baseline,
         )
@@ -1353,7 +1353,7 @@ class BrainstormingMilestoneAdapterTest(unittest.TestCase):
         snapshot = store.record_completed_turn(
             created["id"],
             snapshot.revision,
-            "lead",
+            "initial-position",
             "Produce the proposal.",
             accepted,
         )
@@ -1364,7 +1364,7 @@ class BrainstormingMilestoneAdapterTest(unittest.TestCase):
         snapshot = store.record_completed_turn(
             created["id"],
             snapshot.revision,
-            "interlocutor",
+            "contrary-position",
             "The proposal is coherent.",
             accepted,
         )
@@ -1381,9 +1381,8 @@ class BrainstormingMilestoneAdapterTest(unittest.TestCase):
                 "accepted_target_revision"
             ],
             "votes": [
-                {"participant_id": "lead", "vote": "accept"},
-                {"participant_id": "interlocutor", "vote": "accept"},
-                {"participant_id": "dante", "vote": "accept"},
+                {"participant_id": "initial-position", "vote": "accept"},
+                {"participant_id": "contrary-position", "vote": "accept"},
             ],
             "approved": True,
         }

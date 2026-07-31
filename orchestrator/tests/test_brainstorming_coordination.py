@@ -25,14 +25,14 @@ def participants(same_family=False):
     roster = [
         {
             "id": "lead",
-            "role": "lead",
+            "role": "initial_position",
             "delivery": "llm",
             "executor_ref": "codex-lead",
             "model_family": "codex",
         },
         {
             "id": "critic",
-            "role": "interlocutor",
+            "role": "contrary_position",
             "delivery": "llm",
             "executor_ref": "claude-critic",
             "model_family": "claude",
@@ -176,11 +176,11 @@ class BrainstormingCoordinationTest(unittest.TestCase):
         self.store.transition(session_id, created.revision, "running")
         return target
 
-    def test_dante_closure_prompt_contains_the_proposition_and_prior_votes(self):
+    def test_dante_never_receives_a_closure_vote(self):
         roster = participants() + [
             {
                 "id": "dante",
-                "role": "interlocutor",
+                "role": "common_sense",
                 "delivery": "external",
                 "external_ref": "external-dante",
             }
@@ -241,13 +241,8 @@ class BrainstormingCoordinationTest(unittest.TestCase):
             },
         }
 
-        prompt = coordination.build_external_narrator_prompt(
-            state, intervention
-        )
-
-        self.assertIn("Adopt the deliberately small solution.", prompt)
-        self.assertIn('\"participant_id\": \"critic\"', prompt)
-        self.assertIn('\"vote\": \"object\"', prompt)
+        with self.assertRaisesRegex(bs.ContractError, "does not vote"):
+            coordination.build_external_narrator_prompt(state, intervention)
 
         discussion = dict(intervention)
         discussion["action_kind"] = "discussion_turn"
@@ -256,10 +251,10 @@ class BrainstormingCoordinationTest(unittest.TestCase):
             state, discussion
         )
         self.assertIn("Dante is a human project lead", discussion_prompt)
-        self.assertIn("live brainstorming conversation", discussion_prompt)
-        self.assertIn("ordinary, clear language", discussion_prompt)
+        self.assertIn("ask the few simple, awkward questions", discussion_prompt)
+        self.assertIn("He asks only questions", discussion_prompt)
         self.assertIn("Read the Brainstorming chat", discussion_prompt)
-        self.assertIn("single spoken intervention", discussion_prompt)
+        self.assertIn("anti-drift questions", discussion_prompt)
         self.assertIn("natural English", discussion_prompt)
         self.assertTrue(
             discussion_prompt.endswith(coordination.DANTE_MANDATORY_LINE)

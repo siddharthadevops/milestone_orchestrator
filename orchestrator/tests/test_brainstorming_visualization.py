@@ -59,8 +59,10 @@ class BrainstormingVisualizationTest(unittest.TestCase):
     def _ballot(snapshot, approved):
         votes = [
             {"participant_id": participant["id"],
-             "vote": "accept" if participant["role"] == "lead" or approved else "object"}
-            for participant in snapshot.state["run_config"]["participants"]
+             "vote": "accept" if participant["role"] == "initial_position" or approved else "object"}
+            for participant in bs.closure_voters(
+                snapshot.state["run_config"]
+            )
         ]
         return {
             "after_completed_rounds": snapshot.state["rounds_used"],

@@ -30,14 +30,14 @@ def cross_family_participants():
     return [
         {
             "id": "editor",
-            "role": "lead",
+            "role": "initial_position",
             "delivery": "llm",
             "executor_ref": "codex-primary",
             "model_family": "codex",
         },
         {
             "id": "critic",
-            "role": "interlocutor",
+            "role": "contrary_position",
             "delivery": "llm",
             "executor_ref": "claude-reviewer",
             "model_family": "claude",
@@ -285,9 +285,10 @@ class BrainstormingExecutionTest(unittest.TestCase):
     def test_validated_external_envelope_is_durable_before_activity_failure(self):
         roster = [
             cross_family_participants()[0],
+            cross_family_participants()[1],
             {
                 "id": "dante",
-                "role": "interlocutor",
+                "role": "common_sense",
                 "delivery": "external",
                 "external_ref": "external-dante",
             },
@@ -304,12 +305,19 @@ class BrainstormingExecutionTest(unittest.TestCase):
             "The lead has spoken.",
             target,
         )
+        ready = self.store.record_completed_turn(
+            "external-acceptance",
+            ready.revision,
+            "critic",
+            "The contrary position has spoken.",
+            target,
+        )
         req = ready.state["request"]
         intervention = {
             "token": "external-acceptance-token",
             "participant_id": "dante",
             "action_kind": "discussion_turn",
-            "completed_turn_count": 1,
+            "completed_turn_count": 2,
             "round": 1,
             "target_revision": ready.state["accepted_target_revision"],
             "input": {

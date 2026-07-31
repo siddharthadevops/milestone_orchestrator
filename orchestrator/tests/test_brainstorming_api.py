@@ -140,14 +140,14 @@ class StandaloneBrainstormingApiTest(unittest.TestCase):
         if (
             discussion
             and target_name.endswith("error.md")
-            and "- role: interlocutor" in prompt
+            and "- role: contrary_position" in prompt
         ):
             sys.exit(7)
 
         if (
             discussion
             and target_name.endswith("recoverable.md")
-            and "- role: interlocutor" in prompt
+            and "- role: contrary_position" in prompt
         ):
             counter_path = os.path.join(os.getcwd(), ".recoverable-calls")
             try:
@@ -170,7 +170,7 @@ class StandaloneBrainstormingApiTest(unittest.TestCase):
         if (
             discussion
             and target_name.endswith("slow.md")
-            and "- role: lead" in prompt
+            and "- role: initial_position" in prompt
         ):
             target = (
                 target_name
@@ -203,7 +203,7 @@ class StandaloneBrainstormingApiTest(unittest.TestCase):
             answer = {"kind": "discussion_turn", "markdown": "Accepted turn."}
             if (
                 target_name.endswith("relative.md")
-                and "- role: lead" in prompt
+                and "- role: initial_position" in prompt
             ):
                 target = (
                     target_name
@@ -214,7 +214,7 @@ class StandaloneBrainstormingApiTest(unittest.TestCase):
                     handle.write(b"accepted lead result")
             if (
                 target_name.endswith("replacement.md")
-                and "- role: lead" in prompt
+                and "- role: initial_position" in prompt
             ):
                 target = (
                     target_name
@@ -295,10 +295,10 @@ class StandaloneBrainstormingApiTest(unittest.TestCase):
                 "max_rounds": max_rounds,
             },
             "participants": [
-                {"id": "lead", "role": "lead", "delivery": "llm"},
+                {"id": "lead", "role": "initial_position", "delivery": "llm"},
                 {
                     "id": "critic",
-                    "role": "interlocutor",
+                    "role": "contrary_position",
                     "delivery": "llm",
                 },
             ],
@@ -562,7 +562,7 @@ class StandaloneBrainstormingApiTest(unittest.TestCase):
         payload["participants"] = [
             {
                 "id": "lead",
-                "role": "lead",
+                "role": "initial_position",
                 "delivery": "llm",
                 "model_family": "claude",
                 # Deliberately NOT the claude family default (opus-5), so
@@ -572,13 +572,13 @@ class StandaloneBrainstormingApiTest(unittest.TestCase):
             },
             {
                 "id": "critic-1",
-                "role": "interlocutor",
+                "role": "contrary_position",
                 "delivery": "llm",
                 "model_family": "claude",
             },
             {
                 "id": "critic-2",
-                "role": "interlocutor",
+                "role": "contrary_position",
                 "delivery": "llm",
             },
         ]
@@ -620,7 +620,7 @@ class StandaloneBrainstormingApiTest(unittest.TestCase):
             )
             critic1 = executors[by_id["critic-1"]["executor_ref"]]
             self.assertEqual(critic1["model"], "claude-opus-5")
-            self.assertEqual(critic1["effort"], "high")
+            self.assertEqual(critic1["effort"], "max")
 
             # Every seat pinned to ONE family while another is available
             # is a deliberate roster, not an invalid fallback.
@@ -628,13 +628,13 @@ class StandaloneBrainstormingApiTest(unittest.TestCase):
             mono["participants"] = [
                 {
                     "id": "lead",
-                    "role": "lead",
+                    "role": "initial_position",
                     "delivery": "llm",
                     "model_family": "claude",
                 },
                 {
                     "id": "critic",
-                    "role": "interlocutor",
+                    "role": "contrary_position",
                     "delivery": "llm",
                     "model_family": "claude",
                 },
@@ -655,13 +655,13 @@ class StandaloneBrainstormingApiTest(unittest.TestCase):
         bad["participants"] = [
             {
                 "id": "lead",
-                "role": "lead",
+                "role": "initial_position",
                 "delivery": "llm",
                 "model_family": "gemini",
             },
             {
                 "id": "critic",
-                "role": "interlocutor",
+                "role": "contrary_position",
                 "delivery": "llm",
             },
         ]
@@ -683,19 +683,19 @@ class StandaloneBrainstormingApiTest(unittest.TestCase):
             ("codex-lead.md", [
                 {
                     "id": "lead",
-                    "role": "lead",
+                    "role": "initial_position",
                     "delivery": "llm",
                     "model_family": "codex",
                 },
                 {
                     "id": "critic",
-                    "role": "interlocutor",
+                    "role": "contrary_position",
                     "delivery": "llm",
                 },
             ]),
             ("codex-critic.md", [
-                {"id": "lead", "role": "lead", "delivery": "llm"},
-                {"id": "critic", "role": "interlocutor", "delivery": "llm",
+                {"id": "lead", "role": "initial_position", "delivery": "llm"},
+                {"id": "critic", "role": "contrary_position", "delivery": "llm",
                  "model_family": "codex"},
             ]),
         )):
@@ -1348,7 +1348,7 @@ class StandaloneBrainstormingApiTest(unittest.TestCase):
         ) as handle:
             recorded_prompt = handle.read()
         self.assertIn("Brainstorming chat is the shared record", recorded_prompt)
-        self.assertIn("role: lead", recorded_prompt)
+        self.assertIn("role: initial_position", recorded_prompt)
         self.assertFalse(os.path.samefile(target, unrelated))
         real_identity = lifecycle._target_identity
 
@@ -1632,7 +1632,7 @@ class StandaloneBrainstormingApiTest(unittest.TestCase):
         payload["participants"].append(
             {
                 "id": "dante",
-                "role": "interlocutor",
+                "role": "common_sense",
                 "delivery": "external",
                 "external_provider": "narrator",
                 "model_family": "codex",
@@ -1659,7 +1659,25 @@ class StandaloneBrainstormingApiTest(unittest.TestCase):
         ]
         self.assertEqual(
             [event["stage"] for event in dante_calls],
-            ["discussion", "vote"],
+            ["discussion"],
+        )
+
+    def test_narrator_cannot_occupy_a_voting_position(self):
+        self._target("narrator-voter.md")
+        payload = self._payload("narrator-voter.md")
+        payload["participants"][1] = {
+            "id": "critic",
+            "role": "contrary_position",
+            "delivery": "external",
+            "external_provider": "narrator",
+            "model_family": "codex",
+        }
+        status, body = self._request(
+            "POST", "/api/brainstorming/sessions", payload
+        )
+        self.assertEqual(
+            (status, body),
+            (400, {"ok": False, "error": lifecycle.INVALID_REQUEST}),
         )
 
     def test_manual_external_turn_waits_and_accepts_each_response_once(self):
@@ -1668,7 +1686,7 @@ class StandaloneBrainstormingApiTest(unittest.TestCase):
         payload["participants"].append(
             {
                 "id": "human",
-                "role": "interlocutor",
+                "role": "contrary_position",
                 "delivery": "external",
                 "external_provider": "manual",
             }
@@ -1739,7 +1757,7 @@ class StandaloneBrainstormingApiTest(unittest.TestCase):
         payload["participants"].append(
             {
                 "id": "human",
-                "role": "interlocutor",
+                "role": "contrary_position",
                 "delivery": "external",
                 "external_provider": "manual",
             }
@@ -1811,7 +1829,7 @@ class StandaloneBrainstormingApiTest(unittest.TestCase):
         payload["participants"].append(
             {
                 "id": "human",
-                "role": "interlocutor",
+                "role": "contrary_position",
                 "delivery": "external",
                 "external_provider": "manual",
             }
@@ -1927,7 +1945,7 @@ class StandaloneBrainstormingApiTest(unittest.TestCase):
             [
                 {
                     "id": participant_id,
-                    "role": "interlocutor",
+                    "role": "contrary_position",
                     "delivery": "external",
                     "external_provider": "manual",
                 }
@@ -1980,7 +1998,7 @@ class StandaloneBrainstormingApiTest(unittest.TestCase):
         payload["participants"].append(
             {
                 "id": "dante",
-                "role": "interlocutor",
+                "role": "common_sense",
                 "delivery": "external",
                 "external_provider": "narrator",
                 "model_family": "codex",

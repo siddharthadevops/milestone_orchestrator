@@ -178,17 +178,19 @@ class ServiceApiTest(unittest.TestCase):
         # The dialog opens pre-staffed with Codex, Claude, and Dante; the
         # retired claude id is gone from every option list.
         self.assertIn(
-            '{role: "lead", delivery: "llm", agent: "codex",', text)
+            '{role: "initial_position", delivery: "llm", agent: "codex",', text)
         self.assertIn(
-            '{role: "interlocutor", delivery: "llm", agent: "claude",',
+            '{role: "contrary_position", delivery: "llm", agent: "claude",',
             text,
         )
         self.assertIn('model: "claude-opus-5", effort: "max"', text)
         self.assertIn(
-            '{role: "interlocutor", delivery: "external", '
+            '{role: "common_sense", delivery: "external", '
             'externalProvider: "narrator",',
             text,
         )
+        self.assertIn('agent: "codex", model: "gpt-5.6-sol", effort: "max"',
+                      text)
         self.assertIn('"claude-opus-5"', text)
         self.assertNotIn("opus-4-8", text)
         self.assertIn(".rosterrow { display: grid", text)

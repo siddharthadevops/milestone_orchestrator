@@ -56,8 +56,8 @@ GUARANTEE_CALIBRATION_BRIEF = (
     "realistic damage, enforceability, and the normal, transition, recovery, "
     "or failure states it permits. Do not strengthen a guarantee merely as a "
     "precaution. Do not alter the goal restatement, boundary, non-goals, "
-    "slice plan, slice table, or unrelated material. The lead must leave "
-    "target_path as the complete agreed skeleton, changing it only where the "
+    "slice plan, slice table, or unrelated material. The Initial Position "
+    "must leave target_path as the complete agreed skeleton, changing it only where the "
     "discussion requires; if the current declarations are sound, retain the "
     "document unchanged."
 )
@@ -291,13 +291,13 @@ def _participant(participant_id, role, profile, label):
 def _narrator(profile):
     participant = {
         "id": "dante",
-        "role": "interlocutor",
+        "role": "common_sense",
         "delivery": "external",
         "external_provider": "narrator",
     }
     if profile is None:
         return participant
-    pinned = _participant("dante", "interlocutor", profile, "lead_profile")
+    pinned = _participant("dante", "common_sense", profile, "lead_profile")
     participant.update(
         {
             key: pinned[key]
@@ -309,14 +309,19 @@ def _narrator(profile):
 
 def _participants(lead_profile=None, counterpart_profile=None):
     return [
-        _participant("lead", "lead", lead_profile, "lead_profile"),
         _participant(
-            "interlocutor",
-            "interlocutor",
+            "initial-position",
+            "initial_position",
+            lead_profile,
+            "lead_profile",
+        ),
+        _participant(
+            "contrary-position",
+            "contrary_position",
             counterpart_profile,
             "counterpart_profile",
         ),
-        _narrator(counterpart_profile),
+        _narrator(lead_profile),
     ]
 
 
@@ -526,7 +531,7 @@ def prompt_handoff(state, handoff):
 
 
 def terminal_handoff(state, session_id):
-    """Return one retained terminal result and its lead-accepted authority."""
+    """Return one retained terminal result and its accepted authority."""
     projected = inspect_session(state, session_id)
     session_state = projected["state"]
     if session_state["status"] not in brainstorming.TERMINAL_STATUSES:
@@ -548,7 +553,7 @@ def terminal_handoff(state, session_id):
         revision = handoff["accepted_target_revision"]
         if revision is None:
             raise AdapterError(
-                "a successful Brainstorming session has no lead-accepted target"
+                "a successful Brainstorming session has no accepted target"
             )
         retained_revision(state, session_id, revision)
         return prompt_handoff(state, handoff)

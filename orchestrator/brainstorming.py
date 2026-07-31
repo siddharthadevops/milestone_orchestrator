@@ -31,8 +31,9 @@ except ImportError:  # pragma: no cover - the production service is POSIX
 
 STATUSES = ("created", "running", "success", "failure")
 TERMINAL_STATUSES = ("success", "failure")
-CLOSURE_POLICIES = ("unanimity", "majority_with_lead_tiebreak")
-ROLES = ("lead", "interlocutor")
+CLOSURE_POLICIES = ("unanimity", "majority")
+ROLES = ("initial_position", "contrary_position", "common_sense")
+POSITION_ROLES = ("initial_position", "contrary_position")
 DELIVERIES = ("llm", "external")
 TRANSCRIPT_EVENT_KINDS = ("material_interruption", "closure_ballot")
 TRANSCRIPT_FORMAT_VERSION = 1
@@ -1027,8 +1028,10 @@ def _validate_participant(participant, ctx):
         )
     if checked["role"] not in ROLES:
         raise ContractError("%s.role must be one of %s" % (ctx, ROLES))
-    if delivery == "external" and checked["role"] == "lead":
-        raise ContractError("an external participant cannot own the target")
+    if delivery == "external" and checked["role"] == "initial_position":
+        raise ContractError(
+            "an external participant cannot own the target"
+        )
     return checked
 
 
@@ -1095,8 +1098,9 @@ def validate_run_config(run_config):
         raise ContractError("run_config.participants must be a list")
 
     ids = set()
-    lead_count = 0
-    interlocutor_count = 0
+    initial_count = 0
+    contrary_count = 0
+    common_sense_count = 0
     families = set()
     for index, participant in enumerate(participants):
         ctx = "run_config.participants[%d]" % index
@@ -1106,15 +1110,24 @@ def validate_run_config(run_config):
             raise ContractError("participant ids must be unique")
         ids.add(participant_id)
         role = checked["role"]
-        lead_count += role == "lead"
-        interlocutor_count += role == "interlocutor"
+        initial_count += role == "initial_position"
+        contrary_count += role == "contrary_position"
+        common_sense_count += role == "common_sense"
         if checked["delivery"] == "llm":
             families.add(checked["model_family"])
 
-    if lead_count != 1:
-        raise ContractError("run_config must contain exactly one lead")
-    if interlocutor_count < 1:
-        raise ContractError("run_config must contain at least one interlocutor")
+    if initial_count != 1:
+        raise ContractError(
+            "run_config must contain exactly one initial position"
+        )
+    if contrary_count < 1:
+        raise ContractError(
+            "run_config must contain at least one contrary position"
+        )
+    if common_sense_count > 1:
+        raise ContractError(
+            "run_config may contain at most one common-sense participant"
+        )
     if run_config["closure_policy"] not in CLOSURE_POLICIES:
         raise ContractError(
             "run_config.closure_policy must be one of %s" % (CLOSURE_POLICIES,)
@@ -1240,7 +1253,7 @@ def _validate_coordination(state, request, run_config, status):
         raise ContractError("completed turns exceed request.max_rounds")
 
     previous_revision = None
-    completed_lead_turn = False
+    completed_initial_turn = False
     for index, turn in enumerate(turns):
         ctx = "state.completed_turns[%d]" % index
         _exact_keys(
@@ -1261,16 +1274,18 @@ def _validate_coordination(state, request, run_config, status):
         revision = turn["target_revision"]
         if revision is not None:
             revision = validate_target_revision_id(revision)
-        if participant["role"] == "lead":
+        if participant["role"] == "initial_position":
             if revision is None:
                 raise ContractError(
-                    "%s completed lead turn must accept a target revision"
+                    "%s completed initial-position turn must accept a target "
+                    "revision"
                     % ctx
                 )
-            completed_lead_turn = True
+            completed_initial_turn = True
         elif revision != previous_revision:
             raise ContractError(
-                "%s changes the target revision outside a lead turn" % ctx
+                "%s changes the target revision outside the initial "
+                "position turn" % ctx
             )
         previous_revision = revision
 
@@ -1285,10 +1300,10 @@ def _validate_coordination(state, request, run_config, status):
         raise ContractError(
             "accepted_target_revision must match the latest completed turn"
         )
-    if completed_lead_turn is not (accepted_revision is not None):
+    if completed_initial_turn is not (accepted_revision is not None):
         raise ContractError(
-            "accepted_target_revision must exist exactly after completed lead "
-            "work"
+            "accepted_target_revision must exist exactly after completed "
+            "initial-position work"
         )
     return {
         "completed_turns": _json_copy(turns, "state.completed_turns"),
@@ -1321,11 +1336,13 @@ def _validate_eligible_participants(eligible_participants):
 def _cross_family_roster_available(eligible, interlocutor_count):
     leads = [
         item for item in eligible
-        if item["role"] == "lead" and item["delivery"] == "llm"
+        if item["role"] == "initial_position"
+        and item["delivery"] == "llm"
     ]
     interlocutors = [
         item for item in eligible
-        if item["role"] == "interlocutor" and item["delivery"] == "llm"
+        if item["role"] == "contrary_position"
+        and item["delivery"] == "llm"
     ]
     for lead in leads:
         available_ids = {
@@ -1374,7 +1391,7 @@ def resolve_run_config(participants, closure_policy, eligible_participants):
         and _cross_family_roster_available(
             eligible,
             sum(
-                item["role"] == "interlocutor"
+                item["role"] == "contrary_position"
                 and item["delivery"] == "llm"
                 for item in checked["participants"]
             ),
@@ -1487,12 +1504,22 @@ def validate_material_interruption(interruption):
     return _json_copy(interruption, "material_interruption")
 
 
+def closure_voters(run_config):
+    """Return only the positions whose agreement can close a session."""
+    checked = validate_run_config(run_config)
+    return [
+        participant
+        for participant in checked["participants"]
+        if participant["role"] in POSITION_ROLES
+    ]
+
+
 def _validate_closure_votes(votes, run_config):
     checked_config = validate_run_config(run_config)
-    participants = checked_config["participants"]
+    participants = closure_voters(checked_config)
     if not isinstance(votes, list) or len(votes) != len(participants):
         raise ContractError(
-            "closure_ballot.votes must contain every participant once"
+            "closure_ballot.votes must contain every position once"
         )
     checked_votes = []
     for index, (vote, participant) in enumerate(zip(votes, participants)):
@@ -1504,9 +1531,13 @@ def _validate_closure_votes(votes, run_config):
             )
         if vote["vote"] not in ("accept", "object"):
             raise ContractError("%s.vote must be accept or object" % ctx)
-        if participant["role"] == "lead" and vote["vote"] != "accept":
+        if (
+            participant["role"] == "initial_position"
+            and vote["vote"] != "accept"
+        ):
             raise ContractError(
-                "the lead closure proposal must be recorded as accept"
+                "the initial position's closure proposal must be recorded "
+                "as accept"
             )
         checked_votes.append(
             {"participant_id": vote["participant_id"], "vote": vote["vote"]}
@@ -1519,18 +1550,7 @@ def _closure_decision(checked_config, checked_votes):
     objects = len(checked_votes) - accepts
     if checked_config["closure_policy"] == "unanimity":
         return accepts == len(checked_votes)
-    if accepts != objects:
-        return accepts > objects
-    lead_id = next(
-        participant["id"]
-        for participant in checked_config["participants"]
-        if participant["role"] == "lead"
-    )
-    return next(
-        vote["vote"] == "accept"
-        for vote in checked_votes
-        if vote["participant_id"] == lead_id
-    )
+    return accepts > objects
 
 
 def evaluate_closure(run_config, votes):
@@ -2123,16 +2143,20 @@ def completed_turn_successor(
         raise HistoryRewriteError(
             "completed turn does not match the next persisted participant"
         )
-    if participant["role"] == "lead" and target_revision is None:
+    if (
+        participant["role"] == "initial_position"
+        and target_revision is None
+    ):
         raise HistoryRewriteError(
-            "a completed lead turn must accept the target revision"
+            "a completed initial-position turn must accept the target revision"
         )
     if (
-        participant["role"] != "lead"
+        participant["role"] != "initial_position"
         and target_revision != current["accepted_target_revision"]
     ):
         raise HistoryRewriteError(
-            "only a completed lead turn may advance the target revision"
+            "only a completed initial-position turn may advance the target "
+            "revision"
         )
 
     successor = copy.deepcopy(current)
@@ -2367,21 +2391,19 @@ def assert_transcript_event_successor(old_state, new_state, kind, fact):
 
 def _human_labels(run_config):
     labels = {}
-    interlocutor = 0
-    external = 0
+    contrary = 0
     for participant in run_config["participants"]:
-        if participant["delivery"] == "external":
-            external += 1
-            labels[participant["id"]] = (
-                "Dante"
-                if participant["id"].lower() == "dante"
-                else "External participant %d" % external
-            )
-        elif participant["role"] == "lead":
-            labels[participant["id"]] = "Lead"
+        if participant["role"] == "initial_position":
+            labels[participant["id"]] = "Initial Position"
+        elif participant["role"] == "common_sense":
+            labels[participant["id"]] = "Dante"
         else:
-            interlocutor += 1
-            labels[participant["id"]] = "Interlocutor %d" % interlocutor
+            contrary += 1
+            labels[participant["id"]] = (
+                "Contrary Position"
+                if contrary == 1
+                else "Contrary Position %d" % contrary
+            )
     return labels
 
 
@@ -2397,11 +2419,8 @@ def _quoted_markdown(value):
 
 def _closure_rule(policy):
     if policy == "unanimity":
-        return "Everyone must agree before the session can close."
-    return (
-        "A majority decides; if the vote is tied exactly, the lead's vote "
-        "breaks the tie."
-    )
+        return "Every position must agree before the session can close."
+    return "A strict majority of the positions decides; a tie is a gap."
 
 
 def _entry(title, *parts):
@@ -2416,12 +2435,12 @@ def _render_opening(state, labels):
     roster = []
     for participant in state["run_config"]["participants"]:
         label = labels[participant["id"]]
-        if participant["delivery"] == "external":
-            role = "contributes through an external intervention"
-        elif participant["role"] == "lead":
-            role = "leads the session"
+        if participant["role"] == "initial_position":
+            role = "presents the initial position and owns target edits"
+        elif participant["role"] == "contrary_position":
+            role = "challenges the initial position"
         else:
-            role = "participates as an interlocutor"
+            role = "asks common-sense anti-drift questions and does not vote"
         roster.append("- **%s** — %s." % (label, role))
     rounds = state["request"]["max_rounds"]
     return _entry(
@@ -3011,8 +3030,11 @@ class SessionStore:
             included = {
                 item["id"]
                 for index, item in enumerate(participants)
-                if item["role"] == "lead"
-                or (item["role"] == "interlocutor" and index < before_index)
+                if item["role"] == "initial_position"
+                or (
+                    item["role"] == "contrary_position"
+                    and index < before_index
+                )
             }
             return [
                 item["id"] for item in participants if item["id"] in included

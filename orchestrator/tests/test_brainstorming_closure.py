@@ -19,7 +19,7 @@ def participants(count=2):
     roster = [
         {
             "id": "lead",
-            "role": "lead",
+            "role": "initial_position",
             "delivery": "llm",
             "executor_ref": "codex-lead",
             "model_family": "codex",
@@ -30,7 +30,7 @@ def participants(count=2):
         roster.append(
             {
                 "id": "critic-%d" % index,
-                "role": "interlocutor",
+                "role": "contrary_position",
                 "delivery": "llm",
                 "executor_ref": "%s-critic-%d" % (family, index),
                 "model_family": family,
@@ -192,11 +192,11 @@ class BrainstormingClosureTest(unittest.TestCase):
         )
         return subject, roster, executors, target, sibling
 
-    def test_external_closure_vote_survives_crash_before_ballot(self):
+    def test_common_sense_participant_never_votes_on_closure(self):
         roster = participants() + [
             {
                 "id": "dante",
-                "role": "interlocutor",
+                "role": "common_sense",
                 "delivery": "external",
                 "external_ref": "external-dante",
             }
@@ -225,34 +225,19 @@ class BrainstormingClosureTest(unittest.TestCase):
         )
         subject.run_next_turn("external-closure-crash", context)
 
-        with self.assertRaises(coordination.ExternalInterventionPending):
-            subject.run_closure("external-closure-crash", context)
-        pending = self.store.read_external_intervention(
-            "external-closure-crash"
-        )
-        self.store.submit_external_intervention(
-            "external-closure-crash",
-            pending["token"],
-            {"vote": "accept"},
-        )
-        with (
-            mock.patch.object(
-                self.store,
-                "close_with_ballot",
-                side_effect=RuntimeError("simulated crash before ballot"),
-            ),
-            self.assertRaisesRegex(RuntimeError, "simulated crash"),
-        ):
-            subject.run_closure("external-closure-crash", context)
-
-        retained = self.store.read_external_intervention(
-            "external-closure-crash"
-        )
-        self.assertEqual(retained["response"]["payload"], {"vote": "accept"})
         terminal = subject.run_closure("external-closure-crash", context)
         self.assertEqual(terminal.state["status"], "success")
         self.assertIsNone(
             self.store.read_external_intervention("external-closure-crash")
+        )
+        ballots = [
+            event["fact"]
+            for event in terminal.state["transcript_events"]
+            if event["kind"] == "closure_ballot"
+        ]
+        self.assertEqual(
+            [vote["participant_id"] for vote in ballots[-1]["votes"]],
+            ["lead", "critic-1"],
         )
 
     @staticmethod
@@ -397,11 +382,11 @@ class BrainstormingClosureTest(unittest.TestCase):
             state["run_config"], recorded["votes"]
         ))
 
-    def test_unanimity_majority_and_lead_tiebreak_matrix(self):
+    def test_unanimity_and_strict_majority_matrix(self):
         two = participants(2)
         unanimous = bs.resolve_run_config(two, "unanimity", two)
         majority_two = bs.resolve_run_config(
-            two, "majority_with_lead_tiebreak", two
+            two, "majority", two
         )
         all_accept = [
             {"participant_id": "lead", "vote": "accept"},
@@ -411,14 +396,11 @@ class BrainstormingClosureTest(unittest.TestCase):
         disagreement[1]["vote"] = "object"
         self.assertTrue(bs.evaluate_closure(unanimous, all_accept))
         self.assertFalse(bs.evaluate_closure(unanimous, disagreement))
-        self.assertTrue(
-            bs.evaluate_closure(majority_two, disagreement),
-            "the two-person exact tie follows the lead's accept proposal",
-        )
+        self.assertFalse(bs.evaluate_closure(majority_two, disagreement))
 
         three = participants(3)
         majority_three = bs.resolve_run_config(
-            three, "majority_with_lead_tiebreak", three
+            three, "majority", three
         )
         accept_majority = [
             {"participant_id": "lead", "vote": "accept"},
@@ -436,7 +418,7 @@ class BrainstormingClosureTest(unittest.TestCase):
 
         four = participants(4)
         majority_four = bs.resolve_run_config(
-            four, "majority_with_lead_tiebreak", four
+            four, "majority", four
         )
         exact_tie = [
             {"participant_id": "lead", "vote": "accept"},
@@ -444,7 +426,7 @@ class BrainstormingClosureTest(unittest.TestCase):
             {"participant_id": "critic-2", "vote": "accept"},
             {"participant_id": "critic-3", "vote": "object"},
         ]
-        self.assertTrue(bs.evaluate_closure(majority_four, exact_tie))
+        self.assertFalse(bs.evaluate_closure(majority_four, exact_tie))
 
     def test_target_mutation_retries_closure_once_and_restores_only_target(self):
         def mutate(path, operation, response):
@@ -821,7 +803,7 @@ class BrainstormingClosureTest(unittest.TestCase):
         snapshot, subject, roster, executors, _target, _sibling = (
             self._boundary(
                 "eligibility",
-                policy="majority_with_lead_tiebreak",
+                policy="majority",
                 max_rounds=2,
                 roster=majority_roster,
             )
@@ -915,11 +897,11 @@ class BrainstormingClosureTest(unittest.TestCase):
         )
         self.assertEqual(
             terminal.state["closing_summary"]["unresolved_objections"],
-            ["Interlocutor 2 objected to closure."],
+            ["Contrary Position 2 objected to closure."],
         )
         markdown = self._read_transcript(terminal)
         self.assertIn("This ballot approved closure.", markdown)
-        self.assertIn("Interlocutor 2 objected to closure.", markdown)
+        self.assertIn("Contrary Position 2 objected to closure.", markdown)
         self.assertEqual(markdown.count("## Closing"), 1)
 
     def test_terminal_objections_ignore_a_ballot_invalidated_by_a_later_turn(
@@ -1005,7 +987,7 @@ class BrainstormingClosureTest(unittest.TestCase):
             terminal["closing_summary"]["unresolved_objections"],
             [
                 "The participant's authored concern remains unresolved.",
-                "Interlocutor 1 objected to closure.",
+                "Contrary Position objected to closure.",
             ],
         )
 
@@ -1099,7 +1081,7 @@ class BrainstormingClosureTest(unittest.TestCase):
         )
         self._complete_round(subject, "record-objection", roster)
         terminal = subject.run_closure("record-objection", object())
-        generated_objection = "Interlocutor 1 objected to closure."
+        generated_objection = "Contrary Position objected to closure."
         self.assertEqual(terminal.state["status"], "failure")
         self.assertEqual(
             terminal.state["closing_summary"]["unresolved_objections"],
@@ -1112,7 +1094,7 @@ class BrainstormingClosureTest(unittest.TestCase):
         markdown = self._read_transcript(terminal)
         self.assertIn(authored_objection, markdown)
         self.assertIn(generated_objection, markdown)
-        self.assertIn("**Interlocutor 1:** `object`", markdown)
+        self.assertIn("**Contrary Position:** `object`", markdown)
         self.assertNotIn(
             "No unresolved objections were recorded.", markdown
         )

@@ -261,9 +261,14 @@ concurrent create adopted is never removed). Absent or false keeps the
 historical refusal for a missing parent. Panel pickers open at the bound
 work area's directory when one is chosen and fall back to
 `~/Development/source` (walked up to the nearest existing ancestor on
-other hosts). The default roster is a Codex lead, a Claude interlocutor, and
-Dante as an external narrator. AI seats keep the ordinary family, model and
-effort controls; Dante's turn enters through the durable external contract.
+other hosts). The default roster is a Codex Initial Position, a Claude
+Contrary Position, and Dante on Codex as an external narrator. Dante asks
+anti-drift questions and never votes. AI seats keep the ordinary family, model
+and effort controls; Dante's turn enters through the durable external contract.
+Unanimity requires every position to accept the exact proposal. Majority
+requires a strict majority; ties and round-limit disagreement end as an
+irreducible gap. The coordinator records that result mechanically and never
+chooses a side.
 Participant prompts use the Markdown chat as shared memory, point to the target
 and reference documents, and carry only the applicable amendments instead of
 duplicating the full transcript and caller payload on every turn.

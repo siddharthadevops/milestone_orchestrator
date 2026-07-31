@@ -293,8 +293,9 @@ def validate_create_body(body):
             )
         participants = []
         ids = set()
-        lead_count = 0
-        interlocutor_count = 0
+        initial_count = 0
+        contrary_count = 0
+        common_sense_count = 0
         for index, participant in enumerate(raw_participants):
             context = "participants[%d]" % index
             # A caller may pin what a seat is staffed with — its model
@@ -324,6 +325,14 @@ def validate_create_body(body):
                         "%s.external_provider is invalid" % context
                     )
                 if (
+                    participant["external_provider"] == "narrator"
+                    and participant.get("role") != "common_sense"
+                ):
+                    raise brainstorming.ContractError(
+                        "%s narrator delivery requires the common_sense "
+                        "role" % context
+                    )
+                if (
                     participant["external_provider"] == "manual"
                     and any(
                         field in participant
@@ -349,15 +358,16 @@ def validate_create_body(body):
                     "%s.role is invalid" % context
                 )
             ids.add(participant_id)
-            lead_count += participant["role"] == "lead"
-            interlocutor_count += participant["role"] == "interlocutor"
+            initial_count += participant["role"] == "initial_position"
+            contrary_count += participant["role"] == "contrary_position"
+            common_sense_count += participant["role"] == "common_sense"
             checked_participant = {
                 "id": participant_id,
                 "role": participant["role"],
                 "delivery": delivery,
             }
             if delivery == "external":
-                if participant["role"] == "lead":
+                if participant["role"] == "initial_position":
                     raise brainstorming.ContractError(
                         "an external participant cannot own the target"
                     )
@@ -370,9 +380,15 @@ def validate_create_body(body):
                         participant[field], "%s.%s" % (context, field)
                     )
             participants.append(checked_participant)
-        if lead_count != 1 or interlocutor_count < 1:
+        if (
+            initial_count != 1
+            or contrary_count < 1
+            or common_sense_count > 1
+        ):
             raise brainstorming.ContractError(
-                "participants require exactly one lead and an interlocutor"
+                "participants require exactly one initial position, at "
+                "least one contrary position, and at most one common-sense "
+                "participant"
             )
         policy = body["closure_policy"]
         if policy not in brainstorming.CLOSURE_POLICIES:

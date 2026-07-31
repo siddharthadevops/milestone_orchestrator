@@ -1570,7 +1570,7 @@ def build_rethink_continuation(
         + "The independent Brainstorming session requested by your previous\n"
         "turn has completed successfully. Continue the SAME original worker\n"
         "task in this provider conversation. The handoff supplies the retained\n"
-        "lead-accepted Brainstorming revision and its exact content. Use the\n"
+        "accepted Brainstorming revision and its exact content. Use the\n"
         "retained_target content below as the decision material; do not\n"
         "substitute bytes\n"
         "currently present at target_ref.\n"

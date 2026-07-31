@@ -20,14 +20,14 @@ def participants(same_family=False, three=False):
     roster = [
         {
             "id": "lead-machine",
-            "role": "lead",
+            "role": "initial_position",
             "delivery": "llm",
             "executor_ref": "codex-machine",
             "model_family": "codex",
         },
         {
             "id": "critic-machine",
-            "role": "interlocutor",
+            "role": "contrary_position",
             "delivery": "llm",
             "executor_ref": "claude-machine",
             "model_family": "claude",
@@ -41,7 +41,7 @@ def participants(same_family=False, three=False):
         roster.append(
             {
                 "id": "reader-machine",
-                "role": "interlocutor",
+                "role": "contrary_position",
                 "delivery": "llm",
                 "executor_ref": "gemini-machine",
                 "model_family": "gemini",
@@ -229,7 +229,7 @@ class BrainstormingTranscriptTest(unittest.TestCase):
         )
         second = self._create(
             "opening-b",
-            policy="majority_with_lead_tiebreak",
+            policy="majority",
             request_text="Choose the smaller option.",
         )
         one = self._read(first)
@@ -250,14 +250,15 @@ class BrainstormingTranscriptTest(unittest.TestCase):
             "Which compatible option",
             "Resolve one bounded design request",
             "docs/decision.md",
-            "Lead",
-            "Interlocutor 1",
-            "Interlocutor 2",
-            "Everyone must agree",
+            "Initial Position",
+            "Contrary Position",
+            "Contrary Position 2",
+            "Every position must agree",
             "at most 2 rounds",
         ):
             self.assertIn(expected, one)
-        self.assertIn("lead's vote breaks the tie", two)
+        self.assertIn("strict majority", two)
+        self.assertIn("a tie is a gap", two)
         for forbidden in (
             "opaque-sentinel",
             "lead-machine",
@@ -298,9 +299,9 @@ class BrainstormingTranscriptTest(unittest.TestCase):
             self._headings(after),
             [
                 "Opening",
-                "Discussion turn — Round 1 — Lead",
-                "Discussion turn — Round 1 — Interlocutor 1",
-                "Discussion turn — Round 1 — Interlocutor 2",
+                "Discussion turn — Round 1 — Initial Position",
+                "Discussion turn — Round 1 — Contrary Position",
+                "Discussion turn — Round 1 — Contrary Position 2",
             ],
         )
         for markdown in ("Lead proposal.", "First critique.", "Second critique."):
@@ -314,7 +315,8 @@ class BrainstormingTranscriptTest(unittest.TestCase):
             "same-family", fallback, "lead-machine", "Same-family lead."
         )
         self.assertIn(
-            "Discussion turn — Round 1 — Lead", self._read(fallback)
+            "Discussion turn — Round 1 — Initial Position",
+            self._read(fallback),
         )
 
     def test_renderer_changes_do_not_rewrite_accepted_entries(self):
@@ -441,8 +443,8 @@ class BrainstormingTranscriptTest(unittest.TestCase):
             self._headings(markdown),
             [
                 "Opening",
-                "Discussion turn — Round 1 — Lead",
-                "Discussion turn — Round 1 — Interlocutor 1",
+                "Discussion turn — Round 1 — Initial Position",
+                "Discussion turn — Round 1 — Contrary Position",
                 "Material interruption",
                 "Closure ballot — After round 1",
                 "Closing",
@@ -558,8 +560,8 @@ class BrainstormingTranscriptTest(unittest.TestCase):
             markdown.index("Revised proposal."),
         )
         self.assertIn("This ballot approved closure.", markdown)
-        self.assertEqual(markdown.count("**Lead:** `accept`"), 2)
-        self.assertEqual(markdown.count("**Interlocutor 1:**"), 2)
+        self.assertEqual(markdown.count("**Initial Position:** `accept`"), 2)
+        self.assertEqual(markdown.count("**Contrary Position:**"), 2)
         self.assertNotIn("lead-machine", markdown)
         self.assertNotIn(first_revision, markdown)
         self.assertNotIn(second_revision, markdown)

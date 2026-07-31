@@ -32,7 +32,7 @@ class ClosureNotEligible(CoordinationRejected):
 
 
 class InvalidTargetMutation(CoordinationRejected):
-    """A non-lead or incomplete turn changed the target."""
+    """A non-owner or incomplete turn changed the target."""
 
 
 class TargetMutationCorrected(CoordinationRejected):
@@ -593,18 +593,15 @@ DANTE_SCENE_INTRO = """\
 This scene belongs to a contemporary novel built from a real case so that the
 conversation remains consistent and believable.
 
-Dante is a human project lead taking part in a live brainstorming conversation
-with two AI agents. He is not delivering rulings from above the discussion. He
-talks to them as a person would: he explains what he thinks, listens closely,
-weighs their arguments, and changes his mind when they give him a good reason.
-He understands the project deeply, but uses ordinary, clear language. He knows
-that real work requires proportion, trade-offs, and accepting ordinary risk,
-and that unnecessary complexity also wastes time and creates defects.
+Dante is a human project lead listening to two AI agents discuss a real issue.
+He has no position to defend and proposes no solution. His job is to notice
+drift and ask the few simple, awkward questions that the agents are skipping:
+what the project actually intends, who is really affected, what observable
+damage exists, whether ordinary permitted operation already includes the
+claimed state, and whether the proposed machinery is proportionate.
 
-In summary, Dante is a human who constantly sees AI agents introduce drift when
-making decisions about the project and brings common sense back to the
-conversation. He presents his arguments, listens to theirs, and changes his
-mind when warranted.
+He understands the project deeply but speaks plainly. He asks only questions
+that could change the decision, never a checklist, speech, ruling, or analysis.
 """
 
 
@@ -617,9 +614,8 @@ discussion gives him a solid reason, Dante may question, revise, or reject it.
 
 
 DANTE_MANDATORY_LINE = (
-    "MANDATORY: THIS IS A NOVEL SCENE. DANTE'S TURN MUST SOUND LIKE A REAL "
-    "HUMAN SPEAKING NATURALLY IN A LIVE CONVERSATION, NOT LIKE AN AI "
-    "PRODUCING AN ANALYSIS."
+    "MANDATORY: DANTE MUST SOUND LIKE A REAL HUMAN ASKING NATURAL, DIRECT "
+    "QUESTIONS. HE MUST NOT TAKE A POSITION OR PROPOSE A SOLUTION."
 )
 
 
@@ -722,16 +718,33 @@ def build_turn_prompt(
     else:
         revision_label = accepted_revision
         authority_label = "accepted revision"
-    if checked_participant["role"] == "lead":
+    if checked_participant["role"] == "initial_position":
         ownership = (
-            "You are the lead. You may edit only the target document during "
-            "this turn. A target change is accepted only with one valid "
-            "completed lead turn."
+            "You are the Initial Position. Present the best current answer to "
+            "the request; the request is not evidence that any suggested "
+            "direction is right. You may edit only the target document during "
+            "this turn. Treat your earlier position as revisable: answer "
+            "Dante's questions and the contrary criticism, and change course "
+            "when they expose a real defect."
+        )
+    elif checked_participant["role"] == "contrary_position":
+        ownership = (
+            "You are the Contrary Position. Do not edit the target document. "
+            "Try to disprove the current position. Make every material premise, "
+            "causal link, claimed consequence, necessity, and remedy earn its "
+            "place with concrete evidence. Do not concede merely because a "
+            "claim sounds plausible, but do not invent disagreement after the "
+            "issue is resolved. Attack the weakest inferential link: existence "
+            "or possibility alone does not prove action, harm, or a guarantee "
+            "violation, and operator-configured behavior is ordinary operation "
+            "unless governing material says otherwise. Consider Dante's "
+            "questions."
         )
     else:
         ownership = (
-            "You are an interlocutor. Do not edit the target document. "
-            "Analyze, challenge, and refine the result in your response."
+            "You are the common-sense participant. Do not edit the target "
+            "document, take a position, or propose a solution. Ask only the "
+            "few anti-drift questions the two positions still need to answer."
         )
 
     return """\
@@ -749,12 +762,13 @@ Turn:
 
 {execution_context}
 The target on disk matches that Brainstorming authority. The recovery baseline
-is not accepted work; only a completed lead turn creates the first accepted
-revision. {ownership}
+is not accepted work; only a completed Initial Position turn creates the first
+accepted revision. {ownership}
 
 Return exactly one JSON object with kind "discussion_turn" and one non-empty
 Markdown field. Do not add target content, votes, results, or control metadata
-to that envelope.
+to that envelope. Keep the intervention concise, preferably under 3,000
+characters, but never omit material meaning merely to fit.
 """.format(
         intro=_common_prompt_intro(
             checked, "continue naturally with your next turn"
@@ -774,7 +788,7 @@ to that envelope.
 
 
 def validate_closure_proposal_envelope(envelope):
-    """Validate the lead's control-only decision and possible closing account."""
+    """Validate the Initial Position's exact proposed agreement."""
     brainstorming._exact_keys(
         envelope,
         ("kind", "propose", "closing_summary"),
@@ -804,7 +818,7 @@ def validate_closure_proposal_envelope(envelope):
 
 
 def validate_closure_vote_envelope(envelope):
-    """Validate one interlocutor's vote without admitting extra rationale."""
+    """Validate one Contrary Position vote without extra rationale."""
     brainstorming._exact_keys(
         envelope, ("kind", "vote"), (), "closure_vote"
     )
@@ -849,12 +863,13 @@ does not create a target revision or consume a discussion turn.
 def build_closure_proposal_prompt(
     state, target_revision, execution_context=None
 ):
-    """Ask the persisted lead whether to propose closure at this boundary."""
+    """Ask the Initial Position whether to propose one exact agreement."""
     return _closure_common_prompt(
         state, target_revision, execution_context
     ) + """\
 
-You are the lead. Decide whether to propose closure against this exact revision.
+You are the Initial Position. Decide whether to propose closure against this
+exact revision.
 Your proposal is your `accept` vote. Supply the complete plain-language closing
 account that will be used only if this attempt terminalizes. Its reason must
 stand alone as the final agreement: cover the whole accepted outcome, every
@@ -881,7 +896,7 @@ def build_closure_vote_prompt(
     closing_summary,
     execution_context=None,
 ):
-    """Ask one persisted interlocutor to vote against the lead's proposal."""
+    """Ask one Contrary Position to vote on the exact proposal."""
     checked_participant = brainstorming._validate_participant(
         participant, "participant"
     )
@@ -894,10 +909,11 @@ def build_closure_vote_prompt(
         state, target_revision, execution_context
     ) + """\
 
-The lead has proposed this final agreement against the exact target revision:
+The Initial Position has proposed this final agreement against the exact target
+revision:
 {closing_summary}
 
-You are interlocutor {participant_id}. Accept only if both the target and this
+You are Contrary Position {participant_id}. Accept only if both the target and this
 complete final agreement accurately represent the discussion, including what
 changed, what deliberately stayed unchanged, and what remains open. Return
 exactly one JSON object with kind "closure_vote" and vote equal to "accept" or
@@ -934,12 +950,15 @@ def build_external_narrator_prompt(state, intervention):
 
 {sources}
 
-{amendments}Read the Brainstorming chat from beginning to end and continue naturally with
-Dante's next spoken turn. Do not edit files.
+{amendments}Read the Brainstorming chat from beginning to end. Ask Dante's next
+few direct anti-drift questions. Do not edit files, take a position, propose a
+solution, summarize the discussion, or answer your own questions. If no
+material question remains, say only `No further questions.`
 
 Return exactly one JSON object with kind "discussion_turn" and a non-empty
 "markdown" field with Dante's single spoken intervention, in natural English.
-Add no other fields.
+Add no other fields. Keep it concise, preferably under 3,000 characters, but
+never omit a material question merely to fit.
 
 {mandatory}""".format(
             scene=DANTE_SCENE_INTRO.rstrip(),
@@ -949,30 +968,7 @@ Add no other fields.
             ),
             mandatory=DANTE_MANDATORY_LINE,
         )
-    closure_context = json.dumps(
-        pending["closure_context"],
-        ensure_ascii=False,
-        sort_keys=True,
-        indent=2,
-    )
-    return """\
-You are handling Dante's closure vote in a live, bounded brainstorming
-conversation. Read the Brainstorming chat from beginning to end and inspect the
-target and referenced documents as needed.
-
-{sources}
-
-{amendments}This is the closing proposal and the votes cast before Dante's turn:
-{closure_context}
-
-Decide whether Dante accepts that exact proposal. Return exactly one
-JSON object with kind "closure_vote" and vote equal to "accept" or "object".
-Add no rationale or other fields and do not edit files.
-""".format(
-        sources=_prompt_sources(checked),
-        amendments=_amendments_block(checked, DANTE_AMENDMENT_INTRO),
-        closure_context=closure_context,
-    )
+    raise brainstorming.ContractError("Dante does not vote on closure")
 
 
 class BrainstormingCoordinator:
@@ -1924,13 +1920,13 @@ class BrainstormingCoordinator:
 
             observed_target = _capture_pinned_target(target)
             changed = observed_target != accepted_target
-            if participant["role"] != "lead" and changed:
+            if participant["role"] != "initial_position" and changed:
                 raise InvalidTargetMutation(
-                    "an interlocutor changed target_path"
+                    "a non-owning participant changed target_path"
                 )
             target_record = (
                 observed_target
-                if participant["role"] == "lead"
+                if participant["role"] == "initial_position"
                 else (
                     None
                     if state["accepted_target_revision"] is None
@@ -2043,14 +2039,14 @@ class BrainstormingCoordinator:
 
         if state["accepted_target_revision"] is None:
             raise ClosureNotEligible(
-                "closure requires completed lead target acceptance"
+                "closure requires completed Initial Position target acceptance"
             )
         accepted_target = self._authority_record(session_id, starting)
         self._require_closure_target(target, accepted_target)
         lead = next(
             participant
             for participant in participants
-            if participant["role"] == "lead"
+            if participant["role"] == "initial_position"
         )
         pending = self.store.read_turn_attempt(session_id)
         external_pending = self.store.read_external_intervention(session_id)
@@ -2172,9 +2168,12 @@ class BrainstormingCoordinator:
                 self._closure_fingerprint(state),
             ):
                 raise brainstorming.RevisionConflict(current)
-            result = self._closure_result(
-                current.state, "failure", summary["reason"]
+            reason = (
+                "Irreducible gap: the positions did not agree before the "
+                "configured round limit."
             )
+            summary = dict(summary, reason=reason)
+            result = self._closure_result(current.state, "failure", reason)
             return self.store.transition(
                 session_id,
                 current.revision,
@@ -2196,7 +2195,7 @@ class BrainstormingCoordinator:
         )
         reached_pending = pending_participant is None
         for participant in participants:
-            if participant["role"] != "interlocutor":
+            if participant["role"] != "contrary_position":
                 continue
             if not reached_pending:
                 if participant["id"] != pending_participant:
@@ -2230,15 +2229,16 @@ class BrainstormingCoordinator:
             votes_by_id[participant["id"]] = vote["vote"]
         if not reached_pending:
             raise CoordinationRejected(
-                "the pending closure voter is not an interlocutor"
+                "the pending closure voter is not a Contrary Position"
             )
 
+        voters = brainstorming.closure_voters(state["run_config"])
         votes = [
             {
                 "participant_id": participant["id"],
                 "vote": votes_by_id[participant["id"]],
             }
-            for participant in participants
+            for participant in voters
         ]
         ballot = {
             "after_completed_rounds": state["rounds_used"],
@@ -2270,6 +2270,13 @@ class BrainstormingCoordinator:
             return self.store.reconcile_transcript(session_id)
 
         outcome = "success" if ballot["approved"] else "failure"
+        if not ballot["approved"]:
+            reason = (
+                "Irreducible gap: the positions did not agree before the "
+                "configured round limit."
+            )
+            summary = dict(summary, reason=reason)
+            ballot["closing_summary"] = summary
         result = self._closure_result(
             current.state,
             outcome,

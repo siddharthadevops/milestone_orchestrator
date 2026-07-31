@@ -521,8 +521,8 @@
       same deterministic seal. No seed is pre-selected on purpose — the
       choice is explicit.</p>
     <p><b>Acts</b> — implementation defaults to codex gpt-5.6-sol/max;
-      other empty rows use their family default (claude: opus-5/high, codex:
-      gpt-5.6-sol/xhigh). Model options adapt to the agent; editable mid-run
+      other empty rows use their family default (claude: opus-5/max, codex:
+      gpt-5.6-sol/max). Model options adapt to the agent; editable mid-run
       from the run view. The Skeleton row drives all skeleton content work —
       its draft, re-drafts and fixes (default: claude opus-5/max); only
       skeleton reviews stay on the review rows. The two review rows tune each
@@ -655,19 +655,19 @@
       the standing context every turn receives.</p>
     <p><b>Target document</b> — path relative to the work directory (an
       absolute path inside it also works). The file itself may not exist
-      yet; the lead writes it. <b>Browse…</b> picks an existing document;
+      yet; the Initial Position writes it. <b>Browse…</b> picks an existing document;
       <b>New…</b> picks an existing directory and proposes a fresh session
       folder inside it (<span class="mono">bs-&lt;stamp&gt;/DECISION.md</span>,
       editable) — the missing folders are created at launch, so no
       directory ever has to be made by hand. Without New…, the target's
       parent folder must already exist.</p>
-    <p><b>Participants</b> — the technical lead and interlocutors use the
-      ordinary AI configuration. Dante is an external seat served today by a
-      cinematic narrator; the same durable turn can later wait for a Persona
-      or a real person without changing the discussion flow.</p>
-    <p><b>Closure</b> — <b>unanimity</b> needs every participant to accept
-      the lead's closing proposal; <b>majority with lead tiebreak</b>
-      closes on a majority and lets the lead break a tie.</p>
+    <p><b>Participants</b> — the Initial Position proposes, the Contrary
+      Position tries to disprove it, and Dante asks common-sense anti-drift
+      questions. Dante does not vote.</p>
+    <p><b>Closure</b> — <b>unanimity</b> needs every position to accept the
+      exact final proposal; <b>majority</b> needs a strict majority. A tie, or
+      no agreement at the round limit, closes as an irreducible gap. The
+      coordinator records the result and never chooses a side.</p>
     <p><b>Rounds</b> — the hard ceiling on discussion rounds; the session
       fails rather than exceed it.</p>
   </div>
@@ -694,17 +694,17 @@
   <div class="field"><label>Participants *</label>
     <div id="b_roster"></div>
     <div class="rosterops">
-      <button class="btn sm" type="button" onclick="addBsSeat()">+ Add interlocutor</button>
+      <button class="btn sm" type="button" onclick="addBsSeat()">+ Add contrary position</button>
     </div>
-    <div class="hint">opens pre-staffed: lead gpt-5.6-sol/max,
-      interlocutor claude-opus-5/max, and Dante on claude-opus-5/max — edit any seat; anything
+    <div class="hint">opens pre-staffed: Initial Position gpt-5.6-sol/max,
+      Contrary Position claude-opus-5/max, and Dante on gpt-5.6-sol/max — edit any seat; anything
       set back to default is resolved by the service (family by rotation
       over this host's available agents, model/effort from the family's
       defaults)</div></div>
   <div class="field"><label>Closure policy *</label>
     <select id="b_policy">
       <option value="unanimity">unanimity</option>
-      <option value="majority_with_lead_tiebreak">majority with lead tiebreak</option>
+      <option value="majority">majority</option>
     </select></div>
   <div class="field"><label>Maximum rounds *</label>
     <input id="b_rounds" type="number" min="1" step="1" value="5"></div>
@@ -3304,7 +3304,7 @@ function onAgentChange(prefix, act, userChanged) {
   if (eff) {
     const cur = eff.value;
     const opts = agentEfforts(agent);
-    eff.innerHTML = `<option value="">default</option>` +
+    eff.innerHTML = `<option value="">default (max)</option>` +
       opts.map(o => `<option ${o === cur ? "selected" : ""}>${o}</option>`).join("");
     if (cur && !opts.includes(cur)) eff.value = "";
   }
@@ -3498,14 +3498,14 @@ let bsRefs = [];
 function defaultBsRoster() {
   // The standing roster the dialog opens with — visible, armed, and
   // editable in place (an operator decision, not a hidden resolution):
-  // Codex leads, Claude challenges, and Dante speaks through the narrator.
+  // Codex proposes, Claude challenges, and Dante asks anti-drift questions.
   return [
-    {role: "lead", delivery: "llm", agent: "codex",
+    {role: "initial_position", delivery: "llm", agent: "codex",
      model: "gpt-5.6-sol", effort: "max"},
-    {role: "interlocutor", delivery: "llm", agent: "claude",
+    {role: "contrary_position", delivery: "llm", agent: "claude",
      model: "claude-opus-5", effort: "max"},
-    {role: "interlocutor", delivery: "external", externalProvider: "narrator",
-     agent: "claude", model: "claude-opus-5", effort: "max"},
+    {role: "common_sense", delivery: "external", externalProvider: "narrator",
+     agent: "codex", model: "gpt-5.6-sol", effort: "max"},
   ];
 }
 function snapshotBsRoster() {
@@ -3520,14 +3520,14 @@ function snapshotBsRoster() {
 }
 function bsSeatLabel(seat, index) {
   if (seat.delivery === "external") return "Dante · external narrator";
-  if (seat.role === "lead") return "Lead";
+  if (seat.role === "initial_position") return "Initial Position";
   const nth = bsRoster.slice(0, index)
-    .filter(s => s.role === "interlocutor" && s.delivery === "llm").length + 1;
-  return `Interlocutor ${nth}`;
+    .filter(s => s.role === "contrary_position" && s.delivery === "llm").length + 1;
+  return nth === 1 ? "Contrary Position" : `Contrary Position ${nth}`;
 }
 function renderBsRoster() {
   const interlocutors = bsRoster.filter(
-    s => s.role === "interlocutor" && s.delivery === "llm").length;
+    s => s.role === "contrary_position" && s.delivery === "llm").length;
   document.getElementById("b_roster").innerHTML =
     `<div class="rosterrow"><span></span><span class="acthead">agent</span>
        <span class="acthead">model</span><span class="acthead">effort</span><span></span></div>` +
@@ -3545,7 +3545,7 @@ function renderBsRoster() {
       <datalist id="dl_b_p${i}"></datalist>
       <button class="roster-x" type="button" title="Remove participant"
         onclick="removeBsSeat(${i})"
-        ${seat.role === "lead" || seat.delivery === "external" || interlocutors <= 1 ? "disabled" : ""}>×</button>
+        ${seat.role === "initial_position" || seat.delivery === "external" || interlocutors <= 1 ? "disabled" : ""}>×</button>
     </div>`).join("");
   // Populate each seat's datalist and effort options for its family —
   // the exact machinery the milestone acts grid uses (prefix "b_p",
@@ -3564,12 +3564,12 @@ function onBsAgentChange(i) {
 }
 function addBsSeat() {
   snapshotBsRoster();
-  bsRoster.push({role: "interlocutor", delivery: "llm", agent: "", model: "", effort: ""});
+  bsRoster.push({role: "contrary_position", delivery: "llm", agent: "", model: "", effort: ""});
   renderBsRoster();
 }
 function removeBsSeat(i) {
   snapshotBsRoster();
-  if (bsRoster[i].role === "lead" || bsRoster[i].delivery === "external") return;
+  if (bsRoster[i].role === "initial_position" || bsRoster[i].delivery === "external") return;
   bsRoster.splice(i, 1);
   renderBsRoster();
 }
@@ -3748,7 +3748,7 @@ async function submitBrainstorming() {
   let critics = 0;
   const participants = bsRoster.map(seat => {
     const entry = {
-      id: seat.role === "lead" ? "lead"
+      id: seat.role === "initial_position" ? "initial-position"
         : seat.delivery === "external" ? "dante" : `critic-${++critics}`,
       role: seat.role,
       delivery: seat.delivery,

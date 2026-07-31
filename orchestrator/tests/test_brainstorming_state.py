@@ -30,14 +30,14 @@ def cross_family_participants():
     return [
         {
             "id": "editor",
-            "role": "lead",
+            "role": "initial_position",
             "delivery": "llm",
             "executor_ref": "codex-primary",
             "model_family": "codex",
         },
         {
             "id": "critic",
-            "role": "interlocutor",
+            "role": "contrary_position",
             "delivery": "llm",
             "executor_ref": "claude-reviewer",
             "model_family": "claude",
@@ -55,9 +55,10 @@ def same_family_participants():
 def external_participants():
     return [
         copy.deepcopy(cross_family_participants()[0]),
+        copy.deepcopy(cross_family_participants()[1]),
         {
             "id": "dante",
-            "role": "interlocutor",
+            "role": "common_sense",
             "delivery": "external",
             "external_ref": "external-dante",
         },
@@ -134,7 +135,9 @@ class BrainstormingStateTestCase(unittest.TestCase):
             )
         votes = [
             {"participant_id": participant["id"], "vote": "accept"}
-            for participant in snapshot.state["run_config"]["participants"]
+            for participant in bs.closure_voters(
+                snapshot.state["run_config"]
+            )
         ]
         ballot = {
             "after_completed_rounds": 1,
@@ -173,12 +176,19 @@ class BrainstormingStateTestCase(unittest.TestCase):
             "The technical lead presents the case.",
             target,
         )
+        ready = self.store.record_completed_turn(
+            session_id,
+            ready.revision,
+            "critic",
+            "The contrary position challenges the case.",
+            target,
+        )
         req = ready.state["request"]
         intervention = {
             "token": "external-token-1",
             "participant_id": "dante",
             "action_kind": "discussion_turn",
-            "completed_turn_count": 1,
+            "completed_turn_count": 2,
             "round": 1,
             "target_revision": ready.state["accepted_target_revision"],
             "input": {
@@ -353,7 +363,7 @@ class BrainstormingStateTestCase(unittest.TestCase):
         payload = {
             "status": "success",
             "closure_policy": "not-a-real-policy",
-            "participants": [{"role": "lead"}],
+            "participants": [{"role": "initial_position"}],
             "finding": {"id": "F7", "evidence": [1, False, None]},
         }
         left = self.store.create(
@@ -414,7 +424,7 @@ class BrainstormingStateTestCase(unittest.TestCase):
         )
 
         fallback = run_config(
-            same_family_participants(), "majority_with_lead_tiebreak"
+            same_family_participants(), "majority"
         )
         self.assertTrue(fallback["same_family_fallback"])
         created = self.store.create(
@@ -425,7 +435,7 @@ class BrainstormingStateTestCase(unittest.TestCase):
         eligible = same_family_participants()
         eligible.append({
             "id": "critic",
-            "role": "interlocutor",
+            "role": "contrary_position",
             "delivery": "llm",
             "executor_ref": "claude-reviewer",
             "model_family": "claude",
@@ -542,7 +552,7 @@ class BrainstormingStateTestCase(unittest.TestCase):
         mutations.append(candidate)
         candidate = copy.deepcopy(created.state)
         candidate["run_config"]["closure_policy"] = (
-            "majority_with_lead_tiebreak"
+            "majority"
         )
         mutations.append(candidate)
         candidate = copy.deepcopy(created.state)
