@@ -496,14 +496,6 @@ class DriverImplementationSizeTest(unittest.TestCase):
 
         driver = drv.Driver(path, runner=runner)
         implementation = st.current_unit(driver.state)
-        if git_enabled:
-            implementation["baseline_verification"] = {
-                "commands": driver._verification_commands(implementation),
-                "candidate_fingerprint": (
-                    driver._verification_candidate_fingerprint()
-                ),
-            }
-            driver._save()
         return path, driver, implementation
 
     @staticmethod
@@ -1204,8 +1196,6 @@ class DriverImplementationSizeTest(unittest.TestCase):
             result.origin_pre_snapshot = {}
 
             with mock.patch.object(
-                driver, "_baseline_verification_current", return_value=True
-            ), mock.patch.object(
                 driver,
                 "_take_brainstorming_resume",
                 return_value=(output, result, "raw/resumed.txt"),
@@ -2201,8 +2191,6 @@ class DriverImplementationSizeTest(unittest.TestCase):
             with mock.patch.object(
                 prompts, "build_implement", wraps=prompts.build_implement
             ) as builder, mock.patch.object(
-                driver, "_baseline_verification_current", return_value=True
-            ), mock.patch.object(
                 driver, "_call_implementation", side_effect=_PromptReached
             ):
                 with self.assertRaises(_PromptReached):

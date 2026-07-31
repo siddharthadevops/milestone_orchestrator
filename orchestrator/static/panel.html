@@ -2160,7 +2160,13 @@ function sealChip(s, unitKey) {
     // Wave provenance: the anchor's documentation wave requalified this unit.
     return `<span class="chip pass${click}" title="re-documentation wave ${esc(s.wave)}">Seal &#10003; wave${dur}</span>`;
   if (s.passed)
-    return `<span class="chip pass${click}" title="same-byte reviews and verification satisfied">Seal &#10003;${dur}</span>`;
+    return `<span class="chip pass${click}" title="${
+      s.verification_recorded === false
+        ? "legacy seal; full verification passed under the prior flow"
+        : s.verification_event_seq != null
+        ? "same-byte reviews and scheduled verification satisfied"
+        : "same-byte reviews satisfied; full verification was not due"
+      }">Seal &#10003;${dur}</span>`;
   if (s.invalidated)
     return `<span class="chip fail${click}" title="${esc(s.invalidated)}">historical seal invalid${dur}</span>`;
   const findings = Object.values(s.findings || {})
@@ -2176,11 +2182,25 @@ function reclassifyChip(ev, unitKey) {
   const risk = ev.drift_risk || "unrated";
   const two = ev.drift_damage != null;
   const scale = two ? `dmg ${ev.drift_damage}` : risk;
-  const label = ev.defer_ok
+  const label = ev.requeued ? "debt reopened"
+    : ev.defer_ok
     ? `DEBT · ${two ? ev.drift_damage : risk}`
     : `kept · ${scale}`;
-  const title = `${ev.finding_id || ""}${two ? ` · risk ${risk}` : ""}${ev.threshold ? ` (threshold ${ev.threshold})` : ""}`;
-  return `<span class="chip ${ev.defer_ok ? "clean" : "sev23"} clicky" title="${esc(title)}" onclick="showStory('debt:${esc(unitKey)}')">${esc(label)}${fmtDur(ev.duration_s)}</span>`;
+  const title = `${ev.finding_id || ""}${two ? ` · risk ${risk}` : ""}${ev.threshold ? ` (threshold ${ev.threshold})` : ""}${ev.requeued ? " · later returned to fixing" : ""}`;
+  return `<span class="chip ${ev.defer_ok && !ev.requeued ? "clean" : "sev23"} clicky" title="${esc(title)}" onclick="showStory('debt:${esc(unitKey)}')">${esc(label)}${fmtDur(ev.duration_s)}</span>`;
+}
+function verificationChip(ev) {
+  const stableUnknown = ev.ok && ev.stable == null;
+  const passed = ev.ok && ev.stable === true;
+  const cls = passed ? "pass" : stableUnknown ? "work" : "fail";
+  const status = ev.reused ? "reused fixer proof"
+    : ev.fixer_certified ? "fixer certified"
+    : ev.vacuous ? "no suite configured"
+    : passed ? "passed"
+    : stableUnknown ? "passed · legacy stability unrecorded"
+    : ev.ok ? "changed bytes" : "failed";
+  return `<span class="chip ${cls} clicky"
+    onclick="showStory('verify:${esc(String(ev.seq))}')">suite · ${esc(status)}${fmtDur(ev.duration_s)}</span>`;
 }
 function repairSourceLabel(unitKey) {
   const match = String(unitKey || "").match(/^slice_(?:doc|impl)-(\d+)(?:-([a-z]+))?$/);
@@ -2225,9 +2245,21 @@ function unitHistory(u, activity, running) {
   const withinRepair = at => repairs.some(repair =>
     at && at >= (repair.at || "") &&
     (!repair.completed_at || at <= repair.completed_at));
+  const reclassByRound = new Map();
+  for (const item of (u.reclassify || []).filter(
+    item => item.source_round && !withinRepair(item.at || ""))) {
+    const linked = reclassByRound.get(item.source_round) || [];
+    linked.push(item);
+    reclassByRound.set(item.source_round, linked);
+  }
   const base = [].concat(
     (u.rounds || []).filter(r => !repairRoundIds.has(r.id))
       .map(r => ({at: r.at || "", type: "round", item: r})),
+    (u.verifications || [])
+      .map(v => ({at: v.at || "", type: "verify", item: v})),
+    (u.reclassify || []).filter(item =>
+      !item.source_round && !withinRepair(item.at || ""))
+      .map(item => ({at: item.at || "", type: "reclass", item})),
     (u.seals || []).filter(s => !repairSealAttempts.has(s.attempt))
       .map(s => ({at: s.at || "", type: "seal", item: s})),
     // A brainstorming detour is placed by the moment the unit stopped to
@@ -2237,30 +2269,7 @@ function unitHistory(u, activity, running) {
       .map(b => ({at: b.at || "", type: "brainstorm", item: b})),
     repairs.map(repair => ({at: repair.at || "", type: "repair", item: repair}))
   ).sort((a, b) => a.at < b.at ? -1 : a.at > b.at ? 1 : 0);
-  // Reclassification is recorded immediately before its origin review.
-  // Prefer the same-family review at the same timestamp so adjacent gate
-  // bookkeeping cannot steal the review's debt chips.
-  const anchored = new Map(base.map(event => [event, []]));
-  const loose = [];
-  for (const item of (u.reclassify || [])) {
-    if (withinRepair(item.at || "")) continue;
-    const family = String(item.finding_id || "").split("-", 1)[0];
-    const sameFamilyReview = base.find(event =>
-      event.at === (item.at || "") && event.type === "round" &&
-      event.item.kind === "review_round" && event.item.family === family);
-    const anchor = sameFamilyReview || base.find(event => event.at >= (item.at || ""));
-    const event = {at: item.at || "", type: "reclass", item};
-    if (anchor) anchored.get(anchor).push(event);
-    else loose.push(event);
-  }
-  const events = [];
-  for (const event of base) {
-    events.push(event);
-    events.push(...anchored.get(event).sort((a, b) =>
-      a.at < b.at ? -1 : a.at > b.at ? 1 : 0));
-  }
-  events.push(...loose.sort((a, b) =>
-    a.at < b.at ? -1 : a.at > b.at ? 1 : 0));
+  const events = base;
   const groups = [];
   const reviewCounts = {};
   let repairCount = 0;
@@ -2272,10 +2281,24 @@ function unitHistory(u, activity, running) {
       current = {type: "review", family, number: reviewCounts[family],
                  chips: [roundChip(event.item)]};
       groups.push(current);
+      const linked = reclassByRound.get(event.item.id) || [];
+      if (linked.length) {
+        current = {type: "reclassify",
+                   chips: linked.map(item => reclassifyChip(item, u.unit))};
+        groups.push(current);
+      }
     } else if (event.type === "seal") {
       current = {type: "seal", number: event.item.attempt,
                  deterministic: Object.keys(event.item.findings || {}).length === 0,
                  chips: [sealChip(event.item, u.unit)]};
+      groups.push(current);
+    } else if (event.type === "verify") {
+      current = {type: "verify", cadence: event.item.cadence,
+                 chips: [verificationChip(event.item)]};
+      groups.push(current);
+    } else if (event.type === "reclass") {
+      current = {type: "reclassify",
+                 chips: [reclassifyChip(event.item, u.unit)]};
       groups.push(current);
     } else if (event.type === "repair") {
       // The episode is compact but not opaque: its own fix/delta/review
@@ -2291,6 +2314,8 @@ function unitHistory(u, activity, running) {
       const work = [].concat(
         (u.rounds || []).filter(r => roundIds.has(r.id))
           .map(r => ({at: r.at || "", chip: roundChip(r)})),
+        (u.verifications || []).filter(item => inEpisode(item.at || ""))
+          .map(item => ({at: item.at || "", chip: verificationChip(item)})),
         (u.seals || []).filter(s => sealAttempts.has(s.attempt))
           .map(s => ({at: s.at || "", chip: sealChip(s, u.unit)})),
         (u.reclassify || []).filter(item => inEpisode(item.at || ""))
@@ -2302,12 +2327,17 @@ function unitHistory(u, activity, running) {
                  chips: [repairChip(repair, u.unit)]
                    .concat(work.map(w => w.chip))};
       groups.push(current);
-    } else {
-      const chip = event.type === "round" ? roundChip(event.item)
-        : event.type === "brainstorm" ? brainstormChip(event.item)
-        : reclassifyChip(event.item, u.unit);
-      if (current) current.chips.push(chip);
-      else lead.push(chip);
+    } else if (event.type === "round") {
+      const chip = roundChip(event.item);
+      if (current && (current.type === "review" || current.type === "work"))
+        current.chips.push(chip);
+      else {
+        current = {type: "work", chips: [chip]};
+        groups.push(current);
+      }
+    } else if (event.type === "brainstorm") {
+      current = {type: "brainstorm", chips: [brainstormChip(event.item)]};
+      groups.push(current);
     }
   }
   if (u.unit === activity.current_unit && running) {
@@ -2325,6 +2355,10 @@ function unitHistory(u, activity, running) {
       const attempt = Math.max(0, ...(u.seals || []).map(s => s.attempt || 0)) + 1;
       groups.push({type: "seal", number: attempt, deterministic: true,
                    chips: [chip]});
+    } else if (liveKind === "verification") {
+      groups.push({type: "verify", cadence: null, chips: [chip]});
+    } else if (liveKind === "reclassify") {
+      groups.push({type: "reclassify", chips: [chip]});
     } else if (current) current.chips.push(chip);
     else lead.push(chip);
   }
@@ -2347,11 +2381,21 @@ function unitHistory(u, activity, running) {
       const family = group.family === "codex" ? "Codex"
         : group.family === "claude" ? "Claude" : group.family;
       addLine(`${family} review`, `Round ${group.number}`, group.chips);
+    } else if (group.type === "verify") {
+      const label = group.cadence === "milestone_final" ? "Milestone final"
+        : group.cadence === "four_slice_checkpoint" ? "4-slice checkpoint"
+        : "Suite";
+      addLine("Verify", label, group.chips);
+    } else if (group.type === "reclassify") {
+      addLine("Reclassify", "Decision", group.chips);
+    } else if (group.type === "work") {
+      addLine("Fix", "Work", group.chips);
+    } else if (group.type === "brainstorm") {
+      addLine("Brainstorming", "Discussion", group.chips);
+    } else if (group.type === "seal") {
+      addLine("Seal", group.deterministic ? "Result" : `Historical attempt ${group.number}`, group.chips);
     } else {
-      if (group.type === "seal")
-        addLine("Seal", group.deterministic ? "Result" : `Historical attempt ${group.number}`, group.chips);
-      else
-        addLine("Re-documentation", `Episode ${group.number}`, group.chips);
+      addLine("Re-documentation", `Episode ${group.number}`, group.chips);
     }
   }
   return `<div class="unit-history">${sections.map(section => {
@@ -2597,7 +2641,7 @@ async function refreshDetail() {
       const totalTime = sum && sum.work_duration_s != null
         ? liveClock(sum.work_duration_s,
           activeRunClockInput(running, s.in_flight), "run-clock",
-          "total LLM work including the active call")
+          "total processing work including the active call")
         : "";
       html += `<div class="run-title-row"><h2>${esc(s.name)}<span class="title-sep">·</span>${msChip(s.milestone_status)}</h2>` +
         `<div class="run-title-actions">` +
@@ -2915,9 +2959,15 @@ async function showStory(item) {
     if (d.wave)
       body += `<div class="story-note">Requalified by the anchor's documentation wave (${esc(d.wave)}): the wave certified the whole documentation set, so this unit did not evaluate its own predicate.</div>`;
     else if (!historical && d.passed)
-      body += `<div class="story-note">Deterministic result: every configured family was clean or debt-clean on the same current bytes, and final verification passed. No seal reviewer was called.</div>`;
+      body += `<div class="story-note">Deterministic result: every configured family was clean or debt-clean on the same current bytes. ${
+        d.verification_recorded === false
+          ? "Full verification passed under the legacy flow."
+          : d.verification_event_seq != null
+          ? "The scheduled full verification passed."
+          : "Full verification was not due at this boundary."
+        } No seal reviewer was called.</div>`;
     if (d.verification_event_seq != null)
-      body += `<div class="story-note">Final verification event: ${esc(d.verification_event_seq)}</div>`;
+      body += `<div class="story-note">Scheduled verification event: ${esc(d.verification_event_seq)}</div>`;
     if (d.invalidated)
       body += `<div class="story-note">INVALIDATED: ${esc(d.invalidated)}</div>`;
     for (const [fam, h] of Object.entries(d.halves || {})) {
@@ -2940,6 +2990,22 @@ async function showStory(item) {
     if (res.slices && res.slices.length)
       body += `<div class="story-note">slices:\n${esc(res.slices.map(x => x.id + ". " + x.title).join("\n"))}</div>`;
     if (res.notes) body += `<div class="story-note">${esc(res.notes)}</div>`;
+  } else if (d.story === "verify") {
+    const boundary = d.cadence === "milestone_final" ? "milestone final"
+      : d.cadence === "four_slice_checkpoint" ? "4-slice checkpoint"
+      : d.boundary || "suite";
+    title = `${d.unit} — verify (${boundary})`;
+    const status = d.reused ? "reused fixer proof"
+      : d.fixer_certified ? "fixer certified"
+      : d.vacuous ? "no suite configured"
+      : d.ok && d.stable ? "passed"
+      : d.ok && d.stable == null ? "passed · legacy stability unrecorded"
+      : d.ok ? "changed candidate bytes" : "failed";
+    body += `<div class="story-note"><b>${esc(status)}</b></div>`;
+    if ((d.commands || []).length)
+      body += `<div class="story-note">commands:\n${esc(d.commands.join("\n"))}</div>`;
+    if (d.output_tail)
+      body += `<pre class="log mono" style="max-height:40vh;overflow:auto">${esc(d.output_tail)}</pre>`;
   } else if (d.story === "repair") {
     title = `${d.unit} — re-documentation`;
     body += `<div class="story-note"><b>Triggered by ${esc(repairSourceLabel(d.reported_by))}</b></div>`;
@@ -3018,6 +3084,10 @@ async function showStory(item) {
     if (kept.length)
       body += `<div class="story-note">kept for the fixer (rating above the run threshold, or no rating):\n` +
         esc(kept.map(e => `${e.finding_id} [${e.reclassifier}] ${e.drift_damage ? (e.drift_damage + " damage (" + (e.drift_risk || "?") + " risk)") : (e.drift_risk || "unrated")}${e.threshold ? " > " + e.threshold : ""} — ${e.reason}`).join("\n")) + `</div>`;
+    const reopened = (d.reclassify || []).filter(e => e.requeued);
+    if (reopened.length)
+      body += `<div class="story-note">debt later reopened for fixing:\n` +
+        esc(reopened.map(e => `${e.finding_id} — ${e.reason || ""}`).join("\n")) + `</div>`;
   } else {
     title = "Story";
     body += `<div class="story-note">${esc(JSON.stringify(d, null, 1))}</div>`;

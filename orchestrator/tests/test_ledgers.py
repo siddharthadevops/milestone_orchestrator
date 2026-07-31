@@ -238,7 +238,7 @@ def make_state():
                         "id": "slice_impl-01-codex-r1",
                         "kind": "fix_findings",
                         "family": "codex",
-                        "source_round_id": "slice_impl-01-verify-pre_review-1",
+                        "source_round_id": "slice_impl-01-verify-pre_seal-1",
                         "raw_path": ".orchestrator/raw/slice_impl-01-fix1.txt",
                         "result": {
                             "findings": [
@@ -329,11 +329,11 @@ class TestRenderMilestone(unittest.TestCase):
             self.text,
         )
 
-    def test_internal_pre_seal_status_is_rendered_as_final_verification(self):
+    def test_internal_pre_seal_status_is_rendered_as_completion_gate(self):
         state = make_state()
         state["units"][0]["status"] = st.U_PRE_SEAL_VERIFY
         text = ledgers.render_milestone(state)
-        self.assertIn("| skeleton | final verification |", text)
+        self.assertIn("| skeleton | completion gate |", text)
         self.assertNotIn("pre_seal_verify", text)
 
     def test_no_failure_section_without_failure(self):
@@ -410,10 +410,18 @@ class TestRenderReviewLog(unittest.TestCase):
     def test_deterministic_seal_cites_same_byte_reviews(self):
         self.assertEqual(self.text.count("### Review completion — SATISFIED"), 3)
         self.assertNotIn("Historical completion attempt", self.text)
+        self.assertEqual(
+            self.text.count(
+                "- deterministic result: every configured family was clean "
+                "or debt-clean on the same current bytes; full verification "
+                "was not due at this boundary; no extra reviewer was called"
+            ),
+            2,
+        )
         self.assertIn(
             "- deterministic result: every configured family was clean or "
-            "debt-clean on the same current bytes, and the final verification "
-            "passed; no extra reviewer was called",
+            "debt-clean on the same current bytes; the scheduled full "
+            "verification passed; no extra reviewer was called",
             self.text,
         )
         self.assertIn(
@@ -426,7 +434,7 @@ class TestRenderReviewLog(unittest.TestCase):
             "`slice_impl-01-claude-r1`",
             self.text,
         )
-        self.assertIn("- final verification event: `99`", self.text)
+        self.assertIn("- scheduled verification event: `99`", self.text)
 
     def test_requeued_implementation_debt_is_not_republished(self):
         state = make_state()
@@ -568,7 +576,7 @@ class TestRenderAdjudications(unittest.TestCase):
         # Only "rejected" dispositions enter the registry: the fixed F1 and
         # the fixed V1 must not appear.
         self.assertNotIn("skeleton-codex-r1/F1", self.text)
-        self.assertNotIn("slice_impl-01-verify-pre_review-1/V1", self.text)
+        self.assertNotIn("slice_impl-01-verify-pre_seal-1/V1", self.text)
         self.assertEqual(self.text.count("## ["), 1)
 
     def test_no_prevention_line_when_absent(self):
@@ -612,7 +620,33 @@ class TestRenderClosure(unittest.TestCase):
         self.assertIn("- review completion records: 1", text)
         self.assertIn(
             "- review state: effectively clean (every family clean or "
-            "debt-clean on the same bytes; final verification passed)",
+            "debt-clean on the same bytes; scheduled full verification "
+            "passed)",
+            text,
+        )
+
+    def test_closure_preserves_legacy_verified_seal(self):
+        state = copy.deepcopy(self.state)
+        state["units"][2]["seals"][0].pop("verification_event_seq")
+
+        text = ledgers.render_closure(state, state["units"][2])
+
+        self.assertIn(
+            "- review state: effectively clean (every family clean or "
+            "debt-clean on the same bytes; legacy full verification passed)",
+            text,
+        )
+
+    def test_closure_says_when_scheduled_verification_was_not_due(self):
+        state = copy.deepcopy(self.state)
+        state["units"][2]["seals"][0]["verification_event_seq"] = None
+
+        text = ledgers.render_closure(state, state["units"][2])
+
+        self.assertIn(
+            "- review state: effectively clean (every family clean or "
+            "debt-clean on the same bytes; full verification was not due "
+            "at this boundary)",
             text,
         )
 

@@ -8,7 +8,7 @@ Covers here:
       -> green delta -> amend -> reviews restart from Codex; family advance
       only on clean rounds;
   (c) fix-loop cap -> run failed with the 'fix episode' explanation;
-  (d) final-verification failure -> full-suite fixer -> delta green -> amend
+  (d) due implementation verification failure -> full-suite fixer -> delta green -> amend
       -> fresh reviews -> exact fixer result reused without rerunning tests;
   (f) review-round tampering: output discarded, workspace restored,
       invalidated round recorded, retried; the cap includes it;
@@ -50,6 +50,39 @@ from orchestrator.tests.test_driver_mock import (
 def draft_step():
     """A skeleton draft that writes a real file (wip commit content)."""
     return skeleton_script()[0]
+
+
+def init_final_impl_state(workspace, config):
+    """Start directly at the final implementation boundary.
+
+    Verification-fixer tests do not need to replay skeleton and slice-note
+    reviews.  Those units are documentation and deliberately run no full
+    suite under the current contract.
+    """
+    path = init_state(workspace, config)
+    os.makedirs(os.path.join(workspace, "docs"), exist_ok=True)
+    write_file("docs/skeleton.md", "# Skeleton\n")(workspace)
+    write_file("docs/slice-01.md", "# Slice 01\n")(workspace)
+    state = st.load(path)
+    state["milestone"]["slices"] = [{"id": 1, "title": "Core"}]
+    skeleton = state["units"][0]
+    skeleton["artifact"] = "docs/skeleton.md"
+    skeleton["status"] = st.U_SEALED
+    note = st.ensure_next_unit(state)
+    note["artifact"] = "docs/slice-01.md"
+    note["status"] = st.U_SEALED
+    st.ensure_next_unit(state)
+    st.save(path, state)
+    return path
+
+
+def implement_step():
+    return step(
+        "implement",
+        ok("implement", files_changed=["core.txt"]),
+        family="codex",
+        side_effect=write_file("core.txt", "implemented\n"),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -328,7 +361,7 @@ class TestDeltaFullReviewCheckpoint(DriverTestCase):
         # The bypass is safe only when an active whole-commit reviewer will
         # immediately take over. Final-verification episodes keep real deltas.
         with tempfile.TemporaryDirectory(prefix="orch-mock-") as ws:
-            path = init_state(
+            path = init_final_impl_state(
                 ws,
                 make_config(
                     verification=["test -f marker.txt"],
@@ -336,7 +369,7 @@ class TestDeltaFullReviewCheckpoint(DriverTestCase):
                 ),
             )
             mock = runners.MockRunner([
-                draft_step(),
+                implement_step(),
                 step("review_round", report("review_round"), family="codex"),
                 step("review_round", report("review_round"), family="claude"),
                 step(
@@ -351,11 +384,11 @@ class TestDeltaFullReviewCheckpoint(DriverTestCase):
                 step("delta_review", report("delta_review"), family="codex"),
             ])
             driver = drv.Driver(path, runner=mock)
-            driver.step()  # draft
-            driver.step()  # full suite deferred to the final boundary
+            driver.step()  # implementation
+            driver.step()  # full suite deferred to its scheduled checkpoint
             driver.step()  # codex clean
             driver.step()  # claude clean
-            driver.step()  # final verification fails
+            driver.step()  # scheduled verification fails
             driver.step()  # fix #1
             driver.step()  # real delta review, despite threshold=1
             self.assertEqual(mock.calls[-1][1], "delta_review")
@@ -447,7 +480,7 @@ class TestDeltaFullReviewCheckpoint(DriverTestCase):
             # It followed the REDIRECTED compatibility edge, proving the flag
             # was set yet the checkpoint still fired without a suite run.
             self.assertEqual(checkpoint[0]["return_to"], st.U_PRE_REVIEW_VERIFY)
-            # The pending flag clears only when final verification passes.
+            # The pending flag clears only when scheduled verification passes.
             self.assertFalse(
                 state["units"][0].get("suite_verification_pending")
             )
@@ -504,10 +537,10 @@ class TestFixLoopCap(DriverTestCase):
 class TestVerificationFixEpisode(DriverTestCase):
     def test_suite_fixer_delta_amend_reviews_then_reuses_green(self):
         with tempfile.TemporaryDirectory(prefix="orch-mock-") as ws:
-            path = init_state(
+            path = init_final_impl_state(
                 ws, make_config(verification=["test -f marker.txt"]))
             mock = runners.MockRunner([
-                draft_step(),
+                implement_step(),
                 step("review_round", report("review_round"), family="codex"),
                 step("review_round", report("review_round"), family="claude"),
                 step("fix_findings",
@@ -520,12 +553,12 @@ class TestVerificationFixEpisode(DriverTestCase):
             ])
             driver = drv.Driver(path, runner=mock)
 
-            driver.step()  # draft
-            driver.step()  # full suite deferred to the final boundary
+            driver.step()  # implementation
+            driver.step()  # full suite deferred to its scheduled checkpoint
             driver.step()  # codex clean
             driver.step()  # claude clean
-            driver.step()  # final verification fails
-            unit = driver.state["units"][0]
+            driver.step()  # scheduled verification fails
+            unit = driver.state["units"][-1]
             self.assertEqual(unit["status"], st.U_FIXING)
             self.assertEqual(len(unit["fix_queue"]), 1)
             v1 = unit["fix_queue"][0]
@@ -534,12 +567,12 @@ class TestVerificationFixEpisode(DriverTestCase):
             self.assertEqual(unit["fix_source"]["type"], "verification")
             self.assertIsNone(unit["fix_source"]["family"])
             self.assertEqual(unit["fix_source"]["source_round_id"],
-                             "skeleton-verify-pre_seal-1")
+                             "slice_impl-01-verify-pre_seal-1")
             self.assertEqual(unit["fix_source"]["return_to"],
                              st.U_PRE_SEAL_VERIFY)
 
             self.step_until(driver,
-                            lambda s: s["units"][0]["status"] == st.U_SEALED)
+                            lambda s: s["units"][-1]["status"] == st.U_SEALED)
             self.assertEqual(mock.script, [])
 
             # The fixer diagnoses the live suite; no parsed/truncated failure
@@ -554,7 +587,7 @@ class TestVerificationFixEpisode(DriverTestCase):
             self.assertIn("altitude", fix_prompt)
 
             state = st.load(path)
-            unit = state["units"][0]
+            unit = state["units"][-1]
             # Episode closed: counter reset when the stage passed.
             self.assertEqual(unit["verify_fix_attempts"],
                              {"pre_review": 0, "pre_seal": 0})
@@ -601,12 +634,12 @@ class TestVerificationFixEpisode(DriverTestCase):
 
     def test_no_delta_suite_success_continues_without_rerun(self):
         with tempfile.TemporaryDirectory(prefix="orch-mock-") as ws:
-            path = init_state(
+            path = init_final_impl_state(
                 ws,
                 make_config(verification=["false"]),
             )
             mock = runners.MockRunner([
-                draft_step(),
+                implement_step(),
                 step("review_round", report("review_round"), family="codex"),
                 step("review_round", report("review_round"), family="claude"),
                 step("fix_findings", fix_ok([]), family="codex"),
@@ -614,11 +647,11 @@ class TestVerificationFixEpisode(DriverTestCase):
             driver = drv.Driver(path, runner=mock)
             self.step_until(
                 driver,
-                lambda state: state["units"][0]["status"] == st.U_SEALED,
+                lambda state: state["units"][-1]["status"] == st.U_SEALED,
             )
             self.assertEqual(mock.script, [])
             state = st.load(path)
-            unit = state["units"][0]
+            unit = state["units"][-1]
             self.assertEqual(unit["status"], st.U_SEALED)
             self.assertEqual(unit["verify_fix_attempts"]["pre_seal"], 0)
             self.assertEqual([r["kind"] for r in unit["rounds"]],
@@ -634,9 +667,11 @@ class TestVerificationFixEpisode(DriverTestCase):
 
     def test_suite_fixer_blocked_stops_without_retrying_verification(self):
         with tempfile.TemporaryDirectory(prefix="orch-mock-") as ws:
-            path = init_state(ws, make_config(verification=["false"]))
+            path = init_final_impl_state(
+                ws, make_config(verification=["false"])
+            )
             mock = runners.MockRunner([
-                draft_step(),
+                implement_step(),
                 step("review_round", report("review_round"), family="codex"),
                 step("review_round", report("review_round"), family="claude"),
                 step(

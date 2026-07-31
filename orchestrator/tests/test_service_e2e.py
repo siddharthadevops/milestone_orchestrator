@@ -264,9 +264,8 @@ class TestServicePanelE2E(unittest.TestCase):
         ][-2:]
         self.assertEqual(impl["seals"][0]["reviews"], final_reviews)
 
-        # The durable event log carries exactly the implementation baseline
-        # and final boundaries. The exact doc-final green is reused for the
-        # baseline, and the final suite happens after the last clean review.
+        # There is no pre-implementation baseline. The one logical slice is
+        # also the milestone end, so its suite runs after the last clean review.
         state = st.load(detail["entry"]["state_path"])
         events = state["events"]
         verifications = [
@@ -274,9 +273,10 @@ class TestServicePanelE2E(unittest.TestCase):
             if e["type"] == "verification" and e["unit"] == "slice_impl-01"
         ]
         self.assertEqual(
-            [e["boundary"] for e in verifications], ["baseline", "final"]
+            [e["boundary"] for e in verifications], ["final"]
         )
-        self.assertTrue(verifications[0]["reused"])
+        self.assertEqual(verifications[0]["cadence"], "milestone_final")
+        self.assertFalse(verifications[0].get("reused", False))
         self.assertTrue(all(e["ok"] for e in verifications))
         self.assertTrue(all(
             not str(r.get("source_round_id") or "").startswith(

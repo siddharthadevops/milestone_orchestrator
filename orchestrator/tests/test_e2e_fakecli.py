@@ -14,11 +14,12 @@ The scenario exercises the review/fix separation model end to end:
     pointer (rejected_adjudicated citing skeleton-claude-r1/F1); claude
     clean; the same-byte review predicate seals deterministically.
   slice note: clean everywhere.
-  implementation: baseline before implement; codex docstring finding -> fix
-    episode (the scripted replacement also corrects the deliberate div bug);
+  implementation: codex docstring finding -> fix episode (the scripted
+    replacement also corrects the deliberate div bug);
     claude README finding -> fix episode; every byte change restarts review at
-    codex; current codex+claude reviews precede one final suite and satisfy one
-    deterministic seal. No full suite runs between review/fix cycles.
+    codex; current codex+claude reviews precede the milestone-final suite and
+    satisfy one deterministic seal. No full suite runs before implementation
+    or between review/fix cycles.
 
 The run happens once in setUpClass; each test asserts one aspect.
 
@@ -256,7 +257,8 @@ class TestCalculatorE2E(unittest.TestCase):
                 {"unit", "display_unit", "slice_id", "part", "status",
                  "artifact", "gate_sha", "wip_sha", "draft", "drafts",
                  "rounds", "seals", "opened_epoch", "closed_epoch", "debt",
-                 "reclassify", "repairs", "brainstormings", "work_duration_s"},
+                 "reclassify", "repairs", "brainstormings", "verifications",
+                 "work_duration_s"},
             )
         # The CLI's JSON is exactly state.summary() over the on-disk state.
         self.assertEqual(summ, st.summary(self.disk_state()))
@@ -337,7 +339,7 @@ class TestCalculatorE2E(unittest.TestCase):
 
     # -- verification chronology -----------------------------------------------
 
-    def test_full_suite_runs_only_at_baseline_and_final_boundaries(self):
+    def test_full_suite_runs_only_at_the_due_final_boundary(self):
         impl = self.state_unit("slice_impl-01")
         events = self.disk_state()["events"]
         verifications = [
@@ -345,10 +347,10 @@ class TestCalculatorE2E(unittest.TestCase):
             if e["type"] == "verification" and e["unit"] == "slice_impl-01"
         ]
         self.assertEqual(
-            [e["boundary"] for e in verifications], ["baseline", "final"]
+            [e["boundary"] for e in verifications], ["final"]
         )
-        self.assertTrue(verifications[0]["reused"])
         self.assertTrue(all(e["ok"] for e in verifications))
+        self.assertEqual(verifications[0].get("cadence"), "milestone_final")
         # This fake's docstring fix also corrects div, so no suite-failure
         # fixer is expected here; the lifecycle mock covers that final-failure
         # path explicitly. Every fixer in this subprocess E2E came from a

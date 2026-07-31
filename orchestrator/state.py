@@ -17,13 +17,12 @@ LLM orchestrators kept getting wrong):
    of silently doing the wrong thing.
 
 The unit sequence mirrors the canon cycle: one skeleton unit, then per slice
-a documentation unit and an implementation unit. Documentation drafts go
-straight through the review families and run the full suite once at the final
-boundary. Implementation establishes a pre-work baseline (reusing an exact
-stable final green when possible), relies on focused checks while bytes
-change, then runs the full suite once after every review family is clean.
-There is no full-suite tax between review/fix cycles. Deterministic sealing
-requires clean same-byte reviews plus that final verification.
+a documentation unit and an implementation unit. Documentation goes straight
+through review without running the code suite. Implementations rely on their
+focused checks while bytes change; the complete suite runs after every four
+completed logical slices (implementation parts still count as one slice) and
+at milestone close. There is no full-suite tax per document, implementation
+part, or review/fix cycle.
 """
 
 import copy
@@ -151,10 +150,9 @@ def new_state(goal, workspace, config, name=None, slug=None, project=None):
             _new_unit(UNIT_SKELETON, None),
         ],
         "events": [],
-        # The repo's official full-suite command, discovered by the first
-        # implement worker (its contract's suite_command field). Later
-        # implementation baselines and every known final boundary use it
-        # when config verification is not explicitly set.
+        # The repo's official full-suite command, discovered by an implement
+        # worker (its contract's suite_command field). Scheduled checkpoints
+        # use it when config verification is not explicitly set.
         "suite_command": None,
         "failure": None,
         "config": config,
@@ -1030,7 +1028,10 @@ def record_seal_attempt(state, unit, halves, passed, invalidated=None,
         "passed": passed,
         "invalidated": invalidated,
     }
-    if verification_event_seq is not None:
+    # New deterministic seals always record whether verification was due.
+    # Historical seals lack the key entirely, which lets projections preserve
+    # their legacy verified status instead of relabelling them as "not due".
+    if reviews is not None:
         rec["verification_event_seq"] = verification_event_seq
     unit["seals"].append(rec)
     if reviews is None:
@@ -1126,7 +1127,7 @@ def resume_run(state):
         unit["status"] = target
         unit["failed_from"] = None
         # Grant fresh convergence state: a run that exhausted max_fix_loops
-        # or an unstable baseline budget must not re-fail instantly on resume.
+        # must not re-fail instantly on resume.
         unit["fix_loop_rounds"] = 0
         unit["verify_fix_attempts"] = {"pre_review": 0, "pre_seal": 0}
         unit.pop("baseline_unstable_runs", None)
@@ -1373,11 +1374,9 @@ def close_redoc_wave(state, anchor):
     anchor_reviews = list(
         (anchor["seals"][-1] if anchor["seals"] else {}).get("reviews") or []
     )
-    verification_event_seq = (
-        (anchor["seals"][-1] if anchor["seals"] else {}).get(
-            "verification_event_seq"
-        )
-    )
+    anchor_seal = anchor["seals"][-1] if anchor["seals"] else {}
+    verification_recorded = "verification_event_seq" in anchor_seal
+    verification_event_seq = anchor_seal.get("verification_event_seq")
     by_key = {unit_key(u): u for u in state["units"]}
     closed = []
     for key in wave.get("docs") or []:
@@ -1393,7 +1392,7 @@ def close_redoc_wave(state, anchor):
             "reviews": list(anchor_reviews),
             "wave": "%s-a%d" % (anchor_key, attempt),
         }
-        if verification_event_seq is not None:
+        if verification_recorded:
             seal["verification_event_seq"] = verification_event_seq
         unit["seals"].append(seal)
         transition_unit(
@@ -1680,9 +1679,9 @@ def _work_durations(state):
     """Return ({unit_key: seconds}, unassigned_malformed_seconds).
 
     This is *work consumed*, not elapsed wall time. Every completed live call
-    has one durable home (draft, round, reclassification, or a repaired
-    malformed first strike); persisted historical seal-half durations are
-    included too. Deriving the total keeps it restart-safe.
+    has one durable home (draft, round, reclassification, verification, or a
+    repaired malformed first strike); persisted historical seal-half
+    durations are included too. Deriving the total keeps it restart-safe.
     """
     keys = [unit_key(unit) for unit in state.get("units") or []]
     totals = dict((key, 0.0) for key in keys)
@@ -1716,6 +1715,16 @@ def _work_durations(state):
             key = event.get("unit")
             if key in totals:
                 totals[key] += _completed_duration(event.get("duration_s"))
+            continue
+        if etype == "verification":
+            # A fixer-certified event describes the suite work already
+            # counted in that fix round; reused events execute no new work.
+            if not event.get("fixer_certified") and not event.get("reused"):
+                key = event.get("unit")
+                if key in totals:
+                    totals[key] += _completed_duration(
+                        event.get("duration_s")
+                    )
             continue
         if etype != "worker_malformed" or event.get("fatal"):
             continue
@@ -1859,6 +1868,7 @@ def summary(state):
     closed_at = {}
     wip_sha = {}
     reclassify_by_unit = {}
+    verification_by_unit = {}
     # Attached Brainstorming sessions, in ledger order per unit. The full
     # trail is derived here (not from the 30-event tail the panel receives)
     # so an old detour keeps its chip for the life of the run.
@@ -1899,17 +1909,37 @@ def summary(state):
             # the panel links the CURRENT unit's work-so-far through it.
             wip_sha[uk] = e.get("sha")
         if e.get("type") == "reclassify_recorded":
-            if (e.get("defer_ok")
-                    and e.get("finding_id") in requeued_ids.get(uk, set())):
-                continue
             reclassify_by_unit.setdefault(uk, []).append(
                 {
+                    "seq": e.get("seq"),
                     "at": e.get("at"),
+                    "source_round": e.get("source_round"),
                     "finding_id": e.get("finding_id"),
                     "drift_risk": e.get("drift_risk"),
                     "drift_damage": e.get("drift_damage"),
                     "threshold": e.get("threshold"),
                     "defer_ok": e.get("defer_ok"),
+                    "requeued": bool(
+                        e.get("defer_ok")
+                        and e.get("finding_id")
+                        in requeued_ids.get(uk, set())
+                    ),
+                    "duration_s": e.get("duration_s"),
+                }
+            )
+        if e.get("type") == "verification":
+            verification_by_unit.setdefault(uk, []).append(
+                {
+                    "seq": e.get("seq"),
+                    "at": e.get("at"),
+                    "stage": e.get("stage"),
+                    "boundary": e.get("boundary"),
+                    "cadence": e.get("cadence"),
+                    "ok": e.get("ok"),
+                    "stable": e.get("stable"),
+                    "reused": bool(e.get("reused")),
+                    "vacuous": bool(e.get("vacuous")),
+                    "fixer_certified": bool(e.get("fixer_certified")),
                     "duration_s": e.get("duration_s"),
                 }
             )
@@ -2010,6 +2040,9 @@ def summary(state):
                         "verification_event_seq": s.get(
                             "verification_event_seq"
                         ),
+                        "verification_recorded": (
+                            "verification_event_seq" in s
+                        ),
                         "findings": {
                             fam: (
                                 len(h["result"].get("findings", []))
@@ -2053,6 +2086,10 @@ def summary(state):
                 # so the panel can place each episode chronologically among
                 # the unit's round/seal chips and leave it there.
                 "reclassify": reclassify_by_unit.get(unit_key(u), []),
+                # Every complete-suite decision that actually ran or reused
+                # a fixer proof. Deferred checkpoints are ordinary routing
+                # events and do not pretend work was performed.
+                "verifications": verification_by_unit.get(unit_key(u), []),
                 # A compact handle for every stop-report-repair-resume trip.
                 # Full immutable rounds/seals stay in their normal fields;
                 # the panel uses these ids to collapse the detour.

@@ -2102,11 +2102,15 @@ class TestImplementationDebtRequeue(TempWorkspaceCase):
         impl2["status"] = st.U_ROUNDS
         st.append_event(
             state, "reclassify_recorded", unit="slice_impl-01",
+            source_round="slice_impl-01-codex-r1",
             finding_id="codex-F1", defer_ok=True, drift_risk="low",
+            duration_s=7,
         )
         st.append_event(
             state, "reclassify_recorded", unit="slice_impl-02",
+            source_round="slice_impl-02-claude-r1",
             finding_id="claude-F2", defer_ok=True, drift_risk="high",
+            duration_s=8,
         )
 
         findings = st.requeue_implementation_debt(state)
@@ -2117,7 +2121,9 @@ class TestImplementationDebtRequeue(TempWorkspaceCase):
                          st.U_ROUNDS)
         self.assertIn("old code bug", findings[0]["summary"])
         self.assertIn("current bug", findings[1]["summary"])
-        # Raw debt evidence is immutable, but no longer active or projected.
+        # Raw debt evidence and the classification act remain immutable and
+        # visible as history, but the reopened finding is no longer active
+        # debt.
         self.assertEqual(len(impl1["debt"]), 1)
         self.assertEqual(len(impl2["debt"]), 1)
         self.assertEqual(st.active_debt(state, impl1), [])
@@ -2127,8 +2133,22 @@ class TestImplementationDebtRequeue(TempWorkspaceCase):
         }
         self.assertEqual(views["slice_impl-01"]["debt"], [])
         self.assertEqual(views["slice_impl-02"]["debt"], [])
-        self.assertEqual(views["slice_impl-01"]["reclassify"], [])
-        self.assertEqual(views["slice_impl-02"]["reclassify"], [])
+        self.assertEqual(
+            [
+                (entry["finding_id"], entry["source_round"],
+                 entry["requeued"], entry["duration_s"])
+                for entry in views["slice_impl-01"]["reclassify"]
+            ],
+            [("codex-F1", "slice_impl-01-codex-r1", True, 7)],
+        )
+        self.assertEqual(
+            [
+                (entry["finding_id"], entry["source_round"],
+                 entry["requeued"], entry["duration_s"])
+                for entry in views["slice_impl-02"]["reclassify"]
+            ],
+            [("claude-F2", "slice_impl-02-claude-r1", True, 8)],
+        )
 
     def test_rounds_requeue_returns_to_rounds_after_delta(self):
         state = make_state(
@@ -2256,7 +2276,8 @@ class TestSummary(TempWorkspaceCase):
             {"unit", "display_unit", "slice_id", "part", "status", "artifact",
              "gate_sha", "wip_sha", "draft", "drafts",
              "rounds", "seals", "opened_epoch", "closed_epoch", "debt",
-             "reclassify", "repairs", "brainstormings", "work_duration_s"},
+             "reclassify", "verifications", "repairs", "brainstormings",
+             "work_duration_s"},
         )
         self.assertEqual(skel_view["display_unit"], "skeleton")
         self.assertIsNone(skel_view["slice_id"])
@@ -2289,7 +2310,8 @@ class TestSummary(TempWorkspaceCase):
         self.assertEqual(
             set(seal.keys()),
             {"attempt", "passed", "invalidated", "wave", "reviews",
-             "verification_event_seq", "findings", "duration_s",
+             "verification_event_seq", "verification_recorded", "findings",
+             "duration_s",
              "severity", "at"},
         )
         self.assertEqual(seal["attempt"], 1)
@@ -2298,6 +2320,7 @@ class TestSummary(TempWorkspaceCase):
         # Ordinary seal: no wave provenance.
         self.assertIsNone(seal["wave"])
         self.assertIsNone(seal["verification_event_seq"])
+        self.assertTrue(seal["verification_recorded"])
         self.assertEqual(
             seal["reviews"],
             ["skeleton-codex-r1", "skeleton-claude-r1"],
@@ -2307,6 +2330,8 @@ class TestSummary(TempWorkspaceCase):
         # doc view carries the dirty round's finding count
         self.assertEqual(doc_view["rounds"][0]["findings"], 2)
         self.assertEqual(doc_view["seals"], [])
+        self.assertEqual(skel_view["verifications"], [])
+        self.assertEqual(doc_view["verifications"], [])
 
     def test_summary_surfaces_pending_implementation_stabilization_compactly(self):
         state = make_state(self.workspace)
@@ -2373,7 +2398,7 @@ class TestSummary(TempWorkspaceCase):
             ["bs-three"],
         )
 
-    def test_work_duration_sums_completed_llm_calls_once(self):
+    def test_work_duration_sums_completed_work_once(self):
         state = make_state(self.workspace)
         unit = state["units"][0]
         st.record_draft(
@@ -2431,25 +2456,52 @@ class TestSummary(TempWorkspaceCase):
             state, "worker_malformed", label="legacy-unknown",
             duration_s=90,
         )
-        # Fatal/partial calls and non-LLM verification are deliberately out.
+        # Fatal/partial calls are out. A suite execution is completed work;
+        # reused and fixer-certified proof events execute no additional work.
         st.append_event(
             state, "worker_malformed", unit="skeleton", fatal=True,
             label="skeleton-fatal", duration_s=100,
         )
         st.append_event(
-            state, "verification", unit="skeleton", duration_s=110,
+            state, "verification", unit="skeleton",
+            stage=st.U_PRE_SEAL_VERIFY, boundary="final",
+            cadence="milestone_final", ok=True, stable=True,
+            duration_s=110,
+        )
+        st.append_event(
+            state, "verification", unit="skeleton", reused=True,
+            ok=True, stable=True, duration_s=120,
+        )
+        st.append_event(
+            state, "verification", unit="skeleton", fixer_certified=True,
+            ok=True, stable=True, duration_s=130,
         )
 
         summ = st.summary(state)
 
-        self.assertEqual(summ["units"][0]["work_duration_s"], 383.0)
-        self.assertEqual(summ["work_duration_s"], 473.0)
+        self.assertEqual(summ["units"][0]["work_duration_s"], 493.0)
+        self.assertEqual(summ["work_duration_s"], 583.0)
         self.assertEqual(
             summ["units"][0]["reclassify"][0]["duration_s"], 60
         )
         self.assertEqual(
             summ["units"][0]["brainstormings"][0]["duration_s"], 12
         )
+        verifications = summ["units"][0]["verifications"]
+        self.assertEqual(len(verifications), 3)
+        self.assertEqual(
+            set(verifications[0]),
+            {
+                "seq", "at", "stage", "boundary", "cadence", "ok",
+                "stable", "reused", "vacuous", "fixer_certified",
+                "duration_s",
+            },
+        )
+        self.assertEqual(verifications[0]["cadence"], "milestone_final")
+        self.assertEqual(verifications[0]["duration_s"], 110)
+        self.assertFalse(verifications[0]["reused"])
+        self.assertTrue(verifications[1]["reused"])
+        self.assertTrue(verifications[2]["fixer_certified"])
 
     def test_summary_preserves_implementation_history_after_redraft(self):
         state = make_state(self.workspace)

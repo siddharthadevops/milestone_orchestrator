@@ -1296,8 +1296,8 @@ class TestOperatorAmendments(unittest.TestCase):
 
 class TestVerificationProtocol(unittest.TestCase):
     """Zero-config verification: the implementer reports suite_command,
-    the driver reserves it for the final boundary, and reviewers receive only
-    the generic boundary needed for independent judgment."""
+    the driver reserves it for scheduled checkpoints, and reviewers receive
+    only the generic boundary needed for independent judgment."""
 
     def test_impl_review_carries_only_generic_verification_boundary(self):
         prompt = normalized(prompts.build_review_round(
@@ -1325,10 +1325,10 @@ class TestVerificationProtocol(unittest.TestCase):
             FAMILY, WORKSPACE, GOAL, SLICE, "docs/slice-01.md", []))
         self.assertIn("do NOT run the repo's full test suite at the end",
                       prompt)
-        self.assertIn("pre-implementation baseline before this call", prompt)
-        self.assertIn("exact candidate bytes and commands still matched",
-                      prompt)
-        self.assertIn("after every configured reviewer is clean", prompt)
+        self.assertNotIn("pre-implementation baseline", prompt)
+        self.assertIn("Run focused checks on what you touch", prompt)
+        self.assertIn("after every fourth completed logical slice", prompt)
+        self.assertIn("at milestone end", prompt)
         self.assertIn("below approximately 750", prompt)
         self.assertIn("Do not compress, omit, distort, or reimplement", prompt)
         self.assertIn("return `implementation_cut`", prompt)
@@ -1337,18 +1337,20 @@ class TestVerificationProtocol(unittest.TestCase):
         self.assertIn("reaches 1,000 reviewable Git lines", prompt)
         self.assertIn("Report the repo's official full-suite command",
                       prompt)
-        self.assertIn("your suite_command will arm the final boundary", prompt)
+        self.assertIn("your suite_command will arm scheduled checkpoints",
+                      prompt)
         armed = normalized(prompts.build_implement(
             FAMILY, WORKSPACE, GOAL, SLICE, "docs/slice-01.md",
             ["mix test"]))
-        self.assertIn("Final-suite commands currently armed: mix test", armed)
+        self.assertIn("Scheduled full-suite commands currently armed: mix test",
+                      armed)
 
     def test_fixer_never_runs_the_full_suite(self):
         prompt = normalized(prompts.build_fix_findings(
             FAMILY, WORKSPACE, GOAL, UNIT, FINDINGS, [], "claude",
             ["claude", "-p"], unit_kind="slice_impl"))
         self.assertIn("never the repo's full suite", prompt)
-        self.assertIn("the driver runs it at the final boundary", prompt)
+        self.assertIn("the driver runs it at scheduled checkpoints", prompt)
 
 
 class TestSequentialImplementationScope(unittest.TestCase):

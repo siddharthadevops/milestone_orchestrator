@@ -1816,24 +1816,6 @@ class MilestoneDriverRethinkTest(unittest.TestCase):
         st.save(path, state)
         return path
 
-    def _advance_impl_baseline(self, path, runner):
-        """Cross the pre-implementation suite boundary without consuming
-        the implementer's scripted response.
-
-        These fixtures start directly at a pending implementation unit.  The
-        baseline is now a distinct durable action before the implementer, so
-        rethink/session tests must prove that boundary happened and then make
-        their worker assertion on the following step.
-        """
-        calls_before = len(runner.calls)
-        action, _note = drv.Driver(path, runner=runner).step()
-        self.assertEqual(action.type, drv.A_VERIFY)
-        self.assertEqual(len(runner.calls), calls_before)
-        unit = st.current_unit(st.load(path))
-        self.assertEqual(unit["kind"], st.UNIT_SLICE_IMPL)
-        self.assertEqual(unit["status"], st.U_PENDING)
-        self.assertIsNotNone(unit.get("baseline_verification"))
-
     def _slice_doc_path(self, workspace=None, config=None):
         path = self._state_path(workspace=workspace, config=config)
         state = st.load(path)
@@ -1897,7 +1879,6 @@ class MilestoneDriverRethinkTest(unittest.TestCase):
         )
 
         def assert_no_brainstorming(path, runner):
-            self._advance_impl_baseline(path, runner)
             with (
                 mock.patch.object(adapter, "create_session") as create,
                 mock.patch.object(
@@ -2007,7 +1988,6 @@ class MilestoneDriverRethinkTest(unittest.TestCase):
                 },
             ]
         )
-        self._advance_impl_baseline(path, runner)
         with mock.patch.object(
             adapter, "create_session", return_value=self._created()
         ):
@@ -2078,7 +2058,6 @@ class MilestoneDriverRethinkTest(unittest.TestCase):
                 "response": rethink(contracts.KIND_IMPLEMENT),
             },
         ])
-        self._advance_impl_baseline(path, runner)
         durable_before_create = []
 
         def fail_create(*_args, **_kwargs):
@@ -2122,7 +2101,6 @@ class MilestoneDriverRethinkTest(unittest.TestCase):
             "expect_kind": contracts.KIND_IMPLEMENT,
             "response": rethink(contracts.KIND_IMPLEMENT),
         }])
-        self._advance_impl_baseline(path, runner)
         driver = drv.Driver(path, runner=runner)
         original_save = driver._save
         saves = []
@@ -2171,7 +2149,6 @@ class MilestoneDriverRethinkTest(unittest.TestCase):
                 },
             ]
         )
-        self._advance_impl_baseline(path, runner)
         with mock.patch.object(
             adapter, "create_session", return_value=self._created()
         ):
@@ -2216,7 +2193,6 @@ class MilestoneDriverRethinkTest(unittest.TestCase):
                 "response": rethink(contracts.KIND_IMPLEMENT),
             }]
         )
-        self._advance_impl_baseline(path, runner)
         with mock.patch.object(
             adapter, "create_session", return_value=self._created()
         ):
@@ -2249,6 +2225,55 @@ class MilestoneDriverRethinkTest(unittest.TestCase):
         )
         self.assertEqual(st.summary(state)["work_duration_s"], 4.01)
 
+    def test_run_discards_deleted_brainstorming_and_retries_origin(self):
+        path = self._state_path()
+        runner = runners.MockRunner(
+            [
+                {
+                    "expect_kind": contracts.KIND_IMPLEMENT,
+                    "response": rethink(contracts.KIND_IMPLEMENT),
+                },
+                {
+                    "expect_kind": contracts.KIND_IMPLEMENT,
+                    "response": {
+                        "status": "ok",
+                        "kind": contracts.KIND_IMPLEMENT,
+                        "files_changed": [],
+                    },
+                },
+            ]
+        )
+        with mock.patch.object(
+            adapter, "create_session", return_value=self._created()
+        ):
+            drv.Driver(path, runner=runner).step()
+
+        missing = lifecycle.PublicLifecycleError(
+            404, lifecycle.UNKNOWN_SESSION
+        )
+        with mock.patch.object(
+            adapter, "terminal_handoff", side_effect=missing
+        ):
+            code = drv.Driver(path, runner=runner).run(max_steps=2)
+
+        self.assertEqual(code, 3)
+        state = st.load(path)
+        unit = st.current_unit(state)
+        self.assertNotIn("brainstorming_wait", unit)
+        self.assertEqual(unit["status"], st.U_PRE_REVIEW_VERIFY)
+        self.assertIsNone(state["failure"])
+        self.assertIn(
+            "brainstorming_missing_detached",
+            [event["type"] for event in state["events"]],
+        )
+        self.assertEqual(
+            runner.session_calls,
+            [
+                ("start", "codex", "mock-session-1"),
+                ("start", "codex", "mock-session-2"),
+            ],
+        )
+
     def test_run_observes_brainstorming_started_on_last_allowed_step(self):
         path = self._state_path()
         runner = runners.MockRunner(
@@ -2267,7 +2292,6 @@ class MilestoneDriverRethinkTest(unittest.TestCase):
                 },
             ]
         )
-        self._advance_impl_baseline(path, runner)
 
         with (
             mock.patch.object(
@@ -2304,7 +2328,6 @@ class MilestoneDriverRethinkTest(unittest.TestCase):
                 "response": rethink(contracts.KIND_IMPLEMENT),
             }]
         )
-        self._advance_impl_baseline(path, runner)
         with mock.patch.object(
             adapter, "create_session", return_value=self._created()
         ):
@@ -2437,7 +2460,6 @@ class MilestoneDriverRethinkTest(unittest.TestCase):
                 },
             ]
         )
-        self._advance_impl_baseline(implement_path, implement_runner)
         with mock.patch.object(
             adapter, "create_session", return_value=self._created()
         ):
@@ -2785,7 +2807,6 @@ class MilestoneDriverRethinkTest(unittest.TestCase):
                 },
             ]
         )
-        self._advance_impl_baseline(path, runner)
         with mock.patch.object(
             adapter, "create_session", return_value=self._created()
         ):
@@ -2836,7 +2857,6 @@ class MilestoneDriverRethinkTest(unittest.TestCase):
                 "response": rethink(contracts.KIND_IMPLEMENT),
             }
         ])
-        self._advance_impl_baseline(path, runner)
         driver = drv.Driver(path, runner=runner)
         amendments_path = driver._amendments_path()
         os.makedirs(os.path.dirname(amendments_path), exist_ok=True)
@@ -2870,7 +2890,6 @@ class MilestoneDriverRethinkTest(unittest.TestCase):
                 "response": rethink(contracts.KIND_IMPLEMENT),
             }]
         )
-        self._advance_impl_baseline(path, runner)
         with mock.patch.object(
             adapter, "create_session", return_value=self._created()
         ):
@@ -2956,7 +2975,6 @@ class MilestoneDriverRethinkTest(unittest.TestCase):
                 },
             ]
         )
-        self._advance_impl_baseline(operational_path, operational_runner)
         with mock.patch.object(
             adapter, "create_session", return_value=self._created()
         ):

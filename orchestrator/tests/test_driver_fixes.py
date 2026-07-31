@@ -7,8 +7,8 @@ Covers, per finding:
 - worker protocol failures persist the raw outputs of both attempts;
 - tool-cache writes by read-only reviewers do not invalidate the round
   (defaults + snapshot_exclude_dirs config);
-- a successful full-suite fixer replaces a duplicate driver verification and
-  resets the final-boundary counter;
+- a successful implementation-suite fixer replaces a duplicate driver
+  verification and resets the due-boundary counter;
 - skeleton fix rounds can update the structural slice plan;
 - a second driver invocation is refused before any worker call runs
   (staleness check + advisory lock);
@@ -60,6 +60,22 @@ def init_state(workspace, config, goal=GOAL):
     state = st.new_state(goal, workspace, config)
     st.append_event(state, "initialized", goal=goal)
     path = drv.default_state_path(workspace)
+    st.save(path, state)
+    return path
+
+
+def init_final_impl_state(workspace, config, goal=GOAL):
+    """Create a run positioned at its final implementation boundary."""
+    path = init_state(workspace, config, goal=goal)
+    state = st.load(path)
+    state["milestone"]["slices"] = [{"id": 1, "title": "core"}]
+    skeleton = state["units"][0]
+    skeleton["artifact"] = "docs/skeleton.md"
+    skeleton["status"] = st.U_SEALED
+    note = st.ensure_next_unit(state)
+    note["artifact"] = "docs/slice-01.md"
+    note["status"] = st.U_SEALED
+    st.ensure_next_unit(state)
     st.save(path, state)
     return path
 
@@ -557,7 +573,7 @@ class TestFinalVerifyFixOwnership(DriverTestCase):
 
     def test_fixer_success_replaces_driver_retry_and_resets_counter(self):
         with tempfile.TemporaryDirectory(prefix="orch-fix-") as ws:
-            path = init_state(
+            path = init_final_impl_state(
                 ws,
                 make_config(
                     verification=[self.VER_CMD],
@@ -565,7 +581,7 @@ class TestFinalVerifyFixOwnership(DriverTestCase):
                 ),
             )
             mock = runners.MockRunner([
-                draft_skeleton_step(),
+                impl_script()[0],
                 step("review_round", clean(), family="codex"),
                 step("review_round", clean(), family="claude"),
                 step(
@@ -576,13 +592,13 @@ class TestFinalVerifyFixOwnership(DriverTestCase):
             ])
             driver = drv.Driver(path, runner=mock)
             self.step_until(
-                driver, lambda s: s["units"][0]["status"] == st.U_SEALED
+                driver, lambda s: s["units"][-1]["status"] == st.U_SEALED
             )
             self.assertEqual(mock.script, [])
 
             state = st.load(path)
             self.assertIsNone(state["failure"])
-            unit = state["units"][0]
+            unit = state["units"][-1]
             self.assertEqual(unit["status"], st.U_SEALED)
             # The final-stage counter resets when that boundary passes.
             self.assertEqual(
@@ -592,7 +608,7 @@ class TestFinalVerifyFixOwnership(DriverTestCase):
             fixes = [r for r in unit["rounds"] if r["kind"] == "fix_findings"]
             self.assertEqual(
                 [r["source_round_id"] for r in fixes],
-                ["skeleton-verify-pre_seal-1"],
+                ["slice_impl-01-verify-pre_seal-1"],
             )
             failed = [
                 e for e in state["events"]
@@ -607,7 +623,7 @@ class TestFinalVerifyFixOwnership(DriverTestCase):
                       encoding="utf-8") as fh:
                 self.assertEqual(fh.read(), "1")
             raw_dir = os.path.join(ws, ".orchestrator", "raw")
-            self.assertIn("skeleton-fix1.txt", os.listdir(raw_dir))
+            self.assertIn("slice_impl-01-fix1.txt", os.listdir(raw_dir))
 
 
 class TestSkeletonSlicePlanUpdate(DriverTestCase):

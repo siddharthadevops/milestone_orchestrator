@@ -12,6 +12,5 @@
   },
   "timeouts": {},
   "verification": ["python3 run_checks.py"],
-  "max_rounds_per_family": 12,
-  "max_verify_fix_attempts": 4
+  "max_rounds_per_family": 12
 }

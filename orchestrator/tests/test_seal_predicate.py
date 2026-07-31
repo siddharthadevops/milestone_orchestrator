@@ -199,7 +199,7 @@ class SealPredicateDriverTest(unittest.TestCase):
             satisfied["reviews"], [reviews[-2]["id"], reviews[-1]["id"]]
         )
 
-    def test_preseal_verification_byte_change_restarts_reviews(self):
+    def test_documentation_does_not_run_configured_full_suite(self):
         cfg = self._config("strict")
         cfg["verification"] = [
             "n=$(cat .orchestrator/verify-count 2>/dev/null || echo 0); "
@@ -210,10 +210,7 @@ class SealPredicateDriverTest(unittest.TestCase):
             battery=battery_entries(
                 contracts.BATTERY_QUESTIONS_SKELETON
             )
-        ) + [
-            step("review_round", report("review_round"), family="codex"),
-            step("review_round", report("review_round"), family="claude"),
-        ]
+        )
         state, driver = self._drive(cfg, script)
         sk = state["units"][0]
         self.assertEqual(sk["status"], st.U_SEALED)
@@ -223,18 +220,19 @@ class SealPredicateDriverTest(unittest.TestCase):
         ]
         self.assertEqual(
             [r["family"] for r in reviews],
-            ["codex", "claude", "codex", "claude"],
+            ["codex", "claude"],
         )
         self.assertEqual(
             sk["seals"][0]["reviews"],
             [reviews[-2]["id"], reviews[-1]["id"]],
         )
-        restarts = [
-            e for e in state["events"]
-            if e["type"] == "review_cycle_restarted"
-        ]
-        self.assertTrue(any("verification changed candidate bytes"
-                            in e["reason"] for e in restarts))
+        self.assertEqual(
+            [e for e in state["events"] if e["type"] == "verification"],
+            [],
+        )
+        self.assertFalse(os.path.exists(
+            os.path.join(self.ws, "verified-change.txt")
+        ))
 
     def test_external_edit_between_reviewers_restarts_at_family_zero(self):
         cfg = self._config("strict")
@@ -260,7 +258,7 @@ class SealPredicateDriverTest(unittest.TestCase):
         driver = drv.Driver(path, runner=runner)
 
         driver.step()  # draft
-        driver.step()  # full suite deferred to the final boundary
+        driver.step()  # pre-review gate enters reviews without a full suite
         driver.step()  # first Codex approval
         write_file("between-reviews.txt", "new candidate bytes\n")(self.ws)
         driver.step()  # detects the edit before calling Claude
@@ -285,7 +283,7 @@ class SealPredicateDriverTest(unittest.TestCase):
                          [reviews[-2]["id"], reviews[-1]["id"]])
         self.assertEqual(runner.script, [])
 
-    def test_failed_preseal_verification_edit_restarts_reviews(self):
+    def test_documentation_ignores_even_a_failing_full_suite_command(self):
         cfg = self._config("strict")
         cfg["verification"] = [
             "n=$(cat .orchestrator/verify-count 2>/dev/null || echo 0); "
@@ -297,15 +295,7 @@ class SealPredicateDriverTest(unittest.TestCase):
             battery=battery_entries(
                 contracts.BATTERY_QUESTIONS_SKELETON
             )
-        ) + [
-            step(
-                "fix_findings",
-                fix_ok([]),
-                family="codex",
-            ),
-            step("review_round", report("review_round"), family="codex"),
-            step("review_round", report("review_round"), family="claude"),
-        ]
+        )
         state, driver = self._drive(cfg, script)
         unit = state["units"][0]
         reviews = [
@@ -314,15 +304,17 @@ class SealPredicateDriverTest(unittest.TestCase):
         self.assertEqual(unit["status"], st.U_SEALED)
         self.assertEqual(
             [r["family"] for r in reviews],
-            ["codex", "claude", "codex", "claude"],
+            ["codex", "claude"],
         )
         self.assertEqual(unit["seals"][0]["reviews"],
                          [reviews[-2]["id"], reviews[-1]["id"]])
         self.assertEqual(driver.runner.script, [])
-        self.assertTrue(any(
-            e["type"] == "review_cycle_restarted"
-            and "verification changed candidate bytes" in e["reason"]
-            for e in state["events"]
+        self.assertEqual(
+            [e for e in state["events"] if e["type"] == "verification"],
+            [],
+        )
+        self.assertFalse(os.path.exists(
+            os.path.join(self.ws, "failed-verification-change.txt")
         ))
 
     def test_old_preseal_state_without_byte_binding_reenters_reviews(self):
