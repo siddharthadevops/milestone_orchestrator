@@ -96,11 +96,10 @@ def index_path(state):
 def generated_paths(state):
     """Workspace-relative files written mechanically at a gate.
 
-    Verification proofs deliberately ignore these projections: the final
-    suite runs immediately before sealing, while ``generate`` rewrites the
-    same state-derived views immediately afterwards.  Treating those writes
-    as product-byte drift would make a documentation seal's green proof
-    impossible to reuse as the following implementation baseline.
+    Verification proofs deliberately ignore these projections because
+    ``generate`` rewrites the same state-derived views at every gate. Treating
+    those writes as product-byte drift would invalidate a green proof without
+    any product change.
     """
     from . import interpreter
 
@@ -205,7 +204,7 @@ def render_milestone(state):
                         "completing review"
                         if unit["status"] == st.U_SEALING
                         else (
-                            "final verification"
+                            "completion gate"
                             if unit["status"] == st.U_PRE_SEAL_VERIFY
                             else unit["status"]
                         )
@@ -298,10 +297,16 @@ def render_review_log(state):
                     "unit did not run a separate completion check" % seal["wave"]
                 )
             elif deterministic:
+                verification = seal.get("verification_event_seq") is not None
                 lines.append(
                     "- deterministic result: every configured family was "
-                    "clean or debt-clean on the same current bytes, and the "
-                    "final verification passed; no extra reviewer was called"
+                    "clean or debt-clean on the same current bytes; %s; no "
+                    "extra reviewer was called"
+                    % (
+                        "the scheduled full verification passed"
+                        if verification
+                        else "full verification was not due at this boundary"
+                    )
                 )
                 if seal.get("reviews"):
                     lines.append(
@@ -310,7 +315,7 @@ def render_review_log(state):
                     )
             if seal.get("verification_event_seq") is not None:
                 lines.append(
-                    "- final verification event: `%s`"
+                    "- scheduled verification event: `%s`"
                     % seal["verification_event_seq"]
                 )
             if seal["invalidated"]:
@@ -385,6 +390,16 @@ def render_adjudications(state):
 
 def render_closure(state, unit):
     closed = unit.get("closed_record") or {}
+    seal = next(
+        (item for item in reversed(unit.get("seals") or []) if item["passed"]),
+        {},
+    )
+    if "verification_event_seq" not in seal:
+        verification = "legacy full verification passed"
+    elif seal.get("verification_event_seq") is not None:
+        verification = "scheduled full verification passed"
+    else:
+        verification = "full verification was not due at this boundary"
     return (
         _GENERATED
         + "# Closure — slice %s (%s)\n\n"
@@ -394,7 +409,7 @@ def render_closure(state, unit):
         + "- review completion records: %s\n" % closed.get("seal_attempts")
         + "- gate commit: %s\n" % (unit.get("gate_commit") or "(this commit)")
         + "- review state: effectively clean (every family clean or "
-        "debt-clean on the same bytes; final verification passed)\n"
+        "debt-clean on the same bytes; %s)\n" % verification
     )
 
 

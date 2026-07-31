@@ -12,8 +12,8 @@ Covers, in order of severity:
   (3) P2 — a fixer that claims edits ('fixed' dispositions, files_changed,
       a prevention edit) while the worktree delta is empty fails the run:
       no phantom fixes, no phantom prevention pointers in the registry.
-  (4) P2 — synthetic final-verification episode ids stay unique when the
-      final boundary is re-entered after accepted review fixes, so
+  (4) P2 — synthetic implementation-verification episode ids stay unique
+      when a due boundary is re-entered after accepted review fixes, so
       rejected V1 findings cannot mint colliding registry ids.
   (5) P2/P3 — duplicate finding ids within one worker output violate the
       contract (report kinds and fixer echoes).
@@ -62,6 +62,34 @@ def draft_step():
     )
 
 
+def init_final_impl_state(workspace, config):
+    """Start directly at a one-slice milestone's final implementation."""
+    path = init_state(workspace, config)
+    os.makedirs(os.path.join(workspace, "docs"), exist_ok=True)
+    write_file("docs/skeleton.md", "# Skeleton\n")(workspace)
+    write_file("docs/slice-01.md", "# Slice 01\n")(workspace)
+    state = st.load(path)
+    state["milestone"]["slices"] = [{"id": 1, "title": "Core"}]
+    skeleton = state["units"][0]
+    skeleton["artifact"] = "docs/skeleton.md"
+    skeleton["status"] = st.U_SEALED
+    note = st.ensure_next_unit(state)
+    note["artifact"] = "docs/slice-01.md"
+    note["status"] = st.U_SEALED
+    st.ensure_next_unit(state)
+    st.save(path, state)
+    return path
+
+
+def implement_step():
+    return step(
+        "implement",
+        ok("implement", files_changed=["core.txt"]),
+        family="codex",
+        side_effect=write_file("core.txt", "implemented\n"),
+    )
+
+
 def _run_git(ws, *args):
     return subprocess.run(
         ("git",) + args, cwd=ws, capture_output=True, text=True, check=True
@@ -99,7 +127,7 @@ class TestGitDisabledTamperRecovery(DriverTestCase):
                      side_effect=write_file("tampered.txt", "oops")),
             ]))
             driver.step()  # draft
-            driver.step()  # full suite deferred to the final boundary
+            driver.step()  # full suite deferred to its scheduled checkpoint
             driver.step()  # tampering review round
             self.assert_failed(
                 path, driver,
@@ -311,11 +339,12 @@ class TestPhantomFixEmptyDelta(DriverTestCase):
             state = st.load(path)
             self.assertEqual(state["milestone"]["status"], st.M_FAILED)
 
-    def test_suite_arming_fix_is_not_a_phantom(self):
+    def test_suite_arming_fix_is_not_a_phantom_in_documentation(self):
         """Live case (M164 r55): the honest fix for a vacuous-gate
         finding is supplying suite_command — a STATE fix with zero file
         edits. Once adopted, the 'fixed' disposition is earned and the
-        episode closes green instead of tripping the phantom retry."""
+        episode closes green instead of tripping the phantom retry. The
+        documentation unit itself deliberately does not run the suite."""
         with tempfile.TemporaryDirectory(prefix="orch-adv-") as ws:
             path = init_state(ws, make_config(verification=[]))
             driver = drv.Driver(path, runner=runners.MockRunner([
@@ -354,11 +383,7 @@ class TestPhantomFixEmptyDelta(DriverTestCase):
                 e for e in state["events"]
                 if e["type"] == "verification" and e["unit"] == "skeleton"
             ]
-            self.assertEqual(len(verification), 1)
-            self.assertEqual(verification[0].get("boundary"), "final")
-            self.assertEqual(
-                verification[0]["commands"], ["test -f docs/skeleton.md"]
-            )
+            self.assertEqual(verification, [])
 
     def test_suite_state_credit_does_not_hide_another_phantom_fix(self):
         with tempfile.TemporaryDirectory(prefix="orch-adv-") as ws:
@@ -685,11 +710,12 @@ class TestPhantomFixEmptyDelta(DriverTestCase):
             ]
             self.assertEqual(
                 [event["commands"] for event in verification],
-                [[], [official]],
+                [[official]],
             )
-            self.assertTrue(verification[0].get("vacuous"))
-            self.assertEqual(verification[0].get("boundary"), "baseline")
             self.assertEqual(verification[-1].get("boundary"), "final")
+            self.assertEqual(
+                verification[-1].get("cadence"), "milestone_final"
+            )
             self.assertNotIn("reused", verification[-1])
             self.assertFalse(any(
                 event["commands"] == [narrow] for event in verification
@@ -741,11 +767,8 @@ class TestPhantomFixEmptyDelta(DriverTestCase):
                 if event["type"] == "verification"
                 and event["unit"] == "skeleton"
             ]
-            self.assertEqual(
-                [event["commands"] for event in verification],
-                [[official]],
-            )
-            self.assertEqual(verification[0].get("boundary"), "final")
+            self.assertEqual(verification, [])
+            self.assertEqual(state["suite_command"], official)
             self.assertFalse(any(
                 event["commands"] == stale for event in verification
             ))
@@ -802,15 +825,15 @@ class TestVerifyEpisodeIdsUniqueAcrossReentry(DriverTestCase):
                     **extra
                 )
 
-            path = init_state(ws, make_config(
+            path = init_final_impl_state(ws, make_config(
                 verification=["test -f ok_marker"],
                 max_verify_fix_attempts=3,
             ))
             driver = drv.Driver(path, runner=runners.MockRunner([
-                draft_step(),
+                implement_step(),
                 step("review_round", report("review_round"), family="codex"),
                 step("review_round", report("review_round"), family="claude"),
-                # Initial final verification fails (no marker yet). The suite
+                # Initial scheduled verification fails (no marker yet). The suite
                 # fixer writes it, certifies green, and its real delta is
                 # reviewed before the certification can be reused.
                 repair_suite(),
@@ -821,7 +844,7 @@ class TestVerifyEpisodeIdsUniqueAcrossReentry(DriverTestCase):
                          "S1", "readme missing", severity="P2")]),
                      family="claude"),
                 # The accepted review fix changes bytes and removes the marker.
-                # Fresh reviews complete before final verification re-enters.
+                # Fresh reviews complete before scheduled verification re-enters.
                 step("fix_findings",
                      fix_ok([triaged("S1", "fixed", "readme",
                                      severity="P2")],
@@ -858,24 +881,24 @@ class TestVerifyEpisodeIdsUniqueAcrossReentry(DriverTestCase):
                 step("review_round", report("review_round"), family="claude"),
             ]))
             self.step_until(
-                driver, lambda s: s["units"][0]["status"] == st.U_SEALED,
+                driver, lambda s: s["units"][-1]["status"] == st.U_SEALED,
                 max_steps=60,
             )
             state = st.load(path)
             self.assertIsNone(state["failure"])
             fixes = [
-                r for r in state["units"][0]["rounds"]
+                r for r in state["units"][-1]["rounds"]
                 if r["kind"] == "fix_findings"
                 and str(r.get("source_round_id", "")).startswith(
-                    "skeleton-verify-pre_seal-"
+                    "slice_impl-01-verify-pre_seal-"
                 )
             ]
             self.assertEqual(
                 [r["source_round_id"] for r in fixes],
                 [
-                    "skeleton-verify-pre_seal-1",
-                    "skeleton-verify-pre_seal-2",
-                    "skeleton-verify-pre_seal-3",
+                    "slice_impl-01-verify-pre_seal-1",
+                    "slice_impl-01-verify-pre_seal-2",
+                    "slice_impl-01-verify-pre_seal-3",
                 ],
             )
             self.assertFalse(any(

@@ -2370,7 +2370,7 @@ def run_story(home, run_id, item):
     """The full record behind one pipeline chip — fetched on click, so
     the 2s-poll summary stays lean. item forms: round:<round_id>,
     seal:<unit>:<attempt>, draft:<unit>, repair:<unit>:<event seq>,
-    malformed:<event seq>."""
+    verify:<event seq>, debt:<unit>, malformed:<event seq>."""
     reg = registry.load(home)
     entry = registry.get(reg, run_id)
     if entry is None:
@@ -2477,6 +2477,12 @@ def run_story(home, run_id, item):
                         # seal (None for ordinary seals).
                         "wave": s_.get("wave"),
                         "reviews": list(s_.get("reviews") or []),
+                        "verification_event_seq": s_.get(
+                            "verification_event_seq"
+                        ),
+                        "verification_recorded": (
+                            "verification_event_seq" in s_
+                        ),
                         # Historical records may still carry LLM halves;
                         # deterministic seals cite ordinary reviews instead.
                         "halves": s_.get("halves"),
@@ -2500,6 +2506,31 @@ def run_story(home, run_id, item):
                     "result": d.get("result"),
                 }
         raise ApiError(404, "unknown draft %r" % ref)
+    if kind == "verify":
+        for event in state["events"]:
+            if (
+                event.get("type") == "verification"
+                and str(event.get("seq")) == ref
+            ):
+                return {
+                    "story": "verify",
+                    "unit": event.get("unit"),
+                    "seq": event.get("seq"),
+                    "at": event.get("at"),
+                    "duration_s": event.get("duration_s"),
+                    "boundary": event.get("boundary"),
+                    "cadence": event.get("cadence"),
+                    "ok": event.get("ok"),
+                    "stable": event.get("stable"),
+                    "reused": bool(event.get("reused")),
+                    "vacuous": bool(event.get("vacuous")),
+                    "fixer_certified": bool(
+                        event.get("fixer_certified")
+                    ),
+                    "commands": list(event.get("commands") or []),
+                    "output_tail": event.get("output_tail"),
+                }
+        raise ApiError(404, "unknown verification event %r" % ref)
     if kind == "debt":
         requeued_ids = st.requeued_debt_ids(state)
         for unit in state["units"]:
@@ -2508,20 +2539,23 @@ def run_story(home, run_id, item):
             reclassify = [
                 {
                     "finding_id": e.get("finding_id"),
+                    "source_round": e.get("source_round"),
                     "reclassifier": e.get("reclassifier"),
                     "drift_risk": e.get("drift_risk"),
+                    "drift_damage": e.get("drift_damage"),
                     "threshold": e.get("threshold"),
                     "defer_ok": e.get("defer_ok"),
                     "reason": e.get("reason"),
                     "at": e.get("at"),
+                    "requeued": bool(
+                        e.get("defer_ok")
+                        and e.get("finding_id")
+                        in requeued_ids.get(ref, set())
+                    ),
                 }
                 for e in state["events"]
                 if e.get("type") == "reclassify_recorded"
                 and e.get("unit") == ref
-                and not (
-                    e.get("defer_ok")
-                    and e.get("finding_id") in requeued_ids.get(ref, set())
-                )
             ]
             return {
                 "story": "debt",
@@ -2530,7 +2564,9 @@ def run_story(home, run_id, item):
                 "reclassify": reclassify,
             }
         raise ApiError(404, "unknown unit %r" % ref)
-    raise ApiError(400, "item must be round:/seal:/draft:/debt:")
+    raise ApiError(
+        400, "item must be round:/seal:/draft:/verify:/debt:"
+    )
 
 
 ARTIFACT_MAX = 1 * 1024 * 1024  # bytes served to the doc viewer per fetch

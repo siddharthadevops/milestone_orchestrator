@@ -283,7 +283,14 @@ class ServiceApiTest(unittest.TestCase):
         self.assertNotIn('<div class="card"><h3>Events</h3>', text)
         self.assertNotIn('<div class="card"><h3>Driver log</h3>', text)
         self.assertNotIn('<div class="card"><h3>Worker incidents (LLM)</h3>', text)
-        self.assertIn("const sameFamilyReview = base.find", text)
+        self.assertIn("function verificationChip", text)
+        self.assertIn("function reclassifyChip", text)
+        self.assertIn("const reclassByRound = new Map()", text)
+        self.assertIn('liveKind === "verification"', text)
+        self.assertIn('liveKind === "reclassify"', text)
+        self.assertIn('addLine("Verify", label, group.chips)', text)
+        self.assertIn('addLine("Reclassify", "Decision", group.chips)', text)
+        self.assertIn('d.story === "verify"', text)
         self.assertIn('addLine(`${family} review`', text)
         self.assertIn(
             'addLine("Seal", group.deterministic ? "Result" : '
@@ -1065,6 +1072,40 @@ class StoryApiTest(ServiceApiTest):
         st.save(entry["state_path"], state)
         return rid
 
+    def test_verification_story_and_summary_expose_result_and_duration(self):
+        ws = self.workspace("ws-verification-story")
+        rid = self._seed(ws)
+        entry = registry.get(registry.load(self.home), rid)
+        state = st.load(entry["state_path"])
+        event = st.append_event(
+            state, "verification", unit="skeleton",
+            stage=st.U_PRE_SEAL_VERIFY, boundary="final",
+            cadence="milestone_final", ok=True, stable=True,
+            commands=["python3 -m unittest"], output_tail="OK",
+            duration_s=12.5,
+        )
+        st.save(entry["state_path"], state)
+
+        _, detail = self.request_json("GET", "/api/runs/%s" % rid)
+        projected = detail["summary"]["units"][0]["verifications"][0]
+        self.assertEqual(projected["seq"], event["seq"])
+        self.assertEqual(projected["duration_s"], 12.5)
+        self.assertEqual(projected["cadence"], "milestone_final")
+
+        status, body = self.request_json(
+            "GET", "/api/runs/%s/story?item=verify:%s"
+            % (rid, event["seq"]),
+        )
+        self.assertEqual(status, 200)
+        self.assertEqual(body["story"], "verify")
+        self.assertEqual(body["unit"], "skeleton")
+        self.assertEqual(body["duration_s"], 12.5)
+        self.assertEqual(body["cadence"], "milestone_final")
+        self.assertTrue(body["ok"])
+        self.assertTrue(body["stable"])
+        self.assertEqual(body["commands"], ["python3 -m unittest"])
+        self.assertEqual(body["output_tail"], "OK")
+
     def test_fatal_malformed_story_carries_both_attempts(self):
         ws = self.workspace("ws-fatal")
         rid = self._seed(ws)
@@ -1176,6 +1217,7 @@ class StoryApiTest(ServiceApiTest):
             body["reviews"],
             ["skeleton-codex-r2", "skeleton-claude-r1"],
         )
+        self.assertFalse(body["verification_recorded"])
         self.assertEqual(body["halves"], {})
         status, body = self.request_json(
             "GET", "/api/runs/%s/story?item=draft:skeleton" % rid)
@@ -1271,7 +1313,7 @@ class StoryApiTest(ServiceApiTest):
         self.assertEqual(body["reclassify"][0]["drift_risk"], "low")
         self.assertEqual(body["reclassify"][0]["threshold"], "low")
 
-    def test_requeued_impl_debt_is_hidden_from_summary_and_story(self):
+    def test_requeued_impl_debt_stays_in_history_but_not_active_debt(self):
         ws = self.workspace("ws-requeued-debt")
         rid = self._seed(ws)
         reg = registry.load(self.home)
@@ -1301,12 +1343,18 @@ class StoryApiTest(ServiceApiTest):
             if unit["unit"] == "slice_impl-01"
         )
         self.assertEqual(impl_view["debt"], [])
-        self.assertEqual(impl_view["reclassify"], [])
+        self.assertEqual(len(impl_view["reclassify"]), 1)
+        self.assertEqual(
+            impl_view["reclassify"][0]["finding_id"], "claude-F1"
+        )
+        self.assertTrue(impl_view["reclassify"][0]["requeued"])
         status, body = self.request_json(
             "GET", "/api/runs/%s/story?item=debt:slice_impl-01" % rid)
         self.assertEqual(status, 200)
         self.assertEqual(body["debt"], [])
-        self.assertEqual(body["reclassify"], [])
+        self.assertEqual(len(body["reclassify"]), 1)
+        self.assertEqual(body["reclassify"][0]["finding_id"], "claude-F1")
+        self.assertTrue(body["reclassify"][0]["requeued"])
 
     def test_run_detail_carries_commit_web_base(self):
         ws = self.workspace("ws-webbase")

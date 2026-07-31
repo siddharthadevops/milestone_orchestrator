@@ -101,6 +101,14 @@ class TestP3Debt(DriverTestCase):
             debt_events = [e for e in state["events"]
                            if e["type"] == "debt_recorded"]
             self.assertEqual(len(debt_events), 2)
+            reclassify_events = [
+                e for e in state["events"]
+                if e["type"] == "reclassify_recorded"
+            ]
+            self.assertEqual(
+                [e.get("source_round") for e in reclassify_events],
+                ["skeleton-codex-r1", "skeleton-claude-r1"],
+            )
             # Once rated, later reviewers receive only the compact
             # technical fingerprint — never the lay framing used by the
             # reclassifier to calibrate gravity.

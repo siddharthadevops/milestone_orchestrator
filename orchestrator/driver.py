@@ -36,12 +36,13 @@ try:
 except ImportError:  # pragma: no cover - non-POSIX: flock degrades to the
     fcntl = None     # staleness check in step(); documented in the README
 
-from . import brainstorming, brainstorming_milestone
+from . import brainstorming, brainstorming_lifecycle, brainstorming_milestone
 from . import contracts, errclass, gitops, interpreter, kvstore, ledgers
 from . import projects, prompts, runners, verifiers, workareas
 from . import state as st
 
 IMPLEMENTATION_SIZE_ACK = "IMPLEMENTATION_SIZE_CUTOFF_ACK"
+FULL_VERIFICATION_SLICE_INTERVAL = 4
 
 DEFAULT_CONFIG = {
     "families_order": ["codex", "claude"],
@@ -124,9 +125,6 @@ DEFAULT_CONFIG = {
     # work into failures. Set a number (seconds) to cap it per run.
     "verification_timeout": None,
     "max_rounds_per_family": 12,
-    # Compatibility name: this now bounds only a baseline suite that keeps
-    # mutating bytes. Final-suite convergence belongs to one fixer call.
-    "max_verify_fix_attempts": 4,
     # Gate commits + the reviewed-point index discipline (see gitops.py).
     # Off by default for pure-state CLI runs; the demo config and the
     # service panel (service.create_run forces it on unless the operator
@@ -325,14 +323,6 @@ def decide(state):
         return Action(A_BRAINSTORM_WAIT, unit=st.unit_key(unit))
     status = unit["status"]
     if status == st.U_PENDING:
-        if (
-            unit["kind"] == st.UNIT_SLICE_IMPL
-            and unit.get("draft") is None
-            and unit.get("baseline_verification") is None
-        ):
-            return Action(
-                A_VERIFY, unit=st.unit_key(unit), stage="baseline"
-            )
         return Action(A_DRAFT, unit=st.unit_key(unit))
     if status in (st.U_PRE_REVIEW_VERIFY, st.U_PRE_SEAL_VERIFY):
         return Action(A_VERIFY, unit=st.unit_key(unit), stage=status)
@@ -564,10 +554,9 @@ class Driver(object):
     def _verification_candidate_fingerprint(self, snapshot=None):
         """Digest the bytes a full suite is expected to certify.
 
-        Gate-generated ledgers are deterministic projections written only
-        after the final suite.  They have never been covered by that suite;
-        excluding them makes the proof honest and lets a documentation
-        closure serve as the following implementation's baseline.
+        Gate-generated ledgers are deterministic projections written after
+        unit completion. They are not product bytes covered by the suite, so
+        excluding them keeps checkpoint fingerprints honest.
         """
         mode, entries = snapshot if snapshot is not None else self._snapshot()
         generated = set(ledgers.generated_paths(self.state))
@@ -630,23 +619,6 @@ class Driver(object):
             operator_bytes
         ).hexdigest()
 
-    def _matching_final_verification(self, commands, fingerprint):
-        """Return an actual stable final-suite event for these exact inputs."""
-        commands = list(commands)
-        for event in reversed(self.state.get("events") or []):
-            if (
-                event.get("type") == "verification"
-                and event.get("boundary") == "final"
-                and event.get("ok") is True
-                and event.get("stable") is True
-                and not event.get("vacuous")
-                and not event.get("reused")
-                and event.get("commands") == commands
-                and event.get("candidate_after") == fingerprint
-            ):
-                return event
-        return None
-
     def _matching_fixer_verification(self, commands, fingerprint):
         """Return a fixer's full-suite success for these exact inputs."""
         commands = list(commands)
@@ -664,15 +636,76 @@ class Driver(object):
                 return event
         return None
 
-    def _baseline_verification_current(self, unit):
-        marker = unit.get("baseline_verification")
-        if not isinstance(marker, dict):
-            return False
-        return (
-            marker.get("commands") == self._verification_commands(unit)
-            and marker.get("candidate_fingerprint")
-            == self._verification_candidate_fingerprint()
+    def _latest_full_verification_checkpoint(self):
+        """Latest full-suite proof whose logical slice actually closed.
+
+        A fixer can certify the suite before its delta and fresh reviews have
+        finished.  That proof is reusable only for the exact same bytes; it is
+        not a cadence anchor until the owning slice closes.  Requiring an
+        explicit cadence also excludes historical implementation baselines.
+        """
+        closed_after = set()
+        for event in reversed(self.state.get("events") or []):
+            if event.get("type") == "slice_closed":
+                closed_after.add(event.get("unit"))
+                continue
+            if (
+                event.get("type") == "verification"
+                and event.get("unit") in closed_after
+                and event.get("cadence") in (
+                    "four_slice_checkpoint", "milestone_final"
+                )
+                and event.get("ok") is True
+                and event.get("stable") is True
+                and not event.get("reused")
+            ):
+                return event
+        return None
+
+    def _completed_logical_slices_since_full_verification(self):
+        """Count completed slices, never their implementation parts."""
+        anchor = self._latest_full_verification_checkpoint()
+        after_seq = -1 if anchor is None else int(anchor.get("seq") or -1)
+        anchor_unit = None if anchor is None else anchor.get("unit")
+        by_key = {
+            st.unit_key(candidate): candidate
+            for candidate in self.state.get("units") or []
+        }
+        completed = set()
+        for event in self.state.get("events") or []:
+            if (
+                event.get("type") != "slice_closed"
+                or int(event.get("seq") or -1) <= after_seq
+                or event.get("unit") == anchor_unit
+            ):
+                continue
+            closed = by_key.get(event.get("unit"))
+            if (
+                closed is None
+                or closed.get("kind") != st.UNIT_SLICE_IMPL
+                or closed.get("implementation_cut")
+            ):
+                continue
+            completed.add(closed.get("slice_id"))
+        return len(completed)
+
+    def _full_verification_cadence(self, unit):
+        """Return the only two ordinary reasons to run the complete suite."""
+        if (
+            unit.get("kind") != st.UNIT_SLICE_IMPL
+            or unit.get("implementation_cut")
+        ):
+            return None
+        plan = st.planned_execution_units(self.state)
+        milestone_final = bool(
+            plan and st.unit_identity(unit) == plan[-1]
         )
+        if milestone_final:
+            return "milestone_final"
+        completed = self._completed_logical_slices_since_full_verification()
+        if completed + 1 >= FULL_VERIFICATION_SLICE_INTERVAL:
+            return "four_slice_checkpoint"
+        return None
 
     def _review_evidence_inputs(self, unit):
         """Return the exact bytes and hot rules a full reviewer would see.
@@ -1345,11 +1378,9 @@ class Driver(object):
         a fixer-supplied suite correction can replace a stale explicit
         gate; otherwise use the suite command an implementer discovered.
 
-        Documentation does not run a pre-review suite, but its single final
-        boundary deliberately uses the known full suite: that catches the
-        rare executable/configuration document without taxing every review
-        cycle.  Before the first implementer discovers a zero-config suite,
-        the early documentation boundaries are necessarily vacuous.
+        Documentation does not run the full suite. The command discovered by
+        implementation is used at the scheduled four-slice checkpoints and
+        at milestone completion.
         """
         configured = self.config.get("verification") or []
         corrected = self._corrected_suite_command()
@@ -3202,6 +3233,38 @@ class Driver(object):
             handoff = brainstorming_milestone.terminal_handoff(
                 self.state, session_id
             )
+        except brainstorming_lifecycle.PublicLifecycleError as exc:
+            if exc.code != brainstorming_lifecycle.UNKNOWN_SESSION:
+                st.fail_run(
+                    self.state,
+                    "recorded Brainstorming session could not be inspected: %s"
+                    % exc,
+                    unit=unit,
+                    type_="brainstorming_operational",
+                )
+                self._save()
+                raise StopStep("Brainstorming inspection failed")
+            unit.pop("brainstorming_wait", None)
+            origin_kind = (wait.get("origin") or {}).get("kind")
+            st.append_event(
+                self.state,
+                "brainstorming_missing_detached",
+                unit=st.unit_key(unit),
+                kind=origin_kind,
+                session_id=session_id,
+            )
+            if origin_kind == "guarantee_calibration":
+                unit["guarantee_calibration"] = {
+                    "status": "discarded",
+                    "session_id": session_id,
+                }
+                return self._finish_draft(
+                    unit, "discarded missing guarantee calibration"
+                )
+            return (
+                "discarded missing Brainstorming session %s; "
+                "originating action resumed" % session_id
+            )
         except brainstorming_milestone.OperationalTerminalError as exc:
             # The terminal session remains retained evidence, but it must no
             # longer monopolize the unit's next action. Operator resume now
@@ -4041,17 +4104,6 @@ class Driver(object):
                 reason="recovered pending unit with recorded draft",
             )
             return "recorded draft recovered; review cycle opened"
-        if (
-            unit["kind"] == st.UNIT_SLICE_IMPL
-            and not unit.get("implementation_attempt_snapshot")
-            and not self._baseline_verification_current(unit)
-        ):
-            # The baseline action and the implementer call are separate
-            # durable steps. Re-check immediately before spending the worker
-            # call so an operator edit between them cannot ride an obsolete
-            # green proof.
-            unit.pop("baseline_verification", None)
-            return "implementation baseline changed; verification required"
         # Skeleton drafts (and re-drafts on remodel) run the `skeletoner`
         # act — one operator-chosen model for all skeleton content work,
         # default claude-opus-5/max; slice docs keep `drafter`, impl keeps
@@ -5951,7 +6003,7 @@ class Driver(object):
             # verification failure or review round. Correcting that run
             # state is a real fix even with zero file edits. The command is
             # part of review evidence, so changed commands invalidate prior
-            # approvals and execute at the final boundary.
+            # approvals and execute at the next scheduled checkpoint.
             command = output["suite_command"].strip()
             effective_before = self._verification_commands(unit)
             suite_state_changed = st.set_discovered_suite(
@@ -6019,6 +6071,7 @@ class Driver(object):
                 unit=st.unit_key(unit),
                 stage="fixer",
                 boundary="final",
+                cadence=self._full_verification_cadence(unit),
                 ok=True,
                 commands=list(verification_commands or []),
                 candidate_before=certified_fingerprint,
@@ -6545,7 +6598,12 @@ class Driver(object):
         if unit["status"] == st.U_PRE_SEAL_VERIFY:
             st.transition_unit(
                 self.state, unit, st.U_SEALING,
-                reason="verification passed; review predicate satisfied",
+                reason=(
+                    "verification passed; review predicate satisfied"
+                    if verification_event is not None
+                    else "review predicate satisfied; full verification "
+                    "not due"
+                ),
             )
         st.record_seal_attempt(
             self.state,
@@ -6579,33 +6637,27 @@ class Driver(object):
         if self._migrate_retired_seal_review_handoff(unit):
             return "retired seal discussion migrated to ordinary reviews"
 
-        baseline = (
-            stage == st.U_PENDING
-            and unit["kind"] == st.UNIT_SLICE_IMPL
-            and unit.get("draft") is None
-        )
         if stage == st.U_PRE_REVIEW_VERIFY:
             # Compatibility waypoint retained for existing states and the
-            # many fix/review back-edges. Full suites are boundary checks,
-            # not a tax between review cycles: reviews use focused checks,
-            # and the complete suite runs once at the final boundary.
+            # many fix/review back-edges. Full suites are scheduled checks,
+            # not a tax between review cycles: reviews use focused checks.
             unit.pop("skip_next_verify", None)
             st.append_event(
                 self.state,
                 "verification_deferred",
                 unit=st.unit_key(unit),
                 stage=stage,
-                boundary="final",
-                reason="full suite runs only after all reviewers are clean",
+                boundary="scheduled",
+                reason="full suite never runs between review cycles",
             )
             st.transition_unit(
                 self.state,
                 unit,
                 st.U_ROUNDS,
-                reason="full verification deferred to final boundary",
+                reason="full verification deferred to scheduled checkpoint",
             )
             return "full verification deferred; review cycle opened"
-        if not baseline and stage != st.U_PRE_SEAL_VERIFY:
+        if stage != st.U_PRE_SEAL_VERIFY:
             raise st.IllegalTransition(
                 "verification cannot run from status %s" % stage
             )
@@ -6635,78 +6687,69 @@ class Driver(object):
                 )
                 return "pre-seal evidence stale; review cycle restarted"
 
+        cadence = self._full_verification_cadence(unit)
+        if cadence is None:
+            unit.pop("suite_verification_pending", None)
+            unit.pop("suite_armed_by_fix", None)
+            st.append_event(
+                self.state,
+                "verification_deferred",
+                unit=st.unit_key(unit),
+                stage=stage,
+                boundary="slice_checkpoint",
+                reason=(
+                    "documentation does not run the full suite"
+                    if unit["kind"] != st.UNIT_SLICE_IMPL
+                    else "full suite runs every four completed logical "
+                    "slices and at milestone close"
+                ),
+            )
+            closed = self._complete_seal_from_reviews(unit)
+            return "full verification not due; %s" % closed
+
         commands = self._verification_commands(unit)
         verification_before = self._snapshot()
         candidate_before = self._verification_candidate_fingerprint(
             verification_before
         )
-        if baseline:
-            reusable = self._matching_final_verification(
-                commands, candidate_before
+        reusable = self._matching_fixer_verification(
+            commands, candidate_before
+        )
+        if reusable is not None:
+            event = st.append_event(
+                self.state,
+                "verification",
+                unit=st.unit_key(unit),
+                stage=stage,
+                boundary="final",
+                cadence=cadence,
+                ok=True,
+                commands=list(commands),
+                candidate_before=candidate_before,
+                candidate_after=candidate_before,
+                stable=True,
+                reused=True,
+                reused_from_seq=reusable["seq"],
+                fixer_certified=True,
+                output_tail=(
+                    "(reused: fixer certified these exact bytes and "
+                    "commands at event %d)" % reusable["seq"]
+                ),
             )
-            if reusable is not None:
-                event = st.append_event(
-                    self.state,
-                    "verification",
-                    unit=st.unit_key(unit),
-                    stage="baseline",
-                    boundary="baseline",
-                    ok=True,
-                    commands=list(commands),
-                    candidate_before=candidate_before,
-                    candidate_after=candidate_before,
-                    stable=True,
-                    reused=True,
-                    reused_from_seq=reusable["seq"],
-                    output_tail=(
-                        "(reused: exact bytes and commands passed at final "
-                        "verification event %d)" % reusable["seq"]
-                    ),
-                )
-                unit["baseline_verification"] = {
-                    "event_seq": event["seq"],
-                    "candidate_fingerprint": candidate_before,
-                    "commands": list(commands),
-                }
-                unit.pop("baseline_unstable_runs", None)
-                return "implementation baseline reused from final verification"
-        else:
-            reusable = self._matching_fixer_verification(
-                commands, candidate_before
+            unit.pop("suite_verification_pending", None)
+            unit.pop("suite_armed_by_fix", None)
+            unit["verify_fix_attempts"]["pre_seal"] = 0
+            closed = self._complete_seal_from_reviews(
+                unit, verification_event=event
             )
-            if reusable is not None:
-                event = st.append_event(
-                    self.state,
-                    "verification",
-                    unit=st.unit_key(unit),
-                    stage=stage,
-                    boundary="final",
-                    ok=True,
-                    commands=list(commands),
-                    candidate_before=candidate_before,
-                    candidate_after=candidate_before,
-                    stable=True,
-                    reused=True,
-                    reused_from_seq=reusable["seq"],
-                    fixer_certified=True,
-                    output_tail=(
-                        "(reused: fixer certified these exact bytes and "
-                        "commands at event %d)" % reusable["seq"]
-                    ),
-                )
-                unit.pop("suite_verification_pending", None)
-                unit.pop("suite_armed_by_fix", None)
-                unit["verify_fix_attempts"]["pre_seal"] = 0
-                closed = self._complete_seal_from_reviews(
-                    unit, verification_event=event
-                )
-                return "fixer suite result reused; %s" % closed
+            return "fixer suite result reused; %s" % closed
 
         verification_changed = []
-        boundary = "baseline" if baseline else "final"
+        boundary = "final"
         self._mark_busy(
             "verification (%s)" % boundary, "verification", None
         )
+        verification_started = time.monotonic()
         try:
             ok, output = run_verification(
                 commands,
@@ -6714,6 +6757,9 @@ class Driver(object):
                 self.config.get("verification_timeout"),
             )
         finally:
+            verification_duration_s = max(
+                0.0, time.monotonic() - verification_started
+            )
             self._clear_busy()
         verification_after = self._snapshot()
         verification_changed = self._snapshot_diff(
@@ -6726,59 +6772,18 @@ class Driver(object):
             self.state,
             "verification",
             unit=st.unit_key(unit),
-            stage="baseline" if baseline else stage,
+            stage=stage,
             boundary=boundary,
+            cadence=cadence,
             ok=ok,
             commands=list(commands),
             candidate_before=candidate_before,
             candidate_after=candidate_after,
             stable=not bool(verification_changed),
             vacuous=(not commands) or None,
+            duration_s=verification_duration_s,
             output_tail=(output or "")[-2000:],
         )
-
-        if baseline:
-            if ok and not verification_changed:
-                unit["baseline_verification"] = {
-                    "event_seq": verification_event["seq"],
-                    "candidate_fingerprint": candidate_after,
-                    "commands": list(commands),
-                }
-                unit.pop("baseline_unstable_runs", None)
-                return "implementation baseline verified (%d command(s))" % len(
-                    commands
-                )
-            if ok:
-                attempts = int(unit.get("baseline_unstable_runs") or 0) + 1
-                unit["baseline_unstable_runs"] = attempts
-                if attempts <= self.config["max_verify_fix_attempts"]:
-                    return (
-                        "baseline verification changed candidate bytes; "
-                        "repeating on the resulting tree"
-                    )
-                reason = (
-                    "baseline verification kept changing candidate bytes "
-                    "after %d attempts: %s"
-                    % (
-                        attempts,
-                        runners.format_changes(verification_changed),
-                    )
-                )
-            else:
-                reason = (
-                    "implementation baseline verification failed before any "
-                    "slice bytes were produced; last output tail: %s"
-                    % (output or "")[-1500:]
-                )
-            unit["last_verification_output"] = (output or "")[-4000:]
-            st.fail_run(
-                self.state,
-                reason,
-                unit=unit,
-                type_="baseline_verification",
-            )
-            self._save()
-            raise StopStep("implementation baseline verification failed")
 
         if verification_changed:
             st.restart_reviews_after_candidate_change(
@@ -6853,7 +6858,7 @@ class Driver(object):
         )
         return "verification failed; full-suite repair queued"
 
-    def _partition_defer_candidates(self, unit, items):
+    def _partition_defer_candidates(self, unit, items, source_round=None):
         """Rate candidates independently and split debt from fix work.
 
         `items` is a list of (finding, raising_family). Returns
@@ -6978,6 +6983,7 @@ class Driver(object):
                 st.append_event(
                     self.state, "reclassify_recorded",
                     unit=st.unit_key(unit),
+                    source_round=source_round,
                     finding_id="%s-%s" % (raising_family, finding.get("id")),
                     reclassifier=opp, drift_risk=risk,
                     drift_damage=damage, threshold=threshold,
@@ -7185,8 +7191,12 @@ class Driver(object):
                 if f.get("severity") in defer_scope
             ]
             if candidates:
+                source_round = "%s-%s-r%d" % (
+                    st.unit_key(unit), family,
+                    len(st.family_rounds(unit, family)) + 1,
+                )
                 deferred, retained = self._partition_defer_candidates(
-                    unit, candidates)
+                    unit, candidates, source_round=source_round)
                 retained_ids = {f.get("id") for f, _family in retained}
                 fix_findings = [
                     f for f in findings

@@ -603,7 +603,7 @@ FIX_VERDICT_ACCOUNT_BLOCK = (
 
 FIX_SELF_CHECK_BLOCK = (
     "- Run cheap focused checks when relevant, never the repo's full suite;\n"
-    "  the driver runs it at the final boundary. Before returning, verify\n"
+    "  the driver runs it at scheduled checkpoints. Before returning, verify\n"
     "  the pending changes cover every `fixed` finding and keep directly\n"
     "  touched statuses and acceptance criteria coherent.\n"
 )
@@ -618,8 +618,8 @@ DELTA_COVERAGE_LINE = (
     "  (statuses, acceptance criteria) stay consistent.\n"
     "- Run commands only when the changed lines themselves warrant it\n"
     "  (e.g. one focused test on the changed behavior). Never run the\n"
-    "  full verification suite here — the driver runs it once at the\n"
-    "  final boundary after whole-artifact reviews are clean.\n"
+    "  full verification suite here — the driver runs it at scheduled\n"
+    "  checkpoints after whole-artifact reviews are clean.\n"
 )
 
 # The canon requires this exact sentence for full review rounds
@@ -1420,7 +1420,7 @@ def build_implement(family, workspace, goal, slice_info, note_path, verification
                     skeleton_path=None, remodeled=False,
                     editable_design_paths=None, implementation_scope=None):
     ver = "\n".join("  %s" % c for c in verification) or (
-        "  (none yet — your suite_command will arm the final boundary)"
+        "  (none yet — your suite_command will arm scheduled checkpoints)"
     )
     # Compatibility hint for a run whose design baseline changed after this
     # slice note was written. Point it at the current skeleton, which carries
@@ -1457,19 +1457,15 @@ def build_implement(family, workspace, goal, slice_info, note_path, verification
         + _implementation_scope_block(implementation_scope)
         + _amendments_block(amendments)
         + _project_context_block(project_context)
-        + "The driver handled the pre-implementation baseline before this\n"
-        "call, reusing an earlier final green only when its exact candidate\n"
-        "bytes and commands still matched. That baseline says nothing about\n"
-        "the edits you make now.\n"
-        "Implement the scope, including its tests. Run focused checks on\n"
+        + "Implement the scope, including its tests. Run focused checks on\n"
         "what you touch while working, but do NOT run the repo's full\n"
-        "test suite at the end. The driver runs it once, after every\n"
-        "configured reviewer is clean at the final boundary.\n"
+        "test suite at the end. After reviews are clean, the driver runs it\n"
+        "after every fourth completed logical slice and at milestone end.\n"
         + IMPLEMENTATION_SIZE_GUIDANCE
         + "Report the repo's official full-suite command (as run from the\n"
         "workspace root) in `suite_command` — it must be non-interactive\n"
         "and run the suite exactly once and exit (never a watch mode).\n"
-        "Final-suite commands currently armed:\n"
+        "Scheduled full-suite commands currently armed:\n"
         + ver
         + "\n\n"
         + REUSE_GATE_BLOCK
@@ -2033,7 +2029,7 @@ def build_fix_findings(
             "the edits to disk for real, or dispose honestly ('rejected'\n"
             "with its consultation, or 'blocked'). EXCEPTION: when a\n"
             "queued finding identifies a missing, narrowed, or wrong\n"
-            "final verification command, return the corrected\n"
+            "scheduled full-suite command, return the corrected\n"
             "`suite_command` and\n"
             "its `suite_command_finding_id`; that is a real DRIVER-STATE\n"
             "fix and may correctly have `files_changed: []`. Do not edit a\n"

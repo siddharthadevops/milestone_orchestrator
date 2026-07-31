@@ -10,7 +10,7 @@ repository.
 
 Covers here:
   (a) the full calculator-shaped lifecycle, with its deliberate bug held for
-      the final-suite failure path (unit sequence, statuses, exact round
+      the milestone-final suite failure path (unit sequence, statuses, exact round
       kind/id sequences including fix_findings and delta_review records,
       derived seal records, gate_commit fields, ledgers, milestone closed);
   (i) fixer coverage violation / rejected-without-consultation protocol
@@ -487,8 +487,7 @@ class TestHappyLifecycle(DriverTestCase):
                    drv.A_REVIEW_ROUND, drv.A_REVIEW_ROUND,
                    drv.A_VERIFY]
                 # slice impl
-                + [drv.A_VERIFY,  # pre-implementation baseline
-                   drv.A_DRAFT, drv.A_VERIFY,
+                + [drv.A_DRAFT, drv.A_VERIFY,
                    drv.A_REVIEW_ROUND, drv.A_FIX, drv.A_DELTA_REVIEW,
                    drv.A_VERIFY,
                    drv.A_REVIEW_ROUND, drv.A_REVIEW_ROUND,
@@ -642,29 +641,30 @@ class TestHappyLifecycle(DriverTestCase):
             self.assertIn("docs/skeleton.md", adjudications)
             self.assertIn("explicit float-support note added", adjudications)
 
-            # Verification bookkeeping: docs ran only their final suite; the
-            # implementation reused the doc's exact final green as baseline,
-            # then its first final suite exposed the div bug exactly once.
+            # Documentation never runs the suite. The final logical slice
+            # reaches the milestone-end checkpoint, whose first attempt
+            # exposes the div bug exactly once.
             verifs = [e for e in state["events"] if e["type"] == "verification"]
             self.assertEqual([e["ok"] for e in verifs if e["unit"] == "skeleton"],
-                             [True])
+                             [])
             self.assertEqual(
                 [e["ok"] for e in verifs if e["unit"] == "slice_doc-01"],
-                [True],
+                [],
             )
             self.assertEqual(
                 [e["ok"] for e in verifs if e["unit"] == "slice_impl-01"],
-                [True, False, True, True],
+                [False, True, True],
             )
             impl_verifs = [
                 e for e in verifs if e["unit"] == "slice_impl-01"
             ]
-            self.assertEqual(impl_verifs[0]["boundary"], "baseline")
-            self.assertTrue(impl_verifs[0]["reused"])
             self.assertEqual(
-                [e["boundary"] for e in impl_verifs[1:]],
+                [e["boundary"] for e in impl_verifs],
                 ["final", "final", "final"],
             )
+            self.assertTrue(all(
+                e["cadence"] == "milestone_final" for e in impl_verifs
+            ))
             self.assertTrue(impl_verifs[-1]["reused"])
             self.assertTrue(impl_verifs[-2]["fixer_certified"])
             self.assertEqual(impl["verify_fix_attempts"],
@@ -744,11 +744,10 @@ class TestOperatorAmendmentsFlow(DriverTestCase):
 
 
 class TestSuiteDiscoveryProtocol(DriverTestCase):
-    """Zero-config verification: the first implementation baseline is
-    necessarily vacuous, then suite_command arms its final boundary and all
-    later documentation/implementation boundaries."""
+    """Zero-config verification: implementation may discover suite_command,
+    which arms subsequent scheduled checkpoints but never documentation."""
 
-    def test_discovered_suite_arms_impl_final_after_vacuous_baseline(self):
+    def test_discovered_suite_arms_milestone_final_checkpoint(self):
         with tempfile.TemporaryDirectory(prefix="orch-mock-") as ws:
             path = init_state(ws, make_config(verification=[]))
             impl = impl_script()
@@ -771,26 +770,25 @@ class TestSuiteDiscoveryProtocol(DriverTestCase):
             self.assertEqual([e["command"] for e in discoveries],
                              [VERIFY_CMD])
 
-            # Before discovery, docs and the first implementation baseline
-            # are vacuous. Every implementation final attempt uses the newly
-            # discovered command; no review/fix cycle runs it in between.
+            # Documentation creates no verification events. Every attempt at
+            # the milestone-final checkpoint uses the discovered command; no
+            # review/fix cycle runs it in between.
             ver = [e for e in state["events"] if e["type"] == "verification"]
             self.assertTrue(ver)
             docs = [e for e in ver if not e["unit"].startswith("slice_impl")]
-            self.assertTrue(docs)
-            self.assertTrue(all(e["commands"] == [] for e in docs))
+            self.assertEqual(docs, [])
             impl_ver = [e for e in ver if e["unit"] == "slice_impl-01"]
-            self.assertEqual(impl_ver[0]["boundary"], "baseline")
-            self.assertEqual(impl_ver[0]["commands"], [])
-            self.assertTrue(impl_ver[0]["vacuous"])
             self.assertEqual(
-                [e["commands"] for e in impl_ver[1:]],
+                [e["commands"] for e in impl_ver],
                 [[VERIFY_CMD], [VERIFY_CMD], [VERIFY_CMD]],
             )
             self.assertEqual(
-                [e["boundary"] for e in impl_ver[1:]],
+                [e["boundary"] for e in impl_ver],
                 ["final", "final", "final"],
             )
+            self.assertTrue(all(
+                e["cadence"] == "milestone_final" for e in impl_ver
+            ))
 
             # Reviews receive one generic verification boundary. The exact
             # suite remains driver state and never anchors their judgment.
