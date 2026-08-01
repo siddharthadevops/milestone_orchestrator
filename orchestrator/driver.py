@@ -383,6 +383,7 @@ class Driver(object):
         # for profile-less runs and ref-only labels.
         interpreter.verify_embedded(self.state)
         self.workspace = self.state["workspace"]
+        self._busy_lock = threading.RLock()
         self.runner = runner or runners.SubprocessRunner(
             self.config["commands"], self.config.get("timeouts", {}),
             stall_window_s=self.config.get("worker_stall_window_s"),
@@ -1523,11 +1524,8 @@ class Driver(object):
           the partial dead work): no destructive action — the next fixer
           gets a KILLED NOTICE instead (killed_fix_notice flag).
         """
-        path = self._busy_path()
-        try:
-            with open(path, "r", encoding="utf-8") as fh:
-                marker = json.load(fh)
-        except (OSError, ValueError):
+        marker = self._read_busy()
+        if marker is None:
             return
         marker_state = marker.get("state_digest")
         current_state = self._state_file_digest()
@@ -1538,29 +1536,58 @@ class Driver(object):
         ):
             self._clear_busy()
             return
-        # A stale provider marker means the call consumed an unknown number
-        # of tokens before the process died.  Preserve that uncertainty even
-        # when no Git repair is needed (clean tree or Git-disabled run).
-        if marker.get("family"):
+        calls = list(marker.get("pending_calls") or [])
+        calls.append(self._busy_call(marker))
+        deduped = []
+        seen_ids = set()
+        for call in calls:
+            if not isinstance(call, dict):
+                continue
+            call_id = call.get("call_id")
+            if call_id and call_id in seen_ids:
+                continue
+            if call_id:
+                seen_ids.add(call_id)
+            deduped.append(call)
+        calls = deduped
+        # Preserve every unsaved physical call. Completed parents contribute
+        # their known lower bound; the active child remains explicitly
+        # partial because the process died before its result was durable.
+        accounted = False
+        for call in calls:
+            if not call.get("family"):
+                continue
             unit = st.current_unit(self.state)
+            usage = (
+                copy.deepcopy(call.get("token_usage"))
+                if call.get("completed") else None
+            )
             st.append_event(
                 self.state,
                 "worker_interrupted",
                 unit=st.unit_key(unit) if unit is not None else None,
-                label=marker.get("label"),
-                kind=marker.get("kind"),
-                family=marker.get("family"),
-                model=marker.get("model"),
-                effort=marker.get("effort"),
-                duration_s=None,
-                token_usage=None,
-                token_usage_partial=True,
+                label=call.get("label"),
+                kind=call.get("kind"),
+                family=call.get("family"),
+                model=call.get("model"),
+                effort=call.get("effort"),
+                duration_s=(
+                    call.get("duration_s") if call.get("completed") else None
+                ),
+                token_usage=usage,
+                token_usage_partial=bool(
+                    call.get("token_usage_partial", False)
+                    or usage is None
+                ),
             )
+            accounted = True
+        if accounted:
             self._save()
         if not gitops.enabled(self.config):
             self._clear_busy()
             return
-        kind = marker.get("kind")
+        root_call = calls[0] if calls else marker
+        kind = root_call.get("kind")
         unit = st.current_unit(self.state)
         if unit is None or kind in (None, "verification"):
             self._clear_busy()
@@ -1588,7 +1615,7 @@ class Driver(object):
                 self.state,
                 "unclean_stop_restored",
                 unit=st.unit_key(unit),
-                killed_call=marker.get("label"),
+                killed_call=root_call.get("label"),
                 kind=kind,
             )
             self._save()
@@ -1597,12 +1624,12 @@ class Driver(object):
         if kind == contracts.KIND_FIX_FINDINGS and status in (
             st.U_FIXING, st.U_DELTA_REVIEW
         ):
-            unit["killed_fix_notice"] = marker.get("label") or True
+            unit["killed_fix_notice"] = root_call.get("label") or True
             st.append_event(
                 self.state,
                 "unclean_stop_noticed",
                 unit=st.unit_key(unit),
-                killed_call=marker.get("label"),
+                killed_call=root_call.get("label"),
             )
             self._save()
         self._clear_busy()
@@ -1818,32 +1845,123 @@ class Driver(object):
     def _busy_path(self):
         return os.path.join(self._runtime_dir(), "current.json")
 
-    def _mark_busy(self, label, kind, family, model=None, effort=None):
-        """Cosmetic in-flight marker for the panel (NOT part of the state
-        ledger): what call is executing right now and since when. Written
-        atomically so panel readers never observe a partial record."""
+    @staticmethod
+    def _busy_call(marker):
+        return {
+            key: copy.deepcopy(value)
+            for key, value in marker.items()
+            if key != "pending_calls"
+        }
+
+    def _read_busy(self):
+        try:
+            with open(self._busy_path(), "r", encoding="utf-8") as fh:
+                marker = json.load(fh)
+        except (OSError, ValueError):
+            return None
+        return marker if isinstance(marker, dict) else None
+
+    def _write_busy(self, marker):
         try:
             os.makedirs(os.path.dirname(self._busy_path()), exist_ok=True)
             tmp = self._busy_path() + ".tmp"
             with open(tmp, "w", encoding="utf-8") as fh:
-                json.dump(
-                    {"label": label, "kind": kind, "family": family,
-                     "model": model, "effort": effort,
-                     "started_at": time.time(),
-                     "call_id": str(uuid.uuid4()),
-                     "state_digest": self._state_file_digest()},
-                    fh,
-                )
+                json.dump(marker, fh)
             os.replace(tmp, self._busy_path())
             return True
         except OSError:
             return False
 
+    def _mark_busy(self, label, kind, family, model=None, effort=None,
+                   nested=False):
+        """Durable in-flight marker, with any unsaved parent calls.
+
+        The top-level fields remain the panel's active-call projection.
+        Nested classifiers retain the completed parent in ``pending_calls``
+        until the enclosing step saves all accounting together.
+        """
+        with self._busy_lock:
+            state_digest = self._state_file_digest()
+            pending = []
+            if nested:
+                previous = self._read_busy()
+                if (
+                    previous is not None
+                    and previous.get("state_digest") == state_digest
+                ):
+                    pending = list(previous.get("pending_calls") or [])
+                    pending.append(self._busy_call(previous))
+            marker = {
+                "label": label,
+                "kind": kind,
+                "family": family,
+                "model": model,
+                "effort": effort,
+                "started_at": time.time(),
+                "call_id": str(uuid.uuid4()),
+                "state_digest": state_digest,
+            }
+            if pending:
+                marker["pending_calls"] = pending
+            return self._write_busy(marker)
+
+    def _update_busy_accounting(self, call, duration_s=None):
+        """Attach a completed physical call's known cost to its sentinel."""
+        with self._busy_lock:
+            marker = self._read_busy()
+            if marker is None:
+                return False
+            if isinstance(call, dict):
+                usage = call.get("token_usage")
+                partial = call.get("token_usage_partial", False)
+                duration = call.get("duration_s")
+            else:
+                usage = getattr(call, "token_usage", None)
+                partial = getattr(call, "token_usage_partial", False)
+                duration = getattr(call, "duration_s", None)
+            marker["completed"] = True
+            marker["duration_s"] = (
+                duration_s if duration_s is not None else duration
+            )
+            marker["token_usage"] = copy.deepcopy(usage)
+            marker["token_usage_partial"] = bool(
+                partial or usage is None
+            )
+            return self._write_busy(marker)
+
+    def _require_busy_accounting(self, kind, family, label, call,
+                                 duration_s=None, parent_call=None):
+        """Do not continue after losing the only crash-safe call marker."""
+        if self._update_busy_accounting(call, duration_s=duration_s):
+            return
+        unit = st.current_unit(self.state)
+        self._record_worker_unaccepted(
+            unit, kind, family, call,
+            "%s completed but its accounting marker could not be updated"
+            % label,
+        )
+        if parent_call is not None:
+            self._record_worker_unaccepted(
+                unit, parent_call[0], parent_call[1], parent_call[2],
+                "parent call could not safely start nested accounting",
+            )
+        st.fail_run(
+            self.state,
+            "%s completed but its accounting marker could not be updated"
+            % kind,
+            unit=unit,
+            type_="orchestrator",
+        )
+        self._save()
+        self._clear_busy()
+        raise StopStep("worker accounting marker unavailable")
+
     def _clear_busy(self):
-        try:
-            os.unlink(self._busy_path())
-        except OSError:
-            pass
+        with self._busy_lock:
+            try:
+                os.unlink(self._busy_path())
+            except OSError:
+                pass
 
     def _call(self, family, prompt, kind, raw_name, model=None, effort=None,
               extensions=None, roots=None, validate_opts=None,
@@ -1891,7 +2009,13 @@ class Driver(object):
                     start_session=start_session, session_ref=session_ref,
                     active_control=call_control,
                 )
+                self._require_busy_accounting(
+                    kind, family, raw_name, result
+                )
             except verifiers.VerifierError as exc:
+                self._require_busy_accounting(
+                    kind, family, raw_name, exc
+                )
                 # Slice 4's non-repairable family (the operator's policy or
                 # the environment, e.g. a missing reuse-source directory —
                 # never the worker): a recorded run failure the operator
@@ -1924,6 +2048,10 @@ class Driver(object):
                 raise StopStep(str(exc))
             except (runners.RunnerError, runners.WorkerProtocolError) as exc:
                 failed_duration_s = time.time() - physical_started
+                self._require_busy_accounting(
+                    kind, family, raw_name, exc,
+                    duration_s=failed_duration_s,
+                )
                 proto_paths = self._save_protocol_raws(raw_name, exc)
                 if call_control is not None and call_control.interrupted:
                     # The transport accepted the hard stop. A late transport
@@ -2160,6 +2288,7 @@ class Driver(object):
                 call.get("family"),
                 model=call.get("model"),
                 effort=call.get("effort"),
+                nested=True,
             ):
                 raise RuntimeError(
                     "classifier accounting marker is unavailable"
@@ -2170,6 +2299,7 @@ class Driver(object):
     def _classify_call_recorder(self, raw_name):
         """Own the cost of the optional opposite-family classifier call."""
         def _record(call):
+            self._update_busy_accounting(call)
             st.append_event(
                 self.state,
                 "error_classifier_call",
@@ -2968,6 +3098,10 @@ class Driver(object):
                     "recovery baseline"
                 )
         except StopStep:
+            # The origin call was already recorded above. Persist only the
+            # structural failure here; report/fix callers instead add their
+            # worker_unaccepted accounting before their single save.
+            self._save()
             raise
         except Exception as exc:
             st.fail_run(
@@ -3960,11 +4094,11 @@ class Driver(object):
         st.append_event(
             self.state,
             "worker_unaccepted",
-            unit=st.unit_key(unit),
+            unit=st.unit_key(unit) if unit is not None else None,
             kind=kind,
             family=family,
             reason=str(reason or "")[:300],
-            duration_s=result.duration_s,
+            duration_s=getattr(result, "duration_s", None),
             token_usage=copy.deepcopy(getattr(result, "token_usage", None)),
             token_usage_partial=bool(
                 getattr(result, "token_usage_partial", False)
@@ -5739,7 +5873,6 @@ class Driver(object):
                        sorted(known) or "none"),
                     unit=unit,
                 )
-                self._save()
                 raise StopStep("bad contests reference")
 
     def _validate_adjudication_refs(self, unit, output):
@@ -5755,7 +5888,6 @@ class Driver(object):
                         % (f.get("id"), ref, sorted(known) or "none"),
                         unit=unit,
                     )
-                    self._save()
                     raise StopStep("bad adjudication reference")
 
     def _validate_contested_dispositions(self, unit, output):
@@ -5785,7 +5917,6 @@ class Driver(object):
                        contested[f.get("id")]),
                     unit=unit,
                 )
-                self._save()
                 raise StopStep("contested finding killed by pointer")
 
     def _report_call(self, unit, family, prompt, kind, raw_name,
@@ -7260,6 +7391,7 @@ class Driver(object):
                             opp,
                             model=effective_model,
                             effort=effective_effort,
+                            nested=True,
                         ):
                             if parent_call is not None:
                                 self._record_worker_unaccepted(
@@ -7291,6 +7423,13 @@ class Driver(object):
                                 {"require_drift_damage": True}
                                 if gap_backstop else None
                             ),
+                        )
+                        self._require_busy_accounting(
+                            contracts.KIND_RECLASSIFY,
+                            opp,
+                            raw_name,
+                            result,
+                            parent_call=parent_call,
                         )
                         self._save_raw(raw_name, result.text)
                         duration_s = result.duration_s
@@ -7325,6 +7464,13 @@ class Driver(object):
                             reason = "reclassifier blocked"
                     except (runners.RunnerError,
                             runners.WorkerProtocolError) as exc:
+                        self._require_busy_accounting(
+                            contracts.KIND_RECLASSIFY,
+                            opp,
+                            raw_name,
+                            exc,
+                            parent_call=parent_call,
+                        )
                         self._record_fatal_malformed(
                             raw_name, contracts.KIND_RECLASSIFY, opp, exc,
                             self._save_protocol_raws(raw_name, exc),

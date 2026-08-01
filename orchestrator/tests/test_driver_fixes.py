@@ -27,6 +27,7 @@ import os
 import tempfile
 import unittest
 
+from orchestrator import contracts
 from orchestrator import driver as drv
 from orchestrator import runners
 from orchestrator import state as st
@@ -375,13 +376,25 @@ class TestTypedInfraFailures(DriverTestCase):
 
     def test_interrupted_classifier_is_recovered_as_unknown_usage(self):
         with tempfile.TemporaryDirectory(prefix="orch-fix-") as ws:
+            parent_usage = {
+                "input_tokens": 70,
+                "cached_input_tokens": 20,
+                "output_tokens": 10,
+                "reasoning_output_tokens": 3,
+                "total_tokens": 80,
+            }
             path = init_state(
                 ws, make_config(
                     infra_retry_backoff_s=[], error_classifier=True
                 )
             )
+            parent_failure = runners.RunnerError(
+                "a novel provider failure"
+            )
+            parent_failure.token_usage = parent_usage
+            parent_failure.token_usage_partial = False
             runner = _FailingRunner([
-                runners.RunnerError("a novel provider failure"),
+                parent_failure,
                 KeyboardInterrupt(),
             ])
             driver = drv.Driver(path, runner=runner)
@@ -401,10 +414,26 @@ class TestTypedInfraFailures(DriverTestCase):
                 event for event in state["events"]
                 if event["type"] == "worker_interrupted"
             ]
-            self.assertEqual(len(interrupted), 1)
-            self.assertEqual(interrupted[0]["kind"], "error_classifier")
-            self.assertIsNone(interrupted[0]["token_usage"])
-            self.assertTrue(interrupted[0]["token_usage_partial"])
+            self.assertEqual(len(interrupted), 2)
+            by_kind = {event["kind"]: event for event in interrupted}
+            self.assertEqual(
+                by_kind[contracts.KIND_DRAFT_SKELETON]["token_usage"],
+                parent_usage,
+            )
+            self.assertFalse(
+                by_kind[contracts.KIND_DRAFT_SKELETON][
+                    "token_usage_partial"
+                ]
+            )
+            self.assertIsNone(
+                by_kind["error_classifier"]["token_usage"]
+            )
+            self.assertTrue(
+                by_kind["error_classifier"]["token_usage_partial"]
+            )
+            self.assertEqual(
+                st.summary(state)["work_token_usage"], parent_usage
+            )
             self.assertTrue(st.summary(state)["work_token_usage_partial"])
 
     def test_classifier_io_is_persisted_and_evidence_recorded(self):

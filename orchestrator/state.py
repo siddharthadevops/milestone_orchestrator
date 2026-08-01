@@ -1848,6 +1848,24 @@ def _work_token_usage(state):
 
     for unit in state.get("units") or []:
         key = unit_key(unit)
+        stabilization = (
+            (unit.get("implementation_stabilization") or {}).get(
+                "implementation_size"
+            )
+        )
+        if isinstance(stabilization, dict):
+            episode_id = stabilization.get("episode_id")
+            has_interrupt_accounting = bool(
+                episode_id
+                and any(
+                    event.get("type") == "implementation_size_interrupted"
+                    and event.get("unit") == key
+                    and event.get("episode_id") == episode_id
+                    for event in state.get("events") or []
+                )
+            )
+            if not has_interrupt_accounting:
+                partial[key] = True
         for draft in _draft_history(state, unit):
             account(
                 key,

@@ -105,6 +105,55 @@ class TestP3Debt(DriverTestCase):
             self.assertEqual(observed["kind"], contracts.KIND_RECLASSIFY)
             self.assertEqual(observed["family"], "claude")
 
+    def test_reclassifier_crash_preserves_completed_parent_usage(self):
+        with tempfile.TemporaryDirectory(prefix="orch-mock-") as ws:
+            path = init_state(ws, make_config(p3_reclassify_debt=True))
+            driver = drv.Driver(path, runner=runners.MockRunner([]))
+            usage = {
+                "input_tokens": 90,
+                "cached_input_tokens": 30,
+                "output_tokens": 10,
+                "reasoning_output_tokens": 4,
+                "total_tokens": 100,
+            }
+            self.assertTrue(driver._mark_busy(
+                "skeleton-codex-r1",
+                contracts.KIND_REVIEW_ROUND,
+                "codex",
+            ))
+            self.assertTrue(driver._update_busy_accounting(
+                runners.RunnerResult("{}", 0, 2.0, token_usage=usage)
+            ))
+            self.assertTrue(driver._mark_busy(
+                "skeleton-reclassify-codex-F1",
+                contracts.KIND_RECLASSIFY,
+                "claude",
+                nested=True,
+            ))
+
+            recovered = drv.Driver(path, runner=runners.MockRunner([]))
+            interrupted = [
+                event for event in recovered.state["events"]
+                if event["type"] == "worker_interrupted"
+            ]
+            self.assertEqual(len(interrupted), 2)
+            by_kind = {event["kind"]: event for event in interrupted}
+            self.assertEqual(
+                by_kind[contracts.KIND_REVIEW_ROUND]["token_usage"], usage
+            )
+            self.assertFalse(
+                by_kind[contracts.KIND_REVIEW_ROUND]["token_usage_partial"]
+            )
+            self.assertTrue(
+                by_kind[contracts.KIND_RECLASSIFY]["token_usage_partial"]
+            )
+            self.assertEqual(
+                st.summary(recovered.state)["work_token_usage"], usage
+            )
+            self.assertTrue(
+                st.summary(recovered.state)["work_token_usage_partial"]
+            )
+
     def test_reclassifier_admission_failure_keeps_parent_review_usage(self):
         with tempfile.TemporaryDirectory(prefix="orch-mock-") as ws:
             path = init_state(ws, make_config(p3_reclassify_debt=True))
@@ -123,11 +172,13 @@ class TestP3Debt(DriverTestCase):
             )
             original_mark = driver._mark_busy
 
-            def admit(label, kind, family, model=None, effort=None):
+            def admit(label, kind, family, model=None, effort=None,
+                      nested=False):
                 if kind == contracts.KIND_RECLASSIFY:
                     return False
                 return original_mark(
-                    label, kind, family, model=model, effort=effort
+                    label, kind, family, model=model, effort=effort,
+                    nested=nested,
                 )
 
             with mock.patch.object(driver, "_mark_busy", side_effect=admit):

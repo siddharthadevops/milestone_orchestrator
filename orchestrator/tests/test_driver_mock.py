@@ -1105,7 +1105,10 @@ class TestUncleanStopRepair(DriverTestCase):
     def test_stale_usage_is_recorded_before_git_startup_failure(self):
         with tempfile.TemporaryDirectory(prefix="orch-mock-") as ws:
             path = init_state(ws, make_config())
-            self._marker(ws, "draft_skeleton")
+            active = drv.Driver(path, runner=runners.MockRunner([]))
+            self.assertTrue(active._mark_busy(
+                "skeleton-draft", contracts.KIND_DRAFT_SKELETON, "codex"
+            ))
             os.rename(os.path.join(ws, ".git"), os.path.join(ws, ".git-bad"))
 
             recovered = drv.Driver(path, runner=runners.MockRunner([]))
@@ -1461,6 +1464,41 @@ class TestFixerProtocolFailures(DriverTestCase):
                 path, driver,
                 ["contests unknown adjudication", "nope/F1"],
                 unit_key="skeleton",
+            )
+
+    def test_structural_failure_does_not_save_before_call_accounting(self):
+        with tempfile.TemporaryDirectory(prefix="orch-mock-") as ws:
+            path = init_state(ws, make_config())
+            runner = runners.MockRunner([
+                skeleton_script()[0],
+                step("review_round", report("review_round", [finding(
+                    "F1", "re-raising a settled point",
+                    contests={"rejection_id": "nope/F1",
+                              "new_evidence": "made-up evidence"},
+                )]), family="codex"),
+            ])
+            driver = drv.Driver(path, runner=runner)
+            self.step_until(
+                driver,
+                lambda state: state["units"][0]["status"] == st.U_ROUNDS,
+            )
+
+            with mock.patch.object(
+                driver,
+                "_record_worker_unaccepted",
+                side_effect=KeyboardInterrupt(),
+            ), self.assertRaises(KeyboardInterrupt):
+                driver.step()
+
+            self.assertIsNone(st.load(path)["failure"])
+            recovered = drv.Driver(path, runner=runners.MockRunner([]))
+            interrupted = [
+                event for event in recovered.state["events"]
+                if event["type"] == "worker_interrupted"
+            ]
+            self.assertEqual(len(interrupted), 1)
+            self.assertEqual(
+                interrupted[0]["kind"], contracts.KIND_REVIEW_ROUND
             )
 
 

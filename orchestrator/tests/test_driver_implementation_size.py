@@ -1886,6 +1886,9 @@ class DriverImplementationSizeTest(unittest.TestCase):
                 driver.step()
 
             interrupted = st.load(path)
+            self.assertTrue(
+                st.summary(interrupted)["work_token_usage_partial"]
+            )
             marker = st.current_unit(interrupted)[
                 "implementation_stabilization"
             ]["implementation_size"]
