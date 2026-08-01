@@ -294,11 +294,17 @@ class ServiceApiTest(unittest.TestCase):
             text,
         )
         self.assertIn("function reclassifyChip", text)
+        self.assertIn("function reclassifyWorkChip", text)
+        self.assertIn("function reclassifyHistoryChips", text)
         self.assertIn("const reclassByRound = new Map()", text)
         self.assertIn('liveKind === "verification"', text)
         self.assertIn('liveKind === "reclassify"', text)
         self.assertIn('addLine("Verify", label, group.chips)', text)
-        self.assertIn('addLine("Reclassify", "Decision", group.chips)', text)
+        self.assertNotIn('addLine("Reclassify", "Decision", group.chips)', text)
+        self.assertIn(
+            "current.chips.push(...reclassifyHistoryChips(linked, u.unit))",
+            text,
+        )
         self.assertIn('d.story === "verify"', text)
         self.assertIn('addLine(`${family} review`', text)
         self.assertIn(
@@ -1317,6 +1323,7 @@ class StoryApiTest(ServiceApiTest):
             "seq": 1002, "at": "2026-07-05T10:25:00+0200",
             "type": "reclassify_recorded", "unit": "skeleton",
             "finding_id": "claude-F10", "reclassifier": "codex",
+            "model": "gpt-5.6-sol", "effort": "max",
             "drift_risk": "low", "threshold": "low",
             "defer_ok": True, "reason": "cosmetic",
             "token_usage": {
@@ -1341,6 +1348,12 @@ class StoryApiTest(ServiceApiTest):
         self.assertEqual(body["debt"][0]["drift_risk"], "low")
         self.assertEqual(body["reclassify"][0]["defer_ok"], True)
         self.assertEqual(body["reclassify"][0]["reclassifier"], "codex")
+        partial_summary = next(
+            event for event in skel["reclassify"]
+            if event["finding_id"] == "claude-F10"
+        )
+        self.assertEqual(partial_summary["model"], "gpt-5.6-sol")
+        self.assertEqual(partial_summary["effort"], "max")
         self.assertEqual(body["reclassify"][0]["drift_risk"], "low")
         self.assertEqual(body["reclassify"][0]["threshold"], "low")
         partial = next(

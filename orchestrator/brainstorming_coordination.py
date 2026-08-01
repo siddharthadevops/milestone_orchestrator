@@ -744,7 +744,9 @@ def build_turn_prompt(
         ownership = (
             "You are the common-sense participant. Do not edit the target "
             "document, take a position, or propose a solution. Ask only the "
-            "few anti-drift questions the two positions still need to answer."
+            "few anti-drift questions the two positions still need to answer. "
+            "Use the same natural language as the Brainstorming request and "
+            "discussion; if they are mixed, follow the request."
         )
 
     return """\
@@ -951,14 +953,16 @@ def build_external_narrator_prompt(state, intervention):
 {sources}
 
 {amendments}Read the Brainstorming chat from beginning to end. Ask Dante's next
-few direct anti-drift questions. Do not edit files, take a position, propose a
-solution, summarize the discussion, or answer your own questions. If no
-material question remains, say only `No further questions.`
+few direct anti-drift questions. Use the same natural language as the
+Brainstorming request and discussion; if they are mixed, follow the request.
+Do not edit files, take a position, propose a solution, summarize the
+discussion, or answer your own questions. If no material question remains,
+say only the natural equivalent of `No further questions.` in that language.
 
 Return exactly one JSON object with kind "discussion_turn" and a non-empty
-"markdown" field with Dante's single spoken intervention, in natural English.
-Add no other fields. Keep it concise, preferably under 3,000 characters, but
-never omit a material question merely to fit.
+"markdown" field with Dante's single spoken intervention in that same
+language. Add no other fields. Keep it concise, preferably under 3,000
+characters, but never omit a material question merely to fit.
 
 {mandatory}""".format(
             scene=DANTE_SCENE_INTRO.rstrip(),

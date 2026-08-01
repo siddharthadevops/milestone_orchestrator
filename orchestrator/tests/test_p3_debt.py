@@ -65,6 +65,45 @@ def reclassify(defer_ok, family, reason="verified", risk=None,
 
 
 class TestP3Debt(DriverTestCase):
+    def test_reclassifier_repair_keeps_full_duration_and_profile(self):
+        with tempfile.TemporaryDirectory(prefix="orch-mock-") as ws:
+            cfg = make_config(p3_reclassify_debt=True)
+            cfg["model_defaults"] = {
+                "claude": {"model": "claude-opus-5", "effort": "max"}
+            }
+            path = init_state(ws, cfg)
+            mock_runner = runners.MockRunner([
+                draft_step(),
+                step(
+                    "review_round",
+                    report("review_round", [finding("F1", "stale word")]),
+                    family="codex",
+                ),
+                step("reclassify", "not json", family="claude"),
+                reclassify(True, family="claude", reason="cosmetic"),
+            ])
+            driver = drv.Driver(path, runner=mock_runner)
+            self.step_until(
+                driver,
+                lambda state: any(
+                    event["type"] == "reclassify_recorded"
+                    for event in state["events"]
+                ),
+            )
+
+            state = st.load(path)
+            event = next(
+                event for event in state["events"]
+                if event["type"] == "reclassify_recorded"
+            )
+            self.assertEqual(event["duration_s"], 0.01)
+            self.assertEqual(event["logical_duration_s"], 0.02)
+            self.assertEqual(event["model"], "claude-opus-5")
+            self.assertEqual(event["effort"], "max")
+            self.assertAlmostEqual(
+                st.summary(state)["units"][0]["work_duration_s"], 0.04
+            )
+
     def test_reclassifier_busy_marker_names_resolved_provider(self):
         with tempfile.TemporaryDirectory(prefix="orch-mock-") as ws:
             observed = {}

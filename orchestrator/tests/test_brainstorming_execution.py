@@ -16,7 +16,7 @@ from orchestrator import brainstorming_execution as execution
 from orchestrator import runners
 
 
-def request(workspace_path="/workspace"):
+def request(workspace_path):
     return {
         "workspace_path": workspace_path,
         "target_path": "docs/decision.md",
@@ -151,6 +151,7 @@ class BrainstormingExecutionTest(unittest.TestCase):
         self.addCleanup(self._tmp.cleanup)
         self.root = self._tmp.name
         self.store = bs.SessionStore(self.root)
+        self.workspace = os.path.join(self.root, "workspace")
         self.fake_state = os.path.join(self.root, "provider-state")
         os.makedirs(self.fake_state)
         self.launched_contexts = []
@@ -232,9 +233,10 @@ class BrainstormingExecutionTest(unittest.TestCase):
         return path
 
     def _create_running(
-        self, session_id, participants=None, workspace_path="/workspace"
+        self, session_id, participants=None, workspace_path=None
     ):
         participants = participants or cross_family_participants()
+        workspace_path = workspace_path or self.workspace
         created = self.store.create(
             session_id,
             request(workspace_path),
@@ -577,7 +579,7 @@ class BrainstormingExecutionTest(unittest.TestCase):
 
         created = self.store.create(
             "created",
-            request(),
+            request(self.workspace),
             run_config(participants),
             participants,
         )
@@ -591,7 +593,7 @@ class BrainstormingExecutionTest(unittest.TestCase):
 
         terminal = self.store.create(
             "terminal",
-            request(),
+            request(self.workspace),
             run_config(participants),
             participants,
         )
@@ -654,7 +656,7 @@ class BrainstormingExecutionTest(unittest.TestCase):
         self.assertEqual(len(executor.calls), 4)
         for call in executor.calls:
             self.assertIs(call["execution_context"], context)
-            self.assertEqual(call["workspace_path"], "/workspace")
+            self.assertEqual(call["workspace_path"], self.workspace)
         durable_ref = bs.provider_session_ref(
             "codex-primary",
             self.store.read("valid").state["participant_sessions"]["editor"],

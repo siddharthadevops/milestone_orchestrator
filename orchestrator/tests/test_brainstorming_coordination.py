@@ -256,7 +256,11 @@ class BrainstormingCoordinationTest(unittest.TestCase):
         self.assertIn("He asks only questions", discussion_prompt)
         self.assertIn("Read the Brainstorming chat", discussion_prompt)
         self.assertIn("anti-drift questions", discussion_prompt)
-        self.assertIn("natural English", discussion_prompt)
+        self.assertIn(
+            "same natural language as the\nBrainstorming request",
+            discussion_prompt,
+        )
+        self.assertNotIn("natural English", discussion_prompt)
         self.assertTrue(
             discussion_prompt.endswith(coordination.DANTE_MANDATORY_LINE)
         )

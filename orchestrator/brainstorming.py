@@ -2784,27 +2784,37 @@ class SessionStore:
     def path(self):
         return self._store.client.path
 
-    def transcript_ref(self, session_id):
-        """Return this session's stable Brainstorming-owned human artifact."""
+    def _session_directory(self, session_id):
+        """Return private runtime storage for prompts and provider outputs."""
         session_id = kvstore.validate_fragment(session_id, "session_id")
         directory = hashlib.sha256(
             session_id.encode("utf-8", errors="surrogatepass")
         ).hexdigest()
-        return os.path.abspath(
-            os.path.join(self._transcript_root, directory, "chat.md")
+        return os.path.abspath(os.path.join(self._transcript_root, directory))
+
+    def transcript_ref(self, session_id):
+        """Return this session's private, operational chat reference."""
+        return os.path.join(self._session_directory(session_id), "chat.md")
+
+    def delivered_transcript_ref(self, session_id, request):
+        """Return the final chat artifact placed beside the target."""
+        session_id = kvstore.validate_fragment(session_id, "session_id")
+        checked = validate_request(request)
+        target = checked["target_path"]
+        if not os.path.isabs(target):
+            target = os.path.join(checked["workspace_path"], target)
+        return os.path.join(
+            os.path.dirname(os.path.abspath(target)),
+            "chat-%s.md" % session_id,
         )
 
     def prompt_directory(self, session_id):
         """Brainstorming-owned runtime directory for exact LLM prompts."""
-        return os.path.join(
-            os.path.dirname(self.transcript_ref(session_id)), "prompts"
-        )
+        return os.path.join(self._session_directory(session_id), "prompts")
 
     def output_directory(self, session_id):
         """Brainstorming-owned runtime directory for exact LLM outputs."""
-        return os.path.join(
-            os.path.dirname(self.transcript_ref(session_id)), "outputs"
-        )
+        return os.path.join(self._session_directory(session_id), "outputs")
 
     def save_activity_output(self, session_id, event_id, text):
         """Persist one immutable provider output and return its safe name."""
@@ -2872,11 +2882,6 @@ class SessionStore:
         with _exclusive_transcript(path):
             snapshot = self._snapshot(self._store.read(key))
             if snapshot is None:
-                # The session was discarded between the pre-check above
-                # and taking the lock — and taking the lock recreated the
-                # session's folder and lock file, which the discarder can
-                # no longer see. Tidy this projection's own recreation;
-                # any later reader fails the pre-check and never re-enters.
                 discarded_underfoot = True
                 for leftover in (path, path + ".lock"):
                     try:
@@ -2889,9 +2894,14 @@ class SessionStore:
                         "session transcript reference does not match its "
                         "authority"
                     )
-                _atomic_replace_utf8(
-                    path, render_transcript(snapshot.state)
-                )
+                rendered = render_transcript(snapshot.state)
+                _atomic_replace_utf8(path, rendered)
+                if snapshot.state["status"] in TERMINAL_STATUSES:
+                    delivered = self.delivered_transcript_ref(
+                        session_id, snapshot.state["request"]
+                    )
+                    os.makedirs(os.path.dirname(delivered), exist_ok=True)
+                    _atomic_replace_utf8(delivered, rendered)
                 return snapshot
         if discarded_underfoot:
             try:
@@ -3954,18 +3964,25 @@ class SessionStore:
         )
         if not _same_json_value(checked_config, resolved_config):
             raise ContractError("run_config does not match roster resolution")
-        state = new_session_state(
-            request, resolved_config, self.transcript_ref(session_id)
-        )
-        target_path = state["request"]["target_path"]
+        checked_request = validate_request(request)
+        target_path = checked_request["target_path"]
         if not os.path.isabs(target_path):
             target_path = os.path.join(
-                state["request"]["workspace_path"], target_path
+                checked_request["workspace_path"], target_path
             )
+        target_path = os.path.abspath(target_path)
+        state = new_session_state(
+            checked_request, resolved_config, self.transcript_ref(session_id)
+        )
         if _target_overlaps_state_storage(self.path, target_path):
             raise ContractError(
                 "request.target_path must not overlap Brainstorming's "
                 "durable state store or lock"
+            )
+        delivered = self.delivered_transcript_ref(session_id, checked_request)
+        if os.path.realpath(target_path) == os.path.realpath(delivered):
+            raise ContractError(
+                "request.target_path must not equal its delivered chat path"
             )
         if _target_overlaps_transcript_storage(
             self._transcript_root,
@@ -4103,7 +4120,7 @@ class SessionStore:
                 "only an unused create-time session may be discarded"
             )
 
-        transcript = self.transcript_ref(session_id)
+        transcript = state["transcript_ref"]
         with _exclusive_transcript(transcript):
             try:
                 os.unlink(transcript)
@@ -4143,21 +4160,20 @@ class SessionStore:
                     "create-time session changed before compensation"
                 )
 
-        directory = os.path.dirname(transcript)
+        directory = self._session_directory(session_id)
         try:
             os.rmdir(directory)
         except OSError:
             pass
 
     def discard_session(self, session_id):
-        """Remove one session's whole durable footprint, deliberately.
+        """Remove one session's private runtime state.
 
         The service's delete route calls this after its own authorization
         and process-liveness gates. Unlike discard_unlaunched it does not
         care how far the discussion got — the operator has ordered the
-        session gone. Exactly this session's keys (its record, its target
-        revisions, its turn attempt) and its transcript are removed; the
-        target artifact on disk is never touched.
+        session gone. Its final delivered chat, if one exists beside the
+        target, remains a normal product artifact.
         """
         session_id = kvstore.validate_fragment(session_id, "session_id")
         key = _session_key(session_id)
@@ -4174,8 +4190,6 @@ class SessionStore:
             except FileNotFoundError:
                 pass
 
-            # Exact prompts and outputs are session-owned just like chat.md.
-            # Public deletion removes them without following links.
             for runtime_directory in (
                 self.prompt_directory(session_id),
                 self.output_directory(session_id),
@@ -4220,13 +4234,8 @@ class SessionStore:
                 return True, bool(doomed)
 
             self._store.client._mutate(remove)
-        # Best-effort tidy of the transcript's folder and lock file (the
-        # lock above creates the latter). This does NOT hold exclusivity
-        # against projections: a reader that raced past its pre-check may
-        # recreate both right after this — that reader then discovers the
-        # discarded key under the lock and tidies its own recreation
-        # (_publish_current), so the footprint still converges to gone.
-        directory = os.path.dirname(transcript)
+        # Best-effort tidy of the private runtime directory and lock.
+        directory = self._session_directory(session_id)
         for leftover in (transcript + ".lock",):
             try:
                 os.unlink(leftover)

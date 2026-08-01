@@ -100,14 +100,18 @@ service record is forgotten and the durable state stays as evidence — a
 milestone replaying a retained revision keeps working). A session whose
 process is running refuses deletion (`brainstorming_session_running`, 409 — the
 same refusal covers a stop still reconciling, so a freed target can
-never be rewritten by a stale stop) — stop it first; the target document
-is never touched either way, and deleting frees its target for a new
-discussion. A session whose stored state cannot even be read still
+never be rewritten by a stale stop) — stop it first. The target document and
+any final sibling `chat-<session>.md` are delivered artifacts and are never
+removed; deleting only frees the target for a new discussion. A session whose
+stored state cannot even be read still
 offers Discard from its failure screen — deletion needs only the
 service record. There is no separate session
 page — the panel is the only viewer.
 
-Brainstorming activity is operational evidence separate from `chat.md`:
+The live human-readable `chat.md` stays in Brainstorming's private session
+storage. On a terminal result, its complete final form is also delivered beside
+the target as `chat-<session>.md`. Brainstorming activity is separate
+operational evidence:
 every physical provider call keeps its model, phase, duration and outcome,
 including a malformed first response, its repair, and execution failures.
 The session view shows those calls as clickable chips with raw output on
@@ -259,7 +263,8 @@ work area's directory when one is chosen and fall back to
 `~/Development/source` (walked up to the nearest existing ancestor on
 other hosts). The default roster is a Codex Initial Position, a Claude
 Contrary Position, and Dante on Codex as an external narrator. Dante asks
-anti-drift questions and never votes. AI seats keep the ordinary family, model
+anti-drift questions in the language used by the request and discussion, and
+never votes. AI seats keep the ordinary family, model
 and effort controls; Dante's turn enters through the durable external contract.
 Unanimity requires every position to accept the exact proposal. Majority
 requires a strict majority; ties and round-limit disagreement end as an

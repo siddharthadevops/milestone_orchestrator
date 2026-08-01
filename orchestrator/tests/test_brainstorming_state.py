@@ -12,13 +12,13 @@ from unittest import mock
 from orchestrator import brainstorming as bs
 
 
-def request(source_payload=None, include_optional=True):
+def request(workspace_path, source_payload=None, include_optional=True):
     context = {"brief": "Resolve one bounded design request."}
     if include_optional:
         context["references"] = ["docs/current.md", "https://example.test/fact"]
         context["source_payload"] = source_payload
     return {
-        "workspace_path": "/workspace",
+        "workspace_path": workspace_path,
         "target_path": "docs/decision.md",
         "request": "Choose the compatible option to adopt.",
         "context": context,
@@ -116,6 +116,7 @@ class BrainstormingStateTestCase(unittest.TestCase):
         self._tmp = tempfile.TemporaryDirectory(prefix="brainstorming-state-")
         self.root = self._tmp.name
         self.store = bs.SessionStore(self.root)
+        self.workspace = os.path.join(self.root, "workspace")
 
     def tearDown(self):
         self._tmp.cleanup()
@@ -158,7 +159,7 @@ class BrainstormingStateTestCase(unittest.TestCase):
         roster = external_participants()
         created = self.store.create(
             session_id,
-            request(),
+            request(self.workspace),
             run_config(roster, eligible_participants=roster),
             roster,
         )
@@ -298,20 +299,21 @@ class BrainstormingStateTestCase(unittest.TestCase):
         with self.assertRaises((bs.ContractError, ValueError)):
             self.store.create(
                 session_id,
-                request() if req is None else req,
+                request(self.workspace) if req is None else req,
                 run_config() if config is None else config,
                 cross_family_participants(),
             )
         self.assertIsNone(self.store.read(session_id))
 
     def test_request_and_context_contract(self):
-        minimal = request(include_optional=False)
+        minimal = request(self.workspace, include_optional=False)
         created = self.store.create(
             "minimal", minimal, run_config(), cross_family_participants()
         )
         self.assertEqual(created.state["request"], minimal)
 
         full = request(
+            self.workspace,
             {
                 "finding": {"id": "F1", "facts": [True, 3, None]},
                 "alternatives": ["keep", "change"],
@@ -325,16 +327,16 @@ class BrainstormingStateTestCase(unittest.TestCase):
         invalid = []
         for key in ("workspace_path", "target_path", "request", "context",
                     "max_rounds"):
-            candidate = request()
+            candidate = request(self.workspace)
             del candidate[key]
             invalid.append(candidate)
         for key in ("workspace_path", "target_path", "request"):
             for value in ("", "   ", 7):
-                candidate = request()
+                candidate = request(self.workspace)
                 candidate[key] = value
                 invalid.append(candidate)
         for value in (0, -1, True, 1.5, "2"):
-            candidate = request()
+            candidate = request(self.workspace)
             candidate["max_rounds"] = value
             invalid.append(candidate)
 
@@ -348,11 +350,11 @@ class BrainstormingStateTestCase(unittest.TestCase):
             {"brief": "ok", "source_payload": object()},
             {"brief": "ok", "unexpected": "field"},
         ):
-            candidate = request()
+            candidate = request(self.workspace)
             candidate["context"] = context
             invalid.append(candidate)
         for forbidden in ("answer_options", "problem_type", "domain_type"):
-            candidate = request()
+            candidate = request(self.workspace)
             candidate[forbidden] = []
             invalid.append(candidate)
 
@@ -367,12 +369,12 @@ class BrainstormingStateTestCase(unittest.TestCase):
             "finding": {"id": "F7", "evidence": [1, False, None]},
         }
         left = self.store.create(
-            "opaque-a", request(payload), run_config(),
+            "opaque-a", request(self.workspace, payload), run_config(),
             cross_family_participants(),
         )
         right_payload = {"completely": ["different", {"nested": 9}]}
         right = self.store.create(
-            "opaque-b", request(right_payload), run_config(),
+            "opaque-b", request(self.workspace, right_payload), run_config(),
             cross_family_participants(),
         )
 
@@ -416,7 +418,8 @@ class BrainstormingStateTestCase(unittest.TestCase):
             ["editor", "critic"],
         )
         created = self.store.create(
-            "different", request(), different, cross_family_participants()
+            "different", request(self.workspace), different,
+            cross_family_participants()
         )
         self.assertEqual(
             bs.SessionStore(self.root).read("different").state["run_config"],
@@ -428,7 +431,8 @@ class BrainstormingStateTestCase(unittest.TestCase):
         )
         self.assertTrue(fallback["same_family_fallback"])
         created = self.store.create(
-            "fallback", request(), fallback, same_family_participants()
+            "fallback", request(self.workspace), fallback,
+            same_family_participants()
         )
         self.assertEqual(created.state["run_config"], fallback)
 
@@ -448,7 +452,8 @@ class BrainstormingStateTestCase(unittest.TestCase):
             )
         with self.assertRaises(bs.ContractError):
             self.store.create(
-                "avoidable-fallback", request(), fallback, eligible
+                "avoidable-fallback", request(self.workspace), fallback,
+                eligible
             )
         self.assertIsNone(self.store.read("avoidable-fallback"))
 
@@ -463,7 +468,7 @@ class BrainstormingStateTestCase(unittest.TestCase):
         )
         self.assertFalse(preferred["same_family_fallback"])
         preferred_session = self.store.create(
-            "preferred-family", request(), preferred, eligible
+            "preferred-family", request(self.workspace), preferred, eligible
         )
         self.assertFalse(
             preferred_session.state["run_config"]["same_family_fallback"]
@@ -529,7 +534,8 @@ class BrainstormingStateTestCase(unittest.TestCase):
 
     def test_session_contract_is_immutable(self):
         created = self.store.create(
-            "fixed", request(), run_config(), cross_family_participants()
+            "fixed", request(self.workspace), run_config(),
+            cross_family_participants()
         )
         with open(self.store.path, "rb") as fh:
             durable_before = fh.read()
@@ -570,7 +576,7 @@ class BrainstormingStateTestCase(unittest.TestCase):
             with open(self.store.path, "rb") as fh:
                 self.assertEqual(fh.read(), durable_before)
 
-        typed_request = request({"audit_value": 1})
+        typed_request = request(self.workspace, {"audit_value": 1})
         typed = self.store.create(
             "typed-evidence",
             typed_request,
@@ -595,7 +601,8 @@ class BrainstormingStateTestCase(unittest.TestCase):
 
     def test_history_and_terminal_result_are_append_only(self):
         created = self.store.create(
-            "terminal", request(), run_config(), cross_family_participants()
+            "terminal", request(self.workspace), run_config(),
+            cross_family_participants()
         )
         running = self.store.transition(
             "terminal", created.revision, "running"
@@ -644,7 +651,8 @@ class BrainstormingStateTestCase(unittest.TestCase):
 
     def test_atomic_persistence_and_stale_update_rejection(self):
         created = self.store.create(
-            "atomic", request(), run_config(), cross_family_participants()
+            "atomic", request(self.workspace), run_config(),
+            cross_family_participants()
         )
         running_candidate = bs.transition_session(created.state, "running")
         failure_candidate = bs.transition_session(
@@ -696,7 +704,8 @@ class BrainstormingStateTestCase(unittest.TestCase):
 
     def test_lifecycle_and_result_contract(self):
         created = self.store.create(
-            "success", request(), run_config(), cross_family_participants()
+            "success", request(self.workspace), run_config(),
+            cross_family_participants()
         )
         self.assertNotIn("result", created.state)
         with self.assertRaises(bs.IllegalTransition):
@@ -770,7 +779,8 @@ class BrainstormingStateTestCase(unittest.TestCase):
         self.assertNotIn("reason", success.state["result"])
 
         failed = self.store.create(
-            "failure", request(), run_config(), cross_family_participants()
+            "failure", request(self.workspace), run_config(),
+            cross_family_participants()
         )
         for result in (
             {key: value for key, value in failure_result(
@@ -810,7 +820,7 @@ class BrainstormingStateTestCase(unittest.TestCase):
             fh.write(ledger)
 
         store = bs.SessionStore(orchestrator_dir)
-        req = request({
+        req = request(self.workspace, {
             "milestone": "opaque-only",
             "slice": 7,
             "operator_route": "opaque-only",

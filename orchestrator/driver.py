@@ -1911,33 +1911,7 @@ class Driver(object):
             marker = self._read_busy()
             if marker is None:
                 return False
-            if isinstance(call, dict):
-                usage = call.get("token_usage")
-                partial = call.get("token_usage_partial", False)
-                duration = call.get("duration_s")
-            else:
-                usage = getattr(call, "token_usage", None)
-                final_usage_missing = usage is None
-                partial = getattr(call, "token_usage_partial", False)
-                duration = getattr(call, "duration_s", None)
-                repair = getattr(call, "repair", None)
-                if isinstance(repair, dict):
-                    repair_usage = repair.get("token_usage")
-                    usage = runners.add_token_usage(usage, repair_usage)
-                    partial = bool(
-                        partial
-                        or final_usage_missing
-                        or repair.get("token_usage_partial", False)
-                        or repair_usage is None
-                    )
-                    repair_duration = repair.get("duration_s")
-                    if (
-                        isinstance(duration, (int, float))
-                        and not isinstance(duration, bool)
-                        and isinstance(repair_duration, (int, float))
-                        and not isinstance(repair_duration, bool)
-                    ):
-                        duration += repair_duration
+            duration, usage, partial = self._call_accounting(call)
             marker["completed"] = True
             marker["duration_s"] = (
                 duration_s if duration_s is not None else duration
@@ -1952,6 +1926,44 @@ class Driver(object):
             # sentinel to the current digest before any raw/state persistence.
             marker["state_digest"] = self._state_file_digest()
             return self._write_busy(marker)
+
+    @staticmethod
+    def _call_accounting(call):
+        """Return the complete duration and usage of one logical worker call.
+
+        A contract repair is a second physical provider call.  Its successful
+        result carries the first attempt in ``repair``; count both so the
+        permanent record matches the live timer.
+        """
+        if isinstance(call, dict):
+            usage = call.get("token_usage")
+            partial = call.get("token_usage_partial", False)
+            duration = call.get("duration_s")
+            repair = None
+        else:
+            usage = getattr(call, "token_usage", None)
+            partial = getattr(call, "token_usage_partial", False)
+            duration = getattr(call, "duration_s", None)
+            repair = getattr(call, "repair", None)
+        final_usage_missing = usage is None
+        if isinstance(repair, dict):
+            repair_usage = repair.get("token_usage")
+            usage = runners.add_token_usage(usage, repair_usage)
+            partial = bool(
+                partial
+                or final_usage_missing
+                or repair.get("token_usage_partial", False)
+                or repair_usage is None
+            )
+            repair_duration = repair.get("duration_s")
+            if (
+                isinstance(duration, (int, float))
+                and not isinstance(duration, bool)
+                and isinstance(repair_duration, (int, float))
+                and not isinstance(repair_duration, bool)
+            ):
+                duration += repair_duration
+        return duration, usage, bool(partial or usage is None)
 
     def _require_busy_accounting(self, kind, family, label, call,
                                  duration_s=None, parent_call=None):
@@ -7366,8 +7378,11 @@ class Driver(object):
                 risk = None
                 damage = None
                 duration_s = None
+                logical_duration_s = None
                 token_usage = None
                 token_usage_partial = False
+                effective_model = None
+                effective_effort = None
                 if opp == raising_family and not explicit:
                     # No independent opposite family (single-family config):
                     # cross-family verification is impossible, so the finding
@@ -7462,6 +7477,7 @@ class Driver(object):
                             getattr(result, "token_usage_partial", False)
                             or token_usage is None
                         )
+                        logical_duration_s = self._call_accounting(result)[0]
                         self._record_repair(
                             raw_name, contracts.KIND_RECLASSIFY, opp, result
                         )
@@ -7508,7 +7524,10 @@ class Driver(object):
                     reclassifier=opp, drift_risk=risk,
                     drift_damage=damage, threshold=threshold,
                     defer_ok=defer_ok, reason=reason,
+                    model=effective_model,
+                    effort=effective_effort,
                     duration_s=duration_s,
+                    logical_duration_s=logical_duration_s,
                     token_usage=copy.deepcopy(token_usage),
                     token_usage_partial=token_usage_partial,
                 )

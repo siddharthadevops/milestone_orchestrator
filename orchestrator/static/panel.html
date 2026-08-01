@@ -1567,8 +1567,8 @@ async function discardSelectedSession() {
   const label = lastSessionView
     ? lastSessionView.request : selectedSession;
   if (!confirm(`Discard brainstorming “${label}”? This removes it from the `
-      + "panel and deletes its stored discussion state; the target "
-      + "document is untouched.")) return;
+      + "panel and deletes its private discussion state; the target and any "
+      + "final chat delivered beside it are untouched.")) return;
   sessionDiscarding = true;
   if (lastSessionView) renderSessionDetail(lastSessionView);
   try {
@@ -2171,7 +2171,7 @@ function mobileBack() {
 }
 const KIND_SHORT = {
   review_round: "review", delta_review: "d-review", fix_findings: "fix",
-  verification: "verify",
+  verification: "verify", reclassify: "classify",
 };
 function shortKind(k) { return KIND_SHORT[k] || k; }
 function fmtDur(secs) {
@@ -2228,11 +2228,7 @@ function sealChip(s, unitKey) {
   return `<span class="chip ${sevClass(s.severity)}${click}">historical seal · F${findings}${dur}</span>`;
 }
 function reclassifyChip(ev, unitKey) {
-  // One chip per reclassify outcome, placed chronologically among the
-  // unit's review and gate chips (and left there): deferred -> tracked debt,
-  // kept -> rated above the run threshold, sent to the fixer. Reform
-  // ratings carry TWO axes; the decision gates on DAMAGE, so the chip
-  // leads with it (risk stays in the tooltip and the story).
+  // Decision only. Physical classification work has its own permanent chip.
   const risk = ev.drift_risk || "unrated";
   const two = ev.drift_damage != null;
   const scale = two ? `dmg ${ev.drift_damage}` : risk;
@@ -2241,7 +2237,32 @@ function reclassifyChip(ev, unitKey) {
     ? `DEBT · ${two ? ev.drift_damage : risk}`
     : `kept · ${scale}`;
   const title = `${ev.finding_id || ""}${two ? ` · risk ${risk}` : ""}${ev.threshold ? ` (threshold ${ev.threshold})` : ""}${ev.requeued ? " · later returned to fixing" : ""}`;
-  return `<span class="chip ${ev.defer_ok && !ev.requeued ? "clean" : "sev23"} clicky" title="${esc(title)}" onclick="showStory('debt:${esc(unitKey)}')">${esc(label)}${fmtDur(ev.duration_s)}</span>`;
+  return `<span class="chip ${ev.defer_ok && !ev.requeued ? "clean" : "sev23"} clicky" title="${esc(title)}" onclick="showStory('debt:${esc(unitKey)}')">${esc(label)}</span>`;
+}
+function reclassifyWorkChip(events, unitKey) {
+  const calls = (events || []).filter(item => item && (
+    item.logical_duration_s != null || item.duration_s != null || item.model
+  ));
+  if (!calls.length) return "";
+  const first = calls[0];
+  const actor = first.model ? modelEffort(first.model, first.effort)
+    : first.reclassifier === "codex" ? "Codex"
+    : first.reclassifier === "claude" ? "Claude"
+    : first.reclassifier || "";
+  const durations = calls.map(item => Number(
+    item.logical_duration_s == null ? item.duration_s : item.logical_duration_s
+  ))
+    .filter(value => Number.isFinite(value) && value >= 0);
+  const duration = durations.length
+    ? durations.reduce((total, value) => total + value, 0) : null;
+  const count = calls.length > 1 ? ` · F${calls.length}` : "";
+  const title = `${calls.length} finding${calls.length === 1 ? "" : "s"} classified`;
+  return `<span class="chip work clicky" title="${esc(title)}" onclick="showStory('debt:${esc(unitKey)}')">${actor ? `${esc(actor)} ` : ""}classify${count}${fmtDur(duration)}</span>`;
+}
+function reclassifyHistoryChips(events, unitKey) {
+  return [reclassifyWorkChip(events, unitKey)]
+    .concat((events || []).map(item => reclassifyChip(item, unitKey)))
+    .filter(Boolean);
 }
 function verificationChip(ev) {
   const stableUnknown = ev.ok && ev.stable == null;
@@ -2337,9 +2358,7 @@ function unitHistory(u, activity, running) {
       groups.push(current);
       const linked = reclassByRound.get(event.item.id) || [];
       if (linked.length) {
-        current = {type: "reclassify",
-                   chips: linked.map(item => reclassifyChip(item, u.unit))};
-        groups.push(current);
+        current.chips.push(...reclassifyHistoryChips(linked, u.unit));
       }
     } else if (event.type === "seal") {
       current = {type: "seal", number: event.item.attempt,
@@ -2351,9 +2370,9 @@ function unitHistory(u, activity, running) {
                  chips: [verificationChip(event.item)]};
       groups.push(current);
     } else if (event.type === "reclass") {
-      current = {type: "reclassify",
-                 chips: [reclassifyChip(event.item, u.unit)]};
-      groups.push(current);
+      const chips = reclassifyHistoryChips([event.item], u.unit);
+      if (current) current.chips.push(...chips);
+      else lead.push(...chips);
     } else if (event.type === "repair") {
       // The episode is compact but not opaque: its own fix/delta/review
       // rounds, seal records, and reclassifications render as chips in
@@ -2412,7 +2431,9 @@ function unitHistory(u, activity, running) {
     } else if (liveKind === "verification") {
       groups.push({type: "verify", cadence: null, chips: [chip]});
     } else if (liveKind === "reclassify") {
-      groups.push({type: "reclassify", chips: [chip]});
+      const family = activity.current_family || "review";
+      groups.push({type: "review", family,
+                   number: (reviewCounts[family] || 0) + 1, chips: [chip]});
     } else if (current) current.chips.push(chip);
     else lead.push(chip);
   }
@@ -2440,8 +2461,6 @@ function unitHistory(u, activity, running) {
         : group.cadence === "four_slice_checkpoint" ? "4-slice checkpoint"
         : "Suite";
       addLine("Verify", label, group.chips);
-    } else if (group.type === "reclassify") {
-      addLine("Reclassify", "Decision", group.chips);
     } else if (group.type === "work") {
       addLine("Fix", "Work", group.chips);
     } else if (group.type === "brainstorm") {

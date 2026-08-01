@@ -1656,10 +1656,10 @@ def delete_session(home, session_id, authorize, purge=False):
     signals a process. Without purge only the service record is removed: the panel
     forgets the session, its target is freed for a new discussion, and
     the durable state stays on disk as evidence (a milestone replaying a
-    retained revision keeps working). With purge the session's keys and
-    transcript are removed FIRST — a purge fault leaves the record in
-    place so the operator can simply retry. The target artifact is never
-    touched either way.
+    retained revision keeps working). With purge the session's private keys,
+    transcript, prompts, and outputs are removed FIRST — a purge fault leaves
+    the record in place so the operator can simply retry. The target and any
+    final chat delivered beside it are never touched either way.
     """
     record = _record_by_id(home, session_id)
     _authorize_record(record, authorize)

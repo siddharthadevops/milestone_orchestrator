@@ -685,12 +685,17 @@ class BrainstormingTranscriptTest(unittest.TestCase):
             zero_id, zero, "failure", "No participant completed a turn."
         )
 
-        for snapshot, expected in (
-            (success, "Agreement was reached."),
-            (failure, "The target was left unfinished."),
-            (zero, "No participant completed a turn."),
+        for session_id, snapshot, expected in (
+            (success_id, success, "Agreement was reached."),
+            (failure_id, failure, "The target was left unfinished."),
+            (zero_id, zero, "No participant completed a turn."),
         ):
             markdown = self._read(snapshot)
+            delivered = self.store.delivered_transcript_ref(
+                session_id, snapshot.state["request"]
+            )
+            with open(delivered, encoding="utf-8") as handle:
+                self.assertEqual(handle.read(), markdown)
             self.assertEqual(markdown.count("## Closing"), 1)
             self.assertEqual(self._headings(markdown)[-1], "Closing")
             self.assertIn(expected, markdown)
@@ -702,6 +707,14 @@ class BrainstormingTranscriptTest(unittest.TestCase):
                 "Unresolved objections",
             ):
                 self.assertIn(field, markdown)
+
+        delivered = self.store.delivered_transcript_ref(
+            success_id, success.state["request"]
+        )
+        self.store.discard_session(success_id)
+        self.assertIsNone(self.store.read(success_id))
+        with open(delivered, encoding="utf-8") as handle:
+            self.assertIn("Agreement was reached.", handle.read())
 
         invalid = self._create("invalid-closing", status="created")
         result = {
