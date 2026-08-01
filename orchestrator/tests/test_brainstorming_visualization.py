@@ -417,6 +417,23 @@ class BrainstormingVisualizationTest(unittest.TestCase):
         view = self._view(session_id)
         self.assertEqual((view["status"], view["process"]), ("running", "stopped"))
         self.assertIsNone(view["result"])
+
+    def test_activity_modal_marks_partial_token_usage(self):
+        with open(
+            os.path.join(service.STATIC_DIR, "panel.html"),
+            encoding="utf-8",
+        ) as handle:
+            html = handle.read()
+        self.assertRegex(
+            html,
+            r"fmtTokenUsage\(\s*item\.token_usage,\s*"
+            r"item\.token_usage_partial\s*\)",
+        )
+        self.assertIn(
+            "tokenUsageHtml(item.token_usage, item.token_usage_partial)",
+            html,
+        )
+
     def test_milestone_panel_routes_and_state_remain_unchanged(self):
         status, panel_before = self.api._request("GET", "/")
         self.assertEqual(status, 200)
