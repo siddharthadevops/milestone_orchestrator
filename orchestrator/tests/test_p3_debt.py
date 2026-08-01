@@ -48,7 +48,7 @@ def reform_draft_step():
 
 
 def reclassify(defer_ok, family, reason="verified", risk=None,
-               damage=None):
+               damage=None, side_effect=None):
     # The worker only RATES; deferral is the driver comparing the gated
     # axis to p3_defer_max_risk (risk for legacy, DAMAGE for reform).
     # For test intent, defer_ok=True fakes a "low" rating and False a
@@ -60,10 +60,50 @@ def reclassify(defer_ok, family, reason="verified", risk=None,
                    drift_risk=risk or lvl,
                    drift_damage=damage or lvl,
                    reason=reason),
-                family=family)
+                family=family, side_effect=side_effect)
 
 
 class TestP3Debt(DriverTestCase):
+    def test_reclassifier_busy_marker_names_resolved_provider(self):
+        with tempfile.TemporaryDirectory(prefix="orch-mock-") as ws:
+            observed = {}
+
+            def capture_marker(workspace):
+                import json
+                import os
+                with open(
+                    os.path.join(workspace, ".orchestrator", "current.json"),
+                    encoding="utf-8",
+                ) as handle:
+                    observed.update(json.load(handle))
+
+            path = init_state(ws, make_config(p3_reclassify_debt=True))
+            mock = runners.MockRunner([
+                draft_step(),
+                step(
+                    "review_round",
+                    report("review_round", [finding("F1", "stale word")]),
+                    family="codex",
+                ),
+                reclassify(
+                    True,
+                    family="claude",
+                    reason="cosmetic",
+                    side_effect=capture_marker,
+                ),
+            ])
+            driver = drv.Driver(path, runner=mock)
+            self.step_until(
+                driver,
+                lambda state: any(
+                    event["type"] == "reclassify_recorded"
+                    for event in state["events"]
+                ),
+            )
+
+            self.assertEqual(observed["kind"], contracts.KIND_RECLASSIFY)
+            self.assertEqual(observed["family"], "claude")
+
     def test_doc_round_p3_only_is_deferred_as_debt(self):
         with tempfile.TemporaryDirectory(prefix="orch-mock-") as ws:
             path = init_state(ws, make_config(p3_reclassify_debt=True))

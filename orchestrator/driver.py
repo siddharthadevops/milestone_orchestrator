@@ -7181,12 +7181,21 @@ class Driver(object):
                         st.unit_key(unit), raising_family, safe_id)
                     try:
                         dm, de = self._family_defaults(opp)
+                        effective_model = rater_model or dm
+                        effective_effort = rater_effort or de
+                        self._mark_busy(
+                            raw_name,
+                            contracts.KIND_RECLASSIFY,
+                            opp,
+                            model=effective_model,
+                            effort=effective_effort,
+                        )
                         output, result = runners.call_worker(
                             self.runner, opp, prompt,
                             contracts.KIND_RECLASSIFY,
                             self.workspace,
-                            model=rater_model or dm,
-                            effort=rater_effort or de,
+                            model=effective_model,
+                            effort=effective_effort,
                             validate_opts=(
                                 {"require_drift_damage": True}
                                 if gap_backstop else None
