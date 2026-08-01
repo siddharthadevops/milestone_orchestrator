@@ -5802,7 +5802,15 @@ class Driver(object):
         changed = self._snapshot_diff(before, self._snapshot())
         return output, result, raw_path, changed
 
-    def _restore_or_fail(self, unit, why):
+    def _restore_or_fail(self, unit, why, unaccepted_call=None):
+        def record_unaccepted():
+            if unaccepted_call is None:
+                return
+            kind, family, result = unaccepted_call
+            self._record_worker_unaccepted(
+                unit, kind, family, result, why
+            )
+
         if not gitops.enabled(self.config):
             # With git disabled there was never a wip commit: HEAD — if the
             # workspace even is a repository, e.g. a user's own project —
@@ -5810,6 +5818,7 @@ class Driver(object):
             # destroy the un-committed draft, every prior fix, and the
             # user's own uncommitted work, then keep judging the gutted
             # tree. Restoration is impossible; stop with the facts.
+            record_unaccepted()
             st.fail_run(
                 self.state,
                 "%s, and git is disabled for this run so the workspace "
@@ -5822,6 +5831,7 @@ class Driver(object):
         try:
             gitops.restore_clean(self.workspace)
         except gitops.GitError as exc:
+            record_unaccepted()
             st.fail_run(
                 self.state,
                 "%s and the workspace could not be restored: %s" % (why, exc),
@@ -7463,7 +7473,11 @@ class Driver(object):
             # output, record the incident as an invalidated round (it
             # counts toward the family's cap), retry next step.
             self._restore_or_fail(
-                unit, "review round reviewer (%s) tampered" % family
+                unit,
+                "review round reviewer (%s) tampered" % family,
+                unaccepted_call=(
+                    contracts.KIND_REVIEW_ROUND, family, result
+                ),
             )
             st.record_round(
                 self.state,

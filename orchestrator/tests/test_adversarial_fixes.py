@@ -147,6 +147,15 @@ class TestGitDisabledTamperRecovery(DriverTestCase):
             # No invalidated round was minted from the discarded output.
             state = st.load(path)
             self.assertEqual(state["units"][0]["rounds"], [])
+            unaccepted = [
+                event
+                for event in state["events"]
+                if event["type"] == "worker_unaccepted"
+            ]
+            self.assertEqual(len(unaccepted), 1)
+            self.assertEqual(unaccepted[0]["kind"], "review_round")
+            self.assertTrue(unaccepted[0]["token_usage_partial"])
+            self.assertTrue(st.summary(state)["work_token_usage_partial"])
 
 # ---------------------------------------------------------------------------
 # (2) P2: a contested finding is never killable by pointer
