@@ -1917,6 +1917,7 @@ class Driver(object):
                 duration = call.get("duration_s")
             else:
                 usage = getattr(call, "token_usage", None)
+                final_usage_missing = usage is None
                 partial = getattr(call, "token_usage_partial", False)
                 duration = getattr(call, "duration_s", None)
                 repair = getattr(call, "repair", None)
@@ -1925,6 +1926,7 @@ class Driver(object):
                     usage = runners.add_token_usage(usage, repair_usage)
                     partial = bool(
                         partial
+                        or final_usage_missing
                         or repair.get("token_usage_partial", False)
                         or repair_usage is None
                     )

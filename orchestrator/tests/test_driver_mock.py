@@ -791,6 +791,35 @@ class TestFailedCallAccounting(DriverTestCase):
             )
             self.assertFalse(summary["work_token_usage_partial"])
 
+    def test_repaired_call_marker_keeps_missing_final_usage_partial(self):
+        first_usage = {
+            "input_tokens": 10,
+            "cached_input_tokens": 2,
+            "output_tokens": 2,
+            "reasoning_output_tokens": 0,
+            "total_tokens": 12,
+        }
+        with tempfile.TemporaryDirectory(prefix="orch-mock-") as ws:
+            path = init_state(ws, make_config())
+            driver = drv.Driver(path, runner=runners.MockRunner([]))
+            self.assertTrue(driver._mark_busy(
+                "skeleton-draft",
+                contracts.KIND_DRAFT_SKELETON,
+                "codex",
+            ))
+            result = runners.RunnerResult("{}", 0, 2.0)
+            result.repair = {
+                "duration_s": 1.0,
+                "token_usage": first_usage,
+                "token_usage_partial": False,
+            }
+            self.assertTrue(driver._update_busy_accounting(result))
+
+            recovered = drv.Driver(path, runner=runners.MockRunner([]))
+            summary = st.summary(recovered.state)
+            self.assertEqual(summary["work_token_usage"], first_usage)
+            self.assertTrue(summary["work_token_usage_partial"])
+
     def test_runner_failure_keeps_marker_when_raw_persistence_fails(self):
         with tempfile.TemporaryDirectory(prefix="orch-mock-") as ws:
             path = init_state(ws, make_config())
