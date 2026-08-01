@@ -694,6 +694,7 @@ def validate_turn_attempt(turn_attempt):
             "operational_retry",
             "target_mutation_failure_pending",
             "action_context",
+            "classifier_call",
         ),
         "turn_attempt",
     )
@@ -872,6 +873,40 @@ def validate_turn_attempt(turn_attempt):
         checked["action_context"] = _json_copy(
             action_context, "turn_attempt.action_context"
         )
+    classifier_call = turn_attempt.get("classifier_call")
+    if classifier_call is not None:
+        _exact_keys(
+            classifier_call,
+            ("family", "model", "effort", "started_at"),
+            (),
+            "turn_attempt.classifier_call",
+        )
+        started_at = classifier_call["started_at"]
+        if (
+            isinstance(started_at, bool)
+            or not isinstance(started_at, (int, float))
+            or not math.isfinite(float(started_at))
+            or float(started_at) <= 0
+        ):
+            raise ContractError(
+                "turn_attempt.classifier_call.started_at must be a positive "
+                "finite number"
+            )
+        checked["classifier_call"] = {
+            "family": _text(
+                classifier_call["family"],
+                "turn_attempt.classifier_call.family",
+            ),
+            "model": classifier_call["model"],
+            "effort": classifier_call["effort"],
+            "started_at": float(started_at),
+        }
+        for field in ("model", "effort"):
+            value = checked["classifier_call"][field]
+            if value is not None:
+                checked["classifier_call"][field] = _text(
+                    value, "turn_attempt.classifier_call.%s" % field
+                )
     return checked
 
 
@@ -3334,12 +3369,7 @@ class SessionStore:
             )
         provider_attempt = attempt.get("provider_attempt", 1)
         activity = self.read_activity(session_id)
-        if any(
-            event["action_id"] == token
-            and event["provider_attempt"] == provider_attempt
-            for event in ((activity or {}).get("events") or [])
-        ):
-            return
+        events = (activity or {}).get("events") or []
         snapshot = self.read(session_id)
         if snapshot is None:
             raise SessionNotFound(session_id)
@@ -3369,34 +3399,77 @@ class SessionStore:
             else max(1, completed // len(participants))
         )
         recorded_at = time.time()
-        started_at = attempt.get("started_at", recorded_at)
-        digest = hashlib.sha256(
-            ("%s:%d" % (token, provider_attempt)).encode("utf-8")
-        ).hexdigest()[:20]
-        self.append_activity(
-            session_id,
-            {
-                "id": "activity-%s" % digest,
-                "action_id": token,
-                "provider_attempt": provider_attempt,
-                "at": time.strftime(
-                    "%Y-%m-%dT%H:%M:%S%z", time.localtime(recorded_at)
-                ),
-                "started_at": started_at,
-                "duration_s": max(0.0, recorded_at - started_at),
-                "kind": kind,
-                "stage": stage,
-                "round": round_number,
-                "participant_id": participant["id"],
-                "model_family": participant["model_family"],
-                "model": None,
-                "effort": None,
-                "status": "failed",
-                "failure_type": "execution",
-                "error": "provider call ended without durable activity",
-                "token_usage_partial": True,
-            },
-        )
+        if not any(
+            event["action_id"] == token
+            and event["provider_attempt"] == provider_attempt
+            for event in events
+        ):
+            started_at = attempt.get("started_at", recorded_at)
+            digest = hashlib.sha256(
+                ("%s:%d" % (token, provider_attempt)).encode("utf-8")
+            ).hexdigest()[:20]
+            self.append_activity(
+                session_id,
+                {
+                    "id": "activity-%s" % digest,
+                    "action_id": token,
+                    "provider_attempt": provider_attempt,
+                    "at": time.strftime(
+                        "%Y-%m-%dT%H:%M:%S%z", time.localtime(recorded_at)
+                    ),
+                    "started_at": started_at,
+                    "duration_s": max(0.0, recorded_at - started_at),
+                    "kind": kind,
+                    "stage": stage,
+                    "round": round_number,
+                    "participant_id": participant["id"],
+                    "model_family": participant["model_family"],
+                    "model": None,
+                    "effort": None,
+                    "status": "failed",
+                    "failure_type": "execution",
+                    "error": "provider call ended without durable activity",
+                    "token_usage_partial": True,
+                },
+            )
+        classifier = attempt.get("classifier_call")
+        classifier_action = "%s:classifier" % token
+        if classifier is not None and not any(
+            event["action_id"] == classifier_action
+            and event["provider_attempt"] == provider_attempt
+            for event in events
+        ):
+            digest = hashlib.sha256(
+                ("%s:%d" % (classifier_action, provider_attempt)).encode(
+                    "utf-8"
+                )
+            ).hexdigest()[:20]
+            self.append_activity(
+                session_id,
+                {
+                    "id": "activity-%s" % digest,
+                    "action_id": classifier_action,
+                    "provider_attempt": provider_attempt,
+                    "at": time.strftime(
+                        "%Y-%m-%dT%H:%M:%S%z", time.localtime(recorded_at)
+                    ),
+                    "started_at": classifier["started_at"],
+                    "duration_s": max(
+                        0.0, recorded_at - classifier["started_at"]
+                    ),
+                    "kind": "classifier",
+                    "stage": "classification",
+                    "round": round_number,
+                    "participant_id": "recovery-classifier",
+                    "model_family": classifier["family"],
+                    "model": classifier["model"],
+                    "effort": classifier["effort"],
+                    "status": "failed",
+                    "failure_type": "execution",
+                    "error": "classifier call ended without durable activity",
+                    "token_usage_partial": True,
+                },
+            )
 
     def finish_external_intervention(self, session_id, token):
         """Remove one response only after its turn or vote was consumed."""
@@ -3645,6 +3718,52 @@ class SessionStore:
                 "the active turn attempt changed before quiescence"
             )
         return attempt
+
+    def begin_turn_classifier_call(self, session_id, call):
+        """Admit one classifier call before its provider can start."""
+        key = _turn_attempt_key(session_id)
+        current = self._store.read(key)
+        if not current["exists?"]:
+            raise HistoryRewriteError("the active turn attempt is missing")
+        attempt = validate_turn_attempt(current["value"])
+        if attempt.get("classifier_call") is not None:
+            raise HistoryRewriteError(
+                "a classifier call is already active for this turn"
+            )
+        candidate = copy.deepcopy(attempt)
+        candidate["classifier_call"] = {
+            "family": call.get("family"),
+            "model": call.get("model"),
+            "effort": call.get("effort"),
+            "started_at": call.get("started_at"),
+        }
+        candidate = validate_turn_attempt(candidate)
+        result = self._store.cas(key, current["revision"], candidate)
+        if not result.ok:
+            raise HistoryRewriteError(
+                "the active turn attempt changed before classification"
+            )
+        return candidate
+
+    def finish_turn_classifier_call(self, session_id):
+        """Clear a classifier marker only after its activity is durable."""
+        key = _turn_attempt_key(session_id)
+        current = self._store.read(key)
+        if not current["exists?"]:
+            raise HistoryRewriteError("the active turn attempt is missing")
+        attempt = validate_turn_attempt(current["value"])
+        if attempt.get("classifier_call") is None:
+            return attempt
+        candidate = copy.deepcopy(attempt)
+        candidate.pop("classifier_call", None)
+        result = self._store.cas(
+            key, current["revision"], validate_turn_attempt(candidate)
+        )
+        if not result.ok:
+            raise HistoryRewriteError(
+                "the active turn attempt changed after classification"
+            )
+        return candidate
 
     def mark_turn_attempt_target_mutation(self, session_id, token):
         """Spend the action's sole correction, or report a repetition."""

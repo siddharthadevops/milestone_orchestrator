@@ -350,6 +350,26 @@ class TestClassifyChain(unittest.TestCase):
         self.assertIn("mystery", seen[0]["prompt"])
         self.assertIn("network", seen[0]["raw"])
 
+    def test_classifier_does_not_start_without_durable_admission(self):
+        runner = _FakeRunner('{"error_type": "network"}')
+        seen = []
+
+        etype, _, evidence = errclass.classify_failure(
+            ["mystery"],
+            runner=runner,
+            opposite_family="claude",
+            workspace="/ws",
+            on_llm_start=lambda _call: (_ for _ in ()).throw(
+                RuntimeError("accounting unavailable")
+            ),
+            on_llm_call=seen.append,
+        )
+
+        self.assertEqual(etype, "unknown")
+        self.assertIn("accounting unavailable", evidence)
+        self.assertEqual(runner.calls, [])
+        self.assertEqual(seen, [])
+
     def test_failed_classifier_reports_usage_carried_by_the_exception(self):
         usage = {
             "input_tokens": 10, "cached_input_tokens": 2,

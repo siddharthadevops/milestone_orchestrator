@@ -476,6 +476,13 @@ class Driver(object):
     def _save(self):
         st.save(self.state_path, self.state)
 
+    def _state_file_digest(self):
+        try:
+            with open(self.state_path, "rb") as handle:
+                return hashlib.sha256(handle.read()).hexdigest()
+        except OSError:
+            return None
+
     # -- operator control (safe pause) -------------------------------------
     # control.json lives NEXT to state.json and is written by the service
     # while the driver runs — it must never ride state.json itself, whose
@@ -1520,10 +1527,15 @@ class Driver(object):
                 marker = json.load(fh)
         except (OSError, ValueError):
             return
-        try:
-            os.unlink(path)
-        except OSError:
-            pass
+        marker_state = marker.get("state_digest")
+        current_state = self._state_file_digest()
+        if (
+            marker_state is not None
+            and current_state is not None
+            and marker_state != current_state
+        ):
+            self._clear_busy()
+            return
         # A stale provider marker means the call consumed an unknown number
         # of tokens before the process died.  Preserve that uncertainty even
         # when no Git repair is needed (clean tree or Git-disabled run).
@@ -1544,10 +1556,12 @@ class Driver(object):
             )
             self._save()
         if not gitops.enabled(self.config):
+            self._clear_busy()
             return
         kind = marker.get("kind")
         unit = st.current_unit(self.state)
         if unit is None or kind in (None, "verification"):
+            self._clear_busy()
             return
         try:
             dirty = bool(gitops.worktree_diff(self.workspace).strip())
@@ -1576,6 +1590,7 @@ class Driver(object):
                 kind=kind,
             )
             self._save()
+            self._clear_busy()
             return
         if kind == contracts.KIND_FIX_FINDINGS and status in (
             st.U_FIXING, st.U_DELTA_REVIEW
@@ -1588,6 +1603,7 @@ class Driver(object):
                 killed_call=marker.get("label"),
             )
             self._save()
+        self._clear_busy()
 
     def _amendments_path(self):
         return os.path.join(self._runtime_dir(), "amendments.json")
@@ -1811,12 +1827,15 @@ class Driver(object):
                 json.dump(
                     {"label": label, "kind": kind, "family": family,
                      "model": model, "effort": effort,
-                     "started_at": time.time()},
+                     "started_at": time.time(),
+                     "call_id": str(uuid.uuid4()),
+                     "state_digest": self._state_file_digest()},
                     fh,
                 )
             os.replace(tmp, self._busy_path())
+            return True
         except OSError:
-            pass  # never let the progress display break a run
+            return False
 
     def _clear_busy(self):
         try:
@@ -1844,9 +1863,17 @@ class Driver(object):
             retries = [10, 30]
         attempt = 0
         while True:
-            self._mark_busy(
+            if not self._mark_busy(
                 raw_name, kind, family, model=model, effort=effort
-            )
+            ):
+                st.fail_run(
+                    self.state,
+                    "%s call could not create its accounting marker" % kind,
+                    unit=st.current_unit(self.state),
+                    type_="orchestrator",
+                )
+                self._save()
+                raise StopStep("worker accounting marker unavailable")
             physical_started = time.time()
             try:
                 call_control = (
@@ -1894,7 +1921,6 @@ class Driver(object):
                 self._clear_busy()
                 raise StopStep(str(exc))
             except (runners.RunnerError, runners.WorkerProtocolError) as exc:
-                self._clear_busy()
                 failed_duration_s = time.time() - physical_started
                 proto_paths = self._save_protocol_raws(raw_name, exc)
                 if call_control is not None and call_control.interrupted:
@@ -1919,7 +1945,6 @@ class Driver(object):
                             if len(proto_paths) > 1 else None
                         ),
                     )
-                    self._save()
                     raw_texts = list(
                         getattr(exc, "raw_texts", []) or []
                     )
@@ -2046,7 +2071,6 @@ class Driver(object):
                 self._clear_busy()
                 raise StopStep(str(exc))
             break
-        self._clear_busy()
         if isinstance(result, runners.ControlledInterruptionResult):
             raw_text = getattr(result, "transport_text", None)
             if not isinstance(raw_text, str) or not raw_text:
@@ -2128,13 +2152,16 @@ class Driver(object):
     def _classify_call_starter(self, raw_name):
         """Mark the optional classifier only when its LLM call starts."""
         def _start(call):
-            self._mark_busy(
+            if not self._mark_busy(
                 raw_name or "error-classifier",
                 "error_classifier",
                 call.get("family"),
                 model=call.get("model"),
                 effort=call.get("effort"),
-            )
+            ):
+                raise RuntimeError(
+                    "classifier accounting marker is unavailable"
+                )
 
         return _start
 
@@ -4042,6 +4069,7 @@ class Driver(object):
             ):
                 return action, note
             self._save()
+            self._clear_busy()
             return action, note
 
     def _brainstorming_wait_session(self):
@@ -7150,10 +7178,6 @@ class Driver(object):
         threshold = str(self.config.get("p3_defer_max_risk") or "low")
         if threshold not in levels:
             threshold = "low"
-        self._mark_busy(
-            "%s-reclassify (%d finding(s))" % (st.unit_key(unit), len(items)),
-            contracts.KIND_RECLASSIFY, None,
-        )
         try:
             acts_merged = dict(self.config.get("acts") or {})
             for k, v in self._acts_overlay().items():
@@ -7216,13 +7240,24 @@ class Driver(object):
                         dm, de = self._family_defaults(opp)
                         effective_model = rater_model or dm
                         effective_effort = rater_effort or de
-                        self._mark_busy(
+                        if not self._mark_busy(
                             raw_name,
                             contracts.KIND_RECLASSIFY,
                             opp,
                             model=effective_model,
                             effort=effective_effort,
-                        )
+                        ):
+                            st.fail_run(
+                                self.state,
+                                "reclassify call could not create its "
+                                "accounting marker",
+                                unit=unit,
+                                type_="orchestrator",
+                            )
+                            self._save()
+                            raise StopStep(
+                                "worker accounting marker unavailable"
+                            )
                         output, result = runners.call_worker(
                             self.runner, opp, prompt,
                             contracts.KIND_RECLASSIFY,
@@ -7298,7 +7333,7 @@ class Driver(object):
                 else:
                     retained.append((finding, raising_family))
         finally:
-            self._clear_busy()
+            pass
         if self._snapshot_diff(before, self._snapshot()):
             # A reclassifier edited the workspace: void any deferral (the
             # reclassify_recorded events above no longer stand) and restore.

@@ -2036,9 +2036,12 @@ def _record_classifier_activity(store, session_id, call):
         ("%s:%d" % (action_id, provider_attempt)).encode("utf-8")
     ).hexdigest()[:20]
     event_id = "activity-%s" % digest
-    raw_ref = store.save_activity_output(
-        session_id, event_id, call.get("raw") or ""
-    )
+    try:
+        raw_ref = store.save_activity_output(
+            session_id, event_id, call.get("raw") or ""
+        )
+    except Exception:
+        raw_ref = None
     participants = snapshot.state["run_config"]["participants"]
     completed = attempt["completed_turn_count"]
     kind = attempt.get("kind", "discussion_turn")
@@ -2062,8 +2065,9 @@ def _record_classifier_activity(store, session_id, call):
         "model": call.get("model"),
         "effort": call.get("effort"),
         "status": call["status"],
-        "raw_ref": raw_ref,
     }
+    if raw_ref is not None:
+        event["raw_ref"] = raw_ref
     prompt_path = call.get("prompt_path")
     if isinstance(prompt_path, str) and prompt_path:
         event["prompt_ref"] = os.path.basename(prompt_path)
@@ -2078,6 +2082,7 @@ def _record_classifier_activity(store, session_id, call):
             call.get("error") or "failure classifier call failed"
         )[:4000]
     store.append_activity(session_id, event)
+    store.finish_turn_classifier_call(session_id)
 
 
 def _participant_execution(store, record, participant_process_factory):
@@ -2177,6 +2182,9 @@ def _participant_execution(store, record, participant_process_factory):
             use_llm=bool(runtime.get("error_classifier", True)),
             classifier_model=defaults.get("model"),
             classifier_effort=defaults.get("effort"),
+            on_llm_start=lambda call: store.begin_turn_classifier_call(
+                session_id, call
+            ),
             on_llm_call=lambda call: _record_classifier_activity(
                 store, session_id, call
             ),

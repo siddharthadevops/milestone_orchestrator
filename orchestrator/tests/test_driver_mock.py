@@ -28,6 +28,7 @@ import os
 import subprocess
 import tempfile
 import unittest
+from unittest import mock
 
 from orchestrator import contracts, driver as drv
 from orchestrator import runners
@@ -712,6 +713,89 @@ class TestFailedCallAccounting(DriverTestCase):
             self.assertEqual(event["type"], "worker_malformed")
             self.assertEqual(event["duration_s"], 12.5)
 
+    def test_successful_call_keeps_marker_until_its_state_is_saved(self):
+        with tempfile.TemporaryDirectory(prefix="orch-mock-") as ws:
+            path = init_state(ws, make_config())
+            runner = runners.MockRunner([skeleton_script()[0]])
+            driver = drv.Driver(path, runner=runner)
+            with mock.patch.object(
+                driver, "_save_raw", side_effect=OSError("raw unavailable")
+            ), self.assertRaisesRegex(OSError, "raw unavailable"):
+                driver._call(
+                    "codex",
+                    "KIND: draft_skeleton\n",
+                    contracts.KIND_DRAFT_SKELETON,
+                    "skeleton-draft",
+                )
+
+            marker = os.path.join(ws, ".orchestrator", "current.json")
+            self.assertTrue(os.path.exists(marker))
+            recovered = drv.Driver(path, runner=runners.MockRunner([]))
+            self.assertTrue(
+                st.summary(recovered.state)["work_token_usage_partial"]
+            )
+            self.assertFalse(os.path.exists(marker))
+
+    def test_runner_failure_keeps_marker_when_raw_persistence_fails(self):
+        with tempfile.TemporaryDirectory(prefix="orch-mock-") as ws:
+            path = init_state(ws, make_config())
+            driver = drv.Driver(path, runner=runners.MockRunner([]))
+            failure = runners.RunnerError("provider failed")
+            with mock.patch.object(
+                runners, "call_worker", side_effect=failure
+            ), mock.patch.object(
+                driver,
+                "_save_protocol_raws",
+                side_effect=OSError("raw unavailable"),
+            ), self.assertRaisesRegex(OSError, "raw unavailable"):
+                driver._call(
+                    "codex",
+                    "KIND: draft_skeleton\n",
+                    contracts.KIND_DRAFT_SKELETON,
+                    "skeleton-draft",
+                )
+
+            marker = os.path.join(ws, ".orchestrator", "current.json")
+            self.assertTrue(os.path.exists(marker))
+            recovered = drv.Driver(path, runner=runners.MockRunner([]))
+            self.assertTrue(
+                st.summary(recovered.state)["work_token_usage_partial"]
+            )
+
+    def test_provider_is_not_called_without_accounting_marker(self):
+        with tempfile.TemporaryDirectory(prefix="orch-mock-") as ws:
+            path = init_state(ws, make_config())
+            runner = runners.MockRunner([skeleton_script()[0]])
+            driver = drv.Driver(path, runner=runner)
+            with mock.patch.object(driver, "_mark_busy", return_value=False):
+                with self.assertRaisesRegex(
+                    drv.StopStep, "accounting marker unavailable"
+                ):
+                    driver._call(
+                        "codex",
+                        "KIND: draft_skeleton\n",
+                        contracts.KIND_DRAFT_SKELETON,
+                        "skeleton-draft",
+                    )
+            self.assertEqual(runner.calls, [])
+
+    def test_state_save_failure_keeps_completed_call_marker(self):
+        with tempfile.TemporaryDirectory(prefix="orch-mock-") as ws:
+            path = init_state(ws, make_config())
+            driver = drv.Driver(
+                path, runner=runners.MockRunner([skeleton_script()[0]])
+            )
+            with mock.patch.object(
+                st, "save", side_effect=OSError("state unavailable")
+            ), self.assertRaisesRegex(OSError, "state unavailable"):
+                driver.step()
+
+            self.assertTrue(
+                os.path.exists(
+                    os.path.join(ws, ".orchestrator", "current.json")
+                )
+            )
+
 
 class TestOperatorAmendmentsFlow(DriverTestCase):
     """Amendments dropped into .orchestrator/amendments.json mid-run reach
@@ -996,6 +1080,27 @@ class TestUncleanStopRepair(DriverTestCase):
             self.assertTrue([e for e in state["events"]
                              if e["type"] == "worker_interrupted"])
             self.assertTrue(st.summary(state)["work_token_usage_partial"])
+
+    def test_stale_marker_survives_failed_accounting_save(self):
+        with tempfile.TemporaryDirectory(prefix="orch-mock-") as ws:
+            path = init_state(ws, make_config(git={"enabled": False}))
+            self._marker(ws, "draft_skeleton")
+            marker = os.path.join(ws, ".orchestrator", "current.json")
+
+            with mock.patch.object(
+                st, "save", side_effect=OSError("state unavailable")
+            ), self.assertRaisesRegex(OSError, "state unavailable"):
+                drv.Driver(path, runner=runners.MockRunner([]))
+            self.assertTrue(os.path.exists(marker))
+
+            recovered = drv.Driver(path, runner=runners.MockRunner([]))
+            interrupted = [
+                event
+                for event in recovered.state["events"]
+                if event["type"] == "worker_interrupted"
+            ]
+            self.assertEqual(len(interrupted), 1)
+            self.assertFalse(os.path.exists(marker))
 
 
 class TestDocsDirCollision(DriverTestCase):

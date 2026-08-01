@@ -15,6 +15,7 @@ from unittest import mock
 from orchestrator import brainstorming as bs
 from orchestrator import brainstorming_coordination as coordination
 from orchestrator import brainstorming_execution as execution
+from orchestrator import brainstorming_lifecycle as lifecycle
 from orchestrator import runners
 
 
@@ -650,6 +651,110 @@ class BrainstormingCoordinationTest(unittest.TestCase):
         self.assertTrue(events[0]["token_usage_partial"])
         self.assertNotIn("token_usage", events[0])
         self.assertIsNone(self.store.read_turn_attempt(session_id))
+
+    def test_quiescent_turn_preserves_unrecorded_classifier_call(self):
+        session_id = "lost-classifier-activity"
+        roster = participants()
+        target = self._create_running(session_id, roster=roster)
+        subject, _executors = self._subject(
+            roster, {"lead": [], "critic": []}
+        )
+        prepared = subject.prepare(session_id)
+        attempt = {
+            "token": "classifier-parent-call",
+            "participant_id": "lead",
+            "completed_turn_count": 0,
+            "target_revision": prepared.state["accepted_target_revision"],
+            "quiescent": False,
+        }
+        with coordination._open_target_parent(target) as (
+            _descriptor,
+            _name,
+            parent_identity,
+        ):
+            attempt["target_parent"] = parent_identity
+        self.store.begin_turn_attempt(session_id, attempt)
+        self.store.begin_turn_classifier_call(
+            session_id,
+            {
+                "family": "claude",
+                "model": "opus",
+                "effort": "max",
+                "started_at": 10.0,
+            },
+        )
+        self.store.mark_turn_attempt_quiescent(
+            session_id, attempt["token"]
+        )
+
+        self.store.preserve_turn_attempt_accounting(
+            session_id, attempt["token"]
+        )
+        self.store.finish_turn_attempt(session_id, attempt["token"])
+
+        events = self.store.read_activity(session_id)["events"]
+        self.assertEqual(
+            [event["action_id"] for event in events],
+            [attempt["token"], attempt["token"] + ":classifier"],
+        )
+        self.assertTrue(events[1]["token_usage_partial"])
+
+    def test_classifier_raw_failure_does_not_hide_exact_activity(self):
+        session_id = "classifier-raw-failure"
+        roster = participants()
+        target = self._create_running(session_id, roster=roster)
+        subject, _executors = self._subject(
+            roster, {"lead": [], "critic": []}
+        )
+        prepared = subject.prepare(session_id)
+        attempt = {
+            "token": "classifier-raw-parent",
+            "participant_id": "lead",
+            "completed_turn_count": 0,
+            "target_revision": prepared.state["accepted_target_revision"],
+            "quiescent": False,
+        }
+        with coordination._open_target_parent(target) as (
+            _descriptor,
+            _name,
+            parent_identity,
+        ):
+            attempt["target_parent"] = parent_identity
+        self.store.begin_turn_attempt(session_id, attempt)
+        call = {
+            "family": "claude",
+            "model": "opus",
+            "effort": "max",
+            "started_at": 10.0,
+            "duration_s": 2.0,
+            "status": "completed",
+            "raw": "classified",
+            "token_usage": {
+                "input_tokens": 10,
+                "cached_input_tokens": 2,
+                "output_tokens": 3,
+                "reasoning_output_tokens": 1,
+                "total_tokens": 13,
+            },
+        }
+        self.store.begin_turn_classifier_call(session_id, call)
+
+        with mock.patch.object(
+            self.store,
+            "save_activity_output",
+            side_effect=OSError("raw unavailable"),
+        ):
+            lifecycle._record_classifier_activity(
+                self.store, session_id, call
+            )
+
+        events = self.store.read_activity(session_id)["events"]
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0]["token_usage"], call["token_usage"])
+        self.assertNotIn("raw_ref", events[0])
+        self.assertNotIn(
+            "classifier_call", self.store.read_turn_attempt(session_id)
+        )
 
     def test_completed_lead_turn_creates_or_advances_target_revision_atomically(
         self,

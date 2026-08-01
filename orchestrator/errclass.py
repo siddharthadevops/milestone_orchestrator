@@ -291,6 +291,7 @@ def llm_classify(runner, family, raw_texts, workspace, on_raw=None,
     result = None
     call_error = None
     failure_type = None
+    call_started = False
     started_at = time.time()
     try:
         if on_start is not None:
@@ -301,8 +302,13 @@ def llm_classify(runner, family, raw_texts, workspace, on_raw=None,
                     "effort": effort,
                     "started_at": started_at,
                 })
-            except Exception:
-                pass
+            except Exception as exc:
+                return (
+                    "unknown",
+                    None,
+                    "classifier unavailable: %s" % exc,
+                )
+        call_started = True
         result = runner.call(
             family, prompt, workspace,
             model=model, effort=effort,
@@ -348,7 +354,7 @@ def llm_classify(runner, family, raw_texts, workspace, on_raw=None,
             )
         raise
     finally:
-        if on_call is not None:
+        if on_call is not None and call_started:
             duration = getattr(result, "duration_s", None)
             if isinstance(duration, bool) or not isinstance(
                 duration, (int, float)
