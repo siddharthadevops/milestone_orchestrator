@@ -1714,6 +1714,17 @@ class BrainstormingCoordinator:
                 self._recover_rejected(
                     session_id, target, attempt["token"], mark_error
                 )
+            try:
+                self.store.preserve_turn_attempt_accounting(
+                    session_id, attempt["token"]
+                )
+            except BaseException:
+                self._record_supervision_stop(
+                    session_id,
+                    "The discussion stopped because participant activity "
+                    "could not be preserved.",
+                )
+                raise
             self._recover_rejected(
                 session_id, target, attempt["token"], exc
             )
@@ -1894,6 +1905,17 @@ class BrainstormingCoordinator:
                 self._recover_rejected(
                     session_id, target, attempt["token"], mark_error
                 )
+            try:
+                self.store.preserve_turn_attempt_accounting(
+                    session_id, attempt["token"]
+                )
+            except BaseException:
+                self._record_supervision_stop(
+                    session_id,
+                    "The discussion stopped because participant activity "
+                    "could not be preserved.",
+                )
+                raise
             self._recover_rejected(
                 session_id, target, attempt["token"], exc
             )

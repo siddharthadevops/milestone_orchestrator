@@ -626,6 +626,31 @@ class BrainstormingCoordinationTest(unittest.TestCase):
         self.assertEqual(len(activity["events"]), 1)
         self.assertEqual(activity["events"][0]["status"], "completed")
 
+    def test_quiescent_turn_keeps_partial_accounting_when_activity_write_fails(
+        self,
+    ):
+        session_id = "lost-internal-activity"
+        roster = participants()
+        self._create_running(session_id, roster=roster)
+        subject, _executors = self._subject(
+            roster,
+            {"lead": [envelope("paid result")], "critic": []},
+        )
+
+        with mock.patch.object(
+            subject.participant_execution,
+            "_record_activity",
+            side_effect=RuntimeError("activity unavailable"),
+        ), self.assertRaisesRegex(RuntimeError, "activity unavailable"):
+            subject.run_next_turn(session_id, object())
+
+        events = self.store.read_activity(session_id)["events"]
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0]["status"], "failed")
+        self.assertTrue(events[0]["token_usage_partial"])
+        self.assertNotIn("token_usage", events[0])
+        self.assertIsNone(self.store.read_turn_attempt(session_id))
+
     def test_completed_lead_turn_creates_or_advances_target_revision_atomically(
         self,
     ):

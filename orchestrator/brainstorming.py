@@ -3320,6 +3320,84 @@ class SessionStore:
             })
         self.append_activity(session_id, event)
 
+    def preserve_turn_attempt_accounting(self, session_id, token):
+        """Retain token uncertainty before a quiescent worker is retired."""
+        token = _text(token, "turn_attempt.token")
+        attempt = self.read_turn_attempt(session_id)
+        if attempt is None:
+            raise HistoryRewriteError("the active turn attempt is missing")
+        if attempt["token"] != token:
+            raise HistoryRewriteError("the active turn attempt token changed")
+        if not attempt["quiescent"]:
+            raise HistoryRewriteError(
+                "only a quiescent turn attempt can preserve accounting"
+            )
+        provider_attempt = attempt.get("provider_attempt", 1)
+        activity = self.read_activity(session_id)
+        if any(
+            event["action_id"] == token
+            and event["provider_attempt"] == provider_attempt
+            for event in ((activity or {}).get("events") or [])
+        ):
+            return
+        snapshot = self.read(session_id)
+        if snapshot is None:
+            raise SessionNotFound(session_id)
+        participants = snapshot.state["run_config"]["participants"]
+        participant = next(
+            (
+                item
+                for item in participants
+                if item["id"] == attempt["participant_id"]
+            ),
+            None,
+        )
+        if participant is None or participant["delivery"] != "llm":
+            raise HistoryRewriteError(
+                "the active turn attempt participant is unavailable"
+            )
+        kind = attempt.get("kind", "discussion_turn")
+        stage = (
+            (attempt.get("action_context") or {}).get("stage")
+            if kind == "closure"
+            else "discussion"
+        )
+        completed = attempt["completed_turn_count"]
+        round_number = (
+            completed // len(participants) + 1
+            if kind == "discussion_turn"
+            else max(1, completed // len(participants))
+        )
+        recorded_at = time.time()
+        started_at = attempt.get("started_at", recorded_at)
+        digest = hashlib.sha256(
+            ("%s:%d" % (token, provider_attempt)).encode("utf-8")
+        ).hexdigest()[:20]
+        self.append_activity(
+            session_id,
+            {
+                "id": "activity-%s" % digest,
+                "action_id": token,
+                "provider_attempt": provider_attempt,
+                "at": time.strftime(
+                    "%Y-%m-%dT%H:%M:%S%z", time.localtime(recorded_at)
+                ),
+                "started_at": started_at,
+                "duration_s": max(0.0, recorded_at - started_at),
+                "kind": kind,
+                "stage": stage,
+                "round": round_number,
+                "participant_id": participant["id"],
+                "model_family": participant["model_family"],
+                "model": None,
+                "effort": None,
+                "status": "failed",
+                "failure_type": "execution",
+                "error": "provider call ended without durable activity",
+                "token_usage_partial": True,
+            },
+        )
+
     def finish_external_intervention(self, session_id, token):
         """Remove one response only after its turn or vote was consumed."""
         token = _text(token, "external_intervention.token")
@@ -3661,6 +3739,8 @@ class SessionStore:
         attempt = validate_turn_attempt(current["value"])
         if attempt["token"] != token:
             raise HistoryRewriteError("the active turn attempt token changed")
+        if attempt["quiescent"]:
+            self.preserve_turn_attempt_accounting(session_id, token)
         result = self._store.delete(key, expected_revision=current["revision"])
         if not result.ok:
             raise HistoryRewriteError(
