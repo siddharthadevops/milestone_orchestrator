@@ -2316,6 +2316,36 @@ class DriverImplementationSizeTest(unittest.TestCase):
             self.assertEqual(continuation["rounds"], [])
             self.assertEqual(first["gate_commit"], "gate-a")
 
+    def test_unrelated_reseal_does_not_preopen_a_later_part(self):
+        with tempfile.TemporaryDirectory(prefix="orch-size-due-part-") as ws:
+            _path, driver, first = self._ready_driver(
+                ws, runners.MockRunner([]), git_enabled=False
+            )
+            st.record_implementation_cut(
+                driver.state, first, "coherent core", "adapter wiring"
+            )
+            first["status"] = st.U_SEALED
+            second = st.ensure_next_unit(driver.state)
+            st.record_implementation_cut(
+                driver.state, second, "adapter", "runtime wiring"
+            )
+
+            driver._after_seal(driver.state["units"][0])
+
+            self.assertEqual(second["status"], st.U_PENDING)
+            self.assertFalse(any(
+                unit.get("part") == "c" for unit in driver.state["units"]
+            ))
+
+            second["status"] = st.U_SEALED
+            driver._after_seal(second)
+            continuations = [
+                unit for unit in driver.state["units"]
+                if unit.get("part") == "c"
+            ]
+            self.assertEqual(len(continuations), 1)
+            self.assertEqual(continuations[0]["status"], st.U_PENDING)
+
     def test_failed_part_a_gate_is_retried_before_part_b_can_open(self):
         with tempfile.TemporaryDirectory(prefix="orch-size-gate-resume-") as ws:
             path, driver, first = self._ready_driver(
@@ -2376,6 +2406,38 @@ class DriverImplementationSizeTest(unittest.TestCase):
                 and unit.get("part") is None
             )
             self.assertIsNotNone(recovered_first["gate_commit"])
+
+    def test_pending_gate_recovery_retires_a_sealed_design_update(self):
+        with tempfile.TemporaryDirectory(prefix="orch-size-design-gate-") as ws:
+            path, driver, first = self._ready_driver(
+                ws, runners.MockRunner([])
+            )
+            st.record_implementation_cut(
+                driver.state, first, "coherent core", "remaining wiring"
+            )
+            first["status"] = st.U_SEALED
+            first["design_update"] = {
+                "editable_paths": ["docs/skeleton.md"],
+                "changed_paths": ["docs/skeleton.md"],
+                "amendment": "Use the agreed boundary.",
+            }
+            driver.state["pending_gate_unit"] = st.unit_key(first)
+            gitops.commit_wip(ws, "wip: slice_impl-01-a")
+            driver._save()
+
+            recovered = drv.Driver(path, runner=runners.MockRunner([]))
+
+            recovered_first = recovered.state["units"][-2]
+            continuation = recovered.state["units"][-1]
+            self.assertNotIn("pending_gate_unit", recovered.state)
+            self.assertNotIn("design_update", recovered_first)
+            self.assertIsNotNone(recovered_first["gate_commit"])
+            self.assertEqual(
+                recovered.state["units"][0]["gate_commit"],
+                recovered_first["gate_commit"],
+            )
+            self.assertEqual(st.unit_key(continuation), "slice_impl-01-b")
+            self.assertEqual(continuation["status"], st.U_PENDING)
 
     def test_failed_last_gate_recovery_closes_with_a_final_commit(self):
         with tempfile.TemporaryDirectory(prefix="orch-size-last-gate-") as ws:

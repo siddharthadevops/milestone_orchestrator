@@ -640,6 +640,36 @@ class TestSequentialImplementationParts(TempWorkspaceCase):
             st.assert_append_only(old, rewritten)
         self.assertEqual(st.unit_key(continuation), "slice_impl-01-b")
 
+    def test_sealed_design_update_can_only_be_retired(self):
+        state, impl = self._pending_impl()
+        impl["status"] = st.U_SEALED
+        impl["design_update"] = {
+            "editable_paths": ["docs/skeleton.md"],
+            "amendment": "Use the agreed boundary.",
+        }
+
+        retired = copy.deepcopy(state)
+        retired["units"][-1].pop("design_update")
+        st.assert_append_only(state, retired)
+
+        rewritten = copy.deepcopy(state)
+        rewritten["units"][-1]["design_update"]["amendment"] = "Different"
+        with self.assertRaisesRegex(
+            st.HistoryRewriteError, "terminal update was modified"
+        ):
+            st.assert_append_only(state, rewritten)
+
+        without_update = copy.deepcopy(state)
+        without_update["units"][-1].pop("design_update")
+        added = copy.deepcopy(without_update)
+        added["units"][-1]["design_update"] = {
+            "editable_paths": ["docs/skeleton.md"]
+        }
+        with self.assertRaisesRegex(
+            st.HistoryRewriteError, "terminal update was modified"
+        ):
+            st.assert_append_only(without_update, added)
+
 
 class TestUnitLifecycle(TempWorkspaceCase):
     def test_skeleton_happy_path(self):

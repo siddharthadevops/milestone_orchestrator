@@ -286,8 +286,15 @@ def assert_append_only(old_state, new_state_):
         if old_unit.get("status") == U_SEALED and nu.get("status") == U_SEALED:
             # closed_record and gate_commit are post-seal bookkeeping
             # written by the driver itself right after the terminal
-            # transition; everything else in a terminal unit is frozen.
-            _post_seal = ("closed_record", "gate_commit")
+            # transition.  A design update may also be retired once, but it
+            # may never be added or rewritten after the unit seals.
+            old_update = old_unit.get("design_update")
+            new_update = nu.get("design_update")
+            if new_update not in (old_update, None):
+                raise HistoryRewriteError(
+                    "%s.design_update: terminal update was modified" % uctx
+                )
+            _post_seal = ("closed_record", "gate_commit", "design_update")
             frozen_old = {k: v for k, v in old_unit.items() if k not in _post_seal}
             frozen_new = {k: v for k, v in nu.items() if k not in _post_seal}
             if frozen_old != frozen_new:

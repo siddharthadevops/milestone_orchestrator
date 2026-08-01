@@ -7592,11 +7592,15 @@ class Driver(object):
         if is_anchor:
             self._retire_reviewed_redoc_wave(unit)
         self._gate_commit(unit)
-        if unit.get("design_update"):
-            unit.pop("design_update", None)
+        # The gate first attributes every changed design document to this
+        # commit; only then may the temporary design authority be retired.
+        unit.pop("design_update", None)
         if is_anchor:
             self._guard_unplanned_preserved_candidates()
-        nxt = st.ensure_next_unit(self.state)
+        # Only materialize a continuation whose predecessors have sealed.
+        # Re-sealing an earlier documentation anchor must not pre-open a
+        # later implementation part while its predecessor is still active.
+        nxt = st.ensure_due_unit(self.state)
         if nxt is None and st.maybe_close_milestone(self.state):
             self._final_commit()
 
