@@ -1919,6 +1919,23 @@ class Driver(object):
                 usage = getattr(call, "token_usage", None)
                 partial = getattr(call, "token_usage_partial", False)
                 duration = getattr(call, "duration_s", None)
+                repair = getattr(call, "repair", None)
+                if isinstance(repair, dict):
+                    repair_usage = repair.get("token_usage")
+                    usage = runners.add_token_usage(usage, repair_usage)
+                    partial = bool(
+                        partial
+                        or repair.get("token_usage_partial", False)
+                        or repair_usage is None
+                    )
+                    repair_duration = repair.get("duration_s")
+                    if (
+                        isinstance(duration, (int, float))
+                        and not isinstance(duration, bool)
+                        and isinstance(repair_duration, (int, float))
+                        and not isinstance(repair_duration, bool)
+                    ):
+                        duration += repair_duration
             marker["completed"] = True
             marker["duration_s"] = (
                 duration_s if duration_s is not None else duration

@@ -24,6 +24,7 @@ resolution — live in test_fix_loop.py, which imports this module's helpers.
 """
 
 import copy
+import json
 import os
 import subprocess
 import tempfile
@@ -735,6 +736,60 @@ class TestFailedCallAccounting(DriverTestCase):
                 st.summary(recovered.state)["work_token_usage_partial"]
             )
             self.assertFalse(os.path.exists(marker))
+
+    def test_repaired_call_marker_keeps_both_attempts(self):
+        first_usage = {
+            "input_tokens": 10,
+            "cached_input_tokens": 2,
+            "output_tokens": 2,
+            "reasoning_output_tokens": 0,
+            "total_tokens": 12,
+        }
+        second_usage = {
+            "input_tokens": 20,
+            "cached_input_tokens": 3,
+            "output_tokens": 3,
+            "reasoning_output_tokens": 1,
+            "total_tokens": 23,
+        }
+
+        class RepairRunner(object):
+            def __init__(self):
+                self.calls = 0
+
+            def call(self, *_args, **_kwargs):
+                self.calls += 1
+                if self.calls == 1:
+                    return runners.RunnerResult(
+                        "not json", 0, 1.0, token_usage=first_usage
+                    )
+                return runners.RunnerResult(
+                    json.dumps(skeleton_script()[0]["response"]),
+                    0,
+                    2.0,
+                    token_usage=second_usage,
+                )
+
+        with tempfile.TemporaryDirectory(prefix="orch-mock-") as ws:
+            path = init_state(ws, make_config())
+            driver = drv.Driver(path, runner=RepairRunner())
+            with mock.patch.object(
+                driver, "_save_raw", side_effect=OSError("raw unavailable")
+            ), self.assertRaisesRegex(OSError, "raw unavailable"):
+                driver._call(
+                    "codex",
+                    "KIND: draft_skeleton\n",
+                    contracts.KIND_DRAFT_SKELETON,
+                    "skeleton-draft",
+                )
+
+            recovered = drv.Driver(path, runner=runners.MockRunner([]))
+            summary = st.summary(recovered.state)
+            self.assertEqual(
+                summary["work_token_usage"],
+                runners.add_token_usage(first_usage, second_usage),
+            )
+            self.assertFalse(summary["work_token_usage_partial"])
 
     def test_runner_failure_keeps_marker_when_raw_persistence_fails(self):
         with tempfile.TemporaryDirectory(prefix="orch-mock-") as ws:
