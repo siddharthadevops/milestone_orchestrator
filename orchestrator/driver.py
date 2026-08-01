@@ -1946,6 +1946,11 @@ class Driver(object):
             marker["token_usage_partial"] = bool(
                 partial or usage is None
             )
+            # In-call control may have durably changed state while the
+            # provider was running (the controlled-cutoff write-ahead marker).
+            # This completed result is not in that state yet, so bind the
+            # sentinel to the current digest before any raw/state persistence.
+            marker["state_digest"] = self._state_file_digest()
             return self._write_busy(marker)
 
     def _require_busy_accounting(self, kind, family, label, call,

@@ -1967,6 +1967,48 @@ class DriverImplementationSizeTest(unittest.TestCase):
             )
             self.assertEqual(resumed_runner.controls, [None])
 
+    def test_completed_cutoff_usage_survives_raw_persistence_failure(self):
+        usage = {
+            "input_tokens": 90,
+            "cached_input_tokens": 30,
+            "output_tokens": 10,
+            "reasoning_output_tokens": 4,
+            "total_tokens": 100,
+        }
+
+        class TokenControlRunner(LiveControlRunner):
+            def call(self, *args, **kwargs):
+                result = super().call(*args, **kwargs)
+                if isinstance(result, runners.ControlledInterruptionResult):
+                    result.token_usage = usage
+                    result.token_usage_partial = False
+                return result
+
+        with tempfile.TemporaryDirectory(prefix="orch-size-raw-crash-") as ws:
+            runner = TokenControlRunner(
+                "hard",
+                ok(contracts.KIND_IMPLEMENT,
+                   files_changed=["implementation.py"]),
+            )
+            path, driver, _unit = self._ready_driver(
+                ws,
+                runner,
+                {"soft_lines": 2, "hard_lines": 6,
+                 "poll_interval_s": 0.005},
+            )
+
+            with mock.patch.object(
+                driver,
+                "_save_raw_noclobber",
+                side_effect=OSError("raw unavailable"),
+            ), self.assertRaisesRegex(OSError, "raw unavailable"):
+                driver.step()
+
+            recovered = drv.Driver(path, runner=runners.MockRunner([]))
+            summary = st.summary(recovered.state)
+            self.assertEqual(summary["work_token_usage"], usage)
+            self.assertTrue(summary["work_token_usage_partial"])
+
     def test_brainstorming_implementation_continuation_keeps_size_control(self):
         with tempfile.TemporaryDirectory(prefix="orch-size-brainstorm-") as ws:
             runner = ContinuationControlProbeRunner(
