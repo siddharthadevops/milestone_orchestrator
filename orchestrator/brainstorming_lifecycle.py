@@ -1074,6 +1074,16 @@ def _activity_projection(store, record, state):
             for event in events
         )
     )
+    external_call_recorded = bool(
+        intervention is not None
+        and intervention["provider_attempt"] > 0
+        and any(
+            event["action_id"] == intervention["token"]
+            and event["provider_attempt"]
+            == intervention["provider_attempt"]
+            for event in events
+        )
+    )
     retry = (
         None
         if attempt is None
@@ -1081,17 +1091,24 @@ def _activity_projection(store, record, state):
     )
     process_alive = _process_alive(record)
     orphaned_call = bool(
-        not process_alive
-        and (
-            (
+        (
+            not process_alive
+            and (
                 attempt is not None
                 and not attempt["quiescent"]
                 and retry is None
             )
-            or (
-                intervention is not None
-                and intervention["provider_attempt"] > 0
-                and not intervention["provider_quiescent"]
+        )
+        or (
+            intervention is not None
+            and intervention["provider_attempt"] > 0
+            and not external_call_recorded
+            and (
+                intervention["response"] is not None
+                or (
+                    not process_alive
+                    and not intervention["provider_quiescent"]
+                )
             )
         )
     )

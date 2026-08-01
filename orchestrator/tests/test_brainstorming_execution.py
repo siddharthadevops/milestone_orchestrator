@@ -422,6 +422,23 @@ class BrainstormingExecutionTest(unittest.TestCase):
             accepted["response"]["payload"],
             {"markdown": "Dante chooses the practical option."},
         )
+        latest = self.store.read("external-acceptance")
+        self.store.record_completed_turn(
+            "external-acceptance",
+            latest.revision,
+            "dante",
+            accepted["response"]["payload"]["markdown"],
+            target,
+        )
+        self.store.finish_external_intervention(
+            "external-acceptance", intervention["token"]
+        )
+        activity = self.store.read_activity("external-acceptance")
+        self.assertEqual(len(activity["events"]), 1)
+        self.assertTrue(activity["events"][0]["token_usage_partial"])
+        self.assertIsNone(
+            self.store.read_external_intervention("external-acceptance")
+        )
 
     def _bindings(self, provider_runner, participants):
         return {

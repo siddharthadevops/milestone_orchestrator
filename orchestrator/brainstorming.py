@@ -3037,6 +3037,7 @@ class SessionStore:
             raise HistoryRewriteError(
                 "only an answered closure intervention can advance"
             )
+        self._preserve_external_call_accounting(session_id, prior)
         for field in (
             "action_kind",
             "completed_turn_count",
@@ -3265,6 +3266,53 @@ class SessionStore:
             session_id, token, payload, automatic=True
         )
 
+    def _preserve_external_call_accounting(self, session_id, intervention):
+        """Retain token uncertainty before an automatic response is removed."""
+        attempt = intervention["provider_attempt"]
+        if attempt <= 0:
+            return
+        activity = self.read_activity(session_id)
+        if any(
+            event["action_id"] == intervention["token"]
+            and event["provider_attempt"] == attempt
+            for event in ((activity or {}).get("events") or [])
+        ):
+            return
+        response = intervention.get("response")
+        if response is None:
+            raise HistoryRewriteError(
+                "external provider accounting cannot precede its response"
+            )
+        action_id = intervention["token"]
+        digest = hashlib.sha256(
+            ("%s:%d" % (action_id, attempt)).encode("utf-8")
+        ).hexdigest()[:20]
+        kind = (
+            "discussion_turn"
+            if intervention["action_kind"] == "discussion_turn"
+            else "closure"
+        )
+        received_at = response["received_at"]
+        self.append_activity(session_id, {
+            "id": "activity-%s" % digest,
+            "action_id": action_id,
+            "provider_attempt": attempt,
+            "at": time.strftime(
+                "%Y-%m-%dT%H:%M:%S%z", time.localtime(received_at)
+            ),
+            "started_at": received_at,
+            "duration_s": 0.0,
+            "kind": kind,
+            "stage": "discussion" if kind == "discussion_turn" else "vote",
+            "round": intervention["round"],
+            "participant_id": intervention["participant_id"],
+            "model_family": "external-provider",
+            "model": None,
+            "effort": None,
+            "status": "completed",
+            "token_usage_partial": True,
+        })
+
     def finish_external_intervention(self, session_id, token):
         """Remove one response only after its turn or vote was consumed."""
         token = _text(token, "external_intervention.token")
@@ -3279,6 +3327,7 @@ class SessionStore:
             raise HistoryRewriteError(
                 "an unanswered external intervention cannot finish"
             )
+        self._preserve_external_call_accounting(session_id, intervention)
         result = self._store.delete(key, expected_revision=current["revision"])
         if not result.ok:
             raise HistoryRewriteError(

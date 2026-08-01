@@ -277,6 +277,39 @@ class BrainstormingVisualizationTest(unittest.TestCase):
         self.assertIsNone(view["work_token_usage"])
         self.assertTrue(view["work_token_usage_partial"])
 
+    def test_answered_external_call_without_activity_is_partial(self):
+        session_id, store = self._create("answered-external.md")
+        snapshot = store.read(session_id)
+        request = snapshot.state["request"]
+        now = time.time()
+        store._store.put(bs._external_intervention_key(session_id), {
+            "token": "answered-external",
+            "participant_id": "dante",
+            "action_kind": "discussion_turn",
+            "completed_turn_count": 0,
+            "round": 1,
+            "target_revision": None,
+            "input": {
+                "request": request["request"],
+                "context": request["context"],
+                "workspace_path": request["workspace_path"],
+                "target_path": request["target_path"],
+                "transcript_ref": snapshot.state["transcript_ref"],
+            },
+            "created_at": now - 5,
+            "provider_attempt": 1,
+            "provider_quiescent": True,
+            "response": {
+                "received_at": now,
+                "payload": {"markdown": "A durable response."},
+            },
+        })
+
+        view = self._view(session_id)
+
+        self.assertIsNone(view["work_token_usage"])
+        self.assertTrue(view["work_token_usage_partial"])
+
     def test_view_projection_is_authorized_exact_and_revision_coherent(self):
         project = self.api._ready_project(users=[access.USER_EMAILS[0]])
         self.api._target("authorized-view.md")
