@@ -1524,6 +1524,25 @@ class Driver(object):
             os.unlink(path)
         except OSError:
             pass
+        # A stale provider marker means the call consumed an unknown number
+        # of tokens before the process died.  Preserve that uncertainty even
+        # when no Git repair is needed (clean tree or Git-disabled run).
+        if marker.get("family"):
+            unit = st.current_unit(self.state)
+            st.append_event(
+                self.state,
+                "worker_interrupted",
+                unit=st.unit_key(unit) if unit is not None else None,
+                label=marker.get("label"),
+                kind=marker.get("kind"),
+                family=marker.get("family"),
+                model=marker.get("model"),
+                effort=marker.get("effort"),
+                duration_s=None,
+                token_usage=None,
+                token_usage_partial=True,
+            )
+            self._save()
         if not gitops.enabled(self.config):
             return
         kind = marker.get("kind")

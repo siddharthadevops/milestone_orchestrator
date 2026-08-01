@@ -1741,6 +1741,7 @@ def _work_durations(state):
             "brainstorming_origin_recorded",
             "brainstorming_work_recorded",
             "implementation_size_interrupted",
+            "worker_interrupted",
             "worker_unaccepted",
             "error_classifier_call",
         ):
@@ -1882,6 +1883,7 @@ def _work_token_usage(state):
             "brainstorming_origin_recorded",
             "brainstorming_work_recorded",
             "implementation_size_interrupted",
+            "worker_interrupted",
             "worker_unaccepted",
             "error_classifier_call",
         ):
@@ -2105,6 +2107,9 @@ def summary(state):
                     ),
                     "duration_s": e.get("duration_s"),
                     "token_usage": copy.deepcopy(e.get("token_usage")),
+                    "token_usage_partial": bool(
+                        e.get("token_usage_partial", False)
+                    ),
                 }
             )
         if e.get("type") == "verification":

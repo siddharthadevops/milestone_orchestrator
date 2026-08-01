@@ -1054,6 +1054,12 @@ class StoryApiTest(ServiceApiTest):
             "finding_id": "claude-F9", "reclassifier": "codex",
             "drift_risk": "low", "threshold": "low",
             "defer_ok": True, "reason": "cosmetic; no drift",
+            "token_usage": {
+                "input_tokens": 5, "cached_input_tokens": 1,
+                "output_tokens": 2, "reasoning_output_tokens": 0,
+                "total_tokens": 7,
+            },
+            "token_usage_partial": False,
         })
         # A repaired first strike, with its malformed raw on disk (the
         # story viewer reads the path recorded by the run's own ledger).
@@ -1318,6 +1324,7 @@ class StoryApiTest(ServiceApiTest):
                 "output_tokens": 3, "reasoning_output_tokens": 1,
                 "total_tokens": 13,
             },
+            "token_usage_partial": True,
         })
         st.save(entry["state_path"], state)
         # summary carries the debt so the chip can render after the run ends
@@ -1336,7 +1343,12 @@ class StoryApiTest(ServiceApiTest):
         self.assertEqual(body["reclassify"][0]["reclassifier"], "codex")
         self.assertEqual(body["reclassify"][0]["drift_risk"], "low")
         self.assertEqual(body["reclassify"][0]["threshold"], "low")
-        self.assertEqual(body["token_usage"]["total_tokens"], 13)
+        partial = next(
+            event for event in body["reclassify"]
+            if event["finding_id"] == "claude-F10"
+        )
+        self.assertTrue(partial["token_usage_partial"])
+        self.assertEqual(body["token_usage"]["total_tokens"], 20)
         self.assertTrue(body["token_usage_partial"])
 
     def test_requeued_impl_debt_stays_in_history_but_not_active_debt(self):

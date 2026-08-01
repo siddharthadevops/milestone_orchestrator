@@ -2464,6 +2464,12 @@ class TestSummary(TempWorkspaceCase):
         st.append_event(
             state, "reclassify_recorded", unit="skeleton",
             finding_id="codex-F1", defer_ok=False, duration_s=60,
+            token_usage={
+                "input_tokens": 10, "cached_input_tokens": 2,
+                "output_tokens": 3, "reasoning_output_tokens": 1,
+                "total_tokens": 13,
+            },
+            token_usage_partial=True,
         )
         st.append_event(
             state, "brainstorming_origin_recorded", unit="skeleton",
@@ -2522,6 +2528,9 @@ class TestSummary(TempWorkspaceCase):
         self.assertEqual(summ["work_duration_s"], 683.0)
         self.assertEqual(
             summ["units"][0]["reclassify"][0]["duration_s"], 60
+        )
+        self.assertTrue(
+            summ["units"][0]["reclassify"][0]["token_usage_partial"]
         )
         self.assertEqual(
             summ["units"][0]["brainstormings"][0]["duration_s"], 12
@@ -2654,6 +2663,7 @@ class TestSummary(TempWorkspaceCase):
         }
         for type_ in (
             "worker_unaccepted",
+            "worker_interrupted",
             "implementation_size_interrupted",
             "error_classifier_call",
             "worker_malformed",
@@ -2669,9 +2679,9 @@ class TestSummary(TempWorkspaceCase):
 
         summary = st.summary(state)
         expected = {
-            "input_tokens": 40, "cached_input_tokens": 8,
-            "output_tokens": 20, "reasoning_output_tokens": 4,
-            "total_tokens": 60,
+            "input_tokens": 50, "cached_input_tokens": 10,
+            "output_tokens": 25, "reasoning_output_tokens": 5,
+            "total_tokens": 75,
         }
         self.assertEqual(summary["work_token_usage"], expected)
         self.assertFalse(summary["work_token_usage_partial"])

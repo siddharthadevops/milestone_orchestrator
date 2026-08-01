@@ -2605,6 +2605,9 @@ def run_story(home, run_id, item):
                         in requeued_ids.get(ref, set())
                     ),
                     "token_usage": e.get("token_usage"),
+                    "token_usage_partial": bool(
+                        e.get("token_usage_partial", False)
+                    ),
                 }
                 for e in state["events"]
                 if e.get("type") == "reclassify_recorded"
@@ -2616,7 +2619,9 @@ def run_story(home, run_id, item):
                     token_usage, event.get("token_usage")
                 )
             token_usage_partial = any(
-                event.get("token_usage") is None for event in reclassify
+                event.get("token_usage_partial", False)
+                or event.get("token_usage") is None
+                for event in reclassify
             )
             return {
                 "story": "debt",

@@ -875,12 +875,12 @@ class TestUncleanStopRepair(DriverTestCase):
     startup repairs safely: restore_clean only where the pre-call tree
     was provably HEAD, a KILLED NOTICE where legitimate work is mixed."""
 
-    def _marker(self, ws, kind, label="x-call"):
+    def _marker(self, ws, kind, label="x-call", family="codex"):
         import json as _json
         os.makedirs(os.path.join(ws, ".orchestrator"), exist_ok=True)
         with open(os.path.join(ws, ".orchestrator", "current.json"), "w",
                   encoding="utf-8") as fh:
-            _json.dump({"label": label, "kind": kind, "family": "codex",
+            _json.dump({"label": label, "kind": kind, "family": family,
                         "started_at": 0}, fh)
 
     def _dirty(self, ws):
@@ -966,11 +966,36 @@ class TestUncleanStopRepair(DriverTestCase):
     def test_clean_marker_from_verification_is_ignored(self):
         with tempfile.TemporaryDirectory(prefix="orch-mock-") as ws:
             path = init_state(ws, make_config())
-            self._marker(ws, "verification")
+            self._marker(ws, "verification", family=None)
             drv.Driver(path, runner=runners.MockRunner([]))
             state = st.load(path)
             self.assertFalse([e for e in state["events"]
                               if e["type"].startswith("unclean_stop")])
+            self.assertFalse([e for e in state["events"]
+                              if e["type"] == "worker_interrupted"])
+
+    def test_clean_stale_worker_marks_token_total_partial(self):
+        with tempfile.TemporaryDirectory(prefix="orch-mock-") as ws:
+            path = init_state(ws, make_config())
+            self._marker(ws, "draft_skeleton")
+            drv.Driver(path, runner=runners.MockRunner([]))
+            state = st.load(path)
+            interrupted = [
+                e for e in state["events"]
+                if e["type"] == "worker_interrupted"
+            ]
+            self.assertEqual(len(interrupted), 1)
+            self.assertTrue(st.summary(state)["work_token_usage_partial"])
+
+    def test_git_disabled_stale_worker_marks_token_total_partial(self):
+        with tempfile.TemporaryDirectory(prefix="orch-mock-") as ws:
+            path = init_state(ws, make_config(git={"enabled": False}))
+            self._marker(ws, "draft_skeleton")
+            drv.Driver(path, runner=runners.MockRunner([]))
+            state = st.load(path)
+            self.assertTrue([e for e in state["events"]
+                             if e["type"] == "worker_interrupted"])
+            self.assertTrue(st.summary(state)["work_token_usage_partial"])
 
 
 class TestDocsDirCollision(DriverTestCase):
