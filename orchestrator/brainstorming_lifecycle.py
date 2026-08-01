@@ -1104,11 +1104,7 @@ def _activity_projection(store, record, state):
             and intervention["provider_attempt"] > 0
             and not external_call_recorded
             and (
-                intervention["response"] is not None
-                or (
-                    not process_alive
-                    and not intervention["provider_quiescent"]
-                )
+                intervention["provider_quiescent"] or not process_alive
             )
         )
     )

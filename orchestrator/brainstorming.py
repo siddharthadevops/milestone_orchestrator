@@ -3140,6 +3140,7 @@ class SessionStore:
             raise HistoryRewriteError(
                 "the prior external provider attempt is not confirmed finished"
             )
+        self._preserve_external_call_accounting(session_id, intervention)
         intervention["provider_attempt"] += 1
         intervention["provider_quiescent"] = False
         result = self._store.cas(key, current["revision"], intervention)
@@ -3163,6 +3164,7 @@ class SessionStore:
             raise HistoryRewriteError("external intervention is already answered")
         if intervention["provider_quiescent"]:
             return intervention
+        self._preserve_external_call_accounting(session_id, intervention)
         intervention["provider_quiescent"] = True
         result = self._store.cas(key, current["revision"], intervention)
         if not result.ok:
@@ -3187,6 +3189,7 @@ class SessionStore:
             raise HistoryRewriteError(
                 "external provider repair has no active prior attempt"
             )
+        self._preserve_external_call_accounting(session_id, intervention)
         intervention["provider_attempt"] += 1
         result = self._store.cas(key, current["revision"], intervention)
         if not result.ok:
@@ -3267,7 +3270,7 @@ class SessionStore:
         )
 
     def _preserve_external_call_accounting(self, session_id, intervention):
-        """Retain token uncertainty before an automatic response is removed."""
+        """Retain token uncertainty before an external attempt is retired."""
         attempt = intervention["provider_attempt"]
         if attempt <= 0:
             return
@@ -3279,10 +3282,6 @@ class SessionStore:
         ):
             return
         response = intervention.get("response")
-        if response is None:
-            raise HistoryRewriteError(
-                "external provider accounting cannot precede its response"
-            )
         action_id = intervention["token"]
         digest = hashlib.sha256(
             ("%s:%d" % (action_id, attempt)).encode("utf-8")
@@ -3292,15 +3291,17 @@ class SessionStore:
             if intervention["action_kind"] == "discussion_turn"
             else "closure"
         )
-        received_at = response["received_at"]
-        self.append_activity(session_id, {
+        recorded_at = (
+            response["received_at"] if response is not None else time.time()
+        )
+        event = {
             "id": "activity-%s" % digest,
             "action_id": action_id,
             "provider_attempt": attempt,
             "at": time.strftime(
-                "%Y-%m-%dT%H:%M:%S%z", time.localtime(received_at)
+                "%Y-%m-%dT%H:%M:%S%z", time.localtime(recorded_at)
             ),
-            "started_at": received_at,
+            "started_at": recorded_at,
             "duration_s": 0.0,
             "kind": kind,
             "stage": "discussion" if kind == "discussion_turn" else "vote",
@@ -3309,9 +3310,15 @@ class SessionStore:
             "model_family": "external-provider",
             "model": None,
             "effort": None,
-            "status": "completed",
+            "status": "completed" if response is not None else "failed",
             "token_usage_partial": True,
-        })
+        }
+        if response is None:
+            event.update({
+                "failure_type": "execution",
+                "error": "provider call ended without durable activity",
+            })
+        self.append_activity(session_id, event)
 
     def finish_external_intervention(self, session_id, token):
         """Remove one response only after its turn or vote was consumed."""

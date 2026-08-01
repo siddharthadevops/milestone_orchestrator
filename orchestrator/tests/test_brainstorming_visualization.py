@@ -282,7 +282,8 @@ class BrainstormingVisualizationTest(unittest.TestCase):
         snapshot = store.read(session_id)
         request = snapshot.state["request"]
         now = time.time()
-        store._store.put(bs._external_intervention_key(session_id), {
+        key = bs._external_intervention_key(session_id)
+        intervention = {
             "token": "answered-external",
             "participant_id": "dante",
             "action_kind": "discussion_turn",
@@ -303,12 +304,27 @@ class BrainstormingVisualizationTest(unittest.TestCase):
                 "received_at": now,
                 "payload": {"markdown": "A durable response."},
             },
-        })
+        }
+        store._store.put(key, intervention)
 
         view = self._view(session_id)
 
         self.assertIsNone(view["work_token_usage"])
         self.assertTrue(view["work_token_usage_partial"])
+
+        intervention.update({
+            "token": "quiescent-external",
+            "provider_quiescent": False,
+            "response": None,
+        })
+        store._store.put(key, intervention)
+        store.mark_external_provider_quiescent(
+            session_id, "quiescent-external"
+        )
+        activity = store.read_activity(session_id)
+        self.assertEqual(len(activity["events"]), 1)
+        self.assertEqual(activity["events"][0]["status"], "failed")
+        self.assertTrue(activity["events"][0]["token_usage_partial"])
 
     def test_view_projection_is_authorized_exact_and_revision_coherent(self):
         project = self.api._ready_project(users=[access.USER_EMAILS[0]])
