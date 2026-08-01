@@ -895,7 +895,14 @@ def validate_activity_event(event):
             "effort",
             "status",
         ),
-        ("failure_type", "error", "raw_ref", "prompt_ref", "token_usage"),
+        (
+            "failure_type",
+            "error",
+            "raw_ref",
+            "prompt_ref",
+            "token_usage",
+            "token_usage_partial",
+        ),
         "activity_event",
     )
     checked = {
@@ -995,6 +1002,13 @@ def validate_activity_event(event):
     )
     if token_usage is not None:
         checked["token_usage"] = token_usage
+    token_usage_partial = event.get("token_usage_partial", False)
+    if type(token_usage_partial) is not bool:
+        raise ContractError(
+            "activity_event.token_usage_partial must be a boolean"
+        )
+    if token_usage_partial:
+        checked["token_usage_partial"] = True
     return checked
 
 

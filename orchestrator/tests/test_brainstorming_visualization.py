@@ -149,6 +149,7 @@ class BrainstormingVisualizationTest(unittest.TestCase):
                 "output_tokens": 20, "reasoning_output_tokens": 5,
                 "total_tokens": 120,
             },
+            "token_usage_partial": True,
         })
         store.append_activity(session_id, {
             **common,
@@ -166,7 +167,8 @@ class BrainstormingVisualizationTest(unittest.TestCase):
         view = self._view(session_id)
         self.assertEqual(view["work_duration_s"], 3.5)
         self.assertEqual(view["work_token_usage"]["total_tokens"], 180)
-        self.assertFalse(view["work_token_usage_partial"])
+        self.assertTrue(view["work_token_usage_partial"])
+        self.assertTrue(view["activity"][0]["token_usage_partial"])
         self.assertTrue(view["activity"][0]["recovered"])
         self.assertFalse(view["activity"][1]["recovered"])
         status, detail = self.api._request(
