@@ -396,6 +396,9 @@ class Driver(object):
         # _consume_pending_gap skips under failure, so the junk is never
         # removed. Best-effort restore the recorded snapshot first.
         self._pre_clean_pending_gap()
+        # Account for an interrupted provider before any startup check can
+        # append a different state transition and obscure the stale call.
+        self._consume_stale_marker()
         if gitops.enabled(self.config):
             try:
                 gitops.ensure_repo(
@@ -410,7 +413,6 @@ class Driver(object):
                 if self.state["failure"] is None:
                     st.fail_run(self.state, "git unavailable: %s" % exc)
                     self._save()
-        self._consume_stale_marker()
         self._consume_pending_gap()
         self._migrate_active_redoc_wave()
         # A crash between a seal and its _after_seal ensure_next_unit can
@@ -7172,7 +7174,9 @@ class Driver(object):
         )
         return "verification failed; full-suite repair queued"
 
-    def _partition_defer_candidates(self, unit, items, source_round=None):
+    def _partition_defer_candidates(
+        self, unit, items, source_round=None, parent_call=None
+    ):
         """Rate candidates independently and split debt from fix work.
 
         `items` is a list of (finding, raising_family). Returns
@@ -7257,6 +7261,15 @@ class Driver(object):
                             model=effective_model,
                             effort=effective_effort,
                         ):
+                            if parent_call is not None:
+                                self._record_worker_unaccepted(
+                                    unit,
+                                    parent_call[0],
+                                    parent_call[1],
+                                    parent_call[2],
+                                    "review could not complete its nested "
+                                    "reclassification",
+                                )
                             st.fail_run(
                                 self.state,
                                 "reclassify call could not create its "
@@ -7352,7 +7365,10 @@ class Driver(object):
                 reason="reclassifier modified the workspace; deferral voided",
             )
             self._restore_or_fail(
-                unit, "reclassifier modified the workspace")
+                unit,
+                "reclassifier modified the workspace",
+                unaccepted_call=parent_call,
+            )
             return [], list(items)
         return debt, retained
 
@@ -7555,7 +7571,13 @@ class Driver(object):
                     len(st.family_rounds(unit, family)) + 1,
                 )
                 deferred, retained = self._partition_defer_candidates(
-                    unit, candidates, source_round=source_round)
+                    unit,
+                    candidates,
+                    source_round=source_round,
+                    parent_call=(
+                        contracts.KIND_REVIEW_ROUND, family, result
+                    ),
+                )
                 retained_ids = {f.get("id") for f, _family in retained}
                 fix_findings = [
                     f for f in findings

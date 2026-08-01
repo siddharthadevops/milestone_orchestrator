@@ -11,6 +11,7 @@ fixes). Delta findings always take the normal fix/reject path.
 
 import tempfile
 import unittest
+from unittest import mock
 
 from orchestrator import contracts
 from orchestrator import driver as drv
@@ -103,6 +104,45 @@ class TestP3Debt(DriverTestCase):
 
             self.assertEqual(observed["kind"], contracts.KIND_RECLASSIFY)
             self.assertEqual(observed["family"], "claude")
+
+    def test_reclassifier_admission_failure_keeps_parent_review_usage(self):
+        with tempfile.TemporaryDirectory(prefix="orch-mock-") as ws:
+            path = init_state(ws, make_config(p3_reclassify_debt=True))
+            runner = runners.MockRunner([
+                draft_step(),
+                step(
+                    "review_round",
+                    report("review_round", [finding("F1", "stale word")]),
+                    family="codex",
+                ),
+            ])
+            driver = drv.Driver(path, runner=runner)
+            self.step_until(
+                driver,
+                lambda state: state["units"][0]["status"] == st.U_ROUNDS,
+            )
+            original_mark = driver._mark_busy
+
+            def admit(label, kind, family, model=None, effort=None):
+                if kind == contracts.KIND_RECLASSIFY:
+                    return False
+                return original_mark(
+                    label, kind, family, model=model, effort=effort
+                )
+
+            with mock.patch.object(driver, "_mark_busy", side_effect=admit):
+                driver.step()
+
+            state = st.load(path)
+            parent = [
+                event
+                for event in state["events"]
+                if event["type"] == "worker_unaccepted"
+                and event["kind"] == contracts.KIND_REVIEW_ROUND
+            ]
+            self.assertEqual(len(parent), 1)
+            self.assertTrue(parent[0]["token_usage_partial"])
+            self.assertTrue(st.summary(state)["work_token_usage_partial"])
 
     def test_doc_round_p3_only_is_deferred_as_debt(self):
         with tempfile.TemporaryDirectory(prefix="orch-mock-") as ws:

@@ -1102,6 +1102,25 @@ class TestUncleanStopRepair(DriverTestCase):
             self.assertEqual(len(interrupted), 1)
             self.assertFalse(os.path.exists(marker))
 
+    def test_stale_usage_is_recorded_before_git_startup_failure(self):
+        with tempfile.TemporaryDirectory(prefix="orch-mock-") as ws:
+            path = init_state(ws, make_config())
+            self._marker(ws, "draft_skeleton")
+            os.rename(os.path.join(ws, ".git"), os.path.join(ws, ".git-bad"))
+
+            recovered = drv.Driver(path, runner=runners.MockRunner([]))
+
+            interrupted = [
+                event
+                for event in recovered.state["events"]
+                if event["type"] == "worker_interrupted"
+            ]
+            self.assertEqual(len(interrupted), 1)
+            self.assertTrue(
+                st.summary(recovered.state)["work_token_usage_partial"]
+            )
+            self.assertIsNotNone(recovered.state["failure"])
+
 
 class TestDocsDirCollision(DriverTestCase):
     def test_reused_name_uniquifies_the_slug(self):
