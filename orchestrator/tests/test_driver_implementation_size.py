@@ -498,6 +498,34 @@ class DriverImplementationSizeTest(unittest.TestCase):
         implementation = st.current_unit(driver.state)
         return path, driver, implementation
 
+    def test_rejected_valid_delivery_keeps_its_usage(self):
+        with tempfile.TemporaryDirectory(prefix="orch-size-rejected-") as ws:
+            path, driver, _unit = self._ready_driver(
+                ws, runners.MockRunner([])
+            )
+            usage = {
+                "input_tokens": 10, "cached_input_tokens": 2,
+                "output_tokens": 3, "reasoning_output_tokens": 1,
+                "total_tokens": 13,
+            }
+            result = runners.RunnerResult(
+                "{}", 0, 2.0, token_usage=usage
+            )
+
+            with self.assertRaises(drv.StopStep):
+                driver._fail_implementation_size(
+                    None, 1500, "measurement failed",
+                    family="codex", result=result,
+                )
+
+            state = st.load(path)
+            rejected = [
+                event for event in state["events"]
+                if event["type"] == "worker_unaccepted"
+            ]
+            self.assertEqual(rejected[0]["token_usage"], usage)
+            self.assertEqual(st.summary(state)["work_token_usage"], usage)
+
     @staticmethod
     def _cut_response(cut="coherent core", remaining="remaining wiring"):
         return ok(
@@ -1925,6 +1953,11 @@ class DriverImplementationSizeTest(unittest.TestCase):
             ]
             self.assertEqual(len(current_events), 2)
             by_type = {event["type"]: event for event in current_events}
+            self.assertTrue(
+                by_type["implementation_size_interrupted"][
+                    "token_usage_partial"
+                ]
+            )
             self.assertEqual(
                 by_type["implementation_size_interrupted"]["reason"],
                 marker["interrupt_reason"],

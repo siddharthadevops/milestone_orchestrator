@@ -1351,6 +1351,8 @@ def run_status(entry, home=None):
         "failure_reason": None,
         "events_total": 0,
         "work_duration_s": None,
+        "work_token_usage": None,
+        "work_token_usage_partial": False,
         "last_action_epoch": None,
         "state_error": None,
     }
@@ -1380,6 +1382,10 @@ def run_status(entry, home=None):
         info["failure_reason"] = (summ["failure"] or {}).get("reason")
         info["events_total"] = summ["events_total"]
         info["work_duration_s"] = summ.get("work_duration_s")
+        info["work_token_usage"] = summ.get("work_token_usage")
+        info["work_token_usage_partial"] = bool(
+            summ.get("work_token_usage_partial", False)
+        )
         if home is not None and not info.get("in_flight"):
             current_view = next(
                 (
@@ -1413,6 +1419,18 @@ def run_status(entry, home=None):
                             (info.get("work_duration_s") or 0)
                             + session_work
                         )
+                    session_tokens = session.get("work_token_usage")
+                    if (
+                        waiting.get("token_usage") is None
+                        and session_tokens is not None
+                    ):
+                        info["work_token_usage"] = st._add_token_usage(
+                            info.get("work_token_usage"), session_tokens
+                        )
+                    info["work_token_usage_partial"] = bool(
+                        info.get("work_token_usage_partial")
+                        or session.get("work_token_usage_partial", False)
+                    )
                     active = session.get("in_flight")
                     if active is not None:
                         info["in_flight"] = {
@@ -2424,6 +2442,10 @@ def run_story(home, run_id, item):
                 "family": e.get("family"),
                 "at": e.get("at"),
                 "duration_s": e.get("duration_s"),
+                "token_usage": e.get("token_usage"),
+                "token_usage_partial": bool(
+                    e.get("token_usage_partial", False)
+                ),
                 "error": e.get("error"),
                 "fatal": bool(e.get("fatal")),
                 "stabilizer_retry": bool(e.get("stabilizer_retry")),
@@ -2449,6 +2471,10 @@ def run_story(home, run_id, item):
                         "kind": r["kind"],
                         "at": r["at"],
                         "duration_s": r.get("duration_s"),
+                        "token_usage": r.get("token_usage"),
+                        "token_usage_partial": bool(
+                            r.get("token_usage_partial", False)
+                        ),
                         "model": r.get("model"),
                         "effort": r.get("effort"),
                         "invalidated": r.get("invalidated"),
@@ -2466,12 +2492,33 @@ def run_story(home, run_id, item):
                 continue
             for s_ in unit["seals"]:
                 if str(s_["attempt"]) == attempt:
+                    halves = s_.get("halves") or {}
+                    token_usage = None
+                    for half in halves.values():
+                        if half:
+                            token_usage = st._add_token_usage(
+                                token_usage, half.get("token_usage")
+                            )
+                    token_usage_partial = any(
+                        (half or {}).get("token_usage_partial", False)
+                        or (
+                            (half or {}).get("duration_s")
+                            and (half or {}).get("token_usage") is None
+                        )
+                        for half in halves.values()
+                    )
                     return {
                         "story": "seal",
                         "unit": unit_key,
                         "attempt": s_["attempt"],
                         "passed": s_["passed"],
                         "at": s_["at"],
+                        "duration_s": sum(
+                            (half or {}).get("duration_s") or 0
+                            for half in halves.values()
+                        ) or None,
+                        "token_usage": token_usage,
+                        "token_usage_partial": token_usage_partial,
                         "invalidated": s_.get("invalidated"),
                         # Wave provenance: resealed by the anchor's wave
                         # seal (None for ordinary seals).
@@ -2485,7 +2532,7 @@ def run_story(home, run_id, item):
                         ),
                         # Historical records may still carry LLM halves;
                         # deterministic seals cite ordinary reviews instead.
-                        "halves": s_.get("halves"),
+                        "halves": halves,
                     }
         raise ApiError(404, "unknown seal %r" % ref)
     if kind == "draft":
@@ -2500,6 +2547,10 @@ def run_story(home, run_id, item):
                     "model": d.get("model"),
                     "effort": d.get("effort"),
                     "duration_s": d.get("duration_s"),
+                    "token_usage": d.get("token_usage"),
+                    "token_usage_partial": bool(
+                        d.get("token_usage_partial", False)
+                    ),
                     "at": d.get("at"),
                     "raw_path": d.get("raw_path"),
                     "artifact": unit.get("artifact"),
@@ -2547,21 +2598,37 @@ def run_story(home, run_id, item):
                     "defer_ok": e.get("defer_ok"),
                     "reason": e.get("reason"),
                     "at": e.get("at"),
+                    "duration_s": e.get("duration_s"),
                     "requeued": bool(
                         e.get("defer_ok")
                         and e.get("finding_id")
                         in requeued_ids.get(ref, set())
                     ),
+                    "token_usage": e.get("token_usage"),
                 }
                 for e in state["events"]
                 if e.get("type") == "reclassify_recorded"
                 and e.get("unit") == ref
             ]
+            token_usage = None
+            for event in reclassify:
+                token_usage = st._add_token_usage(
+                    token_usage, event.get("token_usage")
+                )
+            token_usage_partial = any(
+                event.get("token_usage") is None for event in reclassify
+            )
             return {
                 "story": "debt",
                 "unit": ref,
                 "debt": st.active_debt(state, unit),
                 "reclassify": reclassify,
+                "duration_s": sum(
+                    event.get("duration_s") or 0
+                    for event in reclassify
+                ) or None,
+                "token_usage": token_usage,
+                "token_usage_partial": token_usage_partial,
             }
         raise ApiError(404, "unknown unit %r" % ref)
     raise ApiError(

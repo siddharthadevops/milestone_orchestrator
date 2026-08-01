@@ -282,6 +282,52 @@ class BrainstormingExecutionTest(unittest.TestCase):
             participant_process_factory=participant_process_factory,
         )
 
+    def test_failed_activity_uses_usage_carried_by_the_exception(self):
+        captured = []
+
+        class ActivityStore(object):
+            @staticmethod
+            def read_turn_attempt(_session_id):
+                return {
+                    "token": "turn-1", "provider_attempt": 1,
+                    "completed_turn_count": 0, "kind": "discussion_turn",
+                }
+
+            @staticmethod
+            def save_activity_output(_session_id, _event_id, _raw):
+                return "activity.txt"
+
+            @staticmethod
+            def read(_session_id):
+                return type("Snapshot", (), {"state": {
+                    "run_config": {
+                        "participants": cross_family_participants()
+                    }
+                }})()
+
+            @staticmethod
+            def append_activity(_session_id, event):
+                captured.append(event)
+
+        usage = {
+            "input_tokens": 10, "cached_input_tokens": 2,
+            "output_tokens": 3, "reasoning_output_tokens": 1,
+            "total_tokens": 13,
+        }
+        failure = runners.ProviderResponseError(
+            "provider failed", raw_texts=["failed"], token_usage=usage
+        )
+        failure.token_usage_partial = True
+        subject = execution.ParticipantExecution(ActivityStore(), {})
+        subject._record_activity(
+            "session", cross_family_participants()[0],
+            RecordingExecutor("codex"), time.time(),
+            status="failed", failure_type="execution", error=failure,
+        )
+
+        self.assertEqual(captured[0]["token_usage"], usage)
+        self.assertTrue(captured[0]["token_usage_partial"])
+
     def test_validated_external_envelope_is_durable_before_activity_failure(self):
         roster = [
             cross_family_participants()[0],

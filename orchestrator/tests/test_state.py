@@ -2248,6 +2248,8 @@ class TestSummary(TempWorkspaceCase):
                 "docs_dir",
                 "failure",
                 "work_duration_s",
+                "work_token_usage",
+                "work_token_usage_partial",
                 "units",
                 "events_total",
                 "last_events",
@@ -2277,7 +2279,8 @@ class TestSummary(TempWorkspaceCase):
              "gate_sha", "wip_sha", "draft", "drafts",
              "rounds", "seals", "opened_epoch", "closed_epoch", "debt",
              "reclassify", "verifications", "repairs", "brainstormings",
-             "work_duration_s"},
+             "work_duration_s", "work_token_usage",
+             "work_token_usage_partial"},
         )
         self.assertEqual(skel_view["display_unit"], "skeleton")
         self.assertIsNone(skel_view["slice_id"])
@@ -2285,7 +2288,8 @@ class TestSummary(TempWorkspaceCase):
         # The draft chip data: write-once record surfaced for the panel.
         self.assertEqual(
             set(skel_view["draft"].keys()),
-            {"kind", "family", "model", "effort", "duration_s", "at"},
+            {"kind", "family", "model", "effort", "duration_s",
+             "token_usage", "token_usage_partial", "at"},
         )
         self.assertEqual(skel_view["unit"], "skeleton")
         self.assertEqual(len(skel_view["drafts"]), 1)
@@ -2300,7 +2304,7 @@ class TestSummary(TempWorkspaceCase):
                 set(r.keys()),
                 {"id", "family", "kind", "findings", "severity",
                  "deferred_clean", "invalidated", "model", "effort",
-                 "duration_s", "at"},
+                 "duration_s", "token_usage", "token_usage_partial", "at"},
             )
             self.assertEqual(r["findings"], 0)
             self.assertFalse(r["deferred_clean"])
@@ -2460,8 +2464,9 @@ class TestSummary(TempWorkspaceCase):
             state, "worker_malformed", label="legacy-unknown",
             duration_s=90,
         )
-        # Fatal/partial calls are out. A suite execution is completed work;
-        # reused and fixer-certified proof events execute no additional work.
+        # Fatal calls still consumed provider work. A suite execution is
+        # completed work; reused and fixer-certified proof events execute no
+        # additional work.
         st.append_event(
             state, "worker_malformed", unit="skeleton", fatal=True,
             label="skeleton-fatal", duration_s=100,
@@ -2483,8 +2488,8 @@ class TestSummary(TempWorkspaceCase):
 
         summ = st.summary(state)
 
-        self.assertEqual(summ["units"][0]["work_duration_s"], 493.0)
-        self.assertEqual(summ["work_duration_s"], 583.0)
+        self.assertEqual(summ["units"][0]["work_duration_s"], 593.0)
+        self.assertEqual(summ["work_duration_s"], 683.0)
         self.assertEqual(
             summ["units"][0]["reclassify"][0]["duration_s"], 60
         )
@@ -2533,6 +2538,113 @@ class TestSummary(TempWorkspaceCase):
             [("claude-fable-5", 10, False), ("gpt-5.6-sol", 20, True)],
         )
         self.assertEqual(view["work_duration_s"], 30.0)
+
+    def test_work_tokens_sum_provider_calls_once_and_mark_missing_history(self):
+        state = make_state(self.workspace)
+        unit = state["units"][0]
+        first = {
+            "input_tokens": 100, "cached_input_tokens": 40,
+            "output_tokens": 20, "reasoning_output_tokens": 5,
+            "total_tokens": 120,
+        }
+        second = {
+            "input_tokens": 50, "cached_input_tokens": 10,
+            "output_tokens": 10, "reasoning_output_tokens": 2,
+            "total_tokens": 60,
+        }
+        st.record_draft(
+            state, unit, contracts.KIND_DRAFT_SKELETON,
+            skeleton_draft(1), duration=10, token_usage=first,
+        )
+        unit["status"] = st.U_ROUNDS
+        st.record_round(
+            state, unit, "codex", contracts.KIND_REVIEW_ROUND,
+            clean_review(), duration=20, token_usage=second,
+        )
+        # Old calls retain their duration but have no recoverable usage.
+        st.append_event(
+            state, "gap_reported", unit="skeleton", duration_s=30,
+        )
+
+        summary = st.summary(state)
+        expected = {
+            "input_tokens": 150, "cached_input_tokens": 50,
+            "output_tokens": 30, "reasoning_output_tokens": 7,
+            "total_tokens": 180,
+        }
+        self.assertEqual(summary["work_token_usage"], expected)
+        self.assertEqual(summary["units"][0]["work_token_usage"], expected)
+        self.assertTrue(summary["work_token_usage_partial"])
+        self.assertTrue(summary["units"][0]["work_token_usage_partial"])
+
+    def test_known_provider_subtotals_remain_marked_partial(self):
+        state = make_state(self.workspace)
+        unit = state["units"][0]
+        usage = {
+            "input_tokens": 100, "cached_input_tokens": 40,
+            "output_tokens": 20, "reasoning_output_tokens": 5,
+            "total_tokens": 120,
+        }
+        st.record_draft(
+            state, unit, contracts.KIND_DRAFT_SKELETON,
+            skeleton_draft(1), duration=10, token_usage=usage,
+            token_usage_partial=True,
+        )
+        unit["status"] = st.U_ROUNDS
+        st.record_round(
+            state, unit, "codex", contracts.KIND_REVIEW_ROUND,
+            clean_review(), duration=20, token_usage=usage,
+            token_usage_partial=True,
+        )
+
+        summary = st.summary(state)
+        self.assertEqual(summary["work_token_usage"]["total_tokens"], 240)
+        self.assertTrue(summary["work_token_usage_partial"])
+        self.assertTrue(summary["units"][0]["work_token_usage_partial"])
+
+    def test_legacy_provider_call_without_duration_is_still_partial(self):
+        state = make_state(self.workspace)
+        unit = state["units"][0]
+        st.record_draft(
+            state, unit, contracts.KIND_DRAFT_SKELETON,
+            skeleton_draft(1), duration=None,
+        )
+
+        summary = st.summary(state)
+        self.assertIsNone(summary["work_token_usage"])
+        self.assertTrue(summary["work_token_usage_partial"])
+        self.assertTrue(summary["units"][0]["work_token_usage_partial"])
+
+    def test_terminal_unaccepted_calls_and_cutoffs_keep_their_tokens(self):
+        state = make_state(self.workspace)
+        usage = {
+            "input_tokens": 10, "cached_input_tokens": 2,
+            "output_tokens": 5, "reasoning_output_tokens": 1,
+            "total_tokens": 15,
+        }
+        for type_ in (
+            "worker_unaccepted",
+            "implementation_size_interrupted",
+            "error_classifier_call",
+            "worker_malformed",
+        ):
+            st.append_event(
+                state,
+                type_,
+                unit="skeleton",
+                duration_s=2,
+                token_usage=usage,
+                fatal=(type_ == "worker_malformed"),
+            )
+
+        summary = st.summary(state)
+        expected = {
+            "input_tokens": 40, "cached_input_tokens": 8,
+            "output_tokens": 20, "reasoning_output_tokens": 4,
+            "total_tokens": 60,
+        }
+        self.assertEqual(summary["work_token_usage"], expected)
+        self.assertFalse(summary["work_token_usage_partial"])
 
     def test_summary_surfaces_effective_models_for_chips(self):
         state = make_state(self.workspace)

@@ -350,6 +350,23 @@ class TestClassifyChain(unittest.TestCase):
         self.assertIn("mystery", seen[0]["prompt"])
         self.assertIn("network", seen[0]["raw"])
 
+    def test_failed_classifier_reports_usage_carried_by_the_exception(self):
+        usage = {
+            "input_tokens": 10, "cached_input_tokens": 2,
+            "output_tokens": 3, "reasoning_output_tokens": 1,
+            "total_tokens": 13,
+        }
+        failure = runners.ProviderResponseError(
+            "provider failed", token_usage=usage
+        )
+        seen = []
+        errclass.classify_failure(
+            ["mystery"], runner=_FakeRunner(raise_exc=failure),
+            opposite_family="claude", workspace="/ws",
+            on_llm_call=seen.append,
+        )
+        self.assertEqual(seen[0]["token_usage"], usage)
+
     def test_process_control_interrupt_is_failed_and_keeps_propagating(self):
         class Stop(BaseException):
             pass

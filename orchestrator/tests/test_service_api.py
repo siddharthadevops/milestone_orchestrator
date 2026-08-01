@@ -1305,6 +1305,21 @@ class StoryApiTest(ServiceApiTest):
         # both as a summary chip and a clickable story.
         ws = self.workspace("ws-debt")
         rid = self._seed(ws)
+        entry = registry.get(registry.load(self.home), rid)
+        state = st.load(entry["state_path"])
+        state["events"].append({
+            "seq": 1002, "at": "2026-07-05T10:25:00+0200",
+            "type": "reclassify_recorded", "unit": "skeleton",
+            "finding_id": "claude-F10", "reclassifier": "codex",
+            "drift_risk": "low", "threshold": "low",
+            "defer_ok": True, "reason": "cosmetic",
+            "token_usage": {
+                "input_tokens": 10, "cached_input_tokens": 2,
+                "output_tokens": 3, "reasoning_output_tokens": 1,
+                "total_tokens": 13,
+            },
+        })
+        st.save(entry["state_path"], state)
         # summary carries the debt so the chip can render after the run ends
         _, detail = self.request_json("GET", "/api/runs/%s" % rid)
         skel = detail["summary"]["units"][0]
@@ -1321,6 +1336,8 @@ class StoryApiTest(ServiceApiTest):
         self.assertEqual(body["reclassify"][0]["reclassifier"], "codex")
         self.assertEqual(body["reclassify"][0]["drift_risk"], "low")
         self.assertEqual(body["reclassify"][0]["threshold"], "low")
+        self.assertEqual(body["token_usage"]["total_tokens"], 13)
+        self.assertTrue(body["token_usage_partial"])
 
     def test_requeued_impl_debt_stays_in_history_but_not_active_debt(self):
         ws = self.workspace("ws-requeued-debt")

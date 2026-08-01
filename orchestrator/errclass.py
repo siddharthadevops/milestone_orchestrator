@@ -356,6 +356,16 @@ def llm_classify(runner, family, raw_texts, workspace, on_raw=None,
                 "failure_type": failure_type,
                 "error": None if call_error is None else str(call_error),
                 "prompt_path": getattr(result, "prompt_path", None),
+                "token_usage": getattr(
+                    result if result is not None else call_error,
+                    "token_usage",
+                    None,
+                ),
+                "token_usage_partial": bool(getattr(
+                    result if result is not None else call_error,
+                    "token_usage_partial",
+                    False,
+                )),
             }
             try:
                 on_call(event)

@@ -692,6 +692,27 @@ class TestHappyLifecycle(DriverTestCase):
             self.assertEqual(wips, ["skeleton", "slice_doc-01", "slice_impl-01"])
 
 
+class TestFailedCallAccounting(DriverTestCase):
+    def test_fatal_call_uses_duration_carried_by_runner_error(self):
+        with tempfile.TemporaryDirectory(prefix="orch-mock-") as ws:
+            path = init_state(ws, make_config())
+            driver = drv.Driver(path, runner=runners.MockRunner([]))
+            error = runners.RunnerError("provider failed")
+            error.duration_s = 12.5
+
+            driver._record_fatal_malformed(
+                "skeleton-reclassify-claude-F1",
+                contracts.KIND_RECLASSIFY,
+                "claude",
+                error,
+                [],
+            )
+
+            event = driver.state["events"][-1]
+            self.assertEqual(event["type"], "worker_malformed")
+            self.assertEqual(event["duration_s"], 12.5)
+
+
 class TestOperatorAmendmentsFlow(DriverTestCase):
     """Amendments dropped into .orchestrator/amendments.json mid-run reach
     every subsequent worker prompt and leave an amendment_seen ledger
@@ -1177,6 +1198,13 @@ class TestFixerProtocolFailures(DriverTestCase):
                  "queued=['F1']", "got=['X9']"],
                 unit_key="skeleton",
             )
+            state = st.load(path)
+            rejected = [
+                event for event in state["events"]
+                if event["type"] == "worker_unaccepted"
+            ]
+            self.assertEqual(len(rejected), 1)
+            self.assertIn("triage must cover", rejected[0]["reason"])
 
     def test_unavailable_consultation_retries_the_same_fix_episode(self):
         retry = {

@@ -468,6 +468,8 @@ class StandaloneBrainstormingApiTest(unittest.TestCase):
                     "state",
                     "activity",
                     "work_duration_s",
+                    "work_token_usage",
+                    "work_token_usage_partial",
                     "last_action_epoch",
                     "in_flight",
                     "retry",

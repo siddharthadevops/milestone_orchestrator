@@ -14,7 +14,8 @@ VIEW_KEYS = {
     "participants", "same_family_fallback", "closure_policy",
     "closure_ballots", "round", "transcript_markdown", "result",
     "final_agreement",
-    "activity", "work_duration_s", "in_flight", "retry",
+    "activity", "work_duration_s", "work_token_usage",
+    "work_token_usage_partial", "in_flight", "retry",
     "external_intervention",
 }
 class BrainstormingVisualizationTest(unittest.TestCase):
@@ -143,6 +144,11 @@ class BrainstormingVisualizationTest(unittest.TestCase):
             "failure_type": "protocol",
             "error": "invalid envelope",
             "raw_ref": failed_ref,
+            "token_usage": {
+                "input_tokens": 100, "cached_input_tokens": 40,
+                "output_tokens": 20, "reasoning_output_tokens": 5,
+                "total_tokens": 120,
+            },
         })
         store.append_activity(session_id, {
             **common,
@@ -150,10 +156,17 @@ class BrainstormingVisualizationTest(unittest.TestCase):
             "provider_attempt": 2,
             "duration_s": 2.25,
             "status": "completed",
+            "token_usage": {
+                "input_tokens": 50, "cached_input_tokens": 10,
+                "output_tokens": 10, "reasoning_output_tokens": 2,
+                "total_tokens": 60,
+            },
         })
 
         view = self._view(session_id)
         self.assertEqual(view["work_duration_s"], 3.5)
+        self.assertEqual(view["work_token_usage"]["total_tokens"], 180)
+        self.assertFalse(view["work_token_usage_partial"])
         self.assertTrue(view["activity"][0]["recovered"])
         self.assertFalse(view["activity"][1]["recovered"])
         status, detail = self.api._request(

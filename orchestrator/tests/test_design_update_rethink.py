@@ -140,6 +140,13 @@ class DesignUpdateRethinkTest(unittest.TestCase):
                 "effort": "max",
                 "raw_name": "slice_impl-01-draft",
                 "provider_session_ref": "codex-thread-7",
+                "provider_session_token_usage": {
+                    "input_tokens": 80,
+                    "cached_input_tokens": 30,
+                    "output_tokens": 20,
+                    "reasoning_output_tokens": 5,
+                    "total_tokens": 100,
+                },
                 "duration_s": 1.0,
                 "pre_snapshot": {},
             },
@@ -150,6 +157,7 @@ class DesignUpdateRethinkTest(unittest.TestCase):
     ):
         state, unit = self._state(st.U_FIXING)
         driver = self._driver(state, modern=True)
+        driver.runner = mock.Mock()
         unit["brainstorming_wait"] = self._wait(unit)
         driver._project_prompt_inputs = mock.Mock(
             return_value=(None, [], [])
@@ -166,7 +174,14 @@ class DesignUpdateRethinkTest(unittest.TestCase):
             "kind": contracts.KIND_IMPLEMENT,
             "files_changed": ["src/current.py"],
         }
-        worker_result = runners.RunnerResult("{}", 0, 0.2)
+        usage = {
+            "input_tokens": 100, "cached_input_tokens": 50,
+            "output_tokens": 20, "reasoning_output_tokens": 5,
+            "total_tokens": 120,
+        }
+        worker_result = runners.RunnerResult(
+            "{}", 0, 0.2, token_usage=usage
+        )
         driver._call = mock.Mock(
             return_value=(continued, worker_result, "raw/continued.txt")
         )
@@ -191,12 +206,29 @@ class DesignUpdateRethinkTest(unittest.TestCase):
         self.assertEqual(call.kwargs["session_ref"], "codex-thread-7")
         self.assertEqual(call.kwargs["model"], "gpt-5.6-sol")
         self.assertEqual(call.kwargs["effort"], "max")
+        driver.runner.seed_codex_session_usage.assert_called_once_with(
+            "codex-thread-7",
+            {
+                "input_tokens": 80,
+                "cached_input_tokens": 30,
+                "output_tokens": 20,
+                "reasoning_output_tokens": 5,
+                "total_tokens": 100,
+            },
+        )
         for path in self.PATHS:
             self.assertIn(path, prompt)
         self.assertNotIn("design_correction", prompt)
         self.assertIn("origin conversation continued", note)
         self.assertEqual(
             unit["brainstorming_resume"]["output"], continued
+        )
+        self.assertEqual(unit["brainstorming_resume"]["token_usage"], usage)
+        self.assertEqual(
+            driver._resume_result(
+                unit["brainstorming_resume"]
+            ).token_usage,
+            usage,
         )
         event_types = [event["type"] for event in state["events"]]
         self.assertIn("brainstorming_design_amendment_adopted", event_types)

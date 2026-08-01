@@ -1152,6 +1152,7 @@ class Driver(object):
                 unit=unit_key,
                 episode_id=episode_id,
                 duration_s=None,
+                token_usage_partial=True,
                 raw_path=None,
                 **interrupt_fields,
             )
@@ -1191,12 +1192,18 @@ class Driver(object):
                     time.sleep(0.05)
         return None
 
-    def _fail_implementation_size(self, lines, hard, reason):
+    def _fail_implementation_size(self, lines, hard, reason, family=None,
+                                  result=None):
         detail = (
             "%s; the current implementation delta is %s reviewable Git "
             "lines and must be at most %d"
             % (reason, "unknown" if lines is None else lines, hard)
         )
+        if result is not None:
+            self._record_worker_unaccepted(
+                st.current_unit(self.state), contracts.KIND_IMPLEMENT,
+                family, result, detail,
+            )
         st.fail_run(
             self.state,
             detail,
@@ -1293,6 +1300,8 @@ class Driver(object):
                 marker["hard_lines"],
                 "the controlled cutoff could not be accepted before the "
                 "worker completed",
+                family=family,
+                result=result,
             )
         if (
             not interrupted
@@ -1304,6 +1313,8 @@ class Driver(object):
                 None,
                 marker["hard_lines"],
                 "the final implementation size could not be measured",
+                family=family,
+                result=result,
             )
         if not interrupted:
             # The monitor controls a call while it is live. If a valid worker
@@ -1336,6 +1347,14 @@ class Driver(object):
             lines=marker.get("interrupt_lines"),
             reason=result.interrupt_reason,
             duration_s=result.duration_s,
+            token_usage=copy.deepcopy(getattr(result, "token_usage", None)),
+            provider_session_token_usage=copy.deepcopy(
+                getattr(result, "session_token_usage", None)
+            ),
+            token_usage_partial=bool(
+                getattr(result, "token_usage_partial", False)
+                or getattr(result, "token_usage", None) is None
+            ),
             raw_path=raw_path,
             confirmed=marker.get("steer_confirmed"),
             grace_kind=marker.get("grace_kind"),
@@ -1452,7 +1471,7 @@ class Driver(object):
         return st.unit_key(unit) if unit is not None else None
 
     def _record_fatal_malformed(self, raw_name, kind, family, exc,
-                                raw_paths):
+                                raw_paths, duration_s=None):
         """The RED chip: ANY failed LLM call — a double contract
         violation, a crashed/timed-out/non-zero CLI, quota — lands in
         the incident trail (operator decision 2026-07-09). The event
@@ -1470,7 +1489,15 @@ class Driver(object):
             family=family,
             fatal=True,
             error=str(exc)[:300],
-            duration_s=None,
+            duration_s=(
+                duration_s if duration_s is not None
+                else getattr(exc, "duration_s", None)
+            ),
+            token_usage=copy.deepcopy(getattr(exc, "token_usage", None)),
+            token_usage_partial=bool(
+                getattr(exc, "token_usage_partial", False)
+                or getattr(exc, "token_usage", None) is None
+            ),
             raw_path=(raw_paths or [None])[0],
             raw_path2=(raw_paths[1] if len(raw_paths or []) > 1 else None),
         )
@@ -1832,6 +1859,7 @@ class Driver(object):
                 raise StopStep(str(exc))
             except (runners.RunnerError, runners.WorkerProtocolError) as exc:
                 self._clear_busy()
+                failed_duration_s = time.time() - physical_started
                 proto_paths = self._save_protocol_raws(raw_name, exc)
                 if call_control is not None and call_control.interrupted:
                     # The transport accepted the hard stop. A late transport
@@ -1864,6 +1892,11 @@ class Driver(object):
                         1,
                         time.time() - physical_started,
                         call_control.interrupt_reason,
+                        token_usage=getattr(exc, "token_usage", None),
+                    )
+                    result.token_usage_partial = bool(
+                        getattr(exc, "token_usage_partial", False)
+                        or getattr(exc, "token_usage", None) is None
                     )
                     break
                 if (
@@ -1885,7 +1918,14 @@ class Driver(object):
                         fatal=False,
                         stabilizer_retry=True,
                         error=str(exc)[:300],
-                        duration_s=None,
+                        duration_s=failed_duration_s,
+                        token_usage=copy.deepcopy(
+                            getattr(exc, "token_usage", None)
+                        ),
+                        token_usage_partial=bool(
+                            getattr(exc, "token_usage_partial", False)
+                            or getattr(exc, "token_usage", None) is None
+                        ),
                         raw_path=(proto_paths or [None])[0],
                         raw_path2=(
                             proto_paths[1] if len(proto_paths) > 1 else None
@@ -1912,7 +1952,14 @@ class Driver(object):
                         "fatal": False,
                         "infra_retry": True,
                         "error": str(exc)[:300],
-                        "duration_s": None,
+                        "duration_s": failed_duration_s,
+                        "token_usage": copy.deepcopy(
+                            getattr(exc, "token_usage", None)
+                        ),
+                        "token_usage_partial": bool(
+                            getattr(exc, "token_usage_partial", False)
+                            or getattr(exc, "token_usage", None) is None
+                        ),
                         "raw_path": (proto_paths or [None])[0],
                         "raw_path2": (
                             proto_paths[1]
@@ -1938,7 +1985,8 @@ class Driver(object):
                 # non-fatal incident even when the provider exposed no raw
                 # bytes, so every retry remains visible and truthful.
                 self._record_fatal_malformed(
-                    raw_name, kind, family, exc, proto_paths
+                    raw_name, kind, family, exc, proto_paths,
+                    duration_s=failed_duration_s,
                 )
                 resume_at = errclass.normalize_resume_at(resume_at)
                 if etype in errclass.AUTO_RESUMABLE and not resume_at:
@@ -2007,6 +2055,11 @@ class Driver(object):
                 # time — it still reports as malformed because the output
                 # WAS, and the model dropping its brace must stay visible.
                 duration_s=rep.get("duration_s"),
+                token_usage=copy.deepcopy(rep.get("token_usage")),
+                token_usage_partial=bool(
+                    rep.get("token_usage_partial", False)
+                    or rep.get("token_usage") is None
+                ),
                 raw_path=raw_path,
             )
 
@@ -2030,7 +2083,33 @@ class Driver(object):
             on_llm_raw=self._classify_raw_saver(raw_name),
             classifier_model=cls_model,
             classifier_effort=cls_effort,
+            on_llm_call=self._classify_call_recorder(raw_name),
         )
+
+    def _classify_call_recorder(self, raw_name):
+        """Own the cost of the optional opposite-family classifier call."""
+        def _record(call):
+            st.append_event(
+                self.state,
+                "error_classifier_call",
+                unit=self._worker_event_unit(),
+                label=raw_name,
+                family=call.get("family"),
+                model=call.get("model"),
+                effort=call.get("effort"),
+                status=call.get("status"),
+                failure_type=call.get("failure_type"),
+                error=call.get("error"),
+                duration_s=call.get("duration_s"),
+                token_usage=copy.deepcopy(call.get("token_usage")),
+                token_usage_partial=bool(
+                    call.get("token_usage_partial", False)
+                    or call.get("token_usage") is None
+                ),
+                prompt_path=call.get("prompt_path"),
+            )
+
+        return _record
 
     def _classify_raw_saver(self, raw_name):
         """A best-effort sink that persists the failure classifier's I/O.
@@ -2737,6 +2816,11 @@ class Driver(object):
             effort=effort,
             raw_path=raw_path,
             duration_s=result.duration_s,
+            token_usage=copy.deepcopy(getattr(result, "token_usage", None)),
+            token_usage_partial=bool(
+                getattr(result, "token_usage_partial", False)
+                or getattr(result, "token_usage", None) is None
+            ),
         )
         # The paid origin call is complete before session creation begins.
         # Persist its time now so a crash in the independent-session handoff
@@ -2826,6 +2910,9 @@ class Driver(object):
                 "model": model,
                 "effort": effort,
                 "provider_session_ref": provider_ref,
+                "provider_session_token_usage": copy.deepcopy(
+                    getattr(result, "session_token_usage", None)
+                ),
                 "raw_path": raw_path,
                 "raw_name": raw_name,
                 "duration_s": result.duration_s,
@@ -2853,6 +2940,11 @@ class Driver(object):
             record.get("text", ""),
             0,
             record.get("duration_s", 0),
+            token_usage=record.get("token_usage"),
+        )
+        result.token_usage_partial = bool(
+            record.get("token_usage_partial", False)
+            or record.get("token_usage") is None
         )
         result.session_ref = record.get("provider_session_ref")
         result.brainstorming_handoff = copy.deepcopy(record.get("handoff"))
@@ -3198,9 +3290,11 @@ class Driver(object):
         )
         return "drafted %s" % (unit["artifact"] or "(implementation)")
 
-    def _record_brainstorming_work(self, unit, session_id, duration_s):
+    def _record_brainstorming_work(self, unit, session_id, duration_s,
+                                   token_usage=None,
+                                   token_usage_partial=False):
         """Attach one independent session's consumed LLM work exactly once."""
-        if duration_s is None:
+        if duration_s is None and token_usage is None:
             return
         if any(
             event.get("type") == "brainstorming_work_recorded"
@@ -3214,6 +3308,8 @@ class Driver(object):
             unit=st.unit_key(unit),
             session_id=session_id,
             duration_s=duration_s,
+            token_usage=copy.deepcopy(token_usage),
+            token_usage_partial=bool(token_usage_partial),
         )
 
     def _do_brainstorming_wait(self):
@@ -3269,7 +3365,9 @@ class Driver(object):
             # longer monopolize the unit's next action. Operator resume now
             # retries the unchanged originating milestone call.
             self._record_brainstorming_work(
-                unit, session_id, exc.work_duration_s
+                unit, session_id, exc.work_duration_s,
+                exc.work_token_usage,
+                exc.work_token_usage_partial,
             )
             unit.pop("brainstorming_wait", None)
             if (wait.get("origin") or {}).get("kind") \
@@ -3308,7 +3406,9 @@ class Driver(object):
             return "waiting for Brainstorming session %s" % session_id
 
         self._record_brainstorming_work(
-            unit, session_id, handoff.get("work_duration_s")
+            unit, session_id, handoff.get("work_duration_s"),
+            handoff.get("work_token_usage"),
+            handoff.get("work_token_usage_partial", False),
         )
 
         origin = wait["origin"]
@@ -3603,6 +3703,16 @@ class Driver(object):
             } or None
             implementation_size = None
             implementation_stabilized = False
+            seed_usage = getattr(
+                getattr(self, "runner", None),
+                "seed_codex_session_usage",
+                None,
+            )
+            if family == "codex" and callable(seed_usage):
+                seed_usage(
+                    origin["provider_session_ref"],
+                    origin.get("provider_session_token_usage"),
+                )
             if kind == contracts.KIND_IMPLEMENT:
                 origin_pre_snapshot = origin.get("pre_snapshot") or {}
                 fresh_stabilizer_session = bool(
@@ -3700,6 +3810,13 @@ class Driver(object):
                 "output": copy.deepcopy(output),
                 "raw_path": raw_path,
                 "duration_s": result.duration_s,
+                "token_usage": copy.deepcopy(
+                    getattr(result, "token_usage", None)
+                ),
+                "token_usage_partial": bool(
+                    getattr(result, "token_usage_partial", False)
+                    or getattr(result, "token_usage", None) is None
+                ),
                 "text": result.text,
                 "provider_session_ref": (
                     getattr(result, "session_ref", None)
@@ -3758,8 +3875,28 @@ class Driver(object):
         )
         return "Brainstorming succeeded; fresh reviewer call required"
 
-    def _check_worker_blocked(self, unit, output, kind):
+    def _record_worker_unaccepted(self, unit, kind, family, result, reason):
+        st.append_event(
+            self.state,
+            "worker_unaccepted",
+            unit=st.unit_key(unit),
+            kind=kind,
+            family=family,
+            reason=str(reason or "")[:300],
+            duration_s=result.duration_s,
+            token_usage=copy.deepcopy(getattr(result, "token_usage", None)),
+            token_usage_partial=bool(
+                getattr(result, "token_usage_partial", False)
+                or getattr(result, "token_usage", None) is None
+            ),
+        )
+
+    def _check_worker_blocked(self, unit, output, kind, family, result):
+
         if output["status"] == "retry":
+            self._record_worker_unaccepted(
+                unit, kind, family, result, "worker requested retry"
+            )
             # A fixer could not complete its mandatory opposite-family
             # consultation. This is neither a finding disposition nor an
             # operator decision: fail through the established `unknown`
@@ -3793,6 +3930,9 @@ class Driver(object):
         # live (2026-07-10, LPC rich-content): blocked findings that
         # needed a sealed-note repair were auto-resumed 16 minutes later.
         if output["status"] == "blocked":
+            self._record_worker_unaccepted(
+                unit, kind, family, result, "worker reported blocked"
+            )
             st.fail_run(
                 self.state,
                 "%s worker blocked: %s" % (kind, output.get("blocked_reason")),
@@ -3802,6 +3942,9 @@ class Driver(object):
             raise StopStep(output.get("blocked_reason"))
         blocked = contracts.blocking_findings(output)
         if blocked:
+            self._record_worker_unaccepted(
+                unit, kind, family, result, "worker reported blocking findings"
+            )
             st.fail_run(
                 self.state,
                 "%s reported blocked findings needing the operator: %s"
@@ -4371,6 +4514,10 @@ class Driver(object):
             # (goal). The unit finished NOTHING and stays pending; it
             # re-drafts after the repair reseals.
             return self._handle_gap(unit, output, result.duration_s,
+                                    token_usage=getattr(result, "token_usage", None),
+                                    token_usage_partial=getattr(
+                                        result, "token_usage_partial", False
+                                    ),
                                     pre_tree=pre_tree, pre_head=pre_head,
                                     pre_sym=pre_sym, pre_refs=pre_refs,
                                     pre_stash=pre_stash)
@@ -4378,7 +4525,7 @@ class Driver(object):
             raw_name,
             editable_sealed=self._editable_design_paths(unit),
         )
-        self._check_worker_blocked(unit, output, kind)
+        self._check_worker_blocked(unit, output, kind, family, result)
         implementation_cut = output.get("implementation_cut")
         if implementation_cut is not None:
             st.record_implementation_cut(
@@ -4395,7 +4542,12 @@ class Driver(object):
             unit.pop("implementation_stabilization", None)
         st.record_draft(self.state, unit, kind, output, raw_path,
                         family=family, duration=result.duration_s,
-                        model=model, effort=effort)
+                        model=model, effort=effort,
+                        token_usage=getattr(result, "token_usage", None),
+                        token_usage_partial=bool(
+                            getattr(result, "token_usage_partial", False)
+                            or getattr(result, "token_usage", None) is None
+                        ))
         if kind == contracts.KIND_IMPLEMENT and output.get("suite_command"):
             st.set_discovered_suite(self.state, output["suite_command"])
         if unit["kind"] == st.UNIT_SKELETON:
@@ -4514,13 +4666,19 @@ class Driver(object):
             finding["example"] = gap["example"]
         return finding
 
-    def _handle_gap(self, unit, output, duration_s=None, pre_tree=None,
+    def _handle_gap(self, unit, output, duration_s=None, token_usage=None,
+                    token_usage_partial=False,
+                    pre_tree=None,
                     pre_head=None, pre_sym=None, pre_refs=None, pre_stash=None,
                     pre_worktree_tree=None, from_fixer=False):
         gaps = output.get("gaps", [])
         st.append_event(
             self.state, "gap_reported", unit=st.unit_key(unit),
             duration_s=duration_s,
+            token_usage=copy.deepcopy(token_usage),
+            token_usage_partial=bool(
+                token_usage_partial or token_usage is None
+            ),
             count=len(gaps),
             from_fixer=from_fixer,
             gaps=[{k: g.get(k)
@@ -5815,6 +5973,10 @@ class Driver(object):
         self._record_design_changes(unit, fix_workspace_changed)
         if output.get("status") == "need_rethink":
             if restored:
+                self._record_worker_unaccepted(
+                    unit, contracts.KIND_FIX_FINDINGS, family, result,
+                    "rethink requester modified protected artifacts",
+                )
                 st.fail_run(
                     self.state,
                     "fixer requested Brainstorming after modifying sealed "
@@ -5870,6 +6032,10 @@ class Driver(object):
                 and not has_operator_gap
                 and not recoverable_retired_gap
             ):
+                self._record_worker_unaccepted(
+                    unit, contracts.KIND_FIX_FINDINGS, family, result,
+                    "fixer gap outside supported envelope",
+                )
                 st.fail_run(
                     self.state,
                     "%s returned a contradiction gap outside the supported "
@@ -5893,6 +6059,10 @@ class Driver(object):
                 pre_worktree_tree = baseline.get("tree")
                 pre_stash = baseline.get("stash")
             return self._handle_gap(unit, output, result.duration_s,
+                                    token_usage=getattr(result, "token_usage", None),
+                                    token_usage_partial=getattr(
+                                        result, "token_usage_partial", False
+                                    ),
                                     pre_tree=pre_tree, pre_head=pre_head,
                                     pre_sym=pre_sym, pre_refs=pre_refs,
                                     pre_stash=pre_stash,
@@ -5916,6 +6086,9 @@ class Driver(object):
                 )
             except gitops.GitError as exc:
                 reason = "fixer left an unsupported git mutation: %s" % exc
+                self._record_worker_unaccepted(
+                    unit, contracts.KIND_FIX_FINDINGS, family, result, reason
+                )
                 st.fail_run(
                     self.state, reason, unit=unit,
                     type_="worker_git_mutation",
@@ -5931,12 +6104,17 @@ class Driver(object):
                     worker_head=folded_commits["worker_head"],
                     commit_count=folded_commits["commit_count"],
                 )
-        self._check_worker_blocked(unit, output, contracts.KIND_FIX_FINDINGS)
+        self._check_worker_blocked(
+            unit, output, contracts.KIND_FIX_FINDINGS, family, result
+        )
         if verification_repair:
             if output.get("findings") != []:
                 reason = (
                     "verification repair must return an empty findings list; "
                     "its ok status certifies the live full suite"
+                )
+                self._record_worker_unaccepted(
+                    unit, contracts.KIND_FIX_FINDINGS, family, result, reason
                 )
                 st.fail_run(
                     self.state, reason, unit=unit, type_="worker_protocol"
@@ -5949,11 +6127,21 @@ class Driver(object):
                     output, unit.get("fix_queue") or []
                 )
             except contracts.ContractError as exc:
+                self._record_worker_unaccepted(
+                    unit, contracts.KIND_FIX_FINDINGS, family, result, exc
+                )
                 st.fail_run(self.state, str(exc), unit=unit)
                 self._save()
                 raise StopStep(str(exc))
-            self._validate_adjudication_refs(unit, output)
-            self._validate_contested_dispositions(unit, output)
+            try:
+                self._validate_adjudication_refs(unit, output)
+                self._validate_contested_dispositions(unit, output)
+            except StopStep as exc:
+                self._record_worker_unaccepted(
+                    unit, contracts.KIND_FIX_FINDINGS, family, result, exc
+                )
+                self._save()
+                raise
         if active_correction.get("phase") == "proposed":
             correction_error = self._design_correction_integrity_error(
                 active_correction
@@ -5964,6 +6152,10 @@ class Driver(object):
                     "artifacts: %s" % ", ".join(restored)
                 )
             if correction_error:
+                self._record_worker_unaccepted(
+                    unit, contracts.KIND_FIX_FINDINGS, family, result,
+                    correction_error,
+                )
                 return self._rollback_design_correction(
                     unit, correction_error, active_correction
                 )
@@ -5990,6 +6182,10 @@ class Driver(object):
                 )
             if correction_error:
                 unit["design_correction_attempted"] = True
+                self._record_worker_unaccepted(
+                    unit, contracts.KIND_FIX_FINDINGS, family, result,
+                    correction_error,
+                )
                 return self._rollback_design_correction(
                     unit, correction_error, candidate
                 )
@@ -6036,6 +6232,11 @@ class Driver(object):
             output,
             raw_path=raw_path,
             duration=result.duration_s,
+            token_usage=getattr(result, "token_usage", None),
+            token_usage_partial=bool(
+                getattr(result, "token_usage_partial", False)
+                or getattr(result, "token_usage", None) is None
+            ),
             # `queued` preserves what the fixer was actually asked to triage
             # — including any contests links — in the immutable history;
             # state.adjudicated_rejections() derives overturned
@@ -6444,6 +6645,10 @@ class Driver(object):
         if changed:
             # The pending fix delta and the tampering are now entangled;
             # restoring would destroy the fixer's work. Stop with the facts.
+            self._record_worker_unaccepted(
+                unit, contracts.KIND_DELTA_REVIEW, family, result,
+                "delta reviewer modified the workspace",
+            )
             st.fail_run(
                 self.state,
                 "delta reviewer (%s) modified the workspace (%s) during a "
@@ -6470,8 +6675,19 @@ class Driver(object):
                 raw_path,
                 "%s-delta%d" % (st.unit_key(unit), n_delta),
             )
-        self._check_worker_blocked(unit, output, contracts.KIND_DELTA_REVIEW)
-        self._validate_contests(unit, output, contracts.KIND_DELTA_REVIEW)
+        self._check_worker_blocked(
+            unit, output, contracts.KIND_DELTA_REVIEW, family, result
+        )
+        try:
+            self._validate_contests(
+                unit, output, contracts.KIND_DELTA_REVIEW
+            )
+        except StopStep as exc:
+            self._record_worker_unaccepted(
+                unit, contracts.KIND_DELTA_REVIEW, family, result, exc
+            )
+            self._save()
+            raise
         st.record_round(
             self.state,
             unit,
@@ -6480,6 +6696,11 @@ class Driver(object):
             output,
             raw_path=raw_path,
             duration=result.duration_s,
+            token_usage=getattr(result, "token_usage", None),
+            token_usage_partial=bool(
+                getattr(result, "token_usage_partial", False)
+                or getattr(result, "token_usage", None) is None
+            ),
             meta={"model": delta_model, "effort": delta_effort},
         )
         if provisional:
@@ -6521,6 +6742,10 @@ class Driver(object):
                     unit,
                     {"gaps": [gap]},
                     result.duration_s,
+                    token_usage=getattr(result, "token_usage", None),
+                    token_usage_partial=getattr(
+                        result, "token_usage_partial", False
+                    ),
                     pre_tree=baseline.get("index_tree"),
                     pre_head=baseline.get("head"),
                     pre_sym=baseline.get("sym"),
@@ -6896,6 +7121,8 @@ class Driver(object):
                 risk = None
                 damage = None
                 duration_s = None
+                token_usage = None
+                token_usage_partial = False
                 if opp == raising_family and not explicit:
                     # No independent opposite family (single-family config):
                     # cross-family verification is impossible, so the finding
@@ -6948,6 +7175,11 @@ class Driver(object):
                         )
                         self._save_raw(raw_name, result.text)
                         duration_s = result.duration_s
+                        token_usage = getattr(result, "token_usage", None)
+                        token_usage_partial = bool(
+                            getattr(result, "token_usage_partial", False)
+                            or token_usage is None
+                        )
                         self._record_repair(
                             raw_name, contracts.KIND_RECLASSIFY, opp, result
                         )
@@ -6988,6 +7220,8 @@ class Driver(object):
                     drift_damage=damage, threshold=threshold,
                     defer_ok=defer_ok, reason=reason,
                     duration_s=duration_s,
+                    token_usage=copy.deepcopy(token_usage),
+                    token_usage_partial=token_usage_partial,
                 )
                 if defer_ok:
                     debt.append({
@@ -7144,6 +7378,11 @@ class Driver(object):
                  "findings": []},
                 raw_path=raw_path,
                 duration=result.duration_s,
+                token_usage=getattr(result, "token_usage", None),
+                token_usage_partial=bool(
+                    getattr(result, "token_usage_partial", False)
+                    or getattr(result, "token_usage", None) is None
+                ),
                 meta={
                     "invalidated": "reviewer modified the workspace "
                     "(%s); output discarded, workspace restored"
@@ -7170,8 +7409,19 @@ class Driver(object):
                 raw_path,
                 "%s-%s-r%d" % (st.unit_key(unit), family, label_no),
             )
-        self._check_worker_blocked(unit, output, contracts.KIND_REVIEW_ROUND)
-        self._validate_contests(unit, output, contracts.KIND_REVIEW_ROUND)
+        self._check_worker_blocked(
+            unit, output, contracts.KIND_REVIEW_ROUND, family, result
+        )
+        try:
+            self._validate_contests(
+                unit, output, contracts.KIND_REVIEW_ROUND
+            )
+        except StopStep as exc:
+            self._record_worker_unaccepted(
+                unit, contracts.KIND_REVIEW_ROUND, family, result, exc
+            )
+            self._save()
+            raise
         findings = output.get("findings", [])
         # Debt deferral: the profile/phase chooses the deferrable severity
         # scope (interpreter.defer_scope_for): the DOC phase rates P3
@@ -7212,6 +7462,11 @@ class Driver(object):
         rec = st.record_round(
             self.state, unit, family, contracts.KIND_REVIEW_ROUND, output,
             raw_path=raw_path, duration=result.duration_s,
+            token_usage=getattr(result, "token_usage", None),
+            token_usage_partial=bool(
+                getattr(result, "token_usage_partial", False)
+                or getattr(result, "token_usage", None) is None
+            ),
             meta=round_meta,
         )
         if deferred:

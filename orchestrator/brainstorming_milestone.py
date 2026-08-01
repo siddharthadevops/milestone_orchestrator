@@ -21,9 +21,12 @@ class AdapterError(RuntimeError):
 class OperationalTerminalError(AdapterError):
     """The attached discussion ended because its execution failed."""
 
-    def __init__(self, message, work_duration_s=None):
+    def __init__(self, message, work_duration_s=None, work_token_usage=None,
+                 work_token_usage_partial=False):
         super().__init__(message)
         self.work_duration_s = work_duration_s
+        self.work_token_usage = work_token_usage
+        self.work_token_usage_partial = bool(work_token_usage_partial)
 
 
 DESIGN_AMENDMENT_LENGTH_GUIDANCE = (
@@ -540,6 +543,10 @@ def terminal_handoff(state, session_id):
         raise OperationalTerminalError(
             "the Brainstorming lifecycle ended because execution failed",
             work_duration_s=projected.get("work_duration_s"),
+            work_token_usage=projected.get("work_token_usage"),
+            work_token_usage_partial=projected.get(
+                "work_token_usage_partial", False
+            ),
         )
     handoff = {
         "session_id": session_id,
@@ -548,6 +555,10 @@ def terminal_handoff(state, session_id):
             "accepted_target_revision"
         ],
         "work_duration_s": projected.get("work_duration_s"),
+        "work_token_usage": projected.get("work_token_usage"),
+        "work_token_usage_partial": projected.get(
+            "work_token_usage_partial", False
+        ),
     }
     if session_state["status"] == "success":
         revision = handoff["accepted_target_revision"]

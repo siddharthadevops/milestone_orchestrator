@@ -235,9 +235,10 @@ class DriverTestCase(unittest.TestCase):
 class _FailingRunner(object):
     """Raises scripted exceptions, then succeeds with scripted responses."""
 
-    def __init__(self, failures, then=None):
+    def __init__(self, failures, then=None, token_usage=None):
         self.failures = list(failures)
         self.then = list(then or [])
+        self.token_usage = token_usage
         self.calls = 0
 
     def call(self, family, prompt, workspace, model=None, effort=None,
@@ -248,7 +249,10 @@ class _FailingRunner(object):
         if self.failures:
             raise self.failures.pop(0)
         import json as _json
-        return runners.RunnerResult(_json.dumps(self.then.pop(0)), 0, 1.0)
+        return runners.RunnerResult(
+            _json.dumps(self.then.pop(0)), 0, 1.0,
+            token_usage=self.token_usage,
+        )
 
 
 class TestTypedInfraFailures(DriverTestCase):
@@ -317,6 +321,37 @@ class TestTypedInfraFailures(DriverTestCase):
             self.assertEqual(
                 classify_calls, [("claude", "claude-fable-5", "high")]
             )
+
+    def test_classifier_call_usage_is_owned_by_the_milestone(self):
+        with tempfile.TemporaryDirectory(prefix="orch-fix-") as ws:
+            usage = {
+                "input_tokens": 70, "cached_input_tokens": 20,
+                "output_tokens": 10, "reasoning_output_tokens": 3,
+                "total_tokens": 80,
+            }
+            path = init_state(
+                ws, make_config(
+                    infra_retry_backoff_s=[], error_classifier=True
+                )
+            )
+            runner = _FailingRunner(
+                [runners.RunnerError("a novel provider failure")],
+                then=[{"error_type": "busy", "resume_at": None,
+                       "evidence": "transient"}],
+                token_usage=usage,
+            )
+            driver = drv.Driver(path, runner=runner)
+            driver.step()
+
+            state = st.load(path)
+            summary = st.summary(state)
+            events = [
+                event for event in state["events"]
+                if event["type"] == "error_classifier_call"
+            ]
+            self.assertEqual(len(events), 1)
+            self.assertEqual(events[0]["token_usage"], usage)
+            self.assertEqual(summary["work_token_usage"], usage)
 
     def test_classifier_io_is_persisted_and_evidence_recorded(self):
         # An LLM-classified failure must leave an auditable trail: the

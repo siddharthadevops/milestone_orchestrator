@@ -330,7 +330,15 @@ class ParticipantExecution:
             "status": status,
             "raw_ref": raw_ref,
         }
-        prompt_path = getattr(result, "prompt_path", None)
+        usage_source = result if result is not None else error
+        token_usage = runners.normalize_token_usage(
+            getattr(usage_source, "token_usage", None)
+        )
+        if token_usage is not None:
+            event["token_usage"] = token_usage
+        if getattr(usage_source, "token_usage_partial", False):
+            event["token_usage_partial"] = True
+        prompt_path = getattr(usage_source, "prompt_path", None)
         if isinstance(prompt_path, str) and prompt_path:
             event["prompt_ref"] = os.path.basename(prompt_path)
         if status == "failed":
@@ -709,5 +717,10 @@ class ParticipantExecution:
                 "error": first_error,
                 "raw_text": result.text,
                 "duration_s": result.duration_s,
+                "token_usage": getattr(result, "token_usage", None),
+                "token_usage_partial": bool(
+                    getattr(result, "token_usage_partial", False)
+                    or getattr(result, "token_usage", None) is None
+                ),
             }
             return envelope, result2

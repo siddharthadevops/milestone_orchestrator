@@ -46,6 +46,261 @@ def make_prompt(kind, family="codex", workspace="/tmp/ws"):
     )
 
 
+class TestTokenUsage(unittest.TestCase):
+    def test_claude_stream_json_configuration_is_preserved(self):
+        command = [
+            "claude", "-p", "--output-format", "stream-json",
+            "--include-partial-messages",
+        ]
+        self.assertEqual(
+            runners._with_usage_output("claude", command), command
+        )
+
+    def test_codex_usage_keeps_cached_input_as_a_breakdown(self):
+        self.assertEqual(
+            runners.normalize_token_usage({
+                "input_tokens": 100,
+                "cached_input_tokens": 80,
+                "output_tokens": 20,
+                "reasoning_output_tokens": 7,
+            }, "codex"),
+            {
+                "input_tokens": 100,
+                "cached_input_tokens": 80,
+                "output_tokens": 20,
+                "reasoning_output_tokens": 7,
+                "total_tokens": 120,
+            },
+        )
+
+    def test_claude_usage_adds_all_input_categories_once(self):
+        self.assertEqual(
+            runners.normalize_token_usage({
+                "input_tokens": 10,
+                "cache_creation_input_tokens": 20,
+                "cache_read_input_tokens": 30,
+                "output_tokens": 5,
+            }, "claude"),
+            {
+                "input_tokens": 60,
+                "cached_input_tokens": 30,
+                "output_tokens": 5,
+                "reasoning_output_tokens": 0,
+                "total_tokens": 65,
+            },
+        )
+
+    def test_cumulative_usage_subtracts_to_one_turn(self):
+        previous = {
+            "input_tokens": 100, "cached_input_tokens": 40,
+            "output_tokens": 20, "reasoning_output_tokens": 5,
+            "total_tokens": 120,
+        }
+        current = {
+            "input_tokens": 160, "cached_input_tokens": 55,
+            "output_tokens": 30, "reasoning_output_tokens": 8,
+            "total_tokens": 190,
+        }
+        self.assertEqual(
+            runners.subtract_token_usage(current, previous),
+            {
+                "input_tokens": 60, "cached_input_tokens": 15,
+                "output_tokens": 10, "reasoning_output_tokens": 3,
+                "total_tokens": 70,
+            },
+        )
+
+    def test_codex_resume_exposes_delta_not_cumulative_usage(self):
+        class ScriptedRunner(runners.SubprocessRunner):
+            def __init__(self):
+                super().__init__({
+                    "codex": [
+                        "codex", "exec", "--output-last-message",
+                        "{output_file}",
+                    ]
+                }, {})
+                self.results = [
+                    runners.RunnerResult(
+                        '{"status":"ok"}', 0, 1,
+                        transport_text=(
+                            '{"type":"thread.started",'
+                            '"thread_id":"thread-1"}\n'
+                        ),
+                        token_usage={
+                            "input_tokens": 100,
+                            "cached_input_tokens": 40,
+                            "output_tokens": 20,
+                            "reasoning_output_tokens": 5,
+                            "total_tokens": 120,
+                        },
+                    ),
+                    runners.RunnerResult(
+                        '{"status":"ok"}', 0, 1,
+                        token_usage={
+                            "input_tokens": 160,
+                            "cached_input_tokens": 55,
+                            "output_tokens": 30,
+                            "reasoning_output_tokens": 8,
+                            "total_tokens": 190,
+                        },
+                    ),
+                ]
+
+            def _call_prepared(self, *_args, **_kwargs):
+                return self.results.pop(0)
+
+        runner = ScriptedRunner()
+        first = runner.start_session("codex", "first", "/tmp")
+        second = runner.continue_session(
+            "codex", first.session_ref, "second", "/tmp"
+        )
+
+        self.assertEqual(first.token_usage["total_tokens"], 120)
+        self.assertEqual(second.token_usage["total_tokens"], 70)
+
+    def test_codex_resume_restores_durable_baseline_after_restart(self):
+        class RestartedRunner(runners.SubprocessRunner):
+            def __init__(self):
+                super().__init__({
+                    "codex": [
+                        "codex", "exec", "resume", "{session_ref}",
+                        "--output-last-message", "{output_file}",
+                    ]
+                }, {})
+
+            def _call_prepared(self, *_args, **_kwargs):
+                return runners.RunnerResult(
+                    '{"status":"ok"}', 0, 1,
+                    token_usage={
+                        "input_tokens": 160,
+                        "cached_input_tokens": 55,
+                        "output_tokens": 30,
+                        "reasoning_output_tokens": 8,
+                        "total_tokens": 190,
+                    },
+                )
+
+        runner = RestartedRunner()
+        runner.seed_codex_session_usage("thread-1", {
+            "input_tokens": 100,
+            "cached_input_tokens": 40,
+            "output_tokens": 20,
+            "reasoning_output_tokens": 5,
+            "total_tokens": 120,
+        })
+
+        result = runner.continue_session(
+            "codex", "thread-1", "second", "/tmp"
+        )
+
+        self.assertEqual(result.token_usage["total_tokens"], 70)
+        self.assertEqual(result.session_token_usage["total_tokens"], 190)
+
+    def test_repair_failure_duration_includes_both_calls(self):
+        class FailingRepairRunner(object):
+            def __init__(self):
+                self.calls = 0
+
+            def call(self, *_args, **_kwargs):
+                self.calls += 1
+                if self.calls == 1:
+                    return runners.RunnerResult("not json", 0, 5.0)
+                error = runners.RunnerError("repair failed")
+                error.duration_s = 7.0
+                raise error
+
+        with self.assertRaises(runners.RunnerError) as caught:
+            runners.call_worker(
+                FailingRepairRunner(), "codex",
+                make_prompt("implement"), "implement", "/tmp",
+            )
+
+        self.assertEqual(caught.exception.duration_s, 12.0)
+
+    def test_provider_json_returns_answer_and_usage(self):
+        answer, usage = runners._provider_transport_result(
+            "claude",
+            json.dumps({
+                "type": "result",
+                "result": '{"status":"ok"}',
+                "usage": {"input_tokens": 11, "output_tokens": 3},
+            }),
+        )
+        self.assertEqual(answer, '{"status":"ok"}')
+        self.assertEqual(usage["total_tokens"], 14)
+
+    def test_codex_jsonl_returns_agent_answer_and_usage(self):
+        answer, usage = runners._provider_transport_result(
+            "codex",
+            "\n".join([
+                json.dumps({
+                    "type": "item.completed",
+                    "item": {
+                        "type": "agent_message",
+                        "text": '{"status":"ok"}',
+                    },
+                }),
+                json.dumps({
+                    "type": "turn.completed",
+                    "usage": {
+                        "input_tokens": 10,
+                        "cached_input_tokens": 2,
+                        "output_tokens": 3,
+                    },
+                }),
+            ]),
+        )
+        self.assertEqual(answer, '{"status":"ok"}')
+        self.assertEqual(usage["total_tokens"], 13)
+
+    def test_structured_provider_failure_is_not_an_answer(self):
+        for family, event in (
+            ("claude", {
+                "type": "result", "is_error": True,
+                "result": "quota exhausted",
+                "usage": {"input_tokens": 11, "output_tokens": 3},
+            }),
+            ("codex", {
+                "type": "turn.failed",
+                "error": {"message": "network unavailable"},
+            }),
+        ):
+            with self.subTest(family=family):
+                with self.assertRaises(runners.ProviderResponseError) as seen:
+                    runners._provider_transport_result(
+                        family, json.dumps(event)
+                    )
+                self.assertIn("provider failure", str(seen.exception))
+                self.assertEqual(
+                    seen.exception.raw_texts, [json.dumps(event)]
+                )
+
+    def test_custom_codex_template_without_output_file_keeps_answer(self):
+        with tempfile.TemporaryDirectory(prefix="codex-jsonl-") as root:
+            executable = os.path.join(root, "fake-codex")
+            source = """\
+#!/usr/bin/env python3
+import json
+import sys
+sys.stdin.read()
+answer = json.dumps({"status": "ok"})
+print(json.dumps({"type": "item.completed", "item": {
+    "type": "agent_message", "text": answer}}))
+print(json.dumps({"type": "turn.completed", "usage": {
+    "input_tokens": 10, "cached_input_tokens": 2, "output_tokens": 3}}))
+"""
+            with open(executable, "w", encoding="utf-8") as handle:
+                handle.write(source)
+            os.chmod(executable, 0o755)
+            runner = SubprocessRunner(
+                {"codex": [executable, "exec"]}, {}, cwd=root
+            )
+            result = runner.call("codex", "prompt", root)
+
+        self.assertEqual(result.text, '{"status": "ok"}')
+        self.assertEqual(result.token_usage["total_tokens"], 13)
+
+
 # ---------------------------------------------------------------------------
 # extract_json
 
@@ -1464,6 +1719,42 @@ class TestCallWorker(unittest.TestCase):
             ["malformed first transport", "repair transport trace"],
         )
 
+    def test_failed_repair_keeps_both_known_token_usages(self):
+        first = {
+            "input_tokens": 10, "cached_input_tokens": 2,
+            "output_tokens": 2, "reasoning_output_tokens": 0,
+            "total_tokens": 12,
+        }
+        second = {
+            "input_tokens": 20, "cached_input_tokens": 3,
+            "output_tokens": 3, "reasoning_output_tokens": 1,
+            "total_tokens": 23,
+        }
+
+        class RepairFailureRunner(object):
+            def __init__(self):
+                self.calls = 0
+
+            def call(self, *_args, **_kwargs):
+                self.calls += 1
+                if self.calls == 1:
+                    return runners.RunnerResult(
+                        "not json", 0, 1, token_usage=first
+                    )
+                raise runners.ProviderResponseError(
+                    "provider failed", raw_texts=["failed"],
+                    token_usage=second,
+                )
+
+        with self.assertRaises(runners.ProviderResponseError) as caught:
+            call_worker(
+                RepairFailureRunner(), "codex", make_prompt("implement"),
+                "implement", self.workspace,
+            )
+
+        self.assertEqual(caught.exception.token_usage["total_tokens"], 35)
+        self.assertFalse(caught.exception.token_usage_partial)
+
     def test_controlled_repair_keeps_first_attempt_diagnostics(self):
         class InterruptedRepairRunner(object):
             def __init__(self):
@@ -2587,6 +2878,20 @@ class TestActiveProviderControl(unittest.TestCase):
                         },
                     }), flush=True)
                     print(json.dumps({
+                        "method": "rawResponse/completed",
+                        "params": {
+                            "threadId": "thread-failed",
+                            "turnId": "turn-failed",
+                            "usage": {
+                                "inputTokens": 10,
+                                "cachedInputTokens": 2,
+                                "outputTokens": 3,
+                                "reasoningOutputTokens": 1,
+                                "totalTokens": 13,
+                            },
+                        },
+                    }), flush=True)
+                    print(json.dumps({
                         "method": "turn/completed",
                         "params": {
                             "threadId": "thread-1",
@@ -3288,6 +3593,157 @@ class TestActiveProviderControl(unittest.TestCase):
         self.assertFalse(control.interrupted)
         self.assertIn("state write failed", control.error)
         control._close()
+
+    def test_failed_codex_live_turn_keeps_reported_usage(self):
+        fake = self._executable(
+            "codex-failed-usage",
+            r'''
+            import json, sys
+            for line in sys.stdin:
+                message = json.loads(line)
+                method, ident = message.get("method"), message.get("id")
+                if method == "initialize":
+                    print(json.dumps({"id": ident, "result": {}}), flush=True)
+                elif method == "thread/start":
+                    print(json.dumps({"id": ident, "result": {
+                        "thread": {"id": "thread-failed"},
+                    }}), flush=True)
+                elif method == "turn/start":
+                    print(json.dumps({"id": ident, "result": {
+                        "turn": {"id": "turn-failed"},
+                    }}), flush=True)
+                    print(json.dumps({
+                        "method": "thread/tokenUsage/updated",
+                        "params": {
+                            "threadId": "thread-failed",
+                            "turnId": "turn-failed",
+                            "tokenUsage": {"last": {
+                                "inputTokens": 10,
+                                "cachedInputTokens": 2,
+                                "outputTokens": 3,
+                                "reasoningOutputTokens": 1,
+                                "totalTokens": 13,
+                            }},
+                        },
+                    }), flush=True)
+                    print(json.dumps({
+                        "method": "turn/completed",
+                        "params": {
+                            "threadId": "thread-failed",
+                            "turn": {"id": "turn-failed", "status": "failed",
+                                     "error": {"message": "quota"},
+                                     "items": []},
+                        },
+                    }), flush=True)
+            ''',
+        )
+        runner = SubprocessRunner(
+            {"codex": [fake, "exec",
+                       "--dangerously-bypass-approvals-and-sandbox"]},
+            {"codex": 5},
+        )
+
+        with self.assertRaises(runners.ProviderResponseError) as caught:
+            runner.call(
+                "codex", "prompt", self.workspace,
+                active_control=runners.ActiveCallControl(),
+            )
+
+        self.assertEqual(caught.exception.token_usage["total_tokens"], 13)
+        self.assertFalse(caught.exception.token_usage_partial)
+
+    def test_codex_live_turn_sums_each_model_response_usage(self):
+        fake = self._executable(
+            "codex-multi-response-usage",
+            r'''
+            import json, sys
+            answer = json.dumps({
+                "status": "ok", "kind": "implement",
+                "files_changed": ["coherent.py"],
+            })
+            for line in sys.stdin:
+                message = json.loads(line)
+                method, ident = message.get("method"), message.get("id")
+                if method == "initialize":
+                    print(json.dumps({"id": ident, "result": {}}), flush=True)
+                elif method == "thread/start":
+                    print(json.dumps({"id": ident, "result": {
+                        "thread": {"id": "thread-multi"},
+                    }}), flush=True)
+                elif method == "turn/start":
+                    print(json.dumps({"id": ident, "result": {
+                        "turn": {"id": "turn-multi"},
+                    }}), flush=True)
+                    for usage in ((10, 3), (12, 5)):
+                        print(json.dumps({
+                            "method": "rawResponse/completed",
+                            "params": {
+                                "threadId": "thread-multi",
+                                "turnId": "turn-multi",
+                                "usage": {
+                                    "inputTokens": usage[0],
+                                    "cachedInputTokens": 0,
+                                    "outputTokens": usage[1],
+                                    "reasoningOutputTokens": 0,
+                                    "totalTokens": sum(usage),
+                                },
+                            },
+                        }), flush=True)
+                        print(json.dumps({
+                            "method": "thread/tokenUsage/updated",
+                            "params": {
+                                "threadId": "thread-multi",
+                                "turnId": "turn-multi",
+                                "tokenUsage": {"last": {
+                                    "inputTokens": usage[0],
+                                    "cachedInputTokens": 0,
+                                    "outputTokens": usage[1],
+                                    "reasoningOutputTokens": 0,
+                                    "totalTokens": sum(usage),
+                                }},
+                            },
+                        }), flush=True)
+                        print(json.dumps({
+                            "method": "thread/tokenUsage/updated",
+                            "params": {
+                                "threadId": "thread-multi",
+                                "turnId": "turn-multi",
+                                "tokenUsage": {"last": {
+                                    "inputTokens": usage[0],
+                                    "cachedInputTokens": 0,
+                                    "outputTokens": usage[1],
+                                    "reasoningOutputTokens": 0,
+                                    "totalTokens": sum(usage),
+                                }},
+                            },
+                        }), flush=True)
+                    print(json.dumps({
+                        "method": "turn/completed",
+                        "params": {
+                            "threadId": "thread-multi",
+                            "turn": {"id": "turn-multi",
+                                     "status": "completed",
+                                     "items": [{"type": "agentMessage",
+                                                "phase": "final_answer",
+                                                "text": answer}]},
+                        },
+                    }), flush=True)
+            ''',
+        )
+        runner = SubprocessRunner(
+            {"codex": [fake, "exec",
+                       "--dangerously-bypass-approvals-and-sandbox"]},
+            {"codex": 5},
+        )
+
+        result = runner.call(
+            "codex", "prompt", self.workspace,
+            active_control=runners.ActiveCallControl(),
+        )
+
+        self.assertEqual(result.token_usage["input_tokens"], 22)
+        self.assertEqual(result.token_usage["output_tokens"], 8)
+        self.assertEqual(result.token_usage["total_tokens"], 30)
 
     def test_codex_hard_stop_is_a_typed_controlled_interruption(self):
         fake = self._executable(

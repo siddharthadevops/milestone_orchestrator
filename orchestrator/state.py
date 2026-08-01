@@ -696,7 +696,8 @@ def set_discovered_suite(state, command, replace=False):
 
 
 def record_draft(state, unit, kind, result, raw_path=None, family=None,
-                 duration=None, model=None, effort=None):
+                 duration=None, model=None, effort=None, token_usage=None,
+                 token_usage_partial=False):
     """Write-once record of the unit's draft/implement call."""
     if unit["status"] != U_PENDING:
         raise IllegalTransition(
@@ -727,6 +728,10 @@ def record_draft(state, unit, kind, result, raw_path=None, family=None,
         "raw_path": raw_path,
         "result": copy.deepcopy(result),
     }
+    if token_usage is not None:
+        unit["draft"]["token_usage"] = copy.deepcopy(token_usage)
+    if token_usage_partial:
+        unit["draft"]["token_usage_partial"] = True
     unit["artifact"] = result.get("artifact")
     # Keep the lightweight implementation/draft history in the immutable
     # ledger too. A unit can exceptionally be reset to pending after a
@@ -743,6 +748,11 @@ def record_draft(state, unit, kind, result, raw_path=None, family=None,
         effort=effort,
         duration_s=duration,
         raw_path=raw_path,
+        token_usage_partial=bool(token_usage_partial),
+        **(
+            {"token_usage": copy.deepcopy(token_usage)}
+            if token_usage is not None else {}
+        ),
     )
     return unit["draft"]
 
@@ -851,7 +861,7 @@ def active_fix_dirty_deltas(state, unit):
 
 
 def record_round(state, unit, family, kind, result, raw_path=None, duration=None,
-                 meta=None):
+                 meta=None, token_usage=None, token_usage_partial=False):
     """Append an immutable round record. Never edited afterwards.
 
     meta: optional extra record fields (e.g. the fixer's source round id,
@@ -870,6 +880,10 @@ def record_round(state, unit, family, kind, result, raw_path=None, duration=None
         "raw_path": raw_path,
         "result": copy.deepcopy(result),
     }
+    if token_usage is not None:
+        rec["token_usage"] = copy.deepcopy(token_usage)
+    if token_usage_partial:
+        rec["token_usage_partial"] = True
     if meta:
         rec.update(copy.deepcopy(meta))
     unit["rounds"].append(rec)
@@ -1657,6 +1671,10 @@ def _draft_history(state, unit):
             "model": source.get("model"),
             "effort": source.get("effort"),
             "duration_s": source.get("duration_s"),
+            "token_usage": copy.deepcopy(source.get("token_usage")),
+            "token_usage_partial": bool(
+                source.get("token_usage_partial", False)
+            ),
             "at": source.get("at"),
             "raw_path": source.get("raw_path"),
             "current": is_current,
@@ -1668,6 +1686,10 @@ def _draft_history(state, unit):
             "model": current.get("model"),
             "effort": current.get("effort"),
             "duration_s": current.get("duration_s"),
+            "token_usage": copy.deepcopy(current.get("token_usage")),
+            "token_usage_partial": bool(
+                current.get("token_usage_partial", False)
+            ),
             "at": current.get("at"),
             "raw_path": current.get("raw_path"),
             "current": True,
@@ -1711,6 +1733,9 @@ def _work_durations(state):
             "gap_reported",
             "brainstorming_origin_recorded",
             "brainstorming_work_recorded",
+            "implementation_size_interrupted",
+            "worker_unaccepted",
+            "error_classifier_call",
         ):
             key = event.get("unit")
             if key in totals:
@@ -1726,7 +1751,7 @@ def _work_durations(state):
                         event.get("duration_s")
                     )
             continue
-        if etype != "worker_malformed" or event.get("fatal"):
+        if etype != "worker_malformed":
             continue
         seconds = _completed_duration(event.get("duration_s"))
         if not seconds:
@@ -1749,6 +1774,144 @@ def _work_durations(state):
         else:
             unassigned += seconds
     return totals, unassigned
+
+
+_TOKEN_USAGE_FIELDS = (
+    "input_tokens",
+    "cached_input_tokens",
+    "output_tokens",
+    "reasoning_output_tokens",
+    "total_tokens",
+)
+
+
+def _normalized_token_usage(value):
+    if not isinstance(value, dict):
+        return None
+    checked = {}
+    for field in _TOKEN_USAGE_FIELDS:
+        count = value.get(field)
+        if type(count) is not int or count < 0:
+            return None
+        checked[field] = count
+    if checked["cached_input_tokens"] > checked["input_tokens"]:
+        return None
+    if checked["reasoning_output_tokens"] > checked["output_tokens"]:
+        return None
+    if checked["total_tokens"] != (
+        checked["input_tokens"] + checked["output_tokens"]
+    ):
+        return None
+    return checked
+
+
+def _add_token_usage(current, value):
+    value = _normalized_token_usage(value)
+    if value is None:
+        return current
+    if current is None:
+        return value
+    return {
+        field: current[field] + value[field]
+        for field in _TOKEN_USAGE_FIELDS
+    }
+
+
+def _work_token_usage(state):
+    """Mirror work-duration ownership with normalized provider tokens."""
+    keys = [unit_key(unit) for unit in state.get("units") or []]
+    totals = dict((key, None) for key in keys)
+    partial = dict((key, False) for key in keys)
+    unassigned = None
+    unassigned_partial = False
+
+    def account(key, duration, usage, known_partial=False):
+        nonlocal unassigned, unassigned_partial
+        normalized = _normalized_token_usage(usage)
+        missing = _completed_duration(duration) > 0 and normalized is None
+        if key in totals:
+            totals[key] = _add_token_usage(totals[key], normalized)
+            partial[key] = partial[key] or missing or bool(known_partial)
+        else:
+            unassigned = _add_token_usage(unassigned, normalized)
+            unassigned_partial = (
+                unassigned_partial or missing or bool(known_partial)
+            )
+
+    for unit in state.get("units") or []:
+        key = unit_key(unit)
+        for draft in _draft_history(state, unit):
+            account(
+                key,
+                draft.get("duration_s"),
+                draft.get("token_usage"),
+                draft.get("token_usage_partial", False)
+                or draft.get("token_usage") is None,
+            )
+        for round_ in unit.get("rounds") or []:
+            account(
+                key,
+                round_.get("duration_s"),
+                round_.get("token_usage"),
+                round_.get("token_usage_partial", False)
+                or round_.get("token_usage") is None,
+            )
+        for seal in unit.get("seals") or []:
+            for half in (seal.get("halves") or {}).values():
+                if half:
+                    account(
+                        key,
+                        half.get("duration_s"),
+                        half.get("token_usage"),
+                        half.get("token_usage_partial", False)
+                        or half.get("token_usage") is None,
+                    )
+
+    for event in state.get("events") or []:
+        etype = event.get("type")
+        if etype in (
+            "reclassify_recorded",
+            "gap_reported",
+            "brainstorming_origin_recorded",
+            "brainstorming_work_recorded",
+            "implementation_size_interrupted",
+            "worker_unaccepted",
+            "error_classifier_call",
+        ):
+            account(
+                event.get("unit"),
+                event.get("duration_s"),
+                event.get("token_usage"),
+                event.get("token_usage_partial", False),
+            )
+            continue
+        if etype != "worker_malformed":
+            continue
+        key = event.get("unit")
+        if not key:
+            label = str(event.get("label") or "")
+            key = next(
+                (
+                    candidate
+                    for candidate in keys
+                    if label == candidate or label.startswith(candidate + "-")
+                ),
+                None,
+            )
+        if (
+            event.get("duration_s") is None
+            and event.get("token_usage") is None
+            and not event.get("fatal")
+        ):
+            continue
+        account(
+            key,
+            event.get("duration_s"),
+            event.get("token_usage"),
+            event.get("token_usage_partial", False)
+            or (event.get("fatal") and event.get("token_usage") is None),
+        )
+    return totals, partial, unassigned, unassigned_partial
 
 
 def _repair_episodes(state):
@@ -1858,6 +2021,8 @@ def summary(state):
     debt_requeues = requeued_debt_refs(state)
     requeued_ids = requeued_debt_ids(state)
     work_by_unit, unassigned_work = _work_durations(state)
+    token_by_unit, token_partial_by_unit, unassigned_tokens, \
+        unassigned_tokens_partial = _work_token_usage(state)
     repairs_by_unit = _repair_episodes(state)
 
     def effective_setting(family, explicit, field):
@@ -1889,6 +2054,8 @@ def summary(state):
                 "outcome": "waiting",
                 "outcome_at": None,
                 "duration_s": None,
+                "token_usage": None,
+                "token_usage_partial": False,
             }
             brainstorming_by_unit.setdefault(uk, []).append(entry)
             brainstorming_index[(uk, e.get("session_id"))] = entry
@@ -1901,6 +2068,10 @@ def summary(state):
             entry = brainstorming_index.get((uk, e.get("session_id")))
             if entry is not None:
                 entry["duration_s"] = e.get("duration_s")
+                entry["token_usage"] = copy.deepcopy(e.get("token_usage"))
+                entry["token_usage_partial"] = bool(
+                    e.get("token_usage_partial", False)
+                )
         if e.get("type") == "unit_opened" and uk not in opened_at:
             opened_at[uk] = _epoch(e.get("at"))
         if e.get("type") == "unit_transition" and e.get("to_status") == U_SEALED:
@@ -1926,6 +2097,7 @@ def summary(state):
                         in requeued_ids.get(uk, set())
                     ),
                     "duration_s": e.get("duration_s"),
+                    "token_usage": copy.deepcopy(e.get("token_usage")),
                 }
             )
         if e.get("type") == "verification":
@@ -1973,6 +2145,12 @@ def summary(state):
                 ),
                 "closed_epoch": closed_at.get(unit_key(u)),
                 "work_duration_s": work_by_unit.get(unit_key(u), 0.0),
+                "work_token_usage": copy.deepcopy(
+                    token_by_unit.get(unit_key(u))
+                ),
+                "work_token_usage_partial": token_partial_by_unit.get(
+                    unit_key(u), False
+                ),
                 "drafts": [
                     {
                         "kind": draft.get("kind"),
@@ -1984,6 +2162,12 @@ def summary(state):
                             draft.get("family"), draft.get("effort"), "effort"
                         ),
                         "duration_s": draft.get("duration_s"),
+                        "token_usage": copy.deepcopy(
+                            draft.get("token_usage")
+                        ),
+                        "token_usage_partial": bool(
+                            draft.get("token_usage_partial", False)
+                        ),
                         "at": draft.get("at"),
                         "current": draft.get("current", False),
                     }
@@ -2002,6 +2186,12 @@ def summary(state):
                             u["draft"].get("effort"), "effort"
                         ),
                         "duration_s": u["draft"].get("duration_s"),
+                        "token_usage": copy.deepcopy(
+                            u["draft"].get("token_usage")
+                        ),
+                        "token_usage_partial": bool(
+                            u["draft"].get("token_usage_partial", False)
+                        ),
                         "at": u["draft"]["at"],
                     }
                     if u.get("draft")
@@ -2025,6 +2215,10 @@ def summary(state):
                         "deferred_clean": bool(r.get("deferred_clean")),
                         "invalidated": r.get("invalidated"),
                         "duration_s": r.get("duration_s"),
+                        "token_usage": copy.deepcopy(r.get("token_usage")),
+                        "token_usage_partial": bool(
+                            r.get("token_usage_partial", False)
+                        ),
                         "at": r["at"],
                     }
                     for r in u["rounds"]
@@ -2112,6 +2306,11 @@ def summary(state):
         )
         if isinstance(review_act, dict) and review_act.get("model"):
             current_model = review_act["model"]
+    total_token_usage = unassigned_tokens
+    for unit_token_usage in token_by_unit.values():
+        total_token_usage = _add_token_usage(
+            total_token_usage, unit_token_usage
+        )
     out = {
         "goal": state["goal"],
         "workspace": state["workspace"],
@@ -2138,6 +2337,10 @@ def summary(state):
         ),
         "failure": state["failure"],
         "work_duration_s": sum(work_by_unit.values()) + unassigned_work,
+        "work_token_usage": total_token_usage,
+        "work_token_usage_partial": (
+            unassigned_tokens_partial or any(token_partial_by_unit.values())
+        ),
         "units": units_view,
         "events_total": len(state["events"]),
         "last_events": state["events"][-30:],

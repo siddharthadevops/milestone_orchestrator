@@ -66,6 +66,16 @@ class RunnerError(RuntimeError):
     with no usable output)."""
 
 
+class ProviderResponseError(RunnerError):
+    """The CLI returned a structured provider failure, not an answer."""
+
+    def __init__(self, message, raw_texts=None, token_usage=None):
+        RuntimeError.__init__(self, message)
+        self.raw_texts = list(raw_texts or [])
+        self.token_usage = normalize_token_usage(token_usage)
+        self.token_usage_partial = self.token_usage is None
+
+
 class WorkerStalled(RunnerError):
     """A liveness watchdog killed the worker: its whole process tree burned
     less than the configured CPU floor over a full sampling window, i.e. it
@@ -224,18 +234,180 @@ def _positive_float(value):
     return f
 
 
+_TOKEN_USAGE_FIELDS = (
+    "input_tokens",
+    "cached_input_tokens",
+    "output_tokens",
+    "reasoning_output_tokens",
+    "total_tokens",
+)
+
+
+def _token_count(value):
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return 0
+    if not math.isfinite(float(value)) or value < 0:
+        return 0
+    return int(value)
+
+
+def normalize_token_usage(usage, family=None):
+    """Normalize Codex and Claude usage into one additive shape.
+
+    Codex reports cached input as a subset of ``input_tokens``. Claude
+    reports ordinary, cache-write, and cache-read input separately, so its
+    normalized input is their sum. Reasoning is a breakdown of output and is
+    therefore never added again to the total.
+    """
+    if not isinstance(usage, dict):
+        return None
+    canonical = "total_tokens" in usage
+
+    def value(snake, camel=None):
+        if snake in usage:
+            return _token_count(usage.get(snake))
+        return _token_count(usage.get(camel)) if camel else 0
+
+    base_input = value("input_tokens", "inputTokens")
+    cached_input = value("cached_input_tokens", "cachedInputTokens")
+    output = value("output_tokens", "outputTokens")
+    reasoning = value("reasoning_output_tokens", "reasoningOutputTokens")
+    if family == "claude" and not canonical:
+        cache_write = value(
+            "cache_creation_input_tokens", "cacheCreationInputTokens"
+        )
+        cache_read = value("cache_read_input_tokens", "cacheReadInputTokens")
+        base_input += cache_write + cache_read
+        cached_input = cache_read
+        details = usage.get("output_tokens_details") or {}
+        if not reasoning and isinstance(details, dict):
+            reasoning = _token_count(details.get("thinking_tokens"))
+    recognized = any(
+        key in usage
+        for key in (
+            "input_tokens", "inputTokens", "output_tokens", "outputTokens",
+            "total_tokens", "totalTokens", "cache_creation_input_tokens",
+            "cache_read_input_tokens",
+        )
+    )
+    if not recognized:
+        return None
+    return {
+        "input_tokens": base_input,
+        "cached_input_tokens": cached_input,
+        "output_tokens": output,
+        "reasoning_output_tokens": reasoning,
+        "total_tokens": base_input + output,
+    }
+
+
+def add_token_usage(*items):
+    normalized = [normalize_token_usage(item) for item in items]
+    normalized = [item for item in normalized if item is not None]
+    if not normalized:
+        return None
+    return {
+        field: sum(item[field] for item in normalized)
+        for field in _TOKEN_USAGE_FIELDS
+    }
+
+
+def subtract_token_usage(current, previous):
+    """Return a cumulative provider counter's non-negative turn delta."""
+    current = normalize_token_usage(current)
+    previous = normalize_token_usage(previous)
+    if current is None or previous is None:
+        return None
+    delta = {
+        field: current[field] - previous[field]
+        for field in _TOKEN_USAGE_FIELDS
+    }
+    if any(value < 0 for value in delta.values()):
+        return None
+    return delta
+
+
+def _provider_transport_result(family, transport_text):
+    """Return (final_text, normalized usage) from provider JSON output."""
+    events = []
+    for line in (transport_text or "").splitlines():
+        try:
+            event = json.loads(line)
+        except (TypeError, json.JSONDecodeError):
+            continue
+        if isinstance(event, dict):
+            events.append(event)
+    if not events:
+        try:
+            event = json.loads((transport_text or "").strip())
+        except (TypeError, json.JSONDecodeError):
+            event = None
+        if isinstance(event, dict):
+            events.append(event)
+    final_text = None
+    token_usage = None
+    provider_error = None
+    for event in events:
+        if family == "claude" and event.get("type") == "result":
+            if event.get("is_error"):
+                provider_error = (
+                    event.get("result") or event.get("subtype")
+                    or "unknown provider error"
+                )
+            elif isinstance(event.get("result"), str):
+                final_text = event["result"]
+            token_usage = normalize_token_usage(event.get("usage"), "claude")
+        elif family == "codex" and event.get("type") in (
+            "error", "turn.failed"
+        ):
+            error = event.get("error")
+            if isinstance(error, dict):
+                provider_error = error.get("message") or json.dumps(error)
+            else:
+                provider_error = error or event.get("message") or event.get(
+                    "detail"
+                ) or "unknown provider error"
+        elif family == "codex" and event.get("type") == "item.completed":
+            item = event.get("item") or {}
+            if (
+                isinstance(item, dict)
+                and item.get("type") == "agent_message"
+                and isinstance(item.get("text"), str)
+            ):
+                final_text = item["text"]
+        elif family == "codex" and event.get("type") == "turn.completed":
+            token_usage = normalize_token_usage(event.get("usage"), "codex")
+        elif family == "codex" \
+                and event.get("method") == "thread/tokenUsage/updated":
+            usage = ((event.get("params") or {}).get("tokenUsage") or {})
+            token_usage = normalize_token_usage(usage.get("last"), "codex")
+    if provider_error is not None:
+        raise ProviderResponseError(
+            "family %s reported a provider failure: %s"
+            % (family, str(provider_error)[:500]),
+            raw_texts=[transport_text],
+            token_usage=token_usage,
+        )
+    return final_text, token_usage
+
+
 class WorkerProtocolError(RuntimeError):
     """The CLI ran but its output violates the JSON contract even after the
     repair retry. Carries the raw output texts of both attempts so the
     driver can persist them for the operator."""
 
-    def __init__(self, message, raw_texts=None):
+    def __init__(self, message, raw_texts=None, duration_s=None,
+                 token_usage=None, token_usage_partial=False):
         RuntimeError.__init__(self, message)
         self.raw_texts = list(raw_texts or [])
+        self.duration_s = duration_s
+        self.token_usage = normalize_token_usage(token_usage)
+        self.token_usage_partial = bool(token_usage_partial)
 
 
 class RunnerResult(object):
-    def __init__(self, text, exit_code, duration_s, transport_text=None):
+    def __init__(self, text, exit_code, duration_s, transport_text=None,
+                 token_usage=None):
         self.text = text
         self.exit_code = exit_code
         self.duration_s = duration_s
@@ -243,14 +415,16 @@ class RunnerResult(object):
         # emit their explicit thread id here while keeping the final answer in
         # the historical last-message file.
         self.transport_text = text if transport_text is None else transport_text
+        self.token_usage = normalize_token_usage(token_usage)
 
 
 class ControlledInterruptionResult(RunnerResult):
     def __init__(self, text, exit_code, duration_s, reason,
-                 transport_text=None):
+                 transport_text=None, token_usage=None):
         RunnerResult.__init__(
             self, text, exit_code, duration_s,
             transport_text=transport_text,
+            token_usage=token_usage,
         )
         self.controlled_interruption = True
         self.interrupt_reason = str(reason or "controlled interruption")
@@ -809,6 +983,40 @@ def apply_model_effort(argv, model, effort):
     return out
 
 
+def _with_usage_output(family, template):
+    """Ask supported CLIs for machine-readable usage metadata."""
+    out = list(template)
+    if family == "codex" and len(out) >= 2 and out[1] == "exec":
+        if "--json" not in out:
+            out.append("--json")
+        return out
+    if family != "claude" or not ("-p" in out or "--print" in out):
+        return out
+    for index, arg in enumerate(out):
+        if (
+            arg == "--output-format"
+            and index + 1 < len(out)
+            and out[index + 1] == "stream-json"
+        ) or arg == "--output-format=stream-json":
+            # stream-json already exposes the final result usage and may
+            # carry stream-only flags used by the live/stall machinery.
+            return out
+    cleaned = []
+    skip_value = False
+    for arg in out:
+        if skip_value:
+            skip_value = False
+            continue
+        if arg == "--output-format":
+            skip_value = True
+            continue
+        if arg.startswith("--output-format="):
+            continue
+        cleaned.append(arg)
+    cleaned.extend(["--output-format", "json"])
+    return cleaned
+
+
 class SubprocessRunner(object):
     """Runs a family's configured command with the prompt on stdin.
 
@@ -853,6 +1061,9 @@ class SubprocessRunner(object):
         # watchdog rather than raising mid-call and leaking the worker.
         self.stall_window_s = _positive_float(stall_window_s)
         self.stall_min_cpu_s = _positive_float(stall_min_cpu_s)
+        # `codex exec resume --json` reports the thread's cumulative usage.
+        # Keep its last total so continued calls expose only their delta.
+        self._codex_session_usage = {}
 
     def _start_stall_watchdog(self, proc, family, done, state, kill_lock,
                               output_paths=()):
@@ -954,7 +1165,10 @@ class SubprocessRunner(object):
              timeout_override=None, active_control=None):
         if family not in self.commands:
             raise RunnerError("no command configured for family %r" % family)
-        template = apply_model_effort(self.commands[family], model, effort)
+        template = _with_usage_output(
+            family,
+            apply_model_effort(self.commands[family], model, effort),
+        )
         return self._call_prepared(
             family, prompt, workspace, template, model, effort,
             timeout_override, _AMBIENT_EXECUTION, active_control,
@@ -1019,9 +1233,8 @@ class SubprocessRunner(object):
             template = apply_model_effort(
                 self.commands[family], model, effort
             )
+            template = _with_usage_output(family, template)
             if family == "codex":
-                if "--json" not in template:
-                    template = list(template) + ["--json"]
                 session_ref = None
             else:
                 session_ref = str(uuid.uuid4())
@@ -1055,6 +1268,13 @@ class SubprocessRunner(object):
                 raise
         elif not getattr(result, "session_ref", None):
             result.session_ref = session_ref
+        if family == "codex":
+            usage = normalize_token_usage(
+                getattr(result, "session_token_usage", None)
+                or result.token_usage
+            )
+            if usage is not None:
+                self._codex_session_usage[result.session_ref] = usage
         return result
 
     def continue_session(
@@ -1085,13 +1305,13 @@ class SubprocessRunner(object):
             )
             if family == "codex":
                 template = list(template[:2]) + ["resume"] + list(template[2:])
-                if "--json" not in template:
-                    template.append("--json")
+                template = _with_usage_output(family, template)
                 # `-` makes stdin the prompt explicitly; omitting it would
                 # leave room for CLI recency/picker behavior in future versions.
                 template.extend([session_ref, "-"])
             else:
                 template = list(template) + ["--resume", session_ref]
+                template = _with_usage_output(family, template)
         except BaseException as exc:
             # Validation and argv construction above occur before any worker
             # process can exist.
@@ -1100,13 +1320,57 @@ class SubprocessRunner(object):
             except (AttributeError, TypeError):
                 pass
             raise
-        result = self._call_prepared(
-            family, prompt, workspace, template, model, effort,
-            timeout_override, execution_context, active_control,
-            session_ref=session_ref, persist_session=True,
-        )
+        try:
+            result = self._call_prepared(
+                family, prompt, workspace, template, model, effort,
+                timeout_override, execution_context, active_control,
+                session_ref=session_ref, persist_session=True,
+            )
+        except ProviderResponseError as exc:
+            if family == "codex":
+                if getattr(exc, "token_usage_is_delta", False):
+                    self._remember_codex_session_delta(session_ref, exc)
+                else:
+                    self._apply_codex_session_delta(session_ref, exc)
+            raise
+        if family == "codex":
+            if getattr(result, "token_usage_is_delta", False):
+                self._remember_codex_session_delta(session_ref, result)
+            else:
+                self._apply_codex_session_delta(session_ref, result)
         result.session_ref = session_ref
         return result
+
+    def _apply_codex_session_delta(self, session_ref, outcome):
+        cumulative = normalize_token_usage(
+            getattr(outcome, "token_usage", None)
+        )
+        previous = self._codex_session_usage.get(session_ref)
+        if cumulative is not None:
+            self._codex_session_usage[session_ref] = cumulative
+        outcome.session_token_usage = cumulative
+        outcome.token_usage = subtract_token_usage(cumulative, previous)
+        outcome.token_usage_partial = outcome.token_usage is None
+
+    def _remember_codex_session_delta(self, session_ref, outcome):
+        session_total = normalize_token_usage(
+            getattr(outcome, "session_token_usage", None)
+        )
+        if session_total is not None:
+            self._codex_session_usage[session_ref] = session_total
+            return
+        prior = self._codex_session_usage.get(session_ref)
+        delta = normalize_token_usage(getattr(outcome, "token_usage", None))
+        if prior is not None and delta is not None:
+            self._codex_session_usage[session_ref] = add_token_usage(
+                prior, delta
+            )
+
+    def seed_codex_session_usage(self, session_ref, cumulative):
+        """Restore one durable Codex thread counter before a continuation."""
+        usage = normalize_token_usage(cumulative)
+        if isinstance(session_ref, str) and session_ref.strip() and usage:
+            self._codex_session_usage[session_ref] = usage
 
     def _call_prepared(
         self, family, prompt, workspace, template, model, effort, timeout,
@@ -1383,24 +1647,62 @@ class SubprocessRunner(object):
                     text, exit_code, time.time() - started,
                     active_control.interrupt_reason,
                     transport_text="".join(raw),
+                    token_usage=outcome.get("token_usage"),
+                )
+                result.token_usage_partial = bool(
+                    outcome.get(
+                        "token_usage_partial",
+                        outcome.get("token_usage") is None,
+                    )
                 )
             else:
                 detail = outcome.get("error") or diagnostics[-500:]
+                usage = normalize_token_usage(outcome.get("token_usage"))
+
+                def with_usage(error):
+                    error.token_usage = usage
+                    error.token_usage_partial = bool(
+                        outcome.get("token_usage_partial", usage is None)
+                    )
+                    error.session_token_usage = normalize_token_usage(
+                        outcome.get("session_token_usage")
+                    )
+                    error.duration_s = time.time() - started
+                    if family == "codex":
+                        error.token_usage_is_delta = True
+                    return error
+
                 if stalled["stalled"] and not text.strip():
-                    raise WorkerStalled("family %s stalled" % family)
+                    raise with_usage(
+                        WorkerStalled("family %s stalled" % family)
+                    )
                 if not outcome.get("complete"):
-                    raise RunnerError(
+                    raise with_usage(RunnerError(
                         "family %s live transport ended before a result: %s"
                         % (family, detail or "no provider result")
-                    )
-                if exit_code and not text.strip():
-                    raise RunnerError(
-                        "family %s failed with no output: %s"
-                        % (family, detail or "provider turn failed")
-                    )
+                    ))
+                if exit_code:
+                    raise with_usage(ProviderResponseError(
+                        "family %s reported a provider failure: %s"
+                        % (family, detail or "provider turn failed"),
+                        raw_texts=["".join(raw) or text],
+                        token_usage=usage,
+                    ))
                 result = RunnerResult(
                     text, exit_code, time.time() - started,
                     transport_text="".join(raw),
+                    token_usage=outcome.get("token_usage"),
+                )
+                result.token_usage_partial = bool(
+                    outcome.get(
+                        "token_usage_partial",
+                        outcome.get("token_usage") is None,
+                    )
+                )
+            if family == "codex":
+                result.token_usage_is_delta = True
+                result.session_token_usage = normalize_token_usage(
+                    outcome.get("session_token_usage")
                 )
             result.prompt_path = prompt_path
             result.session_ref = None
@@ -1413,6 +1715,11 @@ class SubprocessRunner(object):
             return result
         except BaseException as exc:
             cleanup()
+            if proc is not None and getattr(exc, "duration_s", None) is None:
+                try:
+                    exc.duration_s = max(0.0, time.time() - started)
+                except (AttributeError, TypeError):
+                    pass
             if family in ("codex", "claude") \
                     and isinstance(exc, RunnerError):
                 transport = "".join(raw)
@@ -1571,6 +1878,11 @@ class SubprocessRunner(object):
         completed_final_messages = []
         completed_unphased_messages = []
         completed_commentary_messages = []
+        token_usage = None
+        snapshot_token_usage = None
+        raw_response_seen = False
+        raw_response_missing_usage = False
+        session_token_usage = None
         stop_deadline = None
         while True:
             if active_control.interrupted:
@@ -1610,6 +1922,34 @@ class SubprocessRunner(object):
                     else:
                         completed_unphased_messages.append(text)
                 continue
+            if event.get("method") == "thread/tokenUsage/updated":
+                params = event.get("params") or {}
+                if params.get("threadId") == thread_id:
+                    provider_usage = params.get("tokenUsage") or {}
+                    session_token_usage = normalize_token_usage(
+                        provider_usage.get("total"), "codex"
+                    )
+                if params.get("threadId") == thread_id \
+                        and params.get("turnId") == turn_id:
+                    snapshot_token_usage = normalize_token_usage(
+                        provider_usage.get("last"), "codex"
+                    )
+                continue
+            if event.get("method") == "rawResponse/completed":
+                params = event.get("params") or {}
+                if params.get("threadId") == thread_id \
+                        and params.get("turnId") == turn_id:
+                    raw_response_seen = True
+                    response_usage = normalize_token_usage(
+                        params.get("usage"), "codex"
+                    )
+                    if response_usage is None:
+                        raw_response_missing_usage = True
+                    else:
+                        token_usage = add_token_usage(
+                            token_usage, response_usage
+                        )
+                continue
             if event.get("method") == "turn/completed":
                 params = event.get("params") or {}
                 candidate = params.get("turn") or {}
@@ -1642,12 +1982,20 @@ class SubprocessRunner(object):
             or completed_unphased_messages or fallback_unphased
             or completed_commentary_messages or fallback_commentary
         )
+        if not raw_response_seen:
+            token_usage = snapshot_token_usage
         return {
             "text": texts[-1] if texts else "",
             "session_ref": thread_id,
             "complete": completed is not None,
             "ok": turn.get("status") == "completed",
             "error": turn.get("error"),
+            "token_usage": token_usage,
+            "token_usage_partial": (
+                raw_response_missing_usage
+                if raw_response_seen else token_usage is None
+            ),
+            "session_token_usage": session_token_usage,
         }
 
     @staticmethod
@@ -1701,6 +2049,9 @@ class SubprocessRunner(object):
                     "complete": True,
                     "ok": not bool(event.get("is_error")),
                     "error": event.get("subtype"),
+                    "token_usage": normalize_token_usage(
+                        event.get("usage"), "claude"
+                    ),
                 }
         return {
             "text": "",
@@ -1708,6 +2059,7 @@ class SubprocessRunner(object):
             "complete": False,
             "ok": False,
             "error": None,
+            "token_usage": None,
         }
 
     def _call_template(
@@ -1732,6 +2084,7 @@ class SubprocessRunner(object):
         worker_quiescent = True
         failure = None
         watchdog = None
+        duration = None
         # OWNED here, before any thread starts, so an interrupt that lands
         # after the watchdog thread starts can still stop it (the finally sets
         # wd_done) — the thread is never left armed with unreachable handles.
@@ -1924,6 +2277,11 @@ class SubprocessRunner(object):
                         text = file_text
                 except OSError:
                     pass
+            provider_text, token_usage = _provider_transport_result(
+                family, stdout_text
+            )
+            if output_file is None and provider_text is not None:
+                text = provider_text
             if active_control is not None and active_control.interrupted:
                 result = ControlledInterruptionResult(
                     text,
@@ -1931,7 +2289,10 @@ class SubprocessRunner(object):
                     duration,
                     active_control.interrupt_reason,
                     transport_text=stdout_text,
+                    token_usage=token_usage,
                 )
+                if family == "codex":
+                    result.session_token_usage = token_usage
                 result.prompt_path = prompt_path
                 result.steers = active_control.steers
                 if worker_quiescent:
@@ -1977,7 +2338,10 @@ class SubprocessRunner(object):
                 proc.returncode,
                 duration,
                 transport_text=stdout_text,
+                token_usage=token_usage,
             )
+            if family == "codex":
+                result.session_token_usage = token_usage
             result.prompt_path = prompt_path
             if active_control is not None:
                 result.steers = active_control.steers
@@ -1990,6 +2354,14 @@ class SubprocessRunner(object):
             return result
         except BaseException as exc:
             failure = exc
+            if proc is not None and getattr(exc, "duration_s", None) is None:
+                try:
+                    exc.duration_s = (
+                        duration if duration is not None
+                        else max(0.0, time.time() - started)
+                    )
+                except (AttributeError, TypeError):
+                    pass
             raise
         finally:
             if active_control is not None:
@@ -2389,12 +2761,37 @@ def call_worker(runner, family, prompt, kind, workspace,
             if isinstance(second, str) and second:
                 raw_texts.append(second)
         exc.raw_texts = raw_texts
+        first_usage = normalize_token_usage(result.token_usage)
+        repair_usage = normalize_token_usage(
+            getattr(exc, "token_usage", None)
+        )
+        exc.token_usage = add_token_usage(first_usage, repair_usage)
+        first_duration = getattr(result, "duration_s", None)
+        repair_duration = getattr(exc, "duration_s", None)
+        if isinstance(first_duration, (int, float)) \
+                and not isinstance(first_duration, bool):
+            exc.duration_s = first_duration + (
+                repair_duration
+                if isinstance(repair_duration, (int, float))
+                and not isinstance(repair_duration, bool)
+                else 0
+            )
+        exc.token_usage_partial = bool(
+            getattr(exc, "token_usage_partial", False)
+            or first_usage is None
+            or repair_usage is None
+        )
         raise
     if isinstance(result2, ControlledInterruptionResult):
         result2.repair = {
             "error": first_error,
             "raw_text": diagnostic_text(result),
             "duration_s": result.duration_s,
+            "token_usage": result.token_usage,
+            "token_usage_partial": bool(
+                getattr(result, "token_usage_partial", False)
+                or result.token_usage is None
+            ),
         }
         return None, result2
     try:
@@ -2409,14 +2806,25 @@ def call_worker(runner, family, prompt, kind, workspace,
             "error": first_error,
             "raw_text": diagnostic_text(result),
             "duration_s": result.duration_s,
+            "token_usage": result.token_usage,
+            "token_usage_partial": bool(
+                getattr(result, "token_usage_partial", False)
+                or result.token_usage is None
+            ),
         }
         return validated, result2
     except (ValueError, contracts.ContractError) as exc:
+        token_usage = add_token_usage(result.token_usage, result2.token_usage)
         raise WorkerProtocolError(
             "family %s produced contract-violating output twice for kind %s: "
             "first error: %s; second error: %s"
             % (family, kind, first_error, exc),
             raw_texts=[diagnostic_text(result), diagnostic_text(result2)],
+            duration_s=result.duration_s + result2.duration_s,
+            token_usage=token_usage,
+            token_usage_partial=(
+                result.token_usage is None or result2.token_usage is None
+            ),
         )
 
 

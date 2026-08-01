@@ -65,6 +65,36 @@ _TRANSCRIPT_LOCKS_GUARD = threading.Lock()
 ACTIVITY_SCHEMA_VERSION = 1
 ACTIVITY_STATUSES = ("completed", "failed")
 ACTIVITY_FAILURE_TYPES = ("protocol", "execution")
+
+
+def _token_usage(value, ctx="token_usage"):
+    if value is None:
+        return None
+    _exact_keys(
+        value,
+        (
+            "input_tokens", "cached_input_tokens", "output_tokens",
+            "reasoning_output_tokens", "total_tokens",
+        ),
+        (),
+        ctx,
+    )
+    checked = {}
+    for field, count in value.items():
+        if type(count) is not int or count < 0:
+            raise ContractError(
+                "%s.%s must be a non-negative integer" % (ctx, field)
+            )
+        checked[field] = count
+    if checked["cached_input_tokens"] > checked["input_tokens"]:
+        raise ContractError("%s.cached_input_tokens exceeds input" % ctx)
+    if checked["reasoning_output_tokens"] > checked["output_tokens"]:
+        raise ContractError("%s.reasoning_output_tokens exceeds output" % ctx)
+    if checked["total_tokens"] != (
+        checked["input_tokens"] + checked["output_tokens"]
+    ):
+        raise ContractError("%s.total_tokens is inconsistent" % ctx)
+    return checked
 RECOVERABLE_FAILURE_TYPES = errclass.AUTO_RESUMABLE
 
 
@@ -865,7 +895,7 @@ def validate_activity_event(event):
             "effort",
             "status",
         ),
-        ("failure_type", "error", "raw_ref", "prompt_ref"),
+        ("failure_type", "error", "raw_ref", "prompt_ref", "token_usage"),
         "activity_event",
     )
     checked = {
@@ -960,6 +990,11 @@ def validate_activity_event(event):
         value = event.get(field)
         if value is not None:
             checked[field] = _text(value, "activity_event.%s" % field)
+    token_usage = _token_usage(
+        event.get("token_usage"), "activity_event.token_usage"
+    )
+    if token_usage is not None:
+        checked["token_usage"] = token_usage
     return checked
 
 

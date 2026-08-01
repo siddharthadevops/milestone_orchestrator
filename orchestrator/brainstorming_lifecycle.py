@@ -1145,6 +1145,17 @@ def _activity_projection(store, record, state):
             if activity is None
             else sum(event["duration_s"] for event in events)
         ),
+        "work_token_usage": runners.add_token_usage(
+            *(event.get("token_usage") for event in events)
+        ),
+        "work_token_usage_partial": any(
+            event.get("token_usage_partial", False)
+            or (
+                event.get("duration_s", 0) > 0
+                and event.get("token_usage") is None
+            )
+            for event in events
+        ),
         "in_flight": in_flight,
         "retry": retry,
         "external_intervention": external,
@@ -1540,6 +1551,8 @@ def _list_projection(store, record):
         "rounds_used": None,
         "max_rounds": None,
         "work_duration_s": None,
+        "work_token_usage": None,
+        "work_token_usage_partial": False,
         "last_action_epoch": _iso_epoch(record["created_at"]),
         "in_flight": None,
         "retry": None,
@@ -1565,6 +1578,10 @@ def _list_projection(store, record):
         )
         activity = _activity_projection(store, record, state)
         row["work_duration_s"] = activity["work_duration_s"]
+        row["work_token_usage"] = activity["work_token_usage"]
+        row["work_token_usage_partial"] = activity[
+            "work_token_usage_partial"
+        ]
         row["in_flight"] = activity["in_flight"]
         row["retry"] = activity["retry"]
         row["external_intervention"] = activity["external_intervention"]
@@ -1770,6 +1787,10 @@ def view_session(home, session_id, authorize, preview_limit):
             "final_agreement": final_agreement,
             "activity": activity["activity"],
             "work_duration_s": activity["work_duration_s"],
+            "work_token_usage": activity["work_token_usage"],
+            "work_token_usage_partial": activity[
+                "work_token_usage_partial"
+            ],
             "in_flight": activity["in_flight"],
             "retry": activity["retry"],
             "external_intervention": activity["external_intervention"],
@@ -2017,6 +2038,11 @@ def _record_classifier_activity(store, session_id, call):
     prompt_path = call.get("prompt_path")
     if isinstance(prompt_path, str) and prompt_path:
         event["prompt_ref"] = os.path.basename(prompt_path)
+    token_usage = runners.normalize_token_usage(call.get("token_usage"))
+    if token_usage is not None:
+        event["token_usage"] = token_usage
+    if call.get("token_usage_partial", False):
+        event["token_usage_partial"] = True
     if call["status"] == "failed":
         event["failure_type"] = call.get("failure_type") or "execution"
         event["error"] = str(
@@ -2058,6 +2084,8 @@ def _participant_execution(store, record, participant_process_factory):
     snapshot = store.read(record["id"])
     if snapshot is None:
         raise brainstorming.SessionNotFound(record["id"])
+    activity = store.read_activity(session_id)
+    activity_events = (activity or {}).get("events") or []
     bindings = {}
     for participant in snapshot.state["run_config"]["participants"]:
         binding_ref = (
@@ -2073,6 +2101,28 @@ def _participant_execution(store, record, participant_process_factory):
             seat = runtime.get("model_defaults", {}).get(family) or {}
         else:
             family = seat["model_family"]
+        participant_session = snapshot.state.get(
+            "participant_sessions", {}
+        ).get(participant["id"])
+        prior_calls = [
+            event for event in activity_events
+            if event.get("participant_id") == participant["id"]
+        ]
+        if (
+            family == "codex"
+            and participant_session is not None
+            and prior_calls
+            and all(event.get("token_usage") is not None
+                    for event in prior_calls)
+        ):
+            provider.seed_codex_session_usage(
+                brainstorming.provider_session_ref(
+                    binding_ref, participant_session
+                ),
+                runners.add_token_usage(
+                    *(event["token_usage"] for event in prior_calls)
+                ),
+            )
         bindings[binding_ref] = (
             execution.RunnerParticipantExecutor(
                 family,
