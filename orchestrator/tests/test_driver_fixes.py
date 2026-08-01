@@ -271,6 +271,9 @@ class TestTypedInfraFailures(DriverTestCase):
             state = st.load(path)
             self.assertEqual(state["failure"]["type"], "quota")
             self.assertIsNotNone(state["failure"]["resume_at"])
+            self.assertFalse(os.path.exists(os.path.join(
+                ws, ".orchestrator", "current.json"
+            )))
 
     def test_login_failure_typed_without_resume(self):
         with tempfile.TemporaryDirectory(prefix="orch-fix-") as ws:
@@ -312,6 +315,18 @@ class TestTypedInfraFailures(DriverTestCase):
                 then=[{"error_type": "busy", "resume_at": None,
                        "evidence": "transient"}],
             )
+            observed_marker = {}
+            original_call = runner.call
+
+            def observe_classifier(family, prompt, workspace, **kwargs):
+                if family == "claude":
+                    with open(os.path.join(
+                        ws, ".orchestrator", "current.json"
+                    ), encoding="utf-8") as handle:
+                        observed_marker.update(json.load(handle))
+                return original_call(family, prompt, workspace, **kwargs)
+
+            runner.call = observe_classifier
             driver = drv.Driver(path, runner=runner)
             driver.step()
             state = st.load(path)
@@ -321,6 +336,11 @@ class TestTypedInfraFailures(DriverTestCase):
             self.assertEqual(
                 classify_calls, [("claude", "claude-fable-5", "high")]
             )
+            self.assertEqual(observed_marker["kind"], "error_classifier")
+            self.assertEqual(observed_marker["family"], "claude")
+            self.assertFalse(os.path.exists(os.path.join(
+                ws, ".orchestrator", "current.json"
+            )))
 
     def test_classifier_call_usage_is_owned_by_the_milestone(self):
         with tempfile.TemporaryDirectory(prefix="orch-fix-") as ws:
@@ -352,6 +372,40 @@ class TestTypedInfraFailures(DriverTestCase):
             self.assertEqual(len(events), 1)
             self.assertEqual(events[0]["token_usage"], usage)
             self.assertEqual(summary["work_token_usage"], usage)
+
+    def test_interrupted_classifier_is_recovered_as_unknown_usage(self):
+        with tempfile.TemporaryDirectory(prefix="orch-fix-") as ws:
+            path = init_state(
+                ws, make_config(
+                    infra_retry_backoff_s=[], error_classifier=True
+                )
+            )
+            runner = _FailingRunner([
+                runners.RunnerError("a novel provider failure"),
+                KeyboardInterrupt(),
+            ])
+            driver = drv.Driver(path, runner=runner)
+            with self.assertRaises(KeyboardInterrupt):
+                driver.step()
+
+            marker_path = os.path.join(
+                ws, ".orchestrator", "current.json"
+            )
+            with open(marker_path, encoding="utf-8") as handle:
+                marker = json.load(handle)
+            self.assertEqual(marker["kind"], "error_classifier")
+
+            drv.Driver(path, runner=_FailingRunner([]))
+            state = st.load(path)
+            interrupted = [
+                event for event in state["events"]
+                if event["type"] == "worker_interrupted"
+            ]
+            self.assertEqual(len(interrupted), 1)
+            self.assertEqual(interrupted[0]["kind"], "error_classifier")
+            self.assertIsNone(interrupted[0]["token_usage"])
+            self.assertTrue(interrupted[0]["token_usage_partial"])
+            self.assertTrue(st.summary(state)["work_token_usage_partial"])
 
     def test_classifier_io_is_persisted_and_evidence_recorded(self):
         # An LLM-classified failure must leave an auditable trail: the

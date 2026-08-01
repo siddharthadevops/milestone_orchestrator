@@ -433,6 +433,8 @@ class BrainstormingVisualizationTest(unittest.TestCase):
             "tokenUsageHtml(item.token_usage, item.token_usage_partial)",
             html,
         )
+        self.assertIn('partial ? "tokens unknown" : ""', html)
+        self.assertIn("(tokens || tokenPartial)", html)
 
     def test_milestone_panel_routes_and_state_remain_unchanged(self):
         status, panel_before = self.api._request("GET", "/")

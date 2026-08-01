@@ -1996,6 +1996,7 @@ class Driver(object):
                         wait_s=retries[attempt],
                     )
                     self._save()
+                    self._clear_busy()
                     time.sleep(retries[attempt])
                     attempt += 1
                     continue
@@ -2025,6 +2026,7 @@ class Driver(object):
                     evidence=evidence,
                 )
                 self._save()
+                self._clear_busy()
                 raise StopStep(str(exc))
             break
         self._clear_busy()
@@ -2103,7 +2105,21 @@ class Driver(object):
             classifier_model=cls_model,
             classifier_effort=cls_effort,
             on_llm_call=self._classify_call_recorder(raw_name),
+            on_llm_start=self._classify_call_starter(raw_name),
         )
+
+    def _classify_call_starter(self, raw_name):
+        """Mark the optional classifier only when its LLM call starts."""
+        def _start(call):
+            self._mark_busy(
+                raw_name or "error-classifier",
+                "error_classifier",
+                call.get("family"),
+                model=call.get("model"),
+                effort=call.get("effort"),
+            )
+
+        return _start
 
     def _classify_call_recorder(self, raw_name):
         """Own the cost of the optional opposite-family classifier call."""

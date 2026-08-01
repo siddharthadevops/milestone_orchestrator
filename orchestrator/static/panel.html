@@ -1541,9 +1541,7 @@ async function showSessionActivity(activityId) {
     `round ${item.round || "?"}`,
     item.stage,
     item.duration_s != null ? fmtDHMS(item.duration_s) : "",
-    item.token_usage
-      ? fmtTokenUsage(item.token_usage, item.token_usage_partial)
-      : "",
+    fmtTokenUsage(item.token_usage, item.token_usage_partial),
     item.at ? item.at.slice(0, 16).replace("T", " ") : "",
   ].filter(Boolean).join(" · ");
   let body = `<div class="story-meta">${esc(meta)}</div>` +
@@ -1924,11 +1922,15 @@ function fmtTokenCount(value) {
   return String(Math.round(count));
 }
 function fmtTokenUsage(usage, partial = false) {
-  if (!usage || usage.total_tokens == null) return "";
+  if (!usage || usage.total_tokens == null)
+    return partial ? "tokens unknown" : "";
   return `${fmtTokenCount(usage.total_tokens)}${partial ? "+" : ""} tokens`;
 }
 function tokenUsageHtml(usage, partial = false) {
-  if (!usage || usage.total_tokens == null) return "";
+  if (!usage || usage.total_tokens == null)
+    return partial
+      ? `<div class="story-note"><b>tokens unknown</b></div>`
+      : "";
   const parts = [
     `input ${fmtTokenCount(usage.input_tokens)}`,
     `output ${fmtTokenCount(usage.output_tokens)}`,
@@ -2813,7 +2815,8 @@ async function refreshDetail() {
         `<div class="pipe-cat ${esc(cls)}"><span>${esc(label)}${title}</span>` +
         (stat ? `<span class="st ${esc(stat)}">${esc(stat)}${
           duration != null ? ` · ${fmtDHMS(duration)}` : ""}${
-          tokens ? ` · ${esc(fmtTokenUsage(tokens, tokenPartial))}` : ""}</span>` : "") +
+          (tokens || tokenPartial)
+            ? ` · ${esc(fmtTokenUsage(tokens, tokenPartial))}` : ""}</span>` : "") +
         `</div>`;
       lastWebBase = d.commit_web_base;
       // Opens the LOCAL commit viewer (git show in the workspace): unlike
@@ -2978,8 +2981,10 @@ async function showStory(item) {
   if (d.model) meta.push(d.model + (d.effort ? "/" + d.effort : ""));
   else if (d.effort) meta.push(d.effort);
   if (d.duration_s != null) meta.push(fmtDHMS(d.duration_s));
-  if (d.token_usage)
-    meta.push(fmtTokenUsage(d.token_usage, d.token_usage_partial));
+  const tokenLabel = fmtTokenUsage(
+    d.token_usage, d.token_usage_partial
+  );
+  if (tokenLabel) meta.push(tokenLabel);
   if (d.at) meta.push(d.at.slice(0, 16).replace("T", " "));
   if (d.raw_path) meta.push(d.raw_path);
   let title = "";
@@ -3045,7 +3050,7 @@ async function showStory(item) {
       if (!h) { body += `<h3>${esc(fam)}: (missing)</h3>`; continue; }
       const res = h.result || {};
       const fs = res.findings || [];
-      body += `<h3 style="margin-top:10px">Historical ${esc(fam)} seal review${h.duration_s != null ? " · " + fmtDHMS(h.duration_s) : ""}${h.token_usage ? " · " + esc(fmtTokenUsage(h.token_usage)) : ""}${h.workspace_modified ? " · MODIFIED WORKSPACE" : ""}</h3>`;
+      body += `<h3 style="margin-top:10px">Historical ${esc(fam)} seal review${h.duration_s != null ? " · " + fmtDHMS(h.duration_s) : ""}${h.token_usage || h.token_usage_partial ? " · " + esc(fmtTokenUsage(h.token_usage, h.token_usage_partial)) : ""}${h.workspace_modified ? " · MODIFIED WORKSPACE" : ""}</h3>`;
       body += fs.length ? fs.map(findingRow).join("")
         : `<div class="story-finding">clean — no findings</div>`;
       if (res.notes) body += `<div class="story-note">${esc(res.notes)}</div>`;
