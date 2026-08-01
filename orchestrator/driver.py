@@ -1867,7 +1867,23 @@ class Driver(object):
                 # the environment, e.g. a missing reuse-source directory —
                 # never the worker): a recorded run failure the operator
                 # repairs and resumes; no repair retry is burned.
-                self._clear_busy()
+                st.append_event(
+                    self.state,
+                    "worker_unaccepted",
+                    unit=self._worker_event_unit(),
+                    label=raw_name,
+                    kind=kind,
+                    family=family,
+                    reason="project standing-law fault",
+                    duration_s=getattr(exc, "duration_s", None),
+                    token_usage=copy.deepcopy(
+                        getattr(exc, "token_usage", None)
+                    ),
+                    token_usage_partial=bool(
+                        getattr(exc, "token_usage_partial", False)
+                        or getattr(exc, "token_usage", None) is None
+                    ),
+                )
                 st.fail_run(
                     self.state,
                     "%s call: project standing-law fault (never the "
@@ -1875,6 +1891,7 @@ class Driver(object):
                     unit=st.current_unit(self.state),
                 )
                 self._save()
+                self._clear_busy()
                 raise StopStep(str(exc))
             except (runners.RunnerError, runners.WorkerProtocolError) as exc:
                 self._clear_busy()

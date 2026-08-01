@@ -257,6 +257,26 @@ class BrainstormingVisualizationTest(unittest.TestCase):
         self.assertEqual(view["in_flight"]["action_id"], "active-turn")
         self.assertEqual(view["in_flight"]["participant_id"], "lead")
         self.assertEqual(view["in_flight"]["started_at"], started_at)
+        self.assertFalse(view["work_token_usage_partial"])
+
+    def test_stopped_unfinished_call_marks_token_total_partial(self):
+        session_id, store = self._create("stopped-call.md")
+        store._store.put(bs._turn_attempt_key(session_id), {
+            "token": "orphaned-turn",
+            "participant_id": "lead",
+            "completed_turn_count": 0,
+            "target_revision": None,
+            "quiescent": False,
+            "started_at": time.time() - 5,
+            "provider_attempt": 1,
+        })
+
+        view = self._view(session_id)
+
+        self.assertIsNone(view["in_flight"])
+        self.assertIsNone(view["work_token_usage"])
+        self.assertTrue(view["work_token_usage_partial"])
+
     def test_view_projection_is_authorized_exact_and_revision_coherent(self):
         project = self.api._ready_project(users=[access.USER_EMAILS[0]])
         self.api._target("authorized-view.md")

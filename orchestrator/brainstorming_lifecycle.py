@@ -1079,9 +1079,25 @@ def _activity_projection(store, record, state):
         if attempt is None
         else copy.deepcopy(attempt.get("operational_retry"))
     )
+    process_alive = _process_alive(record)
+    orphaned_call = bool(
+        not process_alive
+        and (
+            (
+                attempt is not None
+                and not attempt["quiescent"]
+                and retry is None
+            )
+            or (
+                intervention is not None
+                and intervention["provider_attempt"] > 0
+                and not intervention["provider_quiescent"]
+            )
+        )
+    )
     in_flight = None
     if (
-        _process_alive(record)
+        process_alive
         and attempt is not None
         and not attempt["quiescent"]
         and not attempt_call_recorded
@@ -1148,7 +1164,7 @@ def _activity_projection(store, record, state):
         "work_token_usage": runners.add_token_usage(
             *(event.get("token_usage") for event in events)
         ),
-        "work_token_usage_partial": any(
+        "work_token_usage_partial": orphaned_call or any(
             event.get("token_usage_partial", False)
             or (
                 event.get("duration_s", 0) > 0

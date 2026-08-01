@@ -2606,6 +2606,23 @@ def _note_recovery(result, closers):
     }
 
 
+def _attach_call_accounting(exc, *results):
+    """Keep completed provider cost on a post-call validation failure."""
+    usages = [getattr(result, "token_usage", None) for result in results]
+    durations = [
+        result.duration_s for result in results
+        if isinstance(getattr(result, "duration_s", None), (int, float))
+        and not isinstance(result.duration_s, bool)
+    ]
+    exc.token_usage = add_token_usage(*usages)
+    exc.token_usage_partial = any(
+        getattr(result, "token_usage_partial", False) or usage is None
+        for result, usage in zip(results, usages)
+    )
+    if durations:
+        exc.duration_s = sum(durations)
+
+
 def call_worker(runner, family, prompt, kind, workspace,
                 model=None, effort=None, extensions=None, roots=None,
                 validate_opts=None, start_session=False, session_ref=None,
@@ -2736,6 +2753,10 @@ def call_worker(runner, family, prompt, kind, workspace,
         return validated, result
     except (ValueError, contracts.ContractError) as exc:
         first_error = str(exc)
+    except BaseException as exc:
+        if extensions and isinstance(exc, verifiers.VerifierError):
+            _attach_call_accounting(exc, result)
+        raise
     repair_prompt = prompt + (REPAIR_SUFFIX % first_error)
     repair_ref = getattr(result, "session_ref", None) or session_ref
     repair_control = (
@@ -2826,6 +2847,10 @@ def call_worker(runner, family, prompt, kind, workspace,
                 result.token_usage is None or result2.token_usage is None
             ),
         )
+    except BaseException as exc:
+        if extensions and isinstance(exc, verifiers.VerifierError):
+            _attach_call_accounting(exc, result, result2)
+        raise
 
 
 # ---------------------------------------------------------------------------

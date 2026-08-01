@@ -549,6 +549,21 @@ class TestReuseAuditDriverPlanning(ReuseAuditRunTestCase):
         self.put_template(inventory=inventory)
         path = self.init_bound()
         driver = self.make_driver(path, [self.skeleton_step(audit=[])])
+        usage = {
+            "input_tokens": 20,
+            "cached_input_tokens": 5,
+            "output_tokens": 3,
+            "reasoning_output_tokens": 1,
+            "total_tokens": 23,
+        }
+        original_call = driver.runner.call
+
+        def call_with_usage(*args, **kwargs):
+            result = original_call(*args, **kwargs)
+            result.token_usage = usage
+            return result
+
+        driver.runner.call = call_with_usage
         driver.step()
         self.assertIsNotNone(driver.state["failure"])
         self.assertIn(
@@ -557,6 +572,9 @@ class TestReuseAuditDriverPlanning(ReuseAuditRunTestCase):
         self.assertIn(marker, driver.state["failure"]["reason"])
         self.assertEqual(len(driver.runner.calls), 1)
         self.assertNotIn("REPAIR", driver.runner.calls[0][2])
+        summary = st.summary(driver.state)
+        self.assertEqual(summary["work_token_usage"], usage)
+        self.assertFalse(summary["work_token_usage_partial"])
 
     def test_missing_inventory_fails_as_operational_fault(self):
         self.assert_inventory_fault(
