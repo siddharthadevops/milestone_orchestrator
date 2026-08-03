@@ -131,13 +131,13 @@ def _access_block(edit_allowed):
     # Report-only roles (reviewers and reclassifiers) get no edit
     # grant, which is the whole instruction: they return findings, not file
     # changes. The old "do not modify ANY file, anywhere — it invalidates
-    # your entire output" warning was dropped deliberately: the real guard
-    # is the orchestrator's deterministic before/after snapshot diff, which
-    # already ignores .gitignore'd build/test artifact churn — so a reviewer
-    # that ran the project's tests would read that warning literally and
-    # block itself over untracked `_build` churn the guard never counts
-    # (observed live 2026-07-20). Actual tampering with tracked files is
-    # still reverted mechanically, prompt or no prompt.
+    # your entire output" warning stays dropped: a reviewer that ran the
+    # project's tests, as these prompts invite, would read it literally and
+    # block itself over untracked build churn (observed live 2026-07-20).
+    # The report-only contract now rests on this absent edit grant and on
+    # the report envelope, which carries no dispositions or file changes;
+    # the before/after snapshot diff that used to re-verify it was removed
+    # by operator decision after 6,326 rounds without a single catch.
     lines += [
         "- Never include secrets, credentials, tokens, private keys, raw PII,",
         "  or sensitive operational data in output, edits, or consultations.",

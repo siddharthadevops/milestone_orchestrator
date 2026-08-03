@@ -112,52 +112,6 @@ def make_user_repo(ws):
 
 
 # ---------------------------------------------------------------------------
-# (1) P1: git-disabled tamper handling must not touch the workspace
-
-
-class TestGitDisabledTamperRecovery(DriverTestCase):
-    def test_review_round_tamper_fails_run_and_preserves_workspace(self):
-        with tempfile.TemporaryDirectory(prefix="orch-adv-") as ws:
-            ws = os.path.realpath(ws)
-            make_user_repo(ws)
-            path = init_state(ws, make_config(git={"enabled": False}))
-            driver = drv.Driver(path, runner=runners.MockRunner([
-                draft_step(),
-                step("review_round", report("review_round"),
-                     side_effect=write_file("tampered.txt", "oops")),
-            ]))
-            driver.step()  # draft
-            driver.step()  # full suite deferred to its scheduled checkpoint
-            driver.step()  # tampering review round
-            self.assert_failed(
-                path, driver,
-                ["review round reviewer (codex) tampered",
-                 "git is disabled",
-                 "cannot be mechanically restored"],
-                unit_key="skeleton",
-            )
-            # NOTHING was reset or cleaned: the never-committed draft, the
-            # tamper evidence, and the user's own uncommitted edit are all
-            # still on disk.
-            with open(os.path.join(ws, "docs", "skeleton.md")) as fh:
-                self.assertIn("# Skeleton", fh.read())
-            self.assertTrue(os.path.exists(os.path.join(ws, "tampered.txt")))
-            with open(os.path.join(ws, "user_file.txt")) as fh:
-                self.assertIn("UNCOMMITTED user edit", fh.read())
-            # No invalidated round was minted from the discarded output.
-            state = st.load(path)
-            self.assertEqual(state["units"][0]["rounds"], [])
-            unaccepted = [
-                event
-                for event in state["events"]
-                if event["type"] == "worker_unaccepted"
-            ]
-            self.assertEqual(len(unaccepted), 1)
-            self.assertEqual(unaccepted[0]["kind"], "review_round")
-            self.assertTrue(unaccepted[0]["token_usage_partial"])
-            self.assertTrue(st.summary(state)["work_token_usage_partial"])
-
-# ---------------------------------------------------------------------------
 # (2) P2: a contested finding is never killable by pointer
 
 

@@ -5965,56 +5965,20 @@ class Driver(object):
     def _report_call(self, unit, family, prompt, kind, raw_name,
                      extensions=None, roots=None, validate_opts=None,
                      model=None, effort=None):
-        """Run a report-only call with mechanical no-edit enforcement.
+        """Run a report-only call.
 
-        Returns (output, result, raw_path, changed): when the reviewer
-        modified the workspace, changed is the non-empty list of paths
-        that differ and the output must be discarded by the caller."""
-        before = self._snapshot()
+        Report-only remains the CONTRACT — reviewers are told not to edit,
+        and their envelopes carry no dispositions or file changes — but it
+        is no longer re-verified by snapshotting the workspace around the
+        call. Operator decision, on the evidence: across 6,326 recorded
+        report-only rounds the check never once caught a reviewer editing
+        code, while its false positives (artifact churn a reviewer's own
+        build or test run wrote) repeatedly discarded good reviews."""
         output, result, raw_path = self._call(
             family, prompt, kind, raw_name, model=model, effort=effort,
             extensions=extensions, roots=roots, validate_opts=validate_opts,
         )
-        changed = self._snapshot_diff(before, self._snapshot())
-        return output, result, raw_path, changed
-
-    def _restore_or_fail(self, unit, why, unaccepted_call=None):
-        def record_unaccepted():
-            if unaccepted_call is None:
-                return
-            kind, family, result = unaccepted_call
-            self._record_worker_unaccepted(
-                unit, kind, family, result, why
-            )
-
-        if not gitops.enabled(self.config):
-            # With git disabled there was never a wip commit: HEAD — if the
-            # workspace even is a repository, e.g. a user's own project —
-            # predates everything this run produced, so reset/clean would
-            # destroy the un-committed draft, every prior fix, and the
-            # user's own uncommitted work, then keep judging the gutted
-            # tree. Restoration is impossible; stop with the facts.
-            record_unaccepted()
-            st.fail_run(
-                self.state,
-                "%s, and git is disabled for this run so the workspace "
-                "cannot be mechanically restored; operator inspection "
-                "required" % why,
-                unit=unit,
-            )
-            self._save()
-            raise StopStep(why)
-        try:
-            gitops.restore_clean(self.workspace)
-        except gitops.GitError as exc:
-            record_unaccepted()
-            st.fail_run(
-                self.state,
-                "%s and the workspace could not be restored: %s" % (why, exc),
-                unit=unit,
-            )
-            self._save()
-            raise StopStep(str(exc))
+        return output, result, raw_path
 
     def _do_fix(self):
         unit = st.current_unit(self.state)
@@ -6885,7 +6849,7 @@ class Driver(object):
         n_delta = 1 + len(
             [r for r in unit["rounds"] if r["kind"] == contracts.KIND_DELTA_REVIEW]
         )
-        output, result, raw_path, changed = self._report_call(
+        output, result, raw_path = self._report_call(
             unit,
             family,
             prompt,
@@ -6908,23 +6872,6 @@ class Driver(object):
             model=delta_model,
             effort=delta_effort,
         )
-        if changed:
-            # The pending fix delta and the tampering are now entangled;
-            # restoring would destroy the fixer's work. Stop with the facts.
-            self._record_worker_unaccepted(
-                unit, contracts.KIND_DELTA_REVIEW, family, result,
-                "delta reviewer modified the workspace",
-            )
-            st.fail_run(
-                self.state,
-                "delta reviewer (%s) modified the workspace (%s) during a "
-                "report-only call; its edits are entangled with the pending "
-                "fix delta — operator inspection required"
-                % (family, runners.format_changes(changed)),
-                unit=unit,
-            )
-            self._save()
-            raise StopStep("delta reviewer tampered")
         if rethink_handoff is not None:
             self._consume_brainstorming_review_handoff(
                 unit, contracts.KIND_DELTA_REVIEW
@@ -7356,10 +7303,8 @@ class Driver(object):
         `items` is a list of (finding, raising_family). Returns
         (debt_entries, retained_items). A refused/failed rating retains only
         that finding for the fixer; one serious finding can never drag other,
-        independently deferred findings into the fix queue. A tampering
-        reclassifier voids every rating and retains the whole input.
+        independently deferred findings into the fix queue.
         """
-        before = self._snapshot()
         debt = []
         retained = []
         levels = contracts.DRIFT_RISK_LEVELS
@@ -7553,19 +7498,6 @@ class Driver(object):
                     retained.append((finding, raising_family))
         finally:
             pass
-        if self._snapshot_diff(before, self._snapshot()):
-            # A reclassifier edited the workspace: void any deferral (the
-            # reclassify_recorded events above no longer stand) and restore.
-            st.append_event(
-                self.state, "reclassify_voided", unit=st.unit_key(unit),
-                reason="reclassifier modified the workspace; deferral voided",
-            )
-            self._restore_or_fail(
-                unit,
-                "reclassifier modified the workspace",
-                unaccepted_call=parent_call,
-            )
-            return [], list(items)
         return debt, retained
 
     def _do_review_round(self):
@@ -7667,7 +7599,7 @@ class Driver(object):
                 if r["kind"] == contracts.KIND_REVIEW_ROUND
             ]
         )
-        output, result, raw_path, changed = self._report_call(
+        output, result, raw_path = self._report_call(
             unit,
             family,
             prompt,
@@ -7679,42 +7611,6 @@ class Driver(object):
             model=review_model,
             effort=review_effort,
         )
-        if changed:
-            # Rounds run on a clean worktree (everything is amended), so a
-            # tampering reviewer is fully revertible: restore, discard the
-            # output, record the incident as an invalidated round (it
-            # counts toward the family's cap), retry next step.
-            self._restore_or_fail(
-                unit,
-                "review round reviewer (%s) tampered" % family,
-                unaccepted_call=(
-                    contracts.KIND_REVIEW_ROUND, family, result
-                ),
-            )
-            st.record_round(
-                self.state,
-                unit,
-                family,
-                contracts.KIND_REVIEW_ROUND,
-                {"status": "ok", "kind": contracts.KIND_REVIEW_ROUND,
-                 "findings": []},
-                raw_path=raw_path,
-                duration=result.duration_s,
-                token_usage=getattr(result, "token_usage", None),
-                token_usage_partial=bool(
-                    getattr(result, "token_usage_partial", False)
-                    or getattr(result, "token_usage", None) is None
-                ),
-                meta={
-                    "invalidated": "reviewer modified the workspace "
-                    "(%s); output discarded, workspace restored"
-                    % runners.format_changes(changed),
-                    "model": review_model,
-                    "effort": review_effort,
-                    "evidence_fingerprint": evidence_fingerprint,
-                },
-            )
-            return "%s round INVALID (reviewer edited); restored and retrying" % family
         if rethink_handoff is not None:
             self._consume_brainstorming_review_handoff(
                 unit, contracts.KIND_REVIEW_ROUND

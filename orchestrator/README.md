@@ -21,7 +21,7 @@ those rules is enforced here structurally.
 | Phase gates (docs: draft -> rounds -> seal; implementation: implement -> rounds -> scheduled verify when due -> seal) | `state.transition_unit()` raises `IllegalTransition` |
 | Family order; changed candidate bytes restart review at the first family | review-cycle freshness is reset whenever an accepted fix changes the candidate |
 | Seal is a deterministic result, not another review | every family must be clean or debt-clean on the same current bytes; scheduled verification must also pass when due |
-| Whoever detects never fixes: ALL reviews are report-only | `contracts.REPORT_KINDS` forbid dispositions and file changes; workspace snapshots detect tampering; tampered reviews are discarded and the worktree restored to HEAD |
+| Whoever detects never fixes: ALL reviews are report-only | `contracts.REPORT_KINDS` forbid dispositions and file changes; the report-only contract is carried by prompt and envelope, not re-verified by snapshot (see Review/fix separation) |
 | A rejected finding requires an opposite-family consultation | `contracts.validate_fix_finding()` (P0-P3; therefore also P0/P1) |
 | Settled findings stay settled | milestone-global adjudication registry injected into every prompt; `contests` and `rejected_adjudicated` references validated against it; misreadable-target rejections carry a `prevention` edit |
 | The fixer triages exactly what was queued | `contracts.validate_fix_coverage()` (same ids, nothing invented) |
@@ -410,13 +410,16 @@ project contract extension may no longer claim it).
 ### Review/fix separation (whoever detects never fixes)
 
 Every review — codex round, claude round, and delta review — is
-REPORT-ONLY: it returns findings and edits nothing (enforced by workspace
-snapshots; a tampering reviewer's output is discarded and, because reviews
-run on a clean worktree, the workspace is mechanically restored to HEAD —
-with git disabled there is no restorable HEAD, so a tampering reviewer
-fails the run with the explanation instead of touching the worktree).
-The driver uses clean reviews to advance state; dirty reviews queue their
-findings for the FIX LOOP:
+REPORT-ONLY: it returns findings and edits nothing. That is a CONTRACT,
+carried by the prompts and by `contracts.REPORT_KINDS`, which forbid
+dispositions and file-change claims in a report envelope. It is no longer
+re-verified by snapshotting the workspace around the call. Operator
+decision on the evidence: across 6,326 recorded report-only rounds the
+check never once caught a reviewer editing code, while its false
+positives — artifact churn written by the reviewer's own build or test
+run, which the prompts explicitly invite — repeatedly discarded good
+reviews and burned worker time. The driver uses clean reviews to advance
+state; dirty reviews queue their findings for the FIX LOOP:
 
     findings -> FIXER (edit permissions: verifies each finding against the
       real code/doc; concedes-and-fixes, or dissents-and-justifies)

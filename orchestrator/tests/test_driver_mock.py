@@ -1753,10 +1753,11 @@ class TestSnapshotUniverseWiring(DriverTestCase):
     """Driver._snapshot must actually carry the git universe it computes.
 
     The pieces have their own tests in test_gitops.py, but those call
-    gitops and runners directly. This pins the wire between them: without
-    it, dropping the universe from the runners call passes every other
-    test while a vendored dependency's build churn invalidates every
-    report-only round in production.
+    gitops and runners directly. This pins the wire between them. The
+    snapshot no longer polices report-only reviewers, but it still
+    decides full-suite stability and the review-evidence fingerprints, so
+    a vendored dependency's build churn reading as a candidate change is
+    still a live defect — it restarts review cycles and re-runs suites.
     """
 
     def _vendored_workspace(self, ws):
@@ -1786,7 +1787,7 @@ class TestSnapshotUniverseWiring(DriverTestCase):
         write(os.path.join(sub, "_build", "test", "a.beam"), "artifact v1\n")
         return sub, write
 
-    def test_vendored_build_churn_does_not_read_as_tampering(self):
+    def test_vendored_build_churn_does_not_read_as_a_candidate_change(self):
         with tempfile.TemporaryDirectory(prefix="orch-universe-") as ws:
             sub, write = self._vendored_workspace(ws)
             path = init_state(ws, make_config())

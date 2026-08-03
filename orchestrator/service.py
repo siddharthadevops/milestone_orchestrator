@@ -1822,8 +1822,8 @@ def create_run(home, payload):
         state_path = driver.default_state_path(workspace)
         config = driver.load_config(None)
         # Panel runs get the FULL enforced flow: gate commits, the amend
-        # discipline, delta reviews of every fix, and revertible tamper
-        # recovery all require git (README, "Git gates and the amend
+        # discipline, delta reviews of every fix, and the sealed-artifact
+        # guard all require git (README, "Git gates and the amend
         # discipline"), so service launches enable it by default — same as
         # the demo config, and matching driver.DEFAULT_CONFIG's own note.
         # An explicit {"git": {"enabled": false}} in the advanced config
