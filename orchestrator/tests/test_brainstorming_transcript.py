@@ -548,6 +548,39 @@ class BrainstormingTranscriptTest(unittest.TestCase):
         self.assertEqual(snapshot.state["rounds_used"], 1)
         self.assertEqual(len(snapshot.state["completed_turns"]), 2)
 
+    def test_delivery_happens_once_when_the_discussion_ends(self):
+        session_id = "delivery"
+        snapshot = self._initialize(session_id, self._create(session_id))
+        snapshot = self._turn(
+            session_id, snapshot, "lead-machine", "The position."
+        )
+        request = snapshot.state["request"]
+        delivered = self.store.delivered_transcript_ref(session_id, request)
+        # Nothing is delivered while the discussion is still running, no
+        # matter how many times the session is read.
+        for _ in range(3):
+            self.store.read(session_id)
+        self.assertFalse(os.path.exists(delivered))
+
+        snapshot = self._turn(
+            session_id, snapshot, "critic-machine", "The objection."
+        )
+        terminal = self._terminal(
+            session_id, snapshot, "success", "The discussion agreed."
+        )
+        self.assertTrue(os.path.exists(delivered))
+        with open(delivered, encoding="utf-8") as handle:
+            self.assertEqual(handle.read(), self._read(terminal))
+
+        # The delivered chat is a product artifact, not a projection: once
+        # the operator removes it, reading the session must never bring it
+        # back (the panel polls every two seconds).
+        os.remove(delivered)
+        for _ in range(3):
+            self.store.read(session_id)
+        self.store.reconcile_transcript(session_id)
+        self.assertFalse(os.path.exists(delivered))
+
     def test_closure_ballots_render_every_vote_and_failed_attempt_in_order(self):
         session_id = "ballots"
         snapshot = self._create(session_id)

@@ -2955,12 +2955,6 @@ class SessionStore:
                     )
                 rendered = render_transcript(snapshot.state)
                 _atomic_replace_utf8(path, rendered)
-                if snapshot.state["status"] in TERMINAL_STATUSES:
-                    delivered = self.delivered_transcript_ref(
-                        session_id, snapshot.state["request"]
-                    )
-                    os.makedirs(os.path.dirname(delivered), exist_ok=True)
-                    _atomic_replace_utf8(delivered, rendered)
                 return snapshot
         if discarded_underfoot:
             try:
@@ -2968,6 +2962,22 @@ class SessionStore:
             except OSError:
                 pass
         return None
+
+    def _deliver_transcript(self, session_id, state):
+        """Place the final chat beside the target, once, at the end.
+
+        This is a PRODUCT artifact, so the discussion ending is what
+        delivers it. Reconciling it from the read path instead — as this
+        once did — made delivery a side effect of looking at the session:
+        the panel polls every two seconds, so an operator who deleted a
+        delivered chat watched it come straight back.
+        """
+        delivered = self.delivered_transcript_ref(
+            session_id, state["request"]
+        )
+        os.makedirs(os.path.dirname(delivered), exist_ok=True)
+        _atomic_replace_utf8(delivered, render_transcript(state))
+        return delivered
 
     def read(self, session_id):
         return self._publish_current(session_id)
@@ -4010,6 +4020,11 @@ class SessionStore:
             if latest is None:
                 raise SessionNotFound(session_id)
             raise RevisionConflict(latest)
+        if candidate["status"] in TERMINAL_STATUSES:
+            # Every terminal acceptance funnels through here, so this is
+            # the one moment the discussion ends — and the only place the
+            # product artifact is written.
+            self._deliver_transcript(session_id, candidate)
         if publish:
             return self._publish_current(session_id)
         return self._snapshot(record)
