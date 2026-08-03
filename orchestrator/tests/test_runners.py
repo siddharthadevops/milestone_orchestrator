@@ -2671,7 +2671,7 @@ class TestSnapshotWorkspace(unittest.TestCase):
 
 class TestSnapshotWithPaths(unittest.TestCase):
     """paths= restricts the tamper universe to what the repository can see
-    (gitops.snapshot_paths): ignored artifact churn is invisible, while
+    (gitops.snapshot_universe): ignored artifact churn is invisible, while
     changes/deletions of listed paths are still detected and nameable."""
 
     def setUp(self):

@@ -27,7 +27,7 @@ import tempfile
 import unittest
 from unittest import mock
 
-from orchestrator import gitops
+from orchestrator import gitops, runners
 
 
 def _write(path, content):
@@ -577,6 +577,316 @@ class CacheNoiseTests(GitopsTestCase):
         for name in runners.SNAPSHOT_EXCLUDE_DIRS - {".git", ".orchestrator"}:
             self.assertIn(name, lines)
         self.assertIn(gitops.IGNORE_LINE.rstrip("/"), lines)
+
+
+class SnapshotUniverseTests(GitopsTestCase):
+    """The tamper universe tolerates a nested repository's OWN ignored
+    artifacts while keeping every detection the raw walk had.
+
+    The rule under test: an ignored region is outside the universe, so
+    CHANGING what a repo ignores must never be free — the files deciding
+    that are hashed, wherever they live.
+    """
+
+    def _commit_all(self, repo, message):
+        self.git(repo, "add", "-A")
+        self.git(
+            repo,
+            "-c", "user.name=Snapshot Tester",
+            "-c", "user.email=snapshot@example.test",
+            "commit", "-q", "-m", message,
+        )
+
+    def _vendored(self):
+        """A committed workspace embedding a committed vendored repo whose
+        own .gitignore excludes its _build artifacts."""
+        ws = self.make_repo("ws", {"app.py": "print(1)\n"})
+        self._commit_all(ws, "baseline")
+        sub = os.path.join(ws, "vendor", "lib")
+        os.makedirs(sub)
+        self.git(sub, "init", "-q")
+        _write(os.path.join(sub, ".gitignore"), "_build/\n")
+        _write(os.path.join(sub, "src.ex"), "defmodule X do end\n")
+        self._commit_all(sub, "vendored baseline")
+        _write(os.path.join(sub, "_build", "test", "a.beam"), "artifact v1\n")
+        _write(os.path.join(sub, "notes.txt"), "untracked but visible\n")
+        return ws, sub
+
+    def _snapshot(self, ws):
+        universe = gitops.snapshot_universe(ws)
+        return runners.snapshot_workspace(
+            ws,
+            paths=universe["paths"],
+            walk_skip=universe["walk_skip"],
+            ignore_surfaces=universe["ignore_surfaces"],
+        )
+
+    def _changes(self, ws, before):
+        return runners.snapshot_changes(before, self._snapshot(ws))
+
+    def test_universe_skips_only_what_the_nested_repo_ignores(self):
+        ws, _sub = self._vendored()
+        universe = gitops.snapshot_universe(ws)
+        # The parent still sees the nested repo as one bare directory; the
+        # subtree is covered by the walk, not by a second listing.
+        self.assertIn("app.py", universe["paths"])
+        self.assertIn("vendor/lib", universe["paths"])
+        self.assertIn("vendor/lib/_build", universe["walk_skip"])
+        snapshot = self._snapshot(ws)
+        self.assertIn(os.path.join("vendor", "lib", "src.ex"), snapshot)
+        self.assertIn(os.path.join("vendor", "lib", "notes.txt"), snapshot)
+        # No CONTENT under the pruned region is hashed. Its own rule file
+        # is named as a surface: pruning it is the thing that must not be
+        # silently widenable.
+        self.assertEqual(
+            [
+                key for key in snapshot
+                if "_build" in key and not key.startswith("(ignore surface)")
+            ],
+            [],
+        )
+        self.assertIn("(ignore surface) vendor/lib/.git/config", snapshot)
+        self.assertIn(
+            "(ignore surface) vendor/lib/.git/info/exclude", snapshot
+        )
+
+    def test_vendored_artifact_churn_is_invisible_but_edits_are_named(self):
+        ws, sub = self._vendored()
+        before = self._snapshot(ws)
+        # Build churn inside the vendored repo (a reviewer running the
+        # project's tests) must not read as tampering. This is the live
+        # incident: mix wrote .mix_test_failures under _build.
+        _write(os.path.join(sub, "_build", "test", "a.beam"), "artifact v2\n")
+        _write(
+            os.path.join(sub, "_build", "test", "lib", ".mix_test_failures"),
+            "failures\n",
+        )
+        self.assertEqual(self._changes(ws, before), [])
+        # A real edit inside the vendored repo is still named.
+        before = self._snapshot(ws)
+        _write(os.path.join(sub, "src.ex"), "defmodule X do :changed end\n")
+        self.assertEqual(
+            self._changes(ws, before),
+            [os.path.join("vendor", "lib", "src.ex")],
+        )
+        # So is a deletion, and an untracked-but-visible plant.
+        before = self._snapshot(ws)
+        os.remove(os.path.join(sub, "src.ex"))
+        _write(os.path.join(sub, "planted.ex"), "plant\n")
+        self.assertEqual(
+            self._changes(ws, before),
+            [
+                os.path.join("vendor", "lib", "planted.ex"),
+                os.path.join("vendor", "lib", "src.ex"),
+            ],
+        )
+
+    def test_nested_empty_directory_outside_ignored_regions_is_detected(self):
+        # Git lists no directories, so an expansion-by-listing universe
+        # would go blind here; the subtree walk must keep this.
+        ws, sub = self._vendored()
+        before = self._snapshot(ws)
+        os.makedirs(os.path.join(sub, "enable_feature"))
+        self.assertEqual(
+            self._changes(ws, before),
+            [os.path.join("vendor", "lib", "enable_feature")],
+        )
+
+    def test_ignored_regions_are_out_of_the_universe_at_every_depth(self):
+        """The deliberate boundary, pinned so it cannot drift unnoticed.
+
+        What a repo ignores is outside the tamper universe — that is the
+        whole point, and it is exactly the posture the workspace repo has
+        always had for its own ignored regions. Extending it to a nested
+        repo therefore adds no NEW class of blind spot, and this test
+        states both halves so a future reader sees the trade rather than
+        discovering it.
+        """
+        ws, sub = self._vendored()
+        before = self._snapshot(ws)
+        # Inside the nested repo's ignored region: not covered.
+        os.makedirs(os.path.join(sub, "_build", "enable_feature"))
+        os.symlink(
+            "/etc/passwd", os.path.join(sub, "_build", "link_to_secret")
+        )
+        self.assertEqual(self._changes(ws, before), [])
+        # Inside the WORKSPACE repo's own ignored region: equally not
+        # covered, and that was true long before nested repos were.
+        _write(os.path.join(ws, ".gitignore"), "artifacts/\n")
+        before = self._snapshot(ws)
+        os.makedirs(os.path.join(ws, "artifacts", "enable_feature"))
+        _write(os.path.join(ws, "artifacts", "plant.py"), "plant\n")
+        self.assertEqual(self._changes(ws, before), [])
+
+    def test_cloaking_via_a_self_ignoring_gitignore_is_visible(self):
+        # cloak/.gitignore holding "*" hides itself and its directory from
+        # every listing. The plant stays git-invisible, but the act of
+        # cloaking is hashed, so the call is invalidated.
+        ws, sub = self._vendored()
+        before = self._snapshot(ws)
+        _write(os.path.join(sub, "cloak", ".gitignore"), "*\n")
+        _write(os.path.join(sub, "cloak", "payload.ex"), "malicious\n")
+        changed = self._changes(ws, before)
+        self.assertTrue(changed, "a cloaked plant must not be free")
+        self.assertTrue(
+            any("cloak" in name and ".gitignore" in name for name in changed),
+            changed,
+        )
+
+    def test_cloaking_via_core_excludesfile_is_visible(self):
+        # core.excludesFile can point anywhere, including inside the git
+        # dir the walk excludes. Both the config and its target are hashed.
+        ws, sub = self._vendored()
+        before = self._snapshot(ws)
+        secret = os.path.join(sub, ".git", "private-ignore")
+        _write(secret, "payload.ex\n")
+        self.git(sub, "config", "core.excludesFile", secret)
+        _write(os.path.join(sub, "payload.ex"), "malicious\n")
+        changed = self._changes(ws, before)
+        self.assertTrue(changed, "an excludesFile cloak must not be free")
+        self.assertTrue(
+            any("config" in name for name in changed), changed
+        )
+        # Editing the pointed-at rule file later is visible on its own.
+        before = self._snapshot(ws)
+        _write(secret, "payload.ex\nsecond.ex\n")
+        self.assertTrue(self._changes(ws, before))
+
+    def test_nested_info_exclude_append_is_visible(self):
+        ws, sub = self._vendored()
+        before = self._snapshot(ws)
+        _write(os.path.join(sub, ".git", "info", "exclude"), "planted.ex\n")
+        _write(os.path.join(sub, "planted.ex"), "plant\n")
+        changed = self._changes(ws, before)
+        self.assertTrue(
+            any("info/exclude" in name for name in changed), changed
+        )
+
+    def test_nested_repos_are_handled_recursively(self):
+        ws, sub = self._vendored()
+        inner = os.path.join(sub, "deps", "leaf")
+        os.makedirs(inner)
+        self.git(inner, "init", "-q")
+        _write(os.path.join(inner, ".gitignore"), "cache/\n")
+        _write(os.path.join(inner, "leaf.ex"), "leaf\n")
+        self._commit_all(inner, "leaf baseline")
+        _write(os.path.join(inner, "cache", "c"), "leaf artifact v1\n")
+        universe = gitops.snapshot_universe(ws)
+        self.assertIn("vendor/lib/deps/leaf/cache", universe["walk_skip"])
+        before = self._snapshot(ws)
+        _write(os.path.join(inner, "cache", "c"), "leaf artifact v2\n")
+        self.assertEqual(self._changes(ws, before), [])
+        before = self._snapshot(ws)
+        _write(os.path.join(inner, "leaf.ex"), "leaf CHANGED\n")
+        self.assertEqual(
+            self._changes(ws, before),
+            [os.path.join("vendor", "lib", "deps", "leaf", "leaf.ex")],
+        )
+
+    def test_declared_submodule_tolerates_churn_and_keeps_detections(self):
+        src = self.make_repo("subsrc")
+        _write(os.path.join(src, ".gitignore"), "_build/\n")
+        _write(os.path.join(src, "lib.ex"), "lib\n")
+        self._commit_all(src, "sub baseline")
+        ws = self.make_repo("ws2", {"app.py": "print(1)\n"})
+        self._commit_all(ws, "baseline")
+        self.git(
+            ws,
+            "-c", "protocol.file.allow=always",
+            "submodule", "add", "-q", src, "vendor/sub",
+        )
+        self._commit_all(ws, "add submodule")
+        sub = os.path.join(ws, "vendor", "sub")
+        _write(os.path.join(sub, "_build", "x"), "artifact\n")
+        universe = gitops.snapshot_universe(ws)
+        self.assertIn("vendor/sub/_build", universe["walk_skip"])
+        # A submodule's git dir lives under the parent's .git/modules; its
+        # ignore surfaces must ride the universe from there.
+        self.assertTrue(
+            any(
+                ".git/modules/vendor/sub/info/exclude" in surface
+                for surface in universe["ignore_surfaces"]
+            ),
+            universe["ignore_surfaces"],
+        )
+        before = self._snapshot(ws)
+        _write(os.path.join(sub, "_build", "x"), "artifact CHURN\n")
+        self.assertEqual(self._changes(ws, before), [])
+        before = self._snapshot(ws)
+        _write(os.path.join(sub, "lib.ex"), "lib CHANGED\n")
+        self.assertEqual(
+            self._changes(ws, before),
+            [os.path.join("vendor", "sub", "lib.ex")],
+        )
+        # The gitfile that binds the submodule to its git dir is content
+        # inside the walk: repointing it at a foreign repo is detected.
+        before = self._snapshot(ws)
+        _write(os.path.join(sub, ".git"), "gitdir: /tmp/foreign\n")
+        changed = self._changes(ws, before)
+        self.assertIn(os.path.join("vendor", "sub", ".git"), changed)
+        # Losing the binding also drops that repo's ignore surfaces and
+        # returns its whole subtree to the walk — louder, never quieter.
+        self.assertTrue(
+            any(name.startswith("(ignore surface)") for name in changed),
+            changed,
+        )
+
+    def test_linked_worktree_surfaces_come_from_the_common_git_dir(self):
+        # A linked worktree has its own git dir, but git reads info/exclude
+        # and config from the COMMON one. Naming the per-worktree pair
+        # would hash two files git never consults while leaving the rules
+        # it does consult free to hide a plant.
+        ws = self.make_repo("wtws", {"app.py": "print(1)\n"})
+        self._commit_all(ws, "baseline")
+        outside = self.make_repo("outside_main", {"lib.py": "lib\n"})
+        self._commit_all(outside, "outside baseline")
+        self.git(
+            outside, "worktree", "add", "-q", os.path.join(ws, "vendor", "wt")
+        )
+        universe = gitops.snapshot_universe(ws)
+        surfaces = " ".join(universe["ignore_surfaces"])
+        self.assertNotIn("worktrees", surfaces)
+        self.assertIn(
+            os.path.join(outside, ".git", "info", "exclude"),
+            universe["ignore_surfaces"],
+        )
+        before = self._snapshot(ws)
+        # The rule git actually applies to the worktree lives in the
+        # common dir, outside the workspace entirely.
+        _write(
+            os.path.join(outside, ".git", "info", "exclude"), "payload.py\n"
+        )
+        _write(os.path.join(ws, "vendor", "wt", "payload.py"), "plant\n")
+        self.assertTrue(
+            self._changes(ws, before), "a common-dir cloak must not be free"
+        )
+
+    def test_unreadable_nested_git_keeps_the_unfiltered_walk(self):
+        # Trusting an ignore set that could not be read would be the
+        # dangerous posture; falling back to walking everything is safe.
+        ws, sub = self._vendored()
+        real_toplevel = gitops._toplevel
+
+        def broken_for_nested(path):
+            if os.path.realpath(path) == os.path.realpath(sub):
+                raise gitops.GitError("nested git cannot answer")
+            return real_toplevel(path)
+
+        with mock.patch.object(
+            gitops, "_toplevel", side_effect=broken_for_nested
+        ):
+            universe = gitops.snapshot_universe(ws)
+        self.assertEqual(universe["walk_skip"], [])
+        snapshot = runners.snapshot_workspace(
+            ws,
+            paths=universe["paths"],
+            walk_skip=universe["walk_skip"],
+            ignore_surfaces=universe["ignore_surfaces"],
+        )
+        self.assertTrue(
+            any("_build" in key for key in snapshot),
+            "the fallback must cover the whole subtree",
+        )
 
 
 class WorktreeDiffTests(GitopsTestCase):

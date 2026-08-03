@@ -553,8 +553,21 @@ Tiers:
   common Python tool caches (`.git`, `.orchestrator`, `__pycache__`,
   `.pytest_cache`, `.mypy_cache`, `.ruff_cache`, `.hypothesis`, `.tox`,
   `*.egg-info`), so a report-only worker whose focused checks write tool
-  caches is not falsely invalidated (with git enabled the tamper universe
-  additionally honors `.gitignore`). Reviewers are told NOT to run the full
+  caches is not falsely invalidated. With git enabled the tamper universe
+  additionally honors `.gitignore`, at every depth: a vendored submodule or
+  embedded repo is still walked as a subtree, minus the regions ITS OWN git
+  ignores, so a reviewer running the project's tests does not read as
+  tampering because a vendored dependency rebuilt its `_build/`. The rule
+  that makes that safe is that an ignored region is outside the universe, so
+  CHANGING what a repo ignores is never free: every file deciding it is
+  hashed wherever it lives — `info/exclude` and `config` from the repo's
+  common git dir (a linked worktree reads both from there, not from its own),
+  the `core.excludesFile` target, and the rule file of any region that cloaks
+  itself. A nested repo whose git cannot answer keeps the fully unfiltered
+  walk. The deliberate residual, unchanged from what the workspace repo has
+  always done for its own ignored regions: content inside an already-ignored
+  region is not covered, and such files can never reach a diff, a commit or a
+  seal. Reviewers are told NOT to run the full
   suite — it runs mechanically after every fourth logical implementation slice
   and at milestone completion; after a checkpoint failure, the dedicated fixer owns
   full-suite convergence. Add tool-specific cache

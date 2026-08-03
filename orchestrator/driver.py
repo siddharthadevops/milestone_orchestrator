@@ -537,10 +537,15 @@ class Driver(object):
         git breakage (e.g. a worker damaging .git) yields one honest
         invalidation instead of a bogus everything-changed file list."""
         paths = None
+        walk_skip = None
+        ignore_surfaces = None
         mode = "walk"
         if gitops.enabled(self.config):
             try:
-                paths = gitops.snapshot_paths(self.workspace)
+                universe = gitops.snapshot_universe(self.workspace)
+                paths = universe["paths"]
+                walk_skip = universe["walk_skip"]
+                ignore_surfaces = universe["ignore_surfaces"]
                 mode = "git"
             except gitops.GitError:
                 paths = None
@@ -548,6 +553,8 @@ class Driver(object):
             self.workspace,
             extra_exclude=self.config.get("snapshot_exclude_dirs"),
             paths=paths,
+            walk_skip=walk_skip,
+            ignore_surfaces=ignore_surfaces,
         )
         return mode, entries
 

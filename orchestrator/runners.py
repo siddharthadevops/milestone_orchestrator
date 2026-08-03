@@ -2897,11 +2897,22 @@ def _hash_file(path):
     return "file %s" % h.hexdigest()
 
 
-def _walk_entries(workspace, root, exclude, entries):
+def _walk_entries(workspace, root, exclude, entries, skip=None):
     """Fold a filesystem walk of `root` into `entries`, keyed by paths
-    relative to `workspace` (walk-mode coverage: files, dirs, symlinks)."""
+    relative to `workspace` (walk-mode coverage: files, dirs, symlinks).
+
+    `skip` holds workspace-relative paths a repository ignores; they are
+    pruned whole, so build artifacts inside a vendored dependency never
+    enter the universe. What decides that ignore is hashed separately
+    (gitops.snapshot_universe ignore surfaces), so pruning cannot be
+    widened mid-call without the change itself being visible."""
+    skip = skip or frozenset()
     for r, dirs, files in os.walk(root):
-        dirs[:] = sorted(d for d in dirs if not _dir_excluded(d, exclude))
+        dirs[:] = sorted(
+            d for d in dirs
+            if not _dir_excluded(d, exclude)
+            and os.path.relpath(os.path.join(r, d), workspace) not in skip
+        )
         for name in dirs:
             path = os.path.join(r, name)
             rel = os.path.relpath(path, workspace)
@@ -2912,13 +2923,21 @@ def _walk_entries(workspace, root, exclude, entries):
         for name in sorted(files):
             path = os.path.join(r, name)
             rel = os.path.relpath(path, workspace)
+            if rel in skip:
+                continue
             if os.path.islink(path):
                 entries[rel] = "link -> %s" % _readlink_quiet(path)
             else:
                 entries[rel] = _hash_file(path)
 
 
-def snapshot_workspace(workspace, extra_exclude=None, paths=None):
+def snapshot_workspace(
+    workspace,
+    extra_exclude=None,
+    paths=None,
+    walk_skip=None,
+    ignore_surfaces=None,
+):
     """Map of workspace entries -> content descriptors (the tamper check).
 
     Used to enforce mechanically that report-only workers edit nothing.
@@ -2930,16 +2949,24 @@ def snapshot_workspace(workspace, extra_exclude=None, paths=None):
       detected), symlink targets (a new or retargeted symlink, broken or
       not, is detected), and unreadable files (recorded as existing even
       though their content cannot be hashed).
-    - paths=<relative paths> (git-enabled runs; gitops.snapshot_paths):
+    - paths=<relative paths> (git-enabled runs; gitops.snapshot_universe):
       only those paths are hashed — tracked plus untracked-non-ignored —
       so build artifacts and caches that .gitignore excludes cannot
       invalidate a report-only call that ran the project's own tooling.
       A listed path missing from disk is recorded as such, so deletions
-      of tracked files are still detected.
+      of tracked files are still detected. A listed path that is a
+      directory (a nested repository) is walked as a subtree, minus
+      `walk_skip` — the regions that repository's OWN git ignores — so
+      the same artifact tolerance reaches vendored dependencies while
+      everything else there stays covered. `ignore_surfaces` names the
+      files deciding those ignores; they are hashed wherever they live
+      (a submodule's sits under the parent's `.git/modules`), so no
+      pruning can widen mid-call unseen.
     """
     exclude = set(SNAPSHOT_EXCLUDE_DIRS)
     if extra_exclude:
         exclude.update(extra_exclude)
+    skip = frozenset(os.path.normpath(p) for p in (walk_skip or ()))
     entries = {}
     if paths is not None:
         for rel in paths:
@@ -2964,7 +2991,7 @@ def snapshot_workspace(workspace, extra_exclude=None, paths=None):
                 if _dir_excluded(parts[-1], exclude):
                     continue
                 entries[rel] = "dir"
-                _walk_entries(workspace, path, exclude, entries)
+                _walk_entries(workspace, path, exclude, entries, skip=skip)
             elif os.path.exists(path):
                 entries[rel] = _hash_file(path)
             else:
@@ -2978,6 +3005,20 @@ def snapshot_workspace(workspace, extra_exclude=None, paths=None):
         info_exclude = os.path.join(workspace, ".git", "info", "exclude")
         if os.path.isfile(info_exclude):
             entries[".git/info/exclude"] = _hash_file(info_exclude)
+        # Keyed under a parenthesized synthetic name: a surface may sit
+        # outside the worktree entirely (an external or modules-hosted
+        # git dir), which no ordinary path key could address without
+        # colliding with a real file. Absent is recorded, so deleting a
+        # rule file is a change like any other.
+        for surface in ignore_surfaces or ():
+            path = (
+                surface
+                if os.path.isabs(surface)
+                else os.path.join(workspace, surface)
+            )
+            entries["(ignore surface) %s" % surface] = (
+                _hash_file(path) if os.path.isfile(path) else "missing"
+            )
         return entries
     _walk_entries(workspace, workspace, exclude, entries)
     return entries

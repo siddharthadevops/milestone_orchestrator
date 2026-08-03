@@ -1749,5 +1749,75 @@ class TestResume(DriverTestCase):
             )
 
 
+class TestSnapshotUniverseWiring(DriverTestCase):
+    """Driver._snapshot must actually carry the git universe it computes.
+
+    The pieces have their own tests in test_gitops.py, but those call
+    gitops and runners directly. This pins the wire between them: without
+    it, dropping the universe from the runners call passes every other
+    test while a vendored dependency's build churn invalidates every
+    report-only round in production.
+    """
+
+    def _vendored_workspace(self, ws):
+        def git(cwd, *args):
+            subprocess.run(
+                ("git",) + args, cwd=cwd, capture_output=True, text=True,
+                check=True, timeout=60,
+            )
+
+        def write(path, content):
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path, "w", encoding="utf-8") as fh:
+                fh.write(content)
+
+        git_init_workspace(ws)
+        write(os.path.join(ws, "app.py"), "print(1)\n")
+        sub = os.path.join(ws, "vendor", "lib")
+        os.makedirs(sub)
+        git(sub, "init", "-q")
+        write(os.path.join(sub, ".gitignore"), "_build/\n")
+        write(os.path.join(sub, "src.ex"), "defmodule X do end\n")
+        git(sub, "add", "-A")
+        git(
+            sub, "-c", "user.name=T", "-c", "user.email=t@example.test",
+            "commit", "-q", "-m", "vendored",
+        )
+        write(os.path.join(sub, "_build", "test", "a.beam"), "artifact v1\n")
+        return sub, write
+
+    def test_vendored_build_churn_does_not_read_as_tampering(self):
+        with tempfile.TemporaryDirectory(prefix="orch-universe-") as ws:
+            sub, write = self._vendored_workspace(ws)
+            path = init_state(ws, make_config())
+            driver = drv.Driver(path, runner=runners.MockRunner([]))
+
+            before = driver._snapshot()
+            self.assertEqual(before[0], "git")
+            # The reviewer ran the project's tests: artifacts churn inside
+            # the vendored dependency's own ignored region.
+            write(os.path.join(sub, "_build", "test", "a.beam"), "v2\n")
+            write(
+                os.path.join(sub, "_build", "test", ".mix_test_failures"),
+                "failures\n",
+            )
+            self.assertEqual(
+                driver._snapshot_diff(before, driver._snapshot()), []
+            )
+
+            # A real edit inside the vendored dependency is still caught,
+            # and so is a cloak that would have hidden one.
+            write(os.path.join(sub, "src.ex"), "defmodule X do :edited end\n")
+            self.assertTrue(
+                driver._snapshot_diff(before, driver._snapshot())
+            )
+            write(os.path.join(sub, "src.ex"), "defmodule X do end\n")
+            write(os.path.join(sub, "cloak", ".gitignore"), "*\n")
+            write(os.path.join(sub, "cloak", "payload.ex"), "malicious\n")
+            self.assertTrue(
+                driver._snapshot_diff(before, driver._snapshot())
+            )
+
+
 if __name__ == "__main__":
     unittest.main()

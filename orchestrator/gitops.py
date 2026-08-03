@@ -313,19 +313,149 @@ def ensure_repo(workspace, extra_ignore_dirs=None):
         _run(workspace, "config", "--local", BASELINE_MARK, "true")
 
 
-def snapshot_paths(workspace):
-    """Relative paths of everything the repository can see: tracked files
-    plus untracked files that are NOT ignored. This is the tamper-check
-    universe when git is enabled — build artifacts and caches excluded by
-    .gitignore never enter it, so a report-only worker that runs the
-    project's build or test commands is not invalidated by artifact churn.
-    Deleted tracked files stay in the list (the snapshot records them as
-    missing, so deletions are still detected)."""
-    _assert_workspace_root(workspace)
-    proc = _run(
-        workspace, "ls-files", "-z", "--cached", "--others", "--exclude-standard"
+def _listing(root, *args):
+    entries = _run(root, "ls-files", "-z", *args).stdout.split("\0")
+    return {entry.rstrip("/") for entry in entries if entry}
+
+
+def _common_git_dir(root):
+    """The git dir whose `info/exclude` and `config` git actually applies.
+
+    A linked worktree has a per-worktree git dir, but git reads both
+    ignore inputs from the COMMON dir; naming the per-worktree one would
+    hash two files git never consults and leave the real rules free."""
+    proc = _run(root, "rev-parse", "--git-common-dir", check=False)
+    if proc.returncode != 0:
+        return None
+    common = proc.stdout.strip()
+    if not common:
+        return None
+    if not os.path.isabs(common):
+        common = os.path.join(root, common)
+    return os.path.realpath(common)
+
+
+def _repo_ignore_surfaces(root, skipped):
+    """Absolute paths of every file that decides what this repo ignores.
+
+    A cloaking plant requires CHANGING an ignore decision, so hashing the
+    decision inputs is what keeps the ignored region safely outside the
+    tamper universe. Four inputs escape the ordinary worktree walk:
+    `<common-git-dir>/info/exclude`; the repo config, which can point
+    `core.excludesFile` anywhere; that file itself; and any `.gitignore`
+    that git ignores — a directory made invisible by its OWN rule file
+    (`cloak/` holding `*`) is pruned wholesale, so without this the cloak
+    would be free. Only the pruned regions' own top-level rule files are
+    needed: anything deeper is already outside the universe whatever it
+    says."""
+    surfaces = []
+    git_dir = _common_git_dir(root)
+    if git_dir is not None:
+        surfaces.append(os.path.join(git_dir, "info", "exclude"))
+        surfaces.append(os.path.join(git_dir, "config"))
+    proc = _run(root, "config", "--get", "core.excludesFile", check=False)
+    configured = os.path.expanduser(
+        proc.stdout.strip() if proc.returncode == 0 else ""
     )
-    return sorted({rel for rel in proc.stdout.split("\0") if rel})
+    if configured:
+        surfaces.append(
+            os.path.abspath(
+                configured
+                if os.path.isabs(configured)
+                else os.path.join(root, configured)
+            )
+        )
+    for rel in skipped:
+        candidate = os.path.join(root, rel)
+        if os.path.basename(rel) == ".gitignore":
+            surfaces.append(candidate)
+        elif os.path.isdir(candidate):
+            # Only when it exists: an ordinary new artifact directory
+            # ignored by a rule that already existed must not register as
+            # a change, while writing the rule file that cloaks a region
+            # adds this key and therefore does.
+            nested_rule = os.path.join(candidate, ".gitignore")
+            if os.path.isfile(nested_rule):
+                surfaces.append(nested_rule)
+    return surfaces
+
+
+def snapshot_universe(workspace):
+    """The tamper-check universe when git is enabled.
+
+    `paths` is what the workspace repository itself can see (tracked plus
+    untracked-non-ignored). A nested repository — a declared submodule or
+    an embedded repo — is one bare directory entry there, walked as a
+    subtree; `walk_skip` carries the regions ITS OWN git ignores, so a
+    report-only worker running the project's build or tests is not
+    invalidated by artifact churn inside a vendored dependency. Everything
+    else in that subtree stays walked, so empty directories, symlinks,
+    plants and gitfile repoints are still detected exactly as before.
+
+    `ignore_surfaces` names every file that decides what any repo in the
+    tree ignores. Ignored regions are outside the universe, so changing
+    the ignore decision is the act that must never be free: with the
+    surfaces hashed, a plant is either walked (not ignored) or announced
+    by the rule change that hid it."""
+    _assert_workspace_root(workspace)
+    paths = set()
+    walk_skip = set()
+    surfaces = set()
+    seen = set()
+
+    def visit(repo_rel):
+        root = os.path.join(workspace, repo_rel) if repo_rel else workspace
+        real_root = os.path.realpath(root)
+        if real_root in seen:
+            return
+        seen.add(real_root)
+        visible = _listing(
+            root, "--cached", "--others", "--exclude-standard"
+        )
+        # `--directory` collapses a fully ignored directory to one entry,
+        # so ordinary churn deep inside it never changes this set — and
+        # the listing stays cheap on a tree with hundreds of thousands of
+        # ignored artifacts, which enumerating them one by one does not.
+        skipped = _listing(
+            root, "--others", "--ignored", "--exclude-standard", "--directory"
+        )
+        surfaces.update(_repo_ignore_surfaces(root, skipped))
+        for rel in skipped:
+            walk_skip.add("%s/%s" % (repo_rel, rel) if repo_rel else rel)
+        for rel in visible:
+            child = "%s/%s" % (repo_rel, rel) if repo_rel else rel
+            if not repo_rel:
+                paths.add(child)
+            full = os.path.join(workspace, child)
+            if os.path.isdir(full) and not os.path.islink(full):
+                try:
+                    if _toplevel(full) == os.path.realpath(full):
+                        visit(child)
+                except GitError:
+                    # A nested repo whose git cannot answer keeps the
+                    # unfiltered walk: strictly safer than trusting an
+                    # ignore set that could not be read.
+                    pass
+
+    visit("")
+    real_workspace = os.path.realpath(workspace)
+    named = set()
+    for surface in surfaces:
+        rel = os.path.relpath(os.path.realpath(surface), real_workspace)
+        # Keyed relative while inside the workspace so the snapshot stays
+        # independent of where the workspace lives; a surface genuinely
+        # outside it (an external git dir hosting a linked worktree) has
+        # no such key and rides its absolute path.
+        named.add(
+            surface
+            if rel.startswith(os.pardir + os.sep) or rel == os.pardir
+            else rel
+        )
+    return {
+        "paths": sorted(paths),
+        "walk_skip": sorted(walk_skip),
+        "ignore_surfaces": sorted(named),
+    }
 
 
 _NON_REVIEWABLE_EXTENSIONS = frozenset((".md", ".txt"))
