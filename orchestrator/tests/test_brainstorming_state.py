@@ -295,6 +295,106 @@ class BrainstormingStateTestCase(unittest.TestCase):
                 {"markdown": "Racing answer."},
             )
 
+    def _running_initialized(self, session_id):
+        created = self.store.create(
+            session_id,
+            request(self.workspace),
+            run_config(),
+            cross_family_participants(),
+        )
+        running = self.store.transition(
+            session_id, created.revision, "running"
+        )
+        target = bs.make_target_revision(True, b"accepted target", 0o644)
+        return self.store.initialize_coordination(
+            session_id, running.revision, target
+        )
+
+    @staticmethod
+    def _floor_fact(after=0, **overrides):
+        fact = {
+            "after_completed_turns": after,
+            "author_id": "entity_" + "a" * 32,
+            "author_name": "operator",
+            "plain": "Keep the compatible option on the table.",
+            "at": 1200.0,
+        }
+        fact.update(overrides)
+        return fact
+
+    def test_floor_intervention_contract(self):
+        checked = bs.validate_floor_intervention(self._floor_fact())
+        self.assertEqual(checked["author_name"], "operator")
+        self.assertEqual(checked["at"], 1200.0)
+        for broken in (
+            # roster-shaped and malformed ids can never pass the entity form
+            self._floor_fact(author_id="critic-1"),
+            self._floor_fact(author_id="dante"),
+            self._floor_fact(author_id="initial-position"),
+            self._floor_fact(author_id="entity_zz"),
+            self._floor_fact(author_id="Entity_" + "a" * 32),
+            self._floor_fact(author_id="entity_" + "a" * 31),
+            self._floor_fact(after=-1),
+            self._floor_fact(after="1"),
+            self._floor_fact(at=0),
+            self._floor_fact(at=True),
+            self._floor_fact(plain=""),
+            self._floor_fact(author_name=""),
+            {**self._floor_fact(), "extra": 1},
+        ):
+            with self.assertRaises((bs.ContractError, ValueError)):
+                bs.validate_floor_intervention(broken)
+        missing = self._floor_fact()
+        del missing["author_name"]
+        with self.assertRaises(bs.ContractError):
+            bs.validate_floor_intervention(missing)
+
+    def test_floor_intervention_appends_only_at_the_current_boundary(self):
+        session_id = "floor-boundary"
+        snapshot = self._running_initialized(session_id)
+        appended = self.store.record_floor_intervention(
+            session_id, snapshot.revision, self._floor_fact()
+        )
+        self.assertEqual(
+            appended.state["transcript_events"][-1],
+            {"kind": "floor_intervention", "fact": self._floor_fact()},
+        )
+        # An identical repeat rewrites history; a new timestamp is new fact.
+        with self.assertRaises(bs.ContractError):
+            self.store.record_floor_intervention(
+                session_id, appended.revision, self._floor_fact()
+            )
+        again = self.store.record_floor_intervention(
+            session_id, appended.revision, self._floor_fact(at=1300.0)
+        )
+        # A boundary ahead of accepted discussion cannot be inserted.
+        with self.assertRaises(bs.HistoryRewriteError):
+            self.store.record_floor_intervention(
+                session_id,
+                again.revision,
+                self._floor_fact(after=3, at=1400.0),
+            )
+        # A stale revision conflicts instead of rewriting the record.
+        with self.assertRaises(bs.RevisionConflict):
+            self.store.record_floor_intervention(
+                session_id, appended.revision, self._floor_fact(at=1500.0)
+            )
+
+    def test_floor_intervention_never_enters_a_terminal_session(self):
+        session_id = "floor-terminal"
+        snapshot = self._running_initialized(session_id)
+        terminal = self.store.transition(
+            session_id,
+            snapshot.revision,
+            "failure",
+            failure_result(snapshot.state["transcript_ref"]),
+            closing_summary(),
+        )
+        with self.assertRaises(bs.IllegalTransition):
+            self.store.record_floor_intervention(
+                session_id, terminal.revision, self._floor_fact()
+            )
+
     def _assert_create_rejected(self, session_id, req=None, config=None):
         with self.assertRaises((bs.ContractError, ValueError)):
             self.store.create(

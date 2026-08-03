@@ -52,6 +52,10 @@ sessions render in the panel's right pane — there is no separate page):
                                    inspect the pending external turn, if any
     POST   /api/brainstorming/sessions/<id>/intervention
                                    submit its exact token and response once
+    POST   /api/brainstorming/sessions/<id>/floor
+                                   append one out-of-turn intervention into
+                                   the discussion record: {text, author_name,
+                                   author_id?}
     POST   /api/brainstorming/sessions/<id>/stop
                                    pause participant work, keeping the session
     POST   /api/brainstorming/sessions/<id>/start
@@ -3188,6 +3192,24 @@ def make_handler(home):
                 elif route.startswith("/api/brainstorming/sessions/"):
                     parts = route.rstrip("/").split("/")
                     if (
+                        len(parts) == 6
+                        and parts[4]
+                        and parts[5] == "floor"
+                    ):
+                        body = self._brainstorming_body()
+                        delivered = (
+                            brainstorming_lifecycle.submit_floor_intervention(
+                                home,
+                                parts[4],
+                                body,
+                                lambda record: require_brainstorming_access(
+                                    home, who, record
+                                ),
+                                who["email"],
+                            )
+                        )
+                        self._json(200, {"ok": True, **delivered})
+                    elif (
                         len(parts) == 6
                         and parts[4]
                         and parts[5] == "intervention"

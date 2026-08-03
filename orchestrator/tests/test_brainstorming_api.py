@@ -1556,6 +1556,99 @@ class StandaloneBrainstormingApiTest(unittest.TestCase):
         )
         self.assertEqual(status, 404, streamed)
 
+    def test_floor_intervention_route_appends_and_refuses_terminal(self):
+        self._target("floor.md")
+        with mock.patch.object(
+            lifecycle,
+            "_launch_lifecycle_process",
+            side_effect=self._sleeper_launcher,
+        ):
+            status, body = self._request(
+                "POST",
+                "/api/brainstorming/sessions",
+                self._payload("floor.md"),
+            )
+        self.assertEqual(status, 201, body)
+        session_id = body["session"]["id"]
+
+        for invalid in (
+            {"text": "Steer.", "author_name": "operator",
+             "author_id": "critic-1"},
+            {"text": "Steer."},
+            {"text": "", "author_name": "operator"},
+            {"text": "Steer.", "author_name": "operator", "extra": 1},
+        ):
+            status, refused = self._request(
+                "POST",
+                "/api/brainstorming/sessions/%s/floor" % session_id,
+                invalid,
+            )
+            self.assertEqual(
+                (status, refused["error"]),
+                (400, lifecycle.INVALID_REQUEST),
+                invalid,
+            )
+
+        status, accepted = self._request(
+            "POST",
+            "/api/brainstorming/sessions/%s/floor" % session_id,
+            {"text": "Keep the scope minimal.", "author_name": "operator"},
+        )
+        self.assertEqual(status, 200, accepted)
+        derived = accepted["intervention"]["author_id"]
+        self.assertEqual(
+            derived, lifecycle.floor_author_id(access.ADMIN_EMAIL)
+        )
+        self.assertTrue(bs.FLOOR_AUTHOR_ID_RE.match(derived))
+        self.assertEqual(accepted["intervention"]["after_completed_turns"], 0)
+
+        explicit = "entity_" + "f" * 32
+        status, accepted = self._request(
+            "POST",
+            "/api/brainstorming/sessions/%s/floor" % session_id,
+            {
+                "text": "Signed by the external entity.",
+                "author_name": "agent 99",
+                "author_id": explicit,
+            },
+        )
+        self.assertEqual(status, 200, accepted)
+        self.assertEqual(accepted["intervention"]["author_id"], explicit)
+
+        status, view = self._request(
+            "GET", "/api/brainstorming/sessions/%s/view" % session_id
+        )
+        self.assertEqual(status, 200, view)
+        transcript = view["view"]["transcript_markdown"]
+        self.assertIn("Intervention — operator", transcript)
+        self.assertIn("Intervention — agent 99", transcript)
+        self.assertNotIn("entity_", transcript)
+
+        store = bs.SessionStore(lifecycle.state_directory(self.home))
+        snapshot = store.read(session_id)
+        store.transition(
+            session_id,
+            snapshot.revision,
+            "failure",
+            {
+                "outcome": "failure",
+                "target_ref": "docs/floor.md",
+                "transcript_ref": snapshot.state["transcript_ref"],
+                "rounds_used": 0,
+                "reason": closing_summary()["reason"],
+            },
+            closing_summary(),
+        )
+        status, refused = self._request(
+            "POST",
+            "/api/brainstorming/sessions/%s/floor" % session_id,
+            {"text": "Too late.", "author_name": "operator"},
+        )
+        self.assertEqual(
+            (status, refused["error"]),
+            (409, lifecycle.FLOOR_INTERVENTION_CONFLICT),
+        )
+
     def test_fake_provider_lifecycle_reaches_success_and_failure(self):
         for name in ("success.md", "failure.md", "error.md"):
             self._target(name)

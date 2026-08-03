@@ -233,6 +233,19 @@ another turn. The `narrator`
 provider uses this same channel today; `manual` leaves it waiting for an
 external UI.
 
+Separately from roster turns, any authorized caller may append one
+out-of-turn **floor intervention** — `POST .../<id>/floor` with
+`{"text", "author_name", "author_id"?}` — into the durable discussion
+record at the current turn boundary. It renders in the transcript under
+its author's name and participants read it as ordinary chat history on
+their next call; it consumes no round, no target revision, and no
+provider call, and does not interrupt an in-flight turn (the panel's
+Intervene dialog offers an explicit stop/start restart for that).
+`author_id` must be label_hex32-shaped (the agent_99 entity contract, e.g.
+`entity_<32 hex>`), which structurally cannot collide with roster ids;
+when absent the service derives one from the authenticated caller. A
+terminal session refuses with `brainstorming_floor_intervention_conflict`.
+
 `GET /api/brainstorming/sessions` lists every session the caller may see
 (`{"ok": true, "sessions": [...]}`), newest creation first — the sidebar's
 source. Authorization is decided from the immutable service record before

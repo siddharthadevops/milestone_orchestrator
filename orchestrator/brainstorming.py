@@ -35,8 +35,17 @@ CLOSURE_POLICIES = ("unanimity", "majority")
 ROLES = ("initial_position", "contrary_position", "common_sense")
 POSITION_ROLES = ("initial_position", "contrary_position")
 DELIVERIES = ("llm", "external")
-TRANSCRIPT_EVENT_KINDS = ("material_interruption", "closure_ballot")
+TRANSCRIPT_EVENT_KINDS = (
+    "material_interruption",
+    "closure_ballot",
+    "floor_intervention",
+)
 TRANSCRIPT_FORMAT_VERSION = 1
+
+# Out-of-turn interventions arrive from outside the roster. Their author ids
+# must be label_hex32-shaped (the agent_99 entity contract), so they can never
+# collide with the operational roster ids (initial-position, dante, critic-N).
+FLOOR_AUTHOR_ID_RE = re.compile(r"^[a-z][a-z0-9]*_[0-9a-f]{32}$")
 
 _ALLOWED_TRANSITIONS = {
     "created": ("running", "failure"),
@@ -1490,7 +1499,7 @@ def resolve_run_config(participants, closure_policy, eligible_participants):
 
 def _transcript_event_boundary(event, participant_count):
     fact = event["fact"]
-    if event["kind"] == "material_interruption":
+    if event["kind"] in ("material_interruption", "floor_intervention"):
         return fact["after_completed_turns"]
     return fact["after_completed_rounds"] * participant_count
 
@@ -1511,6 +1520,8 @@ def _validate_transcript_events(events, run_config, coordination):
             raise ContractError("%s.kind is invalid" % ctx)
         if kind == "material_interruption":
             fact = validate_material_interruption(event["fact"])
+        elif kind == "floor_intervention":
+            fact = validate_floor_intervention(event["fact"])
         else:
             fact = validate_closure_ballot(event["fact"], run_config)
         candidate = {"kind": kind, "fact": fact}
@@ -1586,6 +1597,42 @@ def validate_material_interruption(interruption):
         )
     _text(interruption["plain"], "material_interruption.plain")
     return _json_copy(interruption, "material_interruption")
+
+
+def validate_floor_intervention(intervention):
+    """Validate one out-of-turn intervention by an external actor."""
+    _exact_keys(
+        intervention,
+        ("after_completed_turns", "author_id", "author_name", "plain", "at"),
+        (),
+        "floor_intervention",
+    )
+    after = intervention["after_completed_turns"]
+    if type(after) is not int or after < 0:
+        raise ContractError(
+            "floor_intervention.after_completed_turns must be a "
+            "non-negative integer"
+        )
+    author_id = _text(intervention["author_id"], "floor_intervention.author_id")
+    if not FLOOR_AUTHOR_ID_RE.match(author_id):
+        raise ContractError(
+            "floor_intervention.author_id must be label_hex32-shaped"
+        )
+    _text(intervention["author_name"], "floor_intervention.author_name")
+    _text(intervention["plain"], "floor_intervention.plain")
+    at = intervention["at"]
+    if (
+        isinstance(at, bool)
+        or not isinstance(at, (int, float))
+        or not math.isfinite(float(at))
+        or float(at) <= 0
+    ):
+        raise ContractError(
+            "floor_intervention.at must be a positive finite number"
+        )
+    checked = _json_copy(intervention, "floor_intervention")
+    checked["at"] = float(at)
+    return checked
 
 
 def closure_voters(run_config):
@@ -2323,6 +2370,12 @@ def transcript_event_successor(state, kind, fact):
             raise HistoryRewriteError(
                 "material interruption must follow current accepted turns"
             )
+    elif kind == "floor_intervention":
+        checked_fact = validate_floor_intervention(fact)
+        if checked_fact["after_completed_turns"] != len(completed_turns):
+            raise HistoryRewriteError(
+                "floor intervention must follow current accepted turns"
+            )
     elif kind == "closure_ballot":
         checked_fact = _closure_ballot_at_current_boundary(current, fact)
         if checked_fact["approved"]:
@@ -2567,6 +2620,12 @@ def _render_transcript_event(event, state, labels):
     if event["kind"] == "material_interruption":
         return _entry(
             "Material interruption", _quoted_markdown(fact["plain"])
+        )
+    if event["kind"] == "floor_intervention":
+        # The author id is machine identity; only the name faces humans.
+        return _entry(
+            "Intervention — %s" % fact["author_name"],
+            _quoted_markdown(fact["plain"]),
         )
 
     votes = [
@@ -4387,6 +4446,17 @@ class SessionStore:
             expected_revision,
             "material_interruption",
             interruption,
+        )
+
+    def record_floor_intervention(
+        self, session_id, expected_revision, intervention
+    ):
+        """Append one out-of-turn external intervention."""
+        return self._record_transcript_event(
+            session_id,
+            expected_revision,
+            "floor_intervention",
+            intervention,
         )
 
     def record_closure_ballot(

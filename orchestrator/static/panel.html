@@ -732,6 +732,24 @@
   </div>
 </dialog>
 
+<dialog id="floordlg">
+  <h2>Operator intervention</h2>
+  <p class="amend-hint">Lands in the discussion record at the current turn
+    boundary; every later turn and closure decision reads it.</p>
+  <textarea id="floorText" rows="6"
+    placeholder="Correction or steer for the discussion…"></textarea>
+  <label class="amend-hint" style="display:block;margin-top:8px">
+    <input type="checkbox" id="floorRestart">
+    restart the turn in flight (discards its current work)</label>
+  <div id="floorError" class="failure" style="display:none"></div>
+  <div class="formrow">
+    <button class="btn"
+      onclick="document.getElementById('floordlg').close()">Cancel</button>
+    <button class="btn primary" id="floorSend"
+      onclick="sendFloorIntervention()">Intervene</button>
+  </div>
+</dialog>
+
 <dialog id="story">
   <h2 id="storyTitle">Story</h2>
   <div id="storyBody" class="storybody"></div>
@@ -1484,6 +1502,9 @@ function renderSessionDetail(view) {
           ? `<button class="btn primary" ${sessionStarting ? "disabled" : ""}
               onclick="startSelectedSession()">${sessionStarting ? "Starting…" : "Start session"}</button>`
           : "")}
+    ${!terminal
+      ? `<button class="btn" onclick="openFloorDialog()">Intervene&#8230;</button>`
+      : ""}
     <button class="btn" style="margin-left:auto"
       onclick="openSessionInfo()">Info&#8230;</button>
   </div>`;
@@ -1624,6 +1645,52 @@ async function startSelectedSession() {
     alert(e.message);
   } finally {
     sessionStarting = false;
+    refreshSessionDetail();
+  }
+}
+function openFloorDialog() {
+  if (!lastSessionView || BS_TERMINAL.has(lastSessionView.status)) return;
+  document.getElementById("floorText").value = "";
+  const restart = document.getElementById("floorRestart");
+  restart.checked = false;
+  // Restart only matters while a participant is actually working.
+  restart.disabled = lastSessionView.process !== "running";
+  document.getElementById("floorError").style.display = "none";
+  document.getElementById("floordlg").showModal();
+}
+async function sendFloorIntervention() {
+  const text = (document.getElementById("floorText").value || "").trim();
+  const err = document.getElementById("floorError");
+  if (!text) {
+    err.textContent = "write the intervention first";
+    err.style.display = "";
+    return;
+  }
+  const restart = document.getElementById("floorRestart").checked &&
+    lastSessionView && lastSessionView.process === "running";
+  const btn = document.getElementById("floorSend");
+  btn.disabled = true;
+  try {
+    await api("/api/brainstorming/sessions/" +
+      encodeURIComponent(selectedSession) + "/floor", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({text, author_name: "operator"}),
+    });
+    if (restart) {
+      // Discard the in-flight turn so the intervention is read now:
+      // stop reaps the worker, start relaunches the same turn fresh.
+      await api("/api/brainstorming/sessions/" +
+        encodeURIComponent(selectedSession) + "/stop", {method: "POST"});
+      await api("/api/brainstorming/sessions/" +
+        encodeURIComponent(selectedSession) + "/start", {method: "POST"});
+    }
+    document.getElementById("floordlg").close();
+  } catch (e) {
+    err.textContent = e.message;  // sealed refusal token, verbatim
+    err.style.display = "";
+  } finally {
+    btn.disabled = false;
     refreshSessionDetail();
   }
 }

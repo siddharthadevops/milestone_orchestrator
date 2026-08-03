@@ -501,6 +501,53 @@ class BrainstormingTranscriptTest(unittest.TestCase):
             )
         self.assertEqual(after, self._read(self.store.read(session_id)))
 
+    def test_floor_interventions_append_at_their_boundary_without_cost(self):
+        session_id = "floor-transcript"
+        snapshot = self._initialize(session_id, self._create(session_id))
+        opening = {
+            "after_completed_turns": 0,
+            "author_id": "entity_" + "0" * 32,
+            "author_name": "operator",
+            "plain": "Weigh migration cost before deciding.",
+            "at": 100.0,
+        }
+        snapshot = self.store.record_floor_intervention(
+            session_id, snapshot.revision, opening
+        )
+        snapshot = self._turn(
+            session_id, snapshot, "lead-machine", "Round one opening."
+        )
+        mid = dict(
+            opening,
+            after_completed_turns=1,
+            at=200.0,
+            plain="Also keep the rollout reversible.",
+        )
+        snapshot = self.store.record_floor_intervention(
+            session_id, snapshot.revision, mid
+        )
+        snapshot = self._turn(
+            session_id, snapshot, "critic-machine", "Round one reply."
+        )
+        rendered = self._read(snapshot)
+        self.assertEqual(
+            self._headings(rendered),
+            [
+                "Opening",
+                "Intervention — operator",
+                "Discussion turn — Round 1 — Initial Position",
+                "Intervention — operator",
+                "Discussion turn — Round 1 — Contrary Position",
+            ],
+        )
+        self.assertIn("> Weigh migration cost before deciding.", rendered)
+        self.assertIn("> Also keep the rollout reversible.", rendered)
+        # The author id is machine identity and stays out of the chat.
+        self.assertNotIn("entity_", rendered)
+        # The appends consumed no round and no turn.
+        self.assertEqual(snapshot.state["rounds_used"], 1)
+        self.assertEqual(len(snapshot.state["completed_turns"]), 2)
+
     def test_closure_ballots_render_every_vote_and_failed_attempt_in_order(self):
         session_id = "ballots"
         snapshot = self._create(session_id)

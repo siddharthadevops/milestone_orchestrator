@@ -51,6 +51,7 @@ TARGET_IN_USE = "brainstorming_target_in_use"
 STOP_INCOMPLETE = "brainstorming_stop_incomplete"
 SESSION_RUNNING = "brainstorming_session_running"
 EXTERNAL_INTERVENTION_CONFLICT = "brainstorming_external_intervention_conflict"
+FLOOR_INTERVENTION_CONFLICT = "brainstorming_floor_intervention_conflict"
 UNAVAILABLE = "brainstorming_unavailable"
 _PROJECT_REQUEST_ERRORS = {
     "invalid_project",
@@ -1553,6 +1554,96 @@ def submit_external_intervention(home, session_id, body, authorize):
         raise PublicLifecycleError(
             409, EXTERNAL_INTERVENTION_CONFLICT
         ) from exc
+    except (TypeError, ValueError, brainstorming.ContractError) as exc:
+        raise PublicLifecycleError(400, INVALID_REQUEST) from exc
+    except Exception as exc:
+        raise PublicLifecycleError(503, UNAVAILABLE) from exc
+
+
+def floor_author_id(email):
+    """Derive the bridge entity id for an authenticated caller."""
+    digest = hashlib.sha256(
+        brainstorming._text(email, "floor intervention author email")
+        .strip().lower().encode("utf-8")
+    ).hexdigest()
+    return "entity_%s" % digest[:32]
+
+
+def submit_floor_intervention(home, session_id, body, authorize, author_email):
+    """Append one out-of-turn intervention at the current turn boundary.
+
+    The append consumes no round, target revision, or provider call; the
+    running lifecycle picks it up on its next state read. A terminal session
+    conflicts instead of growing its closed record.
+    """
+    record = _record_by_id(home, session_id)
+    _authorize_record(record, authorize)
+    try:
+        brainstorming._exact_keys(
+            body,
+            ("text", "author_name"),
+            ("author_id",),
+            "floor intervention submission",
+        )
+        text = brainstorming._text(
+            body["text"], "floor intervention submission.text"
+        )
+        author_name = brainstorming._text(
+            body["author_name"],
+            "floor intervention submission.author_name",
+        )
+        author_id = body.get("author_id")
+        if author_id is None:
+            author_id = floor_author_id(author_email)
+        else:
+            author_id = brainstorming._text(
+                author_id, "floor intervention submission.author_id"
+            )
+        if not brainstorming.FLOOR_AUTHOR_ID_RE.match(author_id):
+            raise brainstorming.ContractError(
+                "floor intervention submission.author_id must be "
+                "label_hex32-shaped"
+            )
+    except (TypeError, ValueError, brainstorming.ContractError) as exc:
+        raise PublicLifecycleError(400, INVALID_REQUEST) from exc
+    try:
+        store = brainstorming.SessionStore(state_directory(home))
+        while True:
+            snapshot = store.read(session_id)
+            if snapshot is None:
+                raise brainstorming.SessionNotFound(session_id)
+            if snapshot.state["status"] in brainstorming.TERMINAL_STATUSES:
+                raise PublicLifecycleError(409, FLOOR_INTERVENTION_CONFLICT)
+            projection = brainstorming.coordination_projection(snapshot.state)
+            fact = {
+                "after_completed_turns": (
+                    0
+                    if projection is None
+                    else len(projection["completed_turns"])
+                ),
+                "author_id": author_id,
+                "author_name": author_name,
+                "plain": text,
+                "at": time.time(),
+            }
+            try:
+                accepted = store.record_floor_intervention(
+                    session_id, snapshot.revision, fact
+                )
+            except brainstorming.RevisionConflict:
+                continue
+            return {
+                "revision": accepted.revision,
+                "intervention": fact,
+            }
+    except PublicLifecycleError:
+        raise
+    except (
+        brainstorming.IllegalTransition,
+        brainstorming.HistoryRewriteError,
+        brainstorming.SessionNotFound,
+    ) as exc:
+        raise PublicLifecycleError(409, FLOOR_INTERVENTION_CONFLICT) from exc
     except (TypeError, ValueError, brainstorming.ContractError) as exc:
         raise PublicLifecycleError(400, INVALID_REQUEST) from exc
     except Exception as exc:
