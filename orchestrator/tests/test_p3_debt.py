@@ -529,6 +529,125 @@ class TestP3Debt(DriverTestCase):
             self.assertEqual([d["id"] for d in unit["debt"]], ["codex-F1"])
             self.assertEqual([f["id"] for f in unit["fix_queue"]], ["F2"])
 
+    def test_contesting_a_debt_entry_reopens_it_for_the_fixer(self):
+        # The N46 incident: a deferred finding later escalated with new
+        # evidence had no legal reference — the contest read as a protocol
+        # violation and killed the run, discarding the round's other
+        # findings with it. A debt id is now contestable like an
+        # adjudicated rejection, and a contesting finding NEVER routes
+        # through the reclassifier (no reclassify step is scripted for it:
+        # a re-deferral attempt would abort on script exhaustion).
+        with tempfile.TemporaryDirectory(prefix="orch-mock-") as ws:
+            path = init_state(ws, make_config(p3_reclassify_debt=True))
+            mock = runners.MockRunner([
+                draft_step(),
+                # codex round: lone P3 -> deferred as debt codex-F1.
+                step("review_round",
+                     report("review_round", [finding("F1", "stale word")]),
+                     family="codex"),
+                reclassify(True, family="claude", reason="cosmetic"),
+                # claude round: a P3 CONTESTING that debt with new
+                # evidence. P3 is in the doc defer scope, so only the
+                # contests guard keeps it away from the reclassifier.
+                step("review_round",
+                     report("review_round", [finding(
+                         "F2",
+                         "the deferred wording hides a real dead end",
+                         contests={
+                             "rejection_id": "codex-F1",
+                             "new_evidence": "the shipped state machine "
+                                             "makes the path terminal",
+                         })]),
+                     family="claude"),
+            ])
+            driver = drv.Driver(path, runner=mock)
+            self.step_until(
+                driver, lambda s: s["units"][0]["status"] == st.U_FIXING
+            )
+            self.assertEqual(mock.script, [])
+            state = st.load(path)
+            unit = state["units"][0]
+            # The run is alive and the finding reached the fix queue with
+            # its contest intact (the pointer-kill guard keys off it).
+            self.assertIsNone(state["failure"])
+            self.assertEqual(
+                [(f["id"], (f.get("contests") or {}).get("rejection_id"))
+                 for f in unit["fix_queue"]],
+                [("F2", "codex-F1")],
+            )
+            # The contested deferral is re-opened: the recorded entry
+            # stays (debt arrays are immutable history) but it leaves the
+            # active view, and the event says who re-opened what.
+            self.assertEqual([e["id"] for e in unit["debt"]], ["codex-F1"])
+            self.assertEqual(st.active_debt(state, unit), [])
+            contested = [e for e in state["events"]
+                         if e["type"] == "debt_contested"]
+            self.assertEqual(
+                [(e["debt_id"], e["contested_by"]) for e in contested],
+                [("codex-F1", "F2")],
+            )
+
+    def test_reopen_contested_debt_removes_only_the_cited_entry(self):
+        state = {
+            "units": [
+                {
+                    "kind": "skeleton", "slice_id": None,
+                    "debt": [
+                        {"id": "codex-F1", "severity": "P3",
+                         "summary": "cited"},
+                        {"id": "codex-F2", "severity": "P3",
+                         "summary": "unrelated"},
+                    ],
+                },
+            ],
+            "events": [],
+        }
+        reopened = st.reopen_contested_debt(
+            state,
+            [
+                {"id": "F9",
+                 "contests": {"rejection_id": "codex-F1",
+                              "new_evidence": "proof"}},
+                {"id": "F10"},  # no contests: never touches debt
+            ],
+        )
+        self.assertEqual(reopened, ["codex-F1"])
+        # History is untouched; the active view retires the entry.
+        self.assertEqual(
+            [e["id"] for e in state["units"][0]["debt"]],
+            ["codex-F1", "codex-F2"],
+        )
+        self.assertEqual(
+            [e["id"] for e in st.active_debt(state, state["units"][0])],
+            ["codex-F2"],
+        )
+        self.assertEqual(st.debt_ids(state), {"codex-F2"})
+        # Re-contesting a re-opened entry finds nothing: it is not settled.
+        self.assertEqual(
+            st.reopen_contested_debt(
+                state,
+                [{"id": "F12",
+                  "contests": {"rejection_id": "codex-F1",
+                               "new_evidence": "again"}}],
+            ),
+            [],
+        )
+        # A contest naming an adjudicated rejection (not a debt id) leaves
+        # the ledger alone.
+        self.assertEqual(
+            st.reopen_contested_debt(
+                state,
+                [{"id": "F11",
+                  "contests": {"rejection_id": "skeleton-codex-r1/F1",
+                               "new_evidence": "proof"}}],
+            ),
+            [],
+        )
+        self.assertEqual(
+            [e["id"] for e in st.active_debt(state, state["units"][0])],
+            ["codex-F2"],
+        )
+
     def test_feature_off_by_default_p3_still_fixes(self):
         with tempfile.TemporaryDirectory(prefix="orch-mock-") as ws:
             path = init_state(ws, make_config())  # p3_reclassify_debt absent

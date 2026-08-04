@@ -5902,9 +5902,11 @@ class Driver(object):
 
     def _validate_contests(self, unit, output, kind):
         """Structural check: a finding's contests.rejection_id must exist in
-        the milestone registry. A bad reference is a protocol violation and
-        fails the run with the explanation."""
-        known = st.registry_ids(self.state)
+        the milestone registry — adjudicated rejections OR tracked debt,
+        the two ways a finding gets dispatched without a fix. A bad
+        reference is a protocol violation and fails the run with the
+        explanation."""
+        known = st.registry_ids(self.state) | st.debt_ids(self.state)
         for f in output.get("findings", []):
             contests = f.get("contests")
             if contests and contests.get("rejection_id") not in known:
@@ -7001,6 +7003,7 @@ class Driver(object):
             }
             for f in output["findings"]
         ]
+        st.reopen_contested_debt(self.state, unit["fix_queue"])
         source["type"] = "delta"
         source["family"] = family
         source["source_round_id"] = st.family_rounds(unit, family)[-1]["id"]
@@ -7656,6 +7659,10 @@ class Driver(object):
             candidates = [
                 (f, family) for f in findings
                 if f.get("severity") in defer_scope
+                # A contest is evidence-backed escalation of something
+                # already dispatched once; re-deferring it would loop the
+                # same issue through debt forever. Contests always fix.
+                and not f.get("contests")
             ]
             if candidates:
                 source_round = "%s-%s-r%d" % (

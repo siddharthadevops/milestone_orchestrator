@@ -215,7 +215,9 @@ def _debt_block(debt):
     lines = [
         "DEFERRED DEBT (settled for this unit; do NOT re-report or fix)",
         "Leave each entry settled unless NEW evidence raises correction risk",
-        "above its recorded rating; then cite its id and report only the delta.",
+        "above its recorded rating; then contest it: reference its id in your",
+        "finding's `contests.rejection_id` with the new evidence, and report",
+        "only the delta. A legal contest re-opens the deferral for the fixer.",
     ]
     shown = debt
     if len(debt) > DEBT_MAX_ENTRIES:

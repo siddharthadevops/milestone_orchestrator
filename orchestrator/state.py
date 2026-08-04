@@ -1278,6 +1278,63 @@ def registry_ids(state):
     return {e["id"] for e in adjudicated_rejections(state)}
 
 
+def contested_debt_refs(state):
+    """(unit_key, debt_id) pairs retired from active debt by a contest."""
+    return {
+        (e.get("unit"), e.get("debt_id"))
+        for e in state.get("events", [])
+        if e.get("type") == "debt_contested"
+    }
+
+
+def debt_ids(state):
+    """Every ACTIVE tracked-debt entry id across all units.
+
+    Deferral is the second way a finding gets dispatched without a fix, so
+    a debt entry must be contestable exactly like an adjudicated rejection:
+    a reviewer that brings new evidence against a deferral needs a legal
+    reference to name, or the protocol check reads the contest as garbage
+    and kills the run (the N46 incident: a deferred P3 escalated to P2
+    with shipped-state-machine evidence had no legal way to say so).
+    Already-contested entries are excluded: they are re-opened, not
+    settled, so there is nothing left to contest."""
+    return {
+        entry["id"]
+        for unit in state["units"]
+        for entry in active_debt(state, unit)
+    }
+
+
+def reopen_contested_debt(state, findings):
+    """Re-open every debt entry a queued finding contests.
+
+    Debt arrays are immutable history, so — exactly like the requeue and
+    overturn machinery — the contest is recorded as an append-only
+    `debt_contested` event and active_debt() derives the entry's
+    retirement from it. Searched across all units because debt ids are
+    milestone-wide (a later unit's reviewer may contest an earlier unit's
+    deferral). Returns the re-opened ids."""
+    refs = {
+        (f.get("contests") or {}).get("rejection_id"): f.get("id")
+        for f in findings or []
+        if f.get("contests")
+    }
+    reopened = []
+    if not refs:
+        return reopened
+    for unit in state["units"]:
+        for entry in active_debt(state, unit):
+            if entry["id"] in refs:
+                reopened.append(entry["id"])
+                append_event(
+                    state, "debt_contested",
+                    unit=unit_key(unit),
+                    debt_id=entry["id"],
+                    contested_by=refs[entry["id"]],
+                )
+    return reopened
+
+
 def reopen_for_repair(state, unit, gap, reason, reported_by=None):
     """Reopen a SEALED unit to resolve a downstream builder's gap (reform
     §3, stop-report-repair-resume). Transitions sealed -> repairing and
@@ -1459,6 +1516,7 @@ def stamp_redoc_wave_gate(state, anchor, gate_sha):
 def enter_fix_episode(state, unit, findings, source_type, source_family,
                       source_round_id, return_to):
     """Queue a findings list for the fixer and transition to U_FIXING."""
+    reopen_contested_debt(state, findings)
     unit["fix_queue"] = copy.deepcopy(findings)
     unit["fix_source"] = {
         "type": source_type,
@@ -1517,12 +1575,16 @@ def requeued_debt_refs(state):
 
 
 def active_debt(state, unit):
-    """Debt entries still deferred, excluding implementation requeues."""
+    """Debt entries still deferred: recorded history minus implementation
+    requeues and minus contested entries (a contest re-opens the deferral
+    for the fixer, so the entry is no longer settled)."""
     hidden = requeued_debt_refs(state)
+    contested = contested_debt_refs(state)
     key = unit_key(unit)
     return [
         debt for index, debt in enumerate(unit.get("debt", []))
         if (key, index) not in hidden
+        and (key, debt.get("id")) not in contested
     ]
 
 
