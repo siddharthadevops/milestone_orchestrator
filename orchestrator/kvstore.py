@@ -24,6 +24,23 @@ except ImportError:  # pragma: no cover - non-POSIX
 DEFAULT_NAMESPACE = "milestone_orchestrator"
 STORE_FILENAME = "kv.json"
 
+# Parsed-document cache for READ paths, keyed by the store file's identity
+# (device, inode, size, mtime_ns) — the same change key the service uses for
+# run summaries. Every key lives in one document here, so without this a
+# listing that touches N keys parses the whole store N times: the panel's
+# session list was doing 111 full parses of a 5.6MB file every two seconds.
+#
+# Safe to hand out uncopied because readers never receive a reference into
+# it: _entry_value decodes through canonical_json_value, which returns a
+# fresh structure. Mutators never see it at all — they parse the file again
+# under the lock, so the object a writer edits is always its own.
+#
+# Module-level on purpose: store clients are constructed per request, so an
+# instance cache would never survive to be hit.
+_DOC_CACHE = {}
+_DOC_CACHE_LOCK = threading.Lock()
+_DOC_CACHE_MAX = 8
+
 
 class _Absent:
     def __repr__(self):
@@ -322,7 +339,7 @@ class LocalKVClient:
 
     def get(self, key):
         key = _validate_key(key)
-        with self._locked_doc() as doc:
+        with self._locked_doc(mutating=False) as doc:
             entry = doc["entries"].get(key)
             if entry is None:
                 return ABSENT
@@ -368,7 +385,7 @@ class LocalKVClient:
         if limit is not None and limit <= 0:
             raise ValueError("limit must be positive")
 
-        with self._locked_doc() as doc:
+        with self._locked_doc(mutating=False) as doc:
             keys = sorted(doc["entries"])
             if prefix is not None:
                 keys = [key for key in keys if key.startswith(prefix)]
@@ -396,17 +413,66 @@ class LocalKVClient:
             return result
 
     @contextlib.contextmanager
-    def _locked_doc(self):
+    def _locked_doc(self, mutating=True):
         os.makedirs(self.directory, exist_ok=True)
         with self._thread_lock:
             fh = open(self.lock_path, "a+")
             try:
                 if fcntl is not None:
                     fcntl.flock(fh.fileno(), fcntl.LOCK_EX)
-                doc = self._load_doc()
+                doc = (
+                    self._load_doc()
+                    if mutating
+                    else self._load_doc_cached()
+                )
                 yield doc
             finally:
                 fh.close()
+
+    def _change_key(self):
+        """Identity of the current store file, or None if it is absent.
+
+        Inode and device ride along because the file is replaced by rename
+        on every write, so a fresh inode means fresh content even if size
+        and mtime were somehow to repeat. Mode, ownership and ctime ride
+        along too: a store that just became unreadable has not changed
+        content, and must still not answer from a cached parse.
+        """
+        try:
+            stat = os.stat(self.path)
+        except OSError:
+            return None
+        return (
+            stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns,
+            stat.st_mode, stat.st_uid, stat.st_gid, stat.st_ctime_ns,
+        )
+
+    def _load_doc_cached(self):
+        """Read-only view of the document, reparsed only when it changed.
+
+        The cache elides the PARSE, never the access: a hit still opens the
+        store, so a file that became unreadable fails exactly as it would
+        without the cache instead of being answered from memory.
+        """
+        key = self._change_key()
+        if key is None:
+            return self._load_doc()
+        with _DOC_CACHE_LOCK:
+            cached = _DOC_CACHE.get(self.path)
+        if cached is not None and cached[0] == key:
+            with open(self.path, "rb", buffering=0) as fh:
+                fh.read(1)
+            return cached[1]
+        doc = self._load_doc()
+        # Re-stat after parsing: a write that landed while we were reading
+        # must not be cached under the key we observed before it.
+        if self._change_key() == key:
+            with _DOC_CACHE_LOCK:
+                if len(_DOC_CACHE) >= _DOC_CACHE_MAX \
+                        and self.path not in _DOC_CACHE:
+                    _DOC_CACHE.clear()
+                _DOC_CACHE[self.path] = (key, doc)
+        return doc
 
     def _load_doc(self):
         if not os.path.exists(self.path):

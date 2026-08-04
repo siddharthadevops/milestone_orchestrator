@@ -1,9 +1,12 @@
 import json
 import os
+import subprocess
+import sys
 import tempfile
 import threading
 import unittest
 from concurrent.futures import ThreadPoolExecutor
+from unittest import mock
 
 from orchestrator import kvstore
 
@@ -401,6 +404,111 @@ class TestPersistenceAndConcurrency(KVStoreTestCase):
             thread.join()
         self.assertEqual(thread_errors, [])
         self.assertEqual(errors, [])
+
+
+class TestReadDocumentCache(KVStoreTestCase):
+    """Reads reuse the parsed store, but never a stale one.
+
+    Every key shares one document, so a listing that touches N keys used to
+    parse the whole store N times. Caching that parse is only safe if a
+    write is visible to the very next read, from any client and any process.
+    """
+
+    def _parses(self):
+        """Count real json.load calls made through the client."""
+        seen = []
+        original = kvstore.LocalKVClient._load_doc
+
+        def counted(client):
+            seen.append(client.path)
+            return original(client)
+
+        return seen, mock.patch.object(
+            kvstore.LocalKVClient, "_load_doc", counted
+        )
+
+    def test_repeated_reads_parse_the_store_once(self):
+        for index in range(5):
+            self.env.put("milestone_orchestrator/policy:p%d" % index, index)
+        seen, patched = self._parses()
+        with patched:
+            for _ in range(3):
+                for index in range(5):
+                    self.env.read("milestone_orchestrator/policy:p%d" % index)
+        self.assertEqual(
+            len(seen), 1, "15 reads should share one parse, got %d" % len(seen)
+        )
+
+    def test_a_write_is_visible_to_the_next_read(self):
+        key = "milestone_orchestrator/policy:p1"
+        self.env.put(key, {"n": 1})
+        self.assertEqual(self.env.read(key)["value"], {"n": 1})
+        # Same client, and a second client that never saw the old document.
+        self.env.put(key, {"n": 2})
+        self.assertEqual(self.env.read(key)["value"], {"n": 2})
+        other = kvstore.RevisionEnvelopeStore(kvstore.LocalKVClient(self.home))
+        self.assertEqual(other.read(key)["value"], {"n": 2})
+
+    def test_rapid_write_read_cycles_never_serve_a_stale_value(self):
+        # Same-millisecond writes are exactly where a size+mtime key could
+        # collide; each round must still read back what it just wrote.
+        key = "milestone_orchestrator/policy:churn"
+        for index in range(60):
+            self.env.put(key, {"n": index, "pad": "x" * (index % 3)})
+            self.assertEqual(self.env.read(key)["value"]["n"], index)
+
+    def test_an_out_of_process_write_is_observed(self):
+        key = "milestone_orchestrator/policy:external"
+        self.env.put(key, {"n": 1})
+        self.assertEqual(self.env.read(key)["value"], {"n": 1})
+        script = (
+            "import sys; sys.path.insert(0, %r)\n"
+            "from orchestrator import kvstore\n"
+            "store = kvstore.RevisionEnvelopeStore("
+            "kvstore.LocalKVClient(%r))\n"
+            "store.put(%r, {'n': 2})\n"
+            % (
+                os.path.dirname(os.path.dirname(
+                    os.path.dirname(os.path.abspath(kvstore.__file__))
+                )),
+                self.home,
+                key,
+            )
+        )
+        subprocess.run(
+            [sys.executable, "-c", script], check=True, timeout=60,
+            capture_output=True, text=True,
+        )
+        self.assertEqual(self.env.read(key)["value"], {"n": 2})
+
+    def test_mutators_never_receive_the_shared_document(self):
+        # A writer that edited the cached object in place would corrupt
+        # every later reader of that same parse.
+        key = "milestone_orchestrator/policy:isolated"
+        self.env.put(key, {"n": 1})
+        self.env.read(key)  # populate the cache
+        with kvstore._DOC_CACHE_LOCK:
+            cached = kvstore._DOC_CACHE[self.client.path][1]
+        before = json.dumps(cached, sort_keys=True)
+        self.env.put(key, {"n": 2})
+        self.assertEqual(json.dumps(cached, sort_keys=True), before)
+
+    def test_listing_sees_keys_written_since_the_last_read(self):
+        self.env.put("milestone_orchestrator/policy:a", 1)
+        self.assertEqual(
+            [item["key"] for item in
+             self.client.list_entries(prefix="milestone_orchestrator/policy:")
+             ["items"]],
+            ["milestone_orchestrator/policy:a"],
+        )
+        self.env.put("milestone_orchestrator/policy:b", 2)
+        self.assertEqual(
+            [item["key"] for item in
+             self.client.list_entries(prefix="milestone_orchestrator/policy:")
+             ["items"]],
+            ["milestone_orchestrator/policy:a",
+             "milestone_orchestrator/policy:b"],
+        )
 
 
 class TestKeyGrammar(unittest.TestCase):

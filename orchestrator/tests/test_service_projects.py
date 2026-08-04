@@ -850,14 +850,22 @@ class TestWorkAreaCrud(ProjectsServiceTestCase):
         status, body = self.launch(expect=None)
         self.assertEqual((status, body["error"]), (500, "malformed_store"))
 
+    @unittest.skipIf(
+        hasattr(os, "geteuid") and os.geteuid() == 0,
+        "root can read a chmod-000 store",
+    )
     def test_unreadable_store_refuses_work_area_route_stably(self):
+        # The store is made genuinely unreadable rather than mocked at the
+        # loader: a store whose CONTENT is unchanged is exactly the case a
+        # parsed-document cache could answer from memory, and refusing must
+        # not depend on having missed the cache.
         self.declare(self.primary)
-        with mock.patch.object(
-            kvstore.LocalKVClient, "_load_doc",
-            side_effect=OSError("permission denied"),
-        ):
-            self.refused(500, "unreadable_store", "GET",
-                         self.project_path(PROJECT, "work-areas", AREA))
+        path = self.kv_file()
+        self.expect(200, "GET", self.project_path(PROJECT, "work-areas", AREA))
+        os.chmod(path, 0)
+        self.addCleanup(os.chmod, path, 0o600)
+        self.refused(500, "unreadable_store", "GET",
+                     self.project_path(PROJECT, "work-areas", AREA))
 
     def test_name_with_spaces_round_trips_url_encoded(self):
         # PROJECT and AREA both carry spaces; the fixture helpers already
