@@ -2599,6 +2599,7 @@ class MilestoneDriverRethinkTest(unittest.TestCase):
                     "status": "ok",
                     "kind": contracts.KIND_FIX_FINDINGS,
                     "findings": [],
+                    "tests_modified": False,
                     "files_changed": [],
                 },
             },

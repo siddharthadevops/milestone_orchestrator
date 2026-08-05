@@ -977,6 +977,38 @@ def validate_worker_output(obj, kind, require_plain=False,
                         "%s: verification repair must not include %r"
                         % (ctx, claim)
                     )
+            # The suite is certified by this envelope alone, so the ONE
+            # thing that decides whether the certification can be trusted
+            # is whether the tests themselves were altered to obtain it.
+            # Declared, never inferred: "a test" is language-specific and
+            # in Rust or Elixir lives INSIDE the source file, so no path
+            # rule could decide it without inventing false violations.
+            # The declaration is therefore trusted, like the rest of the
+            # report-only contract — it only routes the review.
+            tests_modified = obj.get("tests_modified")
+            if not isinstance(tests_modified, bool):
+                raise ContractError(
+                    "%s: verification repair must declare tests_modified "
+                    "as a boolean" % ctx
+                )
+            changed_tests = _optional(obj, "tests_changed", list, ctx)
+            if tests_modified:
+                if not changed_tests:
+                    raise ContractError(
+                        "%s: tests_modified requires tests_changed naming "
+                        "every altered test file" % ctx
+                    )
+                for i, path in enumerate(changed_tests):
+                    if not isinstance(path, str) or not path.strip():
+                        raise ContractError(
+                            "%s.tests_changed[%d] must be a non-empty path"
+                            % (ctx, i)
+                        )
+            elif changed_tests:
+                raise ContractError(
+                    "%s: tests_changed contradicts tests_modified false"
+                    % ctx
+                )
         else:
             suite_command = obj.get("suite_command")
             suite_finding_id = obj.get("suite_command_finding_id")
@@ -1408,10 +1440,15 @@ Return exactly one JSON object; no prose or markdown fences.
 
 Completed suite repair:
 {"status":"ok","kind":"fix_findings","findings":[],
- "files_changed":["..."],"notes":"<optional short note>"}
+ "files_changed":["..."],"tests_modified":false,"tests_changed":[],
+ "notes":"<optional short note>"}
 `status: "ok"` certifies that you ran the configured full suite on the final
 workspace bytes and it passed. `findings` must be empty: this task repairs the
 live suite result, not a stored review finding.
+`tests_modified` is REQUIRED and boolean: true if you altered any test CODE to
+reach green — wherever it lives, including tests embedded in a source file —
+false otherwise, naming what you altered in `tests_changed`. It is taken at
+its word: a false `no` skips the review that would have caught it.
 When the prompt explicitly requires slice-plan synchronization or offers a
 legacy design correction, include its normal `slices` or `design_correction`
 field as well; those fields receive their ordinary validation.

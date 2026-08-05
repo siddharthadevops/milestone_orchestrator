@@ -6520,11 +6520,50 @@ class Driver(object):
             unit["verify_fix_attempts"]["pre_seal"] = 0
         self._maybe_update_slices(unit, output)
         unit["fix_loop_rounds"] = unit.get("fix_loop_rounds", 0) + 1
-        if (
+        # A suite repair that did not touch the tests is taken at its word.
+        # The old condition only skipped ahead when the fixer changed
+        # NOTHING — the case where the shortcut is least needed — so every
+        # real repair fell into a delta review whose findings forced more
+        # edits, and those edits invalidated the certification the episode
+        # had just earned, sending the unit back to re-verify. That is the
+        # loop: certify green, get edited, re-verify, repeat.
+        #
+        # What actually decides whether the certification can be trusted is
+        # whether the tests themselves were altered to obtain it, and only
+        # the fixer knows that: a test can live in its own file, beside the
+        # code, or inside it, differently in every language. So it declares,
+        # and the declaration routes — reviewed when it says yes, accepted
+        # when it says no.
+        certified_without_touching_tests = (
             verification_repair
-            and not fix_workspace_changed
+            and not bool(output.get("tests_modified"))
             and not folded_commits
-        ):
+        )
+        if certified_without_touching_tests:
+            if fix_workspace_changed:
+                # Skip the REVIEW, never the commit discipline. Folding the
+                # repair into the wip commit needs git; invalidating stale
+                # approvals does not — the candidate changed either way, and
+                # a git-disabled run inheriting a whole-artifact approval of
+                # bytes that no longer exist is exactly the seal this guard
+                # is here to prevent.
+                if gitops.enabled(self.config):
+                    try:
+                        sha = gitops.amend(self.workspace)
+                    except gitops.GitError as exc:
+                        st.fail_run(
+                            self.state,
+                            "suite repair amend failed: %s" % exc,
+                            unit=unit,
+                        )
+                        self._save()
+                        raise StopStep(str(exc))
+                    st.append_event(
+                        self.state, "amended", unit=st.unit_key(unit), sha=sha
+                    )
+                st.restart_reviews_after_candidate_change(
+                    self.state, unit, "suite repair changed bytes"
+                )
             target = source.get("return_to") or st.U_PRE_SEAL_VERIFY
             if (
                 target == st.U_PRE_SEAL_VERIFY
@@ -6542,7 +6581,11 @@ class Driver(object):
                 self.state,
                 unit,
                 target,
-                reason="full suite certified by fixer; no candidate delta",
+                reason=(
+                    "full suite certified by fixer; tests untouched"
+                    if fix_workspace_changed
+                    else "full suite certified by fixer; no candidate delta"
+                ),
             )
             return "full suite green; continuing without re-verification"
         if gitops.enabled(self.config):

@@ -193,6 +193,18 @@ def fix_ok(entries, files_changed=(), **extra):
     )
 
 
+def suite_fix_ok(files_changed=(), tests_modified=False, tests_changed=(),
+                 **extra):
+    """A verification-repair envelope, which must declare whether the tests
+    themselves were altered to reach green — that declaration is what routes
+    the episode (reviewed when yes, taken at its word when no)."""
+    payload = dict(extra)
+    payload["tests_modified"] = tests_modified
+    if tests_modified:
+        payload["tests_changed"] = list(tests_changed) or ["test/some_test.exs"]
+    return fix_ok([], files_changed=files_changed, **payload)
+
+
 def step(kind, response, family=None, side_effect=None):
     s = {"expect_kind": kind, "response": response}
     if family is not None:
@@ -437,7 +449,7 @@ def impl_script():
         # The first full suite since implementation now runs at the final
         # boundary and exposes calculator.py without div_fixed.
         step("fix_findings",
-             fix_ok([], files_changed=["calculator.py", "div_fixed"]),
+             suite_fix_ok(files_changed=["calculator.py", "div_fixed"]),
              family="codex",
              side_effect=multi(
                  write_file(
@@ -447,7 +459,7 @@ def impl_script():
                  ),
                  write_file("div_fixed", "verification repaired\n"),
              )),
-        step("delta_review", report("delta_review"), family="codex"),
+        # No delta review: the suite repair declared the tests untouched.
         # The fix changed bytes, so both whole-artifact reviews must approve
         # the repaired candidate before its one final suite can pass.
         step("review_round", report("review_round"), family="codex"),
@@ -496,7 +508,10 @@ class TestHappyLifecycle(DriverTestCase):
                    drv.A_FIX, drv.A_DELTA_REVIEW,
                    drv.A_VERIFY, drv.A_REVIEW_ROUND,
                    drv.A_REVIEW_ROUND, drv.A_VERIFY,
-                   drv.A_FIX, drv.A_DELTA_REVIEW, drv.A_VERIFY,
+                   # The suite repair declared the tests untouched, so its
+                   # certification is honoured: no delta review, and the
+                   # changed bytes go straight to fresh whole-artifact rounds.
+                   drv.A_FIX, drv.A_VERIFY,
                    drv.A_REVIEW_ROUND, drv.A_REVIEW_ROUND,
                    drv.A_VERIFY]
             )
@@ -556,9 +571,11 @@ class TestHappyLifecycle(DriverTestCase):
                     ("slice_impl-01-codex-r6", "delta_review", "codex"),
                     ("slice_impl-01-codex-r7", "review_round", "codex"),
                     ("slice_impl-01-claude-r2", "review_round", "claude"),
+                    # The suite repair, then straight to fresh rounds: it
+                    # declared the tests untouched, so no delta review sits
+                    # between its certification and the reviews.
                     ("slice_impl-01-codex-r8", "fix_findings", "codex"),
-                    ("slice_impl-01-codex-r9", "delta_review", "codex"),
-                    ("slice_impl-01-codex-r10", "review_round", "codex"),
+                    ("slice_impl-01-codex-r9", "review_round", "codex"),
                     ("slice_impl-01-claude-r3", "review_round", "claude"),
                 ],
             )

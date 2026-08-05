@@ -704,7 +704,8 @@ class TestFinalVerifyFixOwnership(DriverTestCase):
                 step("review_round", clean(), family="claude"),
                 step(
                     "fix_findings",
-                    ok("fix_findings", findings=[], files_changed=[]),
+                    ok("fix_findings", findings=[], files_changed=[],
+                       tests_modified=False),
                     family="codex",
                 ),
             ])

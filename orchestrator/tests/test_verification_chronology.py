@@ -24,6 +24,7 @@ from orchestrator import state as st
 from orchestrator.tests.test_driver_mock import (
     DriverTestCase,
     fix_ok,
+    suite_fix_ok,
     init_state,
     make_config,
     ok,
@@ -421,15 +422,13 @@ class TestVerificationChronology(DriverTestCase):
         script = _clean_milestone_script(1) + [
             step(
                 contracts.KIND_FIX_FINDINGS,
-                fix_ok([], files_changed=[marker]),
+                suite_fix_ok(files_changed=[marker]),
                 family="codex",
                 side_effect=write_file(marker, "green\n"),
             ),
-            step(
-                contracts.KIND_DELTA_REVIEW,
-                report(contracts.KIND_DELTA_REVIEW),
-                family="codex",
-            ),
+            # The repair declared it left the tests alone, so its
+            # certification is taken at its word: no delta review stands
+            # between it and the fresh whole-artifact rounds below.
         ] + _clean_reviews()
         with tempfile.TemporaryDirectory(prefix="orch-verify-final-fix-") as ws:
             path = init_state(ws, make_config(verification=[command]))
@@ -509,7 +508,7 @@ class TestVerificationChronology(DriverTestCase):
         script = _clean_milestone_script(1) + [
             step(
                 contracts.KIND_FIX_FINDINGS,
-                fix_ok([], files_changed=[marker]),
+                suite_fix_ok(files_changed=[marker]),
                 family="codex",
                 side_effect=commit_repair,
             ),

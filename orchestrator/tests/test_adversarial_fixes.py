@@ -41,6 +41,7 @@ from orchestrator.tests.test_driver_mock import (
     append_file,
     finding,
     fix_ok,
+    suite_fix_ok,
     init_state,
     make_config,
     multi,
@@ -783,7 +784,7 @@ class TestVerifyEpisodeIdsUniqueAcrossReentry(DriverTestCase):
             def repair_suite(**extra):
                 return step(
                     "fix_findings",
-                    fix_ok([], files_changed=["ok_marker"]),
+                    suite_fix_ok(files_changed=["ok_marker"]),
                     side_effect=write_file("ok_marker", "1"),
                     **extra
                 )
@@ -796,11 +797,13 @@ class TestVerifyEpisodeIdsUniqueAcrossReentry(DriverTestCase):
                 implement_step(),
                 step("review_round", report("review_round"), family="codex"),
                 step("review_round", report("review_round"), family="claude"),
-                # Initial scheduled verification fails (no marker yet). The suite
-                # fixer writes it, certifies green, and its real delta is
-                # reviewed before the certification can be reused.
+                # Initial scheduled verification fails (no marker yet). The
+                # suite fixer writes it and certifies green; declaring it left
+                # the tests alone, the certification is taken at its word and
+                # the fresh whole-artifact rounds review the changed bytes.
                 repair_suite(),
-                step("delta_review", report("delta_review")),
+                # No delta review: a suite repair that declares it left the
+                # tests alone is taken at its word.
                 step("review_round", report("review_round"), family="codex"),
                 step("review_round",
                      report("review_round", [finding(
@@ -819,7 +822,6 @@ class TestVerifyEpisodeIdsUniqueAcrossReentry(DriverTestCase):
                 step("review_round", report("review_round"), family="codex"),
                 step("review_round", report("review_round"), family="claude"),
                 repair_suite(),
-                step("delta_review", report("delta_review")),
                 step("review_round", report("review_round"), family="codex"),
                 step("review_round",
                      report("review_round", [finding(
@@ -839,7 +841,6 @@ class TestVerifyEpisodeIdsUniqueAcrossReentry(DriverTestCase):
                 # the same final stage and invalidates the preceding exact-
                 # byte suite certification too.
                 repair_suite(),
-                step("delta_review", report("delta_review")),
                 step("review_round", report("review_round"), family="codex"),
                 step("review_round", report("review_round"), family="claude"),
             ]))

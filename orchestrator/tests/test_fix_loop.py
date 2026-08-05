@@ -36,6 +36,7 @@ from orchestrator.tests.test_driver_mock import (
     append_file,
     finding,
     fix_ok,
+    suite_fix_ok,
     init_state,
     make_config,
     ok,
@@ -374,9 +375,14 @@ class TestDeltaFullReviewCheckpoint(DriverTestCase):
                 step("review_round", report("review_round"), family="claude"),
                 step(
                     "fix_findings",
-                    fix_ok(
-                        [],
+                    # Declaring that the tests WERE touched is what keeps a
+                    # real delta review in the episode: the certification
+                    # cannot be taken at its word when the suite may have
+                    # been bent to produce it.
+                    suite_fix_ok(
                         files_changed=["marker.txt"],
+                        tests_modified=True,
+                        tests_changed=["test/marker_test.exs"],
                     ),
                     family="codex",
                     side_effect=write_file("marker.txt", "fixed\n"),
@@ -544,10 +550,13 @@ class TestVerificationFixEpisode(DriverTestCase):
                 step("review_round", report("review_round"), family="codex"),
                 step("review_round", report("review_round"), family="claude"),
                 step("fix_findings",
-                     fix_ok([], files_changed=["marker.txt"]),
+                     suite_fix_ok(files_changed=["marker.txt"]),
                      family="codex",
                      side_effect=write_file("marker.txt", "repaired\n")),
-                step("delta_review", report("delta_review"), family="codex"),
+                # No delta review: the repair declared it did not touch the
+                # tests, so its certification is taken at its word. The
+                # changed bytes are still reviewed — as a whole artifact,
+                # by the fresh rounds below.
                 step("review_round", report("review_round"), family="codex"),
                 step("review_round", report("review_round"), family="claude"),
             ])
@@ -594,11 +603,14 @@ class TestVerificationFixEpisode(DriverTestCase):
             self.assertEqual(
                 [r["kind"] for r in unit["rounds"]],
                 ["review_round", "review_round", "fix_findings",
-                 "delta_review", "review_round", "review_round"],
+                 "review_round", "review_round"],
             )
-            # Order: final FAIL -> fixer certifies green -> delta -> amend ->
-            # fresh reviews -> exact certification reused. The driver never
-            # executes the suite a second time.
+            # Order: final FAIL -> fixer certifies green (declaring it did
+            # not touch the tests) -> amend -> fresh reviews -> exact
+            # certification reused. No delta review stands between the
+            # certification and the reviews, so nothing can force an edit
+            # that would invalidate it; the driver never executes the suite
+            # a second time.
             events = state["events"]
 
             def index_of(pred):
@@ -611,8 +623,12 @@ class TestVerificationFixEpisode(DriverTestCase):
                               and not e["ok"])
             i_fix = index_of(lambda e: e["type"] == "round_recorded"
                              and e["kind"] == "fix_findings")
-            i_delta = index_of(lambda e: e["type"] == "round_recorded"
-                               and e["kind"] == "delta_review")
+            self.assertEqual(
+                [e for e in events if e["type"] == "round_recorded"
+                 and e["kind"] == "delta_review"],
+                [],
+                "a suite repair that left the tests alone is not delta-reviewed",
+            )
             i_amend = index_of(lambda e: e["type"] == "amended")
             i_cert = index_of(lambda e: e["type"] == "verification"
                               and e.get("fixer_certified")
@@ -627,8 +643,7 @@ class TestVerificationFixEpisode(DriverTestCase):
             )
             self.assertLess(i_fail, i_fix)
             self.assertLess(i_fix, i_cert)
-            self.assertLess(i_fix, i_delta)
-            self.assertLess(i_delta, i_amend)
+            self.assertLess(i_fix, i_amend)
             self.assertLess(i_amend, i_review_after)
             self.assertLess(i_review_after, i_ok)
 
@@ -642,7 +657,7 @@ class TestVerificationFixEpisode(DriverTestCase):
                 implement_step(),
                 step("review_round", report("review_round"), family="codex"),
                 step("review_round", report("review_round"), family="claude"),
-                step("fix_findings", fix_ok([]), family="codex"),
+                step("fix_findings", suite_fix_ok(), family="codex"),
             ])
             driver = drv.Driver(path, runner=mock)
             self.step_until(

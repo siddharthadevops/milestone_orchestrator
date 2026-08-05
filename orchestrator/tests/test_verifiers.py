@@ -818,6 +818,7 @@ class TestMergedOutputValidation(FilesystemCase):
 
         suite_fix = dict(fix)
         suite_fix["findings"] = []
+        suite_fix["tests_modified"] = False
         suite_fix["slices"] = [{"id": 1, "title": "continued repair"}]
         self.assertIs(
             verifiers.validate_merged_output(
@@ -1058,6 +1059,7 @@ class TestCallWorkerIntegration(FilesystemCase):
             "status": "ok",
             "kind": contracts.KIND_FIX_FINDINGS,
             "findings": [],
+            "tests_modified": False,
             "files_changed": [],
             "reuse_audit": [{"package": "life_product_chat"}],
         }
