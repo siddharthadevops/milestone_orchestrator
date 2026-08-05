@@ -3022,7 +3022,11 @@ def _git_sync_lease(home, workspace):
     key = os.path.realpath(workspace)
     with registry.locked(home):
         with _GIT_SYNC_LEASES_GUARD:
-            if key in _GIT_SYNC_LEASES:
+            # Overlap, not equality: two syncs of a tree and a subtree of
+            # it are the same collision as two syncs of one directory.
+            if any(
+                gitsync.paths_overlap(held, key) for held in _GIT_SYNC_LEASES
+            ):
                 raise ApiError(409, WORK_AREA_BUSY)
             _GIT_SYNC_LEASES.add(key)
     try:
@@ -3464,17 +3468,23 @@ def make_handler(home):
                             home, who, checked["project"]
                         )
                     # A discussion started into a tree a sync is merging
-                    # would fight it, the same way a run would.
-                    if workspace_sync_in_flight(
-                        (body.get("request") or {}).get("workspace_path")
-                    ):
-                        raise ApiError(409, WORK_AREA_BUSY)
-                    session = brainstorming_lifecycle.create_session(
-                        home,
-                        body,
-                        who["email"],
-                        project_record=project,
-                    )
+                    # would fight it, the same way a run would — and the
+                    # check must not straddle a sync beginning between it
+                    # and the create, so both sit under the lock the lease
+                    # is taken beneath. create_session takes only the
+                    # BRAINSTORMING registry lock inside, so there is no
+                    # cycle with this one.
+                    with registry.locked(home):
+                        if workspace_sync_in_flight(
+                            (body.get("request") or {}).get("workspace_path")
+                        ):
+                            raise ApiError(409, WORK_AREA_BUSY)
+                        session = brainstorming_lifecycle.create_session(
+                            home,
+                            body,
+                            who["email"],
+                            project_record=project,
+                        )
                     self._json(
                         201, {"ok": True, "session": session}
                     )

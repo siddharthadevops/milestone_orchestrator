@@ -297,5 +297,49 @@ class RootContainmentTest(unittest.TestCase):
             )
 
 
+class CaseProbeTest(unittest.TestCase):
+    """Case-insensitivity is proven by identity, never by existence."""
+
+    def test_a_real_swap_cased_sibling_is_not_evidence(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            base = os.path.realpath(tmp)
+            a = os.path.join(base, "Repo")
+            b = os.path.join(base, "rEPO")
+            os.makedirs(a)
+            if os.path.lexists(b):
+                self.skipTest("case-insensitive volume: siblings cannot exist")
+            os.makedirs(b)
+            # Both exist and are DIFFERENT directories, so the volume
+            # honours case and they must not be treated as one tree.
+            self.assertFalse(gitsync._ignores_case(a))
+            self.assertFalse(gitsync.paths_overlap(a, b))
+
+    def test_a_swap_cased_symlink_is_not_evidence(self):
+        # samefile follows links, so a `rEPO -> Repo` symlink proved
+        # insensitivity on a volume that has none. Identity is compared
+        # without following, so the link is its own entry.
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            base = os.path.realpath(tmp)
+            a = os.path.join(base, "Repo")
+            b = os.path.join(base, "rEPO")
+            os.makedirs(a)
+            if os.path.lexists(b):
+                self.skipTest("case-insensitive volume: no link to make")
+            os.symlink(a, b)
+            self.assertFalse(gitsync._ignores_case(a))
+            self.assertFalse(gitsync.paths_overlap(a, b))
+
+    def test_an_alias_of_one_directory_is_evidence(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            base = os.path.realpath(tmp)
+            a = os.path.join(base, "Repo")
+            os.makedirs(a)
+            insensitive = os.path.lexists(os.path.join(base, "rEPO"))
+            self.assertEqual(gitsync._ignores_case(a), insensitive)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -113,7 +113,12 @@ def _ignores_case(path):
     """Whether the volume holding `path` treats case as insignificant.
 
     Probed by lookup, never by writing: walk up to something that exists
-    and ask whether its own name resolves under a swapped case.
+    and ask whether its swap-cased name IS the same directory entry. Mere
+    existence is not evidence — a volume that honours case can legitimately
+    hold both `Repo` and `rEPO`, and reading that as insensitivity would
+    conflate two real, unrelated trees. Compared without following links,
+    because a swap-cased SYMLINK back to the original would otherwise prove
+    insensitivity on a volume that has none.
     """
     existing = os.path.realpath(path)
     while not os.path.lexists(existing):
@@ -121,24 +126,22 @@ def _ignores_case(path):
         if parent == existing:
             return False
         existing = parent
-    name = os.path.basename(existing)
-    alias = name.swapcase()
-    if alias == name:
-        # Nothing to swap here (digits, separators); ask the parent.
+    while True:
+        name = os.path.basename(existing)
+        alias = name.swapcase()
+        if alias != name:
+            candidate = os.path.join(os.path.dirname(existing), alias)
+            try:
+                return os.path.samestat(
+                    os.lstat(existing), os.lstat(candidate)
+                )
+            except OSError:
+                return False
+        # Nothing to swap at this level (digits, separators): ask upward.
         parent = os.path.dirname(existing)
         if parent == existing:
             return False
-        name = os.path.basename(parent)
-        alias = name.swapcase()
-        if alias == name:
-            return False
-        existing, parent = parent, os.path.dirname(parent)
-    else:
-        parent = os.path.dirname(existing)
-    try:
-        return os.path.lexists(os.path.join(parent, alias))
-    except OSError:
-        return False
+        existing = parent
 
 
 def read_outcome(report, exit_code):
