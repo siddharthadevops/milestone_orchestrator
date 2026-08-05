@@ -344,6 +344,7 @@ def load_projects_record(home):
     rec.setdefault("retained_states", [])
     for project in rec["projects"]:
         project.setdefault("users", [])
+        project.setdefault("admins", [])
     return rec
 
 

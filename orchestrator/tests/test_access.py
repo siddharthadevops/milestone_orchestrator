@@ -83,3 +83,60 @@ class AccessTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ProjectAdminRungTest(unittest.TestCase):
+    """The rung between membership and service administration."""
+
+    MEMBER = access.USER_EMAILS[0]
+    OTHER = access.USER_EMAILS[1]
+
+    def who(self, email, admin=False):
+        return {"email": email, "admin": admin, "local": False}
+
+    def test_membership_alone_does_not_administer(self):
+        project = {"users": [self.MEMBER], "admins": []}
+        self.assertTrue(
+            access.can_access_project(self.who(self.MEMBER), project)
+        )
+        self.assertFalse(
+            access.can_administer_project(self.who(self.MEMBER), project)
+        )
+
+    def test_named_admin_administers_and_the_others_do_not(self):
+        project = {"users": [self.MEMBER, self.OTHER], "admins": [self.MEMBER]}
+        self.assertTrue(
+            access.can_administer_project(self.who(self.MEMBER), project)
+        )
+        self.assertFalse(
+            access.can_administer_project(self.who(self.OTHER), project)
+        )
+
+    def test_service_administrator_administers_every_project(self):
+        project = {"users": [], "admins": []}
+        self.assertTrue(
+            access.can_administer_project(
+                self.who(access.ADMIN_EMAIL, admin=True), project
+            )
+        )
+
+    def test_admins_must_be_members(self):
+        with self.assertRaises(ValueError):
+            access.validated_project_admins([self.OTHER], [self.MEMBER])
+        self.assertEqual(
+            access.validated_project_admins([self.MEMBER], [self.MEMBER]),
+            [self.MEMBER],
+        )
+
+    def test_admin_list_rejects_the_service_administrator_and_strangers(self):
+        for bad in ([access.ADMIN_EMAIL], ["nobody@example.test"], "notalist"):
+            with self.assertRaises(ValueError):
+                access.validated_project_admins(bad, access.ALL_EMAILS)
+
+    def test_an_absent_admins_key_reads_as_no_project_admins(self):
+        self.assertEqual(access.project_admins({"users": [self.MEMBER]}), [])
+        self.assertFalse(
+            access.can_administer_project(
+                self.who(self.MEMBER), {"users": [self.MEMBER]}
+            )
+        )

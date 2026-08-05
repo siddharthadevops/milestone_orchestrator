@@ -70,15 +70,47 @@ def can_access_project(who, project):
     return bool(who.get("admin") or who.get("email") in project_users(project))
 
 
-def validated_users(value):
+def project_admins(project):
+    configured = {
+        normalize_email(email) for email in (project.get("admins") or [])
+    }
+    return [email for email in USER_EMAILS if email in configured]
+
+
+def can_administer_project(who, project):
+    """Whether the caller may run a project's privileged operations.
+
+    The middle rung the two-state model lacked: membership grants ordinary
+    project work, this grants the operations that can damage the work area
+    itself. The service administrator holds it everywhere by definition.
+    """
+    return bool(
+        who.get("admin") or who.get("email") in project_admins(project)
+    )
+
+
+def validated_users(value, label="users"):
     if not isinstance(value, list):
-        raise ValueError("users must be a list")
+        raise ValueError("%s must be a list" % label)
     normalized = [normalize_email(email) for email in value]
     if len(normalized) != len(set(normalized)):
-        raise ValueError("users contains duplicates")
+        raise ValueError("%s contains duplicates" % label)
     if any(email not in USER_EMAILS for email in normalized):
-        raise ValueError("users contains an unknown or administrative email")
+        raise ValueError(
+            "%s contains an unknown or administrative email" % label
+        )
     return [email for email in USER_EMAILS if email in normalized]
+
+
+def validated_project_admins(value, users):
+    """Project admins, which must be members: a privileged email that
+    cannot even see the project would be a rung with nothing under it."""
+    admins = validated_users(value, label="admins")
+    member = set(users or [])
+    outside = [email for email in admins if email not in member]
+    if outside:
+        raise ValueError("admins must be project users: %s" % outside[0])
+    return admins
 
 
 def ngrok_policy():

@@ -81,6 +81,13 @@ work-area name rides as a URL-encoded path segment):
                                    states exist
     GET    /api/projects/<slug>/users
                                    admin + assigned/available users
+    POST   /api/projects/<slug>/git-sync
+                                   {work_area} — hand that area to the
+                                   project's lead family to align it with
+                                   its git remote by MERGING (project-admin
+                                   rung; refuses 409 work_area_busy while a
+                                   milestone driver owns the worktree).
+                                   Returns the agent's prose report.
     POST   /api/projects/<slug>/users
                                    replace assigned users (admin only)
     POST   /api/projects/<slug>/work-areas
@@ -183,7 +190,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from . import access as panel_access
 from . import brainstorming_lifecycle
-from . import driver, errclass, gitops, kvstore, profiles, projects, registry
+from . import driver, errclass, gitops, gitsync, kvstore, profiles
+from . import projects, registry
 from . import reuse_audit
 from . import state as st
 from . import workareas
@@ -223,6 +231,9 @@ INVALID_META = "invalid_meta"
 PROJECT_IN_USE = "project_in_use"
 PROJECTION_TOMBSTONE_FAILED = "projection_tombstone_failed"
 PRIMARY_NOT_REPO_ROOT = "primary_not_repo_root"
+# A work area whose milestone driver is alive is never handed to a
+# git-sync agent: the driver owns that worktree.
+WORK_AREA_BUSY = "work_area_busy"
 MISSING_ADDITIONAL_ROOT = "missing_additional_root"
 FORBIDDEN = "forbidden"
 
@@ -379,7 +390,9 @@ def create_project(home, body):
         kvstore.initialize_empty_store(
             os.path.join(registry.projects_base(home), slug)
         )
-        project = {"slug": slug, "defaults": defaults, "users": []}
+        project = {
+            "slug": slug, "defaults": defaults, "users": [], "admins": [],
+        }
         rec["projects"].append(project)
         registry.save_projects_record(home, rec)
     return _project_entry_or_error(home, project)
@@ -421,6 +434,7 @@ def read_project_users(home, slug):
     return {
         "admin": panel_access.ADMIN_EMAIL,
         "users": panel_access.project_users(project),
+        "admins": panel_access.project_admins(project),
         "available_users": list(panel_access.USER_EMAILS),
     }
 
@@ -428,12 +442,30 @@ def read_project_users(home, slug):
 def update_project_users(home, slug, body):
     try:
         users = panel_access.validated_users(body.get("users"))
+        # Admins ride the same write: a membership change that dropped a
+        # user would otherwise leave them privileged over a project they
+        # can no longer see. Omitting the field keeps the current list,
+        # minus anyone who just stopped being a member.
+        if "admins" in body:
+            admins = panel_access.validated_project_admins(
+                body.get("admins"), users
+            )
+        else:
+            admins = None
     except ValueError as exc:
         raise ApiError(400, str(exc))
     with registry.locked(home):
         slug, rec = _require_declared(home, slug)
         project = registry.get_project(rec, slug)
         project["users"] = users
+        project["admins"] = (
+            admins
+            if admins is not None
+            else [
+                email for email in panel_access.project_admins(project)
+                if email in users
+            ]
+        )
         registry.save_projects_record(home, rec)
     return read_project_users(home, slug)
 
@@ -844,6 +876,12 @@ def projects_api(home, method, segments, body, query=None):
             return 200, {"ok": True, **update_project_users(
                 home, segments[0], body
             )}
+    elif n == 2 and segments[1] == "git-sync":
+        if method == "POST":
+            return 200, {
+                "ok": True,
+                **sync_project_git(home, segments[0], body),
+            }
     elif n == 2 and segments[1] == "policies":
         if method == "POST":
             return 200, {
@@ -2875,14 +2913,26 @@ def read_log_tail(home, run_id, lines):
 # Request identity and project authorization
 
 
-def access_view(who):
+def access_view(who, home=None):
     out = {
         "user": who["email"],
         "admin": bool(who.get("admin")),
         "local": bool(who.get("local")),
+        # Slugs where this caller holds the privileged rung, so the panel
+        # can offer project-admin actions without probing each project.
+        "project_admin": [],
     }
     if who.get("admin"):
         out["users"] = list(panel_access.USER_EMAILS)
+    if home is not None and not who.get("admin"):
+        try:
+            record = registry.load_projects_record(home)
+        except Exception:
+            record = {"projects": []}
+        out["project_admin"] = [
+            project["slug"] for project in record.get("projects", [])
+            if panel_access.can_administer_project(who, project)
+        ]
     return out
 
 
@@ -2919,6 +2969,76 @@ def work_area_roots(home, who, slug, area):
     roots = [resolved.value["primary"]["path"]]
     roots.extend(root["path"] for root in resolved.value["additional"])
     return [root for root in roots if os.path.isdir(root)]
+
+
+def require_project_admin(home, who, slug):
+    """Authorize a privileged project operation.
+
+    Project membership permits ordinary work; this is the rung above it,
+    for operations that can rewrite the work area itself. The service
+    administrator holds it everywhere.
+    """
+    project = require_project_access(home, who, slug)
+    if not panel_access.can_administer_project(who, project):
+        raise ApiError(403, FORBIDDEN)
+    return project
+
+
+def sync_project_git(home, slug, body):
+    """Hand one work area to the project's lead family to align with git.
+
+    Authorization happened at the route. The refusal that stays here is
+    the deterministic one: a work area with a live milestone driver is
+    never handed over, because the driver owns that worktree.
+    """
+    slug, rec = _require_declared(home, slug)
+    project = registry.get_project(rec, slug)
+    area = (body or {}).get("work_area")
+    if not isinstance(area, str) or not area.strip():
+        raise ApiError(400, workareas.INVALID_NAME)
+    try:
+        store = workareas.WorkAreaStore(registry.projects_base(home), slug)
+        resolved = store.resolve(area)
+    except (RuntimeError, OSError) as exc:
+        _raise_store_error(exc)
+    if not resolved.ok:
+        raise _work_area_error(resolved.reason)
+    workspace = resolved.value["primary"]["path"]
+    if not os.path.isdir(workspace):
+        raise ApiError(400, driver.MISSING_PRIMARY_PATH)
+
+    reap_exited_drivers(home)
+    runs = [
+        {"workspace": entry.get("workspace"), "alive": driver_alive(entry),
+         "id": entry["id"], "name": entry.get("name")}
+        for entry in registry.load(home)["runs"]
+    ]
+    blocking = gitsync.active_run_blocking(runs, workspace)
+    if blocking is not None:
+        raise ApiError(409, WORK_AREA_BUSY)
+
+    config = driver.load_config(None)
+    if project.get("defaults"):
+        driver.merge_config(config, project["defaults"])
+    families = config.get("families_order") or ["codex"]
+    family = families[0]
+    seat = (config.get("model_defaults") or {}).get(family) or {}
+    try:
+        outcome = gitsync.run_sync(
+            config["commands"],
+            config.get("timeouts"),
+            family,
+            workspace,
+            model=seat.get("model"),
+            effort=seat.get("effort"),
+        )
+    except runners.RunnerError as exc:
+        raise ApiError(502, str(exc)) from exc
+    return {
+        "work_area": area,
+        "workspace": workspace,
+        "sync": outcome,
+    }
 
 
 def _run_project(entry):
@@ -3045,6 +3165,11 @@ def make_handler(home):
             if len(segments) == 2 and segments[1] == "users":
                 self._require_admin(who)
                 return
+            if len(segments) == 2 and segments[1] == "git-sync":
+                # The privileged rung: it can rewrite the work area's
+                # contents, so membership is not enough.
+                require_project_admin(home, who, segments[0])
+                return
             if method != "GET":
                 self._require_admin(who)
                 return
@@ -3058,7 +3183,7 @@ def make_handler(home):
                 if route in ("/", "/index.html"):
                     self._static("panel.html", "text/html; charset=utf-8")
                 elif route == "/api/access":
-                    self._json(200, {"ok": True, **access_view(who)})
+                    self._json(200, {"ok": True, **access_view(who, home)})
                 elif route == "/api/runs":
                     self._json(200, {"ok": True, "runs": visible_runs(home, who)})
                 elif route == "/api/recents":

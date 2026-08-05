@@ -417,6 +417,93 @@ class ProjectAccessApiTest(ProjectsServiceTestCase):
         status, body = self.request_json("GET", "/api/fs", headers=member)
         self.assertEqual((status, body["error"]), (403, service.FORBIDDEN))
 
+    def test_git_sync_needs_the_project_admin_rung(self):
+        primary = self.repo("sync-area")
+        self.create_project()
+        self.declare(primary)
+        self.make_ready(primary)
+        self.expect(
+            200, "POST", self.project_path(PROJECT, "users"),
+            {"users": [access.USER_EMAILS[0], access.USER_EMAILS[1]]},
+        )
+        path = self.project_path(PROJECT, "git-sync")
+        body = {"work_area": AREA}
+        member = self.remote_headers(access.USER_EMAILS[1])
+        boss = self.remote_headers(access.USER_EMAILS[0])
+
+        # A plain member may see the project but not rewrite its worktree.
+        status, refused = self.request_json("POST", path, body, headers=member)
+        self.assertEqual((status, refused["error"]), (403, service.FORBIDDEN))
+
+        self.expect(
+            200, "POST", self.project_path(PROJECT, "users"),
+            {
+                "users": [access.USER_EMAILS[0], access.USER_EMAILS[1]],
+                "admins": [access.USER_EMAILS[0]],
+            },
+        )
+        # Promotion is visible to the panel without probing each project.
+        status, view = self.request_json("GET", "/api/access", headers=boss)
+        self.assertEqual(view["project_admin"], [PROJECT])
+
+        report = "Aligned: merged 2 remote commits, no conflicts."
+        with mock.patch.object(
+            service.gitsync, "run_sync",
+            return_value={"family": "codex", "report": report},
+        ) as ran:
+            status, body_out = self.request_json(
+                "POST", path, body, headers=boss
+            )
+        self.assertEqual(status, 200, body_out)
+        self.assertEqual(body_out["sync"]["report"], report)
+        self.assertEqual(
+            os.path.realpath(ran.call_args.args[3]),
+            os.path.realpath(primary),
+        )
+        # The other member is still refused after the promotion.
+        status, refused = self.request_json("POST", path, body, headers=member)
+        self.assertEqual((status, refused["error"]), (403, service.FORBIDDEN))
+
+    def test_git_sync_refuses_while_a_driver_owns_the_worktree(self):
+        primary = self.repo("busy-area")
+        self.create_project()
+        self.declare(primary)
+        self.make_ready(primary)
+        with mock.patch.object(service, "driver_alive", return_value=True), \
+                mock.patch.object(
+                    service.registry, "load",
+                    return_value={"runs": [
+                        {"id": "r1", "name": "live", "workspace": primary},
+                    ]},
+                ), \
+                mock.patch.object(service.gitsync, "run_sync") as never:
+            status, body = self.request_json(
+                "POST", self.project_path(PROJECT, "git-sync"),
+                {"work_area": AREA},
+            )
+        self.assertEqual(
+            (status, body["error"]), (409, service.WORK_AREA_BUSY)
+        )
+        never.assert_not_called()
+
+    def test_dropping_a_user_drops_their_project_admin_rung(self):
+        self.create_project()
+        self.expect(
+            200, "POST", self.project_path(PROJECT, "users"),
+            {
+                "users": [access.USER_EMAILS[0], access.USER_EMAILS[1]],
+                "admins": [access.USER_EMAILS[0]],
+            },
+        )
+        # Rewriting membership without naming admins keeps the survivors
+        # and silently retires anyone who stopped being a member.
+        body = self.expect(
+            200, "POST", self.project_path(PROJECT, "users"),
+            {"users": [access.USER_EMAILS[1]]},
+        )
+        self.assertEqual(body["users"], [access.USER_EMAILS[1]])
+        self.assertEqual(body["admins"], [])
+
     def test_runs_are_filtered_and_guarded_by_project_membership(self):
         for slug in (PROJECT, "other"):
             self.create_project(slug)

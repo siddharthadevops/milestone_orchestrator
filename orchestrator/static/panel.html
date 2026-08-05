@@ -732,6 +732,28 @@
   </div>
 </dialog>
 
+<dialog id="gitsyncdlg">
+  <h2>Sync with git</h2>
+  <p class="danger-copy">The project's lead agent will align
+    <b id="gs_area_label"></b> with its remote, <b>merging both sides</b>.
+    It commits uncommitted local changes first and resolves conflicts on
+    the merits. Nothing committed is lost — a bad merge is undone by
+    resetting to the commit before it — but files can end up with content
+    the agent decided.</p>
+  <div class="formrow" id="gs_area_row" style="display:none">
+    <label for="gs_area">Work area</label>
+    <select id="gs_area"></select>
+  </div>
+  <div id="gs_error" class="failure" style="display:none"></div>
+  <div id="gs_report" class="mdbody flow" style="display:none"></div>
+  <div class="formrow">
+    <button class="btn"
+      onclick="document.getElementById('gitsyncdlg').close()">Close</button>
+    <button class="btn danger" id="gs_go"
+      onclick="runGitSync()">Sync now</button>
+  </div>
+</dialog>
+
 <dialog id="floordlg">
   <h2>Operator intervention</h2>
   <p class="amend-hint">Lands in the discussion record at the current turn
@@ -1029,6 +1051,7 @@ const ICONS = {
   // of a milestone; a lamp marks a bounded discussion.
   milestone: `<svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V4s-1 1-4 1-5-2-8-2-4 1-4 1Z"/><path d="M4 22v-7"/></svg>`,
   brainstorm: `<svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 18h6"/><path d="M10 22h4"/><path d="M15.1 14a5 5 0 1 0-6.2 0c.6.5 1.1 1.2 1.1 2h4c0-.8.5-1.5 1.1-2Z"/></svg>`,
+  sync: `<svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M21 2v6h-6"/><path d="M3 12a9 9 0 0 1 15-6.7L21 8"/><path d="M3 22v-6h6"/><path d="M21 12a9 9 0 0 1-15 6.7L3 16"/></svg>`,
 };
 // Interpolating a value into a single-quoted onclick="...('VALUE')"
 // argument needs its OWN escaping layer, independent of esc()'s
@@ -1714,6 +1737,80 @@ async function sendFloorIntervention() {
     refreshSessionDetail();
   }
 }
+let gitSyncProject = null;
+let gitSyncRunning = false;
+async function openGitSync(event, key) {
+  event.stopPropagation();
+  closeProjectMenu();
+  gitSyncProject = key;
+  const err = document.getElementById("gs_error");
+  const report = document.getElementById("gs_report");
+  err.style.display = "none";
+  report.style.display = "none";
+  report.innerHTML = "";
+  document.getElementById("gs_go").disabled = false;
+  document.getElementById("gs_go").textContent = "Sync now";
+  document.getElementById("gs_area_label").textContent = key;
+  // Which area: silent when the project has exactly one, chosen when it
+  // has several — the agent works on one primary root, not "the project".
+  const row = document.getElementById("gs_area_row");
+  const sel = document.getElementById("gs_area");
+  sel.innerHTML = "";
+  row.style.display = "none";
+  try {
+    const data = await api("/api/projects");
+    const project = (data.projects || []).find(p => p.slug === key);
+    const areas = (project && project.work_areas) || [];
+    sel.innerHTML = areas.map((a, i) =>
+      `<option value="${esc(a.record.name)}">${esc(a.record.name)}</option>`
+    ).join("");
+    if (areas.length > 1) row.style.display = "";
+    if (!areas.length) {
+      err.textContent = "this project has no work area declared yet";
+      err.style.display = "";
+      document.getElementById("gs_go").disabled = true;
+    }
+  } catch (e) {
+    err.textContent = e.message;
+    err.style.display = "";
+    document.getElementById("gs_go").disabled = true;
+  }
+  document.getElementById("gitsyncdlg").showModal();
+}
+async function runGitSync() {
+  if (gitSyncRunning || !gitSyncProject) return;
+  const area = document.getElementById("gs_area").value;
+  const err = document.getElementById("gs_error");
+  const report = document.getElementById("gs_report");
+  const go = document.getElementById("gs_go");
+  err.style.display = "none";
+  report.style.display = "none";
+  gitSyncRunning = true;
+  go.disabled = true;
+  go.textContent = "Syncing…";
+  try {
+    const data = await api(
+      "/api/projects/" + encodeURIComponent(gitSyncProject) + "/git-sync",
+      {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({work_area: area}),
+      }
+    );
+    report.innerHTML = mdRender(
+      (data.sync && data.sync.report) || "(the agent reported nothing)"
+    );
+    report.style.display = "";
+    go.textContent = "Sync again";
+  } catch (e) {
+    err.textContent = e.message;  // sealed refusal token, verbatim
+    err.style.display = "";
+    go.textContent = "Sync now";
+  } finally {
+    gitSyncRunning = false;
+    go.disabled = false;
+  }
+}
 function runStatusIndicator(r) {
   if (r.process === "running")
     return `<span class="dot running" title="running"></span>`;
@@ -1825,6 +1922,7 @@ function groupHeader(key, label) {
   const safeKey = esc(escJsSq(key));
   const menuOpen = projectMenuOpen === key;
   const admin = appAccess.admin;
+  const projectAdmin = admin || (appAccess.project_admin || []).includes(key);
   const menu = `<div class="grpmenu ${menuOpen ? "open" : ""}">
          <button class="grpmenu-btn" type="button" title="Project menu"
            aria-label="Project menu" aria-haspopup="menu" aria-expanded="${menuOpen}"
@@ -1834,6 +1932,9 @@ function groupHeader(key, label) {
              onclick="newMilestone(event, '${safeKey}')">${ICONS.milestone}<span>New milestone</span></button>
            <button class="grpmenu-item" type="button" role="menuitem"
              onclick="newBrainstorming(event, '${safeKey}')">${ICONS.brainstorm}<span>New brainstorming</span></button>
+           ${projectAdmin ? `<div class="grpmenu-sep"></div>
+           <button class="grpmenu-item" type="button" role="menuitem"
+             onclick="openGitSync(event, '${safeKey}')">${ICONS.sync}<span>Sync with git…</span></button>` : ""}
            ${admin ? `<div class="grpmenu-sep"></div>
            <button class="grpmenu-item" type="button" role="menuitem"
              onclick="configureProject(event, '${safeKey}')">${ICONS.settings}<span>Configure</span></button>
