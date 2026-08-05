@@ -1803,11 +1803,20 @@ async function runGitSync() {
         body: JSON.stringify({work_area: area}),
       }
     );
-    report.innerHTML = mdRender(
+    // The agent exits 0 whether it aligned or refused, so the verdict —
+    // not the fact that prose came back — decides what this looked like.
+    const outcome = (data.sync && data.sync.outcome) || "unknown";
+    const banner = outcome === "aligned"
+      ? '<div class="amend-hint"><b>Aligned.</b></div>'
+      : outcome === "stopped"
+      ? '<div class="failure">The agent stopped without aligning.</div>'
+      : '<div class="failure">The agent did not say whether it aligned; '
+        + 'read its report before assuming it did.</div>';
+    report.innerHTML = banner + mdRender(
       (data.sync && data.sync.report) || "(the agent reported nothing)"
     );
     report.style.display = "";
-    go.textContent = "Sync again";
+    go.textContent = outcome === "aligned" ? "Sync again" : "Try again";
   } catch (e) {
     err.textContent = e.message;  // sealed refusal token, verbatim
     err.style.display = "";

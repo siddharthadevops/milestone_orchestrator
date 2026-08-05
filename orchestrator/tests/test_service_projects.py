@@ -610,6 +610,49 @@ class ProjectAccessApiTest(ProjectsServiceTestCase):
             )
         self.assertEqual(status, 200, body)
 
+    def test_a_sync_in_flight_blocks_starting_work_in_that_tree(self):
+        # Exclusion must run BOTH ways: the lease alone only stopped a
+        # second sync, while a run started mid-sync walked into the merge.
+        primary = self.repo("both-ways")
+        subprocess.run(["git", "init", "-q"], cwd=primary, check=True)
+        self.create_project()
+        self.declare(primary)
+        self.make_ready(primary)
+        observed = {}
+        started = threading.Event()
+        release = threading.Event()
+
+        def slow(*_args, **_kw):
+            started.set()
+            observed["nested"] = service.workspace_sync_in_flight(
+                os.path.join(primary, "docs")
+            )
+            observed["sibling"] = service.workspace_sync_in_flight(
+                primary + "-other"
+            )
+            release.wait(timeout=10)
+            return {"family": "codex", "report": "ok", "outcome": "aligned"}
+
+        with mock.patch.object(service.gitsync, "run_sync", side_effect=slow):
+            worker = threading.Thread(target=lambda: self.request_json(
+                "POST", self.project_path(PROJECT, "git-sync"),
+                {"work_area": AREA},
+            ))
+            worker.start()
+            self.assertTrue(started.wait(timeout=10))
+            # The lease is visible to the launch paths while it is held —
+            # the run start and the brainstorming create both consult this
+            # exact predicate, each AFTER validating its own request, so a
+            # malformed body still refuses as a malformed body.
+            self.assertTrue(service.workspace_sync_in_flight(primary))
+            release.set()
+            worker.join(timeout=10)
+        # A nested path is covered by the lease; a sibling tree is not.
+        self.assertTrue(observed["nested"])
+        self.assertFalse(observed["sibling"])
+        # Released afterwards, so ordinary work resumes.
+        self.assertFalse(service.workspace_sync_in_flight(primary))
+
     def test_runs_are_filtered_and_guarded_by_project_membership(self):
         for slug in (PROJECT, "other"):
             self.create_project(slug)

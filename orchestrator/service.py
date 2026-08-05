@@ -2016,6 +2016,10 @@ def start_run(home, run_id):
             raise ApiError(409, "run %s is already closed" % run_id)
         if info["state_error"]:
             raise ApiError(409, "state unreadable: %s" % info["state_error"])
+        # A git sync is merging this tree right now: starting a driver into
+        # it is the same collision the sync route refuses in reverse.
+        if workspace_sync_in_flight(entry.get("workspace")):
+            raise ApiError(409, WORK_AREA_BUSY)
         log_file = open(registry.log_path(home, run_id), "a")
         try:
             proc = subprocess.Popen(
@@ -2989,22 +2993,44 @@ _GIT_SYNC_LEASES = set()
 _GIT_SYNC_LEASES_GUARD = threading.Lock()
 
 
+def workspace_sync_in_flight(workspace):
+    """Whether a git sync currently holds this tree (or one containing it).
+
+    The launch paths consult this so the exclusion runs BOTH ways: without
+    it the lease only stopped a second sync, while a run or a discussion
+    started mid-sync walked straight into the merge it was meant to avoid.
+    """
+    with _GIT_SYNC_LEASES_GUARD:
+        held = list(_GIT_SYNC_LEASES)
+    return any(gitsync.paths_overlap(path, workspace) for path in held)
+
+
 @contextlib.contextmanager
-def _git_sync_lease(workspace):
-    """Exclude concurrent syncs of the same work area within this service.
+def _git_sync_lease(home, workspace):
+    """Exclude concurrent syncs, and runs starting, in this work area.
+
+    The lease is TAKEN under the registry lock — the same lock start_run
+    holds across its own check-and-spawn — so the two decisions are
+    mutually exclusive without inventing a second lock: a run cannot be
+    spawned in the gap between the sync's ownership check and the agent's
+    first command, nor a sync begin inside a spawn.
 
     Keyed by realpath so two names for one directory contend. Cross-process
     exclusion is not attempted: the panel is this service, and a second
     orchestrator on the same home is already outside the model.
     """
     key = os.path.realpath(workspace)
-    with _GIT_SYNC_LEASES_GUARD:
-        if key in _GIT_SYNC_LEASES:
-            raise ApiError(409, WORK_AREA_BUSY)
-        _GIT_SYNC_LEASES.add(key)
+    with registry.locked(home):
+        with _GIT_SYNC_LEASES_GUARD:
+            if key in _GIT_SYNC_LEASES:
+                raise ApiError(409, WORK_AREA_BUSY)
+            _GIT_SYNC_LEASES.add(key)
     try:
         yield
     finally:
+        # Released on every exit, including a watchdog kill or the
+        # re-check refusing: a leaked lease would wedge every later sync
+        # AND every run start in this tree.
         with _GIT_SYNC_LEASES_GUARD:
             _GIT_SYNC_LEASES.discard(key)
 
@@ -3034,17 +3060,12 @@ def _require_unowned_workspace(home, workspace):
         # A brainstorming registry we cannot read is not evidence that the
         # area is free; refuse rather than merge under an unknown owner.
         raise ApiError(409, WORK_AREA_BUSY)
-    target = os.path.realpath(workspace)
     for session in sessions:
         # A session with no readable state counts as live: unknown is not
         # evidence of being finished.
         if session.get("status") in ("success", "failure"):
             continue
-        owned = session.get("target_path")
-        if not owned:
-            continue
-        resolved = os.path.realpath(owned)
-        if resolved == target or resolved.startswith(target + os.sep):
+        if gitsync.paths_overlap(session.get("target_path"), workspace):
             raise ApiError(409, WORK_AREA_BUSY)
 
 
@@ -3084,11 +3105,11 @@ def sync_project_git(home, slug, body):
     family = families[0]
     seat = (config.get("model_defaults") or {}).get(family) or {}
 
-    # One sync per work area at a time, and the ownership checks re-run
-    # under that lease: without it two POSTs both passed a check taken
+    # One sync per work area at a time, with the ownership checks re-run
+    # under the lease: without it two POSTs both passed a check taken
     # before either agent started, and a run could be launched into the
     # window between the check and the call.
-    with _git_sync_lease(workspace):
+    with _git_sync_lease(home, workspace):
         _require_unowned_workspace(home, workspace)
         try:
             outcome = gitsync.run_sync(
@@ -3442,6 +3463,12 @@ def make_handler(home):
                         project = require_brainstorming_project_access(
                             home, who, checked["project"]
                         )
+                    # A discussion started into a tree a sync is merging
+                    # would fight it, the same way a run would.
+                    if workspace_sync_in_flight(
+                        (body.get("request") or {}).get("workspace_path")
+                    ):
+                        raise ApiError(409, WORK_AREA_BUSY)
                     session = brainstorming_lifecycle.create_session(
                         home,
                         body,

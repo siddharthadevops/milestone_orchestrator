@@ -55,6 +55,13 @@ Answer in plain prose, for a person reading it on a phone. Say what the
 two sides looked like, what you did, and what — if anything — the
 operator still has to decide. If you stopped without aligning, lead with
 why. Be specific about files you resolved and how.
+
+Then end your answer with a LAST LINE that is exactly one of:
+  RESULT: aligned
+  RESULT: stopped
+`aligned` only if local and remote now hold the same work. Anything else
+— you refused, you could not reach the remote, you left a conflict for
+the operator — is `stopped`. Nothing may follow that line.
 """
 
 
@@ -62,17 +69,111 @@ def build_prompt(workspace):
     return MANDATE.format(workspace=os.path.abspath(workspace))
 
 
-def active_run_blocking(runs, workspace):
-    """The first live run whose workspace is this one, or None.
+def paths_overlap(first, second):
+    """Whether two paths name the same tree or one contains the other.
 
-    Compared by realpath: the registry stores what the launch supplied,
-    which may reach the same directory by another name.
+    Containment both ways, not equality: a merge in a directory disturbs
+    everything beneath it, and a worker owning an ANCESTOR of the area is
+    just as much an owner as one sitting exactly on it. Work areas may be
+    declared at any depth, so nesting is reachable by configuration alone.
+
+    Comparison is realpath-based, and case-folded only where the volume
+    itself ignores case: realpath preserves the casing the caller supplied,
+    so on a case-insensitive volume `/Users/x/Repo` and `/users/x/repo` are
+    ONE directory a case-sensitive test would call two — while folding
+    unconditionally would conflate genuinely distinct siblings on a
+    case-sensitive one and block work that never overlapped.
     """
-    target = os.path.realpath(workspace)
+    if not first or not second:
+        return False
+    left = os.path.realpath(first)
+    right = os.path.realpath(second)
+    try:
+        if os.path.samefile(left, right):
+            return True
+    except OSError:
+        pass  # one of them does not exist yet; fall through to the paths
+    if _ignores_case(left) or _ignores_case(right):
+        left, right = left.lower(), right.lower()
+    return left == right or _contains(right, left) or _contains(left, right)
+
+
+def _contains(parent, child):
+    """Whether `child` sits under `parent`, root included.
+
+    Root needs its own arm: "/" already ends in the separator, so the
+    ordinary parent + os.sep test builds "//" and matches nothing.
+    """
+    if parent == os.sep:
+        return child.startswith(os.sep) and child != os.sep
+    return child.startswith(parent.rstrip(os.sep) + os.sep)
+
+
+def _ignores_case(path):
+    """Whether the volume holding `path` treats case as insignificant.
+
+    Probed by lookup, never by writing: walk up to something that exists
+    and ask whether its own name resolves under a swapped case.
+    """
+    existing = os.path.realpath(path)
+    while not os.path.lexists(existing):
+        parent = os.path.dirname(existing)
+        if parent == existing:
+            return False
+        existing = parent
+    name = os.path.basename(existing)
+    alias = name.swapcase()
+    if alias == name:
+        # Nothing to swap here (digits, separators); ask the parent.
+        parent = os.path.dirname(existing)
+        if parent == existing:
+            return False
+        name = os.path.basename(parent)
+        alias = name.swapcase()
+        if alias == name:
+            return False
+        existing, parent = parent, os.path.dirname(parent)
+    else:
+        parent = os.path.dirname(existing)
+    try:
+        return os.path.lexists(os.path.join(parent, alias))
+    except OSError:
+        return False
+
+
+def read_outcome(report, exit_code):
+    """"aligned", "stopped", or "unknown" for one agent report.
+
+    A process exit code cannot answer this: an agent that obeys the
+    mandate and stops — no remote, an unresolvable conflict — finishes
+    normally and exits 0, so exit status alone reported every refusal as a
+    success. The mandate therefore asks for a verdict line, and an answer
+    that does not carry one is "unknown" rather than assumed good.
+    """
+    if exit_code not in (0, None):
+        return "stopped"
+    for raw in reversed((report or "").strip().splitlines()):
+        if not raw.strip():
+            continue  # trailing blank lines are not content
+        line = raw.strip().strip("*_`> ").strip()
+        if not line:
+            # A line made only of markup (a closing fence, a rule): the
+            # agent put something after its verdict, so the contract was
+            # not followed and the answer is not trusted.
+            return "unknown"
+        if line.upper().startswith("RESULT:"):
+            verdict = line.split(":", 1)[1].strip().lower()
+            return verdict if verdict in ("aligned", "stopped") else "unknown"
+        break
+    return "unknown"
+
+
+def active_run_blocking(runs, workspace):
+    """The first live run whose workspace overlaps this one, or None."""
     for entry in runs:
-        if os.path.realpath(entry.get("workspace") or "") != target:
+        if not entry.get("alive"):
             continue
-        if entry.get("alive"):
+        if paths_overlap(entry.get("workspace"), workspace):
             return entry
     return None
 
@@ -104,13 +205,15 @@ def run_sync(commands, timeouts, family, workspace, model=None, effort=None,
         effort=effort,
     )
     code = getattr(result, "exit_code", None)
+    report = (getattr(result, "text", "") or "").strip()
     return {
         "family": family,
         "model": model,
         "effort": effort,
-        "report": (getattr(result, "text", "") or "").strip(),
+        "report": report,
         "exit_code": code,
         "clean_exit": code == 0,
+        "outcome": read_outcome(report, code),
         "duration_s": getattr(result, "duration_s", None),
         "token_usage": getattr(result, "token_usage", None),
     }
