@@ -174,6 +174,7 @@ it to anything else.
 """
 
 import argparse
+import contextlib
 import json
 import os
 import re
@@ -2984,6 +2985,69 @@ def require_project_admin(home, who, slug):
     return project
 
 
+_GIT_SYNC_LEASES = set()
+_GIT_SYNC_LEASES_GUARD = threading.Lock()
+
+
+@contextlib.contextmanager
+def _git_sync_lease(workspace):
+    """Exclude concurrent syncs of the same work area within this service.
+
+    Keyed by realpath so two names for one directory contend. Cross-process
+    exclusion is not attempted: the panel is this service, and a second
+    orchestrator on the same home is already outside the model.
+    """
+    key = os.path.realpath(workspace)
+    with _GIT_SYNC_LEASES_GUARD:
+        if key in _GIT_SYNC_LEASES:
+            raise ApiError(409, WORK_AREA_BUSY)
+        _GIT_SYNC_LEASES.add(key)
+    try:
+        yield
+    finally:
+        with _GIT_SYNC_LEASES_GUARD:
+            _GIT_SYNC_LEASES.discard(key)
+
+
+def _require_unowned_workspace(home, workspace):
+    """Refuse while any orchestrator work owns this worktree.
+
+    Two owners, not one: a milestone driver (wip commits, amends, gate
+    commits, the sealed-artifact guard) and a live Brainstorming session,
+    which owns its target document and restores the accepted revision after
+    every turn — a sync merging that file underneath would either lose its
+    own result or commit transient bytes.
+    """
+    reap_exited_drivers(home)
+    runs = [
+        {"workspace": entry.get("workspace"), "alive": driver_alive(entry),
+         "id": entry["id"], "name": entry.get("name")}
+        for entry in registry.load(home)["runs"]
+    ]
+    if gitsync.active_run_blocking(runs, workspace) is not None:
+        raise ApiError(409, WORK_AREA_BUSY)
+    try:
+        sessions = brainstorming_lifecycle.list_sessions(
+            home, lambda _record: True
+        )
+    except Exception:
+        # A brainstorming registry we cannot read is not evidence that the
+        # area is free; refuse rather than merge under an unknown owner.
+        raise ApiError(409, WORK_AREA_BUSY)
+    target = os.path.realpath(workspace)
+    for session in sessions:
+        # A session with no readable state counts as live: unknown is not
+        # evidence of being finished.
+        if session.get("status") in ("success", "failure"):
+            continue
+        owned = session.get("target_path")
+        if not owned:
+            continue
+        resolved = os.path.realpath(owned)
+        if resolved == target or resolved.startswith(target + os.sep):
+            raise ApiError(409, WORK_AREA_BUSY)
+
+
 def sync_project_git(home, slug, body):
     """Hand one work area to the project's lead family to align with git.
 
@@ -3006,16 +3070,12 @@ def sync_project_git(home, slug, body):
     workspace = resolved.value["primary"]["path"]
     if not os.path.isdir(workspace):
         raise ApiError(400, driver.MISSING_PRIMARY_PATH)
-
-    reap_exited_drivers(home)
-    runs = [
-        {"workspace": entry.get("workspace"), "alive": driver_alive(entry),
-         "id": entry["id"], "name": entry.get("name")}
-        for entry in registry.load(home)["runs"]
-    ]
-    blocking = gitsync.active_run_blocking(runs, workspace)
-    if blocking is not None:
-        raise ApiError(409, WORK_AREA_BUSY)
+    # The area must be the root of its OWN repository. Git run inside a
+    # nested directory discovers the ENCLOSING repo, so an agent told to
+    # align "this checkout" would commit and push a tree nobody authorized
+    # — the same nesting hazard gitops guards on every other path.
+    if not gitops.is_repo_root(workspace):
+        raise ApiError(400, PRIMARY_NOT_REPO_ROOT)
 
     config = driver.load_config(None)
     if project.get("defaults"):
@@ -3023,17 +3083,26 @@ def sync_project_git(home, slug, body):
     families = config.get("families_order") or ["codex"]
     family = families[0]
     seat = (config.get("model_defaults") or {}).get(family) or {}
-    try:
-        outcome = gitsync.run_sync(
-            config["commands"],
-            config.get("timeouts"),
-            family,
-            workspace,
-            model=seat.get("model"),
-            effort=seat.get("effort"),
-        )
-    except runners.RunnerError as exc:
-        raise ApiError(502, str(exc)) from exc
+
+    # One sync per work area at a time, and the ownership checks re-run
+    # under that lease: without it two POSTs both passed a check taken
+    # before either agent started, and a run could be launched into the
+    # window between the check and the call.
+    with _git_sync_lease(workspace):
+        _require_unowned_workspace(home, workspace)
+        try:
+            outcome = gitsync.run_sync(
+                config["commands"],
+                config.get("timeouts"),
+                family,
+                workspace,
+                model=seat.get("model"),
+                effort=seat.get("effort"),
+                stall_window_s=config.get("worker_stall_window_s"),
+                stall_min_cpu_s=config.get("worker_stall_min_cpu_s"),
+            )
+        except runners.RunnerError as exc:
+            raise ApiError(502, str(exc)) from exc
     return {
         "work_area": area,
         "workspace": workspace,

@@ -447,6 +447,9 @@
     padding: 8px 0; border-bottom: 1px solid var(--line); font-size: 13px; }
   .access-user:last-child { border-bottom: 0; }
   .access-user input { width: 15px; height: 15px; }
+  /* The privileged rung sits to the right of the member it belongs to. */
+  .access-rung { margin-left: auto; display: flex; align-items: center;
+    gap: 6px; color: var(--muted); font-size: 12px; white-space: nowrap; }
   .field .pathrow select { flex: 1; border: 1px solid var(--line);
     border-radius: 8px; padding: 7px 10px; font: inherit; background: #fff;
     min-width: 0; }
@@ -1082,6 +1085,9 @@ async function loadAccess() {
     admin: !!data.admin,
     local: !!data.local,
     users: Array.isArray(data.users) ? data.users : [],
+    // Slugs where this caller holds the project-admin rung. Dropping it
+    // here once hid the privileged menu from exactly the people it is for.
+    project_admin: Array.isArray(data.project_admin) ? data.project_admin : [],
   };
   document.getElementById("newProjectBtn").style.display =
     appAccess.admin ? "" : "none";
@@ -2036,10 +2042,13 @@ async function openAdminUsers(event, key) {
     document.getElementById("au_admin").textContent =
       `${data.admin} is administrator and always has access.`;
     const selectedUsers = new Set(data.users || []);
+    const selectedAdmins = new Set(data.admins || []);
     document.getElementById("au_list").innerHTML =
       (data.available_users || []).map((email, i) =>
         `<label class="access-user"><input type="checkbox" data-access-user="${esc(email)}"${
-          selectedUsers.has(email) ? " checked" : ""}><span>${esc(email)}</span></label>`
+          selectedUsers.has(email) ? " checked" : ""}><span>${esc(email)}</span>` +
+        `<span class="access-rung"><input type="checkbox" data-access-admin="${esc(email)}"${
+          selectedAdmins.has(email) ? " checked" : ""}> project admin</span></label>`
       ).join("") || '<div class="hint">No assignable users configured.</div>';
   } catch (e) {
     document.getElementById("au_error").textContent = e.message;
@@ -2050,11 +2059,17 @@ async function saveAdminUsers() {
   if (!adminUsersProject) return;
   const users = Array.from(document.querySelectorAll("[data-access-user]:checked"))
     .map(el => el.dataset.accessUser);
+  const member = new Set(users);
+  // The rung only exists on top of membership: unchecking a user retires
+  // their admin box with them, which is exactly what the server enforces.
+  const admins = Array.from(document.querySelectorAll("[data-access-admin]:checked"))
+    .map(el => el.dataset.accessAdmin)
+    .filter(email => member.has(email));
   const err = document.getElementById("au_error");
   err.textContent = "";
   try {
     await postJSON("/api/projects/" + encodeURIComponent(adminUsersProject) +
-                   "/users", {users});
+                   "/users", {users, admins});
   } catch (e) { err.textContent = e.message; return; }
   document.getElementById("useraccess").close();
   await loadProjects();

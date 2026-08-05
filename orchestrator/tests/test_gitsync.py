@@ -2,7 +2,7 @@ import os
 import unittest
 from unittest import mock
 
-from orchestrator import gitsync
+from orchestrator import gitsync, runners
 
 
 class ActiveRunGateTest(unittest.TestCase):
@@ -70,3 +70,54 @@ class MandateTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ExitCodeTest(unittest.TestCase):
+    """A prose answer is not evidence of success."""
+
+    class _Result:
+        def __init__(self, code):
+            self.text = "stopped: the remote rejected authentication"
+            self.exit_code = code
+            self.duration_s = 1.0
+            self.token_usage = None
+
+    def _run(self, code):
+        outer = self
+
+        class FakeRunner:
+            def call(self, *_a, **_kw):
+                return outer._Result(code)
+
+        return gitsync.run_sync({}, {}, "codex", "/tmp/ws", runner=FakeRunner())
+
+    def test_a_clean_exit_is_reported_as_such(self):
+        out = self._run(0)
+        self.assertEqual(out["exit_code"], 0)
+        self.assertTrue(out["clean_exit"])
+
+    def test_a_failing_exit_is_not_hidden_by_a_readable_report(self):
+        out = self._run(1)
+        self.assertEqual(out["exit_code"], 1)
+        self.assertFalse(out["clean_exit"])
+        self.assertIn("stopped", out["report"])
+
+    def test_the_watchdog_settings_reach_the_runner(self):
+        seen = {}
+        real = runners.SubprocessRunner
+
+        class Spy(real):
+            def __init__(self, commands, timeouts, **kw):
+                seen.update(kw)
+                super().__init__(commands, timeouts, **kw)
+
+            def call(self, *_a, **_kw):
+                return ExitCodeTest._Result(0)
+
+        with mock.patch.object(runners, "SubprocessRunner", Spy):
+            gitsync.run_sync(
+                {}, {}, "codex", "/tmp/ws",
+                stall_window_s=900, stall_min_cpu_s=1.0,
+            )
+        self.assertEqual(seen.get("stall_window_s"), 900)
+        self.assertEqual(seen.get("stall_min_cpu_s"), 1.0)

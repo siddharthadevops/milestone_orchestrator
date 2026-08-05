@@ -504,6 +504,112 @@ class ProjectAccessApiTest(ProjectsServiceTestCase):
         self.assertEqual(body["users"], [access.USER_EMAILS[1]])
         self.assertEqual(body["admins"], [])
 
+    def test_git_sync_needs_the_area_to_be_its_own_repo_root(self):
+        # Git run inside a nested directory discovers the ENCLOSING repo,
+        # so an agent aligning "this checkout" would touch a tree nobody
+        # authorized. Only a repo root is handed over.
+        outer = self.repo("outer-repo")
+        subprocess.run(["git", "init", "-q"], cwd=outer, check=True)
+        nested = os.path.join(outer, "nested")
+        os.makedirs(nested)
+        self.create_project()
+        self.declare(nested)
+        self.make_ready(nested)
+        with mock.patch.object(service.gitsync, "run_sync") as never:
+            status, body = self.request_json(
+                "POST", self.project_path(PROJECT, "git-sync"),
+                {"work_area": AREA},
+            )
+        self.assertEqual(
+            (status, body["error"]), (400, service.PRIMARY_NOT_REPO_ROOT)
+        )
+        never.assert_not_called()
+
+    def test_git_sync_refuses_while_a_brainstorming_owns_a_target_inside(self):
+        primary = self.repo("bs-area")
+        subprocess.run(["git", "init", "-q"], cwd=primary, check=True)
+        self.create_project()
+        self.declare(primary)
+        self.make_ready(primary)
+        live = {
+            "status": "running",
+            "target_path": os.path.join(primary, "docs", "DECISION.md"),
+        }
+        with mock.patch.object(
+            service.brainstorming_lifecycle, "list_sessions",
+            return_value=[live],
+        ), mock.patch.object(service.gitsync, "run_sync") as never:
+            status, body = self.request_json(
+                "POST", self.project_path(PROJECT, "git-sync"),
+                {"work_area": AREA},
+            )
+        self.assertEqual(
+            (status, body["error"]), (409, service.WORK_AREA_BUSY)
+        )
+        never.assert_not_called()
+
+        # A finished session does not own anything any more.
+        done = dict(live, status="success")
+        with mock.patch.object(
+            service.brainstorming_lifecycle, "list_sessions",
+            return_value=[done],
+        ), mock.patch.object(
+            service.gitsync, "run_sync",
+            return_value={"family": "codex", "report": "aligned"},
+        ):
+            status, body = self.request_json(
+                "POST", self.project_path(PROJECT, "git-sync"),
+                {"work_area": AREA},
+            )
+        self.assertEqual(status, 200, body)
+
+    def test_only_one_sync_runs_per_work_area(self):
+        primary = self.repo("lease-area")
+        subprocess.run(["git", "init", "-q"], cwd=primary, check=True)
+        self.create_project()
+        self.declare(primary)
+        self.make_ready(primary)
+        started = threading.Event()
+        release = threading.Event()
+
+        def slow(*_args, **_kw):
+            started.set()
+            release.wait(timeout=10)
+            return {"family": "codex", "report": "aligned"}
+
+        with mock.patch.object(service.gitsync, "run_sync", side_effect=slow):
+            first = []
+            worker = threading.Thread(target=lambda: first.append(
+                self.request_json(
+                    "POST", self.project_path(PROJECT, "git-sync"),
+                    {"work_area": AREA},
+                )
+            ))
+            worker.start()
+            self.assertTrue(started.wait(timeout=10))
+            # The second caller is refused rather than launching a
+            # competing agent on the same worktree.
+            status, body = self.request_json(
+                "POST", self.project_path(PROJECT, "git-sync"),
+                {"work_area": AREA},
+            )
+            self.assertEqual(
+                (status, body["error"]), (409, service.WORK_AREA_BUSY)
+            )
+            release.set()
+            worker.join(timeout=10)
+        self.assertEqual(first[0][0], 200, first[0][1])
+        # The lease is released, so a later sync is admitted again.
+        with mock.patch.object(
+            service.gitsync, "run_sync",
+            return_value={"family": "codex", "report": "aligned"},
+        ):
+            status, body = self.request_json(
+                "POST", self.project_path(PROJECT, "git-sync"),
+                {"work_area": AREA},
+            )
+        self.assertEqual(status, 200, body)
+
     def test_runs_are_filtered_and_guarded_by_project_membership(self):
         for slug in (PROJECT, "other"):
             self.create_project(slug)

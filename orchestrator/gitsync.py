@@ -78,14 +78,24 @@ def active_run_blocking(runs, workspace):
 
 
 def run_sync(commands, timeouts, family, workspace, model=None, effort=None,
-             runner=None):
+             runner=None, stall_window_s=None, stall_min_cpu_s=None):
     """Hand the work area to `family` and return its prose report.
 
-    Raises runners.RunnerError if the agent could not be run at all; a
-    refusal or a partial alignment comes back as ordinary prose, because
-    only the agent knows which of those happened.
+    Raises runners.RunnerError if the agent could not be run at all. The
+    liveness watchdog is wired so a frozen CLI is killed instead of holding
+    a request forever; without it this call had no upper bound at all.
+
+    `exit_code` rides along because a textual answer is not evidence of
+    success: the agent may have stopped and explained why, and the caller
+    must be able to tell that from an alignment. Whether the worktree was
+    left mid-merge only the report can say, so it is surfaced verbatim.
     """
-    runner = runner or runners.SubprocessRunner(commands, timeouts or {})
+    runner = runner or runners.SubprocessRunner(
+        commands,
+        timeouts or {},
+        stall_window_s=stall_window_s,
+        stall_min_cpu_s=stall_min_cpu_s,
+    )
     result = runner.call(
         family,
         build_prompt(workspace),
@@ -93,11 +103,14 @@ def run_sync(commands, timeouts, family, workspace, model=None, effort=None,
         model=model,
         effort=effort,
     )
+    code = getattr(result, "exit_code", None)
     return {
         "family": family,
         "model": model,
         "effort": effort,
         "report": (getattr(result, "text", "") or "").strip(),
+        "exit_code": code,
+        "clean_exit": code == 0,
         "duration_s": getattr(result, "duration_s", None),
         "token_usage": getattr(result, "token_usage", None),
     }
