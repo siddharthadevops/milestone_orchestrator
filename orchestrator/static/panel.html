@@ -1066,11 +1066,31 @@ async function loadAccess() {
   // reserve sidebar height for.
   document.getElementById("sidebarActions").style.display =
     appAccess.admin ? "" : "none";
-  // The picker is an admin-only endpoint (/api/fs); offering the buttons
-  // to anyone else only buys them a refusal.
-  for (const id of ["b_browse", "b_new", "b_ref_browse"])
-    document.getElementById(id).style.display =
-      appAccess.admin ? "" : "none";
+  // The brainstorming pickers ride the work-area-scoped listing, so they
+  // are offered to every project member; syncBsPickers decides per
+  // selection, because without a bound area there is nothing to scope to.
+  syncBsPickers();
+}
+function bsPickerScope() {
+  // The scope an area-confined /api/fs call needs. Admins keep the
+  // unscoped whole-host picker they have always had.
+  if (appAccess.admin) return null;
+  const pi = document.getElementById("b_project").value;
+  const area = bsBoundArea();
+  if (pi === "" || !area) return null;
+  return {
+    project: bsProjects[+pi].slug,
+    work_area: area.record.name,
+  };
+}
+function syncBsPickers() {
+  // A member without a bound work area has no legal listing to open, so
+  // the buttons stay hidden rather than offering a refusal.
+  const usable = appAccess.admin || !!bsPickerScope();
+  for (const id of ["b_browse", "b_new", "b_ref_browse"]) {
+    const el = document.getElementById(id);
+    if (el) el.style.display = usable ? "" : "none";
+  }
 }
 function runRow(r) {
   // The headline carries the milestone's accumulated work time. Context and
@@ -3496,10 +3516,13 @@ async function loadRecents() {
 /* ---- directory / file picker ---- */
 const picker = { mode: "dir", target: null, path: null, parent: null, sep: "/" };
 let pkSeq = 0;  // request sequence: stale /api/fs responses must not win
-function openPicker(mode, targetId, append, startPath, transform) {
+function openPicker(mode, targetId, append, startPath, transform, scope) {
   picker.append = !!append;
   picker.mode = mode;
   picker.target = targetId;
+  // A scope confines the listing to one work area's roots server-side, so
+  // a project member browses without the admin-only whole-host endpoint.
+  picker.scope = scope || null;
   // Optional caller-supplied rewrite of the picked path before it lands
   // in the target field (relativize to a work area, compose a fresh
   // session folder, …). Null = the picked path verbatim, as always.
@@ -3540,6 +3563,10 @@ async function loadPicker(path, nearest) {
   const params = new URLSearchParams({ path: path || "~", mode: picker.mode });
   if (picker.mode === "file") params.set("ext", ".md,.markdown,.txt");
   if (nearest) params.set("nearest", "1");
+  if (picker.scope) {
+    params.set("project", picker.scope.project);
+    params.set("work_area", picker.scope.work_area);
+  }
   try {
     const data = await api("/api/fs?" + params.toString());
     if (seq !== pkSeq) return;  // superseded by a newer navigation
@@ -3921,7 +3948,7 @@ function removeBsRef(i) {
 }
 function browseBsRef() {
   openPicker("file", "b_ref_input", false, bsAreaRoot() || undefined,
-             bsRelative);
+             bsRelative, bsPickerScope());
 }
 function openBrainstormingForm(preselect) {
   document.getElementById("bsError").textContent = "";
@@ -3977,6 +4004,7 @@ function onBsArea() {
   const pi = document.getElementById("b_project").value;
   const out = document.getElementById("b_resolved");
   updateBsTargetHint();
+  syncBsPickers();
   if (pi === "") { out.textContent = ""; return; }
   const p = bsProjects[+pi];
   if (!p.work_areas.length) {
@@ -4024,7 +4052,7 @@ function browseBsTarget() {
     bsCreateParents = false;
     updateBsTargetHint();
     return bsRelative(p);
-  });
+  }, bsPickerScope());
 }
 function newBsTarget() {
   // "New…": pick an EXISTING directory; the session gets its own fresh
@@ -4045,7 +4073,7 @@ function newBsTarget() {
     const stamp = new Date().toISOString()
       .slice(0, 19).replace(/[-T:]/g, "");
     return bsRelative(`${dir}/bs-${stamp}/DECISION.md`);
-  });
+  }, bsPickerScope());
 }
 async function submitBrainstorming() {
   const err = document.getElementById("bsError");

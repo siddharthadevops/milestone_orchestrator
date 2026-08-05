@@ -244,6 +244,20 @@ class ProjectsServiceTestCase(unittest.TestCase):
             kvstore.LocalKVClient(self.store_dir(slug))
         )
 
+    def make_ready(self, primary, slug=PROJECT, name=AREA, additional=None):
+        """Take a declared area pending -> ready through the sealed seam,
+        exactly as a bound launch's confirm does."""
+        store = self.sealed_store(slug)
+        record = store.read(name).value
+        result = store.confirm(
+            name,
+            record["primary"],
+            record["additional"] if additional is None else additional,
+            service._executor_id(self.home),
+        )
+        self.assertTrue(result.ok, result.reason)
+        return result
+
     def sealed_store(self, slug=PROJECT):
         return workareas.WorkAreaStore(
             registry.projects_base(self.home), slug
@@ -335,6 +349,73 @@ class ProjectAccessApiTest(ProjectsServiceTestCase):
                 )
                 self.assertEqual((status, body["error"]),
                                  (403, service.FORBIDDEN))
+
+    def test_members_browse_their_own_work_area_and_nothing_else(self):
+        # Unscoped /api/fs stays administrative (asserted above); a
+        # project+work_area scope lets a member pick a brainstorming target
+        # inside their area without handing them the operator's machine.
+        primary = self.repo("member-area")
+        os.makedirs(os.path.join(primary, "docs"))
+        with open(os.path.join(primary, "docs", "note.md"), "w") as fh:
+            fh.write("x")
+        self.create_project()
+        self.declare(primary)
+        # Only a READY area is browsable: the picker must never reach into
+        # one the product itself would refuse to bind.
+        self.make_ready(primary)
+        self.create_project("other")
+        other_primary = self.repo("other-area")
+        self.declare(other_primary, slug="other")
+        self.make_ready(other_primary, slug="other")
+        self.expect(
+            200, "POST", self.project_path(PROJECT, "users"),
+            {"users": [access.USER_EMAILS[0]]},
+        )
+        member = self.remote_headers(access.USER_EMAILS[0])
+        scope = "project=%s&work_area=%s" % (
+            urllib.parse.quote(PROJECT), urllib.parse.quote(AREA),
+        )
+
+        status, body = self.request_json(
+            "GET", "/api/fs?%s&mode=dir" % scope, headers=member
+        )
+        self.assertEqual(status, 200, body)
+        # The DECLARED root is what surfaces (containment resolves symlinks
+        # internally, but a member sees the path their area declares).
+        self.assertEqual(body["path"], os.path.abspath(primary))
+        self.assertIn("docs", body["dirs"])
+        # The area root is the ceiling: no "up" out of it.
+        self.assertIsNone(body["parent"])
+
+        status, body = self.request_json(
+            "GET",
+            "/api/fs?%s&mode=file&path=%s"
+            % (scope, urllib.parse.quote(os.path.join(primary, "docs"))),
+            headers=member,
+        )
+        self.assertEqual(status, 200, body)
+        self.assertEqual(body["files"], ["note.md"])
+
+        # Asking for somewhere else lands back on the area, never outside.
+        status, body = self.request_json(
+            "GET",
+            "/api/fs?%s&path=%s" % (scope, urllib.parse.quote(self.tmp.name)),
+            headers=member,
+        )
+        self.assertEqual(status, 200, body)
+        self.assertEqual(body["path"], os.path.abspath(primary))
+
+        # A project the member is not assigned to refuses, scope or not.
+        status, body = self.request_json(
+            "GET",
+            "/api/fs?project=other&work_area=%s" % urllib.parse.quote(AREA),
+            headers=member,
+        )
+        self.assertEqual((status, body["error"]), (403, service.FORBIDDEN))
+
+        # And the whole-host form is still administrative for a member.
+        status, body = self.request_json("GET", "/api/fs", headers=member)
+        self.assertEqual((status, body["error"]), (403, service.FORBIDDEN))
 
     def test_runs_are_filtered_and_guarded_by_project_membership(self):
         for slug in (PROJECT, "other"):

@@ -154,6 +154,85 @@ class BrowseFsTest(unittest.TestCase):
             service.FS_MAX_ENTRIES = old
 
 
+class ScopedBrowseFsTest(unittest.TestCase):
+    """`roots` confines a listing to one work area, symlinks included."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.base = os.path.realpath(self.tmp.name)
+        self.area = os.path.join(self.base, "area")
+        self.extra = os.path.join(self.base, "extra")
+        self.outside = os.path.join(self.base, "outside")
+        for path in (self.area, self.extra, self.outside):
+            os.makedirs(path)
+        os.makedirs(os.path.join(self.area, "docs"))
+        with open(os.path.join(self.area, "docs", "note.md"), "w") as fh:
+            fh.write("x")
+        with open(os.path.join(self.outside, "secret.md"), "w") as fh:
+            fh.write("x")
+        self.roots = [self.area, self.extra]
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def _browse(self, path, **kw):
+        return service.browse_fs(path, roots=self.roots, **kw)
+
+    def test_no_path_opens_at_the_first_root(self):
+        self.assertEqual(self._browse(None)["path"], self.area)
+
+    def test_inside_the_area_lists_normally(self):
+        out = self._browse(os.path.join(self.area, "docs"), mode="file")
+        self.assertEqual(out["files"], ["note.md"])
+        self.assertEqual(out["roots"], [self.area, self.extra])
+
+    def test_every_declared_root_is_reachable(self):
+        self.assertEqual(self._browse(self.extra)["path"], self.extra)
+
+    def test_outside_requests_land_back_on_the_root(self):
+        for target in (self.outside, self.base, "/", "~"):
+            with self.subTest(target=target):
+                self.assertEqual(self._browse(target)["path"], self.area)
+
+    def test_parent_stops_at_the_area_boundary(self):
+        self.assertEqual(
+            self._browse(os.path.join(self.area, "docs"))["parent"], self.area
+        )
+        self.assertIsNone(self._browse(self.area)["parent"])
+
+    def test_nearest_never_climbs_out_of_the_area(self):
+        out = self._browse(
+            os.path.join(self.area, "docs", "missing", "deeper"), nearest=True
+        )
+        self.assertEqual(out["path"], os.path.join(self.area, "docs"))
+        # A missing path whose ancestors leave the area stops at the root.
+        self.assertEqual(
+            self._browse(
+                os.path.join(self.outside, "nope"), nearest=True
+            )["path"],
+            self.area,
+        )
+
+    def test_a_symlink_out_of_the_area_cannot_escape(self):
+        link = os.path.join(self.area, "escape")
+        os.symlink(self.outside, link)
+        # Containment compares realpaths, so following the link lands back
+        # on the root instead of listing the outside directory.
+        out = self._browse(link, mode="file")
+        self.assertEqual(out["path"], self.area)
+        self.assertNotIn("secret.md", out["files"])
+
+    def test_an_empty_root_set_refuses_rather_than_spanning_the_host(self):
+        with self.assertRaises(service.ApiError) as caught:
+            service.browse_fs(self.area, roots=[])
+        self.assertEqual(caught.exception.status, 403)
+
+    def test_unscoped_browsing_is_unchanged(self):
+        out = service.browse_fs(self.outside, mode="file")
+        self.assertEqual(out["files"], ["secret.md"])
+        self.assertIsNone(out["roots"])
+
+
 class RecentsTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()

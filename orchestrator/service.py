@@ -1198,7 +1198,8 @@ def _bound_summary_from_entry(entry):
 # Filesystem browsing + form memory (panel pickers)
 
 
-def browse_fs(path, mode="dir", exts=None, show_hidden=False, nearest=False):
+def browse_fs(path, mode="dir", exts=None, show_hidden=False, nearest=False,
+              roots=None):
     """Read-only directory listing for the panel pickers.
 
     mode "dir" lists directories only (workspace picker); mode "file" also
@@ -1207,15 +1208,36 @@ def browse_fs(path, mode="dir", exts=None, show_hidden=False, nearest=False):
     existing directory (a file, or a workspace that will be "created if
     missing") is walked up to its closest existing ancestor instead of
     failing — the picker always opens somewhere useful, and the server does
-    the walking because only it knows the host's path rules (os.sep). Same
-    trust model as the rest of the service: localhost-only, the operator
-    browsing their own machine."""
-    raw = path or "~"
+    the walking because only it knows the host's path rules (os.sep).
+
+    Without `roots` the listing spans the whole host: same trust model as
+    the rest of the service, localhost-only, the operator browsing their
+    own machine — an ADMIN-ONLY shape. With `roots` (a work area's primary
+    plus additional roots) the listing is confined to them, so a project
+    member browses their own area and nothing else: containment is decided
+    by kvstore.path_is_inside_roots, which compares realpaths, so a symlink
+    pointing out of the area cannot walk out of it either. A confined
+    listing defaults to the first root instead of ~, and `nearest` stops
+    there rather than climbing past it.
+    """
+    if roots is not None and not roots:
+        raise ApiError(403, FORBIDDEN)
+    raw = path or (roots[0] if roots else "~")
     p = os.path.abspath(os.path.expanduser(raw))
+    if roots is not None and not kvstore.path_is_inside_roots(p, roots):
+        # An out-of-area request is answered from the area's own root
+        # rather than refused: the picker's remembered path, or a "nearest"
+        # walk, must never strand a member outside what they may see.
+        p = os.path.abspath(roots[0])
     if nearest:
         while not os.path.isdir(p):
             parent = os.path.dirname(p)
             if parent == p:
+                break
+            if roots is not None and not kvstore.path_is_inside_roots(
+                parent, roots
+            ):
+                p = os.path.abspath(roots[0])
                 break
             p = parent
     if not os.path.exists(p):
@@ -1266,6 +1288,14 @@ def browse_fs(path, mode="dir", exts=None, show_hidden=False, nearest=False):
     parent = os.path.dirname(p)
     if parent == p:
         parent = None
+    if (
+        roots is not None
+        and parent is not None
+        and not kvstore.path_is_inside_roots(parent, roots)
+    ):
+        # "Up" stops at the area boundary: offering a parent the caller
+        # may not list would only render a dead control.
+        parent = None
     return {
         "path": p,
         "parent": parent,
@@ -1273,6 +1303,7 @@ def browse_fs(path, mode="dir", exts=None, show_hidden=False, nearest=False):
         "dirs": dirs,
         "files": files,
         "truncated": truncated,
+        "roots": None if roots is None else [os.path.abspath(r) for r in roots],
     }
 
 
@@ -2869,6 +2900,27 @@ def require_project_access(home, who, slug):
     return project
 
 
+def work_area_roots(home, who, slug, area):
+    """Every root a caller may browse inside one work area.
+
+    Authorization is the ordinary project gate, decided BEFORE the work
+    area store is opened. The area must resolve (READY) through the same
+    sealed seam launches use, so a picker can never reach into an area the
+    product itself would refuse to bind.
+    """
+    require_project_access(home, who, slug)
+    try:
+        store = workareas.WorkAreaStore(registry.projects_base(home), slug)
+        resolved = store.resolve(area or "")
+    except (RuntimeError, OSError) as exc:
+        _raise_store_error(exc)
+    if not resolved.ok:
+        raise _work_area_error(resolved.reason)
+    roots = [resolved.value["primary"]["path"]]
+    roots.extend(root["path"] for root in resolved.value["additional"])
+    return [root for root in roots if os.path.isdir(root)]
+
+
 def _run_project(entry):
     """Return the run's durable project binding."""
     slug = entry.get("project")
@@ -3017,7 +3069,22 @@ def make_handler(home):
                 elif route == "/api/profiles":
                     self._json(200, {"ok": True, "profiles": profiles_list(home)})
                 elif route == "/api/fs":
-                    self._require_admin(who)
+                    # Unscoped browsing spans the whole host and stays
+                    # administrative. A project+work_area scope authorizes
+                    # like every other project route and confines the
+                    # listing to that area's roots, so a member can pick a
+                    # target inside their own area without being handed
+                    # the operator's machine.
+                    roots = None
+                    if query.get("project") or query.get("work_area"):
+                        roots = work_area_roots(
+                            home,
+                            who,
+                            query.get("project"),
+                            query.get("work_area"),
+                        )
+                    else:
+                        self._require_admin(who)
                     exts = None
                     if "ext" in query:
                         exts = tuple(
@@ -3034,6 +3101,7 @@ def make_handler(home):
                         exts=exts,
                         show_hidden=query.get("hidden") == "1",
                         nearest=query.get("nearest") == "1",
+                        roots=roots,
                     )
                     self._json(200, {"ok": True, **listing})
                 elif route == "/api/projects" or route.startswith("/api/projects/"):
