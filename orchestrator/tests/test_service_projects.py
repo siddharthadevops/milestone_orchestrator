@@ -350,6 +350,147 @@ class ProjectAccessApiTest(ProjectsServiceTestCase):
                 self.assertEqual((status, body["error"]),
                                  (403, service.FORBIDDEN))
 
+    def test_the_member_boundary_is_exactly_run_work(self):
+        """Everything a member needs to drive their own work is theirs;
+        everything that reconfigures the installation is not.
+
+        This pins the line rather than any one button: the panel offers
+        Edit… and Info… to whoever can see the run, so if these routes
+        ever start demanding service administration those controls become
+        decoration for every user but one.
+        """
+        primary = self.repo("member-run-area")
+        self.create_project()
+        self.declare(primary)
+        self.make_ready(primary)
+        self.expect(
+            200, "POST", self.project_path(PROJECT, "users"),
+            {"users": [access.USER_EMAILS[0]]},
+        )
+        member = self.remote_headers(access.USER_EMAILS[0])
+        _status, body = self.launch()
+        run_id = body["run"]["id"]
+
+        # The Edit… page: its own reads and every control on it.
+        for method, path, payload in (
+            ("GET", "/api/runs", None),
+            ("GET", "/api/runs/%s" % run_id, None),
+            ("GET", "/api/profiles", None),
+            ("POST", "/api/runs/%s/name" % run_id, {"name": "renamed"}),
+            ("POST", "/api/runs/%s/amendments" % run_id,
+             {"text": "keep the scope small"}),
+            ("POST", "/api/runs/%s/acts" % run_id, {"fixer": "codex"}),
+            ("POST", "/api/runs/%s/pause-after-seal" % run_id,
+             {"enabled": True}),
+            ("POST", "/api/runs/%s/profile" % run_id, {"profile": "light"}),
+            ("POST", "/api/runs/%s/stop" % run_id, None),
+        ):
+            with self.subTest(member=method + " " + path):
+                status, out = self.request_json(
+                    method, path, payload, headers=member
+                )
+                self.assertEqual(status, 200, out)
+
+        # Removing an amendment, starting the driver, resuming and
+        # discarding complete the page. Start is answered without letting
+        # it spawn: this asserts authorization, not process management.
+        amendments = self.expect(
+            200, "GET", "/api/runs/%s" % run_id
+        )["amendments"]
+        self.assertTrue(amendments)
+        status, out = self.request_json(
+            "DELETE",
+            "/api/runs/%s/amendments/%s" % (run_id, amendments[0]["id"]),
+            headers=member,
+        )
+        self.assertEqual(status, 200, out)
+        with mock.patch.object(service.subprocess, "Popen") as popen:
+            popen.return_value.pid = 424242
+            # Say plainly that the stand-in process has exited. Left to a
+            # bare MagicMock the later calls would pass on an accident of
+            # mock truthiness rather than on the liveness rule.
+            popen.return_value.poll.return_value = 0
+            status, out = self.request_json(
+                "POST", "/api/runs/%s/start" % run_id, headers=member
+            )
+        self.assertEqual(status, 200, out)
+        # Resume refuses on a run that never failed — as a state answer,
+        # with its own status, never as a permission one.
+        status, out = self.request_json(
+            "POST", "/api/runs/%s/resume" % run_id, headers=member
+        )
+        self.assertEqual(status, 409, out)
+        self.assertNotEqual(out.get("error"), service.FORBIDDEN)
+        status, out = self.request_json(
+            "DELETE", "/api/runs/%s" % run_id, headers=member
+        )
+        self.assertEqual(status, 200, out)
+
+        # And the installation itself is not.
+        for method, path, payload in (
+            ("POST", "/api/projects", {"slug": "members-cannot-make-this"}),
+            ("POST", self.project_path(PROJECT), {"defaults": {}}),
+            ("DELETE", self.project_path(PROJECT), None),
+            ("GET", self.project_path(PROJECT, "users"), None),
+            ("POST", self.project_path(PROJECT, "users"), {"users": []}),
+            ("POST", self.project_path(PROJECT, "work-areas"),
+             {"name": "smuggled", "primary_path": "/tmp"}),
+            # Unscoped browsing and the host's recent paths: the whole
+            # point of the work-area scope is that neither is reachable.
+            ("GET", "/api/fs", None),
+            ("GET", "/api/recents", None),
+        ):
+            with self.subTest(refused=method + " " + path):
+                status, out = self.request_json(
+                    method, path, payload, headers=member
+                )
+                self.assertEqual(
+                    (status, out.get("error")), (403, service.FORBIDDEN)
+                )
+
+    def test_an_unbound_launch_stays_administrative(self):
+        # A run or discussion with no project is bound to nothing, so it
+        # could name any directory on the host. That is the administrator's
+        # to create, whatever rung the caller holds elsewhere.
+        primary = self.repo("unbound-area")
+        self.create_project()
+        self.declare(primary)
+        self.make_ready(primary)
+        self.expect(
+            200, "POST", self.project_path(PROJECT, "users"),
+            {
+                "users": [access.USER_EMAILS[0]],
+                "admins": [access.USER_EMAILS[0]],
+            },
+        )
+        boss = self.remote_headers(access.USER_EMAILS[0])
+        for path, payload in (
+            ("/api/runs", {"goal": "x", "workspace": primary}),
+            ("/api/brainstorming/sessions", {
+                "request": {
+                    "workspace_path": primary,
+                    "target_path": "docs/d.md",
+                    "request": "Choose the option to adopt.",
+                    "context": {"brief": "Resolve one bounded request."},
+                    "max_rounds": 1,
+                },
+                "participants": [
+                    {"id": "lead", "role": "initial_position",
+                     "delivery": "llm"},
+                    {"id": "critic", "role": "contrary_position",
+                     "delivery": "llm"},
+                ],
+                "closure_policy": "unanimity",
+            }),
+        ):
+            with self.subTest(path=path):
+                status, out = self.request_json(
+                    "POST", path, payload, headers=boss
+                )
+                self.assertEqual(
+                    (status, out.get("error")), (403, service.FORBIDDEN)
+                )
+
     def test_members_browse_their_own_work_area_and_nothing_else(self):
         # Unscoped /api/fs stays administrative (asserted above); a
         # project+work_area scope lets a member pick a brainstorming target

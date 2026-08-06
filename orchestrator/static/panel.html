@@ -277,6 +277,17 @@
     margin-bottom: 1px; }
   .run-title-row { display: flex; align-items: center; gap: 10px; }
   .run-title-row h2 { min-width: 0; margin-bottom: 0; }
+  /* A brainstorming request is free prose and runs to thousands of
+     characters; as a heading it swallowed the whole screen and, on a
+     phone, pushed every control below the fold. Two lines here, the rest
+     behind "more". */
+  .req-clamp { display: -webkit-box; -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical; overflow: hidden; min-width: 0; }
+  .req-more { flex: none; align-self: flex-start; font-size: 12px;
+    color: var(--dim); background: none; border: 0; padding: 2px 4px;
+    cursor: pointer; text-decoration: underline; }
+  .req-more:hover { color: var(--text); }
+  #requestdlg .mdbody { max-height: 60vh; overflow: auto; }
   .title-sep { color: #71717a; margin: 0 8px; font-size: 16px;
     font-weight: 800; line-height: 0; }
   .rename-run { flex: none; width: 22px; height: 22px; display: grid;
@@ -735,6 +746,15 @@
   </div>
 </dialog>
 
+<dialog id="requestdlg">
+  <h2>Requested outcome</h2>
+  <div id="requestBody" class="mdbody flow"></div>
+  <div class="formrow"><span></span>
+    <button class="btn"
+      onclick="document.getElementById('requestdlg').close()">Close</button>
+  </div>
+</dialog>
+
 <dialog id="gitsyncdlg">
   <h2>Sync with git</h2>
   <p class="danger-copy">The project's lead agent will align
@@ -1154,6 +1174,33 @@ function sessionOrigin(s) {
 function sessionLabel(s) {
   return s.request || s.target_path || s.id;
 }
+let fullRequestText = "";
+function requestTitle(text) {
+  // "more" is offered by MEASUREMENT, not by counting characters: whether
+  // two lines hold a request depends on the glyphs and the viewport, so a
+  // character threshold both hides text with no way to reach it (110 wide
+  // characters that do overflow) and offers a dialog showing exactly
+  // what is already on screen. Hidden until syncRequestMore() has seen
+  // the laid-out element.
+  return `<span class="req-clamp">${esc(String(text || ""))}</span>` +
+    `<button type="button" class="req-more" style="display:none"` +
+    ` onclick="openRequest()">more</button>`;
+}
+function syncRequestMore(root) {
+  for (const clamp of (root || document).querySelectorAll(".req-clamp")) {
+    const more = clamp.parentElement &&
+      clamp.parentElement.querySelector(".req-more");
+    if (!more) continue;
+    // A one-pixel tolerance: sub-pixel line heights make an exactly
+    // fitting element report a scrollHeight a hair above its client one.
+    more.style.display =
+      clamp.scrollHeight > clamp.clientHeight + 1 ? "" : "none";
+  }
+}
+function openRequest() {
+  document.getElementById("requestBody").innerHTML = mdRender(fullRequestText);
+  document.getElementById("requestdlg").showModal();
+}
 function sessionRow(s) {
   const terminal = BS_TERMINAL.has(s.status);
   const running = s.process === "running";
@@ -1472,9 +1519,16 @@ function paintSessionDetail(html) {
   const top = det.scrollTop;
   det.innerHTML = html;
   det.scrollTop = top;
-  requestAnimationFrame(updateBottomJump);
+  syncRequestMore(det);
+  requestAnimationFrame(() => {
+    // Again after layout: fonts and the viewport settle late, and the
+    // first measurement can land before either.
+    syncRequestMore(det);
+    updateBottomJump();
+  });
 }
 function renderSessionDetail(view) {
+  fullRequestText = String(view.request || "");
   const terminal = BS_TERMINAL.has(view.status);
   const running = view.process === "running";
   const listed = lastSessions.find(s => s.id === view.id);
@@ -1487,7 +1541,8 @@ function renderSessionDetail(view) {
     // monitoring screen (the run view's Edit… precedent).
     html += `<div class="toolbar">
       <button class="btn" onclick="closeSessionInfo()">&#8592; back</button>
-      <h2 style="margin:0">${esc(view.request)} <span class="st">· session info</span></h2></div>`;
+      <h2 style="margin:0;min-width:0">${requestTitle(view.request)}</h2>
+      <span class="st">· session info</span></div>`;
     html += `<div class="card"><h3>Session</h3>
       <div class="amend-hint mono">session: ${esc(view.id)} · revision ${esc(String(view.revision))}</div>
       <div class="amend-hint mono">caller: ${esc(view.caller)}</div>
@@ -1524,7 +1579,8 @@ function renderSessionDetail(view) {
   html += `<div class="run-sticky-head">`;
   if (listed && listed.project)
     html += `<div class="proj-title">${esc(listed.project)}</div>`;
-  html += `<div class="run-title-row"><h2>${esc(view.request)}<span class="title-sep">·</span><span class="chip ${statusCls}">${esc(displayStatus)}</span></h2></div>`;
+  html += `<div class="run-title-row"><h2>${requestTitle(view.request)}</h2>` +
+    `<span class="chip ${statusCls}">${esc(displayStatus)}</span></div>`;
   const bits = [
     `round ${view.round.current || 0}/${view.round.maximum}` +
       ` · ${view.round.completed} complete`,
