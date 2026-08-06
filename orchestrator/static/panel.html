@@ -374,7 +374,13 @@
   .diffbody { max-height: 72vh; overflow: auto; background: #fff;
               border: 1px solid var(--line); border-radius: 8px;
               padding: 10px 12px; font-size: 12px; line-height: 1.45; }
-  .diffbody div { white-space: pre; }
+  /* Wrap instead of scrolling sideways: a patch line has no length limit
+     and on a phone a long one was simply unreadable. The hanging indent
+     is what keeps a wrapped line legible as a diff — continuations sit
+     under the text, never under the +/- column, so the change markers
+     still read as a single column down the left edge. */
+  .diffbody div { white-space: pre-wrap; overflow-wrap: anywhere;
+                  padding-left: 1.2em; text-indent: -1.2em; }
   .dl-add { color: #15803d; background: #f0fdf4; }
   .dl-del { color: #b91c1c; background: #fef2f2; }
   .dl-hunk { color: var(--accent); background: var(--accent-soft); }
