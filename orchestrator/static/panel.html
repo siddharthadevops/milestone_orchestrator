@@ -381,6 +381,29 @@
      still read as a single column down the left edge. */
   .diffbody div { white-space: pre-wrap; overflow-wrap: anywhere;
                   padding-left: 1.2em; text-indent: -1.2em; }
+  /* One line carrying both sides of a prose edit. */
+  /* One merged line plus the pair it came from; the pin swaps them. */
+  .dl-pair { position: relative; padding-left: 1.1em; }
+  .dl-pair .dl-split { display: none; }
+  .dl-pair.split .dl-merge { display: none; }
+  .dl-pair.split .dl-split { display: block; }
+  .dl-pin { position: absolute; left: 0; top: 0.15em; width: 1em;
+    padding: 0; border: 0; background: none; cursor: pointer;
+    font-size: 9px; line-height: 1; color: var(--line); }
+  .dl-pin:hover { color: var(--dim); }
+  .dl-merge { background: #fafafa; }
+  /* No strike at all: the red text on its red field already says
+     "removed", and a rule through the words only made them harder to
+     read — which matters, because the removed text is prose someone is
+     trying to actually read, not a token they are scanning for. */
+  .dl-merge del { color: #b91c1c; background: #fef2f2;
+                  text-decoration: none; }
+  .dl-merge ins { color: #15803d; background: #f0fdf4;
+                  text-decoration: none; }
+  /* The removed run usually ends flush against the added one, since the
+     space between them belongs to one side or the other. Separate them
+     visually without touching the text — the patch is quoted verbatim. */
+  .dl-merge del + ins { margin-left: 0.35em; }
   .dl-add { color: #15803d; background: #f0fdf4; }
   .dl-del { color: #b91c1c; background: #fef2f2; }
   .dl-hunk { color: var(--accent); background: var(--accent-soft); }
@@ -848,6 +871,10 @@
 <dialog id="commitview">
   <h2 id="cv_title">Gate commit</h2>
   <div class="dv-meta mono" id="cv_meta"></div>
+  <div id="cv_toggle" class="dv-meta" style="display:none">
+    <button type="button" class="req-more" onclick="toggleDiffView()">
+      <span id="cv_toggle_label">show the literal patch</span></button>
+  </div>
   <div id="cv_body" class="diffbody mono"></div>
   <div class="formrow">
     <span id="cv_weblink" style="margin-right:auto;font-size:12px"></span>
@@ -2891,19 +2918,303 @@ function mdRender(src) {
 }
 /* ---- local commit viewer (gate commits) ---- */
 let lastWebBase = null;  // refreshed with each detail poll
+let cvPatch = "";        // the patch text as git produced it
+let cvRaw = false;       // false = merged prose reading, true = literal
+
+function renderDiffView() {
+  const body = document.getElementById("cv_body");
+  body.innerHTML = cvRaw ? rawDiffHtml(cvPatch) : diffHtml(cvPatch);
+  // The control is offered only when the two views actually differ —
+  // for a code-only commit there is nothing to switch between.
+  const merges = !cvRaw && body.querySelectorAll(".dl-merge").length > 0;
+  document.getElementById("cv_toggle").style.display =
+    (merges || cvRaw) ? "" : "none";
+  document.getElementById("cv_toggle_label").textContent =
+    cvRaw ? "show the merged reading" : "show the literal patch";
+}
+function toggleDiffView() { cvRaw = !cvRaw; renderDiffView(); }
+
+/* Prose diffs.
+   A rewritten sentence read as two nearly identical lines, one red and one
+   green, leaving the reader to spot the difference by eye. For a .md
+   document that is the wrong shape: what changed is a few words inside a
+   paragraph, so show ONE line with the removal struck through and the
+   addition beside it. Only for prose — the same treatment on code is
+   unreadable, so it is confined to .md files and never applied inside a
+   fenced block. */
+const PROSE_MAX_CELLS = 400000;  // LCS is quadratic; beyond this,
+                                 // stay raw rather than freeze the UI
+const PROSE_MIN_SIMILARITY = 0.35;  // below this a rewrite reads as confetti
+
+function proseTokens(line) {
+  // Words and the runs between them, so rebuilt text keeps its spacing.
+  return String(line).match(/\s+|[^\s]+/g) || [];
+}
+
+function proseDiff(before, after) {
+  // Plain LCS over tokens. Returns segments {t: "same"|"del"|"ins", text}
+  // or null when the two lines are too different to merge.
+  const a = proseTokens(before), b = proseTokens(after);
+  if (a.length * b.length > PROSE_MAX_CELLS) return null;
+  const n = a.length, m = b.length;
+  const table = new Uint32Array((n + 1) * (m + 1));
+  for (let i = n - 1; i >= 0; i--) {
+    for (let j = m - 1; j >= 0; j--) {
+      table[i * (m + 1) + j] = a[i] === b[j]
+        ? table[(i + 1) * (m + 1) + j + 1] + 1
+        : Math.max(table[(i + 1) * (m + 1) + j], table[i * (m + 1) + j + 1]);
+    }
+  }
+  const segs = [];
+  const push = (t, text) => {
+    const last = segs[segs.length - 1];
+    if (last && last.t === t) last.text += text; else segs.push({t, text});
+  };
+  let i = 0, j = 0, common = 0;
+  while (i < n && j < m) {
+    if (a[i] === b[j]) { push("same", a[i]); if (a[i].trim()) common++; i++; j++; }
+    else if (table[(i + 1) * (m + 1) + j] >= table[i * (m + 1) + j + 1])
+      push("del", a[i++]);
+    else push("ins", b[j++]);
+  }
+  while (i < n) push("del", a[i++]);
+  while (j < m) push("ins", b[j++]);
+  const words = Math.max(
+    1, a.filter(t => t.trim()).length, b.filter(t => t.trim()).length
+  );
+  // A wholesale rewrite has almost nothing in common: merging it would
+  // interleave two unrelated sentences word by word.
+  if (common / words < PROSE_MIN_SIMILARITY) return null;
+  return proseCoalesce(segs);
+}
+
+// An LCS matches every word it can, so two unrelated sentence endings still
+// share their "de", "en", "el" — and the result is confetti: half a dozen
+// one-word strikeouts interleaved with one-word insertions. What a reader
+// wants is the phrase that went and the phrase that came. So a surviving
+// common run that is too short to be a real anchor is absorbed into the
+// change around it, and the neighbours then coalesce into one del and one
+// ins. Long common runs are left alone: those are the untouched sentence.
+const PROSE_MIN_ANCHOR = 10;  // non-space characters, AND at least two
+                              // words: one long word shared by chance is
+                              // not evidence that anything survived
+
+function proseCoalesce(segs) {
+  const anchored = [];
+  for (let i = 0; i < segs.length; i++) {
+    const seg = segs[i];
+    const between = seg.t === "same"
+      && anchored.some(s => s.t !== "same")
+      && segs.slice(i + 1).some(s => s.t !== "same");
+    const anchor = seg.text.replace(/\s+/g, "").length >= PROSE_MIN_ANCHOR
+      && /\S\s+\S/.test(seg.text);
+    if (between && !anchor) {
+      // Belongs to BOTH sides: it stays in the struck-out text and in the
+      // replacement, which is what it literally was.
+      anchored.push({t: "del", text: seg.text});
+      anchored.push({t: "ins", text: seg.text});
+      continue;
+    }
+    anchored.push(seg);
+  }
+  // Reorder each changed region into all removals, then all additions.
+  const out = [];
+  let i = 0;
+  while (i < anchored.length) {
+    if (anchored[i].t === "same") { out.push(anchored[i++]); continue; }
+    let del = "", ins = "";
+    while (i < anchored.length && anchored[i].t !== "same") {
+      if (anchored[i].t === "del") del += anchored[i].text;
+      else ins += anchored[i].text;
+      i++;
+    }
+    if (del) out.push({t: "del", text: del});
+    if (ins) out.push({t: "ins", text: ins});
+  }
+  return out;
+}
+
+// Cheap bag-of-words overlap, used only to TEST a pairing before paying
+// for the real LCS. Order-insensitive on purpose: it answers "are these
+// the same paragraph?", not "what changed in it?".
+function proseSimilarity(a, b) {
+  const bag = line => {
+    const counts = new Map();
+    for (const t of proseTokens(line)) {
+      const w = t.trim().toLowerCase();
+      if (w) counts.set(w, (counts.get(w) || 0) + 1);
+    }
+    return counts;
+  };
+  const left = bag(a), right = bag(b);
+  let shared = 0, total = 0;
+  for (const [w, n] of left) {
+    shared += Math.min(n, right.get(w) || 0);
+    total += n;
+  }
+  for (const [, n] of right) total += n;
+  return total ? (2 * shared) / total : 0;
+}
+
+// Positional pairing is only honest when the text agrees with it. Two
+// reordered paragraphs also arrive as N removals and N additions, and
+// pairing those by position would report replacements that never
+// happened — so the diagonal must be each line's OWN best match, in both
+// directions, and every pair must clear the similarity floor. A
+// reordering fails immediately: its best matches lie off the diagonal.
+const PROSE_MAX_PAIRS = 12;   // the matrix is N^2; N is a paragraph count
+
+function prosePairing(dels, ins) {
+  const n = dels.length;
+  if (!n || n !== ins.length || n > PROSE_MAX_PAIRS) return null;
+  const sim = dels.map(d => ins.map(i => proseSimilarity(d, i)));
+  for (let i = 0; i < n; i++) {
+    const own = sim[i][i];
+    if (own < PROSE_MIN_SIMILARITY) return null;
+    for (let j = 0; j < n; j++) {
+      if (j !== i && sim[i][j] >= own) return null;      // row: best match
+      if (j !== i && sim[j][i] >= own) return null;      // column: mutual
+    }
+  }
+  return dels.map((d, i) => [d, ins[i]]);
+}
+
+function proseMergeHtml(segs, before, after) {
+  // Both readings ship together and one pin swaps them in place. A merged
+  // line is an interpretation, so the lines it was made from have to be
+  // reachable AT the line, not only through a mode for the whole commit:
+  // the doubt is usually about one sentence, not about the patch.
+  const merged = segs.map(seg =>
+    seg.t === "same" ? esc(seg.text)
+      : seg.t === "del" ? `<del>${esc(seg.text)}</del>`
+      : `<ins>${esc(seg.text)}</ins>`
+  ).join("");
+  return `<div class="dl-pair">` +
+    `<button type="button" class="dl-pin" title="show the two original lines"` +
+    ` onclick="togglePair(this)">&#9679;</button>` +
+    `<div class="dl-merge">${merged}</div>` +
+    `<div class="dl-split">${diffLineHtml("-" + before)}` +
+    `${diffLineHtml("+" + after)}</div></div>`;
+}
+function togglePair(pin) {
+  const pair = pin.parentElement;
+  const split = pair.classList.toggle("split");
+  pin.title = split ? "show the merged reading" : "show the two original lines";
+  pin.innerHTML = split ? "&#9675;" : "&#9679;";
+}
+
+function diffLineHtml(l) {
+  let cls = "";
+  if (/^(diff --git|index |new file|deleted file|similarity|rename )/.test(l)) cls = "dl-meta";
+  else if (/^(\+\+\+|---)/.test(l)) cls = "dl-meta";
+  else if (l.startsWith("@@")) cls = "dl-hunk";
+  else if (l.startsWith("+")) cls = "dl-add";
+  else if (l.startsWith("-")) cls = "dl-del";
+  else if (/^(commit |Author:|Date:)/.test(l)) cls = "dl-head";
+  return `<div class="${cls}">${esc(l) || "&nbsp;"}</div>`;
+}
+
+function rawDiffHtml(text) {
+  return String(text || "").split("\n").map(diffLineHtml).join("");
+}
+
 function diffHtml(text) {
-  return String(text || "").split("\n").map(l => {
-    let cls = "";
-    if (/^(diff --git|index |new file|deleted file|similarity|rename )/.test(l)) cls = "dl-meta";
-    else if (/^(\+\+\+|---)/.test(l)) cls = "dl-meta";
-    else if (l.startsWith("@@")) cls = "dl-hunk";
-    else if (l.startsWith("+")) cls = "dl-add";
-    else if (l.startsWith("-")) cls = "dl-del";
-    else if (/^(commit |Author:|Date:)/.test(l)) cls = "dl-head";
-    return `<div class="${cls}">${esc(l) || "&nbsp;"}</div>`;
-  }).join("");
+  const lines = String(text || "").split("\n");
+  const out = [];
+  // Two pieces of state decide whether a run may be merged: which file the
+  // hunk belongs to, and whether we are inside a fenced code block. The
+  // fence toggles on both sides of the patch, so it is tracked from the
+  // content of removed and context lines alike.
+  let prose = false, fenced = false;
+  let dels = [], ins = [];
+
+  const isFence = body => /^\s*(```|~~~)/.test(body);
+
+  const flush = () => {
+    // Correspondence is TESTED, never assumed: prosePairing merges N
+    // removals with N additions only when each line's own opposite is its
+    // best match both ways. Rewriting three paragraphs passes; reordering
+    // three paragraphs fails, because its best matches lie off the
+    // diagonal — which is exactly the case that would otherwise report a
+    // replacement that never happened.
+    //
+    // Residual, accepted: a passing pairing is still an INFERENCE. A patch
+    // never states that its removal and its addition are one sentence
+    // edited. That inference is what a word-level diff IS — git ships it
+    // as `--word-diff`, with no similarity floor and no way back. Here it
+    // is narrowed (prose files only, mutual-best pairing, above a
+    // similarity floor) and reversible: the literal patch is one click
+    // away, offered whenever the two readings differ.
+    if (prose && !fenced) {
+      const pairs = prosePairing(
+        dels.map(l => l.slice(1)), ins.map(l => l.slice(1))
+      );
+      if (pairs) {
+        const merged = [];
+        for (const [before, after] of pairs) {
+          const segs = proseDiff(before, after);
+          if (!segs) { merged.length = 0; break; }
+          merged.push(proseMergeHtml(segs, before, after));
+        }
+        if (merged.length) {
+          out.push(...merged);
+          dels = []; ins = [];
+          return;
+        }
+      }
+    }
+    for (const l of dels) out.push(diffLineHtml(l));
+    for (const l of ins) out.push(diffLineHtml(l));
+    dels = []; ins = [];
+  };
+
+  for (const l of lines) {
+    if (l.startsWith("diff --git ")) {
+      flush();
+      const header = /^diff --git a\/(.+?) b\/(.+)$/.exec(l);
+      // A header this cannot read — git quotes paths holding tabs, quotes
+      // or non-ASCII — means the file is UNKNOWN, and unknown is not
+      // prose. Leaving the previous file's answer standing would carry
+      // prose mode into whatever came next, pinning code as sentences.
+      prose = !!header
+        && /\.(md|markdown|txt)$/i.test(header[1])
+        && /\.(md|markdown|txt)$/i.test(header[2]);
+      fenced = false;
+      out.push(diffLineHtml(l));
+      continue;
+    }
+    // Fence state is tracked on the BEFORE side only — context lines plus
+    // removals — because that is the one coherent file in a patch.
+    // Letting additions toggle too double-counts an edited fence:
+    // replacing ``` with ```lang would toggle twice and leave the code
+    // that follows looking like prose.
+    if (l.startsWith("+") && !l.startsWith("+++")) {
+      if (isFence(l.slice(1))) { flush(); out.push(diffLineHtml(l)); continue; }
+      ins.push(l);
+      continue;
+    }
+    if (l.startsWith("-") && !l.startsWith("---")) {
+      if (isFence(l.slice(1))) { flush(); fenced = !fenced; out.push(diffLineHtml(l)); continue; }
+      // An addition already seen means this removal opens a NEW run.
+      if (ins.length) flush();
+      dels.push(l);
+      continue;
+    }
+    flush();
+    // A hunk starts at an arbitrary line, so whether it opens inside a
+    // fence is unknowable from the patch alone. Residual, accepted: a
+    // hunk whose fence opener sits outside its context may merge a pair
+    // of code lines. That is ugly, never untrue — the words shown are
+    // still exactly the words the patch carries.
+    if (l.startsWith("@@")) fenced = false;
+    else if (isFence(l.slice(1))) fenced = !fenced;
+    out.push(diffLineHtml(l));
+  }
+  flush();
+  return out.join("");
 }
 async function showCommit(unitKey) {
+  cvRaw = false;
   let d;
   try {
     d = await api(`/api/runs/${selected}/commit?unit=${encodeURIComponent(unitKey)}`);
@@ -2913,7 +3224,8 @@ async function showCommit(unitKey) {
   document.getElementById("cv_meta").textContent =
     (d.kind === "wip" ? "working commit — amended as fixes land" : "") +
     (d.truncated ? " (truncated)" : "");
-  document.getElementById("cv_body").innerHTML = diffHtml(d.text);
+  cvPatch = d.text;
+  renderDiffView();
   document.getElementById("cv_weblink").innerHTML = lastWebBase
     ? `<a class="morelink" href="${esc(lastWebBase)}/commit/${esc(d.sha)}"
          target="_blank" rel="noopener">open on git web ↗</a>
