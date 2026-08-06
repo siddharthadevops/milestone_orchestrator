@@ -2942,8 +2942,14 @@ function toggleDiffView() { cvRaw = !cvRaw; renderDiffView(); }
    addition beside it. Only for prose — the same treatment on code is
    unreadable, so it is confined to .md files and never applied inside a
    fenced block. */
-const PROSE_MAX_CELLS = 400000;  // LCS is quadratic; beyond this,
-                                 // stay raw rather than freeze the UI
+// LCS is quadratic, so there has to be a ceiling — but it has to clear
+// real prose. A 358-word paragraph from an actual manuscript needs 511k
+// cells, and the first ceiling sat at 400k, so ordinary paragraphs fell
+// back to the raw diff for no reason a reader could see. Four million
+// cells covers roughly a thousand words a side; the table is Uint16
+// because every value is an LCS length, bounded by the shorter side,
+// which under this ceiling can never reach 65535.
+const PROSE_MAX_CELLS = 4000000;
 const PROSE_MIN_SIMILARITY = 0.35;  // below this a rewrite reads as confetti
 
 function proseTokens(line) {
@@ -2957,7 +2963,7 @@ function proseDiff(before, after) {
   const a = proseTokens(before), b = proseTokens(after);
   if (a.length * b.length > PROSE_MAX_CELLS) return null;
   const n = a.length, m = b.length;
-  const table = new Uint32Array((n + 1) * (m + 1));
+  const table = new Uint16Array((n + 1) * (m + 1));
   for (let i = n - 1; i >= 0; i--) {
     for (let j = m - 1; j >= 0; j--) {
       table[i * (m + 1) + j] = a[i] === b[j]
