@@ -15,7 +15,8 @@ VIEW_KEYS = {
     "closure_ballots", "round", "transcript_markdown", "result",
     "final_agreement",
     "activity", "work_duration_s", "work_token_usage",
-    "work_token_usage_partial", "in_flight", "retry",
+    "work_token_usage_partial", "work_cost", "work_cost_partial",
+    "in_flight", "retry",
     "external_intervention",
 }
 class BrainstormingVisualizationTest(unittest.TestCase):

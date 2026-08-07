@@ -470,6 +470,8 @@ class StandaloneBrainstormingApiTest(unittest.TestCase):
                     "work_duration_s",
                     "work_token_usage",
                     "work_token_usage_partial",
+                    "work_cost",
+                    "work_cost_partial",
                     "last_action_epoch",
                     "in_flight",
                     "retry",

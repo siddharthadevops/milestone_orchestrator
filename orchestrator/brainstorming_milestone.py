@@ -22,11 +22,16 @@ class OperationalTerminalError(AdapterError):
     """The attached discussion ended because its execution failed."""
 
     def __init__(self, message, work_duration_s=None, work_token_usage=None,
-                 work_token_usage_partial=False):
+                 work_token_usage_partial=False, work_cost=None,
+                 work_cost_partial=False):
         super().__init__(message)
         self.work_duration_s = work_duration_s
         self.work_token_usage = work_token_usage
         self.work_token_usage_partial = bool(work_token_usage_partial)
+        # A failed session still spent money; it crosses this seam with the
+        # duration and tokens or it is lost to the run entirely.
+        self.work_cost = work_cost
+        self.work_cost_partial = bool(work_cost_partial)
 
 
 DESIGN_AMENDMENT_LENGTH_GUIDANCE = (
@@ -547,6 +552,8 @@ def terminal_handoff(state, session_id):
             work_token_usage_partial=projected.get(
                 "work_token_usage_partial", False
             ),
+            work_cost=projected.get("work_cost"),
+            work_cost_partial=projected.get("work_cost_partial", False),
         )
     handoff = {
         "session_id": session_id,
@@ -559,6 +566,8 @@ def terminal_handoff(state, session_id):
         "work_token_usage_partial": projected.get(
             "work_token_usage_partial", False
         ),
+        "work_cost": projected.get("work_cost"),
+        "work_cost_partial": projected.get("work_cost_partial", False),
     }
     if session_state["status"] == "success":
         revision = handoff["accepted_target_revision"]

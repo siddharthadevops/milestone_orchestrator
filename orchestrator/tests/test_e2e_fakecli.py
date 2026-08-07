@@ -236,6 +236,9 @@ class TestCalculatorE2E(unittest.TestCase):
                 "work_duration_s",
                 "work_token_usage",
                 "work_token_usage_partial",
+                "work_cost",
+                "work_cost_partial",
+                "billing",
                 "units",
                 "events_total",
                 "last_events",
@@ -261,7 +264,7 @@ class TestCalculatorE2E(unittest.TestCase):
                  "rounds", "seals", "opened_epoch", "closed_epoch", "debt",
                  "reclassify", "repairs", "brainstormings", "verifications",
                  "work_duration_s", "work_token_usage",
-                 "work_token_usage_partial"},
+                 "work_token_usage_partial", "work_cost", "work_cost_partial"},
             )
         # The CLI's JSON is exactly state.summary() over the on-disk state.
         self.assertEqual(summ, st.summary(self.disk_state()))

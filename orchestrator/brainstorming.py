@@ -76,6 +76,30 @@ ACTIVITY_STATUSES = ("completed", "failed")
 ACTIVITY_FAILURE_TYPES = ("protocol", "execution")
 
 
+def _cost(value, ctx="cost"):
+    """What the call cost, under both readings. See pricing.py."""
+    if value is None:
+        return None
+    if not isinstance(value, dict):
+        raise ContractError("%s must be an object" % ctx)
+    checked = {}
+    for field in ("api_usd", "real_usd"):
+        amount = value.get(field)
+        if isinstance(amount, bool) or not isinstance(amount, (int, float)):
+            raise ContractError("%s.%s must be a number" % (ctx, field))
+        amount = float(amount)
+        if not math.isfinite(amount) or amount < 0:
+            raise ContractError(
+                "%s.%s must be a non-negative finite number" % (ctx, field)
+            )
+        checked[field] = amount
+    if checked["real_usd"] > checked["api_usd"]:
+        raise ContractError(
+            "%s.real_usd cannot exceed the API-equivalent" % ctx
+        )
+    return checked
+
+
 def _token_usage(value, ctx="token_usage"):
     if value is None:
         return None
@@ -946,6 +970,8 @@ def validate_activity_event(event):
             "prompt_ref",
             "token_usage",
             "token_usage_partial",
+            "cost",
+            "cost_partial",
         ),
         "activity_event",
     )
@@ -1053,6 +1079,16 @@ def validate_activity_event(event):
         )
     if token_usage_partial:
         checked["token_usage_partial"] = True
+    cost = _cost(event.get("cost"), "activity_event.cost")
+    if cost is not None:
+        checked["cost"] = cost
+    cost_partial = event.get("cost_partial", False)
+    if type(cost_partial) is not bool:
+        raise ContractError(
+            "activity_event.cost_partial must be a boolean"
+        )
+    if cost_partial:
+        checked["cost_partial"] = True
     return checked
 
 
@@ -3426,6 +3462,7 @@ class SessionStore:
             "effort": None,
             "status": "completed" if response is not None else "failed",
             "token_usage_partial": True,
+                    "cost_partial": True,
         }
         if response is None:
             event.update({
@@ -3509,6 +3546,7 @@ class SessionStore:
                     "failure_type": "execution",
                     "error": "provider call ended without durable activity",
                     "token_usage_partial": True,
+                    "cost_partial": True,
                 },
             )
         classifier = attempt.get("classifier_call")
@@ -3547,6 +3585,7 @@ class SessionStore:
                     "failure_type": "execution",
                     "error": "classifier call ended without durable activity",
                     "token_usage_partial": True,
+                    "cost_partial": True,
                 },
             )
 

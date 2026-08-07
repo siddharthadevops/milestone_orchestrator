@@ -38,7 +38,7 @@ except ImportError:  # pragma: no cover - non-POSIX: flock degrades to the
 
 from . import brainstorming, brainstorming_lifecycle, brainstorming_milestone
 from . import contracts, errclass, gitops, interpreter, kvstore, ledgers
-from . import projects, prompts, runners, verifiers, workareas
+from . import pricing, projects, prompts, runners, verifiers, workareas
 from . import state as st
 
 IMPLEMENTATION_SIZE_ACK = "IMPLEMENTATION_SIZE_CUTOFF_ACK"
@@ -88,6 +88,14 @@ DEFAULT_CONFIG = {
     "model_defaults": {
         "claude": {"model": "claude-opus-5", "effort": "max"},
         "codex": {"model": "gpt-5.6-sol", "effort": "max"},
+    },
+    # How each family is PAID FOR, which is what separates the two costs the
+    # panel shows. "subscription": the call spends a seat, so its real cost is
+    # 0.00 and only the API-equivalent is informative. "api": metered, so the
+    # equivalent IS the money. Set per family; see pricing.py.
+    "billing": {
+        "claude": pricing.BILLING_SUBSCRIPTION,
+        "codex": pricing.BILLING_SUBSCRIPTION,
     },
     # No hard wall-clock timeout: worker calls run as long as the work needs
     # (an implement call may legitimately run hours of test suites). A fixed
@@ -382,6 +390,7 @@ class Driver(object):
         # inconsistent (content hash vs recorded profile_ref hash). No-op
         # for profile-less runs and ref-only labels.
         interpreter.verify_embedded(self.state)
+        self._validate_billing()
         self.workspace = self.state["workspace"]
         self._busy_lock = threading.RLock()
         self.runner = runner or runners.SubprocessRunner(
@@ -1170,6 +1179,10 @@ class Driver(object):
                 episode_id=episode_id,
                 duration_s=None,
                 token_usage_partial=True,
+                # Without this the mere existence of this synthesized event
+                # stops state.py force-marking the unit, and the killed
+                # implementer's spend disappears with no floor marker.
+                cost_partial=True,
                 raw_path=None,
                 **interrupt_fields,
             )
@@ -1372,6 +1385,11 @@ class Driver(object):
                 getattr(result, "token_usage_partial", False)
                 or getattr(result, "token_usage", None) is None
             ),
+            cost=copy.deepcopy(getattr(result, "cost", None)),
+            cost_partial=bool(
+                getattr(result, "cost_partial", False)
+                or getattr(result, "cost", None) is None
+            ),
             raw_path=raw_path,
             confirmed=marker.get("steer_confirmed"),
             grace_kind=marker.get("grace_kind"),
@@ -1515,6 +1533,11 @@ class Driver(object):
                 getattr(exc, "token_usage_partial", False)
                 or getattr(exc, "token_usage", None) is None
             ),
+            cost=copy.deepcopy(getattr(exc, "cost", None)),
+            cost_partial=bool(
+                getattr(exc, "cost_partial", False)
+                or getattr(exc, "cost", None) is None
+            ),
             raw_path=(raw_paths or [None])[0],
             raw_path2=(raw_paths[1] if len(raw_paths or []) > 1 else None),
         )
@@ -1585,6 +1608,15 @@ class Driver(object):
                 token_usage_partial=bool(
                     call.get("token_usage_partial", False)
                     or usage is None
+                ),
+                cost=(
+                    copy.deepcopy(call.get("cost"))
+                    if call.get("completed") else None
+                ),
+                cost_partial=bool(
+                    call.get("cost_partial", False)
+                    or not call.get("completed")
+                    or call.get("cost") is None
                 ),
             )
             accounted = True
@@ -1912,6 +1944,61 @@ class Driver(object):
                 marker["pending_calls"] = pending
             return self._write_busy(marker)
 
+    def _price_call(self, family, model, call, include_repair=False):
+        """Price one completed call and hang the answer on it.
+
+        Mirrors token_usage exactly: a dict when the cost is known, absent
+        plus a `partial` flag when it is not. Unknown is never rendered as
+        zero — zero is what a subscription seat genuinely costs, and the two
+        must stay distinguishable.
+        """
+        is_dict = isinstance(call, dict)
+        own = (
+            call.get("cost_payloads") if is_dict
+            else getattr(call, "cost_payloads", None)
+        )
+        # An attempt that ran and reported nothing is unknown, not free — the
+        # same explicit None runners.merged_cost_payloads appends.
+        payloads = list(own) if own else ([None] if call is not None else [])
+        if include_repair:
+            repair = (
+                call.get("repair") if is_dict
+                else getattr(call, "repair", None)
+            )
+            if isinstance(repair, dict):
+                strike = repair.get("cost_payloads")
+                payloads.extend(list(strike) if strike else [None])
+        # No already-settled branch: a carrier that ran always yields at
+        # least the explicit None above, so `payloads` is empty only when
+        # there is no carrier at all — and then there is nothing to read a
+        # previous figure from either.
+        configured = self.config.get("billing")
+        billing = (
+            configured.get(family) if isinstance(configured, dict) else None
+        )
+        quoted = pricing.quote_many(family, model, payloads, billing=billing)
+        # Both readings or nothing: a stored half-known cost passes the
+        # record-level partial check while every aggregation drops it.
+        if quoted.api_usd is None or quoted.real_usd is None:
+            return None
+        return quoted.as_dict()
+
+    def _quote_call(self, family, model, call):
+        """Price ONE physical call and hang the answer on it.
+
+        Deliberately excludes a repair's first strike: that attempt is
+        recorded on its own malformed event, the same split duration and
+        token usage already follow. Only the crash sentinel wants both.
+        """
+        cost = self._price_call(family, model, call)
+        if isinstance(call, dict):
+            call["cost"] = cost
+            call["cost_partial"] = cost is None
+        else:
+            call.cost = cost
+            call.cost_partial = cost is None
+        return cost
+
     def _update_busy_accounting(self, call, duration_s=None):
         """Attach a completed physical call's known cost to its sentinel."""
         with self._busy_lock:
@@ -1919,6 +2006,19 @@ class Driver(object):
             if marker is None:
                 return False
             duration, usage, partial = self._call_accounting(call)
+            # Every completed physical call passes through here, successful or
+            # not, and the marker already records WHICH model actually ran —
+            # so this is the one place a price has to be struck.
+            # The call object gets its OWN price (final attempt only);
+            # the sentinel separately gets the whole logical call, repair
+            # included, because crash recovery reasons about the call as one.
+            self._quote_call(marker.get("family"), marker.get("model"), call)
+            sentinel_cost = self._price_call(
+                marker.get("family"), marker.get("model"), call,
+                include_repair=True,
+            )
+            marker["cost"] = copy.deepcopy(sentinel_cost)
+            marker["cost_partial"] = sentinel_cost is None
             marker["completed"] = True
             marker["duration_s"] = (
                 duration_s if duration_s is not None else duration
@@ -2079,6 +2179,11 @@ class Driver(object):
                         getattr(exc, "token_usage_partial", False)
                         or getattr(exc, "token_usage", None) is None
                     ),
+                    cost=copy.deepcopy(getattr(exc, "cost", None)),
+                    cost_partial=bool(
+                        getattr(exc, "cost_partial", False)
+                        or getattr(exc, "cost", None) is None
+                    ),
                 )
                 st.fail_run(
                     self.state,
@@ -2127,10 +2232,16 @@ class Driver(object):
                         time.time() - physical_started,
                         call_control.interrupt_reason,
                         token_usage=getattr(exc, "token_usage", None),
+                        cost_payloads=getattr(exc, "cost_payloads", None),
                     )
                     result.token_usage_partial = bool(
                         getattr(exc, "token_usage_partial", False)
                         or getattr(exc, "token_usage", None) is None
+                    )
+                    result.cost = getattr(exc, "cost", None)
+                    result.cost_partial = bool(
+                        getattr(exc, "cost_partial", False)
+                        or result.cost is None
                     )
                     break
                 if (
@@ -2159,6 +2270,11 @@ class Driver(object):
                         token_usage_partial=bool(
                             getattr(exc, "token_usage_partial", False)
                             or getattr(exc, "token_usage", None) is None
+                        ),
+                        cost=copy.deepcopy(getattr(exc, "cost", None)),
+                        cost_partial=bool(
+                            getattr(exc, "cost_partial", False)
+                            or getattr(exc, "cost", None) is None
                         ),
                         raw_path=(proto_paths or [None])[0],
                         raw_path2=(
@@ -2193,6 +2309,11 @@ class Driver(object):
                         "token_usage_partial": bool(
                             getattr(exc, "token_usage_partial", False)
                             or getattr(exc, "token_usage", None) is None
+                        ),
+                        "cost": copy.deepcopy(getattr(exc, "cost", None)),
+                        "cost_partial": bool(
+                            getattr(exc, "cost_partial", False)
+                            or getattr(exc, "cost", None) is None
                         ),
                         "raw_path": (proto_paths or [None])[0],
                         "raw_path2": (
@@ -2278,6 +2399,10 @@ class Driver(object):
                 % (raw_name, "" if attr == "repair" else "-tail"),
                 rep["raw_text"],
             )
+            marker = self._read_busy() or {}
+            strike_cost = self._price_call(
+                family, marker.get("model"), rep
+            )
             st.append_event(
                 self.state,
                 "worker_malformed",
@@ -2290,6 +2415,10 @@ class Driver(object):
                 # time — it still reports as malformed because the output
                 # WAS, and the model dropping its brace must stay visible.
                 duration_s=rep.get("duration_s"),
+                cost=copy.deepcopy(strike_cost),
+                # A recovery channel strike made no extra call, so an absent
+                # price is "nothing to price", not "could not price it".
+                cost_partial=bool(strike_cost is None and attr == "repair"),
                 token_usage=copy.deepcopy(rep.get("token_usage")),
                 token_usage_partial=bool(
                     rep.get("token_usage_partial", False)
@@ -2359,6 +2488,11 @@ class Driver(object):
                 token_usage_partial=bool(
                     call.get("token_usage_partial", False)
                     or call.get("token_usage") is None
+                ),
+                cost=copy.deepcopy(call.get("cost")),
+                cost_partial=bool(
+                    call.get("cost_partial", False)
+                    or call.get("cost") is None
                 ),
                 prompt_path=call.get("prompt_path"),
             )
@@ -3075,6 +3209,11 @@ class Driver(object):
                 getattr(result, "token_usage_partial", False)
                 or getattr(result, "token_usage", None) is None
             ),
+            cost=copy.deepcopy(getattr(result, "cost", None)),
+            cost_partial=bool(
+                getattr(result, "cost_partial", False)
+                or getattr(result, "cost", None) is None
+            ),
         )
         # The paid origin call is complete before session creation begins.
         # Persist its time now so a crash in the independent-session handoff
@@ -3171,6 +3310,17 @@ class Driver(object):
                 "provider_session_token_usage": copy.deepcopy(
                     getattr(result, "session_token_usage", None)
                 ),
+                # The raw CUMULATIVE snapshot, so a continuation after a
+                # restart can still subtract instead of pricing as unknown.
+                # It must be the session twin, not cost_payloads[-1]: that
+                # list is rewritten to the per-turn delta, and persisting a
+                # delta as a baseline re-charges the whole session on resume.
+                # Codex only -- nothing else consumes it, and Claude's payload
+                # is a whole worker envelope.
+                "provider_session_cost_payload": copy.deepcopy(
+                    getattr(result, "session_cost_payload", None)
+                    if family == "codex" else None
+                ),
                 "raw_path": raw_path,
                 "raw_name": raw_name,
                 "duration_s": result.duration_s,
@@ -3203,6 +3353,10 @@ class Driver(object):
         result.token_usage_partial = bool(
             record.get("token_usage_partial", False)
             or record.get("token_usage") is None
+        )
+        result.cost = record.get("cost")
+        result.cost_partial = bool(
+            record.get("cost_partial", False) or result.cost is None
         )
         result.session_ref = record.get("provider_session_ref")
         result.brainstorming_handoff = copy.deepcopy(record.get("handoff"))
@@ -3550,9 +3704,10 @@ class Driver(object):
 
     def _record_brainstorming_work(self, unit, session_id, duration_s,
                                    token_usage=None,
-                                   token_usage_partial=False):
+                                   token_usage_partial=False,
+                                   cost=None, cost_partial=False):
         """Attach one independent session's consumed LLM work exactly once."""
-        if duration_s is None and token_usage is None:
+        if duration_s is None and token_usage is None and cost is None:
             return
         if any(
             event.get("type") == "brainstorming_work_recorded"
@@ -3568,6 +3723,8 @@ class Driver(object):
             duration_s=duration_s,
             token_usage=copy.deepcopy(token_usage),
             token_usage_partial=bool(token_usage_partial),
+            cost=copy.deepcopy(cost),
+            cost_partial=bool(cost_partial),
         )
 
     def _do_brainstorming_wait(self):
@@ -3626,6 +3783,8 @@ class Driver(object):
                 unit, session_id, exc.work_duration_s,
                 exc.work_token_usage,
                 exc.work_token_usage_partial,
+                cost=getattr(exc, "work_cost", None),
+                cost_partial=getattr(exc, "work_cost_partial", False),
             )
             unit.pop("brainstorming_wait", None)
             if (wait.get("origin") or {}).get("kind") \
@@ -3667,6 +3826,8 @@ class Driver(object):
             unit, session_id, handoff.get("work_duration_s"),
             handoff.get("work_token_usage"),
             handoff.get("work_token_usage_partial", False),
+            cost=handoff.get("work_cost"),
+            cost_partial=handoff.get("work_cost_partial", False),
         )
 
         origin = wait["origin"]
@@ -3970,6 +4131,7 @@ class Driver(object):
                 seed_usage(
                     origin["provider_session_ref"],
                     origin.get("provider_session_token_usage"),
+                    origin.get("provider_session_cost_payload"),
                 )
             if kind == contracts.KIND_IMPLEMENT:
                 origin_pre_snapshot = origin.get("pre_snapshot") or {}
@@ -4075,6 +4237,11 @@ class Driver(object):
                     getattr(result, "token_usage_partial", False)
                     or getattr(result, "token_usage", None) is None
                 ),
+                "cost": copy.deepcopy(getattr(result, "cost", None)),
+                "cost_partial": bool(
+                    getattr(result, "cost_partial", False)
+                    or getattr(result, "cost", None) is None
+                ),
                 "text": result.text,
                 "provider_session_ref": (
                     getattr(result, "session_ref", None)
@@ -4146,6 +4313,11 @@ class Driver(object):
             token_usage_partial=bool(
                 getattr(result, "token_usage_partial", False)
                 or getattr(result, "token_usage", None) is None
+            ),
+            cost=copy.deepcopy(getattr(result, "cost", None)),
+            cost_partial=bool(
+                getattr(result, "cost_partial", False)
+                or getattr(result, "cost", None) is None
             ),
         )
 
@@ -4777,6 +4949,10 @@ class Driver(object):
                                     token_usage_partial=getattr(
                                         result, "token_usage_partial", False
                                     ),
+                                    cost=getattr(result, "cost", None),
+                                    cost_partial=getattr(
+                                        result, "cost_partial", False
+                                    ),
                                     pre_tree=pre_tree, pre_head=pre_head,
                                     pre_sym=pre_sym, pre_refs=pre_refs,
                                     pre_stash=pre_stash)
@@ -4806,6 +4982,11 @@ class Driver(object):
                         token_usage_partial=bool(
                             getattr(result, "token_usage_partial", False)
                             or getattr(result, "token_usage", None) is None
+                        ),
+                        cost=getattr(result, "cost", None),
+                        cost_partial=bool(
+                            getattr(result, "cost_partial", False)
+                            or getattr(result, "cost", None) is None
                         ))
         if kind == contracts.KIND_IMPLEMENT and output.get("suite_command"):
             st.set_discovered_suite(self.state, output["suite_command"])
@@ -4926,7 +5107,7 @@ class Driver(object):
         return finding
 
     def _handle_gap(self, unit, output, duration_s=None, token_usage=None,
-                    token_usage_partial=False,
+                    token_usage_partial=False, cost=None, cost_partial=False,
                     pre_tree=None,
                     pre_head=None, pre_sym=None, pre_refs=None, pre_stash=None,
                     pre_worktree_tree=None, from_fixer=False):
@@ -4938,6 +5119,8 @@ class Driver(object):
             token_usage_partial=bool(
                 token_usage_partial or token_usage is None
             ),
+            cost=copy.deepcopy(cost),
+            cost_partial=bool(cost_partial or cost is None),
             count=len(gaps),
             from_fixer=from_fixer,
             gaps=[{k: g.get(k)
@@ -5807,6 +5990,29 @@ class Driver(object):
         )
         return family, model, effort or defaults.get("effort")
 
+    def _validate_billing(self):
+        """Refuse a payment mode we cannot honour.
+
+        An unrecognized mode leaves real money unknown, which correctly
+        degrades every call of that family to unpriced -- but silently, and
+        the panel then shows a permanently partial run with no explanation.
+        Say it once, at startup, where it can be acted on.
+        """
+        configured = self.config.get("billing")
+        if configured is None:
+            return
+        if not isinstance(configured, dict):
+            raise ValueError(
+                "config billing must be a mapping of family -> %s"
+                % "|".join(pricing.BILLING_MODES)
+            )
+        for family, mode in configured.items():
+            if mode not in pricing.BILLING_MODES:
+                raise ValueError(
+                    "config billing[%r] is %r; expected one of %s"
+                    % (family, mode, "|".join(pricing.BILLING_MODES))
+                )
+
     def _family_defaults(self, family):
         d = (self.config.get("model_defaults") or {}).get(family) or {}
         return d.get("model"), d.get("effort")
@@ -6295,6 +6501,10 @@ class Driver(object):
                                     token_usage_partial=getattr(
                                         result, "token_usage_partial", False
                                     ),
+                                    cost=getattr(result, "cost", None),
+                                    cost_partial=getattr(
+                                        result, "cost_partial", False
+                                    ),
                                     pre_tree=pre_tree, pre_head=pre_head,
                                     pre_sym=pre_sym, pre_refs=pre_refs,
                                     pre_stash=pre_stash,
@@ -6468,6 +6678,11 @@ class Driver(object):
             token_usage_partial=bool(
                 getattr(result, "token_usage_partial", False)
                 or getattr(result, "token_usage", None) is None
+            ),
+            cost=getattr(result, "cost", None),
+            cost_partial=bool(
+                getattr(result, "cost_partial", False)
+                or getattr(result, "cost", None) is None
             ),
             # `queued` preserves what the fixer was actually asked to triage
             # — including any contests links — in the immutable history;
@@ -6959,6 +7174,11 @@ class Driver(object):
                 getattr(result, "token_usage_partial", False)
                 or getattr(result, "token_usage", None) is None
             ),
+            cost=getattr(result, "cost", None),
+            cost_partial=bool(
+                getattr(result, "cost_partial", False)
+                or getattr(result, "cost", None) is None
+            ),
             meta={"model": delta_model, "effort": delta_effort},
         )
         if provisional:
@@ -7004,6 +7224,8 @@ class Driver(object):
                     token_usage_partial=getattr(
                         result, "token_usage_partial", False
                     ),
+                    cost=getattr(result, "cost", None),
+                    cost_partial=getattr(result, "cost_partial", False),
                     pre_tree=baseline.get("index_tree"),
                     pre_head=baseline.get("head"),
                     pre_sym=baseline.get("sym"),
@@ -7379,6 +7601,8 @@ class Driver(object):
                 logical_duration_s = None
                 token_usage = None
                 token_usage_partial = False
+                call_cost = None
+                call_cost_partial = False
                 effective_model = None
                 effective_effort = None
                 if opp == raising_family and not explicit:
@@ -7475,6 +7699,11 @@ class Driver(object):
                             getattr(result, "token_usage_partial", False)
                             or token_usage is None
                         )
+                        call_cost = getattr(result, "cost", None)
+                        call_cost_partial = bool(
+                            getattr(result, "cost_partial", False)
+                            or call_cost is None
+                        )
                         logical_duration_s = self._call_accounting(result)[0]
                         self._record_repair(
                             raw_name, contracts.KIND_RECLASSIFY, opp, result
@@ -7528,6 +7757,8 @@ class Driver(object):
                     logical_duration_s=logical_duration_s,
                     token_usage=copy.deepcopy(token_usage),
                     token_usage_partial=token_usage_partial,
+                    cost=copy.deepcopy(call_cost),
+                    cost_partial=bool(call_cost_partial),
                 )
                 if defer_ok:
                     debt.append({
@@ -7740,6 +7971,11 @@ class Driver(object):
             token_usage_partial=bool(
                 getattr(result, "token_usage_partial", False)
                 or getattr(result, "token_usage", None) is None
+            ),
+            cost=getattr(result, "cost", None),
+            cost_partial=bool(
+                getattr(result, "cost_partial", False)
+                or getattr(result, "cost", None) is None
             ),
             meta=round_meta,
         )

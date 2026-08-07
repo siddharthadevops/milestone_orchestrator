@@ -2280,6 +2280,9 @@ class TestSummary(TempWorkspaceCase):
                 "work_duration_s",
                 "work_token_usage",
                 "work_token_usage_partial",
+                "work_cost",
+                "work_cost_partial",
+                "billing",
                 "units",
                 "events_total",
                 "last_events",
@@ -2310,7 +2313,7 @@ class TestSummary(TempWorkspaceCase):
              "rounds", "seals", "opened_epoch", "closed_epoch", "debt",
              "reclassify", "verifications", "repairs", "brainstormings",
              "work_duration_s", "work_token_usage",
-             "work_token_usage_partial"},
+             "work_token_usage_partial", "work_cost", "work_cost_partial"},
         )
         self.assertEqual(skel_view["display_unit"], "skeleton")
         self.assertIsNone(skel_view["slice_id"])
@@ -2319,7 +2322,8 @@ class TestSummary(TempWorkspaceCase):
         self.assertEqual(
             set(skel_view["draft"].keys()),
             {"kind", "family", "model", "effort", "duration_s",
-             "token_usage", "token_usage_partial", "at"},
+             "token_usage", "token_usage_partial", "cost", "cost_partial",
+             "at"},
         )
         self.assertEqual(skel_view["unit"], "skeleton")
         self.assertEqual(len(skel_view["drafts"]), 1)
@@ -2334,7 +2338,8 @@ class TestSummary(TempWorkspaceCase):
                 set(r.keys()),
                 {"id", "family", "kind", "findings", "severity",
                  "deferred_clean", "invalidated", "model", "effort",
-                 "duration_s", "token_usage", "token_usage_partial", "at"},
+                 "duration_s", "token_usage", "token_usage_partial",
+                 "cost", "cost_partial", "at"},
             )
             self.assertEqual(r["findings"], 0)
             self.assertFalse(r["deferred_clean"])

@@ -206,6 +206,9 @@ class DesignUpdateRethinkTest(unittest.TestCase):
         self.assertEqual(call.kwargs["session_ref"], "codex-thread-7")
         self.assertEqual(call.kwargs["model"], "gpt-5.6-sol")
         self.assertEqual(call.kwargs["effort"], "max")
+        # The seed now also restores the raw cumulative COST baseline, so a
+        # continuation after a restart can subtract instead of pricing the
+        # whole thread. This fixture predates cost accounting, so it is None.
         driver.runner.seed_codex_session_usage.assert_called_once_with(
             "codex-thread-7",
             {
@@ -215,6 +218,7 @@ class DesignUpdateRethinkTest(unittest.TestCase):
                 "reasoning_output_tokens": 5,
                 "total_tokens": 100,
             },
+            None,
         )
         for path in self.PATHS:
             self.assertIn(path, prompt)

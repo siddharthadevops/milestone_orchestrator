@@ -1427,6 +1427,9 @@ def run_status(entry, home=None):
         "work_duration_s": None,
         "work_token_usage": None,
         "work_token_usage_partial": False,
+        "work_cost": None,
+        "work_cost_partial": False,
+        "billing": {},
         "last_action_epoch": None,
         "state_error": None,
     }
@@ -1460,6 +1463,11 @@ def run_status(entry, home=None):
         info["work_token_usage_partial"] = bool(
             summ.get("work_token_usage_partial", False)
         )
+        info["work_cost"] = summ.get("work_cost")
+        info["work_cost_partial"] = bool(summ.get("work_cost_partial", False))
+        # The panel cannot tell a free seat from a zero-cost call by the
+        # amounts alone, so it is told which families are metered.
+        info["billing"] = summ.get("billing") or {}
         if home is not None and not info.get("in_flight"):
             current_view = next(
                 (
@@ -1504,6 +1512,18 @@ def run_status(entry, home=None):
                     info["work_token_usage_partial"] = bool(
                         info.get("work_token_usage_partial")
                         or session.get("work_token_usage_partial", False)
+                    )
+                    session_cost = session.get("work_cost")
+                    if (
+                        waiting.get("cost") is None
+                        and session_cost is not None
+                    ):
+                        info["work_cost"] = st._add_cost(
+                            info.get("work_cost"), session_cost
+                        )
+                    info["work_cost_partial"] = bool(
+                        info.get("work_cost_partial")
+                        or session.get("work_cost_partial", False)
                     )
                     active = session.get("in_flight")
                     if active is not None:
@@ -2521,6 +2541,8 @@ def run_story(home, run_id, item):
                 "at": e.get("at"),
                 "duration_s": e.get("duration_s"),
                 "token_usage": e.get("token_usage"),
+                "cost": e.get("cost"),
+                "cost_partial": bool(e.get("cost_partial", False)),
                 "token_usage_partial": bool(
                     e.get("token_usage_partial", False)
                 ),
@@ -2550,6 +2572,8 @@ def run_story(home, run_id, item):
                         "at": r["at"],
                         "duration_s": r.get("duration_s"),
                         "token_usage": r.get("token_usage"),
+                        "cost": r.get("cost"),
+                        "cost_partial": bool(r.get("cost_partial", False)),
                         "token_usage_partial": bool(
                             r.get("token_usage_partial", False)
                         ),
@@ -2585,6 +2609,18 @@ def run_story(home, run_id, item):
                         )
                         for half in halves.values()
                     )
+                    cost = None
+                    for half in halves.values():
+                        if half:
+                            cost = st._add_cost(cost, half.get("cost"))
+                    cost_partial = any(
+                        (half or {}).get("cost_partial", False)
+                        or (
+                            (half or {}).get("duration_s")
+                            and (half or {}).get("cost") is None
+                        )
+                        for half in halves.values()
+                    )
                     return {
                         "story": "seal",
                         "unit": unit_key,
@@ -2597,6 +2633,8 @@ def run_story(home, run_id, item):
                         ) or None,
                         "token_usage": token_usage,
                         "token_usage_partial": token_usage_partial,
+                        "cost": cost,
+                        "cost_partial": cost_partial,
                         "invalidated": s_.get("invalidated"),
                         # Wave provenance: resealed by the anchor's wave
                         # seal (None for ordinary seals).
@@ -2626,6 +2664,8 @@ def run_story(home, run_id, item):
                     "effort": d.get("effort"),
                     "duration_s": d.get("duration_s"),
                     "token_usage": d.get("token_usage"),
+                    "cost": d.get("cost"),
+                    "cost_partial": bool(d.get("cost_partial", False)),
                     "token_usage_partial": bool(
                         d.get("token_usage_partial", False)
                     ),
@@ -2683,6 +2723,8 @@ def run_story(home, run_id, item):
                         in requeued_ids.get(ref, set())
                     ),
                     "token_usage": e.get("token_usage"),
+                    "cost": e.get("cost"),
+                    "cost_partial": bool(e.get("cost_partial", False)),
                     "token_usage_partial": bool(
                         e.get("token_usage_partial", False)
                     ),
@@ -2701,8 +2743,16 @@ def run_story(home, run_id, item):
                 or event.get("token_usage") is None
                 for event in reclassify
             )
+            cost = None
+            for event in reclassify:
+                cost = st._add_cost(cost, event.get("cost"))
+            cost_partial = any(
+                event.get("cost_partial", False) for event in reclassify
+            )
             return {
                 "story": "debt",
+                "cost": cost,
+                "cost_partial": cost_partial,
                 "unit": ref,
                 "debt": st.active_debt(state, unit),
                 "reclassify": reclassify,

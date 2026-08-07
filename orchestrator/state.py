@@ -28,6 +28,7 @@ part, or review/fix cycle.
 import copy
 from datetime import datetime
 import json
+import math
 import os
 import tempfile
 import time
@@ -704,7 +705,7 @@ def set_discovered_suite(state, command, replace=False):
 
 def record_draft(state, unit, kind, result, raw_path=None, family=None,
                  duration=None, model=None, effort=None, token_usage=None,
-                 token_usage_partial=False):
+                 token_usage_partial=False, cost=None, cost_partial=False):
     """Write-once record of the unit's draft/implement call."""
     if unit["status"] != U_PENDING:
         raise IllegalTransition(
@@ -739,6 +740,10 @@ def record_draft(state, unit, kind, result, raw_path=None, family=None,
         unit["draft"]["token_usage"] = copy.deepcopy(token_usage)
     if token_usage_partial:
         unit["draft"]["token_usage_partial"] = True
+    if cost is not None:
+        unit["draft"]["cost"] = copy.deepcopy(cost)
+    if cost_partial or cost is None:
+        unit["draft"]["cost_partial"] = True
     unit["artifact"] = result.get("artifact")
     # Keep the lightweight implementation/draft history in the immutable
     # ledger too. A unit can exceptionally be reset to pending after a
@@ -756,10 +761,12 @@ def record_draft(state, unit, kind, result, raw_path=None, family=None,
         duration_s=duration,
         raw_path=raw_path,
         token_usage_partial=bool(token_usage_partial),
+        cost_partial=bool(cost_partial or cost is None),
         **(
             {"token_usage": copy.deepcopy(token_usage)}
             if token_usage is not None else {}
         ),
+        **({"cost": copy.deepcopy(cost)} if cost is not None else {}),
     )
     return unit["draft"]
 
@@ -868,7 +875,8 @@ def active_fix_dirty_deltas(state, unit):
 
 
 def record_round(state, unit, family, kind, result, raw_path=None, duration=None,
-                 meta=None, token_usage=None, token_usage_partial=False):
+                 meta=None, token_usage=None, token_usage_partial=False,
+                 cost=None, cost_partial=False):
     """Append an immutable round record. Never edited afterwards.
 
     meta: optional extra record fields (e.g. the fixer's source round id,
@@ -891,6 +899,10 @@ def record_round(state, unit, family, kind, result, raw_path=None, duration=None
         rec["token_usage"] = copy.deepcopy(token_usage)
     if token_usage_partial:
         rec["token_usage_partial"] = True
+    if cost is not None:
+        rec["cost"] = copy.deepcopy(cost)
+    if cost_partial or cost is None:
+        rec["cost_partial"] = True
     if meta:
         rec.update(copy.deepcopy(meta))
     unit["rounds"].append(rec)
@@ -1744,6 +1756,8 @@ def _draft_history(state, unit):
             "token_usage_partial": bool(
                 source.get("token_usage_partial", False)
             ),
+            "cost": copy.deepcopy(source.get("cost")),
+            "cost_partial": bool(source.get("cost_partial", False)),
             "at": source.get("at"),
             "raw_path": source.get("raw_path"),
             "current": is_current,
@@ -1759,6 +1773,8 @@ def _draft_history(state, unit):
             "token_usage_partial": bool(
                 current.get("token_usage_partial", False)
             ),
+            "cost": copy.deepcopy(current.get("cost")),
+            "cost_partial": bool(current.get("cost_partial", False)),
             "at": current.get("at"),
             "raw_path": current.get("raw_path"),
             "current": True,
@@ -1887,25 +1903,84 @@ def _add_token_usage(current, value):
     }
 
 
+# What a call cost, under the two readings the panel keeps apart: what it
+# WOULD cost at published rates, and what money actually left. See pricing.py.
+_COST_FIELDS = ("api_usd", "real_usd")
+
+
+def _normalized_cost(value):
+    if not isinstance(value, dict):
+        return None
+    checked = {}
+    for field in _COST_FIELDS:
+        amount = value.get(field)
+        if isinstance(amount, bool) or not isinstance(amount, (int, float)):
+            return None
+        amount = float(amount)
+        if not math.isfinite(amount) or amount < 0:
+            return None
+        checked[field] = amount
+    # Real money is the API-equivalent when the family is metered and zero
+    # when it is a seat; it can never exceed the equivalent.
+    if checked["real_usd"] > checked["api_usd"]:
+        return None
+    return checked
+
+
+def _add_cost(current, value):
+    value = _normalized_cost(value)
+    if value is None:
+        return current
+    if current is None:
+        return value
+    return {field: current[field] + value[field] for field in _COST_FIELDS}
+
+
 def _work_token_usage(state):
-    """Mirror work-duration ownership with normalized provider tokens."""
+    """Mirror work-duration ownership with provider tokens AND their price.
+
+    One traversal owns both so the two can never drift apart: a record that
+    counts toward a unit's tokens counts toward its cost, and a record whose
+    price is unknown marks the same unit partial that a missing token count
+    would.
+    """
     keys = [unit_key(unit) for unit in state.get("units") or []]
     totals = dict((key, None) for key in keys)
     partial = dict((key, False) for key in keys)
     unassigned = None
     unassigned_partial = False
+    cost_totals = dict((key, None) for key in keys)
+    cost_partial = dict((key, False) for key in keys)
+    unassigned_cost = None
+    unassigned_cost_partial = False
 
-    def account(key, duration, usage, known_partial=False):
+    def account(key, duration, usage, known_partial=False,
+                cost=None, cost_known_partial=False):
         nonlocal unassigned, unassigned_partial
+        nonlocal unassigned_cost, unassigned_cost_partial
         normalized = _normalized_token_usage(usage)
-        missing = _completed_duration(duration) > 0 and normalized is None
+        priced = _normalized_cost(cost)
+        worked = _completed_duration(duration) > 0
+        missing = worked and normalized is None
+        cost_missing = (worked and priced is None) or (
+            cost is not None and priced is None
+        )
         if key in totals:
             totals[key] = _add_token_usage(totals[key], normalized)
             partial[key] = partial[key] or missing or bool(known_partial)
+            cost_totals[key] = _add_cost(cost_totals[key], priced)
+            cost_partial[key] = (
+                cost_partial[key] or cost_missing or bool(cost_known_partial)
+            )
         else:
             unassigned = _add_token_usage(unassigned, normalized)
             unassigned_partial = (
                 unassigned_partial or missing or bool(known_partial)
+            )
+            unassigned_cost = _add_cost(unassigned_cost, priced)
+            unassigned_cost_partial = (
+                unassigned_cost_partial or cost_missing
+                or bool(cost_known_partial)
             )
 
     for unit in state.get("units") or []:
@@ -1928,6 +2003,7 @@ def _work_token_usage(state):
             )
             if not has_interrupt_accounting:
                 partial[key] = True
+                cost_partial[key] = True
         for draft in _draft_history(state, unit):
             account(
                 key,
@@ -1935,6 +2011,9 @@ def _work_token_usage(state):
                 draft.get("token_usage"),
                 draft.get("token_usage_partial", False)
                 or draft.get("token_usage") is None,
+                cost=draft.get("cost"),
+                cost_known_partial=draft.get("cost_partial", False)
+                or draft.get("cost") is None,
             )
         for round_ in unit.get("rounds") or []:
             account(
@@ -1943,6 +2022,9 @@ def _work_token_usage(state):
                 round_.get("token_usage"),
                 round_.get("token_usage_partial", False)
                 or round_.get("token_usage") is None,
+                cost=round_.get("cost"),
+                cost_known_partial=round_.get("cost_partial", False)
+                or round_.get("cost") is None,
             )
         for seal in unit.get("seals") or []:
             for half in (seal.get("halves") or {}).values():
@@ -1953,6 +2035,9 @@ def _work_token_usage(state):
                         half.get("token_usage"),
                         half.get("token_usage_partial", False)
                         or half.get("token_usage") is None,
+                        cost=half.get("cost"),
+                        cost_known_partial=half.get("cost_partial", False)
+                        or half.get("cost") is None,
                     )
 
     for event in state.get("events") or []:
@@ -1972,6 +2057,8 @@ def _work_token_usage(state):
                 event.get("duration_s"),
                 event.get("token_usage"),
                 event.get("token_usage_partial", False),
+                cost=event.get("cost"),
+                cost_known_partial=event.get("cost_partial", False),
             )
             continue
         if etype != "worker_malformed":
@@ -1999,8 +2086,14 @@ def _work_token_usage(state):
             event.get("token_usage"),
             event.get("token_usage_partial", False)
             or (event.get("fatal") and event.get("token_usage") is None),
+            cost=event.get("cost"),
+            cost_known_partial=event.get("cost_partial", False)
+            or (event.get("fatal") and event.get("cost") is None),
         )
-    return totals, partial, unassigned, unassigned_partial
+    return (
+        totals, partial, unassigned, unassigned_partial,
+        cost_totals, cost_partial, unassigned_cost, unassigned_cost_partial,
+    )
 
 
 def _repair_episodes(state):
@@ -2111,7 +2204,8 @@ def summary(state):
     requeued_ids = requeued_debt_ids(state)
     work_by_unit, unassigned_work = _work_durations(state)
     token_by_unit, token_partial_by_unit, unassigned_tokens, \
-        unassigned_tokens_partial = _work_token_usage(state)
+        unassigned_tokens_partial, cost_by_unit, cost_partial_by_unit, \
+        unassigned_cost, unassigned_cost_partial = _work_token_usage(state)
     repairs_by_unit = _repair_episodes(state)
 
     def effective_setting(family, explicit, field):
@@ -2145,6 +2239,8 @@ def summary(state):
                 "duration_s": None,
                 "token_usage": None,
                 "token_usage_partial": False,
+                "cost": None,
+                "cost_partial": False,
             }
             brainstorming_by_unit.setdefault(uk, []).append(entry)
             brainstorming_index[(uk, e.get("session_id"))] = entry
@@ -2161,6 +2257,8 @@ def summary(state):
                 entry["token_usage_partial"] = bool(
                     e.get("token_usage_partial", False)
                 )
+                entry["cost"] = copy.deepcopy(e.get("cost"))
+                entry["cost_partial"] = bool(e.get("cost_partial", False))
         if e.get("type") == "unit_opened" and uk not in opened_at:
             opened_at[uk] = _epoch(e.get("at"))
         if e.get("type") == "unit_transition" and e.get("to_status") == U_SEALED:
@@ -2191,6 +2289,8 @@ def summary(state):
                     ),
                     "duration_s": e.get("duration_s"),
                     "token_usage": copy.deepcopy(e.get("token_usage")),
+                    "cost": copy.deepcopy(e.get("cost")),
+                    "cost_partial": bool(e.get("cost_partial", False)),
                     "token_usage_partial": bool(
                         e.get("token_usage_partial", False)
                     ),
@@ -2247,6 +2347,10 @@ def summary(state):
                 "work_token_usage_partial": token_partial_by_unit.get(
                     unit_key(u), False
                 ),
+                "work_cost": copy.deepcopy(cost_by_unit.get(unit_key(u))),
+                "work_cost_partial": cost_partial_by_unit.get(
+                    unit_key(u), False
+                ),
                 "drafts": [
                     {
                         "kind": draft.get("kind"),
@@ -2264,6 +2368,8 @@ def summary(state):
                         "token_usage_partial": bool(
                             draft.get("token_usage_partial", False)
                         ),
+                        "cost": copy.deepcopy(draft.get("cost")),
+                        "cost_partial": bool(draft.get("cost_partial", False)),
                         "at": draft.get("at"),
                         "current": draft.get("current", False),
                     }
@@ -2287,6 +2393,10 @@ def summary(state):
                         ),
                         "token_usage_partial": bool(
                             u["draft"].get("token_usage_partial", False)
+                        ),
+                        "cost": copy.deepcopy(u["draft"].get("cost")),
+                        "cost_partial": bool(
+                            u["draft"].get("cost_partial", False)
                         ),
                         "at": u["draft"]["at"],
                     }
@@ -2315,6 +2425,8 @@ def summary(state):
                         "token_usage_partial": bool(
                             r.get("token_usage_partial", False)
                         ),
+                        "cost": copy.deepcopy(r.get("cost")),
+                        "cost_partial": bool(r.get("cost_partial", False)),
                         "at": r["at"],
                     }
                     for r in u["rounds"]
@@ -2407,6 +2519,9 @@ def summary(state):
         total_token_usage = _add_token_usage(
             total_token_usage, unit_token_usage
         )
+    total_cost = unassigned_cost
+    for unit_cost in cost_by_unit.values():
+        total_cost = _add_cost(total_cost, unit_cost)
     out = {
         "goal": state["goal"],
         "workspace": state["workspace"],
@@ -2437,6 +2552,14 @@ def summary(state):
         "work_token_usage_partial": (
             unassigned_tokens_partial or any(token_partial_by_unit.values())
         ),
+        "work_cost": total_cost,
+        "work_cost_partial": (
+            unassigned_cost_partial or any(cost_partial_by_unit.values())
+        ),
+        # Which families are metered decides whether the panel is showing
+        # money or an equivalent; it cannot be inferred from the amounts,
+        # because a genuinely free seat and a zero-cost call look alike.
+        "billing": copy.deepcopy(state["config"].get("billing") or {}),
         "units": units_view,
         "events_total": len(state["events"]),
         "last_events": state["events"][-30:],

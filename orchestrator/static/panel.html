@@ -520,6 +520,8 @@
     .actgrid { grid-template-columns: 70px 1fr 1fr 1fr; }
     .pathrow { flex-wrap: wrap; }
   }
+  .cost-equivalent { opacity: .55; }
+  .cost-tap { cursor: pointer; text-decoration: underline dotted; }
 </style>
 </head>
 <body>
@@ -1621,9 +1623,14 @@ function renderSessionDetail(view) {
     view.work_duration_s != null
       ? `LLM ${fmtDHMS(liveWorkSeconds(view.work_duration_s,
           running ? view.in_flight : null))}` : "",
-    fmtTokenUsage(
-      view.work_token_usage, view.work_token_usage_partial
-    ),
+    (function () {
+      const tokens = fmtTokenUsage(
+        view.work_token_usage, view.work_token_usage_partial);
+      if (!view.work_cost && !view.work_cost_partial) return tokens;
+      const reading = costReading(view.work_cost, view.work_cost_partial);
+      // Same fallback as costChip: show what we know rather than "unknown".
+      return reading.known ? reading.text : (tokens || reading.text);
+    })(),
     view.retry
       ? `retry ${view.retry.error_type} in ${fmtDHMS(Math.max(0,
           Number(view.retry.retry_at) - Date.now() / 1000))}` : "",
@@ -2222,6 +2229,101 @@ function fmtTokenCount(value) {
   }
   return String(Math.round(count));
 }
+// Cost, under the two readings the accounting keeps apart. The chip shows
+// ONE number and never both: real money when any actually left, otherwise the
+// API-equivalent, greyed so it can't be mistaken for spend. Unknown is grey
+// too, and never rendered as zero -- zero is what a seat genuinely costs.
+// Scopes whose money is on screen, so tapping the figure can open its
+// breakdown. Keyed and re-registered on every render; the dialog reads from
+// here rather than from serialized markup.
+let costScopes = {};
+function costChip(key, label, cost, costPartial, tokens, tokensPartial,
+                  billing) {
+  costScopes[key] = {
+    label, cost, costPartial, tokens, tokensPartial,
+    // Per scope: the sidebar shows several runs at once and they can be paid
+    // for differently, so a single global would mislabel the other ones.
+    billing: billing || null,
+  };
+  const reading = costReading(cost, costPartial);
+  const tokenLabel = fmtTokenUsage(tokens, tokensPartial);
+  // No figure at all (every pre-feature run, and any unit holding one
+  // unpriceable call): show what we DO know rather than the word "unknown".
+  const face = reading.known ? reading.text : (tokenLabel || reading.text);
+  return `<span class="cost-tap${reading.real ? "" : " cost-equivalent"}"` +
+    ` onclick="event.stopPropagation();showCostBreakdown(` +
+    `'${esc(escJsSq(key))}')"` +
+    `${tokenLabel ? ` title="${esc(tokenLabel)}"` : ""}>` +
+    `${esc(face)}</span>`;
+}
+function showCostBreakdown(key) {
+  const scope = costScopes[key];
+  if (!scope) return;
+  document.getElementById("storyTitle").textContent = scope.label;
+  document.getElementById("storyBody").innerHTML =
+    costHtml(scope.cost, scope.costPartial, scope.billing || lastBilling) +
+    (tokenUsageHtml(scope.tokens, scope.tokensPartial)
+      || `<div class="story-note"><b>tokens unknown</b></div>`);
+  document.getElementById("story").showModal();
+}
+function costReading(cost, partial = false) {
+  const api = cost && typeof cost.api_usd === "number"
+    ? Number(cost.api_usd) : NaN;
+  const real = cost && typeof cost.real_usd === "number"
+    ? Number(cost.real_usd) : NaN;
+  if (!cost || !Number.isFinite(api))
+    return {text: "cost unknown", real: false, known: false};
+  // A real figure we cannot read is unknown, never zero.
+  if (!Number.isFinite(real))
+    return {text: "cost unknown", real: false, known: false};
+  const spent = real > 0;
+  const amount = spent ? real : api;
+  return {
+    // A real charge must never render as the string reserved for free.
+    text: `$${amount >= 1 ? amount.toFixed(2)
+      : amount === 0 ? "0.00"
+      : amount < 0.0001 ? "<0.0001" : amount.toFixed(4)}${
+      partial ? "+" : ""}`,
+    real: spent,
+    known: true,
+  };
+}
+function costHtml(cost, partial = false, billing = null, family = null) {
+  // Nothing spent and nothing missing: say nothing, exactly as
+  // tokenUsageHtml does. "cost unknown" is reserved for spend we could not
+  // price, not for records that never made a call.
+  if (!cost && !partial) return "";
+  const reading = costReading(cost, partial);
+  // Each entry is escaped on its own; the amount is the only markup.
+  const notes = [];
+  if (reading.known) {
+    notes.push(`<b>${esc(reading.text)}</b> ${
+      reading.real ? "charged" : "API-equivalent, no money spent"}`);
+    const api = Number(cost.api_usd), real = Number(cost.real_usd);
+    if (reading.real && api !== real)
+      notes.push(esc(`API-equivalent $${api.toFixed(4)} — part of this run ` +
+        `is on a seat`));
+    else if (!reading.real)
+      notes.push(esc("real cost $0.00"));
+  } else {
+    notes.push("<b>cost unknown</b>");
+    notes.push(esc("at least one call could not be priced"));
+  }
+  if (partial && reading.known)
+    notes.push(esc("some calls are still unpriced, so this is a floor"));
+  // Where the figure comes from: Claude states its own price, codex is priced
+  // here from published rates. Different reliabilities, worth saying plainly.
+  const seats = Object.entries(billing || {})
+    .filter(([fam]) => !family || fam === family);
+  if (seats.length)
+    notes.push(esc(seats.map(([fam, mode]) =>
+      `${fam} ${mode === "api" ? "metered" : "seat"}`).join(" · ")));
+  if (family)
+    notes.push(esc(family === "claude"
+      ? "priced by the provider"
+      : "priced here from the rate table"));
+  return `<div class="story-note">${notes.join(" · ")}</div>`;
+}
 function fmtTokenUsage(usage, partial = false) {
   if (!usage || usage.total_tokens == null)
     return partial ? "tokens unknown" : "";
@@ -2242,6 +2344,16 @@ function tokenUsageHtml(usage, partial = false) {
     parts.push(`reasoning ${fmtTokenCount(usage.reasoning_output_tokens)}`);
   return `<div class="story-note"><b>${esc(fmtTokenUsage(usage, partial))}</b> · ${
     esc(parts.join(" · "))}</div>`;
+}
+function sumCost(items) {
+  const present = (items || []).filter(Boolean);
+  if (!present.length) return null;
+  return {
+    api_usd: present.reduce((t, c) =>
+      t + (typeof c.api_usd === "number" ? c.api_usd : NaN), 0),
+    real_usd: present.reduce((t, c) =>
+      t + (typeof c.real_usd === "number" ? c.real_usd : NaN), 0),
+  };
 }
 function sumTokenUsage(items) {
   const present = (items || []).filter(Boolean);
@@ -2278,10 +2390,17 @@ function runStatusClock(r) {
     "run-total", "");
 }
 function runStatusTokens(r) {
+  if (!r) return "";
+  // Cost is the headline now. Tokens survive in the tap detail.
+  if (r.work_cost || r.work_cost_partial) {
+    return `<span class="run-total">${costChip(
+      `run:${r.id || r.name || "current"}`, r.name || r.id || "Run",
+      r.work_cost, !!r.work_cost_partial,
+      r.work_token_usage, !!r.work_token_usage_partial,
+      r.billing)}</span>`;
+  }
   const value = fmtTokenUsage(
-    r && r.work_token_usage,
-    !!(r && r.work_token_usage_partial),
-  );
+    r.work_token_usage, !!r.work_token_usage_partial);
   return value ? `<span class="run-total">${esc(value)}</span>` : "";
 }
 function activeRunClockInput(running, inFlight) {
@@ -2918,6 +3037,9 @@ function mdRender(src) {
 }
 /* ---- local commit viewer (gate commits) ---- */
 let lastWebBase = null;  // refreshed with each detail poll
+// Which families are metered. A free seat and a zero-cost call look alike in
+// the amounts, so the detail states the mode rather than inferring it.
+let lastBilling = null;
 let cvPatch = "";        // the patch text as git produced it
 let cvRaw = false;       // false = merged prose reading, true = literal
 
@@ -3422,14 +3544,25 @@ async function refreshDetail() {
         return sl ? `<span class="unit-title">${esc(sl.title)}</span>` : "";
       };
       const catRow = (label, title, stat, duration, tokens,
-                      tokenPartial, cls = "") =>
-        `<div class="pipe-cat ${esc(cls)}"><span>${esc(label)}${title}</span>` +
-        (stat ? `<span class="st ${esc(stat)}">${esc(stat)}${
-          duration != null ? ` · ${fmtDHMS(duration)}` : ""}${
-          (tokens || tokenPartial)
-            ? ` · ${esc(fmtTokenUsage(tokens, tokenPartial))}` : ""}</span>` : "") +
-        `</div>`;
+                      tokenPartial, cls = "", cost = null,
+                      costPartial = false) => {
+        // Same rule as everywhere else: money if any was spent, otherwise
+        // the greyed equivalent, with the token detail as the tooltip.
+        const tokenLabel = (tokens || tokenPartial)
+          ? fmtTokenUsage(tokens, tokenPartial) : "";
+        let figure = tokenLabel ? ` · ${esc(tokenLabel)}` : "";
+        if (cost || costPartial)
+          figure = ` · ${costChip(`cat:${label}`, label, cost, costPartial,
+                                  tokens, tokenPartial)}`;
+        return `<div class="pipe-cat ${esc(cls)}"><span>${esc(label)}${
+          title}</span>` +
+          (stat ? `<span class="st ${esc(stat)}">${esc(stat)}${
+            duration != null ? ` · ${fmtDHMS(duration)}` : ""}${
+            figure}</span>` : "") +
+          `</div>`;
+      };
       lastWebBase = d.commit_web_base;
+      lastBilling = sum.billing || null;
       // Opens the LOCAL commit viewer (git show in the workspace): unlike
       // a direct web link it never 404s on not-yet-pushed gate commits.
       // Sealed units link their gate commit; the unit in flight links its
@@ -3448,7 +3581,12 @@ async function refreshDetail() {
         const tokens = fmtTokenUsage(
           u.work_token_usage, u.work_token_usage_partial
         );
-        const tokenText = tokens ? ` · ${tokens}` : "";
+        // Cost replaces tokens on the chip; tokens stay one hover away.
+        const tokenText = (u.work_cost || u.work_cost_partial)
+          ? ` · ${costChip(`unit:${u.unit}`, u.unit,
+              u.work_cost, u.work_cost_partial,
+              u.work_token_usage, u.work_token_usage_partial)}`
+          : (tokens ? ` · ${esc(tokens)}` : "");
         const slicePhase = u.unit.match(/^slice_(doc|impl)-\d+(?:-[a-z]+)?$/);
         const phase = u.unit === "skeleton" || slicePhase;
         const label = u.unit === "skeleton"
@@ -3460,7 +3598,7 @@ async function refreshDetail() {
         return `
         <div class="unit${phase ? " phase" : ""}">
           <div class="unit-head"><span class="unit-name">${esc(label)}</span>
-            <span class="unit-right">${gitLink(u)}<span class="st ${esc(u.status)}">${esc(u.status)}${time}${esc(tokenText)}</span></span></div>
+            <span class="unit-right">${gitLink(u)}<span class="st ${esc(u.status)}">${esc(u.status)}${time}${tokenText}</span></span></div>
           ${unitHistory(u, s, running)}
         </div>`;
       };
@@ -3483,7 +3621,9 @@ async function refreshDetail() {
         rows += catRow("Skeleton", "", byKey.skeleton.status,
                        byKey.skeleton.work_duration_s,
                        byKey.skeleton.work_token_usage,
-                       byKey.skeleton.work_token_usage_partial, "slice-cat")
+                       byKey.skeleton.work_token_usage_partial, "slice-cat",
+                       byKey.skeleton.work_cost,
+                       byKey.skeleton.work_cost_partial)
               + unitRow(byKey.skeleton);
         seen.skeleton = 1;
       }
@@ -3510,9 +3650,11 @@ async function refreshDetail() {
         const sliceTokensPartial = present.some(
           u => u.work_token_usage_partial
         );
+        const sliceCost = sumCost(present.map(u => u.work_cost));
+        const sliceCostPartial = present.some(u => u.work_cost_partial);
         rows += catRow(`Slice ${pad}`, sliceTitle(sl.id), slStat,
                        sliceDuration, sliceTokens, sliceTokensPartial,
-                       "slice-cat");
+                       "slice-cat", sliceCost, sliceCostPartial);
         const docKey = `slice_doc-${pad}`;
         if (doc) { rows += unitRow(doc); seen[docKey] = 1; }
         else rows += ghostRow(docKey);
@@ -3600,6 +3742,7 @@ async function showStory(item) {
   if (d.raw_path) meta.push(d.raw_path);
   let title = "";
   let body = `<div class="story-meta">${esc(meta.join(" · "))}</div>` +
+    costHtml(d.cost, d.cost_partial, lastBilling, d.family) +
     tokenUsageHtml(d.token_usage, d.token_usage_partial);
   const findingRow = f => {
     const bits = [];

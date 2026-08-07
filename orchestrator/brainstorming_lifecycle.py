@@ -30,7 +30,8 @@ from datetime import datetime
 from orchestrator import brainstorming
 from orchestrator import brainstorming_coordination as coordination
 from orchestrator import brainstorming_execution as execution
-from orchestrator import driver, errclass, kvstore, registry, runners
+from orchestrator import driver, errclass, kvstore, pricing, registry
+from orchestrator import runners
 
 try:
     import fcntl
@@ -671,6 +672,9 @@ def _runtime_and_roster(config, participants, closure_policy, workspace):
         "worker_stall_window_s": config.get("worker_stall_window_s"),
         "worker_stall_min_cpu_s": config.get("worker_stall_min_cpu_s"),
         "error_classifier": bool(config.get("error_classifier", True)),
+        # How each family is paid for, so a discussion turn's price carries
+        # the same two readings the milestone side records.
+        "billing": copy.deepcopy(config.get("billing") or {}),
     }
     try:
         runtime = brainstorming._json_copy(runtime, "runtime")
@@ -1186,6 +1190,15 @@ def _activity_projection(store, record, state):
             )
             for event in events
         ),
+        "work_cost": _add_session_cost(events),
+        "work_cost_partial": orphaned_call or any(
+            event.get("cost_partial", False)
+            or (
+                event.get("duration_s", 0) > 0
+                and event.get("cost") is None
+            )
+            for event in events
+        ),
         "in_flight": in_flight,
         "retry": retry,
         "external_intervention": external,
@@ -1673,6 +1686,8 @@ def _list_projection(store, record):
         "work_duration_s": None,
         "work_token_usage": None,
         "work_token_usage_partial": False,
+        "work_cost": None,
+        "work_cost_partial": False,
         "last_action_epoch": _iso_epoch(record["created_at"]),
         "in_flight": None,
         "retry": None,
@@ -1702,6 +1717,8 @@ def _list_projection(store, record):
         row["work_token_usage_partial"] = activity[
             "work_token_usage_partial"
         ]
+        row["work_cost"] = activity["work_cost"]
+        row["work_cost_partial"] = activity["work_cost_partial"]
         row["in_flight"] = activity["in_flight"]
         row["retry"] = activity["retry"]
         row["external_intervention"] = activity["external_intervention"]
@@ -1911,6 +1928,8 @@ def view_session(home, session_id, authorize, preview_limit):
             "work_token_usage_partial": activity[
                 "work_token_usage_partial"
             ],
+            "work_cost": activity["work_cost"],
+            "work_cost_partial": activity["work_cost_partial"],
             "in_flight": activity["in_flight"],
             "retry": activity["retry"],
             "external_intervention": activity["external_intervention"],
@@ -2115,7 +2134,7 @@ def start_session(home, session_id, authorize):
         raise PublicLifecycleError(503, UNAVAILABLE) from exc
 
 
-def _record_classifier_activity(store, session_id, call):
+def _record_classifier_activity(store, session_id, call, billing=None):
     """Record the classifier's physical LLM call without making it a turn."""
     attempt = store.read_turn_attempt(session_id)
     snapshot = store.read(session_id)
@@ -2167,6 +2186,16 @@ def _record_classifier_activity(store, session_id, call):
         event["token_usage"] = token_usage
     if call.get("token_usage_partial", False):
         event["token_usage_partial"] = True
+    quoted = pricing.quote_many(
+        call.get("family"),
+        call.get("model"),
+        call.get("cost_payloads"),
+        billing=(billing or {}).get(call.get("family")),
+    )
+    if quoted.api_usd is not None and quoted.real_usd is not None:
+        event["cost"] = quoted.as_dict()
+    else:
+        event["cost_partial"] = True
     if call["status"] == "failed":
         event["failure_type"] = call.get("failure_type") or "execution"
         event["error"] = str(
@@ -2174,6 +2203,25 @@ def _record_classifier_activity(store, session_id, call):
         )[:4000]
     store.append_activity(session_id, event)
     store.finish_turn_classifier_call(session_id)
+
+
+def _add_session_cost(events):
+    """Sum a session's priced turns. An unpriced one leaves the flag to say
+    so rather than being dropped from the amount."""
+    total = None
+    for event in events:
+        cost = event.get("cost")
+        if not isinstance(cost, dict):
+            continue
+        if total is None:
+            total = {"api_usd": 0.0, "real_usd": 0.0}
+        for field in ("api_usd", "real_usd"):
+            amount = cost.get(field)
+            if isinstance(amount, (int, float)) and not isinstance(
+                amount, bool
+            ):
+                total[field] += float(amount)
+    return total
 
 
 def _participant_execution(store, record, participant_process_factory):
@@ -2277,7 +2325,7 @@ def _participant_execution(store, record, participant_process_factory):
                 session_id, call
             ),
             on_llm_call=lambda call: _record_classifier_activity(
-                store, session_id, call
+                store, session_id, call, runtime.get("billing"),
             ),
         )
         return {
@@ -2287,7 +2335,8 @@ def _participant_execution(store, record, participant_process_factory):
         }
 
     return execution.ParticipantExecution(
-        store, bindings, failure_classifier=classify_failure
+        store, bindings, failure_classifier=classify_failure,
+        billing=(runtime.get("billing") or {}),
     )
 
 

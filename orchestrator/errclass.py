@@ -382,6 +382,14 @@ def llm_classify(runner, family, raw_texts, workspace, on_raw=None,
                     "token_usage_partial",
                     False,
                 )),
+                # The classifier fires on every failed worker call. Without
+                # its own bands the driver cannot price it, and one failure
+                # would mark a whole run's cost partial for good.
+                "cost_payloads": list(getattr(
+                    result if result is not None else call_error,
+                    "cost_payloads",
+                    None,
+                ) or []),
             }
             try:
                 on_call(event)

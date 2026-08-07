@@ -69,11 +69,14 @@ class RunnerError(RuntimeError):
 class ProviderResponseError(RunnerError):
     """The CLI returned a structured provider failure, not an answer."""
 
-    def __init__(self, message, raw_texts=None, token_usage=None):
+    def __init__(self, message, raw_texts=None, token_usage=None,
+                 cost_payloads=None):
         RuntimeError.__init__(self, message)
         self.raw_texts = list(raw_texts or [])
         self.token_usage = normalize_token_usage(token_usage)
         self.token_usage_partial = self.token_usage is None
+        # A refused call still burned money; keep what prices it.
+        self.cost_payloads = list(cost_payloads or [])
 
 
 class WorkerStalled(RunnerError):
@@ -328,7 +331,20 @@ def subtract_token_usage(current, previous):
 
 
 def _provider_transport_result(family, transport_text):
-    """Return (final_text, normalized usage) from provider JSON output."""
+    """Return (final_text, normalized usage, cost payloads) from provider JSON.
+
+    A cost payload is the provider's OWN accounting object, kept verbatim
+    beside the normalized usage rather than folded into it. Normalization
+    exists to make two families additive in one unit and is lossy by design:
+    Claude's price lives outside it entirely (`total_cost_usd`, which also
+    covers CLI-internal calls the top-level usage block omits), and Codex's
+    cache-write band has no normalized field. pricing.py consumes these.
+
+    Always a LIST, because one logical call can bill more than once (a
+    contract repair is a second physical call; a controlled Codex turn
+    accumulates several responses). One shape everywhere means the summing
+    rule lives in pricing.add_quotes and nowhere else.
+    """
     events = []
     for line in (transport_text or "").splitlines():
         try:
@@ -346,6 +362,7 @@ def _provider_transport_result(family, transport_text):
             events.append(event)
     final_text = None
     token_usage = None
+    cost_payload = None
     provider_error = None
     for event in events:
         if family == "claude" and event.get("type") == "result":
@@ -357,6 +374,8 @@ def _provider_transport_result(family, transport_text):
             elif isinstance(event.get("result"), str):
                 final_text = event["result"]
             token_usage = normalize_token_usage(event.get("usage"), "claude")
+            # The whole result event: it carries the priced figure itself.
+            cost_payload = event
         elif family == "codex" and event.get("type") in (
             "error", "turn.failed"
         ):
@@ -377,18 +396,26 @@ def _provider_transport_result(family, transport_text):
                 final_text = item["text"]
         elif family == "codex" and event.get("type") == "turn.completed":
             token_usage = normalize_token_usage(event.get("usage"), "codex")
+            # Codex reports no price, so the raw bands are what gets priced —
+            # including cache_write_input_tokens, which normalization drops
+            # and which OpenAI bills at 1.25x the uncached input rate.
+            cost_payload = event.get("usage")
         elif family == "codex" \
                 and event.get("method") == "thread/tokenUsage/updated":
             usage = ((event.get("params") or {}).get("tokenUsage") or {})
             token_usage = normalize_token_usage(usage.get("last"), "codex")
+            cost_payload = usage.get("last")
     if provider_error is not None:
         raise ProviderResponseError(
             "family %s reported a provider failure: %s"
             % (family, str(provider_error)[:500]),
             raw_texts=[transport_text],
             token_usage=token_usage,
+            cost_payloads=[cost_payload] if cost_payload else [],
         )
-    return final_text, token_usage
+    # Codex's turn.completed and tokenUsage snapshots are alternative
+    # statements of the SAME turn, so the last one wins rather than adding.
+    return final_text, token_usage, [cost_payload] if cost_payload else []
 
 
 class WorkerProtocolError(RuntimeError):
@@ -397,17 +424,86 @@ class WorkerProtocolError(RuntimeError):
     driver can persist them for the operator."""
 
     def __init__(self, message, raw_texts=None, duration_s=None,
-                 token_usage=None, token_usage_partial=False):
+                 token_usage=None, token_usage_partial=False,
+                 cost_payloads=None):
         RuntimeError.__init__(self, message)
         self.raw_texts = list(raw_texts or [])
         self.duration_s = duration_s
         self.token_usage = normalize_token_usage(token_usage)
         self.token_usage_partial = bool(token_usage_partial)
+        self.cost_payloads = list(cost_payloads or [])
+
+
+_CODEX_DELTA_BANDS = (
+    ("input_tokens", "inputTokens"),
+    ("cached_input_tokens", "cachedInputTokens"),
+    ("cache_write_input_tokens", "cacheWriteInputTokens"),
+    ("output_tokens", "outputTokens"),
+    ("reasoning_output_tokens", "reasoningOutputTokens"),
+)
+
+
+def codex_payload_delta(current, previous):
+    """This turn's bands, from two cumulative session snapshots.
+
+    Returns None -- unknown, never zero -- when the snapshot is unusable or
+    any band went backwards, which means the counter reset and no honest
+    turn-sized figure can be derived from it. Emits snake_case; pricing
+    reads both dialects.
+    """
+    if not isinstance(current, dict):
+        return None
+
+    def band(payload, snake, camel):
+        if not isinstance(payload, dict):
+            return 0
+        if snake in payload:
+            return _token_count(payload.get(snake))
+        return _token_count(payload.get(camel))
+
+    if not any(
+        snake in current or camel in current
+        for snake, camel in _CODEX_DELTA_BANDS
+    ):
+        return None
+    delta = {}
+    for snake, camel in _CODEX_DELTA_BANDS:
+        value = band(current, snake, camel) - band(previous, snake, camel)
+        if value < 0:
+            return None
+        delta[snake] = value
+    return delta
+
+
+def merged_cost_payloads(*carriers):
+    """Every payload these carriers billed, in order.
+
+    A repair is a second physical call and both attempts are charged, so the
+    lists concatenate rather than the later one replacing the earlier. This
+    is the only place that merge is expressed; pricing then sums the list.
+
+    A carrier that ran but produced NO payload contributes an explicit None:
+    shortening the list instead would make an unpriceable physical call
+    indistinguishable from one that billed nothing, and the merged result
+    would then claim to be a complete price. None prices as unknown and
+    poisons the sum, which is what the token side does with `or usage is
+    None`.
+    """
+    merged = []
+    for carrier in carriers:
+        if carrier is None:
+            continue
+        payloads = getattr(carrier, "cost_payloads", None)
+        if isinstance(payloads, (list, tuple)) and payloads:
+            merged.extend(payloads)
+        else:
+            merged.append(None)
+    return merged
 
 
 class RunnerResult(object):
     def __init__(self, text, exit_code, duration_s, transport_text=None,
-                 token_usage=None):
+                 token_usage=None, cost_payloads=None):
         self.text = text
         self.exit_code = exit_code
         self.duration_s = duration_s
@@ -416,15 +512,20 @@ class RunnerResult(object):
         # the historical last-message file.
         self.transport_text = text if transport_text is None else transport_text
         self.token_usage = normalize_token_usage(token_usage)
+        # The provider's own accounting objects, verbatim (see
+        # _provider_transport_result). Empty where the family emitted none,
+        # which prices as unknown rather than as free.
+        self.cost_payloads = list(cost_payloads or [])
 
 
 class ControlledInterruptionResult(RunnerResult):
     def __init__(self, text, exit_code, duration_s, reason,
-                 transport_text=None, token_usage=None):
+                 transport_text=None, token_usage=None, cost_payloads=None):
         RunnerResult.__init__(
             self, text, exit_code, duration_s,
             transport_text=transport_text,
             token_usage=token_usage,
+            cost_payloads=cost_payloads,
         )
         self.controlled_interruption = True
         self.interrupt_reason = str(reason or "controlled interruption")
@@ -1064,6 +1165,10 @@ class SubprocessRunner(object):
         # `codex exec resume --json` reports the thread's cumulative usage.
         # Keep its last total so continued calls expose only their delta.
         self._codex_session_usage = {}
+        # The raw cumulative cost payload per session, kept beside the
+        # normalized counter so a continued turn can be priced on its OWN
+        # bands instead of the session's running total.
+        self._codex_session_cost_payload = {}
 
     def _start_stall_watchdog(self, proc, family, done, state, kill_lock,
                               output_paths=()):
@@ -1275,6 +1380,16 @@ class SubprocessRunner(object):
             )
             if usage is not None:
                 self._codex_session_usage[result.session_ref] = usage
+            # Only a cumulative snapshot is a valid baseline. The live
+            # transport reports per-response bands, so it deliberately writes
+            # nothing and the next turn falls to the unknown-rather-than-wrong
+            # guard in _apply_codex_session_delta.
+            if not getattr(result, "token_usage_is_delta", False):
+                payloads = getattr(result, "cost_payloads", None)
+                if payloads:
+                    self._codex_session_cost_payload[result.session_ref] = (
+                        payloads[-1]
+                    )
         return result
 
     def continue_session(
@@ -1351,8 +1466,36 @@ class SubprocessRunner(object):
         outcome.session_token_usage = cumulative
         outcome.token_usage = subtract_token_usage(cumulative, previous)
         outcome.token_usage_partial = outcome.token_usage is None
+        # The payload is the SESSION's running total, exactly like the
+        # counter above. Pricing it as-is would re-charge every earlier turn
+        # of the session on this call. Subtract the same way.
+        payloads = getattr(outcome, "cost_payloads", None)
+        snapshot = payloads[-1] if payloads else None
+        previous_payload = self._codex_session_cost_payload.get(session_ref)
+        if snapshot is not None:
+            self._codex_session_cost_payload[session_ref] = snapshot
+        # The cumulative twin of session_token_usage. cost_payloads below is
+        # rewritten to this turn's delta, so anything that needs a BASELINE
+        # must read this instead.
+        outcome.session_cost_payload = snapshot
+        if previous_payload is None:
+            # A continued turn with no baseline to subtract: a driver
+            # restart, or a live turn whose per-turn payloads left no
+            # cumulative snapshot behind. This function only ever runs on a
+            # CONTINUATION, so the running total is never this turn's price —
+            # charging it would bill every earlier turn again. Unknown rather
+            # than wrong, exactly as subtract_token_usage does for tokens.
+            outcome.cost_payloads = [None]
+        else:
+            outcome.cost_payloads = [
+                codex_payload_delta(snapshot, previous_payload)
+            ]
 
     def _remember_codex_session_delta(self, session_ref, outcome):
+        # Per-turn payloads say nothing about the session's running total, so
+        # any snapshot left from an earlier turn is stale the moment a live
+        # turn lands. Drop it: unknown beats a wrong subtraction.
+        self._codex_session_cost_payload.pop(session_ref, None)
         session_total = normalize_token_usage(
             getattr(outcome, "session_token_usage", None)
         )
@@ -1366,11 +1509,22 @@ class SubprocessRunner(object):
                 prior, delta
             )
 
-    def seed_codex_session_usage(self, session_ref, cumulative):
-        """Restore one durable Codex thread counter before a continuation."""
+    def seed_codex_session_usage(self, session_ref, cumulative,
+                                 cost_payload=None):
+        """Restore one durable Codex thread counter before a continuation.
+
+        The raw cumulative payload is restored beside it: without it the
+        first continuation after a process restart prices as unknown, even
+        though its tokens are exact.
+        """
         usage = normalize_token_usage(cumulative)
         if isinstance(session_ref, str) and session_ref.strip() and usage:
             self._codex_session_usage[session_ref] = usage
+        if (
+            isinstance(session_ref, str) and session_ref.strip()
+            and isinstance(cost_payload, dict)
+        ):
+            self._codex_session_cost_payload[session_ref] = dict(cost_payload)
 
     def _call_prepared(
         self, family, prompt, workspace, template, model, effort, timeout,
@@ -1648,6 +1802,7 @@ class SubprocessRunner(object):
                     active_control.interrupt_reason,
                     transport_text="".join(raw),
                     token_usage=outcome.get("token_usage"),
+                    cost_payloads=outcome.get("cost_payloads"),
                 )
                 result.token_usage_partial = bool(
                     outcome.get(
@@ -1661,6 +1816,10 @@ class SubprocessRunner(object):
 
                 def with_usage(error):
                     error.token_usage = usage
+                    # A failed turn still billed for what it produced.
+                    error.cost_payloads = list(
+                        outcome.get("cost_payloads") or []
+                    )
                     error.token_usage_partial = bool(
                         outcome.get("token_usage_partial", usage is None)
                     )
@@ -1692,6 +1851,7 @@ class SubprocessRunner(object):
                     text, exit_code, time.time() - started,
                     transport_text="".join(raw),
                     token_usage=outcome.get("token_usage"),
+                    cost_payloads=outcome.get("cost_payloads"),
                 )
                 result.token_usage_partial = bool(
                     outcome.get(
@@ -1883,6 +2043,10 @@ class SubprocessRunner(object):
         raw_response_seen = False
         raw_response_missing_usage = False
         session_token_usage = None
+        # Mirrors token_usage: one controlled turn can bill several responses,
+        # so the provider's raw bands accumulate the same way they do.
+        cost_payloads = []
+        snapshot_cost_payload = None
         stop_deadline = None
         while True:
             if active_control.interrupted:
@@ -1934,6 +2098,7 @@ class SubprocessRunner(object):
                     snapshot_token_usage = normalize_token_usage(
                         provider_usage.get("last"), "codex"
                     )
+                    snapshot_cost_payload = provider_usage.get("last")
                 continue
             if event.get("method") == "rawResponse/completed":
                 params = event.get("params") or {}
@@ -1945,10 +2110,13 @@ class SubprocessRunner(object):
                     )
                     if response_usage is None:
                         raw_response_missing_usage = True
+                        # It billed; we just cannot price it. Say so.
+                        cost_payloads.append(None)
                     else:
                         token_usage = add_token_usage(
                             token_usage, response_usage
                         )
+                        cost_payloads.append(params.get("usage"))
                 continue
             if event.get("method") == "turn/completed":
                 params = event.get("params") or {}
@@ -1984,6 +2152,11 @@ class SubprocessRunner(object):
         )
         if not raw_response_seen:
             token_usage = snapshot_token_usage
+            # No per-response bands arrived: the turn snapshot is the only
+            # statement of what this turn billed.
+            cost_payloads = (
+                [snapshot_cost_payload] if snapshot_cost_payload else []
+            )
         return {
             "text": texts[-1] if texts else "",
             "session_ref": thread_id,
@@ -1991,6 +2164,7 @@ class SubprocessRunner(object):
             "ok": turn.get("status") == "completed",
             "error": turn.get("error"),
             "token_usage": token_usage,
+            "cost_payloads": cost_payloads,
             "token_usage_partial": (
                 raw_response_missing_usage
                 if raw_response_seen else token_usage is None
@@ -2052,6 +2226,9 @@ class SubprocessRunner(object):
                     "token_usage": normalize_token_usage(
                         event.get("usage"), "claude"
                     ),
+                    # The whole result event: it carries total_cost_usd,
+                    # which is the priced figure itself.
+                    "cost_payloads": [event],
                 }
         return {
             "text": "",
@@ -2060,6 +2237,7 @@ class SubprocessRunner(object):
             "ok": False,
             "error": None,
             "token_usage": None,
+            "cost_payloads": [],
         }
 
     def _call_template(
@@ -2277,9 +2455,8 @@ class SubprocessRunner(object):
                         text = file_text
                 except OSError:
                     pass
-            provider_text, token_usage = _provider_transport_result(
-                family, stdout_text
-            )
+            provider_text, token_usage, cost_payloads = \
+                _provider_transport_result(family, stdout_text)
             if output_file is None and provider_text is not None:
                 text = provider_text
             if active_control is not None and active_control.interrupted:
@@ -2290,9 +2467,13 @@ class SubprocessRunner(object):
                     active_control.interrupt_reason,
                     transport_text=stdout_text,
                     token_usage=token_usage,
+                    cost_payloads=cost_payloads,
                 )
                 if family == "codex":
                     result.session_token_usage = token_usage
+                    result.session_cost_payload = (
+                        cost_payloads[-1] if cost_payloads else None
+                    )
                 result.prompt_path = prompt_path
                 result.steers = active_control.steers
                 if worker_quiescent:
@@ -2339,9 +2520,13 @@ class SubprocessRunner(object):
                 duration,
                 transport_text=stdout_text,
                 token_usage=token_usage,
+                cost_payloads=cost_payloads,
             )
             if family == "codex":
                 result.session_token_usage = token_usage
+                result.session_cost_payload = (
+                    cost_payloads[-1] if cost_payloads else None
+                )
             result.prompt_path = prompt_path
             if active_control is not None:
                 result.steers = active_control.steers
@@ -2619,6 +2804,8 @@ def _attach_call_accounting(exc, *results):
         getattr(result, "token_usage_partial", False) or usage is None
         for result, usage in zip(results, usages)
     )
+    # Work that was paid for stays paid for even when validation rejects it.
+    exc.cost_payloads = merged_cost_payloads(*results)
     if durations:
         exc.duration_s = sum(durations)
 
@@ -2787,6 +2974,7 @@ def call_worker(runner, family, prompt, kind, workspace,
             getattr(exc, "token_usage", None)
         )
         exc.token_usage = add_token_usage(first_usage, repair_usage)
+        exc.cost_payloads = merged_cost_payloads(result, exc)
         first_duration = getattr(result, "duration_s", None)
         repair_duration = getattr(exc, "duration_s", None)
         if isinstance(first_duration, (int, float)) \
@@ -2813,6 +3001,7 @@ def call_worker(runner, family, prompt, kind, workspace,
                 getattr(result, "token_usage_partial", False)
                 or result.token_usage is None
             ),
+            "cost_payloads": list(getattr(result, "cost_payloads", None) or []),
         }
         return None, result2
     try:
@@ -2832,6 +3021,7 @@ def call_worker(runner, family, prompt, kind, workspace,
                 getattr(result, "token_usage_partial", False)
                 or result.token_usage is None
             ),
+            "cost_payloads": list(getattr(result, "cost_payloads", None) or []),
         }
         return validated, result2
     except (ValueError, contracts.ContractError) as exc:
@@ -2846,6 +3036,7 @@ def call_worker(runner, family, prompt, kind, workspace,
             token_usage_partial=(
                 result.token_usage is None or result2.token_usage is None
             ),
+            cost_payloads=merged_cost_payloads(result, result2),
         )
     except BaseException as exc:
         if extensions and isinstance(exc, verifiers.VerifierError):

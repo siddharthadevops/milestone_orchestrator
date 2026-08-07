@@ -1421,6 +1421,8 @@ class BrainstormingMilestoneAdapterTest(unittest.TestCase):
                     "work_duration_s",
                     "work_token_usage",
                     "work_token_usage_partial",
+                    "work_cost",
+                    "work_cost_partial",
                 },
             )
             self.assertEqual(handoff["work_duration_s"], 0)

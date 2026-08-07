@@ -6,7 +6,7 @@ import hashlib
 import os
 import time
 
-from orchestrator import brainstorming, runners
+from orchestrator import brainstorming, pricing, runners
 
 
 class ExecutionRejected(RuntimeError):
@@ -89,10 +89,15 @@ class RunnerParticipantExecutor:
 class ParticipantExecution:
     """Run validated exchanges for already-resolved durable participants."""
 
-    def __init__(self, store, executors, failure_classifier=None):
+    def __init__(self, store, executors, failure_classifier=None,
+                 billing=None):
         self.store = store
         self.executors = dict(executors)
         self.failure_classifier = failure_classifier
+        # How each family is paid for, so a discussion turn's price carries
+        # the same two readings the rest of the accounting does. Absent, the
+        # declared defaults apply.
+        self.billing = dict(billing or {})
 
     @staticmethod
     def _participant(snapshot, participant_id):
@@ -338,6 +343,21 @@ class ParticipantExecution:
             event["token_usage"] = token_usage
         if getattr(usage_source, "token_usage_partial", False):
             event["token_usage_partial"] = True
+        # Discussion turns are worker calls like any other: what they cost
+        # belongs in the same record as what they consumed.
+        cost = pricing.quote_many(
+            executor.model_family,
+            getattr(executor, "model", None),
+            getattr(usage_source, "cost_payloads", None),
+            billing=(self.billing or {}).get(executor.model_family),
+        )
+        if cost.api_usd is not None and cost.real_usd is not None:
+            event["cost"] = cost.as_dict()
+        else:
+            # Either reading unknown (unpriced model, or a billing mode the
+            # config spelled wrong) makes the turn's price unknown. Writing a
+            # half-known cost would fail the activity contract outright.
+            event["cost_partial"] = True
         prompt_path = getattr(usage_source, "prompt_path", None)
         if isinstance(prompt_path, str) and prompt_path:
             event["prompt_ref"] = os.path.basename(prompt_path)

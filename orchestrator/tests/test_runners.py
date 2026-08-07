@@ -218,19 +218,24 @@ class TestTokenUsage(unittest.TestCase):
         self.assertEqual(caught.exception.duration_s, 12.0)
 
     def test_provider_json_returns_answer_and_usage(self):
-        answer, usage = runners._provider_transport_result(
+        answer, usage, cost_payload = runners._provider_transport_result(
             "claude",
             json.dumps({
                 "type": "result",
                 "result": '{"status":"ok"}',
                 "usage": {"input_tokens": 11, "output_tokens": 3},
+                "total_cost_usd": 0.0134499,
             }),
         )
         self.assertEqual(answer, '{"status":"ok"}')
         self.assertEqual(usage["total_tokens"], 14)
+        # The priced figure lives outside the normalized usage, so the whole
+        # result event is kept for pricing.
+        self.assertEqual(len(cost_payload), 1)
+        self.assertEqual(cost_payload[0]["total_cost_usd"], 0.0134499)
 
     def test_codex_jsonl_returns_agent_answer_and_usage(self):
-        answer, usage = runners._provider_transport_result(
+        answer, usage, cost_payload = runners._provider_transport_result(
             "codex",
             "\n".join([
                 json.dumps({
@@ -245,6 +250,7 @@ class TestTokenUsage(unittest.TestCase):
                     "usage": {
                         "input_tokens": 10,
                         "cached_input_tokens": 2,
+                        "cache_write_input_tokens": 4,
                         "output_tokens": 3,
                     },
                 }),
@@ -252,6 +258,10 @@ class TestTokenUsage(unittest.TestCase):
         )
         self.assertEqual(answer, '{"status":"ok"}')
         self.assertEqual(usage["total_tokens"], 13)
+        # The cache-write band is billed at 1.25x uncached input and has no
+        # normalized field, so pricing reads the provider's own bands.
+        self.assertEqual(len(cost_payload), 1)
+        self.assertEqual(cost_payload[0]["cache_write_input_tokens"], 4)
 
     def test_structured_provider_failure_is_not_an_answer(self):
         for family, event in (
