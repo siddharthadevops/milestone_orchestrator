@@ -1504,7 +1504,7 @@ class TestLaunchRefusals(ProjectsServiceTestCase):
         super().setUp()
         self.create_project()
 
-    def test_missing_primary_refuses_and_creates_nothing(self):
+    def test_missing_primary_refuses_and_records_the_absence(self):
         ghost = os.path.join(self.tmp.name, "ghost-primary")
         self.declare(ghost)
         self.launch(expect=None)
@@ -1512,22 +1512,32 @@ class TestLaunchRefusals(ProjectsServiceTestCase):
         self.assertEqual((status, body["error"]),
                          (400, "missing_primary_path"))
         record = self.wa_record()
+        # The status is the verification's RESULT: this host looked and
+        # the root was not there. Repeating the launch does not re-bump —
+        # the same identity re-recording the same finding is silent.
         self.assertEqual((record["status"], record["version"]),
-                         ("pending", 1))  # status untouched
+                         ("unavailable", 2))
         self.assert_nothing_created(ghost)
 
-    def test_non_repo_primary_with_git_enabled_refuses(self):
+    def test_non_repo_primary_with_git_enabled_refuses_without_touching_status(
+        self
+    ):
         primary = self.plain_dir("non-repo")
         self.declare(primary)
         status, body = self.launch(expect=None)
         self.assertEqual((status, body["error"]),
                          (400, "primary_not_repo_root"))
         record = self.wa_record()
+        # The roots ARE here, so readiness is exactly what was recorded.
+        # A repository root is this launch's own requirement, not a
+        # property of the descriptor: it refuses without writing status,
+        # and never makes the area look unusable to a caller that has no
+        # ledger to write.
         self.assertEqual((record["status"], record["version"]),
-                         ("pending", 1))
+                         ("ready", 2))
         self.assert_nothing_created(primary)
 
-    def test_missing_additional_root_refuses(self):
+    def test_missing_additional_root_refuses_and_records_the_absence(self):
         primary = self.repo("repo-add")
         self.declare(primary,
                      additional=[os.path.join(self.tmp.name, "ghost-lib")])
@@ -1536,7 +1546,7 @@ class TestLaunchRefusals(ProjectsServiceTestCase):
                          (400, "missing_additional_root"))
         record = self.wa_record()
         self.assertEqual((record["status"], record["version"]),
-                         ("pending", 1))
+                         ("unavailable", 2))
         self.assert_nothing_created(primary)
 
     def test_addressing_refusals_ride_the_sealed_tokens(self):
@@ -1672,24 +1682,69 @@ class TestLaunchRefusals(ProjectsServiceTestCase):
         self.assertNotEqual(new["state_path"], legacy)
         self.assertIn("implementation/milestones", new["state_path"])
 
-    def test_confirm_failures_map_by_the_sealed_vocabulary(self):
+    def test_a_failed_record_write_does_not_veto_a_verified_launch(self):
+        """Provenance that fails is lost provenance, not a veto.
+
+        The roots were verified against this filesystem and they are
+        here. Whether the store then accepts the note saying so — a
+        descriptor repointed underneath, CAS exhaustion — cannot be what
+        decides the launch, or the stored record would be a permission
+        again through the back door.
+        """
         primary = self.repo("repo-confirm")
         self.declare(primary)
+        refusals = [
+            {"return_value": workareas.WorkAreaResult(
+                False, reason=workareas.DESCRIPTOR_MISMATCH)},
+            {"return_value": workareas.WorkAreaResult(
+                False, reason=workareas.CONFLICT)},
+            {"side_effect": RuntimeError("store is read-only")},
+            {"side_effect": OSError("no space left on device")},
+        ]
+        for refusal in refusals:
+            with mock.patch.object(
+                workareas.WorkAreaStore, "confirm", **refusal
+            ):
+                status, body = self.launch(expect=None)
+            self.assertEqual(status, 201, body)
+            record = self.wa_record()
+            self.assertEqual((record["status"], record["version"]),
+                             ("pending", 1))  # the note was simply lost
+
+    def test_store_refusals_still_map_by_the_sealed_vocabulary_on_crud(self):
+        """The mapping the launch no longer exercises is still the CRUD
+        routes' — a declare that cannot settle its CAS is the operator's
+        problem to see, because nothing else is going to record it."""
+        primary = self.repo("repo-crud")
         for reason, expected_status in (
-            (workareas.DESCRIPTOR_MISMATCH, 400),
             (workareas.CONFLICT, 409),
+            (workareas.DESCRIPTOR_MISMATCH, 400),
         ):
             with mock.patch.object(
-                workareas.WorkAreaStore, "confirm",
+                workareas.WorkAreaStore, "declare",
                 return_value=workareas.WorkAreaResult(False, reason=reason),
+            ):
+                self.refused(
+                    expected_status, reason, "POST",
+                    self.project_path(PROJECT, "work-areas"),
+                    {"name": "other", "primary_path": primary},
+                )
+
+    def test_a_failed_record_write_never_displaces_the_missing_root_cause(self):
+        """The refusal names the filesystem, not the store."""
+        ghost = os.path.join(self.tmp.name, "ghost-unrecordable")
+        self.declare(ghost)
+        for refusal in (
+            {"return_value": workareas.WorkAreaResult(
+                False, reason=workareas.DESCRIPTOR_MISMATCH)},
+            {"side_effect": RuntimeError("store is read-only")},
+        ):
+            with mock.patch.object(
+                workareas.WorkAreaStore, "mark_unavailable", **refusal
             ):
                 status, body = self.launch(expect=None)
             self.assertEqual((status, body["error"]),
-                             (expected_status, reason))
-        record = self.wa_record()
-        self.assertEqual((record["status"], record["version"]),
-                         ("pending", 1))
-        self.assert_nothing_created(primary)
+                             (400, "missing_primary_path"))
 
 
 # ---------------------------------------------------------------------------

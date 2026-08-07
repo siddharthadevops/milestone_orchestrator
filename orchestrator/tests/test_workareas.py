@@ -314,6 +314,37 @@ class TestStateMachine(WorkAreaStoreTestCase):
             workareas.UNKNOWN,
         )
 
+    def test_mark_unavailable_mirrors_confirm_and_guards_the_descriptor(self):
+        self.declare(display_name="Main")
+        # An absence is a statement about the roots that were checked: a
+        # descriptor repointed underneath must not be condemned by it.
+        mismatch = self.store.mark_unavailable(
+            "main", {"path": "/other", "device": 1}, [], "local-exec"
+        )
+        self.assertEqual(mismatch.reason, workareas.DESCRIPTOR_MISMATCH)
+        self.assertEqual(self.store.read("main").value["version"], 1)
+
+        gone = self.store.mark_unavailable(
+            "main", self.primary, list(self.additional), "local-exec"
+        )
+        self.assertTrue(gone.ok)
+        self.assertEqual(gone.value["status"], workareas.STATUS_UNAVAILABLE)
+        self.assertEqual(gone.value["version"], 2)
+        self.assertEqual(gone.value["display_name"], "Main")
+
+        # Version follows confirm's rule in both directions.
+        same = self.store.mark_unavailable(
+            "main", self.primary, list(self.additional), "local-exec"
+        )
+        self.assertEqual(same.value["version"], 2)
+        back = self.store.confirm(
+            "main", self.primary, list(self.additional), "local-exec"
+        )
+        self.assertEqual(
+            (back.value["status"], back.value["version"]),
+            (workareas.STATUS_READY, 3),
+        )
+
     def test_relabel_preserves_version_status_roots_key_and_is_transition_only(self):
         self.declare()
         self.store.confirm("main", self.primary, list(self.additional), "local-exec")

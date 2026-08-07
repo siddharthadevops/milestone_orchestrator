@@ -1095,6 +1095,67 @@ class StandaloneBrainstormingApiTest(unittest.TestCase):
             os.path.exists(os.path.join(self.tmp.name, "escape"))
         )
 
+    def test_create_needs_no_prior_milestone_and_no_repository(self):
+        """A discussion runs in a work area declared moments ago.
+
+        The area is `pending` — no milestone has ever launched here — and
+        its primary root is a plain directory, not a git repository.
+        Brainstorming writes no gate ledger, so neither fact is its
+        business; what it verifies is that the roots are there. The
+        create also records what it found, so the operator sees a status
+        that describes this host rather than one waiting for a milestone
+        to write it.
+        """
+        self._target("no-milestone.md")
+        service.create_project(self.home, {"slug": "fresh"})
+        service.declare_work_area(
+            self.home,
+            "fresh",
+            {"name": "main", "primary_path": self.workspace},
+        )
+        store = service._work_area_store(self.home, "fresh")
+        self.assertEqual(store.read("main").value["status"], "pending")
+        self.assertFalse(
+            os.path.isdir(os.path.join(self.workspace, ".git"))
+        )
+
+        with mock.patch.object(
+            lifecycle,
+            "_launch_lifecycle_process",
+            side_effect=self._sleeper_launcher,
+        ):
+            status, body = self._request(
+                "POST",
+                "/api/brainstorming/sessions",
+                self._payload(
+                    "no-milestone.md", project="fresh", work_area="main"
+                ),
+            )
+        self.assertEqual(status, 201, body)
+        self.assertEqual(body["session"]["work_area"], "main")
+        self.assertEqual(store.read("main").value["status"], "ready")
+
+    def test_create_reports_the_missing_root_not_a_stored_status(self):
+        """The refusal names what is wrong, and the record agrees."""
+        ghost = os.path.join(self.tmp.name, "ghost-root")
+        service.create_project(self.home, {"slug": "ghosted"})
+        service.declare_work_area(
+            self.home,
+            "ghosted",
+            {"name": "main", "primary_path": ghost},
+        )
+        payload = self._payload(
+            "unused.md", workspace=ghost, project="ghosted", work_area="main"
+        )
+        status, refusal = self._request(
+            "POST", "/api/brainstorming/sessions", payload
+        )
+        self.assertEqual(status, 400, refusal)
+        self.assertEqual(refusal["error"], "missing_primary_path")
+        record = service._work_area_store(self.home, "ghosted").read("main")
+        self.assertEqual(record.value["status"], "unavailable")
+        self.assertFalse(os.path.exists(ghost))
+
     def test_create_refusals_are_typed_and_side_effect_free(self):
         target = self._target("refusal.md")
         launch_count = []

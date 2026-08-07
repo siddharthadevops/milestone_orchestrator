@@ -59,9 +59,9 @@ _PROJECT_REQUEST_ERRORS = {
     "invalid_name",
     "unknown_work_area",
     "malformed_work_area",
-    "work_area_not_ready",
     "workspace_mismatch",
     "missing_primary_path",
+    "missing_additional_root",
 }
 
 _REGISTRY_LOCKS = {}

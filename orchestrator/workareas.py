@@ -525,6 +525,52 @@ class WorkAreaStore:
 
         return self._transition(name, decide)
 
+    def mark_unavailable(self, name, primary, additional, executor_id):
+        """Record the other half of what a launcher's verification found.
+
+        `confirm` records "these roots are here"; this records "they are
+        not". Status is the RESULT of a verification, never a permission
+        checked before one: no launch consults it to decide whether it may
+        proceed, so recording an absence blocks nothing — it only stops the
+        record from claiming a readiness this host just disproved.
+
+        The verified roots are supplied and guarded exactly as `confirm`
+        guards them: an absence is a statement about the descriptor that
+        was checked, so a descriptor that changed underneath (the operator
+        repointed the area between the check and this write) refuses
+        rather than condemning roots this host never looked at. Version
+        follows `confirm`'s rule: a repeat observation under the same
+        identity is version-silent."""
+        try:
+            name = validate_name(name)
+            primary, additional = _normalize_input_roots(primary, additional)
+            executor_id = validate_executor_id(executor_id)
+        except WorkAreaValidationError as exc:
+            return _err(exc.reason)
+
+        def decide(record):
+            if not _content_matches(record, primary, additional):
+                return _err(DESCRIPTOR_MISMATCH)
+            version = (
+                record["version"]
+                if record["status"] == STATUS_UNAVAILABLE
+                and record["executor_id"] == executor_id
+                else record["version"] + 1
+            )
+            return _ok(
+                _store_map(
+                    record["name"],
+                    record["primary"],
+                    record["additional"],
+                    executor_id,
+                    version,
+                    STATUS_UNAVAILABLE,
+                    record["display_name"],
+                )
+            )
+
+        return self._transition(name, decide)
+
     def relabel(self, name, display_name):
         try:
             name = validate_name(name)

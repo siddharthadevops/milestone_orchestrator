@@ -124,9 +124,35 @@ adopts this contract LOCALLY:
 - **Key families**: defined ONCE, in the Normative-contracts key grammar
   below — the single source; do not restate the list elsewhere (earlier
   drafts restated it here and drifted). Locally, the work-area state
-  machine runs with the panel playing the Body's declare role and the
-  launcher's validation playing the executor's reconcile role (e.g.
-  "primary.path is a git repo root" → ready).
+  machine runs with the panel playing the Body's declare role and each
+  launch playing the executor's reconcile role: a launch verifies the
+  stored descriptor's roots against this filesystem and records what it
+  found — `ready` when they are all here, `unavailable` when one is not.
+
+  AMENDED 2026-08-07. This bullet previously gave the reconcile as
+  `"primary.path is a git repo root" → ready`, and readiness was then
+  read back as a precondition: a launch was admitted only if the stored
+  status already said `ready`. Both halves are withdrawn. The rule now in
+  force, stated in full:
+
+  - Stored status is the RESULT of a verification and is never consulted
+    as a permission. Every launch verifies what it needs at the moment it
+    needs it, and refuses with that specific cause — a root that is
+    missing is named as such, never as a generic "not ready".
+  - Root existence is the only requirement every launch shares, so it is
+    the only thing status describes.
+  - Requiring `primary.path` to be a git repository ROOT belongs to the
+    milestone launch alone, because that is where the gate ledger lands.
+    It refuses with its own cause and does NOT write status. A launch
+    that writes no ledger — a brainstorming — never asks, and runs in an
+    area no milestone has ever touched.
+  - A record that cannot be written loses the note, never the launch.
+
+  The stored domain is unchanged: the field, its three values, the
+  `executor_id`, and the version semantics are still agent_99's, adopted
+  verbatim. What was removed is the field's authority over callers, not
+  the field. Rationale and the code sites in
+  `work-area-readiness-verified-per-launch.md`.
 - **Authority is per-family, and OURS is bottom-up.** agent_99's work-area
   family reconciles top-down (server declares, executor confirms) — fine for
   descriptors, which are cheap declarations. The orchestrator's families are

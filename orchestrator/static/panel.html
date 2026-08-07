@@ -701,7 +701,10 @@
     <p><b>Project</b> — the session runs in the project's work directory,
       exactly like a milestone. The target document must live inside that
       directory: it is the ONE artifact the discussion may write, and the
-      only thing a stop restores.</p>
+      only thing a stop restores. Nothing has to be prepared first: no
+      earlier milestone, and the directory need not be a git repo — a
+      discussion writes no ledger. The launch checks the roots are there
+      and tells you which one is missing if they are not.</p>
     <p><b>Request</b> — the focused result the participants should produce;
       it may include a question, but does not have to be one. <b>Brief</b> is
       the standing context every turn receives.</p>
@@ -1008,8 +1011,13 @@
   <div class="dlg-info" id="projedit_info">
     <p><b>Work directory</b> — the git repo runs of this project execute
       in. Changing it (or the read-only roots) re-declares the area: the
-      version bumps, the status returns to <i>pending</i>, and the next
-      bound launch validates the real roots and confirms <i>ready</i>.</p>
+      version bumps and the status returns to <i>pending</i> until a
+      launch looks. The status is a RECORD of what the last launch found
+      here — <i>ready</i>, or <i>unavailable</i> if a root was gone — and
+      never a permission: every launch checks the roots itself, at the
+      moment it needs them. A milestone additionally needs the work
+      directory to be a git repo root; a brainstorming does not, and can
+      run in an area no milestone has ever touched.</p>
     <p><b>Read-only roots</b> — sibling repos workers may READ for
       evidence (dependencies, consumers); they are never editable by
       workers.</p>
@@ -4972,8 +4980,9 @@ function statusChip(status) {
 /* The work-area surface is two plain ideas — ONE work directory
    (changeable) and a LIST of read-only roots (addable/removable). Every
    edit re-declares the same area name through the sealed store: the
-   version bumps and the next bound launch revalidates the real roots
-   (declare-over-live is the API's in-place update). */
+   version bumps and the next launch revalidates the real roots
+   (declare-over-live is the API's in-place update). The status chip is
+   provenance, not a gate — nothing here waits for it to say ready. */
 function areaFieldId(i, j, prefix) {
   return `${prefix}_${waKey(projState.list[i].slug)}_${j}`;
 }

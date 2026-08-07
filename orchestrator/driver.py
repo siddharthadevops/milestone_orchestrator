@@ -8292,12 +8292,14 @@ def default_state_path(workspace, docs_dir=None):
 
 # Init-specific project refusal causes. Causes raised out of Slice 2's
 # validation/read seams reuse the workareas vocabulary verbatim
-# (invalid_project, invalid_name, unknown_work_area, malformed_work_area,
-# work_area_not_ready); an invalid defaults object reuses
-# projects.INVALID_DEFAULTS. Only the causes no store seam owns are minted
-# here.
+# (invalid_project, invalid_name, unknown_work_area, malformed_work_area);
+# an invalid defaults object reuses projects.INVALID_DEFAULTS. Only the
+# causes no store seam owns are minted here — the root-existence ones,
+# because the roots are judged against this filesystem rather than read
+# out of the record.
 WORKSPACE_MISMATCH = "workspace_mismatch"
 MISSING_PRIMARY_PATH = "missing_primary_path"
+MISSING_ADDITIONAL_ROOT = "missing_additional_root"
 
 _BINDING_REQUIRED_KEYS = ("directory", "project", "work_area")
 
@@ -8308,7 +8310,8 @@ class ProjectResolutionError(RuntimeError):
     so a refused init leaves nothing to resume or clean up. `cause` carries
     one machine-readable reason (Slice 2's validation/read vocabulary,
     projects.INVALID_DEFAULTS, or the init-specific WORKSPACE_MISMATCH /
-    MISSING_PRIMARY_PATH) so the service launcher can map project refusals
+    MISSING_PRIMARY_PATH / MISSING_ADDITIONAL_ROOT) so the service
+    launcher can map project refusals
     to 400-class API errors without string-matching. Deliberately distinct
     from FileExistsError (state already exists — also unchanged)."""
 
@@ -8319,11 +8322,22 @@ class ProjectResolutionError(RuntimeError):
 
 def _resolve_project_binding(binding, workspace, config_override):
     """Resolve a (project, work_area) binding through Slice 2's sealed
-    READY-gated seam (WorkAreaStore.resolve), READ-ONLY: a successful
-    resolution writes no KV entry and creates no directory (the store is
-    not even opened until the pure validations pass and its project
-    directory is known to exist). Returns (workspace, project_block,
-    effective_config):
+    read seam (WorkAreaStore.read), READ-ONLY: a successful resolution
+    writes no KV entry and creates no directory (the store is not even
+    opened until the pure validations pass and its project directory is
+    known to exist).
+
+    Readiness is VERIFIED HERE, not consulted: the stored `status` is a
+    record of what some launcher once found, so it is never read as a
+    permission (a live record of any status resolves). What must hold is
+    the filesystem truth, checked at the moment of use because that is the
+    only moment it is true — every root in the stored descriptor must
+    exist, and a missing one refuses with its OWN cause rather than a
+    generic not-ready. Requirements that belong to one kind of launch
+    (a milestone's git repository root) are verified by that launch, not
+    here: this seam is shared with callers that have no such requirement.
+
+    Returns (workspace, project_block, effective_config):
 
     - workspace: the resolved work area's primary.path — the repo the
       driver owns and executes in. A caller-supplied workspace must equal
@@ -8381,7 +8395,7 @@ def _resolve_project_binding(binding, workspace, config_override):
             "project %r has no work-area store under %s"
             % (project, directory),
         )
-    resolved = workareas.WorkAreaStore(directory, project).resolve(work_area)
+    resolved = workareas.WorkAreaStore(directory, project).read(work_area)
     if not resolved.ok:
         raise ProjectResolutionError(
             resolved.reason,
@@ -8408,6 +8422,13 @@ def _resolve_project_binding(binding, workspace, config_override):
             "init never fabricates the executed repo"
             % (work_area, primary["path"]),
         )
+    for root in additional:
+        if not os.path.isdir(root["path"]):
+            raise ProjectResolutionError(
+                MISSING_ADDITIONAL_ROOT,
+                "work area %r's additional root %r is not an existing "
+                "directory" % (work_area, root["path"]),
+            )
 
     config = load_config(None)
     if defaults is not None:

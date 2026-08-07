@@ -235,7 +235,7 @@ PRIMARY_NOT_REPO_ROOT = "primary_not_repo_root"
 # A work area whose milestone driver is alive is never handed to a
 # git-sync agent: the driver owns that worktree.
 WORK_AREA_BUSY = "work_area_busy"
-MISSING_ADDITIONAL_ROOT = "missing_additional_root"
+MISSING_ADDITIONAL_ROOT = driver.MISSING_ADDITIONAL_ROOT
 FORBIDDEN = "forbidden"
 
 # Slice 2's reason -> HTTP class for the CRUD/read routes: validation
@@ -1683,17 +1683,111 @@ def _refuse_registered_state_path(home, state_path):
         raise ApiError(409, message)
 
 
+def _report_lost_observation(slug, area, missing, cause):
+    """A launch's root observation could not be stored. The launch is not
+    affected — the filesystem decided it — but the record now describes an
+    earlier launch, so say so where the operator can find it."""
+    print(
+        "[work-area] %s/%s: could not record %s (%s)"
+        % (
+            slug,
+            area,
+            "ready" if missing is None else "%s (%s)" % (
+                workareas.STATUS_UNAVAILABLE, missing
+            ),
+            cause,
+        ),
+        file=sys.stderr,
+    )
+
+
+def _verify_and_record_roots(home, slug, area, primary, additional):
+    """The executor-reconcile role: verify the STORED descriptor's roots
+    against the real filesystem — never roots taken from the request — and
+    RECORD what was found.
+
+    Root existence is the only requirement every launch shares, so it is
+    the only thing the stored status describes: `ready` when the
+    descriptor's roots are all here, `unavailable` when one is not. The
+    status is the OUTCOME of this verification and is never read back as a
+    permission — a launch is stopped by the refusal raised here, at the
+    moment of use, with the cause the operator can act on, not by a flag
+    some earlier launch left behind. Requirements belonging to one kind of
+    launch are verified by that launch and do not reach this record.
+
+    The verification decides; the record only remembers. Recording is
+    attempted first, so a launch that proceeds leaves the record agreeing
+    with what this host saw — but a record that cannot be written (a
+    descriptor repointed underneath, a store that refuses the write) never
+    converts a passing verification into a refusal, and never displaces
+    the cause of a failing one. Provenance that fails is lost provenance,
+    not a veto: the whole point of this reform is that a launch stands or
+    falls on the filesystem, not on a stored record.
+
+    Contained is not silent, though — the same rule the projection pump
+    follows. A dropped note means the panel's status chip is describing
+    some earlier launch, so the failure is reported rather than
+    swallowed: the operator is never left with a stale record and no
+    trace of why."""
+    missing = None
+    if not os.path.isdir(primary["path"]):
+        missing = driver.MISSING_PRIMARY_PATH
+    else:
+        for root in additional:
+            if not os.path.isdir(root["path"]):
+                missing = MISSING_ADDITIONAL_ROOT
+                break
+    try:
+        store = _work_area_store(home, slug)
+        executor = _executor_id(home)
+        recorded = (
+            store.confirm(area, primary, additional, executor)
+            if missing is None
+            else store.mark_unavailable(area, primary, additional, executor)
+        )
+        if not recorded.ok:
+            _report_lost_observation(slug, area, missing, recorded.reason)
+    except (RuntimeError, OSError) as exc:
+        _report_lost_observation(slug, area, missing, exc)
+    if missing is not None:
+        raise ApiError(400, missing)
+
+
+def _record_launch_roots(home, slug, area):
+    """Run the root verification for a launch that addresses a work area
+    by name only (it has no resolved descriptor of its own yet).
+
+    A read that does not yield a live record records nothing and refuses
+    nothing: the caller's own sealed seam re-reads it a moment later and
+    owns that refusal vocabulary. This function exists for the half the
+    sealed seam cannot do — writing down what this host found. A project
+    whose store file is gone is left alone entirely: writing would
+    silently fabricate an empty store for a project that has one, which
+    the read routes exist to prevent."""
+    if slug is None or not os.path.isfile(_store_file(home, slug)):
+        return
+    try:
+        record = _work_area_store(home, slug).read(area)
+    except (RuntimeError, OSError):
+        return
+    if not record.ok:
+        return
+    _verify_and_record_roots(
+        home, slug, area, record.value["primary"], record.value["additional"]
+    )
+
+
 def _create_bound_run(home, payload, workspace):
     """POST /api/runs {project, work_area}: launch against a declared
     project instead of a bare path. Observable order: (1) addressing —
-    declared project, live stored record; (2) validation of the STORED
-    descriptor's roots against the real filesystem (the
-    executor-reconcile role — never roots taken from the request);
-    (3) the sealed pending->ready confirm; (4) Slice 5's project-bound
-    init. Refusal tokens ride verbatim; every refusal creates no state
-    file, no registry entry, and no projection entry (a refusal after
-    step 3 may truthfully leave the work area ready — readiness
-    describes the descriptor, not this launch).
+    declared project, live stored record of ANY status (readiness is
+    verified here, never consulted); (2) root verification, recorded
+    through the sealed transition (`_verify_and_record_roots`); (3) the
+    milestone's own git-repository-root requirement; (4) Slice 5's
+    project-bound init. Refusal tokens ride verbatim; every refusal
+    creates no state file, no registry entry, and no projection entry (a
+    refusal at step 3 truthfully leaves the work area ready — readiness
+    describes the descriptor's roots, not this launch's requirements).
 
     Returns (primary_path, state_path, goal_doc)."""
     try:
@@ -1734,33 +1828,23 @@ def _create_bound_run(home, payload, workspace):
     if project.get("defaults"):
         driver.merge_config(binding_defaults, project["defaults"])
 
-    # Validation is the reconcile's real-filesystem half, under the
+    # Verification is the reconcile's real-filesystem half, under the
     # launch's effective config (the same order init will apply). A
-    # failure refuses 400 with a machine-readable reason, leaves the
-    # record's status UNCHANGED, and creates nothing.
+    # failure refuses 400 with a machine-readable reason and creates
+    # nothing.
     effective = driver.load_config(None)
     driver.merge_config(effective, binding_defaults)
     if user_cfg:
         driver.merge_config(effective, user_cfg)
-    if not os.path.isdir(primary["path"]):
-        raise ApiError(400, driver.MISSING_PRIMARY_PATH)
+    _verify_and_record_roots(home, slug, area, primary, additional)
+    # A milestone's OWN requirement, verified by the milestone: the gate
+    # ledger must land in a repo the operator created on purpose (the same
+    # predicate as the project-less gate below). It is deliberately not
+    # part of readiness — a caller with no ledger to write has no business
+    # inheriting it — so it refuses with its own cause and leaves the
+    # status just recorded untouched.
     if gitops.enabled(effective) and not gitops.is_repo_root(primary["path"]):
-        # Same predicate as the project-less gate below: the gate ledger
-        # must land in a repo the operator created on purpose.
         raise ApiError(400, PRIMARY_NOT_REPO_ROOT)
-    for root in additional:
-        if not os.path.isdir(root["path"]):
-            raise ApiError(400, MISSING_ADDITIONAL_ROOT)
-
-    # Reconcile -> ready through the sealed transition: the first confirm
-    # takes pending v1 to ready v2 (the agent_99-pinned bump); re-confirms
-    # with the service's stable identity are version-silent.
-    try:
-        confirmed = store.confirm(area, primary, additional, _executor_id(home))
-    except (RuntimeError, OSError) as exc:
-        _raise_store_error(exc)
-    if not confirmed.ok:
-        raise _work_area_error(confirmed.reason)
 
     resolved_workspace = primary["path"] if workspace is None else workspace
     # The legacy-root state-path guard applies ONLY to a flat/legacy
@@ -3009,14 +3093,16 @@ def work_area_roots(home, who, slug, area):
     """Every root a caller may browse inside one work area.
 
     Authorization is the ordinary project gate, decided BEFORE the work
-    area store is opened. The area must resolve (READY) through the same
-    sealed seam launches use, so a picker can never reach into an area the
-    product itself would refuse to bind.
+    area store is opened. The area must read as a live record through the
+    same sealed seam launches use, so a picker can never reach into an
+    area the product itself would refuse to bind — and, like a launch, it
+    judges the roots by looking at them (the filter below) rather than by
+    trusting a status some earlier launch recorded.
     """
     require_project_access(home, who, slug)
     try:
         store = workareas.WorkAreaStore(registry.projects_base(home), slug)
-        resolved = store.resolve(area or "")
+        resolved = store.read(area or "")
     except (RuntimeError, OSError) as exc:
         _raise_store_error(exc)
     if not resolved.ok:
@@ -3137,11 +3223,14 @@ def sync_project_git(home, slug, body):
         raise ApiError(400, workareas.INVALID_NAME)
     try:
         store = workareas.WorkAreaStore(registry.projects_base(home), slug)
-        resolved = store.resolve(area)
+        resolved = store.read(area)
     except (RuntimeError, OSError) as exc:
         _raise_store_error(exc)
     if not resolved.ok:
         raise _work_area_error(resolved.reason)
+    # This caller verifies its own requirements below — the primary is
+    # here, and it is a repository root — instead of consulting a recorded
+    # status for them.
     workspace = resolved.value["primary"]["path"]
     if not os.path.isdir(workspace):
         raise ApiError(400, driver.MISSING_PRIMARY_PATH)
@@ -3529,6 +3618,15 @@ def make_handler(home):
                             (body.get("request") or {}).get("workspace_path")
                         ):
                             raise ApiError(409, WORK_AREA_BUSY)
+                        # A discussion verifies the same roots a milestone
+                        # does — and records the same finding. What it does
+                        # NOT verify is the milestone's git repository
+                        # root: brainstorming writes no gate ledger, so a
+                        # work area is usable here the moment its roots
+                        # exist, whether or not a milestone has ever run.
+                        _record_launch_roots(
+                            home, checked["project"], checked["work_area"]
+                        )
                         session = brainstorming_lifecycle.create_session(
                             home,
                             body,

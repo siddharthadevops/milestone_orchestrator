@@ -334,33 +334,44 @@ class TestReadOnlyResolution(RunInitTestCase):
 
 
 # ---------------------------------------------------------------------------
-# AC5: ready is required (pending/unavailable refuse; confirm unblocks)
+# AC5: readiness is VERIFIED here, never consulted. The stored status
+# records what some launcher once found; what decides a launch is whether
+# the descriptor's roots are on this filesystem right now, and a missing
+# one refuses with its own cause instead of a generic not-ready.
 
 
-class TestReadyGate(RunInitTestCase):
-    def test_pending_refuses_then_confirm_makes_same_binding_succeed(self):
+class TestRootsAreVerifiedNotConsulted(RunInitTestCase):
+    def test_pending_record_resolves(self):
+        # Declared and never confirmed: no launch has run here yet, which
+        # says nothing about whether the roots exist. They do.
         self.seed(confirm=False)  # declared -> pending
-        before = self.kv_bytes()
-        self.assert_refused(workareas.NOT_READY)
-        self.assertEqual(self.kv_bytes(), before)
-        self.assertEqual(os.listdir(self.repo), [])  # workspace untouched
-
-        # Slice 2's confirm plays the launcher-validation reconcile role.
-        confirmed = self.store().confirm(
-            self.WORK_AREA, self.primary, self.additional, self.EXECUTOR
-        )
-        self.assertTrue(confirmed.ok, confirmed.reason)
         path = drv.init_run(GOAL, project=self.binding())
         self.assertTrue(os.path.exists(path))
 
-    def test_unavailable_refuses(self):
+    def test_unavailable_record_resolves_once_the_roots_are_back(self):
+        # A stale absence verdict does not outrank the filesystem.
         store = self.seed()
         key = kvstore.raw_work_area_key(self.WORK_AREA)
         raw = dict(store.client.get(key))
         raw[A("status")] = "unavailable"
         raw[A("version")] = raw[A("version")] + 1
         store.client.put(key, raw)
-        self.assert_refused(workareas.NOT_READY)
+        path = drv.init_run(GOAL, project=self.binding())
+        self.assertTrue(os.path.exists(path))
+
+    def test_resolution_records_nothing(self):
+        # Verification here is read-only: recording what was found is the
+        # service launcher's half, not the init seam's.
+        self.seed(confirm=False)
+        before = self.kv_bytes()
+        drv.init_run(GOAL, project=self.binding())
+        self.assertEqual(self.kv_bytes(), before)
+
+    def test_missing_additional_root_refuses_with_its_own_cause(self):
+        ghost = os.path.join(self._tmp.name, "ghost-lib")
+        self.seed(additional=[{"path": ghost, "device": "dev-lib"}])
+        self.assert_refused(drv.MISSING_ADDITIONAL_ROOT)
+        self.assertFalse(os.path.exists(ghost))
 
 
 # ---------------------------------------------------------------------------
