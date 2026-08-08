@@ -1,0 +1,223 @@
+# Goal: Model Profiles and the Strategy Configurator
+
+Status: **human-authored, non-canonical implementation input**. This document
+states the desired product outcome and its boundaries. It does not allocate
+phases, slices, participants, or workflow stages, and it does not authorize
+implementation by itself. The reviewed milestone skeleton is the implementation
+authority and may refine or reorganize this proposal.
+
+## Outcome
+
+Give the operator or calling product two reusable, named choices when ordering
+work:
+
+1. A **model profile** says what kind of work this is and how much model effort
+   it warrants. It resolves the agent, model, and effort fields that each
+   existing act already permits the operator to configure.
+2. A **strategy configuration** says how the run reviews and challenges its
+   work. A configurator exposes known decisions with their runtime-support
+   status and produces the complete strategy document.
+
+Both choices are available through the panel and the HTTP API. They replace
+repetitive seat-by-seat setup and hand-written strategy documents without
+coupling the two concerns. Explicit per-act operator overrides remain
+available.
+
+A milestone may need different model choices for work with materially different
+demands. This goal deliberately does not decide how that work is decomposed,
+where those choices are attached, or who proposes them. Those are skeleton
+decisions.
+
+## Two independent axes
+
+Review strategy describes the cost of being wrong and the review machinery
+appropriate to it: debt deferral, document register, discard evidence, open
+passes, and stage composition.
+
+Model staffing describes who performs the existing acts and at what effort.
+Work that shares one review strategy may still need different staffing, and
+work that shares staffing may need a different review strategy. Neither choice
+derives, caps, or silently changes the other.
+
+## Model profiles
+
+A model-profile selection consists of a **name** and a **rigor**:
+
+- **name** identifies the kind of work, such as `documentation`, `web-ui`,
+  `data-access`, or `core`;
+- **rigor** is `low`, `medium`, or `high` and chooses one of that profile's
+  staffing configurations;
+- **examples** are short matching clues for operators and models. Each example
+  is at most five words, such as “internal note”, “public API contract”, or
+  “storage migration”;
+- **configuration** assigns the permitted agent, model, and effort fields to
+  existing acts. A profile or override has no more authority than that act's
+  existing direct configuration: it cannot move a structurally fixed family
+  or replace a structurally derived family policy with a literal family. Where
+  existing controls do permit replacing a relative policy, that remains
+  permitted. A disallowed field is an input error. An act not overridden by
+  the profile keeps its existing act-specific assignment or derivation and,
+  where neither exists, its existing family default. Relative policies such as
+  `self` and `opposite` that remain in force resolve normally from the effective
+  originating act.
+
+The operator-facing catalogue presents one entry per kind of work, with its
+three rigor choices, rather than three unrelated names. The examples are
+matching evidence, not explanatory prose, so the same compact representation
+can travel in a calling product's capability contract.
+
+Every valid model profile contains configurations for all three rigors. An
+incomplete profile is rejected when created or edited; an explicit but unknown
+name or rigor is rejected when selected. Neither case silently falls back to a
+different profile or rigor.
+
+There is one explicit default model profile for new work where no choice was
+supplied. Its initial behavior is identical to today's effective act
+resolution, including existing pins and derived policies. When work reaches
+the point at which its profile is bound, absence of an explicit choice resolves
+the current default once and retains it exactly like an explicit selection;
+later default edits affect only work not yet bound. This goal does not decide
+which persisted work unit owns that binding point. Runs created before this
+feature keep their existing staffing and do not begin consulting the new,
+editable default.
+
+## Resolution, prospective change, and attribution
+
+A selected model profile supplies the base act configuration. An explicit
+operator per-act override has final precedence within that act's permitted
+fields, remains in force across profile changes, and stops overriding only when
+the operator clears it. Changing a profile therefore affects only acts not
+currently overridden.
+
+An override exists only for an act the operator explicitly changed. Showing,
+submitting, or saving an effective value inherited from the profile does not
+turn it into an override. For every act, the operator can distinguish an
+inherited value from an explicit override, see the effective choice before the
+next call, and clear the override so the current profile governs again.
+
+The operator remains free to change the model-profile choice for work that has
+not yet run. A change applies prospectively at the next act resolution; it
+never rewrites completed work or changes an active call.
+
+The run records the resolved agent, model, and effort used for every call, the
+model-profile selection in force, and any operator override that contributed
+to the result. History therefore remains truthful even when later work uses a
+different choice.
+
+This is a behavioral requirement, not a prescribed file layout. The skeleton
+decides whether existing runtime overlays are sufficient or a new persisted
+representation is justified.
+
+## Editable reusable configurations
+
+Model profiles and strategy configurations are ordinary operator-owned,
+editable definitions. Strategy profiles no longer seal on first use.
+
+Mutability must not make active or completed work depend on whatever a reusable
+definition happens to contain later. At every binding — whether an explicit
+selection or the implicit default — and at every explicit change of active
+work, the run retains the configuration resolved at that moment and its
+identity. A reference to the mutable source alone is not that record. Editing
+the reusable source affects future bindings; changing active work is a
+separate, explicit, prospective action that records the transition.
+
+Editing a valid reusable configuration after its first use must no longer be
+refused merely because it has been used. A run is not revalidated against the
+later contents of that reusable source, so a legal edit cannot become an
+identity-divergence failure for earlier work. The identity retained by the run
+describes the resolved content it actually used.
+
+Existing first-use seals cease to block edits. This does not remove or weaken
+artifact seals: those protect reviewed work, not reusable operator settings.
+No surface labels an editable reusable definition as `sealed`. A surface may
+show truthful historical use or a retained run identity under different
+language, but it must not imply that the current definition is immutable. This
+goal does not prescribe whether edits reuse a stored name, advance a version,
+or retain older source documents; the skeleton may choose any representation
+that preserves the behavior above.
+
+## Strategy configurator
+
+The configurator presents known strategy decisions and their legal values
+rather than requiring the operator to author free-form JSON. Every decision is
+classified truthfully:
+
+- an **active** decision has a runtime consumer and is available as an
+  operative control;
+- a **reserved** decision is recognized content for future machinery. It may be
+  retained losslessly in a strategy document, but it is visibly non-operative
+  and is not presented as governing the current run; and
+- an unknown or invalid decision is rejected rather than accepted as a silent
+  no-op.
+
+The support status is the same anywhere strategy content is shown or edited,
+including existing selectors and active-run changes. This milestone corrects
+an existing presentation that describes a reserved decision as operative; it
+does not implement the dormant machinery merely to make the label true.
+
+The existing `strict` and `light` seeds remain reproducible in their complete
+canonical semantic content, including reserved fields, rather than only in
+their current runtime effect. `legacy` remains a fenced compatibility choice
+and cannot be used as a component of a new configuration.
+
+The panel and API use the same names, values, validation, support status, and
+resulting semantics. The configurator does not create new review machinery;
+it configures active machinery and preserves reserved content without claiming
+that it runs.
+
+## Boundaries
+
+- **Cost controls are out of scope.** Rigor selects staffing; it is not a
+  budget or price ceiling.
+- No coupling between model profiles and strategy configurations.
+- No change to artifact sealing, family rotation, or the deterministic
+  review-derived seal.
+- No new risk vocabulary. Existing finding risk and model-profile rigor remain
+  different concepts.
+- Model identifiers and effort values remain those supported by the installed
+  executors.
+- No new brainstorming or calibration stage is required by this goal.
+- No expansion of an act's configurable fields or weakening of fixed or
+  derived family rules.
+- No prescribed slice distribution, internal role ownership, or workflow
+  choreography. The skeleton decides the implementation.
+- Calling-product implementation is out of scope. This milestone supplies the
+  shared API vocabulary and behavior only.
+
+## Completion
+
+The milestone is complete when:
+
+- model profiles and strategy configurations can be created, inspected,
+  edited after use, and selected through both the panel and API;
+- every valid model profile contains `low`, `medium`, and `high`; invalid or
+  unknown selections fail instead of falling back;
+- the initial default reproduces current staffing, while pre-feature runs keep
+  their existing resolution unchanged; an omitted choice binds and retains the
+  default once rather than following later edits;
+- profiles and overrides respect every act's existing configurable fields and
+  reject attempts to bypass fixed or derived family rules;
+- only acts explicitly changed by the operator become overrides; their origin
+  is visible, inherited values are not promoted by opening or saving the
+  editor, and clearing an override restores profile control;
+- a profile change binds only future act resolutions not overridden by the
+  operator;
+- two persisted work units inside one run can carry different model-profile
+  selections without this goal prescribing the run's decomposition;
+- every call remains attributable to its actual model-profile selection,
+  overrides, agent, model, and effort;
+- the strategy configurator reproduces the complete canonical semantic content
+  of the `strict` and `light` seeds while keeping `legacy` fenced;
+- every operative strategy control has a runtime consumer; reserved decisions
+  round-trip without loss and are marked non-operative everywhere they appear,
+  including existing strategy surfaces, while unknown or invalid decisions
+  fail loudly;
+- reusable definitions remain editable without divergence failures, rewriting
+  run history, or weakening artifact seals, including after an active-run
+  strategy change whose resolved content remains attached to that run, and no
+  editable definition is presented as `sealed`; and
+- focused tests prove panel/API agreement, profile completeness, precedence,
+  per-act authority, override provenance, default binding and pre-feature
+  compatibility, prospective changes, active-work snapshots, editable-source
+  independence, within-run selection, historical attribution, seed-content
+  equivalence, and truthful active/reserved/seal-status presentation.
