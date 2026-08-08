@@ -43,6 +43,12 @@ GOAL = "Build a small CLI calculator (add/sub/mul/div) with unit tests"
 NONDET_FIELDS = frozenset({
     "at",             # ISO timestamps on every event / round / seal
     "duration_s",     # wall-clock worker durations
+    # The same wall-clock measurement summed over one LOGICAL call (a
+    # contract repair is a second physical call counted into it). It
+    # arrived after this list was written and inherited none of its
+    # exclusions, so the gate compared two stopwatches and failed on
+    # milliseconds.
+    "logical_duration_s",
     "raw_path",       # per-workspace path to the raw worker output
     "workspace",      # the two runs live in different absolute dirs
     "created_at",     # state creation timestamp
@@ -241,10 +247,10 @@ class EquivalenceMachineryTest(unittest.TestCase):
         self.assertTrue(_diffs(_strip(a), _strip(b)))
 
     def test_excluded_fields_are_ignored(self):
-        a = {"type": "x", "at": "t1", "duration_s": 3, "sha": "aaa",
-             "findings": 0}
-        b = {"type": "x", "at": "t2", "duration_s": 9, "sha": "bbb",
-             "findings": 0}
+        a = {"type": "x", "at": "t1", "duration_s": 3,
+             "logical_duration_s": 3.1, "sha": "aaa", "findings": 0}
+        b = {"type": "x", "at": "t2", "duration_s": 9,
+             "logical_duration_s": 9.4, "sha": "bbb", "findings": 0}
         self.assertEqual(_diffs(_strip(a), _strip(b)), [])
 
     def test_non_excluded_field_still_compared(self):
