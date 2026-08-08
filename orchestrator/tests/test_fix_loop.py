@@ -822,11 +822,12 @@ class TestRejectionRegistry(DriverTestCase):
 
 
 class TestActsResolution(DriverTestCase):
-    def _run_skeleton(self, ws, acts, script_tail, draft_family="codex"):
+    def _run_skeleton(self, ws, acts, script_tail, draft_family="codex",
+                      config=None):
         # The skeleton draft runs the `skeletoner` act; callers whose
         # skeletoner resolves to a non-codex family override draft_family so
         # the scripted draft expects the right worker.
-        path = init_state(ws, make_config(acts=acts))
+        path = init_state(ws, config or make_config(acts=acts))
         draft = dict(draft_step())
         draft["expect_family"] = draft_family
         mock = runners.MockRunner([draft] + script_tail)
@@ -927,6 +928,49 @@ class TestActsResolution(DriverTestCase):
             fix_prompt = [c[2] for c in mock.calls
                           if c[1] == "fix_findings"][0]
             self.assertIn("consult the codex family", fix_prompt)
+
+    def test_consultation_command_carries_the_callers_effort(self):
+        # The fixer runs the consultation line VERBATIM, so it must reach
+        # the prompt resolved: the consulted family's default model at the
+        # CALLER'S effort — a rejection argued by a lighter opponent than
+        # the one rejecting is not a second opinion, and a literal
+        # {model}/{effort} would reach the CLI as a brace-string.
+        acts = {"fixer": "claude", "skeletoner": "claude",
+                "delta_review": "self", "consultation": "opposite"}
+        config = make_config(
+            acts=acts,
+            commands=drv.DEFAULT_CONFIG["commands"],
+            model_defaults=drv.DEFAULT_CONFIG["model_defaults"],
+        )
+        with tempfile.TemporaryDirectory(prefix="orch-mock-") as ws:
+            mock = self._run_skeleton(
+                ws, acts, draft_family="claude", config=config,
+                script_tail=[
+                    step("review_round",
+                         report("review_round", [finding("F1", "found")]),
+                         family="codex"),
+                    step("fix_findings",
+                         fix_ok([triaged("F1", "fixed", "found")],
+                                files_changed=["docs/skeleton.md"]),
+                         family="claude",
+                         side_effect=append_file(
+                             "docs/skeleton.md", "\nfix\n")),
+                    step("delta_review", report("delta_review"),
+                         family="claude"),
+                    step("review_round", report("review_round"),
+                         family="codex"),
+                    step("review_round", report("review_round"),
+                         family="claude"),
+                ])
+            fix_prompt = [c[2] for c in mock.calls
+                          if c[1] == "fix_findings"][0]
+            # A skeleton fix runs the `skeletoner`, which re-asserts max —
+            # so the consultation runs at max too, not at the consulted
+            # family's own default effort.
+            self.assertIn("model_reasoning_effort=max", fix_prompt)
+            self.assertIn("gpt-5.6-sol", fix_prompt)
+            self.assertNotIn("{model}", fix_prompt)
+            self.assertNotIn("{effort}", fix_prompt)
 
     def test_skeleton_fix_routes_through_skeletoner_not_fixer(self):
         # Routing check with the two acts set to DIFFERENT families: the

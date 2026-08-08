@@ -624,7 +624,7 @@ class StandaloneBrainstormingApiTest(unittest.TestCase):
             )
             critic1 = executors[by_id["critic-1"]["executor_ref"]]
             self.assertEqual(critic1["model"], "claude-opus-5")
-            self.assertEqual(critic1["effort"], "max")
+            self.assertEqual(critic1["effort"], "xhigh")
 
             # Every seat pinned to ONE family while another is available
             # is a deliberate roster, not an invalid fallback.

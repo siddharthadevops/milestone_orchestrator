@@ -175,7 +175,7 @@ class GuaranteeCalibrationDriverTest(unittest.TestCase):
             {
                 "family": "claude",
                 "kind": contracts.KIND_DRAFT_SKELETON,
-                "model": "claude-opus-5",
+                "model": "claude-fable-5",
                 "effort": "max",
             },
         )
@@ -184,20 +184,42 @@ class GuaranteeCalibrationDriverTest(unittest.TestCase):
         self.assertEqual(
             captured["lead"],
             {
+                "agent": "claude",
+                "model": "claude-fable-5",
+                "effort": "max",
+            },
+        )
+        # The counterpart is the lead's opposite family, at the LEAD'S
+        # effort (max here) rather than codex's family default.
+        self.assertEqual(
+            captured["counterpart"],
+            {
                 "agent": "codex",
                 "model": "gpt-5.6-sol",
                 "effort": "max",
             },
         )
+        self.assertEqual(captured["kwargs"]["max_rounds"], 10)
+
+    def test_counterpart_never_lands_on_the_leads_family(self):
+        # A milestone discussion is two families arguing. A counterpart
+        # pinned onto the lead's own family would stage an opposition
+        # between two seats of the same house, so the seat moves back to
+        # the opposite family (the pinned model goes with it); an effort
+        # the operator chose survives.
+        config = self._config()
+        config["acts"] = dict(config["acts"])
+        config["acts"]["brainstorming_counterpart"] = {
+            "agent": "claude", "model": "claude-opus-5", "effort": "high",
+        }
+
+        *_prefix, captured, _action, _note = self._start(config=config)
+
+        self.assertEqual(captured["lead"]["agent"], "claude")
         self.assertEqual(
             captured["counterpart"],
-            {
-                "agent": "claude",
-                "model": "claude-opus-5",
-                "effort": "max",
-            },
+            {"agent": "codex", "model": "gpt-5.6-sol", "effort": "high"},
         )
-        self.assertEqual(captured["kwargs"]["max_rounds"], 10)
 
     def test_explicit_round_override_is_preserved(self):
         config = self._config()

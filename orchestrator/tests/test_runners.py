@@ -2471,10 +2471,10 @@ class TestApplyModelEffort(unittest.TestCase):
         self.assertIn("model_reasoning_effort=high", out)
         d = DEFAULT_CONFIG["model_defaults"]
         self.assertEqual(
-            d["codex"], {"model": "gpt-5.6-sol", "effort": "max"}
+            d["codex"], {"model": "gpt-5.6-sol", "effort": "xhigh"}
         )
         self.assertEqual(d["claude"],
-                         {"model": "claude-opus-5", "effort": "max"})
+                         {"model": "claude-opus-5", "effort": "xhigh"})
 
     def test_no_placeholder_no_flag_ignores_overrides(self):
         from orchestrator.runners import apply_model_effort

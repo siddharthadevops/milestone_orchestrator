@@ -86,8 +86,8 @@ DEFAULT_CONFIG = {
     # (runners.WORKFLOW_DISABLED_ENV): the async workflow model is
     # incompatible with the one-shot call contract.
     "model_defaults": {
-        "claude": {"model": "claude-opus-5", "effort": "max"},
-        "codex": {"model": "gpt-5.6-sol", "effort": "max"},
+        "claude": {"model": "claude-opus-5", "effort": "xhigh"},
+        "codex": {"model": "gpt-5.6-sol", "effort": "xhigh"},
     },
     # How each family is PAID FOR, which is what separates the two costs the
     # panel shows. "subscription": the call spends a seat, so its real cost is
@@ -159,34 +159,37 @@ DEFAULT_CONFIG = {
         # milestone-owned Brainstorming session.  Pinning the profile here
         # avoids silently dropping from max effort to the family default.
         "implementer": {
-            "agent": "codex",
-            "model": "gpt-5.6-sol",
-            "effort": "max",
-        },
-        # The second voice is independent configuration, not inferred from
-        # family rotation. Same-family fallbacks remain valid when that is all
-        # the runtime can provide.
-        "brainstorming_counterpart": {
             "agent": "claude",
-            "model": "claude-opus-5",
+            "model": "claude-fable-5",
             "effort": "max",
         },
+        # The second voice answers the Initial Position, so it is ALWAYS
+        # the opposite family of whoever leads the session, at the LEAD'S
+        # effort: a counterpart from the same family, or arguing below the
+        # proposer's weight, is not a second opinion. The model comes from
+        # the resolved family; an override may tune model/effort, but not
+        # move the seat back onto the lead's family
+        # (see _brainstorming_profiles).
+        "brainstorming_counterpart": "opposite",
         # The skeleton is drafted, re-drafted, and fixed by one chosen
         # model — skeleton work is high-leverage planning, so it defaults
-        # to claude-opus-5 at max effort. Reviews of the skeleton are
+        # to claude-fable-5 at max effort. Reviews of the skeleton are
         # unaffected (they use review_codex/review_claude).
         "skeletoner": {
             "agent": "claude",
-            "model": "claude-opus-5",
+            "model": "claude-fable-5",
             "effort": "max",
         },
+        # The consulted family is the opposite of the fixer's; it runs at
+        # the CALLER'S effort (see _consultation_command) so a rejection
+        # is never argued by a lighter opponent than the one rejecting.
         "consultation": "opposite",
-        # Who RATES findings for debt deferral: "opposite" (the
-        # pre-reform doctrine) or a fixed family (operator
+        # Who RATES findings for debt deferral: a fixed family (operator
         # 2026-07-09: an 8-minute opposite-family rating of a
         # 4-minute review's findings is upside down; a fixed fast
-        # rater is still a fresh stateless look).
-        "reclassifier": "opposite",
+        # rater is still a fresh stateless look). "opposite" remains a
+        # valid policy for operators who want the pre-reform doctrine.
+        "reclassifier": {"agent": "codex", "effort": "xhigh"},
     },
     # New runs calibrate the skeleton's declared guarantees once, before its
     # ordinary review cycle. Persisted runs created before this key existed
@@ -829,6 +832,23 @@ class Driver(object):
 
     def _opposite_cmd(self, family):
         return self.config["commands"].get(self._opposite(family), [])
+
+    def _consultation_command(self, family, caller_effort):
+        """The consulted family's command line, ready to run.
+
+        The fixer runs this line VERBATIM, so the template must arrive
+        resolved: an unsubstituted {model}/{effort} would reach the CLI
+        as a literal brace-string. Model comes from the consulted
+        family's defaults; effort is the CALLER'S, so a rejection is
+        never argued by a lighter opponent than the one rejecting.
+        """
+        template = self.config["commands"].get(family) or []
+        if not template:
+            return []
+        model, family_effort = self._family_defaults(family)
+        return runners.apply_model_effort(
+            template, model, caller_effort or family_effort
+        )
 
     def _runtime_dir(self):
         # All runtime bookkeeping lives beside the state file: for a
@@ -4679,7 +4699,7 @@ class Driver(object):
             return "recorded draft recovered; review cycle opened"
         # Skeleton drafts (and re-drafts on remodel) run the `skeletoner`
         # act — one operator-chosen model for all skeleton content work,
-        # default claude-opus-5/max; slice docs keep `drafter`, impl keeps
+        # default claude-fable-5/max; slice docs keep `drafter`, impl keeps
         # `implementer`. Only skeleton REVIEWS stay on the review families.
         if unit["kind"] == st.UNIT_SKELETON:
             act = "skeletoner"
@@ -5972,7 +5992,7 @@ class Driver(object):
         skeleton's OWN defaults re-asserted.
 
         The skeleton's declared defaults live in
-        DEFAULT_CONFIG["acts"]["skeletoner"] (claude / claude-opus-5 / max),
+        DEFAULT_CONFIG["acts"]["skeletoner"] (claude / claude-fable-5 / max),
         but merge_config replaces a whole act entry on a partial override —
         so a panel that customizes only the model drops the agent and
         effort. Left to the generic fallback, a model-only override would
@@ -6027,25 +6047,26 @@ class Driver(object):
             "effort": effort or default_effort,
         }
 
-        defaults = DEFAULT_CONFIG["acts"]["brainstorming_counterpart"]
-        family, model, effort = self._act_profile(
+        # In a milestone the counterpart ALWAYS argues from the other
+        # family — an opponent drawn from the lead's own family is not an
+        # opposition — and it inherits the lead's effort, because a second
+        # voice argued at lower weight than the proposal is not a second
+        # opinion either. A same-family pin is therefore not honored here
+        # (only a single-family configuration can still fall back), and a
+        # model pinned for that other family goes with it; effort survives.
+        opposite = self._opposite(lead["agent"])
+        pinned_family, model, effort = self._act_profile(
             "brainstorming_counterpart",
             origin_family=lead["agent"],
-            default_family=defaults["agent"],
+            default_family=opposite,
         )
-        default_model, default_effort = self._family_defaults(family)
+        if pinned_family != opposite:
+            model = None
+        default_model, _default_effort = self._family_defaults(opposite)
         counterpart = {
-            "agent": family,
-            "model": (
-                model
-                or (defaults["model"] if family == defaults["agent"] else None)
-                or default_model
-            ),
-            "effort": (
-                effort
-                or (defaults["effort"] if family == defaults["agent"] else None)
-                or default_effort
-            ),
+            "agent": opposite,
+            "model": model or default_model,
+            "effort": effort or lead["effort"],
         }
         return lead, counterpart
 
@@ -6209,7 +6230,7 @@ class Driver(object):
         if unit["kind"] == st.UNIT_SKELETON:
             # The skeleton is drafted, fixed, and re-drafted by ONE
             # operator-chosen model (the `skeletoner` act, default
-            # claude-opus-5/max); only its reviews stay on the review
+            # claude-fable-5/max); only its reviews stay on the review
             # families. So a skeleton fix runs `skeletoner`, not `fixer`.
             family, fix_model, fix_effort = self._skeletoner_profile(
                 source.get("family")
@@ -6219,6 +6240,12 @@ class Driver(object):
                 "fixer", source.get("family"), default_family="codex"
             )
         consultation_family = self._resolve_act("consultation", family)
+        # The consultation runs at the fixer's own effort — its family
+        # default when the act pins none.
+        _fixer_model, fixer_family_effort = self._family_defaults(family)
+        consultation_cmd = self._consultation_command(
+            consultation_family, fix_effort or fixer_family_effort
+        )
         project_context, extensions, roots = self._project_prompt_inputs(
             unit, contracts.KIND_FIX_FINDINGS
         )
@@ -6267,7 +6294,7 @@ class Driver(object):
             unit.get("fix_queue") or [],
             self._registry(),
             consultation_family,
-            self.config["commands"].get(consultation_family, []),
+            consultation_cmd,
             unit_kind=unit["kind"],
             amendments=self._amendments(),
             phantom_retry=bool(unit.get("phantom_retried")),

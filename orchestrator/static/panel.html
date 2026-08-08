@@ -228,13 +228,19 @@
   .closing-label { width: 64px; flex: none; color: #a1a1aa;
     font-size: 10px; text-transform: uppercase; letter-spacing: .04em; }
   .final-agreement { border-color: #bbe7c9; background: #fbfefc; }
-  .actgrid { display: grid; grid-template-columns: 90px 1fr 1fr 1fr;
+  /* The model column carries the widest text in the grid — its
+     "default (gpt-5.6-sol)" hint names the real value, and a clipped
+     default is the same guesswork as no default at all. */
+  .actgrid { display: grid; grid-template-columns: 90px 1fr 1.45fr .95fr;
     gap: 6px; align-items: center; }
   .actgrid label { font-size: 12px; color: #3f3f46; }
   .acthead { font-size: 10px; text-transform: uppercase; color: #a1a1aa; }
   .actfamily { font-size: 12px; color: #52525b; padding: 4px 6px; }
   .actgrid select, .actgrid input { font: inherit; font-size: 12px;
-    padding: 4px 6px; border: 1px solid var(--line); border-radius: 6px; }
+    padding: 4px 6px; border: 1px solid var(--line); border-radius: 6px;
+    /* without this the controls' intrinsic width beats the fr track
+       sizes and the model column collapses */
+    min-width: 0; }
   .unit-title { color: #71717a; font-size: 11px; margin-left: 6px; }
   /* Brainstorming roster: one row per AI seat, configured like a
      milestone act (agent / model / effort) plus a remove control. */
@@ -517,7 +523,7 @@
     dialog { width: calc(100vw - 20px); max-width: calc(100vw - 20px);
              padding: 14px; }
     .storybody { min-width: 0; max-width: none; }
-    .actgrid { grid-template-columns: 70px 1fr 1fr 1fr; }
+    .actgrid { grid-template-columns: 70px 1fr 1.45fr .95fr; }
     .pathrow { flex-wrap: wrap; }
   }
   .cost-equivalent { opacity: .55; }
@@ -572,11 +578,11 @@
       to open a fix cycle vs record as tracked debt). Every profile uses the
       same deterministic seal. No seed is pre-selected on purpose — the
       choice is explicit.</p>
-    <p><b>Acts</b> — implementation defaults to codex gpt-5.6-sol/max;
-      other empty rows use their family default (claude: opus-5/max, codex:
-      gpt-5.6-sol/max). Model options adapt to the agent; editable mid-run
+    <p><b>Acts</b> — implementation defaults to claude fable-5/max;
+      other empty rows use their family default (claude: opus-5/xhigh, codex:
+      gpt-5.6-sol/xhigh). Model options adapt to the agent; editable mid-run
       from the run view. The Skeleton row drives all skeleton content work —
-      its draft, re-drafts and fixes (default: claude opus-5/max); only
+      its draft, re-drafts and fixes (default: claude fable-5/max); only
       skeleton reviews stay on the review rows. The two review rows tune each
       fixed family for review rounds and delta reviews; family rotation never
       changes. Sealing does not launch a model.</p>
@@ -613,58 +619,58 @@
         <option value="">default (claude)</option>
         <option>codex</option><option>claude</option></select>
       <input id="a_skeletoner_model" list="dl_a_skeletoner"
-        placeholder="default (opus-5)">
+        placeholder="default (fable-5)">
       <select id="a_skeletoner_effort"><option value="">default (max)</option>
         <option>low</option><option>medium</option><option>high</option>
         <option>xhigh</option><option>max</option></select>
       <label>Draft docs</label>
       <select id="a_drafter_agent" onchange="onAgentChange('a_','drafter', true)">
-        <option value="">default</option>
+        <option value="">default (codex)</option>
         <option>codex</option><option>claude</option></select>
-      <input id="a_drafter_model" list="dl_a_drafter" placeholder="default">
-      <select id="a_drafter_effort"><option value="">default</option>
+      <input id="a_drafter_model" list="dl_a_drafter" placeholder="default (gpt-5.6-sol)">
+      <select id="a_drafter_effort"><option value="">default (xhigh)</option>
         <option>low</option><option>medium</option><option>high</option>
         <option>xhigh</option><option>max</option></select>
       <label>Implement</label>
       <select id="a_implementer_agent"
         onchange="onAgentChange('a_','implementer', true)">
-        <option value="">default (codex)</option>
+        <option value="">default (claude)</option>
         <option>codex</option><option>claude</option></select>
       <input id="a_implementer_model" list="dl_a_implementer"
-        placeholder="default (gpt-5.6-sol)">
+        placeholder="default (fable-5)">
       <select id="a_implementer_effort"><option value="">default (max)</option>
         <option>low</option><option>medium</option><option>high</option>
         <option>xhigh</option><option>max</option></select>
       <label>Review · Codex</label>
       <span class="actfamily mono">codex</span>
       <input id="a_review_codex_model" list="dl_a_review_codex"
-        placeholder="default">
-      <select id="a_review_codex_effort"><option value="">default</option>
+        placeholder="default (gpt-5.6-sol)">
+      <select id="a_review_codex_effort"><option value="">default (xhigh)</option>
         <option>low</option><option>medium</option><option>high</option>
         <option>xhigh</option><option>max</option></select>
       <label>Review · Claude</label>
       <span class="actfamily mono">claude</span>
       <input id="a_review_claude_model" list="dl_a_review_claude"
-        placeholder="default">
-      <select id="a_review_claude_effort"><option value="">default</option>
+        placeholder="default (opus-5)">
+      <select id="a_review_claude_effort"><option value="">default (xhigh)</option>
         <option>low</option><option>medium</option><option>high</option>
         <option>xhigh</option><option>max</option></select>
       <label>Fix findings</label>
       <select id="a_fixer_agent" onchange="onAgentChange('a_','fixer', true)">
-        <option value="">default</option>
+        <option value="">default (codex)</option>
         <option>codex</option><option>claude</option></select>
-      <input id="a_fixer_model" list="dl_a_fixer" placeholder="default">
-      <select id="a_fixer_effort"><option value="">default</option>
+      <input id="a_fixer_model" list="dl_a_fixer" placeholder="default (gpt-5.6-sol)">
+      <select id="a_fixer_effort"><option value="">default (xhigh)</option>
         <option>low</option><option>medium</option><option>high</option>
         <option>xhigh</option><option>max</option></select>
       <label>Reclassify</label>
       <select id="a_reclassifier_agent"
         onchange="onAgentChange('a_','reclassifier', true)">
-        <option value="">default (opposite)</option>
+        <option value="">default (codex)</option>
         <option>codex</option><option>claude</option></select>
       <input id="a_reclassifier_model" list="dl_a_reclassifier"
-        placeholder="default">
-      <select id="a_reclassifier_effort"><option value="">default</option>
+        placeholder="default (gpt-5.6-sol)">
+      <select id="a_reclassifier_effort"><option value="">default (xhigh)</option>
         <option>low</option><option>medium</option><option>high</option>
         <option>xhigh</option><option>max</option></select>
     </div>
@@ -909,47 +915,48 @@
       <option value="">default (claude)</option>
       <option>codex</option><option>claude</option></select>
     <input id="ra_skeletoner_model" list="dl_ra_skeletoner"
-      placeholder="default (opus-5)">
+      placeholder="default (fable-5)">
     <select id="ra_skeletoner_effort">
       <option value="">default (max)</option></select>
     <label>Draft docs</label>
     <select id="ra_drafter_agent" onchange="onAgentChange('ra_','drafter', true)">
-      <option value="">default</option>
+      <option value="">default (codex)</option>
       <option>codex</option><option>claude</option></select>
-    <input id="ra_drafter_model" list="dl_ra_drafter" placeholder="default">
-    <select id="ra_drafter_effort"><option value="">default</option></select>
+    <input id="ra_drafter_model" list="dl_ra_drafter" placeholder="default (gpt-5.6-sol)">
+    <select id="ra_drafter_effort"><option value="">default (xhigh)</option></select>
     <label>Implement</label>
     <select id="ra_implementer_agent"
       onchange="onAgentChange('ra_','implementer', true)">
-      <option value="">default (codex)</option>
+      <option value="">default (claude)</option>
       <option>codex</option><option>claude</option></select>
     <input id="ra_implementer_model" list="dl_ra_implementer"
-      placeholder="default (gpt-5.6-sol)">
+      placeholder="default (fable-5)">
     <select id="ra_implementer_effort"><option value="">default (max)</option></select>
     <label>Review · Codex</label>
     <span class="actfamily mono">codex</span>
     <input id="ra_review_codex_model" list="dl_ra_review_codex"
-      placeholder="default">
-    <select id="ra_review_codex_effort"><option value="">default</option></select>
+      placeholder="default (gpt-5.6-sol)">
+    <select id="ra_review_codex_effort"><option value="">default (xhigh)</option></select>
     <label>Review · Claude</label>
     <span class="actfamily mono">claude</span>
     <input id="ra_review_claude_model" list="dl_ra_review_claude"
-      placeholder="default">
-    <select id="ra_review_claude_effort"><option value="">default</option></select>
+      placeholder="default (opus-5)">
+    <select id="ra_review_claude_effort"><option value="">default (xhigh)</option></select>
     <label>Fix findings</label>
     <select id="ra_fixer_agent" onchange="onAgentChange('ra_','fixer', true)">
-      <option value="">default</option>
+      <option value="">default (codex)</option>
       <option>codex</option><option>claude</option></select>
-    <input id="ra_fixer_model" list="dl_ra_fixer" placeholder="default">
-    <select id="ra_fixer_effort"><option value="">default</option></select>
+    <input id="ra_fixer_model" list="dl_ra_fixer" placeholder="default (gpt-5.6-sol)">
+    <select id="ra_fixer_effort"><option value="">default (xhigh)</option></select>
     <label>Reclassify</label>
     <select id="ra_reclassifier_agent"
       onchange="onAgentChange('ra_','reclassifier', true)">
-      <option value="">default (opposite)</option>
+      <option value="">default (codex)</option>
       <option>codex</option><option>claude</option></select>
     <input id="ra_reclassifier_model" list="dl_ra_reclassifier"
-      placeholder="default">
-    <select id="ra_reclassifier_effort"><option value="">default</option></select>
+      placeholder="default (gpt-5.6-sol)">
+    <select id="ra_reclassifier_effort">
+      <option value="">default (xhigh)</option></select>
   </div>
   <datalist id="dl_ra_skeletoner"></datalist>
   <datalist id="dl_ra_drafter"></datalist>
@@ -4347,6 +4354,41 @@ const EFFORT_OPTS = {
   claude: ["low", "medium", "high", "xhigh", "max"],
   codex: ["low", "medium", "high", "xhigh", "max"],
 };
+// What an EMPTY row actually runs. Mirrors driver.DEFAULT_CONFIG
+// (model_defaults + acts) so every "default" label names a real value
+// instead of leaving the operator to guess. Keep in sync with driver.py.
+const FAMILY_DEFAULTS = {
+  claude: {model: "claude-opus-5", effort: "xhigh"},
+  codex: {model: "gpt-5.6-sol", effort: "xhigh"},
+};
+const ACT_DEFAULTS = {
+  // stickyEffort: the driver re-asserts the skeleton's own effort even
+  // when the operator moves the act to the other family
+  // (driver._skeletoner_profile), so the label must not drop to xhigh.
+  skeletoner: {agent: "claude", model: "claude-fable-5", effort: "max",
+               stickyEffort: true},
+  drafter: {agent: "codex"},
+  implementer: {agent: "claude", model: "claude-fable-5", effort: "max"},
+  review_codex: {agent: "codex"},
+  review_claude: {agent: "claude"},
+  fixer: {agent: "codex"},
+  reclassifier: {agent: "codex", effort: "xhigh"},
+};
+function actDefaults(act, agent) {
+  // A pinned act keeps its own model/effort; anything unpinned falls to
+  // the family default of the agent in force (the chosen one, or the
+  // act's default agent while the row is empty).
+  const pin = ACT_DEFAULTS[act] || {};
+  const moved = Boolean(agent) && agent !== pin.agent;
+  const fam = FAMILY_DEFAULTS[agent || pin.agent] || {};
+  return {
+    model: (moved ? null : pin.model) || fam.model,
+    effort: (moved && !pin.stickyEffort ? null : pin.effort) || fam.effort,
+  };
+}
+function shortModel(model) {
+  return model ? String(model).replace(/^claude-/, "") : "";
+}
 function agentModels(agent) {
   return MODEL_OPTS[agent] || [...MODEL_OPTS.claude, ...MODEL_OPTS.codex];
 }
@@ -4369,11 +4411,17 @@ function onAgentChange(prefix, act, userChanged) {
   if (dl)
     dl.innerHTML = agentModels(agent)
       .map(m => `<option>${m}</option>`).join("");
+  const def = actDefaults(act, agent);
+  const modelBox = document.getElementById(`${prefix}${act}_model`);
+  if (modelBox)
+    modelBox.placeholder = def.model
+      ? `default (${shortModel(def.model)})` : "default";
   const eff = document.getElementById(`${prefix}${act}_effort`);
   if (eff) {
     const cur = eff.value;
     const opts = agentEfforts(agent);
-    eff.innerHTML = `<option value="">default (max)</option>` +
+    const label = def.effort ? `default (${def.effort})` : "default";
+    eff.innerHTML = `<option value="">${label}</option>` +
       opts.map(o => `<option ${o === cur ? "selected" : ""}>${o}</option>`).join("");
     if (cur && !opts.includes(cur)) eff.value = "";
   }
