@@ -191,7 +191,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from . import access as panel_access
 from . import brainstorming_lifecycle
-from . import driver, errclass, gitops, gitsync, kvstore, profiles
+from . import driver, errclass, gitops, gitsync, kvstore, model_profiles
+from . import profiles
 from . import projects, registry
 from . import reuse_audit
 from . import state as st
@@ -2529,6 +2530,27 @@ def save_profile(home, body):
     return _profile_view(saved)
 
 
+def model_profiles_list(home):
+    """All model profiles for the catalogue (model-profiles slice 1).
+
+    The API-visible document IS the stored source document — no view
+    wrapper, no derived metadata. Unlike the strategy list, a stored but
+    invalid definition is NOT skipped: the error propagates and the GET
+    fails loudly with the common 500 envelope, so a damaged catalogue never
+    looks merely shorter."""
+    return model_profiles.list_model_profiles(home)
+
+
+def save_model_profile(home, body):
+    """Create or wholly replace one model profile — the catalogue's only
+    edit operation. Validation refuses with 400 before any byte changes,
+    so the prior definition survives every rejected input."""
+    try:
+        return model_profiles.save(home, body)
+    except model_profiles.ModelProfileError as exc:
+        raise ApiError(400, str(exc))
+
+
 def set_profile_swap(home, run_id, body):
     """Repoint a run at another strategy profile at RUNTIME. Swap != edit:
     the profile is never mutated in place; the run points elsewhere. Seals
@@ -3426,6 +3448,11 @@ def make_handler(home):
                     self._json(200, {"ok": True, **registry.load_ui_state(home)})
                 elif route == "/api/profiles":
                     self._json(200, {"ok": True, "profiles": profiles_list(home)})
+                elif route == "/api/model-profiles":
+                    self._json(
+                        200,
+                        {"ok": True, "profiles": model_profiles_list(home)},
+                    )
                 elif route == "/api/fs":
                     # Unscoped browsing spans the whole host and stays
                     # administrative. A project+work_area scope authorizes
@@ -3721,6 +3748,10 @@ def make_handler(home):
                 elif route == "/api/profiles":
                     self._require_admin(who)
                     saved = save_profile(home, self._body())
+                    self._json(200, {"ok": True, "profile": saved})
+                elif route == "/api/model-profiles":
+                    self._require_admin(who)
+                    saved = save_model_profile(home, self._body())
                     self._json(200, {"ok": True, "profile": saved})
                 elif route == "/api/projects" or route.startswith("/api/projects/"):
                     segments = project_route_segments(route)
@@ -4067,6 +4098,12 @@ def make_server(home, port):
         profiles.ensure_seeds(home)
     except Exception:
         pass
+    # The model-profile `default` seed is NOT best-effort: a successfully
+    # initialized service must hold a valid `default` (missing-only — an
+    # existing file, operator edits included, is validated but never
+    # rewritten), so a seed or validation failure here stops startup
+    # visibly instead of serving without the guaranteed catalogue entry.
+    model_profiles.ensure_default(home)
     return ThreadingHTTPServer(("127.0.0.1", port), make_handler(home))
 
 

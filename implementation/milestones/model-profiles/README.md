@@ -246,4 +246,5 @@ The milestone is complete when:
 | Unit | Status | Rounds | Review result | Gate commit |
 |---|---|---|---|---|
 | skeleton | reviewed | 23 | satisfied | 541adc9 |
-| slice_doc-01 (Model-profile store and seeded default) | reviewed | 2 | satisfied | - |
+| slice_doc-01 (Model-profile store and seeded default) | reviewed | 2 | satisfied | d5e7f28 |
+| slice_impl-01 (Model-profile store and seeded default) | reviewed | 9 | satisfied | - |

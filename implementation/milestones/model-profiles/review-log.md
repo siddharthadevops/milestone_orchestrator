@@ -78,3 +78,28 @@
 - `claude-claude-MP-S01-004` (raised claude, cleared codex): Two rows claim to cover the consultation seat but cite ranges that exclude the code producing it. The Enforceability Gate row 'Seeded medium is current-staffing equivalent' pins the comparison surfaces as `orchestrator/driver.py:88-91,141-193,5961-6120`, and the row 'Per-act authority ceiling' pins fixed/derived enforcement as `orchestrator/driver.py:6040-6120`. Consultation's family is resolved at `_resolve_act` (driver.py:6122-6127) and its model/effort are derived in `_consultation_command` (driver.py:836-851) with the caller effort computed at driver.py:6242-6248 — all outside both ranges. Verification row 5 nevertheless claims the equivalence check covers "review, counterpart, and consultation constraints". The skeleton cites the correct authority (skeleton.md:148: driver.py:836-851,6242-6248); the slice drops it. — The cited ranges omit consultation resolution, creating a plausible silent coverage gap, but the explicit nine-act requirement and correct skeleton authority should alert a capable builder, while correction is only a local citation and focused-test expansion.
 - `claude-claude-MP-S01-005` (raised claude, cleared codex): The Enforceability Gate row 'Invalid persisted content never silently disappears' cites `orchestrator/service.py:3772-3779` as "the service's 500 envelope" for a catalogue LISTING failure, and the row 'Exact HTTP surface and no strategy regression' calls the same lines the "common error handler". Lines 3772-3779 are the `do_POST` try/except block. A listing failure surfaces through `do_GET`'s own block at service.py:3583-3590, and there is no common handler — each verb duplicates the envelope (do_GET 3583-3590, do_POST 3772-3779, do_DELETE 3820-3826, 3856). The envelopes are byte-identical, so the pinned 500 contract still holds; the evidence simply points at the wrong method. — The artifact pins the correct GET-500 behavior and an explicit corrupt-file listing test, while only misidentifying an identical POST envelope as common, so a capable builder is unlikely to implement different behavior and correction is a local citation/wording fix.
 
+## slice_impl-01 (Model-profile store and seeded default)
+
+- draft: kind `implement`, artifact `-` (raw: `implementation/milestones/model-profiles/.run/raw/slice_impl-01-draft.txt`)
+
+| Round | Kind | Family | Findings | Triage | Raw |
+|---|---|---|---|---|---|
+| slice_impl-01-codex-r1 | review_round | codex | 2 | DEBT-CLEAN (reclassified) | `implementation/milestones/model-profiles/.run/raw/slice_impl-01-codex-r1.txt` |
+| slice_impl-01-claude-r1 | review_round | claude | 1 | 1 reported | `implementation/milestones/model-profiles/.run/raw/slice_impl-01-claude-r1.txt` |
+| slice_impl-01-codex-r2 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/model-profiles/.run/raw/slice_impl-01-fix1.txt` |
+| slice_impl-01-codex-r3 | delta_review | codex | 0 | clean | `implementation/milestones/model-profiles/.run/raw/slice_impl-01-delta1.txt` |
+| slice_impl-01-codex-r4 | review_round | codex | 1 | 1 reported | `implementation/milestones/model-profiles/.run/raw/slice_impl-01-codex-r2.txt` |
+| slice_impl-01-codex-r5 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/model-profiles/.run/raw/slice_impl-01-fix2.txt` |
+| slice_impl-01-codex-r6 | delta_review | codex | 0 | clean | `implementation/milestones/model-profiles/.run/raw/slice_impl-01-delta2.txt` |
+| slice_impl-01-codex-r7 | review_round | codex | 0 | clean | `implementation/milestones/model-profiles/.run/raw/slice_impl-01-codex-r3.txt` |
+| slice_impl-01-claude-r2 | review_round | claude | 0 | clean | `implementation/milestones/model-profiles/.run/raw/slice_impl-01-claude-r2.txt` |
+
+### Review completion — SATISFIED
+
+- deterministic result: every configured family was clean or debt-clean on the same current bytes; full verification was not due at this boundary; no extra reviewer was called
+- cited reviews: `slice_impl-01-codex-r7`, `slice_impl-01-claude-r2`
+
+**Deferred debt (opposite-family verified):**
+- `codex-MP-S01-001` (raised codex, cleared codex): Schema-valid long names fail as server errors — The declared schema wrongly promises that the 247-character name is valid, so later UI or API work could plausibly preserve that false contract without stopping, while correction is a local filename-or-length fix plus one boundary test and the affected POST exposes the defect immediately.
+- `codex-MP-S01-002` (raised codex, cleared codex): Length validation is stricter than the existing act input posture — The validator checks the raw model string’s 100-character limit before trimming, unlike the acts API, but this narrow boundary mismatch produces an immediate 400 rather than silent state drift and needs only a local validation-order fix plus a regression test.
+

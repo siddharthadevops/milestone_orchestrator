@@ -20,7 +20,8 @@ import urllib.error
 import urllib.request
 from unittest import mock
 
-from orchestrator import driver, profiles, registry, service, state as st
+from orchestrator import access, driver, model_profiles, profiles, registry
+from orchestrator import service, state as st
 
 
 class ServiceApiTest(unittest.TestCase):
@@ -1784,6 +1785,192 @@ class ProfilesApiTest(ServiceApiTest):
         status, body = self.request_json("POST", "/api/profiles", changed)
         self.assertEqual(status, 400)
         self.assertIn("sealed", body["error"])
+
+
+class ModelProfilesApiTest(ServiceApiTest):
+    """Model-profile catalogue API (model-profiles slice 1): the seeded
+    `default` is listed from startup, POST is the sole create/edit surface
+    with loud validation and no mutation on refusal, stored corruption
+    fails the listing instead of shortening it, and the strategy
+    `/api/profiles` surface stays untouched."""
+
+    def member_request_json(self, method, path, payload=None):
+        """The same request as an authenticated NON-admin member (the
+        remote OAuth identity headers a real member request carries)."""
+        data = (json.dumps(payload).encode("utf-8")
+                if payload is not None else None)
+        req = urllib.request.Request(
+            self.base + path, data=data, method=method)
+        req.add_header("Content-Type", "application/json")
+        req.add_header("Host", "example.ngrok-free.dev")
+        req.add_header(access.REMOTE_HEADER, access.REMOTE_MARKER)
+        req.add_header(access.USER_HEADER, access.USER_EMAILS[0])
+        try:
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                return resp.status, json.loads(resp.read().decode("utf-8"))
+        except urllib.error.HTTPError as exc:
+            with exc:
+                return exc.code, json.loads(exc.read().decode("utf-8"))
+
+    def catalogue_doc(self, name="docs-work"):
+        return {
+            "name": name,
+            "examples": ["internal note", "public API contract"],
+            "configurations": {
+                "low": {"implementer": {"agent": "claude",
+                                        "model": "claude-sonnet-5",
+                                        "effort": "medium"}},
+                "medium": {"fixer": "codex", "consultation": "opposite"},
+                "high": {"review_codex": {"effort": "max"}},
+            },
+        }
+
+    def test_list_create_edit_and_validation_contract(self):
+        # Startup seeded the editable `default`; the listing serves the
+        # exact source documents, sorted by name, in the pinned envelope.
+        status, body = self.request_json("GET", "/api/model-profiles")
+        self.assertEqual(status, 200)
+        self.assertIs(body["ok"], True)
+        names = [p["name"] for p in body["profiles"]]
+        self.assertEqual(names, sorted(names))
+        self.assertIn("default", names)
+        default = [p for p in body["profiles"] if p["name"] == "default"][0]
+        self.assertEqual(default, model_profiles.DEFAULT_SEED)
+        self.assertEqual(set(default), {"name", "examples", "configurations"})
+
+        # A case variant is a conflicting catalogue identity, not a second
+        # create.  Refuse it before a case-insensitive filesystem can replace
+        # the seeded default and make listing/startup fail.
+        status, body = self.request_json(
+            "POST", "/api/model-profiles", self.catalogue_doc("Default"))
+        self.assertEqual(status, 400)
+        self.assertFalse(body["ok"])
+        self.assertIn("case-insensitively unique", body["error"])
+        self.assertEqual(model_profiles.load(self.home, "default"),
+                         model_profiles.DEFAULT_SEED)
+        status, body = self.request_json("GET", "/api/model-profiles")
+        self.assertEqual(status, 200)
+        self.assertEqual([p["name"] for p in body["profiles"]], ["default"])
+
+        # Create through the sole create/edit operation.
+        doc = self.catalogue_doc()
+        status, body = self.request_json("POST", "/api/model-profiles", doc)
+        self.assertEqual(status, 200)
+        self.assertIs(body["ok"], True)
+        self.assertEqual(body["profile"], doc)
+        prefix_doc = self.catalogue_doc("default-heavy")
+        status, body = self.request_json(
+            "POST", "/api/model-profiles", prefix_doc)
+        self.assertEqual(status, 200)
+        self.assertIs(body["ok"], True)
+        status, body = self.request_json("GET", "/api/model-profiles")
+        self.assertEqual([p["name"] for p in body["profiles"]],
+                         ["default", "default-heavy", "docs-work"])
+
+        # A same-name save wholly replaces the definition.
+        edited = {
+            "name": "docs-work",
+            "examples": ["storage migration"],
+            "configurations": {
+                "low": {},
+                "medium": {"drafter": {"agent": "codex", "effort": "low"}},
+                "high": {"review_claude": {"effort": "max"}},
+            },
+        }
+        status, body = self.request_json(
+            "POST", "/api/model-profiles", edited)
+        self.assertEqual(status, 200)
+        _, body = self.request_json("GET", "/api/model-profiles")
+        stored = [p for p in body["profiles"] if p["name"] == "docs-work"][0]
+        self.assertEqual(stored, edited)
+        self.assertNotIn("fixer", stored["configurations"]["medium"])
+
+        # Invalid input: pinned 400 envelope, and the prior definition
+        # survives byte-identical.
+        extra_key = dict(self.catalogue_doc(), version=1)
+        missing_rigor = self.catalogue_doc()
+        del missing_rigor["configurations"]["high"]
+        unknown_act = self.catalogue_doc()
+        unknown_act["configurations"]["medium"] = {"delta_review": "codex"}
+        dead_agent = self.catalogue_doc()
+        dead_agent["configurations"]["medium"] = {
+            "review_claude": {"agent": "claude"}}
+        dead_consultation = self.catalogue_doc()
+        dead_consultation["configurations"]["medium"] = {
+            "consultation": {"model": "gpt-5.6-sol"}}
+        for bad in (extra_key, missing_rigor, unknown_act, dead_agent,
+                    dead_consultation, ["not", "a", "document"]):
+            status, body = self.request_json(
+                "POST", "/api/model-profiles", bad)
+            self.assertEqual(status, 400, body)
+            self.assertFalse(body["ok"])
+            self.assertTrue(body["error"])
+        self.assertEqual(
+            model_profiles.load(self.home, "docs-work"), edited)
+
+        # POST is administrative under the existing access posture; the
+        # catalogue read stays member-visible like /api/profiles.
+        status, body = self.member_request_json("GET", "/api/model-profiles")
+        self.assertEqual(status, 200)
+        status, body = self.member_request_json(
+            "POST", "/api/model-profiles", self.catalogue_doc("member-try"))
+        self.assertEqual(status, 403)
+        self.assertFalse(body["ok"])
+        with self.assertRaises(model_profiles.ModelProfileError):
+            model_profiles.load(self.home, "member-try")
+
+        # The seeded default is an ordinary editable profile, and a
+        # service restart over the same home never re-seeds over the edit.
+        edited_default = json.loads(
+            json.dumps(model_profiles.DEFAULT_SEED))
+        edited_default["examples"] = ["operator edited clue"]
+        status, _ = self.request_json(
+            "POST", "/api/model-profiles", edited_default)
+        self.assertEqual(status, 200)
+        second = service.make_server(self.home, 0)
+        thread = threading.Thread(
+            target=second.serve_forever, daemon=True)
+        thread.start()
+        base = self.base
+        try:
+            self.base = "http://127.0.0.1:%d" % second.server_address[1]
+            status, body = self.request_json("GET", "/api/model-profiles")
+        finally:
+            self.base = base
+            second.shutdown()
+            second.server_close()
+            thread.join(timeout=5)
+        self.assertEqual(status, 200)
+        restarted = [p for p in body["profiles"]
+                     if p["name"] == "default"][0]
+        self.assertEqual(restarted["examples"], ["operator edited clue"])
+
+        # A damaged stored definition fails the WHOLE listing loudly with
+        # the common 500 envelope — never a silently shortened catalogue.
+        corrupt = os.path.join(
+            self.home, model_profiles.MODEL_PROFILES_DIRNAME,
+            "zz-corrupt.json")
+        with open(corrupt, "w", encoding="utf-8") as fh:
+            fh.write("{broken")
+        status, body = self.request_json("GET", "/api/model-profiles")
+        self.assertEqual(status, 500)
+        self.assertFalse(body["ok"])
+        self.assertTrue(body["error"])
+        os.unlink(corrupt)
+        status, body = self.request_json("GET", "/api/model-profiles")
+        self.assertEqual(status, 200)
+
+        # The strategy-profile surface is untouched by the new catalogue:
+        # same names, same envelope keys, and no model profile leaks in.
+        status, body = self.request_json("GET", "/api/profiles")
+        self.assertEqual(status, 200)
+        strategy = {p["name"]: p for p in body["profiles"]}
+        self.assertEqual(sorted(strategy), ["legacy", "light", "strict"])
+        for entry in strategy.values():
+            self.assertEqual(
+                set(entry),
+                {"name", "version", "sealed", "description", "hash",
+                 "profile"})
 
 
 class CommitWebBaseTest(unittest.TestCase):
