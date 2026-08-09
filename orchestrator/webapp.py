@@ -9,12 +9,34 @@ import json
 import os
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+from . import driver
 from . import state as st
 
 STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
 
 
-def make_handler(state_path):
+def load_summary(state_path, model_profiles_home=None):
+    state = st.load(state_path)
+    acts_path = os.path.join(os.path.dirname(os.path.abspath(state_path)),
+                             "acts.json")
+    try:
+        with open(acts_path, "r", encoding="utf-8") as fh:
+            acts = json.load(fh)
+    except (OSError, ValueError):
+        acts = {}
+    current_review_model = None
+    if model_profiles_home is not None:
+        current_review_model = driver.resolve_current_review_model(
+            state_path, model_profiles_home, run_state=state
+        )
+    return st.summary(
+        state,
+        acts_overlay=acts if isinstance(acts, dict) else {},
+        current_review_model=current_review_model,
+    )
+
+
+def make_handler(state_path, model_profiles_home=None):
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self):
             if self.path in ("/", "/index.html"):
@@ -40,8 +62,12 @@ def make_handler(state_path):
 
         def _serve_state(self):
             try:
-                state = st.load(state_path)
-                payload = {"ok": True, "summary": st.summary(state)}
+                payload = {
+                    "ok": True,
+                    "summary": load_summary(
+                        state_path, model_profiles_home=model_profiles_home
+                    ),
+                }
             except Exception as exc:  # viewer must never crash the server
                 payload = {"ok": False, "error": str(exc)}
             body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
@@ -58,8 +84,11 @@ def make_handler(state_path):
     return Handler
 
 
-def serve(state_path, port=8765):
-    server = ThreadingHTTPServer(("127.0.0.1", port), make_handler(state_path))
+def serve(state_path, port=8765, model_profiles_home=None):
+    server = ThreadingHTTPServer(
+        ("127.0.0.1", port),
+        make_handler(state_path, model_profiles_home=model_profiles_home),
+    )
     print("orchestrator dashboard: http://127.0.0.1:%d  (state: %s)" % (port, state_path))
     try:
         server.serve_forever()

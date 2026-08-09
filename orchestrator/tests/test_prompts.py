@@ -750,6 +750,25 @@ class TestPortedCanonContentRules(unittest.TestCase):
         self.assertNotIn("MACHINERY PROPORTIONALITY",
                          built["reclassify"])
 
+    def test_profile_aware_reclassifier_prompt_does_not_invent_opposition(self):
+        finding = {
+            "id": "F1",
+            "severity": "P3",
+            "summary": "One wording issue",
+            "validity": {
+                "permitted_baseline": "truthful structural context",
+                "actual_outcome": "the context may be same-family",
+                "incremental_harm": "the rating can be biased",
+                "exceeds_baseline": True,
+            },
+        }
+        prompt = prompts.build_reclassify(
+            "codex", "/tmp", finding, "docs/skeleton.md",
+            raising_family="codex",
+        )
+        self.assertIn("Another reviewer raised the finding below", prompt)
+        self.assertNotIn("opposite family) raised", prompt)
+
     def test_new_machinery_needs_an_authority_outside_this_plan(self):
         # Reform layer: a reuse posture that answers "why is this machinery
         # necessary?" with "because the requirement I just adopted demands

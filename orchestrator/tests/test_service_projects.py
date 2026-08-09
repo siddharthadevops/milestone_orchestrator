@@ -1752,6 +1752,38 @@ class TestLaunchRefusals(ProjectsServiceTestCase):
 
 
 class TestConfigPrecedence(ProjectsServiceTestCase):
+    def test_bound_creation_acts_are_single_homed_after_merge(self):
+        self.create_project(defaults={
+            "git": {"enabled": False},
+            "acts": None,
+        })
+        primary = self.plain_dir("bound-creation-acts")
+        self.declare(primary)
+        self.launch(config={
+            "git": {"enabled": False},
+            "acts": {"fixer": "claude"},
+        })
+        path = _ws_state(primary)
+        with open(os.path.join(os.path.dirname(path), "acts.json"),
+                  encoding="utf-8") as fh:
+            self.assertEqual(json.load(fh), {"fixer": "claude"})
+        self.assertEqual(st.load(path)["config"]["acts"],
+                         drv.DEFAULT_CONFIG["acts"])
+
+    def test_bound_creation_acts_use_live_authority_validator(self):
+        self.create_project(defaults={"git": {"enabled": False}})
+        primary = self.plain_dir("bound-invalid-creation-acts")
+        self.declare(primary)
+        status, body = self.launch(config={
+            "git": {"enabled": False},
+            "acts": {"consultation": {"agent": "claude"}},
+        }, expect=None)
+        self.assertEqual(status, 400, body)
+        self.assertIn("creation act overrides", body["error"])
+        self.assertFalse(any(
+            "state.json" in files for _root, _dirs, files in os.walk(primary)
+        ))
+
     def test_project_defaults_beat_the_service_git_convention(self):
         # Standing operator law: pure-state launches for this project.
         self.create_project(defaults={"git": {"enabled": False}})

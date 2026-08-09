@@ -911,6 +911,84 @@ class BrainstormingMilestoneAdapterTest(unittest.TestCase):
             ],
         )
 
+    def test_projectless_adapter_uses_active_home_for_launch_only_profile_input(self):
+        state = {
+            "name": "run",
+            "workspace": self.workspace,
+            "docs_dir": "docs",
+        }
+        runtime = {
+            "state_path": os.path.join(self.home, "run", "state.json"),
+            "home": self.home,
+        }
+        captured = {}
+
+        def capture(
+            home,
+            body,
+            caller,
+            context,
+            config,
+            owned_target_path=None,
+            model_profile_runtime=None,
+        ):
+            captured["home"] = home
+            captured["participants"] = copy.deepcopy(body["participants"])
+            captured["config"] = config
+            captured["model_profile_runtime"] = model_profile_runtime
+            return {"id": "session", "state": {"status": "created"}}
+
+        with mock.patch.object(
+            lifecycle, "create_resolved_session", side_effect=capture
+        ):
+            adapter.create_session(
+                state,
+                self.config,
+                "slice_impl-08",
+                rethink(contracts.KIND_IMPLEMENT),
+                [],
+                model_profile_runtime=runtime,
+            )
+
+        self.assertEqual(captured["home"], os.path.abspath(self.home))
+        self.assertEqual(
+            captured["participants"], adapter._participants()
+        )
+        self.assertEqual(captured["model_profile_runtime"], runtime)
+        self.assertIs(captured["config"], self.config)
+        self.assertNotIn("_current_model_profile_runtime", self.config)
+
+    def test_current_profile_launch_input_is_not_persisted(self):
+        target = os.path.join(self.workspace, "docs", "ephemeral.md")
+        runtime = {
+            "state_path": os.path.join(self.home, "run", "state.json"),
+            "home": self.home,
+        }
+        captured = {}
+
+        def launch(home, session_id, model_profile_runtime=None):
+            captured["runtime"] = copy.deepcopy(model_profile_runtime)
+            process = _FakeProcess(710001)
+            return lifecycle.GatedLaunch(
+                process,
+                lambda: None,
+                process.terminate,
+            )
+
+        created = lifecycle.create_resolved_session(
+            self.home,
+            self._body(target),
+            "milestone:run:slice_impl-02-b",
+            self.context,
+            self.config,
+            launcher=launch,
+            model_profile_runtime=runtime,
+        )
+
+        self.assertEqual(captured["runtime"], runtime)
+        record = lifecycle._record_by_id(self.home, created["id"])
+        self.assertNotIn("current_model_profile", record["runtime"])
+
     def test_adapter_rejects_incomplete_participant_profile_before_materializing(self):
         state = {
             "name": "run",

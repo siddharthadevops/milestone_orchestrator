@@ -512,6 +512,97 @@ class BrainstormingExecutionTest(unittest.TestCase):
                 family_calls[1]["session_ref"],
             )
 
+    def test_current_staffing_is_reresolved_for_each_fresh_dispatch(self):
+        participants = cross_family_participants()
+        self._create_running("current-staffing", participants)
+        provider = runners.MockRunner([
+            {
+                "expect_family": "codex",
+                "response": envelope("first"),
+            },
+            {
+                "expect_family": "claude",
+                "response": envelope("second"),
+            },
+        ])
+        current = {
+            "agent": "codex",
+            "model": "first-model",
+            "effort": "medium",
+        }
+
+        def resolve():
+            return dict(current)
+
+        first_binding = execution.RunnerParticipantExecutor(
+            "codex",
+            provider,
+            current_resolver=resolve,
+            fresh_each_call=True,
+        )
+        first = execution.ParticipantExecution(
+            self.store, {"codex-primary": first_binding}
+        )
+        first.exchange(
+            "current-staffing", "editor", "first turn", {}
+        )
+        self.assertEqual(
+            self.store.read("current-staffing").state[
+                "participant_sessions"
+            ],
+            {},
+        )
+
+        current.update({
+            "agent": "claude",
+            "model": "second-model",
+            "effort": "high",
+        })
+        # Rebuild the lifecycle-side executor as a process restart would.
+        second_binding = execution.RunnerParticipantExecutor(
+            "codex",
+            provider,
+            current_resolver=resolve,
+            fresh_each_call=True,
+        )
+        second = execution.ParticipantExecution(
+            self.store, {"codex-primary": second_binding}
+        )
+        second.exchange(
+            "current-staffing", "editor", "second turn", {}
+        )
+
+        self.assertEqual(
+            provider.session_calls,
+            [
+                ("start", "codex", "mock-session-1"),
+                ("start", "claude", "mock-session-2"),
+            ],
+        )
+        self.assertEqual(
+            provider.call_meta,
+            [
+                {
+                    "family": "codex",
+                    "kind": None,
+                    "model": "first-model",
+                    "effort": "medium",
+                },
+                {
+                    "family": "claude",
+                    "kind": None,
+                    "model": "second-model",
+                    "effort": "high",
+                },
+            ],
+        )
+        self.assertEqual(
+            self.store.read("current-staffing").state[
+                "participant_sessions"
+            ],
+            {},
+        )
+
     def test_same_family_participants_never_use_implicit_latest_session(self):
         participants = same_family_participants()
         self._create_running(

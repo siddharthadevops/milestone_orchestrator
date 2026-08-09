@@ -174,6 +174,7 @@ it to anything else.
 """
 
 import argparse
+import copy
 import contextlib
 import json
 import os
@@ -1005,18 +1006,72 @@ def _clear_pid(home, run_id, pid):
 # every tick. Keyed by (mtime_ns, size): drivers write states atomically
 # via os.replace, so any change moves the key.
 
-_SUMMARY_CACHE = {}  # state_path -> ((mtime_ns, size), summary)
+_SUMMARY_CACHE = {}  # state_path -> ((state/acts/current-profile keys), summary)
 _SUMMARY_CACHE_LOCK = threading.Lock()
 
 
-def load_summary(state_path):
-    stat = os.stat(state_path)
-    key = (stat.st_mtime_ns, stat.st_size)
+def _summary_file_key(path):
+    try:
+        stat = os.stat(path)
+    except OSError:
+        return None
+    return (stat.st_mtime_ns, stat.st_size)
+
+
+def _summary_acts(state_path):
+    path = os.path.join(os.path.dirname(os.path.abspath(state_path)),
+                        "acts.json")
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            value = json.load(fh)
+    except (OSError, ValueError):
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
+def _summary_model_profile_key(state_path, home):
+    selection_path = os.path.join(
+        os.path.dirname(os.path.abspath(state_path)), "model_profile.json"
+    )
+    try:
+        selection = driver.read_current_model_profile_selection(state_path)
+        name = (
+            model_profiles.DEFAULT_PROFILE_NAME
+            if selection is None else selection["name"]
+        )
+        profile_path = os.path.join(
+            model_profiles.model_profiles_dir(home), "%s.json" % name
+        )
+    except model_profiles.ModelProfileError:
+        profile_path = None
+    return (
+        os.path.abspath(home),
+        _summary_file_key(selection_path),
+        _summary_file_key(profile_path) if profile_path is not None else None,
+    )
+
+
+def load_summary(state_path, model_profiles_home=None):
+    acts_path = os.path.join(os.path.dirname(os.path.abspath(state_path)),
+                             "acts.json")
+    key = (_summary_file_key(state_path), _summary_file_key(acts_path))
+    if model_profiles_home is not None:
+        key += _summary_model_profile_key(state_path, model_profiles_home)
     with _SUMMARY_CACHE_LOCK:
         cached = _SUMMARY_CACHE.get(state_path)
     if cached is not None and cached[0] == key:
         return cached[1]
-    summ = st.summary(st.load(state_path))
+    run_state = st.load(state_path)
+    current_review_model = None
+    if model_profiles_home is not None:
+        current_review_model = driver.resolve_current_review_model(
+            state_path, model_profiles_home, run_state=run_state
+        )
+    summ = st.summary(
+        run_state,
+        acts_overlay=_summary_acts(state_path),
+        current_review_model=current_review_model,
+    )
     with _SUMMARY_CACHE_LOCK:
         _SUMMARY_CACHE[state_path] = (key, summ)
     return summ
@@ -1435,7 +1490,7 @@ def run_status(entry, home=None):
         "state_error": None,
     }
     try:
-        summ = load_summary(entry["state_path"])
+        summ = load_summary(entry["state_path"], model_profiles_home=home)
         info["project"] = summ.get("project")
         info["work_area"] = summ.get("work_area")
         info["milestone_status"] = summ["milestone_status"]
@@ -1879,11 +1934,14 @@ def _create_bound_run(home, payload, workspace):
         state_path = driver.init_run(
             goal, workspace, name=name_for_init,
             project=binding, config_override=user_cfg,
+            model_profiles_home=home,
         )
     except driver.ProjectResolutionError as exc:
         # The sealed seam built cause for exactly this consumer: the
         # token rides verbatim, no per-cause status remapping.
         raise ApiError(400, exc.cause)
+    except ValueError as exc:
+        raise ApiError(400, str(exc))
     except FileExistsError as exc:
         raise ApiError(409, str(exc) + ' (use "attach": true to adopt it)')
     return primary["path"], state_path, goal_doc
@@ -2041,9 +2099,16 @@ def create_run(home, payload):
             # the real state path — for a per-milestone docs_dir that is
             # <milestone>/.run/state.json, so a new run never collides with
             # a closed one in the same repo.
+            creation_kwargs = {}
+            if isinstance(user_cfg, dict) and "acts" in user_cfg:
+                creation_kwargs["creation_acts"] = user_cfg["acts"]
             state_path = driver.init_run(
-                goal.strip(), workspace, config=config, name=name_for_init
+                goal.strip(), workspace, config=config, name=name_for_init,
+                model_profiles_home=home,
+                **creation_kwargs
             )
+        except ValueError as exc:
+            raise ApiError(400, str(exc))
         except FileExistsError as exc:
             raise ApiError(409, str(exc) + ' (use "attach": true to adopt it)')
 
@@ -2063,7 +2128,7 @@ def create_run(home, payload):
     entry_project = None
     entry_work_area = None
     try:
-        entry_summ = load_summary(state_path)
+        entry_summ = load_summary(state_path, model_profiles_home=home)
         entry_project = entry_summ.get("project")
         entry_work_area = entry_summ.get("work_area")
     except Exception:
@@ -2129,7 +2194,8 @@ def start_run(home, run_id):
         try:
             proc = subprocess.Popen(
                 [sys.executable, "-u", "-m", "orchestrator.driver", "run",
-                 "--state", entry["state_path"]],
+                 "--state", entry["state_path"],
+                 "--model-profiles-home", os.path.abspath(home)],
                 cwd=REPO_ROOT,
                 stdin=subprocess.DEVNULL,
                 stdout=log_file,
@@ -2226,7 +2292,9 @@ def delete_run(home, run_id, purge=False):
             # Read while the state is certainly still on disk: the purge
             # tombstone and the retained-state decision below need to know
             # whether (and where) the run was bound.
-            summ = load_summary(entry["state_path"])
+            summ = load_summary(
+                entry["state_path"], model_profiles_home=home
+            )
         except Exception:
             summ = _bound_summary_from_entry(entry)
         if purge:
@@ -2266,11 +2334,18 @@ def _claim_retained_state_locked(home, state_path, summ):
 
 def _purge_state_files(state_path):
     """Best-effort removal of a discarded run's on-disk state claim — the
-    state file and its driver lock — so a fresh launch can re-claim the same
-    workspace path (state.init refuses to overwrite an existing file). Only
-    these two exact files; nothing else in the workspace is touched."""
+    state file, its driver lock, and its current model-profile settings — so a
+    fresh launch can re-claim the same workspace path without inheriting the
+    discarded run's selection or act overrides. Only these exact files;
+    nothing else in the workspace is touched."""
     purged, errors = [], []
-    for path in (state_path, state_path + ".lock"):
+    runtime_dir = os.path.dirname(os.path.abspath(state_path))
+    for path in (
+        state_path,
+        state_path + ".lock",
+        os.path.join(runtime_dir, "model_profile.json"),
+        os.path.join(runtime_dir, "acts.json"),
+    ):
         try:
             os.unlink(path)
             purged.append(path)
@@ -2359,9 +2434,7 @@ def _write_amendments(entry, amendments):
     os.replace(tmp, path)
 
 
-ACT_KEYS = ("skeletoner", "drafter", "implementer", "review_codex",
-            "review_claude", "fixer", "consultation", "reclassifier")
-FIXED_REVIEW_ACTS = {"review_codex": "codex", "review_claude": "claude"}
+ACT_KEYS = model_profiles.PROFILE_ACT_KEYS
 
 
 def _acts_path(entry):
@@ -2389,6 +2462,43 @@ def set_acts(home, run_id, body):
     entry = registry.get(reg, run_id)
     if entry is None:
         raise ApiError(404, "unknown run %r" % run_id)
+    acts = _validated_acts(body)
+    _write_acts(entry, acts)
+    return acts
+
+
+def patch_acts(home, run_id, body):
+    """Apply only the supplied live-act changes.
+
+    The panel uses this mutation form so editing one row does not erase an
+    untouched creation-time explicit-empty entry.  Empty supplied values keep
+    the public clear meaning; omitted keys remain semantically unchanged.
+    """
+    reg = registry.load(home)
+    entry = registry.get(reg, run_id)
+    if entry is None:
+        raise ApiError(404, "unknown run %r" % run_id)
+    changes = _validated_acts(body, retain_clears=True)
+    try:
+        acts = driver.read_current_acts_overlay(
+            entry["state_path"], strict=True
+        )
+    except model_profiles.ModelProfileError as exc:
+        raise ApiError(400, str(exc))
+    # A partial mutation must not make malformed omitted state look healthy.
+    # Validate the whole current layer, but preserve its original values and
+    # meaningful explicit-empty forms byte-for-semantics when merging changes.
+    _validated_acts(acts, retain_clears=True)
+    for key, val in changes.items():
+        if val is None:
+            acts.pop(key, None)
+        else:
+            acts[key] = val
+    _write_acts(entry, acts)
+    return acts
+
+
+def _validated_acts(body, retain_clears=False):
     if not isinstance(body, dict):
         raise ApiError(400, "acts body must be an object")
     acts = {}
@@ -2397,41 +2507,32 @@ def set_acts(home, run_id, body):
             raise ApiError(400, "unknown act %r (allowed: %s)"
                            % (key, ", ".join(ACT_KEYS)))
         if val in (None, "", {}):
-            continue  # cleared -> fall back to config/defaults
-        if isinstance(val, str):
-            if key in FIXED_REVIEW_ACTS:
-                raise ApiError(
-                    400, "act %r has a fixed family; set model/effort only"
-                    % key)
-            acts[key] = val.strip()
-            continue
-        if not isinstance(val, dict):
-            raise ApiError(400, "act %r must be a string or object" % key)
-        entry_out = {}
-        for f in ("agent", "model", "effort"):
-            v = (val.get(f) or "").strip() if isinstance(
-                val.get(f), str) else val.get(f)
-            if v:
-                if not isinstance(v, str) or len(v) > 100:
-                    raise ApiError(
-                        400, "act %r field %r must be a short string"
-                        % (key, f))
-                entry_out[f] = v
-        if key in FIXED_REVIEW_ACTS and entry_out.get("agent"):
-            fixed = FIXED_REVIEW_ACTS[key]
-            if entry_out["agent"] != fixed:
-                raise ApiError(
-                    400, "act %r family is fixed to %s" % (key, fixed))
-            entry_out.pop("agent", None)
-        if entry_out:
-            acts[key] = entry_out
+            if retain_clears:
+                acts[key] = None
+            continue  # cleared -> fall back to profile/config/defaults
+        try:
+            acts[key] = model_profiles.validate_act_entry(
+                "acts", key, val
+            )
+        except model_profiles.ModelProfileError as exc:
+            raise ApiError(400, str(exc))
+
+    return acts
+
+
+def _write_acts(entry, acts):
     path = _acts_path(entry)
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    tmp = path + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as fh:
-        json.dump(acts, fh, indent=1)
-    os.replace(tmp, path)
-    return acts
+    fd, tmp = tempfile.mkstemp(
+        prefix=".acts-", suffix=".json", dir=os.path.dirname(path)
+    )
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            json.dump(acts, fh, indent=1)
+        os.replace(tmp, path)
+    finally:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
 
 
 def _profile_overlay_path(entry):
@@ -3026,7 +3127,9 @@ def run_detail(home, run_id, log_tail=80):
         raise ApiError(404, "unknown run %r" % run_id)
     detail = {"entry": entry, "status": run_status(entry, home=home), "summary": None}
     try:
-        detail["summary"] = load_summary(entry["state_path"])
+        detail["summary"] = load_summary(
+            entry["state_path"], model_profiles_home=home
+        )
     except Exception as exc:
         detail["summary_error"] = str(exc)
     detail["log"] = read_log_tail(home, run_id, log_tail)
@@ -3332,6 +3435,87 @@ def require_brainstorming_access(home, who, record):
     require_brainstorming_project_access(home, who, slug)
 
 
+def _attached_brainstorming_model_profile_runtime(
+    home, session_id, record=None
+):
+    """Resolve launch-only current staffing from the generic run attachment.
+
+    The Brainstorming registry does not retain model-profile locators.  On an
+    explicit restart the service can reattach a registered run through the
+    session id already held in ordinary milestone state.  A milestone session
+    without that generic attachment cannot resolve current staffing and must
+    refuse before launching; standalone sessions remain profile-independent.
+    """
+    if record is None:
+        record = brainstorming_lifecycle._record_by_id(home, session_id)
+    caller = record.get("caller")
+    if not isinstance(caller, str) or not caller.startswith("milestone:"):
+        return None
+    context = record.get("execution_context")
+    workspace = (
+        context.get("workspace_path") if isinstance(context, dict) else None
+    )
+    matches = []
+    try:
+        entries = registry.load(home).get("runs") or []
+    except Exception as exc:
+        raise ApiError(503, brainstorming_lifecycle.UNAVAILABLE) from exc
+    for entry in entries:
+        if (
+            isinstance(workspace, str)
+            and os.path.abspath(entry.get("workspace") or "")
+            != os.path.abspath(workspace)
+        ):
+            continue
+        try:
+            run_state = st.load(entry["state_path"])
+        except Exception:
+            # A registered state is only authoritative for this restart when
+            # it actually exposes the session attachment.  Keep looking so
+            # corruption in an unrelated run cannot mask a readable match;
+            # if none is readable below, the ordinary unattached refusal
+            # still prevents launch with the lifecycle roster.
+            continue
+        if any(
+            ((unit.get("brainstorming_wait") or {}).get("session_id")
+             == session_id)
+            for unit in run_state.get("units") or []
+            if isinstance(unit, dict)
+        ):
+            matches.append(os.path.abspath(entry["state_path"]))
+    if len(matches) > 1:
+        raise ApiError(503, brainstorming_lifecycle.UNAVAILABLE)
+    if not matches:
+        raise ApiError(503, brainstorming_lifecycle.UNAVAILABLE)
+    return {
+        "state_path": matches[0],
+        "home": os.path.abspath(home),
+    }
+
+
+def _current_brainstorming_staffing(home, record, session_state):
+    """Best-effort current staffing for the read-only milestone view."""
+    try:
+        current = _attached_brainstorming_model_profile_runtime(
+            home, record["id"], record=record
+        )
+        lead, counterpart = driver.resolve_current_brainstorming_profiles(
+            current["state_path"], current["home"]
+        )
+    except Exception:
+        return {}
+    return {
+        participant["id"]: copy.deepcopy(
+            counterpart
+            if participant.get("role") == "contrary_position"
+            else lead
+        )
+        for participant in session_state["run_config"]["participants"]
+        if participant.get("delivery") != "external"
+        or participant.get("role") == "common_sense"
+    }
+
+
 def brainstorming_visibility(home, who):
     """A record-level predicate for the Brainstorming list route.
 
@@ -3559,6 +3743,11 @@ def make_handler(home):
                                 home, who, record
                             ),
                             ARTIFACT_MAX,
+                            current_staffing=lambda record, state: (
+                                _current_brainstorming_staffing(
+                                    home, record, state
+                                )
+                            ),
                         )
                         self._json(200, {"ok": True, "view": view})
                     elif len(parts) == 5 and parts[4]:
@@ -3714,17 +3903,30 @@ def make_handler(home):
                                 400,
                                 brainstorming_lifecycle.INVALID_REQUEST,
                             )
-                        operation = (
-                            brainstorming_lifecycle.stop_session
-                            if parts[5] == "stop"
-                            else brainstorming_lifecycle.start_session
-                        )
-                        session = operation(
-                            home, parts[4],
-                            lambda record: require_brainstorming_access(
-                                home, who, record
-                            ),
-                        )
+                        if parts[5] == "stop":
+                            session = brainstorming_lifecycle.stop_session(
+                                home, parts[4],
+                                lambda record: require_brainstorming_access(
+                                    home, who, record
+                                ),
+                            )
+                        else:
+                            session = brainstorming_lifecycle.start_session(
+                                home,
+                                parts[4],
+                                lambda record: require_brainstorming_access(
+                                    home, who, record
+                                ),
+                                validate_launch=(
+                                    lambda record: (
+                                        _attached_brainstorming_model_profile_runtime(
+                                            home,
+                                            parts[4],
+                                            record=record,
+                                        )
+                                    )
+                                ),
+                            )
                         self._json(
                             200, {"ok": True, "session": session}
                         )
@@ -3806,6 +4008,24 @@ def make_handler(home):
                 self._json(
                     exc.status, {"ok": False, "error": exc.code}
                 )
+            except Exception as exc:
+                self._json(500, {"ok": False, "error": str(exc)})
+
+        def do_PATCH(self):
+            try:
+                brainstorming_lifecycle.reap_children(home)
+                route, _query = self._route()
+                who = self._who()
+                parts = route.rstrip("/").split("/")
+                if (len(parts) == 5 and route.startswith("/api/runs/")
+                        and parts[4] == "acts"):
+                    require_run_access(home, who, parts[3])
+                    acts = patch_acts(home, parts[3], self._body())
+                    self._json(200, {"ok": True, "acts": acts})
+                else:
+                    self._json(404, {"ok": False, "error": "not found"})
+            except ApiError as exc:
+                self._json(exc.status, {"ok": False, "error": str(exc)})
             except Exception as exc:
                 self._json(500, {"ok": False, "error": str(exc)})
 
@@ -3980,7 +4200,9 @@ def guard_scan(home):
     for entry in runs:
         try:
             run_id = entry["id"]
-            summ = load_summary(entry["state_path"])
+            summ = load_summary(
+                entry["state_path"], model_profiles_home=home
+            )
             if summ is None:
                 continue
             # The guard's periodic scan is the projection's second

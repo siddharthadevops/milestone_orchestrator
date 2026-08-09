@@ -1621,6 +1621,18 @@ class TestCallWorker(unittest.TestCase):
         self.assertEqual(len(runner.calls), 1)
         self.assertNotIn("REPAIR", runner.calls[0][2])
 
+    def test_profileless_call_preserves_supplied_prompt_bytes(self):
+        runner = MockRunner(
+            [{"expect_kind": "implement", "response": VALID_IMPLEMENT}]
+        )
+        prompt = make_prompt("implement", family="supplied-family")
+
+        call_worker(
+            runner, "codex", prompt, "implement", self.workspace
+        )
+
+        self.assertEqual(runner.calls[0][2], prompt)
+
     def test_contract_is_selected_regardless_of_json_position(self):
         contract = json.dumps(VALID_IMPLEMENT)
         for response in (

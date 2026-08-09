@@ -972,6 +972,12 @@ def validate_activity_event(event):
             "token_usage_partial",
             "cost",
             "cost_partial",
+            # Withdrawn model-profile attribution may remain in ledgers
+            # written by the superseded runtime. It has no authority, but
+            # generic Brainstorming execution and recovery must still read
+            # those sessions, so validation accepts and discards it.
+            "model_profile",
+            "act_override",
         ),
         "activity_event",
     )

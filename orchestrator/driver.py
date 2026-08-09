@@ -38,12 +38,16 @@ except ImportError:  # pragma: no cover - non-POSIX: flock degrades to the
 
 from . import brainstorming, brainstorming_lifecycle, brainstorming_milestone
 from . import contracts, errclass, gitops, interpreter, kvstore, ledgers
-from . import model_profiles
-from . import pricing, projects, prompts, runners, verifiers, workareas
+from . import model_profiles, pricing, projects, prompts, registry, runners
+from . import verifiers, workareas
 from . import state as st
 
 IMPLEMENTATION_SIZE_ACK = "IMPLEMENTATION_SIZE_CUTOFF_ACK"
 FULL_VERIFICATION_SLICE_INTERVAL = 4
+
+
+class _NoIndependentReclassifier(runners.RunnerError):
+    """Current structural policy leaves no separate rating call."""
 
 DEFAULT_CONFIG = {
     "families_order": ["codex", "claude"],
@@ -380,10 +384,332 @@ class _StandingLawError(RuntimeError):
     operator's store, not the worker's output)."""
 
 
+def _runtime_sidecar_path(state_path, filename):
+    return os.path.join(os.path.dirname(os.path.abspath(state_path)), filename)
+
+
+def read_current_acts_overlay(state_path, strict=False):
+    """Read the live per-run override layer without retaining a copy."""
+    path = _runtime_sidecar_path(state_path, "acts.json")
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+    except FileNotFoundError as exc:
+        if strict and os.path.lexists(path):
+            raise model_profiles.ModelProfileError(
+                "current act overrides are unavailable: %s" % exc
+            ) from exc
+        return {}
+    except (OSError, ValueError) as exc:
+        if strict:
+            raise model_profiles.ModelProfileError(
+                "current act overrides are unreadable: %s" % exc
+            ) from exc
+        return {}
+    if not isinstance(data, dict):
+        if strict:
+            raise model_profiles.ModelProfileError(
+                "current act overrides must be an object"
+            )
+        return {}
+    if strict:
+        normalized = {}
+        for act, value in data.items():
+            # Empty known entries are meaningful at creation: their presence
+            # suppresses the profile and exposes structural defaults.  They
+            # still must name a real act; every non-empty entry must satisfy
+            # that act's complete authority ceiling before any act dispatches.
+            if value in (None, "", {}):
+                if act not in model_profiles.PROFILE_ACT_KEYS:
+                    model_profiles.validate_act_entry(
+                        "current act overrides", act, value
+                    )
+                normalized[act] = value
+                continue
+            normalized[act] = model_profiles.validate_act_entry(
+                "current act overrides", act, value
+            )
+        return normalized
+    return data
+
+
+def read_current_model_profile_selection(state_path):
+    """Read the current selection sidecar; absence means default@medium."""
+    path = _runtime_sidecar_path(state_path, "model_profile.json")
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            value = json.load(fh)
+    except FileNotFoundError as exc:
+        if os.path.lexists(path):
+            raise model_profiles.ModelProfileError(
+                "current model-profile selection is unavailable: %s" % exc
+            ) from exc
+        return None
+    except (OSError, ValueError) as exc:
+        raise model_profiles.ModelProfileError(
+            "current model-profile selection is unreadable: %s" % exc
+        ) from exc
+    return model_profiles.validate_selection(value)
+
+
+def _read_current_profile_layers(state_path, model_profiles_home):
+    """Read one ephemeral current-state view for one physical dispatch."""
+    strict = model_profiles_home is not None
+    overlay = read_current_acts_overlay(state_path, strict=strict)
+    configuration = None
+    if strict:
+        selection = read_current_model_profile_selection(state_path)
+        _selected, configuration = model_profiles.resolve_selection(
+            model_profiles_home, selection
+        )
+    return strict, overlay, configuration
+
+
+def _resolve_act_from_layers(
+    config,
+    strict,
+    overlay,
+    configuration,
+    act,
+    origin_family=None,
+    default_family=None,
+    include_explicit=False,
+):
+    """Resolve one act from an already-read dispatch-local current view."""
+    if not strict:
+        acts = dict(config.get("acts") or {})
+        for key, value in overlay.items():
+            if value:
+                acts[key] = value
+        policy = acts.get(act)
+        policy_has_explicit_authority = True
+    elif act in overlay:
+        policy = overlay[act]
+        if policy in (None, "", {}):
+            # Creation-time empties are retained in the live layer so their
+            # presence suppresses the profile.  They deliberately expose the
+            # structural/family fallback, not the shipped config entry that
+            # was restored after creation acts were single-homed.
+            policy = None
+            policy_has_explicit_authority = False
+        else:
+            policy = model_profiles.validate_act_entry(
+                "current act overrides", act, policy
+            )
+            policy_has_explicit_authority = True
+    elif act in configuration:
+        policy = configuration[act]
+        policy_has_explicit_authority = True
+    else:
+        acts = dict(config.get("acts") or {})
+        policy = acts.get(act)
+        policy_has_explicit_authority = act in acts
+
+    raw_family_policy = policy
+    if isinstance(raw_family_policy, dict):
+        raw_family_policy = (
+            raw_family_policy.get("agent")
+            or raw_family_policy.get("family")
+            or ""
+        ).strip()
+    explicit_family_policy = policy_has_explicit_authority and bool(
+        raw_family_policy and raw_family_policy != "opposite"
+    )
+
+    model = effort = None
+    if isinstance(policy, dict):
+        model = (policy.get("model") or "").strip() or None
+        effort = (policy.get("effort") or "").strip() or None
+        policy = (
+            policy.get("agent") or policy.get("family") or ""
+        ).strip() or None
+    families = config["families_order"]
+    if not policy:
+        family = (
+            default_family
+            or config.get("fix_family")
+            or families[0]
+        )
+    elif policy == "self":
+        family = origin_family or families[0]
+    elif policy == "opposite":
+        family = next(
+            (candidate for candidate in families
+             if candidate != (origin_family or families[0])),
+            origin_family or families[0],
+        )
+    else:
+        family = policy
+    resolved = (family, model, effort)
+    if include_explicit:
+        return resolved + (explicit_family_policy,)
+    return resolved
+
+
+def resolve_current_acts(
+    state_path,
+    config,
+    model_profiles_home,
+    requests,
+):
+    """Resolve several related acts from one dispatch-local source read.
+
+    ``requests`` contains dictionaries accepted by
+    :func:`_resolve_act_from_layers`.  Nothing is retained after the caller's
+    dispatch; the grouping only prevents one physical call from combining two
+    catalogue generations.
+    """
+    strict, overlay, configuration = _read_current_profile_layers(
+        state_path, model_profiles_home
+    )
+    return [
+        _resolve_act_from_layers(
+            config,
+            strict,
+            overlay,
+            configuration,
+            **request,
+        )
+        for request in requests
+    ]
+
+
+def resolve_current_act(
+    state_path,
+    config,
+    model_profiles_home,
+    act,
+    origin_family=None,
+    default_family=None,
+    include_explicit=False,
+):
+    """Resolve one act from the current selection, profile, and overrides.
+
+    This is the one side-effect-free resolution seam used by the milestone
+    driver and by each independently supervised Brainstorming dispatch.
+    """
+    return resolve_current_acts(
+        state_path,
+        config,
+        model_profiles_home,
+        [{
+            "act": act,
+            "origin_family": origin_family,
+            "default_family": default_family,
+            "include_explicit": include_explicit,
+        }],
+    )[0]
+
+
+def resolve_current_review_model(state_path, model_profiles_home, run_state=None):
+    """Best-effort model projection for read-only rounds-time status.
+
+    Dispatch resolution remains strict.  Status and the service guard are
+    generic diagnostic/recovery paths, so unavailable model-profile state
+    merely withholds this optional projection instead of hiding the run.
+    """
+    run_state = run_state or st.load(state_path)
+    unit = st.current_unit(run_state)
+    if unit is None or unit.get("status") != st.U_ROUNDS:
+        return None
+    config = interpreter.effective_config(run_state)
+    families = config.get("families_order") or []
+    index = unit.get("family_index", 0)
+    if index >= len(families):
+        return None
+    family = families[index]
+    try:
+        _fixed_family, model, _effort = resolve_current_act(
+            state_path,
+            config,
+            model_profiles_home,
+            "review_%s" % family,
+            origin_family=family,
+            default_family=family,
+        )
+    except model_profiles.ModelProfileError:
+        return None
+    defaults = (config.get("model_defaults") or {}).get(family) or {}
+    return model or defaults.get("model")
+
+
+def resolve_current_structural_dispatch(
+    state_path, model_profiles_home, family
+):
+    """Validate current profile state for a structurally staffed call."""
+    run_state = st.load(state_path)
+    config = interpreter.effective_config(run_state)
+    _read_current_profile_layers(state_path, model_profiles_home)
+    defaults = (config.get("model_defaults") or {}).get(family) or {}
+    return family, defaults.get("model"), defaults.get("effort")
+
+
+def _resolve_current_brainstorming_profiles(
+    state_path, model_profiles_home, include_counterpart
+):
+    """Read one current generation and derive the requested seats."""
+    run_state = st.load(state_path)
+    config = interpreter.effective_config(run_state)
+    requests = [{"act": "implementer"}]
+    if include_counterpart:
+        # The counterpart's structural family depends on the lead, so resolve
+        # both from one ephemeral catalogue/override read and derive below.
+        requests.append({"act": "brainstorming_counterpart"})
+    resolved = resolve_current_acts(
+        state_path, config, model_profiles_home, requests
+    )
+    lead_family, lead_model, lead_effort = resolved[0]
+    lead_defaults = (config.get("model_defaults") or {}).get(
+        lead_family
+    ) or {}
+    lead = {
+        "agent": lead_family,
+        "model": lead_model or lead_defaults.get("model"),
+        "effort": lead_effort or lead_defaults.get("effort"),
+    }
+    if not include_counterpart:
+        return lead, None
+
+    opposite = next(
+        (family for family in config["families_order"]
+         if family != lead_family),
+        lead_family,
+    )
+    _ignored_family, model, effort = resolved[1]
+    defaults = (config.get("model_defaults") or {}).get(opposite) or {}
+    counterpart = {
+        "agent": opposite,
+        "model": model or defaults.get("model"),
+        "effort": effort or lead["effort"],
+    }
+    return lead, counterpart
+
+
+def resolve_current_brainstorming_profiles(state_path, model_profiles_home):
+    """Project both current Brainstorming seats from one source read."""
+    return _resolve_current_brainstorming_profiles(
+        state_path, model_profiles_home, True
+    )
+
+
+def resolve_current_brainstorming_profile(
+    state_path, model_profiles_home, counterpart=False
+):
+    """Resolve one Brainstorming seat immediately before its dispatch."""
+    lead, contrary = _resolve_current_brainstorming_profiles(
+        state_path, model_profiles_home, counterpart
+    )
+    return contrary if counterpart else lead
+
+
 class Driver(object):
-    def __init__(self, state_path, runner=None):
+    def __init__(self, state_path, runner=None, model_profiles_home=None):
         self.state_path = state_path
         self.state = st.load(state_path)
+        self.model_profiles_home = (
+            os.path.abspath(model_profiles_home)
+            if model_profiles_home is not None else None
+        )
         # The governing profile's dials merge over the run config here
         # (spec §5). Profile-less runs and the dial-less `legacy` profile
         # get the raw config unchanged, so they stay bit-identical; a
@@ -403,16 +729,33 @@ class Driver(object):
             stall_min_cpu_s=self.config.get("worker_stall_min_cpu_s"),
             prompt_recorder=self._record_llm_prompt,
         )
-        # Before repo validation: if a pending gap's cleanup never ran (a crash
-        # between recording the gap and cleaning up), worker junk such as a
-        # nested repo could make ensure_repo reject the workspace and deadlock
-        # every resume — ensure_repo would record a failure, and
-        # _consume_pending_gap skips under failure, so the junk is never
-        # removed. Best-effort restore the recorded snapshot first.
-        self._pre_clean_pending_gap()
         # Account for an interrupted provider before any startup check can
         # append a different state transition and obscure the stale call.
         self._consume_stale_marker()
+        if self.model_profiles_home is not None:
+            try:
+                # Startup readiness only: seed absence, validate presence.
+                # Generic crash accounting above must remain independent of
+                # this optional catalogue; per-call resolution never repairs
+                # or falls back.
+                model_profiles.ensure_default(self.model_profiles_home)
+            except model_profiles.ModelProfileError as exc:
+                if self.state.get("failure") is None:
+                    st.fail_run(
+                        self.state,
+                        "model-profile catalogue unavailable: %s" % exc,
+                        unit=st.current_unit(self.state),
+                        type_="orchestrator",
+                    )
+                    st.save(self.state_path, self.state)
+                raise RuntimeError(
+                    "model-profile catalogue unavailable: %s" % exc
+                ) from exc
+        # Before repo validation: if a pending gap's cleanup never ran (a crash
+        # between recording the gap and cleaning up), worker junk such as a
+        # nested repo could make ensure_repo reject the workspace and deadlock
+        # every resume.
+        self._pre_clean_pending_gap()
         if gitops.enabled(self.config):
             try:
                 gitops.ensure_repo(
@@ -834,7 +1177,8 @@ class Driver(object):
     def _opposite_cmd(self, family):
         return self.config["commands"].get(self._opposite(family), [])
 
-    def _consultation_command(self, family, caller_effort):
+    def _consultation_command(self, family, caller_effort,
+                              caller_act="fixer", caller_origin=None):
         """The consulted family's command line, ready to run.
 
         The fixer runs this line VERBATIM, so the template must arrive
@@ -843,6 +1187,23 @@ class Driver(object):
         family's defaults; effort is the CALLER'S, so a rejection is
         never argued by a lighter opponent than the one rejecting.
         """
+        if self.model_profiles_home is not None:
+            command = [
+                sys.executable,
+                os.path.join(
+                    os.path.dirname(os.path.abspath(__file__)),
+                    "current_model_call.py",
+                ),
+                "--state",
+                os.path.abspath(self.state_path),
+                "--home",
+                os.path.abspath(self.model_profiles_home),
+                "--caller-act",
+                caller_act,
+            ]
+            if caller_origin is not None:
+                command.extend(["--caller-origin", caller_origin])
+            return command
         template = self.config["commands"].get(family) or []
         if not template:
             return []
@@ -1099,6 +1460,10 @@ class Driver(object):
         created = unit.get("implementation_stabilization") is None
         if created:
             durable_marker = copy.deepcopy(marker)
+            call = self._matching_busy_call(kind=contracts.KIND_IMPLEMENT)
+            for key in ("family", "model", "effort"):
+                if key in call:
+                    durable_marker[key] = copy.deepcopy(call[key])
             if interrupt_reason:
                 durable_marker["interrupt_reason"] = interrupt_reason
             unit["implementation_stabilization"] = {
@@ -1172,6 +1537,11 @@ class Driver(object):
             "grace_kind": marker.get("grace_kind"),
             "hard_crossed_lines": marker.get("hard_crossed_lines"),
         }
+        call_fields = {
+            key: copy.deepcopy(marker[key])
+            for key in ("family", "model", "effort")
+            if key in marker
+        }
         added = False
         if (
             marker.get("steer_attempted")
@@ -1205,6 +1575,7 @@ class Driver(object):
                 # implementer's spend disappears with no floor marker.
                 cost_partial=True,
                 raw_path=None,
+                **call_fields,
                 **interrupt_fields,
             )
             added = True
@@ -1267,7 +1638,8 @@ class Driver(object):
     def _call_implementation(
         self, family, prompt, raw_name, model, effort, extensions, roots,
         validate_opts, start_session, base_tree, session_ref=None,
-        stabilizing=False,
+        stabilizing=False, dispatch_resolver=None,
+        continuation_family=None,
     ):
         if stabilizing:
             output, result, raw_path = self._call(
@@ -1284,6 +1656,8 @@ class Driver(object):
                 session_ref=session_ref,
                 active_control=None,
                 repeat_protocol=True,
+                dispatch_resolver=dispatch_resolver,
+                continuation_family=continuation_family,
             )
             return output, result, raw_path, None, True
         control, marker = self._implementation_size_control(base_tree)
@@ -1311,6 +1685,8 @@ class Driver(object):
             start_session=start_session,
             session_ref=session_ref,
             active_control=control,
+            dispatch_resolver=dispatch_resolver,
+            continuation_family=continuation_family,
         )
         if marker is None:
             return output, result, raw_path, None, False
@@ -1390,11 +1766,20 @@ class Driver(object):
                     completed=True,
                 )
             return output, result, raw_path, marker, False
+        interrupted_call = self._matching_busy_call(
+            kind=contracts.KIND_IMPLEMENT, label=raw_name
+        )
+        interrupted_family, interrupted_model, interrupted_effort = (
+            self._result_identity(result, family, model, effort)
+        )
         st.append_event(
             self.state,
             "implementation_size_interrupted",
             unit=st.unit_key(st.current_unit(self.state)),
             episode_id=marker.get("episode_id"),
+            family=interrupted_call.get("family") or interrupted_family,
+            model=interrupted_call.get("model") or interrupted_model,
+            effort=interrupted_call.get("effort") or interrupted_effort,
             lines=marker.get("interrupt_lines"),
             reason=result.interrupt_reason,
             duration_s=result.duration_s,
@@ -1441,6 +1826,8 @@ class Driver(object):
             # size-monitored nor failed for an oversized coherent result.
             active_control=None,
             repeat_protocol=True,
+            dispatch_resolver=dispatch_resolver,
+            continuation_family=continuation_family,
         )
         return output, result, raw_path, marker, True
 
@@ -1536,6 +1923,57 @@ class Driver(object):
         text still tells). A worker that honestly returns `blocked` is
         NOT an LLM failure and records nothing here."""
         raw_paths = list(raw_paths or [])
+        call = self._matching_busy_call(kind=kind, label=raw_name)
+        dispatches = getattr(exc, "physical_dispatches", None)
+        dispatch_identities = (
+            {
+                (
+                    dispatch.get("family"),
+                    dispatch.get("model"),
+                    dispatch.get("effort"),
+                )
+                for dispatch in dispatches
+                if isinstance(dispatch, dict)
+            }
+            if isinstance(dispatches, list) else set()
+        )
+        # A current-state edit can change any part of the repair identity; that
+        # exceptional call needs one truthful identity per physical dispatch.
+        # A double-malformed call whose full identity is unchanged retains its
+        # established single fatal incident and combined failure/accounting.
+        if (isinstance(dispatches, list) and len(dispatches) > 1
+                and len(dispatch_identities) > 1):
+            for index, dispatch in enumerate(dispatches):
+                st.append_event(
+                    self.state,
+                    "worker_malformed",
+                    unit=self._worker_event_unit(),
+                    label=raw_name,
+                    kind=kind,
+                    family=dispatch.get("family"),
+                    model=dispatch.get("model"),
+                    effort=dispatch.get("effort"),
+                    fatal=index == len(dispatches) - 1,
+                    error=str(dispatch.get("error") or exc)[:300],
+                    duration_s=dispatch.get("duration_s"),
+                    token_usage=copy.deepcopy(
+                        dispatch.get("token_usage")
+                    ),
+                    token_usage_partial=bool(
+                        dispatch.get("token_usage_partial", False)
+                        or dispatch.get("token_usage") is None
+                    ),
+                    cost=copy.deepcopy(dispatch.get("cost")),
+                    cost_partial=bool(
+                        dispatch.get("cost_partial", False)
+                        or dispatch.get("cost") is None
+                    ),
+                    raw_path=(
+                        raw_paths[index] if index < len(raw_paths) else None
+                    ),
+                    raw_path2=None,
+                )
+            return
         st.append_event(
             self.state,
             "worker_malformed",
@@ -1543,8 +1981,14 @@ class Driver(object):
             label=raw_name,
             kind=kind,
             family=family,
+            model=(call.get("model")
+                   or getattr(exc, "resolved_model", None)),
+            effort=(call.get("effort")
+                    or getattr(exc, "resolved_effort", None)),
             fatal=True,
-            error=str(exc)[:300],
+            error=str(
+                getattr(exc, "incident_error", None) or exc
+            )[:300],
             duration_s=(
                 duration_s if duration_s is not None
                 else getattr(exc, "duration_s", None)
@@ -1913,6 +2357,35 @@ class Driver(object):
             if key != "pending_calls"
         }
 
+    def _matching_busy_call(self, kind=None, family=None, label=None):
+        """Find the durable ordinary call identity for an incident."""
+        marker = self._read_busy()
+        if marker is None:
+            return {}
+        calls = list(marker.get("pending_calls") or [])
+        calls.append(self._busy_call(marker))
+        for call in reversed(calls):
+            if not isinstance(call, dict):
+                continue
+            if kind is not None and call.get("kind") != kind:
+                continue
+            if family is not None and call.get("family") != family:
+                continue
+            if label is not None and call.get("label") != label:
+                continue
+            return copy.deepcopy(call)
+        return {}
+
+    @staticmethod
+    def _retain_call_identity(call, model, effort, family=None):
+        """Keep generic staffing available after the busy marker is gone."""
+        if getattr(call, "resolved_family", None) is None:
+            call.resolved_family = family
+        if getattr(call, "resolved_model", None) is None:
+            call.resolved_model = model
+        if getattr(call, "resolved_effort", None) is None:
+            call.resolved_effort = effort
+
     def _read_busy(self):
         try:
             with open(self._busy_path(), "r", encoding="utf-8") as fh:
@@ -1964,6 +2437,31 @@ class Driver(object):
             if pending:
                 marker["pending_calls"] = pending
             return self._write_busy(marker)
+
+    def _retarget_busy(self, label, kind, family, model, effort):
+        """Keep the generic in-flight marker aligned with the next call."""
+        with self._busy_lock:
+            marker = self._read_busy()
+            if (
+                marker is None
+                or marker.get("label") != label
+                or marker.get("kind") != kind
+            ):
+                raise RuntimeError(
+                    "%s call lost its accounting marker before dispatch"
+                    % kind
+                )
+            marker.update({
+                "family": family,
+                "model": model,
+                "effort": effort,
+                "started_at": time.time(),
+            })
+            if not self._write_busy(marker):
+                raise RuntimeError(
+                    "%s call could not update its accounting marker"
+                    % kind
+                )
 
     def _price_call(self, family, model, call, include_repair=False):
         """Price one completed call and hang the answer on it.
@@ -2026,6 +2524,17 @@ class Driver(object):
             marker = self._read_busy()
             if marker is None:
                 return False
+            final_family, final_model, final_effort = self._result_identity(
+                call,
+                marker.get("family"),
+                marker.get("model"),
+                marker.get("effort"),
+            )
+            marker.update({
+                "family": final_family,
+                "model": final_model,
+                "effort": final_effort,
+            })
             duration, usage, partial = self._call_accounting(call)
             # Every completed physical call passes through here, successful or
             # not, and the marker already records WHICH model actually ran —
@@ -2033,11 +2542,39 @@ class Driver(object):
             # The call object gets its OWN price (final attempt only);
             # the sentinel separately gets the whole logical call, repair
             # included, because crash recovery reasons about the call as one.
-            self._quote_call(marker.get("family"), marker.get("model"), call)
-            sentinel_cost = self._price_call(
-                marker.get("family"), marker.get("model"), call,
-                include_repair=True,
+            physical_dispatches = getattr(
+                call, "physical_dispatches", None
             )
+            if isinstance(physical_dispatches, list):
+                costs = [
+                    self._quote_call(
+                        item.get("family") or final_family,
+                        item.get("model") or final_model,
+                        item,
+                    )
+                    for item in physical_dispatches
+                ]
+            else:
+                final_cost = self._quote_call(
+                    final_family, final_model, call
+                )
+                costs = [final_cost]
+                repair = getattr(call, "repair", None)
+                if isinstance(repair, dict):
+                    costs.append(self._price_call(
+                        repair.get("family") or final_family,
+                        repair.get("model") or final_model,
+                        repair,
+                    ))
+            sentinel_cost = None
+            if costs and all(isinstance(cost, dict) for cost in costs):
+                sentinel_cost = {
+                    "api_usd": sum(cost["api_usd"] for cost in costs),
+                    "real_usd": sum(cost["real_usd"] for cost in costs),
+                }
+            if isinstance(physical_dispatches, list):
+                call.cost = copy.deepcopy(sentinel_cost)
+                call.cost_partial = sentinel_cost is None
             marker["cost"] = copy.deepcopy(sentinel_cost)
             marker["cost_partial"] = sentinel_cost is None
             marker["completed"] = True
@@ -2130,7 +2667,8 @@ class Driver(object):
     def _call(self, family, prompt, kind, raw_name, model=None, effort=None,
               extensions=None, roots=None, validate_opts=None,
               start_session=False, session_ref=None, active_control=None,
-              repeat_protocol=False):
+              repeat_protocol=False, dispatch_resolver=None,
+              continuation_family=None):
         """Validated worker call; on protocol/runner failure, fail the run
         with the explanation recorded, then re-raise as StopStep.
 
@@ -2147,8 +2685,12 @@ class Driver(object):
             retries = [10, 30]
         attempt = 0
         while True:
+            call_family, call_model, call_effort = family, model, effort
+            if dispatch_resolver is not None:
+                call_family, call_model, call_effort = dispatch_resolver()
             if not self._mark_busy(
-                raw_name, kind, family, model=model, effort=effort
+                raw_name, kind, call_family,
+                model=call_model, effort=call_effort
             ):
                 st.fail_run(
                     self.state,
@@ -2166,45 +2708,70 @@ class Driver(object):
                     else active_control.renew()
                 )
                 output, result = runners.call_worker(
-                    self.runner, family, prompt, kind, self.workspace,
-                    model=model, effort=effort,
+                    self.runner, call_family, prompt, kind, self.workspace,
+                    model=call_model, effort=call_effort,
                     extensions=extensions, roots=roots,
                     validate_opts=validate_opts,
                     start_session=start_session, session_ref=session_ref,
                     active_control=call_control,
+                    resolve_dispatch=dispatch_resolver,
+                    continuation_family=continuation_family,
+                    on_dispatch=lambda f, m, e: self._retarget_busy(
+                        raw_name, kind, f, m, e
+                    ),
+                )
+                actual_family, actual_model, actual_effort = (
+                    self._result_identity(
+                        result, call_family, call_model, call_effort
+                    )
+                )
+                self._retain_call_identity(
+                    result, actual_model, actual_effort, actual_family
                 )
                 self._require_busy_accounting(
-                    kind, family, raw_name, result
+                    kind, actual_family, raw_name, result
                 )
+            except StopStep as exc:
+                if getattr(
+                    exc, "completed_attempt_before_dispatch_failure", False
+                ):
+                    actual_family, actual_model, actual_effort = (
+                        self._result_identity(
+                            exc, call_family, call_model, call_effort
+                        )
+                    )
+                    self._retain_call_identity(
+                        exc, actual_model, actual_effort, actual_family
+                    )
+                    self._require_busy_accounting(
+                        kind, actual_family, raw_name, exc
+                    )
+                    proto_paths = self._save_protocol_raws(raw_name, exc)
+                    self._record_fatal_malformed(
+                        raw_name, kind, actual_family, exc, proto_paths
+                    )
+                    self._save()
+                self._clear_busy()
+                raise
             except verifiers.VerifierError as exc:
+                actual_family, actual_model, actual_effort = (
+                    self._result_identity(
+                        exc, call_family, call_model, call_effort
+                    )
+                )
+                self._retain_call_identity(
+                    exc, actual_model, actual_effort, actual_family
+                )
                 self._require_busy_accounting(
-                    kind, family, raw_name, exc
+                    kind, actual_family, raw_name, exc
                 )
                 # Slice 4's non-repairable family (the operator's policy or
                 # the environment, e.g. a missing reuse-source directory —
                 # never the worker): a recorded run failure the operator
                 # repairs and resumes; no repair retry is burned.
-                st.append_event(
-                    self.state,
-                    "worker_unaccepted",
-                    unit=self._worker_event_unit(),
-                    label=raw_name,
-                    kind=kind,
-                    family=family,
-                    reason="project standing-law fault",
-                    duration_s=getattr(exc, "duration_s", None),
-                    token_usage=copy.deepcopy(
-                        getattr(exc, "token_usage", None)
-                    ),
-                    token_usage_partial=bool(
-                        getattr(exc, "token_usage_partial", False)
-                        or getattr(exc, "token_usage", None) is None
-                    ),
-                    cost=copy.deepcopy(getattr(exc, "cost", None)),
-                    cost_partial=bool(
-                        getattr(exc, "cost_partial", False)
-                        or getattr(exc, "cost", None) is None
-                    ),
+                self._record_worker_unaccepted(
+                    st.current_unit(self.state), kind, actual_family, exc,
+                    "project standing-law fault",
                 )
                 st.fail_run(
                     self.state,
@@ -2217,8 +2784,16 @@ class Driver(object):
                 raise StopStep(str(exc))
             except (runners.RunnerError, runners.WorkerProtocolError) as exc:
                 failed_duration_s = time.time() - physical_started
+                actual_family, actual_model, actual_effort = (
+                    self._result_identity(
+                        exc, call_family, call_model, call_effort
+                    )
+                )
+                self._retain_call_identity(
+                    exc, actual_model, actual_effort, actual_family
+                )
                 self._require_busy_accounting(
-                    kind, family, raw_name, exc,
+                    kind, actual_family, raw_name, exc,
                     duration_s=failed_duration_s,
                 )
                 proto_paths = self._save_protocol_raws(raw_name, exc)
@@ -2233,7 +2808,9 @@ class Driver(object):
                         unit=self._worker_event_unit(),
                         label=raw_name,
                         kind=kind,
-                        family=family,
+                        family=actual_family,
+                        model=actual_model,
+                        effort=actual_effort,
                         fatal=False,
                         controlled_interruption=True,
                         error=str(exc)[:300],
@@ -2264,6 +2841,9 @@ class Driver(object):
                         getattr(exc, "cost_partial", False)
                         or result.cost is None
                     )
+                    self._retain_call_identity(
+                        result, actual_model, actual_effort, actual_family
+                    )
                     break
                 if (
                     repeat_protocol
@@ -2280,7 +2860,9 @@ class Driver(object):
                         unit=self._worker_event_unit(),
                         label=raw_name,
                         kind=kind,
-                        family=family,
+                        family=actual_family,
+                        model=actual_model,
+                        effort=actual_effort,
                         fatal=False,
                         stabilizer_retry=True,
                         error=str(exc)[:300],
@@ -2310,7 +2892,7 @@ class Driver(object):
                         start_session = True
                     continue
                 etype, resume_at, evidence = self._classify_failure(
-                    family, exc, raw_name=raw_name
+                    actual_family, exc, raw_name=raw_name
                 )
                 if etype in ("network", "busy") and attempt < len(retries):
                     # Short in-place retries BEFORE failing: transient
@@ -2319,7 +2901,9 @@ class Driver(object):
                         "unit": self._worker_event_unit(),
                         "label": raw_name,
                         "kind": kind,
-                        "family": family,
+                        "family": actual_family,
+                        "model": actual_model,
+                        "effort": actual_effort,
                         "fatal": False,
                         "infra_retry": True,
                         "error": str(exc)[:300],
@@ -2348,7 +2932,8 @@ class Driver(object):
                         self.state, "worker_malformed", **incident
                     )
                     st.append_event(
-                        self.state, "infra_retry", kind=kind, family=family,
+                        self.state, "infra_retry", kind=kind,
+                        family=actual_family,
                         failure_type=etype, attempt=attempt + 1,
                         wait_s=retries[attempt],
                     )
@@ -2362,7 +2947,7 @@ class Driver(object):
                 # non-fatal incident even when the provider exposed no raw
                 # bytes, so every retry remains visible and truthful.
                 self._record_fatal_malformed(
-                    raw_name, kind, family, exc, proto_paths,
+                    raw_name, kind, actual_family, exc, proto_paths,
                     duration_s=failed_duration_s,
                 )
                 resume_at = errclass.normalize_resume_at(resume_at)
@@ -2393,11 +2978,17 @@ class Driver(object):
             raw_path = self._save_raw_noclobber(
                 raw_name + "-controlled-interruption", raw_text
             )
-            self._record_repair(raw_name, kind, family, result)
+            actual_family, _actual_model, _actual_effort = (
+                self._result_identity(result, call_family, call_model, call_effort)
+            )
+            self._record_repair(raw_name, kind, actual_family, result)
             result.raw_path = raw_path
             return None, result, raw_path
         raw_path = self._save_raw(raw_name, result.text)
-        self._record_repair(raw_name, kind, family, result)
+        actual_family, _actual_model, _actual_effort = self._result_identity(
+            result, call_family, call_model, call_effort
+        )
+        self._record_repair(raw_name, kind, actual_family, result)
         return output, result, raw_path
 
     def _record_repair(self, raw_name, kind, family, result):
@@ -2408,6 +2999,7 @@ class Driver(object):
         text lands in raw/ and a worker_malformed event carries the error,
         the wasted duration, and the raw path — the panel surfaces it as a
         chip; prompt/contract tuning needs these strikes visible."""
+        call = self._matching_busy_call(kind, family, raw_name)
         # BOTH channels, never `or`: a repair retry that itself needed
         # delimiter recovery produced two distinct strikes, and reporting
         # only the first would hide the second.
@@ -2421,8 +3013,11 @@ class Driver(object):
                 rep["raw_text"],
             )
             marker = self._read_busy() or {}
+            strike_family = rep.get("family") or family
+            strike_model = rep.get("model") or marker.get("model")
+            strike_effort = rep.get("effort") or call.get("effort")
             strike_cost = self._price_call(
-                family, marker.get("model"), rep
+                strike_family, strike_model, rep
             )
             st.append_event(
                 self.state,
@@ -2430,7 +3025,9 @@ class Driver(object):
                 unit=self._worker_event_unit(),
                 label=raw_name,
                 kind=kind,
-                family=family,
+                family=strike_family,
+                model=strike_model,
+                effort=strike_effort,
                 error=str(rep["error"])[:300],
                 # A delimiter recovery costs no retry, so it wasted no
                 # time — it still reports as malformed because the output
@@ -2470,6 +3067,9 @@ class Driver(object):
             classifier_effort=cls_effort,
             on_llm_call=self._classify_call_recorder(raw_name),
             on_llm_start=self._classify_call_starter(raw_name),
+            resolve_dispatch=self._structural_dispatch(
+                opposite, cls_model, cls_effort
+            ),
         )
 
     def _classify_call_starter(self, raw_name):
@@ -2731,6 +3331,7 @@ class Driver(object):
                     self.state,
                     brainstorming_authority["session_id"],
                     brainstorming_authority["accepted_target_revision"],
+                    active_home=self.model_profiles_home,
                 )
                 checked_record = brainstorming.validate_target_revision(
                     authority_record
@@ -2799,6 +3400,7 @@ class Driver(object):
                     self.state,
                     brainstorming_authority["session_id"],
                     brainstorming_authority["accepted_target_revision"],
+                    active_home=self.model_profiles_home,
                 )
                 exists, content = brainstorming.target_revision_content(
                     authority_record
@@ -2836,6 +3438,7 @@ class Driver(object):
             self.state,
             authority["session_id"],
             authority["accepted_target_revision"],
+            active_home=self.model_profiles_home,
         )
         exists, content = brainstorming.target_revision_content(record)
         if not exists:
@@ -3213,7 +3816,6 @@ class Driver(object):
         raw_path,
         raw_name,
         pre_snapshot=None,
-        model_profile_binding=None,
     ):
         """Attach one non-completing worker signal to an independent session."""
         st.append_event(
@@ -3278,9 +3880,12 @@ class Driver(object):
                     "goal": self.state.get("goal"),
                     "project_context": project_context,
                 })
-            lead_profile, counterpart_profile = (
-                self._brainstorming_profiles()
-            )
+            profile_runtime = self._brainstorming_profile_runtime()
+            lead_profile = counterpart_profile = None
+            if profile_runtime is None:
+                lead_profile, counterpart_profile = (
+                    self._brainstorming_profiles()
+                )
             created = brainstorming_milestone.create_session(
                 self.state,
                 self.config,
@@ -3290,6 +3895,7 @@ class Driver(object):
                 authority_context=authority_context,
                 lead_profile=lead_profile,
                 counterpart_profile=counterpart_profile,
+                model_profile_runtime=profile_runtime,
             )
             progress = brainstorming.coordination_projection(created["state"])
             if (
@@ -3349,10 +3955,6 @@ class Driver(object):
                 "pre_snapshot": copy.deepcopy(pre_snapshot),
             },
         }
-        if model_profile_binding is not None:
-            unit["brainstorming_wait"]["origin"][
-                "model_profile_binding"
-            ] = copy.deepcopy(model_profile_binding)
         st.append_event(
             self.state,
             "brainstorming_wait_started",
@@ -3390,9 +3992,6 @@ class Driver(object):
         result.origin_model = record.get("model")
         result.origin_effort = record.get("effort")
         result.origin_pre_snapshot = copy.deepcopy(record.get("pre_snapshot"))
-        result.origin_model_profile_binding = copy.deepcopy(
-            record.get("model_profile_binding")
-        )
         return result
 
     def _take_brainstorming_resume(self, unit, kind):
@@ -3427,7 +4026,9 @@ class Driver(object):
                 "Brainstorming review handoff kind does not match current action"
             )
         handoff = brainstorming_milestone.prompt_handoff(
-            self.state, record["handoff"]
+            self.state,
+            record["handoff"],
+            active_home=self.model_profiles_home,
         )
         handoff["source_finding"] = copy.deepcopy(
             record["source_finding"]
@@ -3544,7 +4145,10 @@ class Driver(object):
         if settings is None:
             return self._finish_draft(unit, "drafted")
         skeleton_path = unit.get("artifact") or self._skeleton_artifact()
-        lead_profile, counterpart_profile = self._brainstorming_profiles()
+        profile_runtime = self._brainstorming_profile_runtime()
+        lead_profile = counterpart_profile = None
+        if profile_runtime is None:
+            lead_profile, counterpart_profile = self._brainstorming_profiles()
         project_context, _extensions, _roots = self._project_prompt_inputs(
             unit, contracts.KIND_DRAFT_SKELETON, record_seen=False
         )
@@ -3568,6 +4172,7 @@ class Driver(object):
                         "project_context": project_context,
                     },
                     max_rounds=settings["max_rounds"],
+                    model_profile_runtime=profile_runtime,
                 )
             )
         except Exception as exc:
@@ -3587,34 +4192,42 @@ class Driver(object):
             "status": "running",
             "session_id": created["id"],
         }
+        origin = {
+            "unit": st.unit_key(unit),
+            "kind": "guarantee_calibration",
+            "raw_name": "%s-guarantee-calibration" % st.unit_key(unit),
+        }
+        if lead_profile is not None:
+            origin.update({
+                "family": lead_profile["agent"],
+                "model": lead_profile["model"],
+                "effort": lead_profile["effort"],
+            })
         unit["brainstorming_wait"] = {
             "session_id": created["id"],
             "signal": None,
             "references": list(references),
-            "origin": {
-                "unit": st.unit_key(unit),
-                "kind": "guarantee_calibration",
-                "family": lead_profile["agent"],
-                "model": lead_profile["model"],
-                "effort": lead_profile["effort"],
-                "raw_name": "%s-guarantee-calibration"
-                % st.unit_key(unit),
-            },
+            "origin": origin,
         }
         st.append_event(
             self.state,
             "brainstorming_wait_started",
             unit=st.unit_key(unit),
             kind="guarantee_calibration",
-            family=lead_profile["agent"],
             session_id=created["id"],
             target_path=skeleton_path,
+            **(
+                {"family": lead_profile["agent"]}
+                if lead_profile is not None else {}
+            ),
         )
         return "skeleton drafted; guarantee calibration started"
 
     def _complete_guarantee_calibration(self, unit, wait, handoff):
         expanded = brainstorming_milestone.prompt_handoff(
-            self.state, handoff
+            self.state,
+            handoff,
+            active_home=self.model_profiles_home,
         )
         retained = expanded.get("retained_target") or {}
         content = retained.get("content")
@@ -3770,7 +4383,9 @@ class Driver(object):
             )
         try:
             handoff = brainstorming_milestone.terminal_handoff(
-                self.state, session_id
+                self.state,
+                session_id,
+                active_home=self.model_profiles_home,
             )
         except brainstorming_lifecycle.PublicLifecycleError as exc:
             if exc.code != brainstorming_lifecycle.UNKNOWN_SESSION:
@@ -4059,7 +4674,9 @@ class Driver(object):
                 family,
                 self.workspace,
                 brainstorming_milestone.prompt_handoff(
-                    self.state, handoff
+                    self.state,
+                    handoff,
+                    active_home=self.model_profiles_home,
                 ),
                 allow_design_correction=bool(
                     design_context
@@ -4200,6 +4817,10 @@ class Driver(object):
                             "implementation_stabilized"
                         )
                     ),
+                    dispatch_resolver=self._dispatch_for_worker_kind(
+                        unit, kind
+                    ),
+                    continuation_family=origin["family"],
                 )
                 if durable_stabilization_size is not None:
                     implementation_size = durable_stabilization_size
@@ -4216,7 +4837,21 @@ class Driver(object):
                     roots=roots,
                     validate_opts=validate_opts,
                     session_ref=origin["provider_session_ref"],
+                    dispatch_resolver=self._dispatch_for_worker_kind(
+                        unit,
+                        kind,
+                        origin_family=(unit.get("fix_source") or {}).get(
+                            "family"
+                        ),
+                    ),
+                    continuation_family=origin["family"],
                 )
+            family, current_model, current_effort = self._result_identity(
+                result,
+                family,
+                origin.get("model"),
+                origin.get("effort"),
+            )
             continued_pre_snapshot = copy.deepcopy(
                 origin.get("pre_snapshot") or {}
             )
@@ -4246,16 +4881,13 @@ class Driver(object):
                     unit,
                     kind,
                     family,
-                    origin.get("model"),
-                    origin.get("effort"),
+                    current_model,
+                    current_effort,
                     output,
                     result,
                     raw_path,
                     raw_name,
                     pre_snapshot=continued_pre_snapshot,
-                    model_profile_binding=origin.get(
-                        "model_profile_binding"
-                    ),
                 )
             unit["brainstorming_resume"] = {
                 "kind": kind,
@@ -4281,14 +4913,10 @@ class Driver(object):
                 ),
                 "handoff": copy.deepcopy(handoff),
                 "family": family,
-                "model": origin.get("model"),
-                "effort": origin.get("effort"),
+                "model": current_model,
+                "effort": current_effort,
                 "pre_snapshot": continued_pre_snapshot,
             }
-            if origin.get("model_profile_binding") is not None:
-                unit["brainstorming_resume"][
-                    "model_profile_binding"
-                ] = copy.deepcopy(origin["model_profile_binding"])
             st.append_event(
                 self.state,
                 "brainstorming_builder_continued",
@@ -4337,12 +4965,20 @@ class Driver(object):
         return "Brainstorming succeeded; fresh reviewer call required"
 
     def _record_worker_unaccepted(self, unit, kind, family, result, reason):
+        call = self._matching_busy_call(kind=kind, family=family)
         st.append_event(
             self.state,
             "worker_unaccepted",
             unit=st.unit_key(unit) if unit is not None else None,
+            label=call.get("label"),
             kind=kind,
             family=family,
+            model=(call.get("model")
+                   or getattr(result, "resolved_model", None)
+                   or getattr(result, "origin_model", None)),
+            effort=(call.get("effort")
+                    or getattr(result, "resolved_effort", None)
+                    or getattr(result, "origin_effort", None)),
             reason=str(reason or "")[:300],
             duration_s=getattr(result, "duration_s", None),
             token_usage=copy.deepcopy(getattr(result, "token_usage", None)),
@@ -4719,15 +5355,11 @@ class Driver(object):
         # `implementer`. Only skeleton REVIEWS stay on the review families.
         if unit["kind"] == st.UNIT_SKELETON:
             act = "skeletoner"
-            staffing = self._skeletoner_staffing()
+            family, model, effort = self._skeletoner_profile()
         else:
             act = "implementer" if unit["kind"] == st.UNIT_SLICE_IMPL \
                 else "drafter"
-            staffing = self._act_staffing(act)
-        family = staffing["family"]
-        model = staffing["model"]
-        effort = staffing["effort"]
-        draft_attribution = self._staffing_attribution(staffing)
+            family, model, effort = self._act_profile(act)
         goal = self._goal_for(unit)
         amendments = self._amendments()
         kind = {
@@ -4735,6 +5367,7 @@ class Driver(object):
             st.UNIT_SLICE_DOC: contracts.KIND_DRAFT_SLICE_NOTE,
             st.UNIT_SLICE_IMPL: contracts.KIND_IMPLEMENT,
         }[unit["kind"]]
+        dispatch_resolver = self._dispatch_for_worker_kind(unit, kind)
         project_context, extensions, roots = self._project_prompt_inputs(
             unit, kind
         )
@@ -4887,24 +5520,8 @@ class Driver(object):
         if resumed is not None:
             output, result, raw_path = resumed
             family = result.origin_family or family
-            if self._model_profile_state() is not None:
-                default_model, default_effort = self._family_defaults(family)
-                model = result.origin_model or default_model
-                effort = result.origin_effort or default_effort
-                if act == "skeletoner" and result.origin_effort is None:
-                    effort = DEFAULT_CONFIG["acts"]["skeletoner"]["effort"]
-            else:
-                model = result.origin_model or model
-                effort = result.origin_effort or effort
-            # The resumed envelope was produced under the ORIGIN call
-            # (whose staffing and attribution the ledger's
-            # brainstorming_origin_recorded event retains); the draft
-            # record claims only the unit's retained binding, not the
-            # just-resolved override provenance.
-            if draft_attribution is not None:
-                draft_attribution = self._resumed_call_attribution(
-                    result, act
-                )
+            model = result.origin_model or model
+            effort = result.origin_effort or effort
             original_pre = result.origin_pre_snapshot or {}
             pre_refs = original_pre.get("refs")
             pre_sym = original_pre.get("sym")
@@ -4951,6 +5568,7 @@ class Driver(object):
                     start_session,
                     (implementation_attempt or {}).get("tree") or pre_tree,
                     stabilizing=stabilization_size is not None,
+                    dispatch_resolver=dispatch_resolver,
                 )
                 if stabilization_size is not None:
                     implementation_size = stabilization_size
@@ -4960,7 +5578,11 @@ class Driver(object):
                     model=model, effort=effort, extensions=extensions,
                     roots=roots, validate_opts=validate_opts,
                     start_session=start_session,
+                    dispatch_resolver=dispatch_resolver,
                 )
+            family, model, effort = self._result_identity(
+                result, family, model, effort
+            )
         if design_before is not None:
             self._record_design_changes(
                 unit,
@@ -4994,7 +5616,6 @@ class Driver(object):
                         implementation_stabilized
                     ),
                 },
-                model_profile_binding=staffing.get("binding"),
             )
         if output.get("status") == "gap":
             # The builder met a build-changing hole/conflict and stopped
@@ -5044,8 +5665,7 @@ class Driver(object):
                         cost_partial=bool(
                             getattr(result, "cost_partial", False)
                             or getattr(result, "cost", None) is None
-                        ),
-                        attribution=draft_attribution)
+                        ))
         if kind == contracts.KIND_IMPLEMENT and output.get("suite_command"):
             st.set_discovered_suite(self.state, output["suite_command"])
         if unit["kind"] == st.UNIT_SKELETON:
@@ -5440,8 +6060,9 @@ class Driver(object):
                         stash=pending.get("pre_stash"),
                     )
                     if (
-                        gitops.snapshot_worktree_tree(self.workspace)
+                        gitops.snapshot_index_tree(self.workspace)
                         != candidate_tree
+                        or gitops.has_builder_edits(self.workspace)
                     ):
                         raise gitops.GitError(
                             "pre-fixer candidate tree did not restore exactly"
@@ -5984,503 +6605,120 @@ class Driver(object):
         return list(st.active_debt(self.state, unit))
 
     def _acts_overlay(self):
-        """Operator-editable mid-run act assignments (acts.json beside the
-        state file) — same lock-free pattern as amendments: the panel
-        writes, the driver only reads, re-read before every act resolution
-        so a change binds the next call.
-
-        For a model-profile-enabled run the file is also the single
-        persisted override layer (creation-supplied entries included) and
-        presence is provenance, so a PRESENT but unreadable or non-object
-        file fails the resolution loudly instead of silently resolving as
-        if every override had been cleared. Pre-feature runs keep the
-        historical tolerant read."""
-        path = os.path.join(self._runtime_dir(), "acts.json")
+        """Read the one current per-run override map beside state."""
         try:
-            with open(path, "r", encoding="utf-8") as fh:
-                data = json.load(fh)
-        except FileNotFoundError:
-            return {}
-        except (OSError, ValueError) as exc:
-            if self._model_profile_state() is not None:
-                self._fail_model_profile_resolution(
-                    "act override layer (acts.json) is unreadable: %s" % exc
-                )
-            return {}
-        if isinstance(data, dict):
-            return data
-        if self._model_profile_state() is not None:
-            self._fail_model_profile_resolution(
-                "act override layer (acts.json) must be a JSON object"
+            return read_current_acts_overlay(
+                self.state_path,
+                strict=self.model_profiles_home is not None,
             )
-        return {}
-
-    # -- model-profile runtime: selection, binding, retention ---------------
-
-    def _model_profile_state(self):
-        """The run's model-profile feature marker ({home, selection}), or
-        None for a pre-feature state — which never reads the catalogue and
-        keeps the exact config-only resolution path."""
-        if "model_profile" not in self.state:
-            return None
-        mp = self.state.get("model_profile")
-        if not isinstance(mp, dict):
-            self._fail_model_profile_resolution(
-                "model-profile feature state must be a JSON object"
-            )
-        return mp
+        except model_profiles.ModelProfileError as exc:
+            self._fail_model_profile_resolution(str(exc))
 
     def _fail_model_profile_resolution(self, reason):
-        """Loud pre-dispatch failure: no provider call is made, nothing
-        falls back, and no prior binding or recorded call is rewritten."""
-        st.fail_run(self.state, reason, unit=st.current_unit(self.state))
-        self._save()
-        raise StopStep(reason)
-
-    def _model_profile_selection_path(self):
-        # Beside the state file, like acts.json/amendments.json: the
-        # operator (Slice 3's route) writes it atomically, the driver only
-        # reads it, re-read at every act resolution so a change binds the
-        # next call, never one already in flight.
-        return os.path.join(self._runtime_dir(), "model_profile.json")
-
-    @staticmethod
-    def _selection_request_identity(raw, stat_result):
-        """Identity of one physical sidecar generation.
-
-        The request payload deliberately stays the small ``name`` + ``rigor``
-        command.  File identity distinguishes a later deliberate reapplication
-        of that same payload from the same request surviving a crash after its
-        state transition was saved.
-        """
-        stamp = "%s:%s:%s:%s:%s:" % (
-            stat_result.st_dev,
-            stat_result.st_ino,
-            getattr(
-                stat_result,
-                "st_mtime_ns",
-                int(stat_result.st_mtime * 1000000000),
-            ),
-            getattr(
-                stat_result,
-                "st_ctime_ns",
-                int(stat_result.st_ctime * 1000000000),
-            ),
-            stat_result.st_size,
-        )
-        return hashlib.sha256(stamp.encode("ascii") + raw).hexdigest()
-
-    def _read_selection_request(self):
-        """The operator's current selection request and physical identity.
-
-        Returns ``(selection, request_identity)`` or ``(None, None)`` when no
-        request exists. A present but unreadable or malformed request fails
-        loudly: selections never fall back.
-        """
-        try:
-            with open(self._model_profile_selection_path(), "rb") as fh:
-                raw = fh.read()
-                stat_result = os.fstat(fh.fileno())
-            data = json.loads(raw)
-        except FileNotFoundError:
-            return None, None
-        except (OSError, ValueError) as exc:
-            self._fail_model_profile_resolution(
-                "model-profile selection request is unreadable: %s" % exc
-            )
-        name = data.get("name") if isinstance(data, dict) else None
-        rigor = data.get("rigor") if isinstance(data, dict) else None
-        if (not isinstance(name, str) or not name.strip()
-                or not isinstance(rigor, str) or not rigor.strip()):
-            self._fail_model_profile_resolution(
-                "model-profile selection request must be an object "
-                "carrying non-empty name and rigor"
-            )
-        return (
-            {"name": name.strip(), "rigor": rigor.strip()},
-            self._selection_request_identity(raw, stat_result),
-        )
-
-    def _clear_selection_request(self, expected_identity):
-        """Acknowledge one successfully resolved sidecar request.
-
-        The sidecar is a one-shot command, not retained selection state.  The
-        durable selection/binding and ledger event are saved first; removing
-        the request afterwards lets an operator explicitly reapply the same
-        name + rigor later to adopt newly edited source content. If an
-        operator replaced the sidecar while this resolution was running, that
-        new physical request is left for the next resolution.
-        """
-        try:
-            path = self._model_profile_selection_path()
-            with open(path, "rb") as fh:
-                raw = fh.read()
-                stat_result = os.fstat(fh.fileno())
-        except FileNotFoundError:
-            return False
-        except OSError as exc:
-            self._fail_model_profile_resolution(
-                "model-profile selection request could not be acknowledged: "
-                "%s" % exc
-            )
-        if self._selection_request_identity(raw, stat_result) != expected_identity:
-            return False
-        try:
-            os.remove(path)
-        except FileNotFoundError:
-            return False
-        except OSError as exc:
-            self._fail_model_profile_resolution(
-                "model-profile selection request could not be acknowledged: "
-                "%s" % exc
-            )
-        return True
-
-    def _resolve_selection_content(self, selection):
-        """(configuration, content_hash) for one selection, read fresh
-        from the mutable source. Unknown, missing, corrupt, or incomplete
-        sources fail before any provider dispatch; there is no fallback."""
-        home = self._model_profile_state().get("home")
-        if not isinstance(home, str) or not home:
-            self._fail_model_profile_resolution(
-                "model-profile state carries no catalogue home"
-            )
-        try:
-            return model_profiles.selection_content(
-                home, selection["name"], selection["rigor"]
-            )
-        except model_profiles.ModelProfileError as exc:
-            self._fail_model_profile_resolution(
-                "model-profile selection %s@%s cannot be resolved: %s"
-                % (selection["name"], selection["rigor"], exc)
-            )
-
-    def _current_model_profile_selection(self):
-        """(selection, origin): the run's persisted explicit choice, or
-        the implicit default at the middle rigor when none was made."""
-        selection = self._model_profile_state().get("selection")
-        if selection is None:
-            return (
-                {"name": model_profiles.DEFAULT_PROFILE_NAME,
-                 "rigor": "medium"},
-                "implicit-default",
-            )
-        name = selection.get("name") if isinstance(selection, dict) else None
-        rigor = selection.get("rigor") if isinstance(selection, dict) else None
-        if (not isinstance(name, str) or not name.strip()
-                or not isinstance(rigor, str) or not rigor.strip()):
-            self._fail_model_profile_resolution(
-                "persisted model-profile selection must carry non-empty "
-                "name and rigor"
-            )
-        return (
-            {"name": name.strip(), "rigor": rigor.strip()},
-            "explicit",
-        )
-
-    def _verified_model_profile_binding(self, binding, context):
-        """Return one internally verified retained snapshot, source-free."""
-        if not isinstance(binding, dict):
-            self._fail_model_profile_resolution(
-                "%s must be a retained model-profile binding object" % context
-            )
-        name = binding.get("name")
-        rigor = binding.get("rigor")
-        content_hash = binding.get("content_hash")
-        configuration = binding.get("configuration")
-        if not isinstance(name, str) or not name.strip():
-            self._fail_model_profile_resolution(
-                "%s carries no model-profile name" % context
-            )
-        if rigor not in model_profiles.RIGORS:
-            self._fail_model_profile_resolution(
-                "%s carries an unknown model-profile rigor" % context
-            )
-        if not isinstance(content_hash, str) or not content_hash:
-            self._fail_model_profile_resolution(
-                "%s carries no model-profile content identity" % context
-            )
-        try:
-            normalized = model_profiles.validate_configuration(
-                configuration, context=context
-            )
-        except model_profiles.ModelProfileError as exc:
-            self._fail_model_profile_resolution(
-                "%s carries invalid retained configuration: %s"
-                % (context, exc)
-            )
-        if normalized != configuration:
-            self._fail_model_profile_resolution(
-                "%s carries non-canonical retained configuration" % context
-            )
-        if model_profiles.content_identity(configuration) != content_hash:
-            self._fail_model_profile_resolution(
-                "%s content does not match its retained identity" % context
-            )
-        return binding
-
-    def _ensure_model_profile_runtime(self):
-        """Model-profile runtime at one act resolution.
-
-        Picks up a pending explicit selection change (prospective: it
-        takes effect exactly here — the next act resolution — never on a
-        call already in flight) and binds the current unit at its first
-        act resolution. Every transition lands in the append-only ledger
-        and is saved BEFORE any provider dispatch. Returns the retained
-        binding governing THIS resolution; outside any persisted unit,
-        a fresh resolution of the run's current selection, retained only
-        in that call's attribution."""
-        mp = self._model_profile_state()
-        unit = st.current_unit(self.state)
-        selection, origin = self._current_model_profile_selection()
-        resolved = None  # (configuration, content_hash) read this ensure
-        dirty = False
-        requested, request_identity = self._read_selection_request()
-        binding = None
-        if unit is not None and "model_profile_binding" in unit:
-            binding = self._verified_model_profile_binding(
-                unit.get("model_profile_binding"),
-                "%s model-profile binding" % st.unit_key(unit),
-            )
-        request_ack = mp.get("selection_request_ack")
-        if request_ack is not None and (
-            not isinstance(request_ack, str) or not request_ack
-        ):
-            self._fail_model_profile_resolution(
-                "persisted model-profile selection acknowledgement is invalid"
-            )
-        if requested is None and request_ack is not None:
-            # Crash after unlink but before acknowledgement cleanup.
-            mp.pop("selection_request_ack", None)
-            dirty = True
-        elif requested is not None and request_ack == request_identity:
-            # Crash after the state transition was saved but before its exact
-            # sidecar generation was removed. Consume it without resolving
-            # mutable source again or emitting a second change.
-            self._clear_selection_request(request_identity)
-            mp.pop("selection_request_ack", None)
-            requested = None
-            request_identity = None
-            dirty = True
-        request_changes_selection = bool(
-            requested is not None
-            and (requested["name"], requested["rigor"])
-            != (selection["name"], selection["rigor"])
-        )
-        request_refreshes_binding = False
-        if requested is not None:
-            # Resolve BEFORE mutating anything: an unknown or corrupt
-            # request leaves the prior selection and binding untouched.
-            resolved = self._resolve_selection_content(requested)
-            # This acknowledgement is persisted atomically with any selection
-            # event/binding below. It closes the save-before-unlink crash
-            # window without preventing a later, newly written reapplication.
-            mp["selection_request_ack"] = request_identity
-            dirty = True
-            request_refreshes_binding = bool(
-                binding is not None
-                and resolved[1] != binding["content_hash"]
-            )
-        if request_changes_selection or request_refreshes_binding:
-            previous = dict(selection)
-            mp["selection"] = dict(requested)
-            selection, origin = dict(requested), "explicit"
-            st.append_event(
+        """Fail through ordinary run recovery before any provider dispatch."""
+        if self.state.get("failure") is None:
+            st.fail_run(
                 self.state,
-                "model_profile_changed",
-                unit=st.unit_key(unit) if unit is not None else None,
-                name=selection["name"],
-                rigor=selection["rigor"],
-                content_hash=resolved[1],
-                configuration=copy.deepcopy(resolved[0]),
-                previous=previous,
+                "model-profile resolution failed: %s" % reason,
+                unit=st.current_unit(self.state),
+                type_="orchestrator",
             )
-            if unit is not None and binding is not None:
-                # The change restaffs the unit's REMAINING calls from the
-                # next resolution on; the superseded binding stays in the
-                # ledger (model_profile_bound / earlier changes).
-                unit["model_profile_binding"] = {
-                    "name": selection["name"],
-                    "rigor": selection["rigor"],
-                    "content_hash": resolved[1],
-                    "configuration": copy.deepcopy(resolved[0]),
-                    "origin": "explicit",
-                    "at": st.now_iso(),
-                }
-                binding = unit["model_profile_binding"]
-            dirty = True
-        if unit is not None:
-            if binding is None:
-                if resolved is None:
-                    resolved = self._resolve_selection_content(selection)
-                binding = {
-                    "name": selection["name"],
-                    "rigor": selection["rigor"],
-                    "content_hash": resolved[1],
-                    "configuration": copy.deepcopy(resolved[0]),
-                    "origin": origin,
-                    "at": st.now_iso(),
-                }
-                unit["model_profile_binding"] = binding
-                st.append_event(
-                    self.state,
-                    "model_profile_bound",
-                    unit=st.unit_key(unit),
-                    name=binding["name"],
-                    rigor=binding["rigor"],
-                    content_hash=binding["content_hash"],
-                    configuration=copy.deepcopy(binding["configuration"]),
-                    origin=origin,
+            self._save()
+        raise StopStep("model-profile resolution failed: %s" % reason)
+
+    def _act_profile(self, act, origin_family=None, default_family=None,
+                     include_explicit=False):
+        """Resolve one act from CURRENT state, with whole-act precedence.
+
+        Current override > current saved profile > existing config/structural
+        rules. Nothing is cached, bound to a unit, or copied into history.
+        """
+        try:
+            return resolve_current_act(
+                self.state_path,
+                self.config,
+                self.model_profiles_home,
+                act,
+                origin_family=origin_family,
+                default_family=default_family,
+                include_explicit=include_explicit,
+            )
+        except model_profiles.ModelProfileError as exc:
+            self._fail_model_profile_resolution(str(exc))
+
+    def _dispatch_for_act(self, act, origin_family=None,
+                          default_family=None, fixed_family=None,
+                          skeleton=False):
+        """Return a fresh resolver for every physical provider dispatch."""
+        def resolve():
+            if skeleton:
+                family, model, effort = self._skeletoner_profile(
+                    origin_family
                 )
-                dirty = True
-            if dirty:
-                self._save()
-            if requested is not None:
-                self._clear_selection_request(request_identity)
-                mp.pop("selection_request_ack", None)
-                self._save()
-            return binding
-        if dirty:
-            self._save()
-        if requested is not None:
-            self._clear_selection_request(request_identity)
-            mp.pop("selection_request_ack", None)
-            self._save()
-        if resolved is None:
-            resolved = self._resolve_selection_content(selection)
-        return {
-            "name": selection["name"],
-            "rigor": selection["rigor"],
-            "content_hash": resolved[1],
-            "configuration": copy.deepcopy(resolved[0]),
-            "origin": origin,
-            "outside_unit": True,
-        }
+            else:
+                family, model, effort = self._act_profile(
+                    act,
+                    origin_family=origin_family,
+                    default_family=(fixed_family or default_family),
+                )
+            if fixed_family is not None:
+                family = fixed_family
+            default_model, default_effort = self._family_defaults(family)
+            return (
+                family,
+                model or default_model,
+                effort or default_effort,
+            )
+
+        return resolve
+
+    def _structural_dispatch(self, family, model=None, effort=None):
+        """Validate current profile state, then apply a non-profile act."""
+        def resolve():
+            if self.model_profiles_home is not None:
+                try:
+                    _read_current_profile_layers(
+                        self.state_path, self.model_profiles_home
+                    )
+                except model_profiles.ModelProfileError as exc:
+                    self._fail_model_profile_resolution(str(exc))
+            default_model, default_effort = self._family_defaults(family)
+            return (
+                family,
+                model or default_model,
+                effort or default_effort,
+            )
+
+        return resolve
+
+    def _dispatch_for_worker_kind(self, unit, kind, origin_family=None):
+        if kind == contracts.KIND_DRAFT_SKELETON:
+            return self._dispatch_for_act(
+                "skeletoner", origin_family=origin_family, skeleton=True
+            )
+        if kind == contracts.KIND_DRAFT_SLICE_NOTE:
+            return self._dispatch_for_act("drafter")
+        if kind == contracts.KIND_IMPLEMENT:
+            return self._dispatch_for_act("implementer")
+        if kind == contracts.KIND_FIX_FINDINGS:
+            if unit["kind"] == st.UNIT_SKELETON:
+                return self._dispatch_for_act(
+                    "skeletoner", origin_family=origin_family, skeleton=True
+                )
+            return self._dispatch_for_act(
+                "fixer",
+                origin_family=origin_family,
+                default_family="codex",
+            )
+        return None
 
     @staticmethod
-    def _staffing_attribution(staffing):
-        """The model-profile attribution fields a new call record carries,
-        or None for a pre-feature run — whose records keep their exact
-        historical shape and never fabricate a selection."""
-        binding = (staffing or {}).get("binding")
-        if binding is None:
-            return None
-        out = {
-            "model_profile": {
-                "name": binding["name"],
-                "rigor": binding["rigor"],
-                "content_hash": binding["content_hash"],
-                "origin": binding.get("origin"),
-            }
-        }
-        if staffing.get("override_present"):
-            entry = staffing.get("override_entry")
-            # {} is the explicit empty per-act policy — contributing, and
-            # recorded as such.
-            out["act_override"] = {
-                "act": staffing["act"],
-                "entry": copy.deepcopy(entry) if entry else {},
-            }
-        return out
-
-    def _resumed_call_attribution(self, result, act):
-        """Attribution for already-completed Brainstorming continuation work.
-
-        A pending selection may have taken effect while reopening the unit,
-        but it cannot reattribute the continuation that ran under the origin
-        binding.  Older/malformed feature waits without that snapshot fail
-        rather than claiming the later binding.
-        """
-        if self._model_profile_state() is None:
-            return None
-        binding = getattr(result, "origin_model_profile_binding", None)
-        binding = self._verified_model_profile_binding(
-            binding, "Brainstorming continuation model-profile binding"
+    def _result_identity(call, family=None, model=None, effort=None):
+        return (
+            getattr(call, "resolved_family", None) or family,
+            getattr(call, "resolved_model", None) or model,
+            getattr(call, "resolved_effort", None) or effort,
         )
-        return self._staffing_attribution({"binding": binding, "act": act})
-
-    def _act_profile(self, act, origin_family=None, default_family=None):
-        """(family, model, effort) for an act. Policy forms: a family
-        name, "self"/"opposite" (relative to origin), or an object
-        {"agent": ..., "model": ..., "effort": ...}. Hot overlay wins
-        over config; an absent policy falls back to default_family (or
-        fix_family). model/effort None mean family defaults."""
-        staffing = self._act_staffing(act, origin_family, default_family)
-        return staffing["family"], staffing["model"], staffing["effort"]
-
-    def _act_staffing(self, act, origin_family=None, default_family=None):
-        """The single per-act resolution seam, with provenance.
-
-        Pre-feature runs keep the historical two-layer read exactly:
-        truthy overlay entries over config acts. A model-profile-enabled
-        run resolves act-wide: explicit operator override (the acts.json
-        entry is the WHOLE per-act policy — an explicit empty entry
-        included, and a field it does not carry never merges from the
-        profile) > the retained binding's rigor entry > the config's
-        shipped act entry > structural derivation / family default.
-        Attribution provenance is resolved in the SAME read, so a record
-        can never disagree with the dispatch it describes."""
-        mp = self._model_profile_state()
-        overlay = self._acts_overlay()
-        binding = None
-        override_present = False
-        override_entry = None
-        if mp is None:
-            acts = dict(self.config.get("acts") or {})
-            for key, val in overlay.items():
-                if val:
-                    acts[key] = val
-            policy_entry = acts.get(act)
-        else:
-            binding = self._ensure_model_profile_runtime()
-            if act in overlay:
-                override_present = True
-                override_entry = overlay.get(act)
-                policy_entry = override_entry if override_entry else None
-            elif act in (binding.get("configuration") or {}):
-                policy_entry = binding["configuration"][act]
-            else:
-                policy_entry = (self.config.get("acts") or {}).get(act)
-        policy = policy_entry
-        model = effort = None
-        if isinstance(policy, dict):
-            model = (policy.get("model") or "").strip() or None
-            effort = (policy.get("effort") or "").strip() or None
-            policy = (
-                policy.get("agent") or policy.get("family") or ""
-            ).strip() or None
-        if not policy:
-            family = default_family or self._fix_family()
-        else:
-            families = self.config["families_order"]
-            if policy == "self":
-                family = origin_family or families[0]
-            elif policy == "opposite":
-                family = self._opposite(origin_family or families[0])
-            else:
-                family = policy
-        if mp is not None and act in (
-            "drafter", "implementer", "fixer", "reclassifier"
-        ):
-            # These acts dispatch exactly the family resolved here. Capture
-            # that family's defaults now, in the same read as the binding and
-            # override provenance, so immutable records cannot retain nulls
-            # for values that _call later materializes for the provider.
-            default_model, default_effort = self._family_defaults(family)
-            model = model or default_model
-            effort = effort or default_effort
-        return {
-            "act": act,
-            "family": family,
-            "model": model,
-            "effort": effort,
-            "policy": policy if isinstance(policy, str) else None,
-            "binding": binding,
-            "override_present": override_present,
-            "override_entry": (
-                copy.deepcopy(override_entry) if override_present else None
-            ),
-        }
 
     def _skeletoner_profile(self, origin_family=None):
         """(family, model, effort) for the `skeletoner` act, with the
@@ -6498,24 +6736,12 @@ class Driver(object):
         defaults — correct whichever family wins, whereas the skeleton's
         default model belongs only to its default family.
         """
-        staffing = self._skeletoner_staffing(origin_family)
-        return staffing["family"], staffing["model"], staffing["effort"]
-
-    def _skeletoner_staffing(self, origin_family=None):
-        """_skeletoner_profile with attribution provenance."""
         defaults = DEFAULT_CONFIG["acts"]["skeletoner"]
-        staffing = self._act_staffing(
+        family, model, effort = self._act_profile(
             "skeletoner", origin_family,
             default_family=defaults.get("agent"),
         )
-        staffing["effort"] = staffing["effort"] or defaults.get("effort")
-        if staffing.get("binding") is not None:
-            default_model, default_effort = self._family_defaults(
-                staffing["family"]
-            )
-            staffing["model"] = staffing["model"] or default_model
-            staffing["effort"] = staffing["effort"] or default_effort
-        return staffing
+        return family, model, effort or defaults.get("effort")
 
     def _validate_billing(self):
         """Refuse a payment mode we cannot honour.
@@ -6545,7 +6771,7 @@ class Driver(object):
         return d.get("model"), d.get("effort")
 
     def _brainstorming_profiles(self):
-        """Pin milestone discussions to their two configured voices."""
+        """Resolve the two voices for non-profile-aware library callers."""
         family, model, effort = self._act_profile("implementer")
         default_model, default_effort = self._family_defaults(family)
         lead = {
@@ -6577,6 +6803,15 @@ class Driver(object):
         }
         return lead, counterpart
 
+    def _brainstorming_profile_runtime(self):
+        """Return locators for independent per-dispatch current resolution."""
+        if self.model_profiles_home is None:
+            return None
+        return {
+            "state_path": os.path.abspath(self.state_path),
+            "home": os.path.abspath(self.model_profiles_home),
+        }
+
     def _modern_design_updates(self):
         # Compatibility must never restore retired redocumentation machinery.
         # Persisted runs with a missing or false historical flag use the same
@@ -6607,24 +6842,13 @@ class Driver(object):
         `agent` field on the act cannot turn the Codex half into Claude or
         vice versa. Only model and effort are operator-tunable.
         """
-        staffing = self._review_staffing(family)
-        return staffing["model"], staffing["effort"]
-
-    def _review_staffing(self, family):
-        """_review_profile with attribution provenance. The family stays
-        structurally pinned even against malformed stored/override data:
-        whatever `agent` a source carried, the resolved family is the
-        rotation's."""
-        staffing = self._act_staffing(
+        _ignored_family, model, effort = self._act_profile(
             "review_%s" % family,
             origin_family=family,
             default_family=family,
         )
         default_model, default_effort = self._family_defaults(family)
-        staffing["family"] = family
-        staffing["model"] = staffing["model"] or default_model
-        staffing["effort"] = staffing["effort"] or default_effort
-        return staffing
+        return model or default_model, effort or default_effort
 
     def _delta_review_profile(self, fixer_family):
         """Use the fixer's family and that family's Review profile.
@@ -6633,12 +6857,9 @@ class Driver(object):
         deliberately ignored: the delta judge has no independent family or
         model dial, so it cannot drift away from the fixer it is checking.
         """
-        staffing = self._delta_review_staffing(fixer_family)
-        return staffing["family"], staffing["model"], staffing["effort"]
-
-    def _delta_review_staffing(self, fixer_family):
-        """_delta_review_profile with attribution provenance."""
-        return self._review_staffing(fixer_family or self._fix_family())
+        family = fixer_family or self._fix_family()
+        model, effort = self._review_profile(family)
+        return family, model, effort
 
     def _resolve_act(self, act, origin_family):
         """Family-only view of _act_profile (legacy call sites/tests)."""
@@ -6714,7 +6935,7 @@ class Driver(object):
 
     def _report_call(self, unit, family, prompt, kind, raw_name,
                      extensions=None, roots=None, validate_opts=None,
-                     model=None, effort=None):
+                     model=None, effort=None, dispatch_resolver=None):
         """Run a report-only call.
 
         Report-only remains the CONTRACT — reviewers are told not to edit,
@@ -6727,6 +6948,7 @@ class Driver(object):
         output, result, raw_path = self._call(
             family, prompt, kind, raw_name, model=model, effort=effort,
             extensions=extensions, roots=roots, validate_opts=validate_opts,
+            dispatch_resolver=dispatch_resolver,
         )
         return output, result, raw_path
 
@@ -6753,21 +6975,30 @@ class Driver(object):
             # operator-chosen model (the `skeletoner` act, default
             # claude-fable-5/max); only its reviews stay on the review
             # families. So a skeleton fix runs `skeletoner`, not `fixer`.
-            fix_staffing = self._skeletoner_staffing(source.get("family"))
+            family, fix_model, fix_effort = self._skeletoner_profile(
+                source.get("family")
+            )
         else:
-            fix_staffing = self._act_staffing(
+            family, fix_model, fix_effort = self._act_profile(
                 "fixer", source.get("family"), default_family="codex"
             )
-        family = fix_staffing["family"]
-        fix_model = fix_staffing["model"]
-        fix_effort = fix_staffing["effort"]
-        fix_attribution = self._staffing_attribution(fix_staffing)
+        dispatch_resolver = self._dispatch_for_worker_kind(
+            unit,
+            contracts.KIND_FIX_FINDINGS,
+            origin_family=source.get("family"),
+        )
         consultation_family = self._resolve_act("consultation", family)
         # The consultation runs at the fixer's own effort — its family
         # default when the act pins none.
         _fixer_model, fixer_family_effort = self._family_defaults(family)
         consultation_cmd = self._consultation_command(
-            consultation_family, fix_effort or fixer_family_effort
+            consultation_family,
+            fix_effort or fixer_family_effort,
+            caller_act=(
+                "skeletoner"
+                if unit["kind"] == st.UNIT_SKELETON else "fixer"
+            ),
+            caller_origin=source.get("family"),
         )
         project_context, extensions, roots = self._project_prompt_inputs(
             unit, contracts.KIND_FIX_FINDINGS
@@ -6894,27 +7125,8 @@ class Driver(object):
         if resumed is not None:
             output, result, raw_path = resumed
             family = result.origin_family or family
-            if self._model_profile_state() is not None:
-                default_model, default_effort = self._family_defaults(family)
-                fix_model = result.origin_model or default_model
-                fix_effort = result.origin_effort or default_effort
-                if (
-                    fix_staffing["act"] == "skeletoner"
-                    and result.origin_effort is None
-                ):
-                    fix_effort = DEFAULT_CONFIG["acts"]["skeletoner"][
-                        "effort"
-                    ]
-            else:
-                fix_model = result.origin_model or fix_model
-                fix_effort = result.origin_effort or fix_effort
-            # The resumed envelope was produced under the ORIGIN call; its
-            # record claims only the unit's retained binding, not the
-            # just-resolved override provenance (mirrors _do_draft).
-            if fix_attribution is not None:
-                fix_attribution = self._resumed_call_attribution(
-                    result, fix_staffing["act"]
-                )
+            fix_model = result.origin_model or fix_model
+            fix_effort = result.origin_effort or fix_effort
             original_pre = result.origin_pre_snapshot or {}
             pre_refs = original_pre.get("refs")
             pre_sym = original_pre.get("sym")
@@ -6954,6 +7166,10 @@ class Driver(object):
                     } or None
                 ),
                 start_session=True,
+                dispatch_resolver=dispatch_resolver,
+            )
+            family, fix_model, fix_effort = self._result_identity(
+                result, family, fix_model, fix_effort
             )
         # The sealed-artifact guard runs on EVERY outcome (gap or not, in
         # envelope or not) BEFORE any branch returns: a fixer that tampered with
@@ -7011,7 +7227,6 @@ class Driver(object):
                     "worktree_tree": pre_worktree_tree,
                     "stash": pre_stash,
                 },
-                model_profile_binding=fix_staffing.get("binding"),
             )
         if output.get("status") == "gap":
             # The fixer met an insoluble-in-scope contradiction: a queued
@@ -7267,7 +7482,6 @@ class Driver(object):
                     if (fix_model or fix_effort)
                     else {}
                 ),
-                **(fix_attribution or {}),
                 **({"suite_corrected": True} if suite_corrected else {}),
                 **(
                     {
@@ -7647,10 +7861,9 @@ class Driver(object):
             if r["kind"] == contracts.KIND_FIX_FINDINGS:
                 fixer_family = r["family"]
                 break
-        delta_staffing = self._delta_review_staffing(fixer_family)
-        family = delta_staffing["family"]
-        delta_model = delta_staffing["model"]
-        delta_effort = delta_staffing["effort"]
+        family, delta_model, delta_effort = self._delta_review_profile(
+            fixer_family
+        )
         project_context, extensions, roots = self._project_prompt_inputs(
             unit, contracts.KIND_DELTA_REVIEW
         )
@@ -7703,6 +7916,14 @@ class Driver(object):
             } or None,
             model=delta_model,
             effort=delta_effort,
+            dispatch_resolver=self._dispatch_for_act(
+                "review_%s" % family,
+                origin_family=family,
+                fixed_family=family,
+            ),
+        )
+        family, delta_model, delta_effort = self._result_identity(
+            result, family, delta_model, delta_effort
         )
         if rethink_handoff is not None:
             self._consume_brainstorming_review_handoff(
@@ -7751,11 +7972,7 @@ class Driver(object):
                 getattr(result, "cost_partial", False)
                 or getattr(result, "cost", None) is None
             ),
-            meta={
-                "model": delta_model,
-                "effort": delta_effort,
-                **(self._staffing_attribution(delta_staffing) or {}),
-            },
+            meta={"model": delta_model, "effort": delta_effort},
         )
         if provisional:
             verdict = output["design_correction_verdict"]
@@ -8139,6 +8356,20 @@ class Driver(object):
         )
         return "verification failed; full-suite repair queued"
 
+    def _preserve_reclassify_parent(self, parent_call, reason):
+        """Keep a completed review visible when child admission stops."""
+        if parent_call is not None:
+            unit = st.current_unit(self.state)
+            self._record_worker_unaccepted(
+                unit,
+                parent_call[0],
+                parent_call[1],
+                parent_call[2],
+                reason,
+            )
+            self._save()
+        self._clear_busy()
+
     def _partition_defer_candidates(
         self, unit, items, source_round=None, parent_call=None
     ):
@@ -8157,22 +8388,21 @@ class Driver(object):
             threshold = "low"
         try:
             for finding, raising_family in items:
-                rater_staffing = self._act_staffing(
-                    "reclassifier", origin_family=raising_family,
-                    default_family=self._opposite(raising_family),
-                )
-                opp = rater_staffing["family"]
-                rater_model = rater_staffing["model"]
-                rater_effort = rater_staffing["effort"]
-                rater_attribution = self._staffing_attribution(
-                    rater_staffing
-                )
-                # The policy string from the same layered read that staffed
-                # this rating (override > profile > config), so the
-                # deliberate-same-family judgment can never disagree with
-                # the staffing it judges.
-                policy = rater_staffing["policy"]
-                explicit = bool(policy) and policy not in ("opposite",)
+                try:
+                    opp, rater_model, rater_effort, explicit = (
+                        self._act_profile(
+                            "reclassifier", origin_family=raising_family,
+                            default_family=self._opposite(raising_family),
+                            include_explicit=True,
+                        )
+                    )
+                except StopStep:
+                    self._preserve_reclassify_parent(
+                        parent_call,
+                        "review completed but current model-profile state "
+                        "blocked nested reclassification",
+                    )
+                    raise
                 defer_ok, reason = False, "reclassification unavailable"
                 risk = None
                 damage = None
@@ -8218,10 +8448,38 @@ class Driver(object):
                         project_context=pc,
                         builder_desc=builder_desc, gap_backstop=gap_backstop,
                         two_axis=gap_backstop,
+                        raising_family=(
+                            raising_family
+                            if self.model_profiles_home is not None else None
+                        ),
                     )
                     raw_name = "%s-reclassify-%s-%s" % (
                         st.unit_key(unit), raising_family, safe_id)
                     try:
+                        def resolve_rater():
+                            current_opp, current_model, current_effort, current_explicit = (
+                                self._act_profile(
+                                    "reclassifier",
+                                    origin_family=raising_family,
+                                    default_family=self._opposite(
+                                        raising_family
+                                    ),
+                                    include_explicit=True,
+                                )
+                            )
+                            if current_opp == raising_family and not current_explicit:
+                                raise _NoIndependentReclassifier(
+                                    "no independent reclassifier"
+                                )
+                            current_dm, current_de = self._family_defaults(
+                                current_opp
+                            )
+                            return (
+                                current_opp,
+                                current_model or current_dm,
+                                current_effort or current_de,
+                            )
+
                         dm, de = self._family_defaults(opp)
                         effective_model = rater_model or dm
                         effective_effort = rater_effort or de
@@ -8253,16 +8511,39 @@ class Driver(object):
                             raise StopStep(
                                 "worker accounting marker unavailable"
                             )
-                        output, result = runners.call_worker(
-                            self.runner, opp, prompt,
-                            contracts.KIND_RECLASSIFY,
-                            self.workspace,
-                            model=effective_model,
-                            effort=effective_effort,
-                            validate_opts=(
-                                {"require_drift_damage": True}
-                                if gap_backstop else None
-                            ),
+                        try:
+                            output, result = runners.call_worker(
+                                self.runner, opp, prompt,
+                                contracts.KIND_RECLASSIFY,
+                                self.workspace,
+                                model=effective_model,
+                                effort=effective_effort,
+                                validate_opts=(
+                                    {"require_drift_damage": True}
+                                    if gap_backstop else None
+                                ),
+                                resolve_dispatch=resolve_rater,
+                                on_dispatch=lambda f, m, e: (
+                                    self._retarget_busy(
+                                        raw_name,
+                                        contracts.KIND_RECLASSIFY,
+                                        f,
+                                        m,
+                                        e,
+                                    )
+                                ),
+                            )
+                        except StopStep:
+                            self._preserve_reclassify_parent(
+                                parent_call,
+                                "review completed but current model-profile "
+                                "state blocked nested reclassification",
+                            )
+                            raise
+                        opp, effective_model, effective_effort = (
+                            self._result_identity(
+                                result, opp, effective_model, effective_effort
+                            )
                         )
                         self._require_busy_accounting(
                             contracts.KIND_RECLASSIFY,
@@ -8308,8 +8589,18 @@ class Driver(object):
                             )
                         else:
                             reason = "reclassifier blocked"
+                    except _NoIndependentReclassifier:
+                        self._clear_busy()
+                        reason = (
+                            "no independent reclassifier (single family)"
+                        )
                     except (runners.RunnerError,
                             runners.WorkerProtocolError) as exc:
+                        opp, effective_model, effective_effort = (
+                            self._result_identity(
+                                exc, opp, effective_model, effective_effort
+                            )
+                        )
                         self._require_busy_accounting(
                             contracts.KIND_RECLASSIFY,
                             opp,
@@ -8338,7 +8629,6 @@ class Driver(object):
                     token_usage_partial=token_usage_partial,
                     cost=copy.deepcopy(call_cost),
                     cost_partial=bool(call_cost_partial),
-                    **(rater_attribution or {}),
                 )
                 if defer_ok:
                     debt.append({
@@ -8420,9 +8710,7 @@ class Driver(object):
         # (presence and substance, never prose — spec §4) and every
         # finding hard-requires its plain/example lay mirror.
         reform = interpreter.reform_active(self.state)
-        review_staffing = self._review_staffing(family)
-        review_model = review_staffing["model"]
-        review_effort = review_staffing["effort"]
+        review_model, review_effort = self._review_profile(family)
         prompt = prompts.build_review_round(
             family,
             self.workspace,
@@ -8469,6 +8757,14 @@ class Driver(object):
             validate_opts={"require_plain": True} if reform else None,
             model=review_model,
             effort=review_effort,
+            dispatch_resolver=self._dispatch_for_act(
+                "review_%s" % family,
+                origin_family=family,
+                fixed_family=family,
+            ),
+        )
+        family, review_model, review_effort = self._result_identity(
+            result, family, review_model, review_effort
         )
         if rethink_handoff is not None:
             self._consume_brainstorming_review_handoff(
@@ -8543,7 +8839,6 @@ class Driver(object):
             "model": review_model,
             "effort": review_effort,
             "evidence_fingerprint": evidence_fingerprint,
-            **(self._staffing_attribution(review_staffing) or {}),
         }
         if deferred and not fix_findings:
             round_meta["deferred_clean"] = True
@@ -9028,13 +9323,95 @@ def _resolve_project_binding(binding, workspace, config_override):
     return workspace, project_block, config
 
 
+_CREATION_ACTS_UNSET = object()
+
+
+def _creation_act_overrides(layers):
+    """Project ordered raw creation layers onto the one live override map.
+
+    The projection follows ``merge_config``'s one-level whole-map behavior.
+    A dict updates a lower dict but replaces a lower non-dict value. A final
+    non-dict whole-map replacement suppresses every configurable profile act.
+    Unknown/legacy keys remain outside this layer and continue in config.
+    """
+    current = _CREATION_ACTS_UNSET
+    for layer in layers:
+        if layer is _CREATION_ACTS_UNSET:
+            continue
+        if isinstance(layer, dict):
+            if isinstance(current, dict):
+                current.update(copy.deepcopy(layer))
+            else:
+                current = copy.deepcopy(layer)
+        else:
+            current = copy.deepcopy(layer)
+    if current is _CREATION_ACTS_UNSET:
+        overrides = {}
+    elif not isinstance(current, dict):
+        overrides = {
+            act: None for act in model_profiles.PROFILE_ACT_KEYS
+        }
+    else:
+        overrides = {
+            act: copy.deepcopy(value)
+            for act, value in current.items()
+            if act in model_profiles.PROFILE_ACT_KEYS
+        }
+    for act, value in overrides.items():
+        if value in (None, "", {}):
+            continue
+        try:
+            model_profiles.validate_act_entry(
+                "creation act overrides", act, value
+            )
+        except model_profiles.ModelProfileError as exc:
+            # Creation-input errors need their own caller-facing posture;
+            # catalogue corruption remains a ModelProfileError and therefore
+            # is not mistaken for a bad launch request by CLI/service callers.
+            raise ValueError(str(exc)) from exc
+    return overrides
+
+
+def _restrict_config_acts_to_shipped(config):
+    """Keep shipped surface entries in config; creation entries live outside."""
+    if not isinstance(config, dict):
+        return
+    acts = config.get("acts")
+    shipped = DEFAULT_CONFIG["acts"]
+    if not isinstance(acts, dict):
+        config["acts"] = copy.deepcopy(shipped)
+        return
+    for act in model_profiles.PROFILE_ACT_KEYS:
+        if act in shipped:
+            acts[act] = copy.deepcopy(shipped[act])
+        else:
+            acts.pop(act, None)
+
+
+def _write_creation_acts(state_path, overrides):
+    path = os.path.join(
+        os.path.dirname(os.path.abspath(state_path)), "acts.json"
+    )
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as fh:
+        json.dump(overrides, fh, indent=1)
+    os.replace(tmp, path)
+
+
 def init_run(goal, workspace=None, config=None, state_path=None, name=None,
-             project=None, config_override=None):
+             project=None, config_override=None, model_profiles_home=None,
+             creation_acts=_CREATION_ACTS_UNSET):
     """Create a new run state. `config` is a merged config dict (see
     load_config) or None for defaults. Returns the state path.
     Raises FileExistsError instead of overwriting an existing state; the
     claim is atomic (st.save_new, exclusive hard link), so two concurrent
     inits of the same workspace cannot both win — no exists() TOCTOU.
+
+    When ``model_profiles_home`` is supplied, startup seeds/validates the
+    current catalogue and surface acts explicitly supplied at creation are
+    projected into ``acts.json`` only. ``creation_acts`` carries the raw CLI or
+    project-less service layer; project-bound init derives project-default and
+    launch layers directly.
 
     `project` (optional) binds the run to a (project, work_area) pair:
     {"directory": <service-level store dir>, "project": <slug>,
@@ -9049,6 +9426,9 @@ def init_run(goal, workspace=None, config=None, state_path=None, name=None,
     intent, a bound init takes the launch's own override separately, as
     `config_override`, never pre-merged into `config`. Without a binding,
     behavior is byte-identical to the pre-project seam."""
+    if model_profiles_home is not None:
+        model_profiles_home = os.path.abspath(model_profiles_home)
+    creation_act_layers = [creation_acts]
     if project is not None:
         if config is not None:
             raise ValueError(
@@ -9060,9 +9440,21 @@ def init_run(goal, workspace=None, config=None, state_path=None, name=None,
             config_override, dict
         ):
             raise ValueError("config_override must be a dict")
+        if creation_acts is not _CREATION_ACTS_UNSET:
+            raise ValueError(
+                "project-bound init derives creation acts; do not pass "
+                "creation_acts"
+            )
         workspace, project_block, config = _resolve_project_binding(
             project, workspace, config_override
         )
+        defaults = project.get("defaults")
+        creation_act_layers = [
+            (defaults["acts"] if isinstance(defaults, dict)
+             and "acts" in defaults else _CREATION_ACTS_UNSET),
+            (config_override["acts"] if isinstance(config_override, dict)
+             and "acts" in config_override else _CREATION_ACTS_UNSET),
+        ]
     else:
         if config_override is not None:
             raise ValueError(
@@ -9078,6 +9470,11 @@ def init_run(goal, workspace=None, config=None, state_path=None, name=None,
         os.makedirs(workspace, exist_ok=True)
         if config is None:
             config = load_config(None)
+    creation_overrides = {}
+    if model_profiles_home is not None:
+        creation_overrides = _creation_act_overrides(creation_act_layers)
+        model_profiles.ensure_default(model_profiles_home)
+        _restrict_config_acts_to_shipped(config)
     template = (config or {}).get("docs_dir") or "docs"
     slug = None
     if "{slug}" in template:
@@ -9123,15 +9520,33 @@ def init_run(goal, workspace=None, config=None, state_path=None, name=None,
         )
     path = state_path or default_state_path(workspace, state.get("docs_dir"))
     st.save_new(path, state)
+    if creation_overrides:
+        try:
+            _write_creation_acts(path, creation_overrides)
+        except OSError:
+            try:
+                os.unlink(path)
+            except OSError:
+                pass
+            raise
     return path
 
 
 def cmd_init(args):
+    user_cfg = None
+    if args.config:
+        with open(args.config, "r", encoding="utf-8") as fh:
+            user_cfg = json.load(fh)
+        if not isinstance(user_cfg, dict):
+            raise ValueError("--config must contain a JSON object")
+    config = load_config(None)
+    if user_cfg is not None:
+        merge_config(config, user_cfg)
     try:
         path = init_run(
             args.goal,
             args.workspace,
-            config=load_config(args.config),
+            config=config,
             state_path=args.state,
             name=(
                 args.name
@@ -9140,8 +9555,16 @@ def cmd_init(args):
                 )
                 or "run"
             ),
+            model_profiles_home=getattr(
+                args, "model_profiles_home", registry.DEFAULT_HOME
+            ),
+            creation_acts=(
+                user_cfg["acts"]
+                if isinstance(user_cfg, dict) and "acts" in user_cfg
+                else _CREATION_ACTS_UNSET
+            ),
         )
-    except FileExistsError as exc:
+    except (FileExistsError, ValueError) as exc:
         print(str(exc), file=sys.stderr)
         return 2
     print("initialized: %s" % path)
@@ -9193,8 +9616,25 @@ def _state_path(args):
 
 
 def cmd_status(args):
-    state = st.load(_state_path(args))
-    summ = st.summary(state)
+    path = _state_path(args)
+    state = st.load(path)
+    acts_path = os.path.join(os.path.dirname(os.path.abspath(path)),
+                             "acts.json")
+    try:
+        with open(acts_path, "r", encoding="utf-8") as fh:
+            acts_overlay = json.load(fh)
+    except (OSError, ValueError):
+        acts_overlay = {}
+    current_review_model = resolve_current_review_model(
+        path,
+        getattr(args, "model_profiles_home", registry.DEFAULT_HOME),
+        run_state=state,
+    )
+    summ = st.summary(
+        state,
+        acts_overlay=(acts_overlay if isinstance(acts_overlay, dict) else {}),
+        current_review_model=current_review_model,
+    )
     if args.json:
         print(json.dumps(summ, indent=2, ensure_ascii=False))
         return 0
@@ -9262,7 +9702,12 @@ def _install_stop_forwarding():
 
 def cmd_step(args):
     _install_stop_forwarding()
-    driver = Driver(_state_path(args))
+    driver = Driver(
+        _state_path(args),
+        model_profiles_home=getattr(
+            args, "model_profiles_home", registry.DEFAULT_HOME
+        ),
+    )
     try:
         action, note = driver.step()
     except ConcurrentRunError as exc:
@@ -9276,7 +9721,12 @@ def cmd_step(args):
 
 def cmd_run(args):
     _install_stop_forwarding()
-    driver = Driver(_state_path(args))
+    driver = Driver(
+        _state_path(args),
+        model_profiles_home=getattr(
+            args, "model_profiles_home", registry.DEFAULT_HOME
+        ),
+    )
     try:
         code = driver.run(max_steps=args.max_steps)
     except ConcurrentRunError as exc:
@@ -9298,7 +9748,12 @@ def cmd_run(args):
 def cmd_serve(args):
     from . import webapp
 
-    return webapp.serve(_state_path(args), args.port)
+    return webapp.serve(
+        _state_path(args), args.port,
+        model_profiles_home=getattr(
+            args, "model_profiles_home", registry.DEFAULT_HOME
+        ),
+    )
 
 
 def main(argv=None):
@@ -9312,6 +9767,9 @@ def main(argv=None):
     p_init.add_argument("--workspace", required=True)
     p_init.add_argument("--config", default=None)
     p_init.add_argument("--state", default=None)
+    p_init.add_argument(
+        "--model-profiles-home", default=registry.DEFAULT_HOME
+    )
     p_init.set_defaults(func=cmd_init)
 
     for name, func in (
@@ -9329,6 +9787,10 @@ def main(argv=None):
             p.add_argument("--json", action="store_true")
         if name == "run":
             p.add_argument("--max-steps", type=int, default=1000)
+        if name in ("status", "step", "run", "serve"):
+            p.add_argument(
+                "--model-profiles-home", default=registry.DEFAULT_HOME
+            )
         if name == "serve":
             p.add_argument("--port", type=int, default=8765)
         p.set_defaults(func=func)

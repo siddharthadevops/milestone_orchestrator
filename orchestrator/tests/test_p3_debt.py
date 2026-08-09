@@ -9,12 +9,16 @@ or P2/P3 (reform); the IMPL phase defers cosmetic P3s only (a code P2 always
 fixes). Delta findings always take the normal fix/reject path.
 """
 
+import copy
+import json
+import os
 import tempfile
 import unittest
 from unittest import mock
 
 from orchestrator import contracts
 from orchestrator import driver as drv
+from orchestrator import model_profiles
 from orchestrator import profiles
 from orchestrator import runners
 from orchestrator import state as st
@@ -65,7 +69,7 @@ def reclassify(defer_ok, family, reason="verified", risk=None,
 
 
 class TestP3Debt(DriverTestCase):
-    def test_reclassifier_repair_keeps_full_duration_and_profile(self):
+    def test_reclassifier_repair_keeps_full_duration_and_identity(self):
         with tempfile.TemporaryDirectory(prefix="orch-mock-") as ws:
             cfg = make_config(p3_reclassify_debt=True)
             cfg["model_defaults"] = {
@@ -100,6 +104,12 @@ class TestP3Debt(DriverTestCase):
             self.assertEqual(event["logical_duration_s"], 0.02)
             self.assertEqual(event["model"], "claude-opus-5")
             self.assertEqual(event["effort"], "max")
+            malformed = next(
+                event for event in state["events"]
+                if event["type"] == "worker_malformed"
+            )
+            self.assertEqual(malformed["model"], "claude-opus-5")
+            self.assertEqual(malformed["effort"], "max")
             self.assertAlmostEqual(
                 st.summary(state)["units"][0]["work_duration_s"], 0.04
             )
@@ -233,6 +243,196 @@ class TestP3Debt(DriverTestCase):
             self.assertEqual(len(parent), 1)
             self.assertTrue(parent[0]["token_usage_partial"])
             self.assertTrue(st.summary(state)["work_token_usage_partial"])
+
+    def test_reclassifier_predispatch_failure_keeps_parent_review_usage(self):
+        with tempfile.TemporaryDirectory(prefix="orch-mock-") as ws:
+            home = os.path.join(ws, "home")
+            model_profiles.ensure_default(home)
+            current_profile = model_profiles.load(home, "default")
+            current_profile["configurations"]["medium"]["skeletoner"] = {
+                "agent": "codex"
+            }
+            model_profiles.save(home, current_profile)
+            config = make_config(p3_reclassify_debt=True)
+            config["model_defaults"] = copy.deepcopy(
+                drv.DEFAULT_CONFIG["model_defaults"]
+            )
+            path = init_state(ws, config)
+            usage = {
+                "input_tokens": 20,
+                "cached_input_tokens": 5,
+                "output_tokens": 4,
+                "reasoning_output_tokens": 1,
+                "total_tokens": 24,
+            }
+
+            def invalidate_selection(_workspace):
+                runtime = os.path.dirname(path)
+                with open(
+                    os.path.join(runtime, "model_profile.json"),
+                    "w",
+                    encoding="utf-8",
+                ) as handle:
+                    handle.write(
+                        '{"name":"missing","rigor":"medium"}'
+                    )
+
+            class UsageRunner(runners.MockRunner):
+                def call(inner, *args, **kwargs):
+                    result = super().call(*args, **kwargs)
+                    if inner.call_meta[-1]["kind"] == contracts.KIND_REVIEW_ROUND:
+                        result.token_usage = copy.deepcopy(usage)
+                        result.cost_payloads = [copy.deepcopy(usage)]
+                    return result
+
+            runner = UsageRunner([
+                draft_step(),
+                step(
+                    "review_round",
+                    report("review_round", [finding("F1", "stale word")]),
+                    family="codex",
+                ),
+            ])
+            subject = drv.Driver(
+                path, runner=runner, model_profiles_home=home
+            )
+            self.step_until(
+                subject,
+                lambda current: current["units"][0]["status"] == st.U_ROUNDS,
+            )
+
+            original_mark = subject._mark_busy
+
+            def invalidate_after_nested_admission(
+                label, kind, family, model=None, effort=None, nested=False
+            ):
+                admitted = original_mark(
+                    label,
+                    kind,
+                    family,
+                    model=model,
+                    effort=effort,
+                    nested=nested,
+                )
+                if admitted and kind == contracts.KIND_RECLASSIFY:
+                    invalidate_selection(ws)
+                return admitted
+
+            with mock.patch.object(
+                subject,
+                "_mark_busy",
+                side_effect=invalidate_after_nested_admission,
+            ):
+                subject.step()
+
+            current = st.load(path)
+            parent = [
+                event
+                for event in current["events"]
+                if event["type"] == "worker_unaccepted"
+                and event["kind"] == contracts.KIND_REVIEW_ROUND
+            ]
+            self.assertEqual(len(parent), 1)
+            self.assertEqual(parent[0]["token_usage"], usage)
+            self.assertFalse(parent[0]["token_usage_partial"])
+            self.assertIsNotNone(
+                parent[0]["cost"], (parent[0], runner.call_meta)
+            )
+            self.assertEqual(parent[0]["duration_s"], 0.01)
+            self.assertEqual(
+                [call[1] for call in runner.calls],
+                [contracts.KIND_DRAFT_SKELETON,
+                 contracts.KIND_REVIEW_ROUND],
+            )
+            self.assertIn(
+                "model-profile resolution failed",
+                current["failure"]["reason"],
+            )
+            self.assertFalse(os.path.exists(subject._busy_path()))
+
+    def test_reclassifier_policy_change_before_dispatch_is_not_incident(self):
+        with tempfile.TemporaryDirectory(prefix="orch-mock-") as ws:
+            home = os.path.join(ws, "home")
+            model_profiles.ensure_default(home)
+            current_profile = model_profiles.load(home, "default")
+            current_profile["configurations"]["medium"].update({
+                "skeletoner": {"agent": "codex"},
+                "reclassifier": {"agent": "codex"},
+            })
+            model_profiles.save(home, current_profile)
+            config = make_config(p3_reclassify_debt=True)
+            config["families_order"] = ["codex"]
+            config["model_defaults"] = copy.deepcopy(
+                drv.DEFAULT_CONFIG["model_defaults"]
+            )
+            path = init_state(ws, config)
+            runner = runners.MockRunner([
+                draft_step(),
+                step(
+                    "review_round",
+                    report("review_round", [finding("F1", "stale word")]),
+                    family="codex",
+                ),
+            ])
+            subject = drv.Driver(
+                path, runner=runner, model_profiles_home=home
+            )
+            self.step_until(
+                subject,
+                lambda current: current["units"][0]["status"] == st.U_ROUNDS,
+            )
+
+            original_mark = subject._mark_busy
+
+            def remove_explicit_rater_after_admission(
+                label, kind, family, model=None, effort=None, nested=False
+            ):
+                admitted = original_mark(
+                    label,
+                    kind,
+                    family,
+                    model=model,
+                    effort=effort,
+                    nested=nested,
+                )
+                if admitted and kind == contracts.KIND_RECLASSIFY:
+                    edited = model_profiles.load(home, "default")
+                    edited["configurations"]["medium"].pop(
+                        "reclassifier"
+                    )
+                    model_profiles.save(home, edited)
+                return admitted
+
+            with mock.patch.object(
+                subject,
+                "_mark_busy",
+                side_effect=remove_explicit_rater_after_admission,
+            ):
+                subject.step()
+
+            current = st.load(path)
+            ratings = [
+                event for event in current["events"]
+                if event["type"] == "reclassify_recorded"
+            ]
+            self.assertEqual(len(ratings), 1)
+            self.assertFalse(ratings[0]["defer_ok"])
+            self.assertEqual(
+                ratings[0]["reason"],
+                "no independent reclassifier (single family)",
+            )
+            self.assertFalse(any(
+                event["type"] == "worker_malformed"
+                and event.get("kind") == contracts.KIND_RECLASSIFY
+                for event in current["events"]
+            ))
+            self.assertIsNone(current.get("failure"))
+            self.assertEqual(
+                [call[1] for call in runner.calls],
+                [contracts.KIND_DRAFT_SKELETON,
+                 contracts.KIND_REVIEW_ROUND],
+            )
+            self.assertFalse(os.path.exists(subject._busy_path()))
 
     def test_doc_round_p3_only_is_deferred_as_debt(self):
         with tempfile.TemporaryDirectory(prefix="orch-mock-") as ws:
@@ -377,6 +577,124 @@ class TestP3Debt(DriverTestCase):
             self.assertAlmostEqual(
                 st.summary(state)["units"][0]["work_duration_s"], 0.03
             )
+
+    def test_shipped_reclassifier_remains_explicit_when_profile_omits_act(
+        self,
+    ):
+        with tempfile.TemporaryDirectory(prefix="orch-profile-rater-") as ws:
+            home = os.path.join(ws, "home")
+            model_profiles.ensure_default(home)
+            model_profiles.save(home, {
+                "name": "lean",
+                "examples": ["lean staffing"],
+                "configurations": {"low": {}, "medium": {}, "high": {}},
+            })
+            config = make_config(p3_reclassify_debt=True)
+            config["acts"]["reclassifier"] = {
+                "agent": "codex", "effort": "xhigh"
+            }
+            path = init_state(ws, config)
+            with open(
+                os.path.join(os.path.dirname(path), "model_profile.json"),
+                "w",
+                encoding="utf-8",
+            ) as handle:
+                json.dump({"name": "lean", "rigor": "medium"}, handle)
+
+            mock_runner = runners.MockRunner([
+                draft_step(),
+                step(
+                    "review_round",
+                    report(
+                        "review_round", [finding("F1", "stale word")]
+                    ),
+                    family="codex",
+                ),
+                reclassify(True, family="codex", reason="shipped policy"),
+            ])
+            subject = drv.Driver(
+                path, runner=mock_runner, model_profiles_home=home
+            )
+            self.step_until(
+                subject,
+                lambda current: any(
+                    event["type"] == "reclassify_recorded"
+                    for event in current["events"]
+                ),
+            )
+
+            event = next(
+                event for event in st.load(path)["events"]
+                if event["type"] == "reclassify_recorded"
+            )
+            self.assertEqual(event["reclassifier"], "codex")
+            self.assertEqual(event["effort"], "xhigh")
+            self.assertTrue(event["defer_ok"])
+            self.assertEqual(event["reason"], "shipped policy")
+
+    def test_current_profile_can_explicitly_choose_same_family_reclassifier(
+        self,
+    ):
+        with tempfile.TemporaryDirectory(prefix="orch-profile-rater-") as ws:
+            home = os.path.join(ws, "home")
+            model_profiles.ensure_default(home)
+            current = model_profiles.load(home, "default")
+            current["configurations"]["medium"]["reclassifier"] = {
+                "agent": "codex",
+                "model": "profile-rater",
+                "effort": "high",
+            }
+            model_profiles.save(home, current)
+            path = init_state(ws, make_config(p3_reclassify_debt=True))
+            mock = runners.MockRunner([
+                step(
+                    "draft_skeleton",
+                    ok(
+                        "draft_skeleton",
+                        artifact="docs/skeleton.md",
+                        slices=[{"id": 1, "title": "One"}],
+                    ),
+                    family="claude",
+                    side_effect=write_file(
+                        "docs/skeleton.md", "# Current profile\n"
+                    ),
+                ),
+                step(
+                    "review_round",
+                    report(
+                        "review_round", [finding("F1", "stale word")]
+                    ),
+                    family="codex",
+                ),
+                reclassify(True, family="codex", reason="explicit profile"),
+            ])
+            driver = drv.Driver(
+                path, runner=mock, model_profiles_home=home
+            )
+            self.step_until(
+                driver,
+                lambda state: any(
+                    event["type"] == "reclassify_recorded"
+                    for event in state["events"]
+                ),
+            )
+            event = next(
+                event for event in st.load(path)["events"]
+                if event["type"] == "reclassify_recorded"
+            )
+            self.assertEqual(event["reclassifier"], "codex")
+            self.assertEqual(event["model"], "profile-rater")
+            self.assertEqual(event["effort"], "high")
+            self.assertTrue(event["defer_ok"])
+            reclassify_prompt = next(
+                prompt for _family, kind, prompt in mock.calls
+                if kind == contracts.KIND_RECLASSIFY
+            )
+            self.assertIn(
+                "Another reviewer raised the finding below",
+                reclassify_prompt,
+            )
+            self.assertNotIn("opposite family) raised", reclassify_prompt)
 
     def test_reform_gates_on_damage_not_probability(self):
         # The two-axis decision (operator 2026-07-09): a certain-but-cheap

@@ -631,6 +631,43 @@ class BrainstormingCoordinationTest(unittest.TestCase):
         self.assertEqual(len(activity["events"]), 1)
         self.assertEqual(activity["events"][0]["status"], "completed")
 
+    def test_withdrawn_attribution_fields_are_ignored_on_read_and_resume(self):
+        session_id = "activity-withdrawn-attribution"
+        roster = participants()
+        self._create_running(session_id, roster=roster)
+        subject, _executors = self._subject(
+            roster,
+            {
+                "lead": [envelope("first turn")],
+                "critic": [envelope("resumed turn")],
+            },
+        )
+        subject.run_next_turn(session_id, object())
+
+        key = bs._activity_key(session_id)
+        current = self.store._store.read(key)
+        stale = copy.deepcopy(current["value"])
+        stale["events"][0]["model_profile"] = {
+            "name": "obsolete",
+            "rigor": "high",
+            "content_hash": "withdrawn",
+            "origin": "explicit",
+        }
+        stale["events"][0]["act_override"] = {
+            "act": "implementer",
+            "entry": {"effort": "max"},
+        }
+        written = self.store._store.cas(key, current["revision"], stale)
+        self.assertTrue(written.ok)
+
+        readable = self.store.read_activity(session_id)
+        self.assertNotIn("model_profile", readable["events"][0])
+        self.assertNotIn("act_override", readable["events"][0])
+        subject.run_next_turn(session_id, object())
+        self.assertEqual(
+            len(self.store.read(session_id).state["completed_turns"]), 2
+        )
+
     def test_quiescent_turn_keeps_partial_accounting_when_activity_write_fails(
         self,
     ):

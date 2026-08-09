@@ -14,6 +14,7 @@ mechanically and their output discarded.
 
 import json
 import re
+import shlex
 
 from . import contracts
 
@@ -242,7 +243,7 @@ def _debt_block(debt):
 
 
 def _consultation_block(opposite_family, opposite_cmd):
-    cmd = " ".join(opposite_cmd) if opposite_cmd else "(not configured)"
+    cmd = shlex.join(opposite_cmd) if opposite_cmd else "(not configured)"
     return (
         "CONSULTATION PROTOCOL (for rejections)\n"
         "Before `rejected`, consult the %s family with the artifact/path,\n"
@@ -1864,7 +1865,7 @@ TWO_AXIS_BLOCK = (
 def build_reclassify(family, workspace, finding, artifact, unit_kind=None,
                      amendments=None, project_context=None,
                      builder_desc=None, gap_backstop=False,
-                     two_axis=False):
+                     two_axis=False, raising_family=None):
     """Opposite-family RATER of one finding's implementation-drift risk.
 
     Deliberately not a yes/no decision: asked "is it safe?", a worker
@@ -1890,8 +1891,12 @@ def build_reclassify(family, workspace, finding, artifact, unit_kind=None,
         "nothing and review nothing else.\n\n"
         + _amendments_block(amendments)
         + _project_context_block(project_context)
-        + "Another reviewer (the opposite family) raised the finding below\n"
-        "on %s. The orchestrator is deciding whether to fix it now or defer\n"
+        + (
+            "Another reviewer raised the finding below\n"
+            if raising_family is not None else
+            "Another reviewer (the opposite family) raised the finding below\n"
+        )
+        + "on %s. The orchestrator is deciding whether to fix it now or defer\n"
         "it as TRACKED DEBT — recorded per unit, revisited later; deferred\n"
         "never means silently dropped.\n\n"
         % (artifact,)

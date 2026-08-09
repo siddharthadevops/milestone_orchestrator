@@ -13,8 +13,8 @@ complete definition through the HTTP API.
 The catalogue starts with an ordinary profile named `default`. Its medium
 choice preserves the staffing a new run receives today. The seed is a starting
 definition, not protected product data: the operator may edit it, and later
-service starts never replace that edit. This slice stores that source; a later
-slice decides when work binds a snapshot of it.
+service starts never replace that edit. This slice stores that source; Slice 2
+reads its current content at resolution time.
 
 ### Ownership and boundary
 
@@ -22,10 +22,11 @@ This slice owns the model-profile document, its validation, persistent
 create/edit/list behavior, the missing-only `default` seed, and the catalogue's
 HTTP surface. It keeps model staffing separate from review strategy.
 
-It does not select a profile for a run, resolve an act from one, bind or retain
-a selection, change overrides, attribute calls, add panel controls, or migrate
-existing runs. It does not alter strategy configurations or their routes,
-seals, seeds, or runtime interpretation.
+It does not select a profile for a run, resolve an act from one, change
+overrides, add panel controls, or migrate existing runs. It adds no binding,
+snapshot, attribution, provenance, or history machinery. It does not alter
+strategy configurations or their routes, seals, seeds, or runtime
+interpretation.
 
 ### Guarantee posture
 
@@ -57,8 +58,8 @@ profiles yet. Slices 2 and 3 are the declared later consumers of this store.
 ### Non-goals
 
 - No run-creation or mid-run model-profile selection.
-- No profile-to-act resolution, precedence, binding event, snapshot, or call
-  attribution.
+- No profile-to-act resolution, precedence, current selection, or runtime call
+  integration.
 - No per-act override or `acts.json` change.
 - No panel catalogue or editor.
 - No deletion, rename, clone, source-version history, conflict token, or bulk
@@ -109,8 +110,8 @@ would exceed this slice rather than justify exceeding the target.
 | Identifier posture | The seed uses only the installed model and effort vocabulary. The store adds no identifiers and no executor-availability whitelist stricter than today's short-string act input; structural act/field validation is still strict. | `implementation/milestones/model-profiles/skeleton.md:147,153,157`; `orchestrator/driver.py:77-91`; `orchestrator/static/panel.html:4349-4356` | do-not-touch executor identifiers or turn catalogue persistence into capability probing |
 | Catalogue API | `GET /api/model-profiles` returns HTTP 200 with `{"ok":true,"profiles":[...]}` sorted by name. `POST /api/model-profiles` is the sole create/edit operation: a complete valid body creates or wholly replaces the definition under its `name`, returns HTTP 200 with `{"ok":true,"profile":{...}}`, and is administrative under the existing service access posture. There is no PUT, PATCH, DELETE, rename, or per-name route in this slice. | `implementation/milestones/model-profiles/skeleton.md:70,156`; existing route/envelope/access pattern `orchestrator/service.py:3427-3428,3721-3724`; `orchestrator/README.md:323-324` | touch: add the two route branches; do-not-touch `/api/profiles` |
 | Loud rejection and save visibility | Malformed, incomplete, unknown-key, unknown-act, or disallowed-field POST input returns HTTP 400 with `{"ok":false,"error":<non-empty string>}` and leaves any prior definition unchanged. A persisted invalid document makes catalogue GET fail with HTTP 500; it is never silently omitted. A successful non-overlapping save replaces one whole definition before returning. No new named error-code vocabulary is introduced. | `implementation/milestones/model-profiles/skeleton.md:70,151-153,178`; `orchestrator/service.py:2391-2426,3772-3779`; atomic-save precedent `orchestrator/profiles.py:131-148`; silent-skip behavior not to copy `orchestrator/profiles.py:108-121` | touch: validate before whole replacement and surface stored corruption; do-not-fallback, partially merge, or skip invalid definitions |
-| Seeded default | Successful service initialization ensures one profile named `default` only when absent. All three rigors exist. The initial `medium` configuration is behaviorally identical to `DEFAULT_CONFIG` acts plus `model_defaults` resolution for every configurable act and applicable fixed/derived context. Re-running seed initialization never changes any existing `default`, including an operator edit. Absence of a selection will mean `default` at `medium`, but Slice 2 owns that binding and no run consults the seed in this slice. | `implementation/milestones/model-profiles/skeleton.md:31-32,70,137-138,154`; `orchestrator/driver.py:88-91,141-193`; missing-only seed precedent `orchestrator/profiles.py:278-286`; startup seam `orchestrator/service.py:4061-4069` | touch: add a strict missing-only model seed and equivalence gate; do-not-overwrite, bind runs, or change `DEFAULT_CONFIG` |
-| Slice boundary | Slice 1 stops at the source catalogue and API. It emits neither `model_profile_bound` nor `model_profile_changed`: profile resolution/binding/attribution is Slice 2; selection/override presentation is Slice 3; strategy work is Slices 4-6. Existing `/api/profiles`, `/api/runs`, `acts.json`, driver act resolution, panel behavior, strategy seals, and pre-feature run state remain behaviorally unchanged. | `implementation/milestones/model-profiles/skeleton.md:66-79,137-141,155,158-166`; `implementation/milestones/model-profiles/goal.md:175-189` | touch only the additive catalogue/store/API/test surfaces; do-not-pull later slices forward |
+| Seeded default | Successful service initialization ensures one profile named `default` only when absent. All three rigors exist. The initial `medium` configuration is behaviorally identical to `DEFAULT_CONFIG` acts plus `model_defaults` resolution for every configurable act and applicable fixed/derived context. Re-running seed initialization never changes any existing `default`, including an operator edit. Absence of a selection means current `default@medium` once Slice 2 integrates the runtime; no run consults the seed in this slice. | `implementation/milestones/model-profiles/skeleton.md`; `orchestrator/driver.py`; missing-only seed precedent `orchestrator/profiles.py`; startup seam `orchestrator/service.py` | touch: add a strict missing-only model seed and equivalence gate; do-not-overwrite or change `DEFAULT_CONFIG` |
+| Slice boundary | Slice 1 stops at the source catalogue and API. It emits no binding/change events and retains no snapshot or attribution: current runtime resolution is Slice 2; current-selection and override presentation is Slice 3; strategy work is Slices 4-6. Existing `/api/profiles`, `/api/runs`, `acts.json`, driver act resolution, panel behavior, and strategy seals remain behaviorally unchanged in this slice. | `implementation/milestones/model-profiles/skeleton.md`; `implementation/milestones/model-profiles/goal.md` as superseded by A1 for model profiles | touch only the additive catalogue/store/API/test surfaces; do-not-pull later slices forward |
 
 ### Verification Contract
 
@@ -129,8 +130,8 @@ Focused command:
 
 The repository gate remains
 `python3 -m unittest discover -s orchestrator/tests -t .`
-(`orchestrator/README.md:522-524`). Slice 2 must add the runtime binding and
-pre-feature-run equivalence checks; this slice does not claim them.
+(`orchestrator/README.md:522-524`). Slice 2 adds current runtime resolution for
+old and new runs; this slice does not claim that integration.
 
 ### Question Battery
 
@@ -141,15 +142,15 @@ for the facts this note pins.
 | question | answer | evidence |
 |---|---|---|
 | consumers_touched | **current production consumers:** service initialization and the HTTP GET/POST dispatcher. **new direct consumer:** API callers reading or editing the catalogue. **verified absent:** the current driver, panel, and granted calling-product repositories contain no model-profile route or selection consumer; Slices 2-3 own those integrations. Existing strategy-profile consumers remain unchanged. | `orchestrator/service.py:3411-3429,3708-3724,4061-4069`; `implementation/milestones/model-profiles/skeleton.md:34-40,66-75` |
-| pinned_facts | **closed facts:** exact source fields; exact three rigors; five-word examples; the nine-act authority matrix; no stricter executor-id whitelist; exact GET/POST route and envelopes; HTTP 400 input rejection with no mutation; loud stored-corruption failure; missing-only editable `default`; medium staffing equivalence; and the no-binding/no-strategy boundary. | this note, Pinned-Facts Table; `implementation/milestones/model-profiles/skeleton.md:143-166` |
-| verification | **focused:** the named store and API checks cover schema, authority, atomic failure, seed preservation, default equivalence, status/envelopes, access, and strategy-route non-regression. **full:** repository unittest discovery remains the closure gate. Runtime binding and old-run compatibility are explicitly deferred to Slice 2. | this note, Verification Contract; `implementation/milestones/model-profiles/skeleton.md:70-79,154-157`; `orchestrator/README.md:522-524` |
+| pinned_facts | **closed facts:** exact source fields; exact three rigors; five-word examples; the nine-act authority matrix; no stricter executor-id whitelist; exact GET/POST route and envelopes; HTTP 400 input rejection with no mutation; loud stored-corruption failure; missing-only editable `default`; medium staffing equivalence; and the no-runtime/no-strategy boundary. | this note, Pinned-Facts Table; `implementation/milestones/model-profiles/skeleton.md` |
+| verification | **focused:** the named store and API checks cover schema, authority, atomic failure, seed preservation, default equivalence, status/envelopes, access, and strategy-route non-regression. **full:** repository unittest discovery remains the closure gate. Current runtime resolution for old and new runs is explicitly deferred to Slice 2. | this note, Verification Contract; `implementation/milestones/model-profiles/skeleton.md`; `orchestrator/README.md:522-524` |
 | reuse_posture | **checked:** strategy-profile validation/whole-file persistence/missing-only seeds, service route/error envelopes, act-edit vocabulary, current staffing defaults, and their tests. **reused:** those proven shapes and tests as patterns, without sharing strategy lifecycle or storage. **cheapest sufficient:** one separate model-profile store plus two additive route branches; documentation/configuration alone cannot provide the mandated reusable API catalogue. **cost:** no migration/process, bounded maintenance, additive and reversible; omission blocks Slices 2-3 and preserves repetitive setup. | `orchestrator/profiles.py:61-88,95-148,278-286`; `orchestrator/service.py:2361-2433,3427-3428,3721-3724`; `orchestrator/tests/test_profiles.py:110-168`; `implementation/milestones/model-profiles/skeleton.md:37-46,70-72,175-197` |
 | enforceability | **schema/authority:** pre-write validator over the pinned closed matrix. **whole save:** validate first, then existing same-directory replacement pattern. **seed:** missing-only ensure at service initialization, with failure visible. **API:** existing dispatcher/ApiError envelopes. **medium equivalence:** a behavioral comparison against current act-resolution defaults. **separation:** additive namespace plus regression checks for `/api/profiles`, `/api/runs`, acts, and panel. No promise is made for concurrent-edit ordering, crash durability, selection, binding, or call delivery because this slice has no mechanism for them. | this note, Enforceability Gate; `orchestrator/profiles.py:61-88,131-148,278-286`; `orchestrator/service.py:3411-3429,3708-3724,3772-3779,4061-4069`; `orchestrator/driver.py:88-91,156-193,5961-6120` |
 
 ### Reuse Posture
 
 Operators and API callers are affected: without a catalogue they keep repeating
-seat-level setup, and later binding/panel slices have no reusable authority.
+seat-level setup, and later runtime/panel slices have no reusable authority.
 The exposure is every new model-profile use; the realistic harm is
 misconfiguration and blocked reuse, moderate and reversible before calls run.
 The reviewed skeleton independently requires the catalogue and seed

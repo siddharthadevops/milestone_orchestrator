@@ -71,13 +71,15 @@ GUARANTEE_CALIBRATION_BRIEF = (
 )
 
 
-def service_home(state):
-    """Use the bound service home, or the ordinary default for local runs."""
+def service_home(state, active_home=None):
+    """Use the bound service home, active entrypoint home, or local default."""
     project = state.get("project")
     if isinstance(project, dict):
         directory = project.get("directory")
         if isinstance(directory, str) and directory.strip():
             return os.path.dirname(os.path.abspath(directory))
+    if isinstance(active_home, str) and active_home.strip():
+        return os.path.abspath(active_home)
     return os.path.abspath(registry.DEFAULT_HOME)
 
 
@@ -193,12 +195,12 @@ def validate_origin_signal(signal, kind, queued_findings=None):
     return copy.deepcopy(signal)
 
 
-def _owned_work_areas_root(state):
+def _owned_work_areas_root(state, active_home=None):
     """Keep adapter proposals outside the milestone checkout."""
     workspace = os.path.abspath(state["workspace"])
     candidates = [
         os.path.join(
-            os.path.abspath(service_home(state)),
+            os.path.abspath(service_home(state, active_home)),
             "brainstorming-work-areas",
         ),
         os.path.join(
@@ -225,10 +227,10 @@ def _owned_work_areas_root(state):
     )
 
 
-def _materialize_target(state, signal, references):
+def _materialize_target(state, signal, references, active_home=None):
     """Materialize either a source proposal or a fresh amendment target."""
     source = validate_target(state, signal, references)
-    root = _owned_work_areas_root(state)
+    root = _owned_work_areas_root(state, active_home)
     os.makedirs(root, exist_ok=True)
     work_area = tempfile.mkdtemp(prefix="milestone-", dir=root)
     target_parent = os.path.join(work_area, "target")
@@ -341,6 +343,8 @@ def _launch_owned_session(
     target,
     body,
     caller_suffix=None,
+    model_profile_runtime=None,
+    active_home=None,
 ):
     """Launch one session whose isolated target belongs to this adapter."""
     context = execution_context(state)
@@ -354,13 +358,16 @@ def _launch_owned_session(
     if caller_suffix:
         caller += ":%s" % caller_suffix
     try:
+        kwargs = {"owned_target_path": target}
+        if model_profile_runtime is not None:
+            kwargs["model_profile_runtime"] = model_profile_runtime
         return brainstorming_lifecycle.create_resolved_session(
-            service_home(state),
+            service_home(state, active_home),
             body,
             caller,
             context,
             config,
-            owned_target_path=target,
+            **kwargs
         )
     except Exception:
         shutil.rmtree(work_area)
@@ -376,10 +383,22 @@ def create_session(
     authority_context=None,
     lead_profile=None,
     counterpart_profile=None,
+    model_profile_runtime=None,
 ):
     """Translate one valid signal into the existing standalone lifecycle."""
+    model_profile_runtime = (
+        brainstorming_lifecycle._current_model_profile_runtime(
+            model_profile_runtime
+        )
+    )
+    active_home = (
+        model_profile_runtime["home"]
+        if model_profile_runtime is not None else None
+    )
     participants = _participants(lead_profile, counterpart_profile)
-    work_area, target = _materialize_target(state, signal, references)
+    work_area, target = _materialize_target(
+        state, signal, references, active_home=active_home
+    )
     amendment_mode = (
         signal.get("result_mode")
         == contracts.RETHINK_RESULT_DESIGN_AMENDMENT
@@ -433,6 +452,8 @@ def create_session(
         work_area,
         target,
         body,
+        model_profile_runtime=model_profile_runtime,
+        active_home=active_home,
     )
 
 
@@ -446,11 +467,21 @@ def create_guarantee_calibration_session(
     references=None,
     authority_context=None,
     max_rounds=GUARANTEE_CALIBRATION_MAX_ROUNDS,
+    model_profile_runtime=None,
 ):
     """Open a bounded discussion over an isolated full-skeleton copy."""
     if isinstance(max_rounds, bool) or not isinstance(max_rounds, int) \
             or max_rounds <= 0:
         raise AdapterError("guarantee calibration max_rounds must be positive")
+    model_profile_runtime = (
+        brainstorming_lifecycle._current_model_profile_runtime(
+            model_profile_runtime
+        )
+    )
+    active_home = (
+        model_profile_runtime["home"]
+        if model_profile_runtime is not None else None
+    )
     participants = _participants(lead_profile, counterpart_profile)
     references = list(references or [])
     source = {
@@ -462,7 +493,9 @@ def create_guarantee_calibration_session(
         raise AdapterError(
             "guarantee calibration requires one existing regular skeleton"
         )
-    work_area, target = _materialize_target(state, source, references)
+    work_area, target = _materialize_target(
+        state, source, references, active_home=active_home
+    )
     context_references = list(references)
     if skeleton_path not in context_references:
         context_references.append(skeleton_path)
@@ -497,23 +530,27 @@ def create_guarantee_calibration_session(
         target,
         body,
         caller_suffix="guarantee-calibration",
+        model_profile_runtime=model_profile_runtime,
+        active_home=active_home,
     )
 
 
-def inspect_session(state, session_id):
+def inspect_session(state, session_id, active_home=None):
     return brainstorming_lifecycle.inspect_session(
-        service_home(state), session_id, lambda _record: None
+        service_home(state, active_home), session_id, lambda _record: None
     )
 
 
-def retained_revision(state, session_id, revision):
+def retained_revision(state, session_id, revision, active_home=None):
     store = brainstorming.SessionStore(
-        brainstorming_lifecycle.state_directory(service_home(state))
+        brainstorming_lifecycle.state_directory(
+            service_home(state, active_home)
+        )
     )
     return store.read_target_revision(session_id, revision)
 
 
-def prompt_handoff(state, handoff):
+def prompt_handoff(state, handoff, active_home=None):
     """Attach exact retained proposal bytes for one worker prompt only."""
     expanded = copy.deepcopy(handoff)
     if "retained_target" in expanded:
@@ -522,6 +559,7 @@ def prompt_handoff(state, handoff):
         state,
         expanded["session_id"],
         expanded["accepted_target_revision"],
+        active_home=active_home,
     )
     exists, content = brainstorming.target_revision_content(record)
     try:
@@ -538,9 +576,9 @@ def prompt_handoff(state, handoff):
     return expanded
 
 
-def terminal_handoff(state, session_id):
+def terminal_handoff(state, session_id, active_home=None):
     """Return one retained terminal result and its accepted authority."""
-    projected = inspect_session(state, session_id)
+    projected = inspect_session(state, session_id, active_home=active_home)
     session_state = projected["state"]
     if session_state["status"] not in brainstorming.TERMINAL_STATUSES:
         return None
@@ -575,6 +613,8 @@ def terminal_handoff(state, session_id):
             raise AdapterError(
                 "a successful Brainstorming session has no accepted target"
             )
-        retained_revision(state, session_id, revision)
-        return prompt_handoff(state, handoff)
+        retained_revision(
+            state, session_id, revision, active_home=active_home
+        )
+        return prompt_handoff(state, handoff, active_home=active_home)
     return handoff

@@ -12,7 +12,9 @@ import copy
 import json
 import os
 import tempfile
+import threading
 import unittest
+from unittest import mock
 
 from orchestrator import driver, model_profiles as mp, runners, state as st
 
@@ -267,6 +269,94 @@ class ModelProfileStoreTest(unittest.TestCase):
         with self.assertRaises(mp.ModelProfileError):
             mp.list_model_profiles(self.home)
 
+    def test_concurrent_saves_are_atomic_and_last_replacement_wins(self):
+        mp.ensure_default(self.home)
+        first = copy.deepcopy(mp.DEFAULT_SEED)
+        first["examples"] = ["first completed save"]
+        second = copy.deepcopy(mp.DEFAULT_SEED)
+        second["examples"] = ["second completed save"]
+        real_replace = os.replace
+        both_ready = threading.Barrier(2)
+        first_replaced = threading.Event()
+        errors = []
+
+        def ordered_replace(source, target):
+            both_ready.wait(timeout=5)
+            if threading.current_thread().name == "profile-first":
+                real_replace(source, target)
+                first_replaced.set()
+            else:
+                self.assertTrue(first_replaced.wait(timeout=5))
+                real_replace(source, target)
+
+        def save(doc):
+            try:
+                mp.save(self.home, doc)
+            except Exception as exc:  # pragma: no cover - assertion surface
+                errors.append(exc)
+
+        with mock.patch(
+                "orchestrator.model_profiles.os.replace",
+                side_effect=ordered_replace):
+            threads = (
+                threading.Thread(
+                    target=save, args=(first,), name="profile-first"
+                ),
+                threading.Thread(
+                    target=save, args=(second,), name="profile-second"
+                ),
+            )
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join(timeout=10)
+
+        self.assertFalse(any(thread.is_alive() for thread in threads))
+        self.assertEqual(errors, [])
+        self.assertEqual(mp.load(self.home, "default"), second)
+
+    def test_staged_save_does_not_enter_catalogue(self):
+        reached_replace = threading.Event()
+        release_replace = threading.Event()
+        real_replace = os.replace
+        errors = []
+
+        def paused_replace(source, target):
+            reached_replace.set()
+            self.assertTrue(release_replace.wait(timeout=5))
+            real_replace(source, target)
+
+        def save():
+            try:
+                mp.save(self.home, valid_doc("alpha"))
+            except Exception as exc:  # pragma: no cover - assertion surface
+                errors.append(exc)
+
+        with mock.patch(
+                "orchestrator.model_profiles.os.replace",
+                side_effect=paused_replace):
+            thread = threading.Thread(target=save)
+            thread.start()
+            self.assertTrue(reached_replace.wait(timeout=5))
+            try:
+                self.assertEqual(mp.list_model_profiles(self.home), [])
+            finally:
+                release_replace.set()
+                thread.join(timeout=10)
+
+        self.assertFalse(thread.is_alive())
+        self.assertEqual(errors, [])
+        self.assertEqual(mp.list_model_profiles(self.home), [valid_doc("alpha")])
+
+    def test_valid_long_profile_name_remains_writable(self):
+        # The final 250-byte component fits the common 255-byte filesystem
+        # limit.  Staging must not add the profile name again with overhead.
+        name = "a" * 245
+        expected = valid_doc(name)
+
+        self.assertEqual(mp.save(self.home, expected), expected)
+        self.assertEqual(mp.load(self.home, name), expected)
+
     def test_case_variant_create_cannot_overwrite_catalogue_entry(self):
         self.assertTrue(mp.ensure_default(self.home))
         default_bytes = self.read_file("default")
@@ -314,6 +404,19 @@ class ModelProfileStoreTest(unittest.TestCase):
             mp.ensure_default(self.home)
         self.assertEqual(json.loads(self.read_file("default")),
                          {"name": "default"})
+
+    def test_dangling_default_link_is_unavailable_not_missing(self):
+        directory = mp.model_profiles_dir(self.home)
+        os.makedirs(directory)
+        path = os.path.join(directory, "default.json")
+        target = os.path.join(self.home, "temporarily-unavailable-default")
+        os.symlink(target, path)
+
+        with self.assertRaisesRegex(mp.ModelProfileError, "unavailable"):
+            mp.ensure_default(self.home)
+
+        self.assertTrue(os.path.islink(path))
+        self.assertEqual(os.readlink(path), target)
 
     # -- seeded medium == today's staffing ---------------------------------
 

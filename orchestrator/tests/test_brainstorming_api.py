@@ -4,6 +4,7 @@ import contextlib
 import copy
 import json
 import os
+import pathlib
 import signal
 import stat
 import subprocess
@@ -1979,6 +1980,101 @@ class StandaloneBrainstormingApiTest(unittest.TestCase):
         self.assertEqual(code, 200, response)
         self.assertEqual(
             self._poll_terminal(session_id)["state"]["status"], "success"
+        )
+
+    def test_noop_start_does_not_require_legacy_milestone_attachment(self):
+        def mark_legacy_milestone(session_id):
+            with lifecycle._locked_registry(self.home):
+                document = lifecycle._load_registry(self.home)
+                record = lifecycle._find_record(document, session_id)
+                record["caller"] = "milestone:legacy:slice_impl-02-b"
+                lifecycle._save_registry(self.home, document)
+
+        self._target("already-running.md")
+        running = lifecycle.create_session(
+            self.home,
+            self._payload("already-running.md"),
+            access.ADMIN_EMAIL,
+            launcher=self._sleeper_launcher,
+        )
+        mark_legacy_milestone(running["id"])
+        with mock.patch.object(
+            service,
+            "_attached_brainstorming_model_profile_runtime",
+            side_effect=AssertionError("attachment lookup is not due"),
+        ) as attachment:
+            code, response = self._request(
+                "POST",
+                "/api/brainstorming/sessions/%s/start" % running["id"],
+                {},
+            )
+        self.assertEqual(code, 200, response)
+        self.assertEqual(response["session"]["process"], "running")
+        attachment.assert_not_called()
+        self._stop_sleeper_record(running["id"])
+
+        self._target("already-terminal.md")
+        code, created = self._request(
+            "POST",
+            "/api/brainstorming/sessions",
+            self._payload("already-terminal.md"),
+        )
+        self.assertEqual(code, 201, created)
+        session_id = created["session"]["id"]
+        terminal = self._poll_terminal(session_id)
+        mark_legacy_milestone(session_id)
+        with mock.patch.object(
+            service,
+            "_attached_brainstorming_model_profile_runtime",
+            side_effect=AssertionError("attachment lookup is not due"),
+        ) as attachment:
+            code, response = self._request(
+                "POST",
+                "/api/brainstorming/sessions/%s/start" % session_id,
+                {},
+            )
+        self.assertEqual(code, 200, response)
+        self.assertEqual(
+            response["session"]["state"]["status"],
+            terminal["state"]["status"],
+        )
+        attachment.assert_not_called()
+
+    def test_start_refuses_unattached_milestone_without_profile_locator(self):
+        self._target("unattached-milestone-restart.md")
+        created = lifecycle.create_session(
+            self.home,
+            self._payload("unattached-milestone-restart.md"),
+            access.ADMIN_EMAIL,
+            launcher=self._sleeper_launcher,
+        )
+        session_id = created["id"]
+        self._stop_sleeper_record(session_id)
+        with lifecycle._locked_registry(self.home):
+            document = lifecycle._load_registry(self.home)
+            record = lifecycle._find_record(document, session_id)
+            record["caller"] = "milestone:current:slice_impl-02-b"
+            lifecycle._save_registry(self.home, document)
+        registry_before = pathlib.Path(
+            lifecycle.registry_path(self.home)
+        ).read_bytes()
+
+        with mock.patch.object(
+            lifecycle,
+            "_launch_lifecycle_process",
+            side_effect=self._sleeper_launcher,
+        ) as launch:
+            code, response = self._request(
+                "POST",
+                "/api/brainstorming/sessions/%s/start" % session_id,
+                {},
+            )
+        self.assertEqual(code, 503, response)
+        self.assertEqual(response["error"], lifecycle.UNAVAILABLE)
+        launch.assert_not_called()
+        self.assertEqual(
+            pathlib.Path(lifecycle.registry_path(self.home)).read_bytes(),
+            registry_before,
         )
 
     def test_stop_preserves_a_pending_external_turn_for_resume(self):

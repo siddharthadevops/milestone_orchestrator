@@ -683,6 +683,24 @@ def _runtime_and_roster(config, participants, closure_policy, workspace):
     return runtime, run_config, eligible
 
 
+def _current_model_profile_runtime(value):
+    """Validate one launch-only locator for per-dispatch profile reads."""
+    if value is None:
+        return None
+    if (
+        not isinstance(value, dict)
+        or set(value) != {"state_path", "home"}
+        or not all(
+            isinstance(value.get(key), str)
+            and value[key].strip()
+            and os.path.isabs(value[key])
+            for key in ("state_path", "home")
+        )
+    ):
+        raise PublicLifecycleError(503, UNAVAILABLE)
+    return copy.deepcopy(value)
+
+
 def _resolved_target_path(request, execution_context, owned_target_path=None):
     """Resolve and contain the target path without touching the filesystem."""
     path = coordination.resolve_target_path(request)
@@ -885,7 +903,9 @@ def _spawn_participant(execution_context, argv, popen_kwargs):
     return subprocess.Popen(argv, **popen_kwargs)
 
 
-def _launch_lifecycle_process(home, session_id):
+def _launch_lifecycle_process(
+    home, session_id, model_profile_runtime=None
+):
     """Spawn one child blocked until its binding and session are durable."""
     logs = os.path.join(service_directory(home), LOGS_DIRNAME)
     os.makedirs(logs, exist_ok=True)
@@ -893,8 +913,7 @@ def _launch_lifecycle_process(home, session_id):
     read_fd, write_fd = os.pipe()
     log_handle = open(log_path, "a", encoding="utf-8")
     try:
-        process = subprocess.Popen(
-            [
+        argv = [
                 sys.executable,
                 "-u",
                 "-m",
@@ -906,7 +925,17 @@ def _launch_lifecycle_process(home, session_id):
                 session_id,
                 "--start-fd",
                 str(read_fd),
-            ],
+            ]
+        current = _current_model_profile_runtime(model_profile_runtime)
+        if current is not None:
+            argv.extend([
+                "--model-profile-state",
+                current["state_path"],
+                "--model-profiles-home",
+                current["home"],
+            ])
+        process = subprocess.Popen(
+            argv,
             cwd=os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
             stdin=subprocess.DEVNULL,
             stdout=log_handle,
@@ -1055,6 +1084,11 @@ def _iso_epoch(value):
         return None
 
 
+def _is_milestone_session(record):
+    caller = record.get("caller")
+    return isinstance(caller, str) and caller.startswith("milestone:")
+
+
 def _activity_projection(store, record, state):
     activity = store.read_activity(record["id"])
     events = [] if activity is None else copy.deepcopy(activity["events"])
@@ -1120,11 +1154,17 @@ def _activity_projection(store, record, state):
         and not attempt["quiescent"]
         and not attempt_call_recorded
     ):
-        participants = {
-            participant["id"]: participant
-            for participant in _view_participants(record, state)
-        }
-        participant = participants.get(attempt["participant_id"]) or {}
+        # Current profile state can change after dispatch. The turn attempt
+        # does not retain call identity, so the creation roster is not proof
+        # of what an active milestone call is running.
+        if _is_milestone_session(record):
+            participant = {}
+        else:
+            participants = {
+                participant["id"]: participant
+                for participant in _view_participants(record, state)
+            }
+            participant = participants.get(attempt["participant_id"]) or {}
         kind = attempt.get("kind", "discussion_turn")
         stage = (
             (attempt.get("action_context") or {}).get("stage")
@@ -1294,6 +1334,7 @@ def create_resolved_session(
     config,
     launcher=None,
     owned_target_path=None,
+    model_profile_runtime=None,
 ):
     """Create for an already-resolved milestone without resolving roots again."""
     try:
@@ -1355,6 +1396,7 @@ def create_resolved_session(
             config,
             launcher,
             owned_target_path=owned_target_path,
+            model_profile_runtime=model_profile_runtime,
         )
     except PublicLifecycleError:
         raise
@@ -1372,7 +1414,11 @@ def _create_session_with_context(
     config,
     launcher,
     owned_target_path=None,
+    model_profile_runtime=None,
 ):
+    model_profile_runtime = _current_model_profile_runtime(
+        model_profile_runtime
+    )
     runtime, run_config, eligible = _runtime_and_roster(
         config,
         checked["participants"],
@@ -1419,7 +1465,14 @@ def _create_session_with_context(
             ):
                 session_id = _new_session_id()
             try:
-                launch = launcher(home, session_id)
+                if model_profile_runtime is None:
+                    launch = launcher(home, session_id)
+                else:
+                    launch = launcher(
+                        home,
+                        session_id,
+                        model_profile_runtime=model_profile_runtime,
+                    )
             except Exception as exc:
                 raise PublicLifecycleError(503, UNAVAILABLE) from exc
             if (
@@ -1800,12 +1853,13 @@ def delete_session(home, session_id, authorize, purge=False):
     return {"deleted": session_id, "purged": bool(purge)}
 
 
-def _view_participants(record, state):
-    """Expose the resolved seat settings without leaking runtime commands."""
+def _view_participants(record, state, current_staffing=None):
+    """Expose current or standalone seat settings without runtime commands."""
     runtime = record.get("runtime") or {}
     executors = runtime.get("executors") or {}
     defaults = runtime.get("model_defaults") or {}
     external_providers = runtime.get("external_providers") or {}
+    milestone = _is_milestone_session(record)
     projected = []
     for participant in state["run_config"]["participants"]:
         binding_ref = (
@@ -1814,11 +1868,26 @@ def _view_participants(record, state):
             else participant["external_ref"]
         )
         binding = executors.get(binding_ref) or {}
-        model_family = binding.get("model_family") or participant.get(
-            "model_family"
-        )
-        family_defaults = defaults.get(model_family) or {}
         provider = external_providers.get(participant.get("external_ref"))
+        profile_staffed = (
+            participant["delivery"] == "llm"
+            or (
+                isinstance(provider, dict)
+                and provider.get("kind") == "narrator"
+            )
+        )
+        if milestone and profile_staffed:
+            current = (current_staffing or {}).get(participant["id"]) or {}
+            model_family = current.get("agent")
+            model = current.get("model")
+            effort = current.get("effort")
+        else:
+            model_family = binding.get("model_family") or participant.get(
+                "model_family"
+            )
+            family_defaults = defaults.get(model_family) or {}
+            model = binding.get("model") or family_defaults.get("model")
+            effort = binding.get("effort") or family_defaults.get("effort")
         projected.append(
             {
                 "id": participant["id"],
@@ -1828,18 +1897,16 @@ def _view_participants(record, state):
                     None if provider is None else provider["kind"]
                 ),
                 "model_family": model_family,
-                "model": (
-                    binding.get("model") or family_defaults.get("model")
-                ),
-                "effort": (
-                    binding.get("effort") or family_defaults.get("effort")
-                ),
+                "model": model,
+                "effort": effort,
             }
         )
     return projected
 
 
-def view_session(home, session_id, authorize, preview_limit):
+def view_session(
+    home, session_id, authorize, preview_limit, current_staffing=None
+):
     """Project one authorized durable revision for the dedicated view."""
     record = _record_by_id(home, session_id)
     _authorize_record(record, authorize)
@@ -1884,6 +1951,15 @@ def view_session(home, session_id, authorize, preview_limit):
                     target["truncated"] = len(text) > preview_limit
         turns = [] if progress is None else progress["completed_turns"]
         activity = _activity_projection(store, record, state)
+        projected_staffing = None
+        if _is_milestone_session(record) and callable(current_staffing):
+            try:
+                projected_staffing = current_staffing(record, state)
+            except Exception:
+                # Monitoring remains available when current profile state is
+                # unavailable; omitted staffing is safer than an ignored
+                # creation roster.
+                projected_staffing = {}
         closing_summary = state.get("closing_summary")
         final_agreement = None
         if state["status"] == "success" and closing_summary is not None:
@@ -1904,7 +1980,9 @@ def view_session(home, session_id, authorize, preview_limit):
             "process": "running" if _process_alive(record) else "stopped",
             "revision": snapshot.revision,
             "target": target,
-            "participants": _view_participants(record, state),
+            "participants": _view_participants(
+                record, state, current_staffing=projected_staffing
+            ),
             "same_family_fallback": state["run_config"][
                 "same_family_fallback"
             ],
@@ -2091,7 +2169,12 @@ def _stop_authorized(home, session_id, record):
     return _projection(home, current)
 
 
-def start_session(home, session_id, authorize):
+def start_session(
+    home,
+    session_id,
+    authorize,
+    validate_launch=None,
+):
     """Resume one stopped non-terminal session under its existing identity."""
     record = _record_by_id(home, session_id)
     _authorize_record(record, authorize)
@@ -2115,7 +2198,19 @@ def start_session(home, session_id, authorize):
                 or _process_alive(current)
             ):
                 return _projection(home, current)
-            launch = _launch_lifecycle_process(home, session_id)
+            model_profile_runtime = None
+            if validate_launch is not None:
+                model_profile_runtime = _current_model_profile_runtime(
+                    validate_launch(current)
+                )
+            if model_profile_runtime is None:
+                launch = _launch_lifecycle_process(home, session_id)
+            else:
+                launch = _launch_lifecycle_process(
+                    home,
+                    session_id,
+                    model_profile_runtime=model_profile_runtime,
+                )
             current["pid"] = launch.process.pid
             _save_registry(home, document)
             resumed = copy.deepcopy(current)
@@ -2224,7 +2319,12 @@ def _add_session_cost(events):
     return total
 
 
-def _participant_execution(store, record, participant_process_factory):
+def _participant_execution(
+    store,
+    record,
+    participant_process_factory,
+    current_model_profile=None,
+):
     runtime = record["runtime"]
     session_id = record["id"]
 
@@ -2259,6 +2359,9 @@ def _participant_execution(store, record, participant_process_factory):
         raise brainstorming.SessionNotFound(record["id"])
     activity = store.read_activity(session_id)
     activity_events = (activity or {}).get("events") or []
+    current_model_profile = _current_model_profile_runtime(
+        current_model_profile
+    )
     bindings = {}
     for participant in snapshot.state["run_config"]["participants"]:
         binding_ref = (
@@ -2282,7 +2385,8 @@ def _participant_execution(store, record, participant_process_factory):
             if event.get("participant_id") == participant["id"]
         ]
         if (
-            family == "codex"
+            current_model_profile is None
+            and family == "codex"
             and participant_session is not None
             and prior_calls
             and all(event.get("token_usage") is not None
@@ -2296,13 +2400,27 @@ def _participant_execution(store, record, participant_process_factory):
                     *(event["token_usage"] for event in prior_calls)
                 ),
             )
-        bindings[binding_ref] = (
-            execution.RunnerParticipantExecutor(
-                family,
-                provider,
-                model=seat.get("model"),
-                effort=seat.get("effort"),
-            )
+        current_resolver = None
+        if current_model_profile is not None:
+            counterpart = participant["role"] == "contrary_position"
+
+            def current_resolver(
+                spec=current_model_profile,
+                counterpart=counterpart,
+            ):
+                return driver.resolve_current_brainstorming_profile(
+                    spec["state_path"],
+                    spec["home"],
+                    counterpart=counterpart,
+                )
+
+        bindings[binding_ref] = execution.RunnerParticipantExecutor(
+            family,
+            provider,
+            model=seat.get("model"),
+            effort=seat.get("effort"),
+            current_resolver=current_resolver,
+            fresh_each_call=current_resolver is not None,
         )
 
     def classify_failure(session_id, participant, _executor, exc):
@@ -2313,6 +2431,15 @@ def _participant_execution(store, record, participant_process_factory):
             failed_family,
         )
         defaults = (runtime.get("model_defaults") or {}).get(opposite) or {}
+        classifier_resolver = None
+        if current_model_profile is not None:
+            classifier_resolver = lambda: (
+                driver.resolve_current_structural_dispatch(
+                    current_model_profile["state_path"],
+                    current_model_profile["home"],
+                    opposite,
+                )
+            )
         error_type, resume_at, evidence = errclass.classify_worker_failure(
             exc,
             runner=provider,
@@ -2327,6 +2454,7 @@ def _participant_execution(store, record, participant_process_factory):
             on_llm_call=lambda call: _record_classifier_activity(
                 store, session_id, call, runtime.get("billing"),
             ),
+            resolve_dispatch=classifier_resolver,
         )
         return {
             "error_type": error_type,
@@ -2521,6 +2649,7 @@ def run_lifecycle(
     session_id,
     participant_process_factory=None,
     require_pid_claim=True,
+    model_profile_runtime=None,
 ):
     """Drive complete ordered rounds and closure until one terminal result."""
     try:
@@ -2536,6 +2665,7 @@ def run_lifecycle(
             store,
             record,
             participant_process_factory or _spawn_participant,
+            current_model_profile=model_profile_runtime,
         )
         coordinator = coordination.BrainstormingCoordinator(
             store, participant_execution
@@ -2677,11 +2807,24 @@ def main(argv=None):
     run.add_argument("--home", required=True)
     run.add_argument("--session", required=True)
     run.add_argument("--start-fd", required=True, type=int)
+    run.add_argument("--model-profile-state")
+    run.add_argument("--model-profiles-home")
     args = parser.parse_args(argv)
     if args.command != "run" or not _wait_for_start(args.start_fd):
         return 2
     _install_stop_handler()
-    return run_lifecycle(args.home, args.session)
+    model_profile_runtime = None
+    if args.model_profile_state is not None \
+            or args.model_profiles_home is not None:
+        model_profile_runtime = {
+            "state_path": args.model_profile_state,
+            "home": args.model_profiles_home,
+        }
+    return run_lifecycle(
+        args.home,
+        args.session,
+        model_profile_runtime=model_profile_runtime,
+    )
 
 
 if __name__ == "__main__":

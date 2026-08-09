@@ -249,4 +249,5 @@ The milestone is complete when:
 | slice_doc-01 (Model-profile store and seeded default) | reviewed | 2 | satisfied | d5e7f28 |
 | slice_impl-01 (Model-profile store and seeded default) | reviewed | 9 | satisfied | a7192e2 |
 | slice_doc-02 (Profile resolution, binding, and attribution) | reviewed | 4 | satisfied | 7192ec2 |
-| slice_impl-02-a (Profile resolution, binding, and attribution) | reviewed | 11 | satisfied | - |
+| slice_impl-02-a (Profile resolution, binding, and attribution) | reviewed | 11 | satisfied | fc62d64 |
+| slice_impl-02-b (Profile resolution, binding, and attribution) | reviewed | 124 | satisfied | - |

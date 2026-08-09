@@ -1,208 +1,207 @@
-# Slice 2 — Profile resolution, binding, and attribution
+# Slice 02 — Current profile resolution and override authority
 
-## Register 1 — Intent (lay language)
+## Goal
 
-### What this slice builds
+Deliver the thin current-state resolver required by operator amendment A1 and
+the accepted current-state design amendment. Slice 1's editable validated
+catalogue remains the source. Before a model dispatch, resolve the applicable
+act from the run's current selection, the selected profile's current saved
+definition, and the current override layer. Retain no earlier model-profile
+state or model-profile history.
 
-This slice makes a chosen model profile govern real work. When a work unit is
-about to use a model for the first time, the run keeps the exact profile choice
-and staffing it resolved. Editing the reusable profile later cannot change that
-unit's past or silently restaff its remaining calls. A later unit can pick up the
-edited definition, and an explicit change affects the next call rather than a
-call already in progress.
+This note replaces the withdrawn binding/attribution Slice 2 design. Its old
+snapshots, content identities, binding/change events, override generations,
+acknowledgements, per-call profile attribution, provenance projections,
+pre-feature opt-out, and related tests are obsolete and must be removed.
 
-An operator's explicit choice for one act still wins over the profile. Choices
-made when the run was created become the same clearable overrides as choices
-made later, without changing their present result. Every model call remains
-auditable: a reader can recover who ran, with which model and effort, under
-which profile choice, and whether an explicit override contributed.
+## Scope
 
-This is for operators, calling products, and people auditing run history. It
-owns runtime resolution, retained bindings, override precedence and origin, and
-call attribution. It does not build the profile picker or editor in the panel.
+In scope:
 
-### Guarantee posture
+- one current `{name, rigor}` selection per run, read from the run's atomic
+  current-selection sidecar; no file means `default@medium`;
+- a current load and validation of the selected saved profile at act resolution;
+- `current override > current profile entry > existing structural/config
+  default > family default`, with whole-act replacement;
+- existing fixed/derived authority for review, delta, counterpart, and
+  consultation seats;
+- service and direct-CLI execution startup seeding a missing `default`,
+  validating an existing one, and supplying that active catalogue home to the
+  driver for old and new runs alike;
+- project-default, launch-input, and CLI creation act layers projected into
+  `acts.json` only, with existing merge order, partial values, explicit per-act
+  empties, whole-map replacement, and legacy/unknown-key tolerance preserved;
+- the existing live acts route accepting the full nine-act surface through the
+  Slice 1 authority validator, refusing invalid input atomically.
+- independently supervised milestone Brainstorming turns resolving the current
+  lead and structurally opposite counterpart immediately before each dispatch,
+  with the creating driver supplying launch-only current state and catalogue
+  inputs; explicit service restart reuses the generic run/session attachment
+  when present, while unattached milestone restarts refuse before launch and
+  no lifecycle record retains a model-profile locator;
 
-- **Strict:** a unit's first act resolution binds one exact source snapshot;
-  precedence is act-wide and deterministic; a later choice is prospective;
-  source edits never rewrite a binding or call record; every new call is
-  attributable; invalid or unavailable selections never fall back; and runs
-  created before this feature keep their former staffing.
-- **Optimistic:** none. There is no conflict token or promise that two
-  simultaneous operator edits will both survive.
-- **Eventual:** none. A completed binding or change is effective at the named
-  act boundary; there is no background convergence.
-- **Best-effort:** ordering between genuinely overlapping operator writes and
-  survival through abrupt filesystem or host loss are not strengthened here.
-  A successfully recorded binding and history remain strict.
+Out of scope:
 
-### Dependencies and consumers
+- the Slice 3 selection read/replace routes and panel controls;
+- any model-profile snapshot, hash, binding, generation, event, origin,
+  attribution, provenance, history, acknowledgement, replay, migration,
+  recovery, lock, CAS, retry, rollback, or reconciliation;
+- changes to strategy profiles/configuration, artifact seals, generic worker
+  accounting/recovery, executor vocabulary, or Slices 4–6.
 
-This slice depends on Slice 1's validated, editable catalogue and seeded
-default. It also depends on the existing run initializer, act-override file,
-single act-resolution path, state ledger, call accounting, and frozen
-Brainstorming seats.
+## Pinned facts
 
-The direct consumers are the driver paths that choose workers, the run-state
-history and summaries that report them, the existing run-creation and act-edit
-services, and the Brainstorming lifecycle when it receives model-profile-backed
-seats. No granted calling-product checkout is changed; those products remain
-future API consumers.
+| concern | contract | implementation posture |
+|---|---|---|
+| Current selection | Read the sidecar immediately before act resolution. Missing means `default@medium`; malformed shape, unknown name, or unknown rigor fails before dispatch without fallback. | One atomic current value, no ledger event or prior value. |
+| Current definition | Load and validate the named profile on every resolution. A saved edit visible to that load affects the next call, including in an active unit. | Reuse `model_profiles.load`; never cache or retain resolved content. |
+| In-flight call | Settings already supplied to a dispatched provider call stay unchanged. | Ordinary call-local arguments only; no profile-specific record. |
+| Precedence | A present `acts.json` entry is the whole policy. If absent, use the current profile entry. If both omit the act, use existing config/structural defaults. | Extend `_act_profile`, do not add a second resolver. |
+| Explicit empty | A creation-time `null`, `""`, or `{}` surface entry remains present and suppresses the profile for that act, exposing only structural/family defaults. The live route keeps its existing clear meaning and removes empty submitted entries. | Presence controls precedence, not provenance. |
+| Creation merge | Project defaults are below launch input. A later object after a lower non-object acts replacement replaces that non-object and carries only its explicit keys; a final non-object replacement suppresses every surface act. | Project the ordered raw layers with the same one-level merge semantics before restricting baseline config. |
+| Single home | Creation-supplied surface winners exist only in `acts.json`; baseline config retains shipped surface entries. Unknown/legacy creation keys remain tolerated in merged config and are not activated. | No origin label, event, or inferred migration. |
+| Authority | Full-policy acts, fixed/derived model-effort acts, and consultation family-only retain Slice 1's closed matrix. | Shared validator for profile documents and hot route; structural resolvers remain final authority. |
+| Catalogue readiness | Service startup and direct CLI init/run/step seed absence and validate existing `default`, then pass that catalogue home to runtime resolution. Read-only status does not seed or use catalogue readiness as a gate. | Startup work only; resolver never repairs catalogue data. A status-only resolution error withholds the optional current-model projection while generic state, diagnostics, projection, and guard recovery continue. |
+| Stale data | Superseded unit bindings, content hashes, selection snapshots, generations, and attribution fields have no authority. Pre-feature config acts are not inferred or migrated into `acts.json`; after adoption they remain baseline beneath the current profile. | Resolver does not read obsolete model-profile fields and performs no migration or cleanup pass. |
+| Brainstorming | Each milestone-owned turn reads current implementer/counterpart staffing before dispatch. Its prompt names the complete shared transcript, so it starts a fresh provider session rather than retaining a provider binding that could freeze earlier settings. Monitoring reports fresh current participant staffing and completed-call identity from generic activity; it omits unproven active-call identity rather than presenting the ignored creation roster. | Reuse the shared current resolver and generic activity records; standalone non-profile Brainstorming remains unchanged. |
 
-### Non-goals
+## Creation-layer algorithm
 
-- No panel catalogue, picker, editor, inherited/override presentation, or
-  clear-control work; those are Slice 3.
-- No new run-creation or mid-run profile-selection HTTP route in this slice.
-- No profile deletion, source versions, retained older source documents,
-  watcher, background synchronizer, migration job, or concurrency protocol.
-- No new act, model, effort, family, cost, budget, or risk vocabulary.
-- No change to review strategy, strategy-profile editability or seals, review
-  stages, family rotation, artifact seals, or calling-product implementation.
+Project the explicit raw `acts` layers in ascending precedence:
 
-### Acceptance
+1. A missing layer changes nothing.
+2. A dict updates the current dict; if the prior whole value was non-dict, it
+   replaces it.
+3. A non-dict replaces the whole current value.
+4. From the final dict, copy only configurable surface keys to `acts.json`,
+   retaining explicit-empty values and validating every non-empty value through
+   the Slice 1 authority validator before any run state is created. If the final
+   value is non-dict, write an empty per-act policy for every configurable act.
+   If there is no surface result, create no override file.
+5. In merged baseline config, restore only shipped surface entries while
+   retaining tolerated non-surface keys.
 
-The slice is accepted when new unselected work binds the current default at its
-middle rigor on the unit's first act resolution; a named choice binds the exact
-selected source; two units in one run can retain different choices; a source
-edit changes only later bindings; and an explicit change affects the next act
-resolution without changing an in-flight or recorded call. A model call outside
-any persisted unit resolves and retains the run's current choice for that call.
+This specifically prevents a lower whole-map clear from leaving stale empty
+overrides after a later higher-precedence object.
 
-It must also prove the complete precedence chain, including whole-act
-overrides, partial entries, relative policies, and an explicit empty creation
-override. Run-creation choices from every existing channel must produce the
-same staffing as before while becoming single-homed, attributable, and
-clearable. Fixed and derived seats must remain fixed or derived.
-
-Every successful, failed, repaired, interrupted, or nested model call must lead
-to history from which its resolved staffing, bound selection (or pre-feature
-no-selection origin), and contributing override can be recovered. A pre-feature
-state must produce its former choices without reading the model-profile
-catalogue.
-
-The implementation is expected to exceed the roughly 500 changed-line target
-modestly. The reason is test breadth: three creation channels, explicit-empty
-compatibility, old-state equivalence, mutable-source boundaries, and all direct
-and nested call-record classes must be pinned. Runtime machinery should still
-remain one extended resolver and one binding/attribution contract; the excess
-does not justify another store, resolver, migration, or process.
-
-### Risks
-
-- Re-reading mutable source content after a unit binds would silently restaff
-  work. Snapshot and source-edit tests close that path.
-- Moving creation-time choices could change today's partial or empty-entry
-  behavior. Cross-channel equivalence tests compare the exact effective seats.
-- Recording only successful drafts and reviews would hide paid failures,
-  classifiers, consultations, or discussion turns. The attribution matrix
-  covers every existing call-record class.
-- Treating the absence of new state as an implicit default would migrate old
-  runs accidentally. A legacy fixture must prove zero catalogue access.
-- Concurrent operator writes can still overwrite one another. Adding revision
-  or coordination machinery is disproportionate until an independent need
-  requires it.
-
-## Register 2 — Pinned facts and executable evidence
-
-### Pinned-Facts Table
-
-| fact | value | authority (file:line) | touch / do-not-touch |
-|---|---|---|---|
-| Binding and prospective change | A feature-enabled run with no explicit choice resolves `default` at `medium`. A persisted unit's first act resolution appends `model_profile_bound`; a later explicit choice that takes effect appends `model_profile_changed`. Each retained binding identifies `name` + `rigor` and the exact resolved configuration/content identity. A bound unit never follows later source edits; the next unbound unit may. A call outside any unit resolves the run's current selection at that call and retains it in the call's attribution. A change never alters an active or recorded call. When a new binding/change must resolve source content, an unknown, missing, corrupt, or incomplete source fails before provider dispatch with no fallback. | `implementation/milestones/model-profiles/skeleton.md:55-63,119-125,137-141,151,154-155`; source validation `orchestrator/model_profiles.py:153-222`; append-only event capability `orchestrator/state.py:233-246,330-356` | touch: bind and retain at act resolution; do-not-bind at run creation, retain only a mutable reference, or revalidate old bindings against the source |
-| Resolution precedence | Per act, the strict order is explicit operator override > the bound profile's selected rigor entry > the act's existing assignment or structural derivation > family default. An override entry is the whole act policy: its missing fields never merge from the profile. A creation-supplied `null`, `""`, or `{}` is an explicit empty policy that suppresses the profile and resolves from structural derivations/family defaults until that override is cleared. Relative `self`/`opposite` policies resolve from the effective originating act. | `implementation/milestones/model-profiles/skeleton.md:86-113,147-150`; current single seam `orchestrator/driver.py:5948-5988`; fixed/derived resolution `orchestrator/driver.py:6040-6071,6096-6120,6239-6248` | touch: extend the one resolver; do-not-field-merge an override with a profile or add a parallel resolution path |
-| Override origin and creation compatibility | `acts.json` beside state is the sole persisted override layer and presence is provenance. `POST /api/runs/<id>/acts` accepts exactly the configurable surface, clears omitted/empty submitted entries, and returns HTTP 400 with a non-empty error without changing the prior file for an unknown act or disallowed field. For new runs, surface-act entries supplied by project `defaults.acts`, launch `config.acts`, or CLI `--config` are stored here only, with launch winning project defaults; shipped `DEFAULT_CONFIG` entries remain in config. Creation keeps today's tolerant result: a legacy/unknown non-surface key does not refuse launch or enter the override layer, and a creation-time empty surface entry is retained as the explicit empty policy rather than treated as a mid-run clear. | `implementation/milestones/model-profiles/skeleton.md:88-108,149`; current path/route `orchestrator/service.py:2367-2434,3764-3804`; creation merge paths `orchestrator/service.py:1818-1839,1996-2013`; CLI/config merge `orchestrator/driver.py:270-292,8460-8464,8573-8579`; merge-order test `orchestrator/tests/test_run_init.py:568-583` | touch: single-home explicit creation entries and make the existing override route authority-strict; do-not-reject or activate legacy creation keys |
-| Configurable authority | The surface is exactly `skeletoner`, `drafter`, `implementer`, `fixer`, `reclassifier`, `review_codex`, `review_claude`, `brainstorming_counterpart`, and `consultation`. The first five accept family policy or `agent`/`model`/`effort`; the two reviews and counterpart accept only `model`/`effort`; consultation accepts only family policy. Review families, delta-review derivation, opposite-family counterpart, and consultation model/effort derivation remain structural. | `implementation/milestones/model-profiles/skeleton.md:114-118,147-153`; validated surface `orchestrator/model_profiles.py:49-70,99-150`; structural consumers `orchestrator/driver.py:6040-6071,6096-6120,6239-6248` | touch: apply the same authority matrix to profile and hot-override inputs; do-not-add fields, acts, identifiers, or movable structural seats |
-| Call attribution and immutable history | Every new model call record must directly carry, or immutably reference, the fully resolved `agent`/family, `model`, `effort`, the bound model-profile `name` + `rigor` + content identity for feature-enabled work, and the exact contributing override when one exists (including an explicit empty policy). A pre-feature call instead remains explicitly attributable to no model-profile selection and never fabricates one. This covers accepted drafts/implementations, reviews, fixes, delta reviews, reclassification and error-classifier calls, Brainstorming seats/turns, repaired/malformed attempts, and interrupted calls. Existing records are never backfilled or rewritten. | `implementation/milestones/model-profiles/skeleton.md:126-141,166`; draft/round records `orchestrator/state.py:706-770,877-918`; durable call marker/incidents `orchestrator/driver.py:1523-1641,1904-1965,2402-2448,2474-2518,7768-7789`; frozen discussion seats/activity `orchestrator/brainstorming_lifecycle.py:629-670,2163-2204` | touch: extend existing records or their immutable binding reference; do-not-derive historical attribution from current mutable source or invent a selection for old work |
-| Compatibility and slice boundary | A state created before model-profile enablement never reads the catalogue and resolves exactly through its persisted config and existing acts behavior. Slice 2 adds no `model_profile` key to `POST /api/runs`, no `POST /api/runs/<id>/model-profile`, and no panel selection/presentation; those selection surfaces are Slice 3. `GET/POST /api/model-profiles`, strategy profiles, strategy interpretation, review machinery, family rotation, artifact seals, cost accounting, and the executor vocabulary remain behaviorally unchanged. | `implementation/milestones/model-profiles/skeleton.md:31-46,66-79,137-138,156-166`; existing state creation/load `orchestrator/state.py:123-168,223-230`; current model-profile routes `orchestrator/service.py:2533-2551,3442-3454,3735-3755` | touch: additive new-run runtime capability only; do-not-migrate old state or pull Slice 3/strategy work forward |
-
-### Verification Contract
+## Verification contract
 
 Focused command:
 
-`python3 -m unittest orchestrator.tests.test_model_profile_runtime orchestrator.tests.test_run_init.TestDefaultsPrecedence orchestrator.tests.test_service_api.ActsApiTest orchestrator.tests.test_model_profiles`
+`python3 -m unittest orchestrator.tests.test_model_profile_runtime orchestrator.tests.test_brainstorming_execution.BrainstormingExecutionTest.test_current_staffing_is_reresolved_for_each_fresh_dispatch orchestrator.tests.test_brainstorming_milestone_adapter.BrainstormingMilestoneAdapterTest.test_projectless_adapter_uses_active_home_for_launch_only_profile_input orchestrator.tests.test_brainstorming_milestone_adapter.BrainstormingMilestoneAdapterTest.test_current_profile_launch_input_is_not_persisted orchestrator.tests.test_brainstorming_coordination.BrainstormingCoordinationTest.test_withdrawn_attribution_fields_are_ignored_on_read_and_resume orchestrator.tests.test_driver_implementation_size.DriverImplementationSizeTest.test_rejected_valid_delivery_keeps_its_usage orchestrator.tests.test_p3_debt.TestP3Debt.test_reclassifier_repair_keeps_full_duration_and_identity orchestrator.tests.test_p3_debt.TestP3Debt.test_reclassifier_predispatch_failure_keeps_parent_review_usage orchestrator.tests.test_p3_debt.TestP3Debt.test_reclassifier_policy_change_before_dispatch_is_not_incident orchestrator.tests.test_p3_debt.TestP3Debt.test_current_profile_can_explicitly_choose_same_family_reclassifier orchestrator.tests.test_runners.TestCallWorker.test_profileless_call_preserves_supplied_prompt_bytes orchestrator.tests.test_run_init.TestDefaultsPrecedence orchestrator.tests.test_service_api.ActsApiTest orchestrator.tests.test_service_projects.TestConfigPrecedence orchestrator.tests.test_service_fixes.TestStartRunAtomic orchestrator.tests.test_service_fixes.TestSummaryCache orchestrator.tests.test_model_profiles`
 
-| observable claim | named check | pass condition | posture |
-|---|---|---|---|
-| Unit-open binding retains mutable source content | `test_unit_binding_snapshots_source_and_allows_two_unit_choices` | First resolution records `model_profile_bound`; editing the source does not change that unit; a later unit binds the edited or newly selected content and retains a distinct identity. | strict |
-| Explicit change is prospective and loud | `test_profile_change_applies_to_next_resolution_only` | An already-started call keeps its original attribution; the next resolution uses the new choice and records one `model_profile_changed`; unknown/corrupt content dispatches no provider call and does not rewrite the prior binding. | strict |
-| Precedence is act-wide | `test_precedence_whole_act_partial_relative_and_empty_override` | The complete matrix yields override > profile > existing rule > family default; missing override fields never leak from the profile; relative and explicit-empty cases match the pinned result. | strict |
-| Creation channels preserve behavior and provenance | `test_creation_acts_are_single_homed_without_staffing_drift` | Project defaults, launch config, and CLI config preserve their former effective staffing, merge winner, partial/empty behavior, and legacy-key tolerance while surface entries appear only in the override layer. | strict |
-| Authority ceilings remain structural | `test_profile_and_override_authority_matrix_share_one_result` | Every allowed form resolves; hot-route unknown/disallowed input returns 400 without mutation; counterpart is supported; fixed review, delta, counterpart, and consultation derivations cannot be bypassed even by malformed stored data. | strict |
-| Old states do not opt in | `test_pre_feature_state_is_identical_and_never_reads_catalogue` | A fixture without the feature marker produces the same all-act staffing snapshot as the current path while a failing catalogue spy records zero reads. | strict |
-| Every model call is attributable | `test_call_attribution_matrix_survives_source_and_override_edits` | Accepted, failed, repaired, interrupted, nested-classifier, consultation, Brainstorming, and outside-unit records resolve to exact staffing, selection identity (or explicit pre-feature no-selection origin), and contributing override after both source and override files are changed. | strict |
-| Runtime reporting matches dispatch | `test_summary_choice_equals_next_call_without_intervening_change` | Under unchanged persisted inputs, the run summary's effective choice equals the next call's recorded attribution; a mismatch is permitted only after a recorded intervening choice/override change. | strict |
-
-The repository gate remains
-`python3 -m unittest discover -s orchestrator/tests -t .`
-(`orchestrator/README.md:522-524`).
-
-### Question Battery
-
-The skeleton's Question Battery is **INHERITED**, not re-answered here. These
-are the slice-scoped remainder; enforceability is intentionally answered again
-for the facts this note pins.
-
-| question | answer | evidence |
+| observable claim | named check | pass condition |
 |---|---|---|
-| consumers_touched | **direct runtime consumers:** the driver's one act-resolution seam and every worker-call path; state draft/round/event history and summary projection; service run initialization plus the existing acts route; and Brainstorming's frozen executor/activity records. **verified boundary:** current granted product checkouts have no model-profile route/symbol consumer and are not edited; panel selection and the two new selection routes stay in Slice 3. | `orchestrator/driver.py:4689-4717,5948-6128,6230-6248,7101-7161,7614-7789,7866-7917`; `orchestrator/state.py:706-770,877-918,2200-2214,2330-2432`; `orchestrator/service.py:1781-1889,1911-2048,2367-2434`; `orchestrator/brainstorming_lifecycle.py:629-670,2163-2204`; `implementation/milestones/model-profiles/skeleton.md:34-46,70-72` |
-| pinned_facts | **closed facts:** `default`@`medium`; unit-first-resolution and prospective-change semantics; exact event names; retained content identity; strict precedence and whole-act override behavior; `acts.json` single-homing and creation-channel compatibility; the nine-act authority matrix; exhaustive immutable call attribution; no catalogue reads for pre-feature state; and no Slice 3/strategy expansion. | this note, Pinned-Facts Table; `implementation/milestones/model-profiles/skeleton.md:55-63,81-166` |
-| verification | The focused runtime matrix pins binding, mutable-source independence, two-unit divergence, prospective change, precedence, all three creation channels, empty overrides, authority ceilings, old-state equivalence with zero catalogue reads, exhaustive call attribution, and summary-to-dispatch fidelity. The repository discovery command remains the final regression gate. | this note, Verification Contract; `implementation/milestones/model-profiles/skeleton.md:71,81-166`; full-suite authority `orchestrator/README.md:522-524` |
-| reuse_posture | **checked/reused:** Slice 1's loader/validator, the existing `_act_profile` seam, `acts.json` and its atomic route write, creation merge order, append-only state/events, durable call markers, draft/round records, and Brainstorming's frozen seat/activity records. **cheapest sufficient:** extend those seams with one retained binding/attribution shape. Documentation alone cannot make staffing or history true; a parallel resolver, source-version store, migration, watcher, or synchronization service adds lifecycle cost without authority. The remaining additive state is consumed by the driver, audit/summary readers, and Slice 3. | `orchestrator/model_profiles.py:153-222`; `orchestrator/driver.py:5948-5988`; `orchestrator/service.py:2367-2434`; `orchestrator/state.py:233-246,330-356,706-770,877-918`; `orchestrator/brainstorming_lifecycle.py:629-670`; `implementation/milestones/model-profiles/skeleton.md:180-197` |
-| enforceability | **binding/history:** validated loads plus content identity, append-only events, and atomic state save. **precedence/provenance:** the one act resolver plus key-preserving override reads and creation-time single-homing. **prospective behavior:** act-boundary reads and a persisted transition before provider dispatch. **authority:** the shared nine-act validator plus structural fixed/derived resolvers. **attribution:** the durable call marker, immutable draft/round/event records, and frozen Brainstorming bindings. **legacy:** an additive marker written only by new-state initialization; absence takes the existing config-only path. **fidelity:** state reports retained effective choices rather than re-reading mutable sources. No asserted guarantee requires prompt discipline or an unavailable mechanism. | this note, Enforceability Gate; `orchestrator/model_profiles.py:153-222`; `orchestrator/state.py:123-168,233-246,305-356,706-770,877-918`; `orchestrator/driver.py:1904-1965,5948-6128`; `orchestrator/brainstorming_lifecycle.py:629-670` |
+| Default applies to every run | `test_old_and_new_unselected_runs_use_current_default` | States made before and after this slice both read current `default@medium`; editing the default changes their next resolution. |
+| Current writes govern next resolution | `test_profile_selection_and_override_are_last_write_wins`; `ModelProfileStoreTest.test_concurrent_saves_are_atomic_and_last_replacement_wins`; `ModelProfileStoreTest.test_staged_save_does_not_enter_catalogue`; `ModelProfileStoreTest.test_valid_long_profile_name_remains_writable`; `ActsApiTest.test_concurrent_saves_are_atomic_and_last_replacement_wins` | Profile edit, selection replacement, and override replacement each alter the next resolved act without a unit boundary; already-returned call settings remain unchanged values. Concurrent profile and override saves stage independently, profile staging is never a catalogue candidate and does not narrow the validated name space, each successful replacement carries its own submitted content, and the last replacement wins. |
+| Invalid current state is loud | `test_invalid_current_selection_or_profile_fails_without_fallback`; `test_dangling_current_state_links_fail_without_fallback`; `test_dangling_default_link_is_unavailable_not_missing` | Malformed/unknown selection and missing/corrupt profile raise before a provider call; no default or prior content is substituted. A dangling current-state link is unavailable rather than absent, and startup preserves rather than seeds over a dangling default link. |
+| Precedence and authority | `test_current_precedence_and_structural_authority`; `test_consultation_resolution_keeps_caller_structural_origin`; `ActsApiTest.test_acts_validation`; `ActsApiTest.test_patch_preserves_untouched_explicit_empty_and_can_clear_it`; `ActsApiTest.test_patch_rejects_malformed_current_state_without_mutation`; `ActsApiTest.test_panel_blank_rows_advertise_layer_semantics` | Override > profile > existing rules/defaults; whole-act partial/empty behavior holds; the panel mutates only edited rows so an untouched creation-time explicit empty remains authoritative and its explicit “Use profile” action clears it; a partial write refuses malformed current state without changing its bytes; blank live rows advertise current-profile inheritance, while blank launch rows truthfully add no panel override and warn that project defaults or Advanced config can still supply the current override; reviews, delta, counterpart, and consultation cannot be reassigned outside their allowed fields or lose the caller's structural origin. |
+| Creation channels are equal | `test_creation_acts_are_single_homed_without_staffing_drift`; `test_creation_authority_validation_refuses_before_state_creation`; `ActsApiTest.test_projectless_creation_acts_are_single_homed`; `ActsApiTest.test_creation_acts_use_live_authority_validator`; `TestConfigPrecedence.test_bound_creation_acts_are_single_homed_after_merge`; `TestConfigPrecedence.test_bound_creation_acts_use_live_authority_validator` | CLI, project-less service, and project-bound service preserve winners, partial/empty behavior, and unknown-key tolerance while surface entries occur only in `acts.json`; invalid non-empty winners are refused before state creation through the shared authority matrix. |
+| Lower clear cannot survive higher object | `test_higher_object_replaces_lower_whole_map_clear` | Project `acts:null` followed by launch `{fixer: ...}` writes only `fixer`; an omitted act resolves from the current profile. |
+| Stale machinery has no authority | `test_stale_binding_and_attribution_data_are_ignored`; `test_withdrawn_attribution_fields_are_ignored_on_read_and_resume` | Injected old binding/hash/generation/attribution fields do not affect resolution or append new profile records; old Brainstorming activity attribution is discarded while the generic session stays readable and resumable. |
+| Fresh runtime ownership | `test_purged_legacy_run_does_not_supply_next_run_current_settings` | Purging and recreating the same legacy runtime path removes the deleted run's selection and live act overrides, so the new run resolves current `default@medium`. |
+| Entrypoint readiness | `test_execution_entrypoints_seed_validate_and_supply_catalogue_home`; `test_catalogue_failure_does_not_suppress_generic_recovery`; `TestStartRunAtomic.test_concurrent_starts_spawn_exactly_one_driver` | CLI and service paths seed a missing default, reject an invalid existing default, and supply the active home to the resolver. Catalogue refusal occurs only after an earlier physical call's generic crash accounting and cleanup run unchanged. |
+| Brainstorming is current | `test_brainstorming_turns_read_current_profile_and_overrides`; `test_brainstorming_restart_uses_ephemeral_generic_run_attachment`; `test_brainstorming_monitoring_uses_current_or_actual_staffing`; `test_noop_brainstorming_start_does_not_validate_attachment`; `test_start_refuses_unattached_milestone_without_profile_locator`; `test_current_staffing_is_reresolved_for_each_fresh_dispatch`; `test_projectless_adapter_uses_active_home_for_launch_only_profile_input`; `test_current_profile_launch_input_is_not_persisted` | Profile and counterpart-override edits affect the next turn. Creation and a registered-run restart supply current resolution only to the launched child, including for project-less runs under a non-default service home; the lifecycle record contains no model-profile locator. Monitoring participant info is current, completed closing labels come from actual generic activity, and active-call staffing is omitted when actual identity is unavailable. Unattached milestone restarts refuse without mutating the session, while terminal/already-running starts remain idempotent without attachment lookup. |
+| Every physical dispatch is current | `test_secondary_dispatches_reresolve_current_staffing`; `test_infrastructure_retry_reresolves_current_staffing`; `test_cutoff_stabilizer_reresolves_current_staffing`; `test_error_classifier_paths_use_current_resolver` | Contract repair, infrastructure retry, cutoff stabilization, post-discussion continuation, consultation, and both classifier dispatch paths resolve again immediately before invocation; a family change starts a fresh provider session and the dispatched prompt names that current family. |
+| Non-profile callers are unchanged | `test_profileless_call_preserves_supplied_prompt_bytes` | Without a current dispatch resolver, the generic runner passes the supplied prompt byte-for-byte. |
+| Counterpart state is coherent | `test_counterpart_dispatch_reads_one_profile_generation` | One counterpart dispatch resolves lead derivation and counterpart model/effort from one ephemeral current profile read, so it cannot combine two saved generations. |
+| Generic records stay complete | `test_predispatch_failure_preserves_completed_malformed_attempt`; `test_nonrepairable_verifier_failure_keeps_dispatch_identities`; `test_double_malformed_family_change_records_each_dispatch_identity`; `test_double_malformed_same_family_change_keeps_each_identity`; `test_rejected_valid_delivery_keeps_its_usage`; `test_reclassifier_repair_keeps_full_duration_and_identity`; `test_reclassifier_predispatch_failure_keeps_parent_review_usage` | Removing profile provenance does not remove ordinary raw output, duration, usage, cost, or label/family/model/effort identity from unaccepted, malformed, repaired-strike, interrupted, or cutoff records. A double-malformed call retains one truthful generic incident per physical attempt whenever family, model, or effort changes; only attempts with the same full identity share the established combined incident. |
+| Reclassification uses current policy | `test_current_profile_can_explicitly_choose_same_family_reclassifier`; `test_reclassifier_policy_change_before_dispatch_is_not_incident` | The shared resolver identifies a current profile or live override as an explicit full-family policy; structural same-family fallback retains the finding without dispatch or a false worker incident. |
+| Generic status is truthful | `test_summary_choice_equals_next_call_without_intervening_change`; `test_status_does_not_require_catalogue_readiness`; `TestSummaryCache.test_guard_projection_survives_unavailable_model_catalogue` | During review rounds with valid current state, service/panel and CLI status report the model returned by the same current resolver and profile, selection, and override writes invalidate the summary cache. Missing, invalid, or unreadable catalogue state never hides the generic status or prevents guard projection/recovery; strict dispatch still fails before provider invocation. |
 
-### Reuse Posture
+The repository's scheduled full-suite gate remains
+`python3 -m unittest discover -s orchestrator/tests -t .`; this worker runs only
+the focused command.
 
-Operators and history readers are affected. Without this slice, a reusable
-definition can drift away from the work attributed to it, creation-time choices
-have no uniform origin, and later surfaces cannot truthfully explain why a model
-ran. The harm occurs on every new call, is moderate to high when the wrong model
-handles sensitive work, and is reversible only before that call; the reviewed
-baseline independently requires binding, precedence, and attribution
-(`implementation/milestones/model-profiles/skeleton.md:37-46,81-141`).
+## Reuse posture
 
-Checked and reused: the validated source loader
-(`orchestrator/model_profiles.py:153-222`), the existing single resolution seam
-and structural seats (`orchestrator/driver.py:5948-6128`), the override file and
-atomic route write (`orchestrator/service.py:2367-2434`), creation merge order
-(`orchestrator/driver.py:8460-8464`), append-only atomic state
-(`orchestrator/state.py:233-246,305-356`), durable call accounting and immutable
-records (`orchestrator/driver.py:1904-1965`; `orchestrator/state.py:706-770,877-918`),
-and frozen Brainstorming seats (`orchestrator/brainstorming_lifecycle.py:629-670`).
+Reuse Slice 1's strict loader/validator and missing-only seed, the existing
+`_act_profile` resolution seam, `acts.json` and its atomic service write, the
+existing creation merge order, and the structural review/delta/counterpart/
+consultation resolvers. The creation projection reuses that validator for every
+non-empty winner before claiming state while retaining the already-pinned empty
+semantics. The panel's thin per-act mutation reuses the resolver's strict
+current-layer read, the same validator, and atomic writer: malformed current
+state refuses without mutation, omitted rows remain untouched, while a
+supplied empty retains the live route's clear meaning. Live blank-row labels
+name current-profile inheritance; launch blanks name only the absence of a
+panel-layer override because project defaults or Advanced config can still
+provide the creation winner. Structural defaults are shown only after a row
+becomes an override. This is necessary because the whole-map
+replacement form cannot carry a meaningful explicit empty without clearing it.
+The only new durable model-profile value is the current selection sidecar owned
+by Slice 3's later write surface; Slice 2 reads it.
+Atomic profile and override saves reuse same-directory replacement with one
+unique temporary file per write. Profile staging uses a short basename outside
+the `.json` catalogue namespace, so overlapping readers do not validate it and
+staging does not narrow the accepted profile-name space. This is sufficient for
+overlapping writers without a lock, retry, or retained generation. Lexical path presence
+distinguishes a dangling current-state link from genuine absence, so the
+resolver fails and the missing-only seed does not replace operator data.
+The existing purge lifecycle removes both current-setting sidecars before a
+legacy runtime path can be reused; no separate ownership or cleanup mechanism
+is added.
 
-The cheapest sufficient option is one retained binding/attribution shape feeding
-the existing resolver and records. New machinery is limited to the new-run
-selection/binding projection and its consumers: driver dispatch, audit/summary
-readers, and Slice 3's later surfaces. A second resolver, source-version archive,
-migration, watcher, or background synchronizer would cost more to build,
-operate, maintain, and review while weakening the simple mutable-source rule.
-The test-heavy size excess is justified by omission cost; the runtime addition
-is bounded, additive, and reversible.
+The cheapest sufficient implementation performs current reads and returns the
+ordinary family/model/effort tuple already consumed by callers. The existing
+physical-invocation seam asks for that tuple immediately before initial,
+repair, retry, stabilization, continuation, and classifier calls; the fixer's
+separately launched consultation uses a thin late-resolution command over the
+same seam and receives the caller act plus its structural origin. Related
+lead/counterpart derivation shares one ephemeral source read. The same resolver
+supplies the existing generic current-model summary
+and its cache key tracks the current selection and selected source. If that
+read-only projection encounters invalid current model-profile state, it omits
+the enhancement and leaves generic state/status/guard recovery intact; the
+physical dispatch seam remains strict. Existing
+busy markers and the existing worker-incident type keep ordinary per-dispatch
+identity and accounting truthful when a repair changes family, model, or
+effort; a current
+structural policy that removes the independent rater simply retains the
+finding without inventing a provider failure. Snapshots, hashes, binding
+events, generations, profile-attribution
+extensions, profile-provenance summary content, and Brainstorming provenance
+have no authorized consumer and are removed. Old Brainstorming attribution
+keys are accepted only as discarded compatibility input. No migration, new
+ledger, or parallel resolver is added.
+The catalogue adds no Git policy. The normal registry home is outside the run
+workspace. If an operator explicitly places a custom home inside it, ordinary
+repository staging, commit, and recovery semantics apply; the resolver adds no
+exclusion, preservation, startup refusal, migration, or cleanup exception.
 
-### Enforceability Gate
+Milestone Brainstorming reuses that same resolver from its independently
+supervised process. Because each prompt already points to the complete durable
+chat, the cheapest sufficient option is a fresh provider session per turn. The
+creating driver passes the run state and active catalogue directly to the
+child launch and places a project-less lifecycle in that same active service
+home, including a non-default one; neither value enters the lifecycle record.
+On explicit service restart, the existing generic run state attachment in that
+home supplies those launch-only values when present. The same attachment gives
+the read-only participant view a fresh current projection; invalid or
+unavailable current state withholds staffing instead of restoring the creation
+roster. Active milestone calls likewise omit unproven staffing until the
+existing generic activity record provides actual identity, and completed
+closing labels use that record. Without the attachment, a milestone restart
+cannot resolve current settings and refuses before launch rather than
+dispatching its creation-time roster. Standalone sessions remain
+profile-independent. Terminal and already-running starts keep their idempotent
+projection without attachment lookup. No roster is inferred or migrated and no
+profile-specific binding, generation, history, or recovery state is added.
 
-| invariant asserted here | pinned mechanism that can enforce it | implementation gate |
+## Enforceability gate
+
+| invariant | mechanism | focused evidence |
 |---|---|---|
-| Exact unit binding and source-edit independence | `model_profiles.load` supplies one validated source (`orchestrator/model_profiles.py:206-222`); canonical content identity can reuse `profiles.semantic_hash` (`orchestrator/profiles.py:53-58`); `append_event` plus atomic append-only `save` retain it (`orchestrator/state.py:233-246,330-356`). | Persist `model_profile_bound` before the first provider dispatch; edit/delete the source, restart, and prove the unit still resolves from retained content. |
-| Prospective explicit change | The current overlay pattern is atomically replaced by the service and re-read at act boundaries (`orchestrator/service.py:2428-2434`; `orchestrator/driver.py:5948-5959`); the state ledger can retain the applied transition. | Hold a call open, change selection, prove that call keeps its original record and the next resolution appends one `model_profile_changed` before dispatch. |
-| Strict precedence and override provenance | `_act_profile` is the one resolution seam (`orchestrator/driver.py:5961-5988`); creation merge order is centralized (`orchestrator/driver.py:270-292,8460-8464`); the override reader preserves per-key presence (`orchestrator/service.py:2367-2378`). | Exhaust the profile-present/omitted, override-present/empty/cleared, partial, and relative-policy matrix for every authority class. |
-| Fixed/derived authority ceiling | Slice 1's closed act matrix rejects dead fields (`orchestrator/model_profiles.py:49-70,99-150`); review, delta, counterpart, and consultation resolvers structurally impose their families and derived fields (`orchestrator/driver.py:6040-6071,6096-6120,6239-6248`). | Feed malformed stored/override data as well as route input; dispatch either refuses or still uses the structural seat, never the forbidden value. |
-| Exact attribution for every call outcome | The durable marker records resolved staffing before a call (`orchestrator/driver.py:1904-1965`); accepted work lands in immutable draft/round records (`orchestrator/state.py:706-770,877-918`); failures and classifiers already have ledger events (`orchestrator/driver.py:1523-1641,2402-2518,7768-7789`); Brainstorming freezes seats and records activity (`orchestrator/brainstorming_lifecycle.py:629-670,2163-2204`). | After mutating source and override files, resolve each call-record class through its direct fields or immutable binding reference and compare it with the captured dispatch. |
-| Pre-feature compatibility | `new_state` is the sole initializer for new state (`orchestrator/state.py:123-168`); `load` accepts older documents without inventing fields (`orchestrator/state.py:223-230`); the current all-act equivalence helper already compares fully resolved seats (`orchestrator/tests/test_model_profiles.py:320-397`). | Load a pre-feature fixture with a catalogue loader that fails if called; its complete staffing snapshot must equal the existing path and the spy must remain untouched. |
-| Summary-to-dispatch fidelity | Existing history summaries consume recorded family/model/effort (`orchestrator/state.py:2200-2214,2330-2432`); the same retained binding that feeds `_act_profile` can supply selection/override provenance without rereading source. | Under unchanged state, compare the reported effective choice with the next captured call; allow divergence only when an intervening change event exists. |
+| Current selection/definition | atomic sidecar read that distinguishes unavailable links from absence, plus `model_profiles.load` inside `_act_profile` | edit files between consecutive resolutions; inject dangling selection, override, and default links |
+| No fallback | selection/profile validation error propagates before runner invocation | provider spy remains unused |
+| Last-write-wins | no cache, retained binding, or unit snapshot; unique non-catalogue same-directory staging followed by atomic replacement | same Driver instance observes consecutive writes; overlap profile save with catalogue read, overlap two profile saves and two override saves with an ordered replacement; save a validated name whose final filename approaches the filesystem component limit |
+| Override precedence | key-preserving `acts.json` read before profile entry | profile/override matrix including explicit empty |
+| Structural authority | strict whole-layer validation through the shared Slice 1 validator plus existing fixed/derived resolvers | unknown or disallowed live entry fails before an unrelated act dispatch; route and creation refusal plus end-result assertions |
+| Creation parity | one raw-layer projection helper used by all three creation channels; it validates non-empty winners before state creation | CLI, project-less, and bound fixtures |
+| No obsolete authority | no resolution authority or new writes for binding/hash/generation/attribution fields; old activity keys are discard-only compatibility input | injected stale fields and event census |
+| Brainstorming next-turn visibility | shared current resolver plus fresh per-turn provider dispatch; launch-only inputs from the creating driver or generic registered-run attachment, never the lifecycle record; read-only views reuse current resolution and generic completed-call activity without persisting identity | edit profile/override between turns; inspect the durable runtime for no locator; restart a registered session, refuse an unattached milestone without mutation, keep terminal/running starts idempotent, and observe current participant staffing, omitted unproven active staffing, and actual completed closing labels |
+| Generic continuity | discard-only legacy activity compatibility plus existing busy marker, worker incident, summary cache, and purge ownership | resume old sessions; inspect each physical failed attempt; compare status with immediate next-call resolution; purge and recreate a legacy runtime path without inheriting its prior current selection or live act overrides |
 
-Any implementation that silently falls back, reconstructs history from mutable
-source, duplicates resolution, or relies on prompt discipline does not deliver
-this slice.
-
-### Planning Material Disposition
-
-- **Adopt:** the reviewed skeleton's unit-open binding, in-place editable source,
-  prospective change, precedence, and attribution decisions.
-- **Revise:** no planning decision independently; this note only makes the
-  Slice 2 boundary executable.
-- **Reject:** brainstorming and `_drafts` material as authority, including
-  per-slice pre-assignment machinery or any mechanism not carried into the
-  reviewed skeleton.
-
-Authority: `implementation/milestones/model-profiles/skeleton.md:48-64,66-79`.
+Any implementation that caches profile content, preserves an earlier selection,
+adds model-profile history, silently falls back, duplicates resolution, or lets
+a lower whole-map clear survive a later object does not deliver this slice.

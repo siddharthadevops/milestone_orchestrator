@@ -30,7 +30,7 @@ import time
 import unittest
 from unittest import mock
 
-from orchestrator import driver, registry, service, state as st
+from orchestrator import driver, model_profiles, registry, service, state as st
 
 REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 
@@ -387,6 +387,7 @@ class TestStartRunAtomic(ServiceFixesTestCase):
         n_threads = 8
         barrier = threading.Barrier(n_threads)
         spawned = []
+        commands = []
         results = []
         lock = threading.Lock()
 
@@ -394,6 +395,7 @@ class TestStartRunAtomic(ServiceFixesTestCase):
             proc = _FakeProc(10_000_000 + len(spawned))
             with lock:
                 spawned.append(proc)
+                commands.append(args[0])
             self.fake_child_pids.add(proc.pid)
             return proc
 
@@ -415,6 +417,9 @@ class TestStartRunAtomic(ServiceFixesTestCase):
         self.assertEqual(len(spawned), 1, "more than one driver spawned")
         self.assertEqual(results.count("ok"), 1, results)
         self.assertEqual(results.count(409), n_threads - 1, results)
+        self.assertEqual(commands[0][-2:], [
+            "--model-profiles-home", os.path.abspath(self.home)
+        ])
         # The recorded pid is the (single) survivor's, not a random loser's.
         self.assertEqual(self._entry(run_id)["pid"], spawned[0].pid)
         # Clean the fake pid out of the registry for tearDown.
@@ -640,6 +645,43 @@ class TestSummaryCache(ServiceFixesTestCase):
         st.save(path, state)
         s3 = service.load_summary(path)
         self.assertEqual(s3["events_total"], s1["events_total"] + 1)
+
+    def test_guard_projection_survives_unavailable_model_catalogue(self):
+        ws = self.workspace("ws-invalid-model-catalogue")
+        entry = service.create_run(
+            self.home,
+            {"workspace": ws, "goal": "diagnostic continuity",
+             "autostart": False},
+        )
+        run_state = st.load(entry["state_path"])
+        unit = st.current_unit(run_state)
+        unit["status"] = st.U_ROUNDS
+        unit["family_index"] = 0
+        st.save(entry["state_path"], run_state)
+
+        with mock.patch.object(
+            model_profiles,
+            "open",
+            create=True,
+            side_effect=PermissionError("profile unreadable"),
+        ), mock.patch.object(service, "_pump_projection") as pump:
+            summ = service.load_summary(
+                entry["state_path"], model_profiles_home=self.home
+            )
+            self.assertEqual(summ["current_unit_status"], st.U_ROUNDS)
+            shown = service.run_status(entry, home=self.home)
+            self.assertIsNone(shown["state_error"])
+            self.assertEqual(shown["current_unit_status"], st.U_ROUNDS)
+            service.guard_scan(self.home)
+            with self.assertRaisesRegex(
+                model_profiles.ModelProfileError, "unreadable"
+            ):
+                driver.resolve_current_act(
+                    entry["state_path"], run_state["config"], self.home,
+                    "fixer",
+                )
+        self.assertIn(entry["id"], [call.args[1]["id"]
+                                    for call in pump.call_args_list])
 
 
 # ---------------------------------------------------------------------------

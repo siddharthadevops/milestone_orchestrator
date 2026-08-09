@@ -225,7 +225,22 @@ class ServiceApiTest(unittest.TestCase):
         self.assertIn("function sessionChips", text)
         self.assertIn("function sessionClosingCard", text)
         self.assertIn('closing-label">Proposal', text)
-        self.assertIn("sessionActorLabel(view, lead && lead.id)", text)
+        self.assertIn("function sessionRecordedActorLabel", text)
+        self.assertIn("function sessionClosureActivity", text)
+        self.assertNotIn(
+            "`${sessionActorLabel(view, item.participant_id)}: "
+            "${item.vote}`",
+            text,
+        )
+        self.assertRegex(
+            text,
+            r"const votes = \(ballot\.votes \|\| \[\]\)\.map\(item =>\s*"
+            r"`\$\{sessionRecordedActorLabel\(\s*view,\s*"
+            r"sessionClosureActivity\(\s*view, "
+            r"ballot\.after_completed_rounds, \"vote\", "
+            r"item\.participant_id\s*\),\s*item\.participant_id\s*\)",
+        )
+        self.assertIn("proposalLabel", text)
         self.assertIn("is reviewing that proposal", text)
         self.assertIn("Agreement accepted", text)
         self.assertIn("view.final_agreement", text)
@@ -947,6 +962,231 @@ class AmendmentsApiTest(ServiceApiTest):
 
 
 class ActsApiTest(ServiceApiTest):
+    def test_concurrent_saves_are_atomic_and_last_replacement_wins(self):
+        ws = self.workspace("ws-concurrent-acts")
+        status, body = self.create_run(ws)
+        self.assertEqual(status, 201, body)
+        entry = registry.get(registry.load(self.home), body["run"]["id"])
+        first = {"fixer": "claude"}
+        second = {"fixer": "codex"}
+        real_replace = os.replace
+        both_ready = threading.Barrier(2)
+        first_replaced = threading.Event()
+        errors = []
+
+        def ordered_replace(source, target):
+            both_ready.wait(timeout=5)
+            if threading.current_thread().name == "acts-first":
+                real_replace(source, target)
+                first_replaced.set()
+            else:
+                self.assertTrue(first_replaced.wait(timeout=5))
+                real_replace(source, target)
+
+        def save(acts):
+            try:
+                service._write_acts(entry, acts)
+            except Exception as exc:  # pragma: no cover - assertion surface
+                errors.append(exc)
+
+        with mock.patch(
+                "orchestrator.service.os.replace",
+                side_effect=ordered_replace):
+            threads = (
+                threading.Thread(
+                    target=save, args=(first,), name="acts-first"
+                ),
+                threading.Thread(
+                    target=save, args=(second,), name="acts-second"
+                ),
+            )
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join(timeout=10)
+
+        self.assertFalse(any(thread.is_alive() for thread in threads))
+        self.assertEqual(errors, [])
+        self.assertEqual(service.read_acts(entry), second)
+
+    def test_panel_distinguishes_and_preserves_explicit_empty_overrides(self):
+        status, body = self.request("GET", "/")
+        self.assertEqual(status, 200)
+        panel = body.decode("utf-8")
+        self.assertIn(
+            "lastActOverrides[a] = present ? lastActs[a] : null", panel
+        )
+        self.assertNotIn("lastActs[a] || cfgActs[a]", panel)
+        self.assertIn("retainedEmptyActOverrides", panel)
+        self.assertIn("structural default override", panel)
+        self.assertIn("Use profile", panel)
+        self.assertIn("const changes = actsDialogPatch()", panel)
+        self.assertIn('method: "PATCH"', panel)
+        self.assertIn("Act overrides (models and roles)", panel)
+
+    def test_patch_preserves_untouched_explicit_empty_and_can_clear_it(self):
+        current = model_profiles.load(self.home, "default")
+        current["configurations"]["medium"]["skeletoner"] = {
+            "agent": "claude", "model": "claude-opus-5", "effort": "high"
+        }
+        model_profiles.save(self.home, current)
+        ws = self.workspace("ws-panel-explicit-empty-acts")
+        status, body = self.create_run(ws, config={"acts": {
+            "skeletoner": None,
+            "drafter": "",
+            "implementer": {},
+            "fixer": {"agent": "claude", "model": "claude-opus-5"},
+            "brainstorming_counterpart": {
+                "model": "gpt-5.6-luna", "effort": "max"
+            },
+        }})
+        self.assertEqual(status, 201, body)
+        rid = body["run"]["id"]
+        state_path = os.path.join(ws, ".orchestrator", "state.json")
+        run_state = st.load(state_path)
+        acts_path = os.path.join(ws, ".orchestrator", "acts.json")
+
+        # The creation-time empty is meaningful: it suppresses the current
+        # profile and exposes the structural default.
+        self.assertEqual(driver.resolve_current_act(
+            state_path, run_state["config"], self.home, "skeletoner"
+        ), ("codex", None, None))
+
+        status, body = self.request_json(
+            "PATCH", "/api/runs/%s/acts" % rid,
+            {"fixer": {"agent": "codex", "model": "gpt-5.6-sol"}},
+        )
+        self.assertEqual(status, 200, body)
+        self.assertIsNone(body["acts"]["skeletoner"])
+        self.assertEqual(body["acts"]["drafter"], "")
+        self.assertEqual(body["acts"]["implementer"], {})
+        self.assertEqual(
+            body["acts"]["brainstorming_counterpart"]["model"],
+            "gpt-5.6-luna",
+        )
+        self.assertEqual(driver.resolve_current_act(
+            state_path, run_state["config"], self.home, "skeletoner"
+        ), ("codex", None, None))
+
+        # The explicit control sends this one clear; it now inherits the
+        # current profile selected above.
+        status, body = self.request_json(
+            "PATCH", "/api/runs/%s/acts" % rid, {"skeletoner": None}
+        )
+        self.assertEqual(status, 200, body)
+        self.assertNotIn("skeletoner", body["acts"])
+        self.assertEqual(body["acts"]["drafter"], "")
+        self.assertEqual(body["acts"]["implementer"], {})
+        self.assertEqual(
+            body["acts"]["brainstorming_counterpart"]["effort"], "max"
+        )
+        self.assertEqual(driver.resolve_current_act(
+            state_path, run_state["config"], self.home, "skeletoner"
+        ), ("claude", "claude-opus-5", "high"))
+
+        with open(acts_path, "rb") as fh:
+            before = fh.read()
+        status, _ = self.request_json(
+            "PATCH", "/api/runs/%s/acts" % rid,
+            {"reviewer": "claude"},
+        )
+        self.assertEqual(status, 400)
+        with open(acts_path, "rb") as fh:
+            self.assertEqual(fh.read(), before)
+
+    def test_patch_rejects_malformed_current_state_without_mutation(self):
+        ws = self.workspace("ws-malformed-current-acts")
+        status, body = self.create_run(ws)
+        self.assertEqual(status, 201, body)
+        rid = body["run"]["id"]
+        acts_path = os.path.join(ws, ".orchestrator", "acts.json")
+
+        malformed = (
+            b"{",
+            b"[]",
+            b'{"review_codex":{"agent":"claude"}}',
+        )
+        for raw in malformed:
+            with self.subTest(raw=raw):
+                with open(acts_path, "wb") as fh:
+                    fh.write(raw)
+                status, _ = self.request_json(
+                    "PATCH", "/api/runs/%s/acts" % rid,
+                    {"fixer": {"agent": "codex"}},
+                )
+                self.assertEqual(status, 400)
+                with open(acts_path, "rb") as fh:
+                    self.assertEqual(fh.read(), raw)
+
+    def test_panel_blank_rows_advertise_layer_semantics(self):
+        status, body = self.request("GET", "/")
+        self.assertEqual(status, 200)
+        panel = body.decode("utf-8")
+        launch_grid = panel[panel.index('id="a_skeletoner_agent"'):
+                            panel.index('id="dl_a_skeletoner"')]
+        runtime_grid = panel[panel.index('id="ra_skeletoner_agent"'):
+                             panel.index('id="dl_ra_skeletoner"')]
+        self.assertIn("no panel override", launch_grid)
+        self.assertNotIn("current profile", launch_grid)
+        self.assertIn("current profile", runtime_grid)
+        self.assertIn("Project defaults", panel)
+        self.assertIn("Advanced config may still provide", panel)
+        self.assertIn(
+            'const inheritsProfile = prefix === "ra_" && !rowHasOverride',
+            panel,
+        )
+        self.assertIn(
+            'const noPanelOverride = prefix === "a_" && !rowHasOverride',
+            panel,
+        )
+
+    def test_panel_preserves_overrides_missing_from_compact_dialog(self):
+        status, body = self.request("GET", "/")
+        self.assertEqual(status, 200)
+        panel = body.decode("utf-8")
+        self.assertIn("Send only changed rows", panel)
+        self.assertIn("Omission preserves hidden acts", panel)
+        self.assertNotIn('"consultation"', panel[panel.index(
+            "const ACT_NAMES"
+        ):panel.index("const FIXED_ACT_AGENTS")])
+        self.assertNotIn('"brainstorming_counterpart"', panel[panel.index(
+            "const ACT_NAMES"
+        ):panel.index("const FIXED_ACT_AGENTS")])
+
+    def test_projectless_creation_acts_are_single_homed(self):
+        ws = self.workspace("ws-creation-acts")
+        status, body = self.create_run(ws, config={"acts": {
+            "implementer": {"agent": "claude", "model": "launch"},
+            "legacy_surface": {"kept": True},
+        }})
+        self.assertEqual(status, 201, body)
+        state_path = os.path.join(ws, ".orchestrator", "state.json")
+        with open(os.path.join(ws, ".orchestrator", "acts.json"),
+                  encoding="utf-8") as fh:
+            self.assertEqual(json.load(fh), {
+                "implementer": {"agent": "claude", "model": "launch"}
+            })
+        config_acts = st.load(state_path)["config"]["acts"]
+        self.assertEqual(config_acts["implementer"],
+                         driver.DEFAULT_CONFIG["acts"]["implementer"])
+        self.assertEqual(config_acts["legacy_surface"], {"kept": True})
+
+    def test_creation_acts_use_live_authority_validator(self):
+        invalid = (
+            {"review_codex": {"agent": "codex", "model": "review"}},
+            {"consultation": {"agent": "claude", "effort": "high"}},
+            {"fixer": {"agent": "codex", "reasoning": "high"}},
+        )
+        for index, acts in enumerate(invalid):
+            with self.subTest(acts=acts):
+                ws = self.workspace("ws-invalid-creation-acts-%d" % index)
+                status, body = self.create_run(ws, config={"acts": acts})
+                self.assertEqual(status, 400, body)
+                self.assertIn("creation act overrides", body["error"])
+                self.assertFalse(os.path.exists(os.path.join(
+                    ws, ".orchestrator", "state.json"
+                )))
+
     def test_set_and_read_acts(self):
         ws = self.workspace("ws-acts")
         status, body = self.create_run(ws)
@@ -957,9 +1197,10 @@ class ActsApiTest(ServiceApiTest):
                              "effort": "high"},
              "review_codex": {"model": "gpt-5.6-terra",
                               "effort": "high"},
-             "review_claude": {"agent": "claude",
-                               "model": "claude-sonnet-5",
+             "review_claude": {"model": "claude-sonnet-5",
                                "effort": "medium"},
+             "brainstorming_counterpart": {"model": "gpt-5.6-luna",
+                                            "effort": "max"},
              "fixer": "codex",
              "skeletoner": {"agent": "claude",
                             "model": "claude-fable-5",
@@ -972,6 +1213,10 @@ class ActsApiTest(ServiceApiTest):
         self.assertEqual(body["acts"]["review_claude"]["model"],
                          "claude-sonnet-5")
         self.assertNotIn("agent", body["acts"]["review_claude"])
+        self.assertEqual(
+            body["acts"]["brainstorming_counterpart"]["model"],
+            "gpt-5.6-luna",
+        )
         self.assertEqual(body["acts"]["skeletoner"]["effort"], "max")
         status, body = self.request_json("GET", "/api/runs/%s" % rid)
         self.assertEqual(body["acts"]["fixer"], "codex")
@@ -984,8 +1229,17 @@ class ActsApiTest(ServiceApiTest):
         status, body = self.create_run(ws)
         rid = body["run"]["id"]
         status, _ = self.request_json(
+            "POST", "/api/runs/%s/acts" % rid, {"fixer": "claude"})
+        self.assertEqual(status, 200)
+        acts_path = os.path.join(ws, ".orchestrator", "acts.json")
+        with open(acts_path, "rb") as fh:
+            before = fh.read()
+
+        status, _ = self.request_json(
             "POST", "/api/runs/%s/acts" % rid, {"reviewer": "claude"})
         self.assertEqual(status, 400)
+        with open(acts_path, "rb") as fh:
+            self.assertEqual(fh.read(), before)
         status, _ = self.request_json(
             "POST", "/api/runs/%s/acts" % rid,
             {"delta_review": {"agent": "claude", "model": "x"}})
@@ -1001,6 +1255,16 @@ class ActsApiTest(ServiceApiTest):
             "POST", "/api/runs/%s/acts" % rid,
             {"review_claude": "claude"})
         self.assertEqual(status, 400)
+        status, _ = self.request_json(
+            "POST", "/api/runs/%s/acts" % rid,
+            {"review_claude": {"agent": "claude", "model": "x"}})
+        self.assertEqual(status, 400)
+        status, _ = self.request_json(
+            "POST", "/api/runs/%s/acts" % rid,
+            {"consultation": {"model": "claude-opus-5"}})
+        self.assertEqual(status, 400)
+        with open(acts_path, "rb") as fh:
+            self.assertEqual(fh.read(), before)
 
 
 class StoryApiTest(ServiceApiTest):
@@ -1586,6 +1850,19 @@ class TestPerMilestoneLayout(ServiceApiTest):
         self._new_run(ws, "Beta")
         with self.assertRaises(SystemExit):
             driver.resolve_workspace_state(ws)
+
+    def test_cli_legacy_state_resolution_does_not_walk_workspace(self):
+        ws = self.workspace("ws-legacy-resolve")
+        legacy = driver.default_state_path(ws)
+        os.makedirs(os.path.dirname(legacy), exist_ok=True)
+        with open(legacy, "w", encoding="utf-8") as handle:
+            handle.write("{}")
+        with mock.patch.object(
+            driver.os,
+            "walk",
+            side_effect=AssertionError("legacy resolution must not walk"),
+        ):
+            self.assertEqual(driver.resolve_workspace_state(ws), legacy)
 
     def test_attach_rejects_state_from_another_workspace(self):
         ws_a = self.workspace("ws-a")

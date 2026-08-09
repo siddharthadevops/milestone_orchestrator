@@ -1,708 +1,1707 @@
-"""Model-profile runtime: resolution, binding, and attribution (Slice 2).
+"""Focused tests for Slice 2's current-state model-profile resolver."""
 
-The surface under test is the driver's single act-resolution seam
-(`_act_staffing` / `_act_profile`) plus the binding/attribution state it
-retains — no provider call is ever scripted or made. Pinned here:
-
-- a persisted unit's FIRST act resolution binds the run's current
-  selection against the CURRENT source and retains the exact resolved
-  configuration + content identity (`model_profile_bound`), so later
-  source edits — or even deleting the source — never restaff that unit;
-- an explicit selection change is prospective: it takes effect at the
-  next act resolution (`model_profile_changed`, exactly once), and an
-  unknown/corrupt selection fails loudly before any dispatch without
-  rewriting the prior binding;
-- per-act precedence is act-wide: explicit override (the whole per-act
-  policy, an explicit EMPTY entry included) > the bound rigor entry >
-  the config's shipped entry > structural derivation / family default;
-- a state created before the feature (no marker) resolves byte-identically
-  through its persisted config and existing acts behavior and never reads
-  the catalogue.
-"""
-
+import contextlib
+import copy
+import io
 import json
 import os
+import shlex
+import subprocess
 import tempfile
+import time
+import types
 import unittest
 from unittest import mock
 
-from orchestrator import contracts
-from orchestrator import driver
-from orchestrator import model_profiles as mp
-from orchestrator import runners
-from orchestrator import state as st
-
-GOAL = "Exercise the model-profile runtime"
+from orchestrator import contracts, current_model_call, driver, gitops
+from orchestrator import model_profiles
+from orchestrator import brainstorming_lifecycle
+from orchestrator import prompts, registry, runners, service, state, verifiers
 
 
-class ModelProfileRuntimeTestCase(unittest.TestCase):
+def profile(name, medium):
+    return {
+        "name": name,
+        "examples": ["runtime test"],
+        "configurations": {"low": {}, "medium": medium, "high": {}},
+    }
+
+
+class CurrentModelProfileRuntimeTest(unittest.TestCase):
     def setUp(self):
-        self._tmp = tempfile.TemporaryDirectory(prefix="orch-mp-rt-")
-        self.addCleanup(self._tmp.cleanup)
-        self.home = os.path.join(self._tmp.name, "home")
-        os.makedirs(self.home)
-        self._n = 0
+        self.tmp = tempfile.TemporaryDirectory(
+            prefix="orch-current-model-profile-"
+        )
+        self.addCleanup(self.tmp.cleanup)
+        self.home = os.path.join(self.tmp.name, "home")
+        self.workspace = os.path.join(self.tmp.name, "workspace")
+        os.makedirs(self.workspace)
 
-    # -- fixtures -----------------------------------------------------------
+    def init(self, workspace=None, with_home=True, config=None):
+        workspace = workspace or self.workspace
+        os.makedirs(workspace, exist_ok=True)
+        return driver.init_run(
+            "current model profile",
+            workspace,
+            config=copy.deepcopy(config or driver.DEFAULT_CONFIG),
+            model_profiles_home=self.home if with_home else None,
+        )
 
-    def _driver(self, model_profile, config_acts=None, overlay=None):
-        self._n += 1
-        ws = os.path.join(self._tmp.name, "ws-%d" % self._n)
-        os.makedirs(ws)
-        cfg = json.loads(json.dumps(driver.DEFAULT_CONFIG))
-        if config_acts is not None:
-            cfg["acts"] = config_acts
-        path = driver.default_state_path(ws)
-        st.save(path, st.new_state(GOAL, ws, cfg,
-                                   model_profile=model_profile))
-        if overlay is not None:
-            self.write_overlay(path, overlay)
-        return driver.Driver(path, runner=runners.MockRunner([]))
+    def runtime_path(self, state_path, name):
+        return os.path.join(os.path.dirname(state_path), name)
 
-    def feature_driver(self, selection=None, config_acts=None, overlay=None,
-                       seed=True):
-        """A model-profile-enabled run: marker present, catalogue seeded."""
-        if seed:
-            mp.ensure_default(self.home)
-        return self._driver({"home": self.home, "selection": selection},
-                            config_acts=config_acts, overlay=overlay)
+    def write_runtime(self, state_path, name, value):
+        path = self.runtime_path(state_path, name)
+        tmp = path + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump(value, fh)
+        os.replace(tmp, path)
 
-    def pre_feature_driver(self, config_acts=None, overlay=None):
-        """A state exactly as pre-feature initialization persisted it."""
-        return self._driver(None, config_acts=config_acts, overlay=overlay)
+    def resolver(self, state_path, runner=None):
+        return driver.Driver(
+            state_path,
+            runner=runner or runners.MockRunner([]),
+            model_profiles_home=self.home,
+        )
 
-    @staticmethod
-    def write_overlay(state_path, acts):
-        path = os.path.join(os.path.dirname(state_path), "acts.json")
-        with open(path, "w", encoding="utf-8") as fh:
-            if isinstance(acts, str):
-                fh.write(acts)
-            else:
-                json.dump(acts, fh)
+    def test_old_and_new_unselected_runs_use_current_default(self):
+        old_config = copy.deepcopy(driver.DEFAULT_CONFIG)
+        old_config["acts"]["fixer"] = "claude"
+        old_path = self.init(with_home=False, config=old_config)
+        model_profiles.ensure_default(self.home)
+        d = self.resolver(old_path)
+        # Pre-feature config acts have no recoverable origin and remain
+        # baseline; the current profile governs old and new runs alike.
+        self.assertEqual(d._act_profile("fixer")[0], "codex")
 
-    @staticmethod
-    def write_selection(d, payload):
-        path = os.path.join(os.path.dirname(d.state_path),
-                            "model_profile.json")
-        with open(path, "w", encoding="utf-8") as fh:
-            if isinstance(payload, str):
-                fh.write(payload)
-            else:
-                json.dump(payload, fh)
-
-    def save_profile(self, name, medium, low=None, high=None):
-        mp.save(self.home, {
-            "name": name,
-            "examples": ["custom work"],
-            "configurations": {
-                "low": low or {},
-                "medium": medium,
-                "high": high or {},
-            },
-        })
-
-    @staticmethod
-    def events(d, etype):
-        return [e for e in d.state["events"] if e.get("type") == etype]
-
-    @staticmethod
-    def seal_current_unit(d):
-        unit = st.current_unit(d.state)
-        unit["status"] = st.U_SEALED
-        d._save()
-
-    def edit_default_medium(self, act, value):
-        doc = mp.load(self.home, "default")
-        doc["configurations"]["medium"][act] = value
-        mp.save(self.home, doc)
-        return doc
-
-    # -- unit-open binding retains mutable source content --------------------
-
-    def test_unit_binding_snapshots_source_and_allows_two_unit_choices(self):
-        d = self.feature_driver()
-        self.assertEqual(d._act_profile("implementer"),
-                         ("claude", "claude-fable-5", "max"))
-        bound = self.events(d, "model_profile_bound")
-        self.assertEqual(len(bound), 1)
-        evt = bound[0]
-        seeded = mp.load(self.home, "default")["configurations"]["medium"]
-        self.assertEqual(evt["unit"], "skeleton")
-        self.assertEqual((evt["name"], evt["rigor"], evt["origin"]),
-                         ("default", "medium", "implicit-default"))
-        self.assertEqual(evt["configuration"], seeded)
-        h1 = evt["content_hash"]
-        self.assertEqual(h1, mp.content_identity(seeded))
-        # The binding is persisted at the resolution itself — durable on
-        # disk BEFORE any provider dispatch could happen.
-        on_disk = st.load(d.state_path)
-        self.assertEqual(
-            [e["type"] for e in on_disk["events"]
-             if e["type"] == "model_profile_bound"],
-            ["model_profile_bound"])
-        # Further resolutions never rebind.
-        d._act_profile("drafter")
-        d._act_profile("reclassifier", origin_family="claude")
-        self.assertEqual(len(self.events(d, "model_profile_bound")), 1)
-
-        # Editing the mutable source does not change the bound unit...
-        edited = self.edit_default_medium(
-            "implementer",
-            {"agent": "claude", "model": "claude-sonnet-5", "effort": "low"})
-        self.assertEqual(d._act_profile("implementer"),
-                         ("claude", "claude-fable-5", "max"))
-        # ...not even across a restart with the source DELETED: the unit
-        # resolves from retained content, no source read at all.
-        source = os.path.join(mp.model_profiles_dir(self.home),
-                              "default.json")
-        os.remove(source)
-        d2 = driver.Driver(d.state_path, runner=runners.MockRunner([]))
-        self.assertEqual(d2._act_profile("implementer"),
-                         ("claude", "claude-fable-5", "max"))
-        self.assertEqual(len(self.events(d2, "model_profile_bound")), 1)
-
-        # A LATER unit binds the edited definition and retains a distinct
-        # content identity under the same selection.
-        mp.save(self.home, edited)
-        self.seal_current_unit(d2)
-        d2.state["milestone"]["slices"] = [{"id": 1, "title": "One"}]
-        self.assertIsNotNone(st.ensure_due_unit(d2.state))
-        d2._save()
-        self.assertEqual(d2._act_profile("implementer"),
-                         ("claude", "claude-sonnet-5", "low"))
-        bound = self.events(d2, "model_profile_bound")
-        self.assertEqual(len(bound), 2)
-        self.assertNotEqual(bound[1]["unit"], "skeleton")
-        self.assertEqual(bound[1]["name"], "default")
-        self.assertNotEqual(bound[1]["content_hash"], h1)
-        # The first unit's retained record is untouched.
-        self.assertEqual(bound[0]["content_hash"], h1)
-
-    # -- explicit change is prospective and loud -----------------------------
-
-    def test_profile_change_applies_to_next_resolution_only(self):
-        self.save_profile("webui", medium={
-            "implementer": {"agent": "claude", "model": "claude-sonnet-5",
-                            "effort": "medium"},
-        }, high={
-            "implementer": {"agent": "codex", "effort": "low"},
-        })
-        d = self.feature_driver()
-        self.assertEqual(d._act_profile("implementer"),
-                         ("claude", "claude-fable-5", "max"))
-        original_bound = self.events(d, "model_profile_bound")[0]
-
-        # A pending selection request takes effect at the NEXT resolution:
-        # one model_profile_changed, the unit restaffed from here on.
-        self.write_selection(d, {"name": "webui", "rigor": "high"})
-        self.assertEqual(d._act_profile("implementer"),
-                         ("codex", "gpt-5.6-sol", "low"))
-        changed = self.events(d, "model_profile_changed")
-        self.assertEqual(len(changed), 1)
-        webui_high = mp.load(self.home, "webui")["configurations"]["high"]
-        self.assertEqual(changed[0]["configuration"], webui_high)
-        self.assertEqual(changed[0]["previous"],
-                         {"name": "default", "rigor": "medium"})
-        self.assertEqual(d.state["model_profile"]["selection"],
-                         {"name": "webui", "rigor": "high"})
-        unit = st.current_unit(d.state)
-        self.assertEqual(unit["model_profile_binding"]["name"], "webui")
-        # Idempotent: the same request never re-fires.
-        d._act_profile("implementer")
-        self.assertEqual(len(self.events(d, "model_profile_changed")), 1)
-        # The original binding record was never rewritten.
-        self.assertEqual(self.events(d, "model_profile_bound")[0],
-                         original_bound)
-
-        # An unknown selection fails BEFORE any dispatch, falls back to
-        # nothing, and rewrites neither the selection nor the binding.
-        self.write_selection(d, {"name": "ghost", "rigor": "high"})
-        with self.assertRaises(driver.StopStep):
-            d._act_profile("implementer")
-        self.assertIsNotNone(d.state["failure"])
-        self.assertEqual(len(self.events(d, "model_profile_changed")), 1)
-        self.assertEqual(d.state["model_profile"]["selection"],
-                         {"name": "webui", "rigor": "high"})
-        self.assertEqual(unit["model_profile_binding"]["name"], "webui")
-
-        # Same loudness for an unknown rigor and for corrupt stored
-        # content; the prior binding stays authoritative each time.
-        d.state["failure"] = None
-        self.write_selection(d, {"name": "webui", "rigor": "extreme"})
-        with self.assertRaises(driver.StopStep):
-            d._act_profile("implementer")
-        d.state["failure"] = None
-        with open(os.path.join(mp.model_profiles_dir(self.home),
-                               "broken.json"), "w", encoding="utf-8") as fh:
-            fh.write("{not json")
-        self.write_selection(d, {"name": "broken", "rigor": "low"})
-        with self.assertRaises(driver.StopStep):
-            d._act_profile("implementer")
-        self.assertEqual(len(self.events(d, "model_profile_changed")), 1)
-        self.assertEqual(unit["model_profile_binding"]["name"], "webui")
-
-        # A persisted selection object is not absence: if damaged, it
-        # fails before even consulting the catalogue and never binds the
-        # implicit default.
-        for damaged in ({"rigor": "medium"}, {"name": "default"}, {},
-                        "default@medium"):
-            with self.subTest(persisted_selection=damaged):
-                damaged_driver = self.feature_driver(selection=damaged)
-                with mock.patch.object(
-                        mp, "selection_content",
-                        wraps=mp.selection_content) as resolve:
-                    with self.assertRaises(driver.StopStep):
-                        damaged_driver._act_profile("implementer")
-                    resolve.assert_not_called()
-                self.assertIn(
-                    "persisted model-profile selection",
-                    damaged_driver.state["failure"]["reason"])
-                self.assertEqual(
-                    self.events(damaged_driver, "model_profile_bound"), [])
-                self.assertNotIn(
-                    "model_profile_binding",
-                    st.current_unit(damaged_driver.state))
-
-    def test_same_selection_reapplication_refreshes_edited_content_once(self):
-        self.save_profile("core", medium={
-            "implementer": {
-                "agent": "claude", "model": "claude-fable-5",
-                "effort": "max",
-            },
-        })
-        selection = {"name": "core", "rigor": "medium"}
-        d = self.feature_driver(selection=selection)
-        self.assertEqual(d._act_profile("implementer"),
-                         ("claude", "claude-fable-5", "max"))
-        original_hash = st.current_unit(d.state)[
-            "model_profile_binding"
-        ]["content_hash"]
-
-        doc = mp.load(self.home, "core")
-        doc["configurations"]["medium"]["implementer"] = {
-            "agent": "codex", "model": "gpt-5.6-terra",
+        edited = model_profiles.load(self.home, "default")
+        edited["configurations"]["medium"]["fixer"] = {
+            "agent": "claude", "model": "claude-sonnet-5",
             "effort": "high",
         }
-        mp.save(self.home, doc)
-        # A source edit alone never changes the retained unit binding.
-        self.assertEqual(d._act_profile("implementer"),
-                         ("claude", "claude-fable-5", "max"))
+        model_profiles.save(self.home, edited)
+        expected = ("claude", "claude-sonnet-5", "high")
+        self.assertEqual(d._act_profile("fixer"), expected)
 
-        # Reapplying the SAME selection is a new one-shot request. It
-        # resolves current content, records the transition, and is consumed.
-        self.write_selection(d, selection)
-        self.assertEqual(d._act_profile("implementer"),
-                         ("codex", "gpt-5.6-terra", "high"))
-        changed = self.events(d, "model_profile_changed")
-        self.assertEqual(len(changed), 1)
-        self.assertEqual(changed[0]["previous"], selection)
-        self.assertNotEqual(changed[0]["content_hash"], original_hash)
-        self.assertFalse(os.path.exists(d._model_profile_selection_path()))
-        d._act_profile("implementer")
-        self.assertEqual(len(self.events(d, "model_profile_changed")), 1)
-
-    def test_applied_selection_request_does_not_replay_after_restart(self):
-        self.save_profile("core", medium={
-            "implementer": {
-                "agent": "claude", "model": "claude-fable-5",
-                "effort": "max",
-            },
-        })
-        selection = {"name": "core", "rigor": "medium"}
-        d = self.feature_driver()
-        d._act_profile("implementer")
-        self.write_selection(d, selection)
-
-        # Simulate process death after the changed event and binding were
-        # saved, but before that exact sidecar generation was unlinked.
-        with mock.patch.object(
-            d, "_clear_selection_request",
-            side_effect=RuntimeError("simulated crash before unlink"),
-        ):
-            with self.assertRaisesRegex(RuntimeError, "before unlink"):
-                d._act_profile("implementer")
-        on_disk = st.load(d.state_path)
-        changed = [
-            event for event in on_disk["events"]
-            if event.get("type") == "model_profile_changed"
-        ]
-        self.assertEqual(len(changed), 1)
-        applied_hash = changed[0]["content_hash"]
-
-        doc = mp.load(self.home, "core")
-        doc["configurations"]["medium"]["implementer"] = {
-            "agent": "codex", "model": "gpt-5.6-terra",
-            "effort": "high",
-        }
-        mp.save(self.home, doc)
-
-        restarted = driver.Driver(
-            d.state_path, runner=runners.MockRunner([])
-        )
-        self.assertEqual(
-            restarted._act_profile("implementer"),
-            ("claude", "claude-fable-5", "max"),
-        )
-        self.assertEqual(
-            len(self.events(restarted, "model_profile_changed")), 1
-        )
-        self.assertEqual(
-            st.current_unit(restarted.state)["model_profile_binding"][
-                "content_hash"
-            ],
-            applied_hash,
-        )
-        self.assertFalse(
-            os.path.exists(restarted._model_profile_selection_path())
-        )
-        self.assertNotIn(
-            "selection_request_ack", restarted.state["model_profile"]
-        )
-
-        # A newly written request with the same selection remains a distinct
-        # operator action and may deliberately adopt the edited source.
-        self.write_selection(restarted, selection)
-        self.assertEqual(
-            restarted._act_profile("implementer"),
-            ("codex", "gpt-5.6-terra", "high"),
-        )
-        self.assertEqual(
-            len(self.events(restarted, "model_profile_changed")), 2
-        )
-
-    def test_retained_binding_is_verified_without_reading_mutable_source(self):
-        corruptions = ("hash-mismatch", "invalid-shape", "incomplete")
-        for corruption in corruptions:
-            with self.subTest(corruption=corruption):
-                d = self.feature_driver()
-                d._act_profile("implementer")
-                unit = st.current_unit(d.state)
-                binding = unit["model_profile_binding"]
-                if corruption == "hash-mismatch":
-                    binding["configuration"]["implementer"]["effort"] = (
-                        "low"
-                    )
-                elif corruption == "invalid-shape":
-                    binding["configuration"] = {
-                        "implementer": {"agent": "claude", "dead": "x"}
-                    }
-                    binding["content_hash"] = mp.content_identity(
-                        binding["configuration"]
-                    )
-                else:
-                    unit["model_profile_binding"] = {"name": "default"}
-                with mock.patch.object(
-                    mp, "selection_content",
-                    side_effect=AssertionError(
-                        "damaged retained binding consulted mutable source"
-                    ),
-                ) as resolve:
-                    with self.assertRaises(driver.StopStep):
-                        d._act_profile("implementer")
-                resolve.assert_not_called()
-                self.assertIsNotNone(d.state["failure"])
-
-    def test_brainstorming_resume_keeps_origin_binding_after_pending_change(self):
-        d = self.feature_driver()
-        self.seal_current_unit(d)
-        d.state["milestone"]["slices"] = [{"id": 1, "title": "One"}]
-        self.assertIsNotNone(st.ensure_due_unit(d.state))
-        d._save()
-        unit = st.current_unit(d.state)
-        self.assertEqual(unit["kind"], st.UNIT_SLICE_DOC)
-        origin_staffing = d._act_staffing("drafter")
-        origin_binding = json.loads(json.dumps(
-            unit["model_profile_binding"]
+        new_workspace = os.path.join(self.tmp.name, "new-workspace")
+        new_path = self.init(workspace=new_workspace)
+        self.assertEqual(self.resolver(new_path)._act_profile("fixer"),
+                         expected)
+        self.assertFalse(os.path.exists(
+            self.runtime_path(old_path, "model_profile.json")
         ))
-        origin_hash = origin_binding["content_hash"]
-        unit["brainstorming_resume"] = {
-            "kind": contracts.KIND_DRAFT_SLICE_NOTE,
-            "output": {
-                "status": "ok",
-                "kind": contracts.KIND_DRAFT_SLICE_NOTE,
-                "artifact": "docs/slice-01.md",
-            },
-            "raw_path": "raw/resumed.txt",
-            "duration_s": 1.0,
-            "model_profile_binding": origin_binding,
-            "family": origin_staffing["family"],
-            # A wait persisted by the pre-fix runtime omitted family-default
-            # values even though those exact defaults were dispatched.
-            "model": None,
-            "effort": None,
-            "pre_snapshot": {},
-        }
+        self.assertFalse(os.path.exists(
+            self.runtime_path(new_path, "model_profile.json")
+        ))
 
-        self.edit_default_medium(
-            "drafter",
-            {"agent": "codex", "model": "gpt-5.6-terra",
-             "effort": "high"},
+    def test_execution_entrypoints_seed_validate_and_supply_catalogue_home(self):
+        cli_workspace = os.path.join(self.tmp.name, "cli-workspace")
+        config_path = os.path.join(self.tmp.name, "cli-config.json")
+        with open(config_path, "w", encoding="utf-8") as fh:
+            json.dump({
+                "git": {"enabled": False},
+                "acts": {"fixer": "claude"},
+            }, fh)
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            code = driver.main([
+                "init", "--goal", "cli current profile",
+                "--workspace", cli_workspace,
+                "--config", config_path,
+                "--model-profiles-home", self.home,
+            ])
+        self.assertEqual(code, 0)
+        self.assertEqual(model_profiles.load(self.home, "default")["name"],
+                         "default")
+        path = output.getvalue().strip().removeprefix("initialized: ")
+        with open(self.runtime_path(path, "acts.json"), encoding="utf-8") as fh:
+            self.assertEqual(json.load(fh), {"fixer": "claude"})
+        self.assertEqual(self.resolver(path)._act_profile("fixer")[0],
+                         "claude")
+
+        default_path = os.path.join(
+            self.home, "model_profiles", "default.json"
         )
-        self.write_selection(
-            d, {"name": "default", "rigor": "medium"}
+        with open(default_path, "w", encoding="utf-8") as fh:
+            fh.write("{broken")
+        invalid_workspace = os.path.join(self.tmp.name, "invalid-startup")
+        with self.assertRaises(model_profiles.ModelProfileError):
+            self.init(workspace=invalid_workspace)
+        self.assertFalse(os.path.exists(
+            driver.default_state_path(invalid_workspace)
+        ))
+
+        refused_workspace = os.path.join(self.tmp.name, "invalid-cli-acts")
+        refused_config = os.path.join(self.tmp.name, "invalid-cli-acts.json")
+        with open(refused_config, "w", encoding="utf-8") as fh:
+            json.dump({"acts": {
+                "review_codex": {"agent": "claude", "model": "x"}
+            }}, fh)
+        error = io.StringIO()
+        with contextlib.redirect_stderr(error):
+            code = driver.main([
+                "init", "--goal", "invalid creation acts",
+                "--workspace", refused_workspace,
+                "--config", refused_config,
+                "--model-profiles-home", self.home,
+            ])
+        self.assertEqual(code, 2)
+        self.assertIn("not honored", error.getvalue())
+        self.assertFalse(os.path.exists(
+            driver.default_state_path(refused_workspace)
+        ))
+
+    def test_creation_authority_validation_refuses_before_state_creation(self):
+        model_profiles.ensure_default(self.home)
+        invalid = (
+            {"review_codex": {"agent": "codex", "model": "review"}},
+            {"consultation": {"agent": "claude", "effort": "high"}},
+            {"fixer": {"agent": "codex", "reasoning": "high"}},
         )
-        self.assertIn("drafted", d._do_draft())
+        for index, creation_acts in enumerate(invalid):
+            with self.subTest(creation_acts=creation_acts):
+                workspace = os.path.join(
+                    self.tmp.name, "invalid-creation-%d" % index
+                )
+                os.makedirs(workspace)
+                config = copy.deepcopy(driver.DEFAULT_CONFIG)
+                config["acts"].update(copy.deepcopy(creation_acts))
+                state_path = driver.default_state_path(workspace)
+                with self.assertRaisesRegex(ValueError, "creation act overrides"):
+                    driver.init_run(
+                        "invalid creation",
+                        workspace,
+                        config=config,
+                        model_profiles_home=self.home,
+                        creation_acts=creation_acts,
+                    )
+                self.assertFalse(os.path.exists(state_path))
+                self.assertFalse(os.path.exists(os.path.join(
+                    os.path.dirname(state_path), "acts.json"
+                )))
 
-        # Reopening legitimately applies the prospective change, but the
-        # already-completed continuation's immutable draft record keeps A.
-        self.assertNotEqual(
-            unit["model_profile_binding"]["content_hash"], origin_hash
+    def test_profile_selection_and_override_are_last_write_wins(self):
+        model_profiles.ensure_default(self.home)
+        model_profiles.save(self.home, profile("work", {
+            "fixer": {"agent": "claude", "model": "profile-v1",
+                      "effort": "medium"},
+        }))
+        model_profiles.save(self.home, profile("other", {
+            "fixer": {"agent": "codex", "model": "other-profile",
+                      "effort": "low"},
+        }))
+        path = self.init()
+        d = self.resolver(path)
+        self.write_runtime(
+            path, "model_profile.json", {"name": "work", "rigor": "medium"}
         )
-        self.assertEqual(unit["draft"]["model_profile"]["content_hash"],
-                         origin_hash)
-        self.assertEqual(
-            (unit["draft"]["family"], unit["draft"]["model"],
-             unit["draft"]["effort"]),
-            ("codex", "gpt-5.6-sol", "xhigh"),
+        dispatched = d._act_profile("fixer")
+        self.assertEqual(dispatched, ("claude", "profile-v1", "medium"))
+
+        edited = model_profiles.load(self.home, "work")
+        edited["configurations"]["medium"]["fixer"]["model"] = "profile-v2"
+        model_profiles.save(self.home, edited)
+        self.assertEqual(d._act_profile("fixer"),
+                         ("claude", "profile-v2", "medium"))
+        self.assertEqual(dispatched, ("claude", "profile-v1", "medium"))
+
+        self.write_runtime(
+            path, "model_profile.json", {"name": "other", "rigor": "medium"}
         )
-        self.assertNotIn("act_override", unit["draft"])
+        self.assertEqual(d._act_profile("fixer"),
+                         ("codex", "other-profile", "low"))
 
-    # -- precedence is act-wide ----------------------------------------------
-
-    def test_precedence_whole_act_partial_relative_and_empty_override(self):
-        self.save_profile("core", medium={
-            "skeletoner": {"agent": "claude", "model": "claude-sonnet-5",
-                           "effort": "low"},
-            "implementer": {"agent": "claude", "model": "claude-fable-5",
-                            "effort": "max"},
-            "drafter": "claude",
-            "reclassifier": "self",
-            "review_claude": {"model": "claude-sonnet-5", "effort": "low"},
-            "consultation": "codex",
-        })
-        d = self.feature_driver(
-            selection={"name": "core", "rigor": "medium"},
-            overlay={
-                "implementer": {"agent": "codex", "effort": "xhigh"},
-                "drafter": {"model": "gpt-5.6-luna"},
-                "skeletoner": {},
-                "fixer": "opposite",
-            })
-        # 1. A whole-act override beats the profile's entry outright.
-        self.assertEqual(d._act_profile("implementer"),
-                         ("codex", "gpt-5.6-sol", "xhigh"))
-        # 2. A PARTIAL override is still the whole act policy: its missing
-        # agent resolves by the entry's own form (fix-family fallback),
-        # never from the profile's `drafter: claude`.
-        self.assertEqual(d._act_profile("drafter"),
-                         ("codex", "gpt-5.6-luna", "xhigh"))
-        # 3. The explicit EMPTY policy suppresses profile AND shipped
-        # config entry: the act resolves purely structurally (skeletoner
-        # re-asserts its own family/effort; model = family default later).
-        self.assertEqual(
-            d._skeletoner_profile(), ("claude", "claude-opus-5", "max")
+        self.write_runtime(
+            path, "acts.json",
+            {"fixer": {"agent": "codex", "model": "override",
+                       "effort": "high"}},
         )
-        # 4. Relative override policies resolve from the effective
-        # originating act.
-        self.assertEqual(d._resolve_act("fixer", "claude"), "codex")
-        self.assertEqual(d._resolve_act("fixer", "codex"), "claude")
-        # 5. Profile entry beats the config's shipped act entry (shipped
-        # reclassifier pins codex; the profile says `self`).
-        self.assertEqual(
-            d._act_profile("reclassifier", origin_family="claude",
-                           default_family="codex")[0],
-            "claude")
-        # 6. Consultation: the profile's family policy governs where the
-        # shipped entry would derive the opposite.
-        self.assertEqual(d._resolve_act("consultation", "codex"), "codex")
-        # 7. A profile-omitted act keeps its existing derivation: the
-        # counterpart stays the structural opposite of the lead.
-        lead, counterpart = d._brainstorming_profiles()
-        self.assertEqual(lead["agent"], "codex")
-        self.assertEqual(counterpart["agent"], "claude")
-        self.assertEqual(counterpart["effort"], "xhigh")
-        # 8. Review seats take profile model/effort; the family is pinned.
-        self.assertEqual(d._review_profile("claude"),
-                         ("claude-sonnet-5", "low"))
-        # 9. Attribution provenance: the explicit empty entry is a
-        # contributing override, recorded as {}.
-        staffing = d._act_staffing("skeletoner")
-        attribution = d._staffing_attribution(staffing)
-        self.assertEqual(attribution["model_profile"]["name"], "core")
-        self.assertEqual(attribution["model_profile"]["rigor"], "medium")
-        self.assertEqual(attribution["act_override"],
-                         {"act": "skeletoner", "entry": {}})
-        # ...and an act the override layer does not touch carries none.
-        untouched = d._staffing_attribution(d._act_staffing("reclassifier"))
-        self.assertNotIn("act_override", untouched)
-        self.assertEqual(untouched["model_profile"]["name"], "core")
+        self.assertEqual(d._act_profile("fixer"),
+                         ("codex", "override", "high"))
+        self.write_runtime(path, "acts.json", {})
+        self.assertEqual(d._act_profile("fixer"),
+                         ("codex", "other-profile", "low"))
 
-    # -- old states do not opt in ---------------------------------------------
-
-    def test_pre_feature_state_is_identical_and_never_reads_catalogue(self):
-        config_acts = {
-            "implementer": {"model": "claude-sonnet-5"},
-            "drafter": None,
-            "delta_review": "codex",
-            "fixer": "codex",
-            "skeletoner": {"agent": "claude", "model": "claude-fable-5",
-                           "effort": "max"},
-            "consultation": "opposite",
-            "reclassifier": {"agent": "codex", "effort": "xhigh"},
-            "brainstorming_counterpart": "opposite",
-        }
-        overlay = {
-            "review_claude": {"model": "claude-sonnet-5"},
-            "implementer": "",  # falsy overlay entries stay skipped
-        }
-        d = self.pre_feature_driver(config_acts=config_acts, overlay=overlay)
-        spy = mock.MagicMock(
-            side_effect=AssertionError("pre-feature state read the "
-                                       "model-profile catalogue"))
-        with mock.patch.object(mp, "load", spy), \
-                mock.patch.object(mp, "selection_content", spy):
-            # The historical quirks, pinned literally: a partial object
-            # without `agent` falls to the fix family; a creation-cleared
-            # act falls to the fix family; legacy keys stay inert.
-            self.assertEqual(d._act_profile("implementer"),
-                             ("codex", "claude-sonnet-5", None))
-            self.assertEqual(d._act_profile("drafter"),
-                             ("codex", None, None))
-            self.assertEqual(d._skeletoner_profile(),
-                             ("claude", "claude-fable-5", "max"))
-            self.assertEqual(d._act_profile("fixer", "claude",
-                                            default_family="codex"),
-                             ("codex", None, None))
-            self.assertEqual(d._resolve_act("consultation", "codex"),
-                             "claude")
-            self.assertEqual(
-                d._act_profile("reclassifier", origin_family="claude",
-                               default_family="claude"),
-                ("codex", None, "xhigh"))
-            self.assertEqual(d._review_profile("claude"),
-                             ("claude-sonnet-5", "xhigh"))
-            self.assertEqual(d._review_profile("codex"),
-                             ("gpt-5.6-sol", "xhigh"))
-            lead, counterpart = d._brainstorming_profiles()
-            # The partial implementer entry keeps today's exact quirk:
-            # family falls to the fix family while the pinned model rides
-            # along with it.
-            self.assertEqual(
-                (lead["agent"], lead["model"], lead["effort"]),
-                ("codex", "claude-sonnet-5", "xhigh"))
-            self.assertEqual(counterpart["agent"], "claude")
-            # No binding machinery ran: no events, no attribution, no
-            # feature state.
-            self.assertEqual(self.events(d, "model_profile_bound"), [])
-            self.assertEqual(self.events(d, "model_profile_changed"), [])
-            staffing = d._act_staffing("implementer")
-            self.assertIsNone(staffing["binding"])
-            self.assertIsNone(d._staffing_attribution(staffing))
-        spy.assert_not_called()
-
-    def test_present_malformed_feature_marker_fails_loudly(self):
-        for marker in (None, "default@medium", [], 7):
-            with self.subTest(marker=marker):
-                d = self.feature_driver()
-                d.state["model_profile"] = marker
-                with mock.patch.object(
-                    mp, "selection_content",
-                    side_effect=AssertionError(
-                        "malformed marker consulted the catalogue"
-                    ),
-                ) as resolve:
-                    with self.assertRaises(driver.StopStep):
-                        d._act_profile("implementer")
-                resolve.assert_not_called()
-                self.assertIn(
-                    "feature state must be a JSON object",
-                    d.state["failure"]["reason"],
+    def test_explicit_empty_uses_structural_family_default_not_profile(self):
+        for index, empty in enumerate((None, "", {})):
+            with self.subTest(empty=empty):
+                workspace = os.path.join(self.tmp.name, "empty-%d" % index)
+                os.makedirs(workspace)
+                config = copy.deepcopy(driver.DEFAULT_CONFIG)
+                config["acts"]["implementer"] = copy.deepcopy(empty)
+                path = driver.init_run(
+                    "empty creation override",
+                    workspace,
+                    config=config,
+                    model_profiles_home=self.home,
+                    creation_acts={"implementer": copy.deepcopy(empty)},
+                )
+                with open(self.runtime_path(path, "acts.json"),
+                          encoding="utf-8") as fh:
+                    self.assertEqual(json.load(fh), {"implementer": empty})
+                self.assertEqual(
+                    self.resolver(path)._act_profile("implementer"),
+                    ("codex", None, None),
                 )
 
-    # -- calls outside any persisted unit -------------------------------------
-
-    def test_outside_unit_call_resolves_current_selection_at_that_call(self):
-        d = self.feature_driver()
-        self.seal_current_unit(d)
-        self.assertIsNone(st.current_unit(d.state))
-        staffing = d._act_staffing("implementer")
-        self.assertEqual(
-            (staffing["family"], staffing["model"], staffing["effort"]),
-            ("claude", "claude-fable-5", "max"))
-        self.assertTrue(staffing["binding"].get("outside_unit"))
-        h1 = staffing["binding"]["content_hash"]
-        # No unit: nothing binds, nothing is persisted...
-        self.assertEqual(self.events(d, "model_profile_bound"), [])
-        # ...and the CURRENT source governs each call: an edit shows up at
-        # the very next resolution, with a distinct retained identity in
-        # the call's attribution.
-        self.edit_default_medium(
-            "implementer",
-            {"agent": "claude", "model": "claude-sonnet-5", "effort": "low"})
-        staffing = d._act_staffing("implementer")
-        self.assertEqual(
-            (staffing["family"], staffing["model"], staffing["effort"]),
-            ("claude", "claude-sonnet-5", "low"))
-        attribution = d._staffing_attribution(staffing)
-        self.assertEqual(attribution["model_profile"]["name"], "default")
-        self.assertNotEqual(attribution["model_profile"]["content_hash"], h1)
-
-    # -- the override layer is loud when damaged ------------------------------
-
-    def test_unreadable_override_layer_is_loud_only_for_feature_runs(self):
-        d = self.feature_driver()
-        self.write_overlay(d.state_path, "{not json")
-        with self.assertRaises(driver.StopStep):
-            d._act_profile("implementer")
-        self.assertIn("acts.json", d.state["failure"]["reason"])
-
-        d2 = self.feature_driver()
-        self.write_overlay(d2.state_path, '["not", "an", "object"]')
-        with self.assertRaises(driver.StopStep):
-            d2._act_profile("implementer")
-
-        # Pre-feature runs keep the historical tolerant read.
-        d3 = self.pre_feature_driver()
-        self.write_overlay(d3.state_path, "{not json")
-        self.assertEqual(d3._act_profile("fixer", None,
-                                         default_family="codex"),
+        workspace = os.path.join(self.tmp.name, "empty-whole-map")
+        os.makedirs(workspace)
+        config = copy.deepcopy(driver.DEFAULT_CONFIG)
+        config["acts"] = None
+        path = driver.init_run(
+            "empty whole map",
+            workspace,
+            config=config,
+            model_profiles_home=self.home,
+            creation_acts=None,
+        )
+        d = self.resolver(path)
+        self.assertEqual(d._act_profile("implementer"),
                          ("codex", None, None))
-        self.assertIsNone(d3.state["failure"])
+        self.assertEqual(d._act_profile("reclassifier"),
+                         ("codex", None, None))
 
-    # -- draft records carry the retained attribution -------------------------
+    def test_status_does_not_require_catalogue_readiness(self):
+        path = self.init(with_home=False)
+        run_state = state.load(path)
+        unit = state.current_unit(run_state)
+        unit["status"] = state.U_ROUNDS
+        unit["family_index"] = 0
+        state.save(path, run_state)
 
-    def test_draft_record_carries_binding_and_override_attribution(self):
-        d = self.feature_driver(overlay={"implementer": {"effort": "xhigh"}})
-        staffing = d._act_staffing("implementer")
-        self.assertEqual(
-            (staffing["family"], staffing["model"], staffing["effort"]),
-            ("codex", "gpt-5.6-sol", "xhigh"),
+        homes = (
+            os.path.join(self.tmp.name, "missing-catalogue"),
+            os.path.join(self.tmp.name, "corrupt-catalogue"),
         )
-        attribution = d._staffing_attribution(staffing)
-        unit = st.current_unit(d.state)
-        st.record_draft(
-            d.state, unit, "implement",
-            {"status": "ok", "kind": "implement", "artifact": "x.md"},
-            family=staffing["family"], model=staffing["model"],
-            effort=staffing["effort"], attribution=attribution)
-        binding = unit["model_profile_binding"]
-        self.assertEqual(unit["draft"]["model_profile"], {
-            "name": "default", "rigor": "medium",
-            "content_hash": binding["content_hash"],
-            "origin": "implicit-default",
+        os.makedirs(os.path.join(homes[1], "model_profiles"))
+        with open(os.path.join(homes[1], "model_profiles", "default.json"),
+                  "w", encoding="utf-8") as fh:
+            fh.write("{broken")
+
+        for home in homes:
+            with self.subTest(home=home):
+                output = io.StringIO()
+                args = types.SimpleNamespace(
+                    state=path,
+                    workspace=None,
+                    json=True,
+                    model_profiles_home=home,
+                )
+                with contextlib.redirect_stdout(output):
+                    self.assertEqual(driver.cmd_status(args), 0)
+                shown = json.loads(output.getvalue())
+                self.assertEqual(shown["current_unit_status"], state.U_ROUNDS)
+                self.assertEqual(
+                    service.load_summary(
+                        path, model_profiles_home=home
+                    )["current_unit_status"],
+                    state.U_ROUNDS,
+                )
+
+    def test_catalogue_failure_does_not_suppress_generic_recovery(self):
+        subprocess.run(
+            ["git", "init", "-q", self.workspace],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        config = copy.deepcopy(driver.DEFAULT_CONFIG)
+        config["git"] = {"enabled": True}
+        path = self.init(config=config)
+        active = self.resolver(path)
+        run_state = state.load(path)
+        state.current_unit(run_state)["status"] = state.U_ROUNDS
+        state.save(path, run_state)
+        usage = {
+            "input_tokens": 11,
+            "cached_input_tokens": 2,
+            "output_tokens": 3,
+            "reasoning_output_tokens": 1,
+            "total_tokens": 14,
+        }
+        self.assertTrue(active._mark_busy(
+            "completed-before-restart",
+            contracts.KIND_REVIEW_ROUND,
+            "codex",
+            model="gpt-5.6-sol",
+            effort="high",
+        ))
+        completed = runners.RunnerResult(
+            "{}", 0, 2.5, token_usage=usage, cost_payloads=[usage]
+        )
+        self.assertTrue(active._update_busy_accounting(completed))
+        worker_junk = os.path.join(
+            self.workspace, "interrupted-worker-output.txt"
+        )
+        with open(worker_junk, "w", encoding="utf-8") as fh:
+            fh.write("partial worker output\n")
+
+        default_path = os.path.join(
+            self.home, "model_profiles", "default.json"
+        )
+        with open(default_path, "w", encoding="utf-8") as fh:
+            fh.write("{broken")
+
+        with self.assertRaisesRegex(
+            RuntimeError, "model-profile catalogue unavailable"
+        ):
+            self.resolver(path)
+
+        recovered = state.load(path)
+        incidents = [
+            event for event in recovered["events"]
+            if event.get("type") == "worker_interrupted"
+            and event.get("label") == "completed-before-restart"
+        ]
+        self.assertEqual(len(incidents), 1)
+        self.assertEqual(incidents[0]["duration_s"], 2.5)
+        self.assertEqual(incidents[0]["token_usage"], usage)
+        self.assertIsNotNone(incidents[0]["cost"])
+        self.assertIn(
+            "model-profile catalogue unavailable",
+            recovered["failure"]["reason"],
+        )
+        self.assertFalse(os.path.exists(worker_junk))
+        self.assertTrue(any(
+            event.get("type") == "unclean_stop_restored"
+            for event in recovered["events"]
+        ))
+        self.assertFalse(os.path.exists(
+            self.runtime_path(path, "current.json")
+        ))
+
+    def test_purged_legacy_run_does_not_supply_next_run_current_settings(self):
+        model_profiles.ensure_default(self.home)
+        model_profiles.save(self.home, profile("prior", {
+            "fixer": {
+                "agent": "claude",
+                "model": "prior-run-model",
+                "effort": "high",
+            },
+        }))
+        config = {"git": {"enabled": False}, "docs_dir": "docs"}
+        first = service.create_run(self.home, {
+            "workspace": self.workspace,
+            "goal": "first legacy run",
+            "autostart": False,
+            "config": config,
         })
-        self.assertEqual(unit["draft"]["act_override"], {
-            "act": "implementer", "entry": {"effort": "xhigh"}})
+        self.write_runtime(first["state_path"], "model_profile.json", {
+            "name": "prior", "rigor": "medium"
+        })
         self.assertEqual(
-            (unit["draft"]["family"], unit["draft"]["model"],
-             unit["draft"]["effort"]),
-            ("codex", "gpt-5.6-sol", "xhigh"),
+            self.resolver(first["state_path"])._act_profile("fixer"),
+            ("claude", "prior-run-model", "high"),
         )
-        recorded = self.events(d, "draft_recorded")[-1]
-        self.assertEqual(recorded["model_profile"],
-                         unit["draft"]["model_profile"])
-        self.assertEqual(recorded["act_override"],
-                         unit["draft"]["act_override"])
+        self.write_runtime(first["state_path"], "acts.json", {
+            "fixer": {
+                "agent": "claude",
+                "model": "deleted-run-override",
+                "effort": "low",
+            },
+        })
         self.assertEqual(
-            (recorded["family"], recorded["model"], recorded["effort"]),
-            ("codex", "gpt-5.6-sol", "xhigh"),
+            self.resolver(first["state_path"])._act_profile("fixer"),
+            ("claude", "deleted-run-override", "low"),
         )
 
-        # The same effective-resolution object feeds fix round metadata.
-        fixer = d._act_staffing("fixer", default_family="codex")
+        purged = service.delete_run(self.home, first["id"], purge=True)
+        selection_path = self.runtime_path(
+            first["state_path"], "model_profile.json"
+        )
+        acts_path = self.runtime_path(first["state_path"], "acts.json")
+        for discarded_path in (selection_path, acts_path):
+            self.assertIn(discarded_path, purged["purged"])
+            self.assertFalse(os.path.exists(discarded_path))
+
+        second = service.create_run(self.home, {
+            "workspace": self.workspace,
+            "goal": "second legacy run",
+            "autostart": False,
+            "config": config,
+        })
+        self.assertEqual(second["state_path"], first["state_path"])
+        self.assertIsNone(driver.read_current_model_profile_selection(
+            second["state_path"]
+        ))
         self.assertEqual(
-            (fixer["family"], fixer["model"], fixer["effort"]),
-            ("codex", "gpt-5.6-sol", "xhigh"),
+            self.resolver(second["state_path"])._act_profile("fixer"),
+            ("codex", None, None),
+        )
+
+    def test_current_precedence_and_structural_authority(self):
+        model_profiles.ensure_default(self.home)
+        model_profiles.save(self.home, profile("structure", {
+            "implementer": {"agent": "claude", "effort": "high"},
+            "review_codex": {"model": "review-model", "effort": "low"},
+            "brainstorming_counterpart": {
+                "model": "counterpart-model", "effort": "medium"
+            },
+            "consultation": "self",
+        }))
+        path = self.init()
+        self.write_runtime(
+            path, "model_profile.json",
+            {"name": "structure", "rigor": "medium"},
+        )
+        d = self.resolver(path)
+        self.assertEqual(d._review_profile("codex"),
+                         ("review-model", "low"))
+        lead, counterpart = d._brainstorming_profiles()
+        self.assertEqual(lead["agent"], "claude")
+        self.assertEqual(counterpart,
+                         {"agent": "codex", "model": "counterpart-model",
+                          "effort": "medium"})
+        self.assertEqual(d._resolve_act("consultation", "claude"), "claude")
+
+    def test_brainstorming_turns_read_current_profile_and_overrides(self):
+        model_profiles.ensure_default(self.home)
+        edited = model_profiles.load(self.home, "default")
+        edited["configurations"]["medium"].update({
+            "implementer": {
+                "agent": "claude",
+                "model": "lead-v1",
+                "effort": "medium",
+            },
+            "brainstorming_counterpart": {
+                "model": "counterpart-v1",
+                "effort": "medium",
+            },
+        })
+        model_profiles.save(self.home, edited)
+        path = self.init()
+
+        self.assertEqual(
+            driver.resolve_current_brainstorming_profile(path, self.home),
+            {"agent": "claude", "model": "lead-v1", "effort": "medium"},
+        )
+        edited["configurations"]["medium"]["implementer"].update({
+            "agent": "codex",
+            "model": "lead-v2",
+            "effort": "high",
+        })
+        model_profiles.save(self.home, edited)
+        self.write_runtime(path, "acts.json", {
+            "brainstorming_counterpart": {
+                "model": "counterpart-live",
+                "effort": "low",
+            }
+        })
+
+        # A fresh resolver, matching lifecycle restart, sees only current
+        # state and does not consult the session's creation-time roster.
+        self.assertEqual(
+            driver.resolve_current_brainstorming_profile(path, self.home),
+            {"agent": "codex", "model": "lead-v2", "effort": "high"},
+        )
+        self.assertEqual(
+            driver.resolve_current_brainstorming_profile(
+                path, self.home, counterpart=True
+            ),
+            {
+                "agent": "claude",
+                "model": "counterpart-live",
+                "effort": "low",
+            },
+        )
+
+    def test_brainstorming_restart_uses_ephemeral_generic_run_attachment(self):
+        path = self.init()
+        run_state = state.load(path)
+        state.current_unit(run_state)["brainstorming_wait"] = {
+            "session_id": "legacy-session"
+        }
+        state.save(path, run_state)
+        legacy_record = {
+            "caller": "milestone:current-model-profile:slice_impl-02-b",
+            "execution_context": {"workspace_path": self.workspace},
+            "runtime": {"executors": {"lead": {
+                "model_family": "claude", "model": "old", "effort": "max"
+            }}},
+        }
+
+        # An unregistered milestone session has no authoritative current-state
+        # attachment.  It must refuse rather than launch with its old roster.
+        service_home = os.path.join(self.tmp.name, "service-home")
+        self.assertEqual(registry.load(service_home)["runs"], [])
+        with self.assertRaises(service.ApiError) as raised:
+            service._attached_brainstorming_model_profile_runtime(
+                service_home, "legacy-session", record=legacy_record
+            )
+        self.assertEqual(raised.exception.status, 503)
+
+        # The ordinary service run attachment already identifies the state;
+        # the active service home supplies the catalogue only for this launch.
+        registry.add(
+            service_home,
+            registry.new_entry(
+                "run-1",
+                "current model profile",
+                self.workspace,
+                path,
+            ),
+        )
+        with mock.patch.object(
+            service.st,
+            "load",
+            side_effect=OSError("registered run state is unreadable"),
+        ):
+            with self.assertRaises(service.ApiError) as raised:
+                service._attached_brainstorming_model_profile_runtime(
+                    service_home, "legacy-session", record=legacy_record
+                )
+        self.assertEqual(raised.exception.status, 503)
+
+        # Corruption in another registered run sharing the workspace does not
+        # mask the one readable state that actually exposes the attachment.
+        unreadable_path = os.path.join(
+            self.tmp.name, "unrelated-run", "state.json"
+        )
+        registry.add(
+            service_home,
+            registry.new_entry(
+                "run-unreadable",
+                "unrelated run",
+                self.workspace,
+                unreadable_path,
+            ),
+        )
+        real_load = service.st.load
+
+        def load_readable_attachment(state_path):
+            if state_path == unreadable_path:
+                raise OSError("unrelated registered state is unreadable")
+            return real_load(state_path)
+
+        current = {
+            "state_path": os.path.abspath(path),
+            "home": os.path.abspath(service_home),
+        }
+        with mock.patch.object(
+            service.st, "load", side_effect=load_readable_attachment
+        ):
+            self.assertEqual(
+                service._attached_brainstorming_model_profile_runtime(
+                    service_home, "legacy-session", record=legacy_record
+                ),
+                current,
+            )
+
+        lifecycle_record = {
+            "id": "legacy-session",
+            "pid": None,
+            **legacy_record,
+        }
+        document = {"sessions": [lifecycle_record]}
+        snapshot = types.SimpleNamespace(state={"status": "running"})
+        store = mock.Mock()
+        store.read.return_value = snapshot
+        launch = mock.Mock()
+        launch.process.pid = 12345
+        validate_launch = mock.Mock(
+            side_effect=lambda record: (
+                service._attached_brainstorming_model_profile_runtime(
+                    service_home, "legacy-session", record=record
+                )
+            )
+        )
+        with (
+            mock.patch.object(
+                service.st, "load", side_effect=load_readable_attachment
+            ),
+            mock.patch.object(
+                brainstorming_lifecycle,
+                "_record_by_id",
+                return_value=lifecycle_record,
+            ),
+            mock.patch.object(
+                brainstorming_lifecycle,
+                "_locked_registry",
+                return_value=contextlib.nullcontext(),
+            ),
+            mock.patch.object(
+                brainstorming_lifecycle, "_load_registry",
+                return_value=document,
+            ),
+            mock.patch.object(
+                brainstorming_lifecycle, "_process_alive",
+                return_value=False,
+            ),
+            mock.patch.object(
+                brainstorming_lifecycle, "_launch_lifecycle_process",
+                return_value=launch,
+            ) as launch_process,
+            mock.patch.object(
+                brainstorming_lifecycle.brainstorming,
+                "SessionStore", return_value=store,
+            ),
+            mock.patch.object(brainstorming_lifecycle, "_save_registry"),
+            mock.patch.object(brainstorming_lifecycle, "_track_child"),
+            mock.patch.object(
+                brainstorming_lifecycle, "_projection", return_value={}
+            ),
+        ):
+            brainstorming_lifecycle.start_session(
+                service_home,
+                "legacy-session",
+                lambda _record: None,
+                validate_launch=validate_launch,
+            )
+        validate_launch.assert_called_once_with(lifecycle_record)
+        launch_process.assert_called_once_with(
+            service_home,
+            "legacy-session",
+            model_profile_runtime=current,
+        )
+
+    def test_brainstorming_monitoring_uses_current_or_actual_staffing(self):
+        path = self.init()
+        run_state = state.load(path)
+        state.current_unit(run_state)["brainstorming_wait"] = {
+            "session_id": "current-view"
+        }
+        state.save(path, run_state)
+        registry.add(
+            self.home,
+            registry.new_entry(
+                "run-current-view",
+                "current model profile",
+                self.workspace,
+                path,
+            ),
+        )
+        edited = model_profiles.load(self.home, "default")
+        edited["configurations"]["medium"].update({
+            "implementer": {
+                "agent": "claude", "model": "current-lead",
+                "effort": "high",
+            },
+            "brainstorming_counterpart": {
+                "model": "current-counterpart", "effort": "low",
+            },
+        })
+        model_profiles.save(self.home, edited)
+        participants = [
+            {
+                "id": "lead", "role": "initial_position",
+                "delivery": "llm", "executor_ref": "old-lead",
+                "model_family": "codex",
+            },
+            {
+                "id": "critic", "role": "contrary_position",
+                "delivery": "llm", "executor_ref": "old-critic",
+                "model_family": "claude",
+            },
+        ]
+        session_state = {"run_config": {"participants": participants}}
+        record = {
+            "id": "current-view",
+            "caller": "milestone:current-model-profile:slice_impl-02-b",
+            "created_at": "2026-08-10T08:00:00+0000",
+            "execution_context": {"workspace_path": self.workspace},
+            "runtime": {
+                "executors": {
+                    "old-lead": {
+                        "model_family": "codex", "model": "creation-lead",
+                        "effort": "medium",
+                    },
+                    "old-critic": {
+                        "model_family": "claude",
+                        "model": "creation-counterpart", "effort": "medium",
+                    },
+                },
+                "model_defaults": copy.deepcopy(
+                    driver.DEFAULT_CONFIG["model_defaults"]
+                ),
+            },
+        }
+        current = service._current_brainstorming_staffing(
+            self.home, record, session_state
+        )
+        projected = brainstorming_lifecycle._view_participants(
+            record, session_state, current_staffing=current
+        )
+        self.assertEqual(
+            [
+                (item["model_family"], item["model"], item["effort"])
+                for item in projected
+            ],
+            [
+                ("claude", "current-lead", "high"),
+                ("codex", "current-counterpart", "low"),
+            ],
+        )
+
+        store = mock.Mock()
+        store.read_activity.return_value = None
+        store.read_external_intervention.return_value = None
+        store.read_turn_attempt.return_value = {
+            "token": "active-call",
+            "participant_id": "lead",
+            "completed_turn_count": 0,
+            "quiescent": False,
+            "provider_attempt": 1,
+            "started_at": time.time(),
+        }
+        with mock.patch.object(
+            brainstorming_lifecycle, "_process_alive", return_value=True
+        ):
+            active = brainstorming_lifecycle._activity_projection(
+                store, record, session_state
+            )["in_flight"]
+        self.assertEqual(active["participant_id"], "lead")
+        self.assertIsNone(active["model_family"])
+        self.assertIsNone(active["model"])
+        self.assertIsNone(active["effort"])
+
+        without_attachment = copy.deepcopy(record)
+        without_attachment["id"] = "unattached"
+        self.assertEqual(
+            service._current_brainstorming_staffing(
+                self.home, without_attachment, session_state
+            ),
+            {},
+        )
+        omitted = brainstorming_lifecycle._view_participants(
+            without_attachment, session_state
+        )
+        self.assertTrue(all(
+            item["model_family"] is None
+            and item["model"] is None
+            and item["effort"] is None
+            for item in omitted
+        ))
+
+    def test_noop_brainstorming_start_does_not_validate_attachment(self):
+        for status, process_alive in (("success", False), ("running", True)):
+            with self.subTest(status=status, process_alive=process_alive):
+                lifecycle_record = {"id": "legacy-session", "pid": 12345}
+                document = {"sessions": [lifecycle_record]}
+                snapshot = types.SimpleNamespace(state={"status": status})
+                store = mock.Mock()
+                store.read.return_value = snapshot
+                validate_launch = mock.Mock(
+                    side_effect=AssertionError("attachment lookup is not due")
+                )
+                with (
+                    mock.patch.object(
+                        brainstorming_lifecycle,
+                        "_record_by_id",
+                        return_value=lifecycle_record,
+                    ),
+                    mock.patch.object(
+                        brainstorming_lifecycle,
+                        "_locked_registry",
+                        return_value=contextlib.nullcontext(),
+                    ),
+                    mock.patch.object(
+                        brainstorming_lifecycle,
+                        "_load_registry",
+                        return_value=document,
+                    ),
+                    mock.patch.object(
+                        brainstorming_lifecycle,
+                        "_process_alive",
+                        return_value=process_alive,
+                    ),
+                    mock.patch.object(
+                        brainstorming_lifecycle,
+                        "_launch_lifecycle_process",
+                    ) as launch_process,
+                    mock.patch.object(
+                        brainstorming_lifecycle.brainstorming,
+                        "SessionStore",
+                        return_value=store,
+                    ),
+                    mock.patch.object(
+                        brainstorming_lifecycle,
+                        "_projection",
+                        return_value={"process": "unchanged"},
+                    ),
+                ):
+                    projected = brainstorming_lifecycle.start_session(
+                        self.home,
+                        "legacy-session",
+                        lambda _record: None,
+                        validate_launch=validate_launch,
+                    )
+                self.assertEqual(projected, {"process": "unchanged"})
+                validate_launch.assert_not_called()
+                launch_process.assert_not_called()
+
+    def test_counterpart_dispatch_reads_one_profile_generation(self):
+        path = self.init()
+        original = model_profiles.resolve_selection
+        reads = []
+
+        def counted(home, selection=None):
+            reads.append(copy.deepcopy(selection))
+            return original(home, selection)
+
+        with mock.patch.object(
+            model_profiles, "resolve_selection", side_effect=counted
+        ):
+            resolved = driver.resolve_current_brainstorming_profile(
+                path, self.home, counterpart=True
+            )
+        self.assertEqual(len(reads), 1)
+        self.assertNotEqual(resolved["agent"], "claude")
+
+    def test_secondary_dispatches_reresolve_current_staffing(self):
+        model_profiles.ensure_default(self.home)
+        current = model_profiles.load(self.home, "default")
+        current["configurations"]["medium"]["implementer"] = {
+            "agent": "codex", "model": "first-model", "effort": "low"
+        }
+        model_profiles.save(self.home, current)
+        path = self.init()
+
+        def select_second(_workspace):
+            edited = model_profiles.load(self.home, "default")
+            edited["configurations"]["medium"]["implementer"] = {
+                "agent": "claude",
+                "model": "second-model",
+                "effort": "high",
+            }
+            model_profiles.save(self.home, edited)
+
+        provider = runners.MockRunner([
+            {
+                "expect_kind": contracts.KIND_IMPLEMENT,
+                "expect_family": "codex",
+                "response": "not contract json",
+                "side_effect": select_second,
+            },
+            {
+                "expect_kind": contracts.KIND_IMPLEMENT,
+                "expect_family": "claude",
+                "response": {
+                    "status": "ok",
+                    "kind": contracts.KIND_IMPLEMENT,
+                    "files_changed": [],
+                },
+            },
+        ])
+        subject = self.resolver(path, provider)
+        output, result, _raw = subject._call(
+            "codex",
+            "KIND: implement\nFAMILY: codex\nWORKSPACE: %s\n\n"
+            "secondary dispatch test" % self.workspace,
+            contracts.KIND_IMPLEMENT,
+            "secondary-dispatch",
+            dispatch_resolver=subject._dispatch_for_act("implementer"),
+        )
+        self.assertEqual(output["status"], "ok")
+        self.assertEqual(
+            [(item["family"], item["model"], item["effort"])
+             for item in provider.call_meta],
+            [
+                ("codex", "first-model", "low"),
+                ("claude", "second-model", "high"),
+            ],
+        )
+        self.assertEqual(result.resolved_family, "claude")
+        self.assertEqual(result.repair["family"], "codex")
+        self.assertIn("\nFAMILY: codex\n", provider.calls[0][2])
+        self.assertIn("\nFAMILY: claude\n", provider.calls[1][2])
+        self.assertNotIn("\nFAMILY: codex\n", provider.calls[1][2])
+
+        continuation = runners.MockRunner([{
+            "expect_kind": contracts.KIND_IMPLEMENT,
+            "expect_family": "claude",
+            "response": {
+                "status": "ok",
+                "kind": contracts.KIND_IMPLEMENT,
+                "files_changed": [],
+            },
+        }])
+        continued = self.resolver(path, continuation)
+        continued._call(
+            "codex",
+            "KIND: implement\nFAMILY: codex\nWORKSPACE: %s\n\n"
+            "post discussion continuation" % self.workspace,
+            contracts.KIND_IMPLEMENT,
+            "post-discussion",
+            session_ref="old-codex-session",
+            continuation_family="codex",
+            dispatch_resolver=continued._dispatch_for_act("implementer"),
+        )
+        self.assertEqual(
+            continuation.session_calls[0][:2], ("start", "claude")
+        )
+        self.assertIn("\nFAMILY: claude\n", continuation.calls[0][2])
+
+        # The separately launched consultation resolves after the fixer has
+        # started, from the same current-state source used by normal calls.
+        current = model_profiles.load(self.home, "default")
+        current["configurations"]["medium"].update({
+            "fixer": {"agent": "claude", "effort": "high"},
+            "consultation": "opposite",
+        })
+        model_profiles.save(self.home, current)
+        command = current_model_call.consultation_command(
+            path, self.home, "fixer"
+        )
+        self.assertIn("gpt-5.6-sol", command)
+        self.assertIn("model_reasoning_effort=high", command)
+
+    def test_consultation_command_round_trips_spaced_paths(self):
+        spaced_home = os.path.join(self.tmp.name, "profile home")
+        spaced_workspace = os.path.join(self.tmp.name, "run workspace")
+        model_profiles.ensure_default(spaced_home)
+        path = driver.init_run(
+            "spaced consultation",
+            spaced_workspace,
+            config=copy.deepcopy(driver.DEFAULT_CONFIG),
+            model_profiles_home=spaced_home,
+        )
+        subject = driver.Driver(
+            path,
+            runner=runners.MockRunner([]),
+            model_profiles_home=spaced_home,
+        )
+        argv = subject._consultation_command(
+            "claude", "high", caller_act="fixer"
+        )
+        block = prompts._consultation_block("claude", argv)
+        rendered = block.split("Command (prompt on stdin):\n  ", 1)[1].split(
+            "\n", 1
+        )[0]
+        self.assertEqual(shlex.split(rendered), argv)
+
+    def test_consultation_resolution_keeps_caller_structural_origin(self):
+        model_profiles.ensure_default(self.home)
+        current = model_profiles.load(self.home, "default")
+        current["configurations"]["medium"].update({
+            "fixer": "self",
+            "skeletoner": "self",
+            "consultation": "opposite",
+        })
+        model_profiles.save(self.home, current)
+        path = self.init()
+
+        fixer_command = current_model_call.consultation_command(
+            path, self.home, "fixer", caller_origin="claude"
+        )
+        skeletoner_command = current_model_call.consultation_command(
+            path, self.home, "skeletoner", caller_origin="codex"
+        )
+
+        self.assertIn("gpt-5.6-sol", fixer_command)
+        self.assertIn("claude-opus-5", skeletoner_command)
+
+    def test_consultation_uses_the_fixers_structural_default(self):
+        config = copy.deepcopy(driver.DEFAULT_CONFIG)
+        config["fix_family"] = "claude"
+        path = self.init(config=config)
+        self.write_runtime(path, "acts.json", {"fixer": None})
+
+        subject = self.resolver(path)
+        self.assertEqual(
+            subject._act_profile("fixer", default_family="codex"),
+            ("codex", None, None),
+        )
+        consultation_command = current_model_call.consultation_command(
+            path, self.home, "fixer", caller_origin="claude"
+        )
+
+        self.assertIn("claude-opus-5", consultation_command)
+        self.assertNotIn("gpt-5.6-sol", consultation_command)
+
+    def test_infrastructure_retry_reresolves_current_staffing(self):
+        model_profiles.ensure_default(self.home)
+        current = model_profiles.load(self.home, "default")
+        current["configurations"]["medium"]["implementer"] = {
+            "agent": "codex", "model": "retry-v1", "effort": "low"
+        }
+        model_profiles.save(self.home, current)
+        path = self.init()
+
+        def select_second():
+            edited = model_profiles.load(self.home, "default")
+            edited["configurations"]["medium"]["implementer"] = {
+                "agent": "claude", "model": "retry-v2", "effort": "high"
+            }
+            model_profiles.save(self.home, edited)
+
+        class BusyThenOk:
+            def __init__(self):
+                self.calls = []
+
+            def call(inner, family, _prompt, _workspace,
+                     model=None, effort=None, **_kwargs):
+                inner.calls.append((family, model, effort, _prompt))
+                if len(inner.calls) == 1:
+                    select_second()
+                    raise runners.RunnerError("server busy")
+                return runners.RunnerResult(
+                    json.dumps({
+                        "status": "ok",
+                        "kind": contracts.KIND_IMPLEMENT,
+                        "files_changed": [],
+                    }),
+                    0,
+                    0.01,
+                )
+
+        provider = BusyThenOk()
+        subject = self.resolver(path, provider)
+        subject.config["infra_retry_backoff_s"] = [0]
+        output, result, _raw = subject._call(
+            "codex",
+            "KIND: implement\nFAMILY: codex\nWORKSPACE: %s\n\n"
+            "infrastructure retry test" % self.workspace,
+            contracts.KIND_IMPLEMENT,
+            "infrastructure-retry",
+            dispatch_resolver=subject._dispatch_for_act("implementer"),
+        )
+        self.assertEqual(output["status"], "ok")
+        self.assertEqual([call[:3] for call in provider.calls], [
+            ("codex", "retry-v1", "low"),
+            ("claude", "retry-v2", "high"),
+        ])
+        self.assertIn("\nFAMILY: codex\n", provider.calls[0][3])
+        self.assertIn("\nFAMILY: claude\n", provider.calls[1][3])
+        self.assertEqual(result.resolved_family, "claude")
+
+    def test_cutoff_stabilizer_reresolves_current_staffing(self):
+        model_profiles.ensure_default(self.home)
+        current = model_profiles.load(self.home, "default")
+        current["configurations"]["medium"]["implementer"] = {
+            "agent": "codex", "model": "before-cutoff", "effort": "low"
+        }
+        model_profiles.save(self.home, current)
+        path = self.init()
+        provider = runners.MockRunner([{
+            "expect_kind": contracts.KIND_IMPLEMENT,
+            "expect_family": "claude",
+            "response": {
+                "status": "ok",
+                "kind": contracts.KIND_IMPLEMENT,
+                "files_changed": [],
+            },
+        }])
+        subject = self.resolver(path, provider)
+        stale = subject._act_profile("implementer")
+        current["configurations"]["medium"]["implementer"] = {
+            "agent": "claude", "model": "after-cutoff", "effort": "high"
+        }
+        model_profiles.save(self.home, current)
+
+        output, result, _raw, marker, stabilized = (
+            subject._call_implementation(
+                stale[0],
+                "KIND: implement\nFAMILY: codex\nWORKSPACE: %s\n\n"
+                "cutoff stabilization" % self.workspace,
+                "cutoff-stabilize",
+                stale[1],
+                stale[2],
+                None,
+                None,
+                None,
+                True,
+                None,
+                stabilizing=True,
+                dispatch_resolver=subject._dispatch_for_act("implementer"),
+                continuation_family=stale[0],
+            )
+        )
+
+        self.assertEqual(output["status"], "ok")
+        self.assertIsNone(marker)
+        self.assertTrue(stabilized)
+        self.assertEqual(
+            provider.call_meta[0],
+            {
+                "family": "claude",
+                "kind": contracts.KIND_IMPLEMENT,
+                "model": "after-cutoff",
+                "effort": "high",
+            },
+        )
+        self.assertEqual(result.resolved_family, "claude")
+
+    def test_error_classifier_paths_use_current_resolver(self):
+        path = self.init()
+        subject = self.resolver(path)
+        resolutions = []
+
+        def classify_driver(_exc, **kwargs):
+            resolutions.append(("driver", kwargs["resolve_dispatch"]()))
+            return "unknown", None, "test"
+
+        with mock.patch.object(
+            driver.errclass,
+            "classify_worker_failure",
+            side_effect=classify_driver,
+        ):
+            subject._classify_failure(
+                "codex", runners.RunnerError("mystery"), "classifier-test"
+            )
+
+        participant = {
+            "id": "lead",
+            "role": "initial_position",
+            "delivery": "llm",
+            "executor_ref": "lead-seat",
+            "model_family": "codex",
+        }
+        snapshot = types.SimpleNamespace(state={
+            "run_config": {"participants": [participant]},
+            "participant_sessions": {},
+            "request": {"workspace_path": self.workspace},
+        })
+
+        class Store:
+            def read(_self, _session_id):
+                return snapshot
+
+            def read_activity(_self, _session_id):
+                return None
+
+        record = {
+            "id": "session",
+            "runtime": {
+                "families_order": ["codex", "claude"],
+                "commands": copy.deepcopy(driver.DEFAULT_CONFIG["commands"]),
+                "model_defaults": copy.deepcopy(
+                    driver.DEFAULT_CONFIG["model_defaults"]
+                ),
+                "executors": {
+                    "lead-seat": {
+                        "model_family": "codex",
+                        "model": "lead-model",
+                        "effort": "medium",
+                    }
+                },
+            },
+        }
+        participant_execution = brainstorming_lifecycle._participant_execution(
+            Store(),
+            record,
+            None,
+            current_model_profile={
+                "state_path": path,
+                "home": self.home,
+            },
+        )
+
+        def classify_brainstorming(_exc, **kwargs):
+            resolutions.append(
+                ("brainstorming", kwargs["resolve_dispatch"]())
+            )
+            return "unknown", None, "test"
+
+        with mock.patch.object(
+            brainstorming_lifecycle.errclass,
+            "classify_worker_failure",
+            side_effect=classify_brainstorming,
+        ):
+            participant_execution.failure_classifier(
+                "session",
+                participant,
+                participant_execution.executors["lead-seat"],
+                runners.RunnerError("mystery"),
+            )
+
+        expected = (
+            "claude",
+            driver.DEFAULT_CONFIG["model_defaults"]["claude"]["model"],
+            driver.DEFAULT_CONFIG["model_defaults"]["claude"]["effort"],
+        )
+        self.assertEqual(resolutions, [
+            ("driver", expected),
+            ("brainstorming", expected),
+        ])
+
+    def test_predispatch_failure_preserves_completed_malformed_attempt(self):
+        usage = {
+            "input_tokens": 10,
+            "cached_input_tokens": 2,
+            "output_tokens": 3,
+            "reasoning_output_tokens": 1,
+            "total_tokens": 13,
+        }
+        path = self.init()
+        current_profile = model_profiles.load(self.home, "default")
+        current_profile["configurations"]["medium"]["implementer"] = {
+            "agent": "codex",
+            "model": "gpt-5.6-sol",
+            "effort": "high",
+        }
+        model_profiles.save(self.home, current_profile)
+
+        class MalformedThenInvalid:
+            def __init__(inner):
+                inner.calls = 0
+
+            def call(inner, family, _prompt, _workspace,
+                     model=None, effort=None, **_kwargs):
+                inner.calls += 1
+                self.write_runtime(
+                    path,
+                    "model_profile.json",
+                    {"name": "missing", "rigor": "medium"},
+                )
+                result = runners.RunnerResult(
+                    "paid malformed output",
+                    0,
+                    2.5,
+                    token_usage=usage,
+                    cost_payloads=[usage],
+                )
+                return result
+
+        provider = MalformedThenInvalid()
+        subject = self.resolver(path, provider)
+        with self.assertRaises(driver.StopStep):
+            subject._call(
+                "codex",
+                "KIND: implement\nFAMILY: codex\nWORKSPACE: %s\n\n"
+                "preserve the first attempt" % self.workspace,
+                contracts.KIND_IMPLEMENT,
+                "predispatch-profile-failure",
+                dispatch_resolver=subject._dispatch_for_act("implementer"),
+            )
+
+        self.assertEqual(provider.calls, 1)
+        current = state.load(path)
+        incidents = [
+            event for event in current["events"]
+            if event.get("type") == "worker_malformed"
+            and event.get("label") == "predispatch-profile-failure"
+        ]
+        self.assertEqual(len(incidents), 1)
+        incident = incidents[0]
+        self.assertEqual(incident["duration_s"], 2.5)
+        self.assertEqual(incident["token_usage"], usage)
+        self.assertIsNotNone(incident["cost"])
+        self.assertIn("JSON", incident["error"])
+        with open(
+            os.path.join(self.workspace, incident["raw_path"]),
+            encoding="utf-8",
+        ) as handle:
+            self.assertEqual(handle.read(), "paid malformed output")
+        self.assertIn(
+            "model-profile resolution failed",
+            current["failure"]["reason"],
+        )
+
+    def test_nonrepairable_verifier_failure_keeps_dispatch_identities(self):
+        first_usage = {
+            "input_tokens": 1_000_000,
+            "cached_input_tokens": 0,
+            "output_tokens": 0,
+            "reasoning_output_tokens": 0,
+            "total_tokens": 1_000_000,
+        }
+        second_usage = {
+            "input_tokens": 7,
+            "cached_input_tokens": 0,
+            "output_tokens": 3,
+            "reasoning_output_tokens": 0,
+            "total_tokens": 10,
+        }
+        path = self.init()
+        current = model_profiles.load(self.home, "default")
+        current["configurations"]["medium"]["implementer"] = {
+            "agent": "codex", "model": "gpt-5.6-sol", "effort": "low"
+        }
+        model_profiles.save(self.home, current)
+
+        class MalformedThenRejected:
+            def __init__(inner):
+                inner.calls = []
+
+            def call(inner, family, _prompt, _workspace,
+                     model=None, effort=None, **_kwargs):
+                inner.calls.append((family, model, effort))
+                if len(inner.calls) == 1:
+                    edited = model_profiles.load(self.home, "default")
+                    edited["configurations"]["medium"]["implementer"] = {
+                        "agent": "claude",
+                        "model": "claude-opus-5",
+                        "effort": "high",
+                    }
+                    model_profiles.save(self.home, edited)
+                    return runners.RunnerResult(
+                        "malformed",
+                        0,
+                        2.0,
+                        token_usage=first_usage,
+                        cost_payloads=[first_usage],
+                    )
+                return runners.RunnerResult(
+                    json.dumps({
+                        "status": "ok",
+                        "kind": contracts.KIND_IMPLEMENT,
+                        "files_changed": [],
+                    }),
+                    0,
+                    3.0,
+                    token_usage=second_usage,
+                    cost_payloads=[{"total_cost_usd": 2.5}],
+                )
+
+        provider = MalformedThenRejected()
+        subject = self.resolver(path, provider)
+        with mock.patch(
+            "orchestrator.verifiers.validate_merged_output",
+            side_effect=verifiers.OperationalError("operator root unavailable"),
+        ):
+            with self.assertRaises(driver.StopStep):
+                subject._call(
+                    "codex",
+                    "KIND: implement\nFAMILY: codex\nWORKSPACE: %s\n\n"
+                    "verifier identity" % self.workspace,
+                    contracts.KIND_IMPLEMENT,
+                    "verifier-identity",
+                    extensions=[object()],
+                    roots=[self.workspace],
+                    dispatch_resolver=subject._dispatch_for_act("implementer"),
+                )
+
+        self.assertEqual(provider.calls, [
+            ("codex", "gpt-5.6-sol", "low"),
+            ("claude", "claude-opus-5", "high"),
+        ])
+        rejected = [
+            event for event in state.load(path)["events"]
+            if event.get("type") == "worker_unaccepted"
+            and event.get("label") == "verifier-identity"
+        ]
+        self.assertEqual(len(rejected), 1)
+        self.assertEqual(rejected[0]["family"], "claude")
+        self.assertEqual(rejected[0]["model"], "claude-opus-5")
+        self.assertEqual(rejected[0]["effort"], "high")
+        self.assertEqual(rejected[0]["duration_s"], 5.0)
+        self.assertEqual(rejected[0]["cost"], {
+            "api_usd": 7.5,
+            "real_usd": 0.0,
+        })
+
+    def test_double_malformed_family_change_records_each_dispatch_identity(
+        self,
+    ):
+        config = copy.deepcopy(driver.DEFAULT_CONFIG)
+        config["error_classifier"] = False
+        path = self.init(config=config)
+        current = model_profiles.load(self.home, "default")
+        current["configurations"]["medium"]["implementer"] = {
+            "agent": "codex", "model": "gpt-5.6-sol", "effort": "low"
+        }
+        model_profiles.save(self.home, current)
+        first_usage = {
+            "input_tokens": 10,
+            "cached_input_tokens": 0,
+            "output_tokens": 2,
+            "reasoning_output_tokens": 0,
+            "total_tokens": 12,
+        }
+        second_usage = {
+            "input_tokens": 20,
+            "cached_input_tokens": 5,
+            "output_tokens": 3,
+            "reasoning_output_tokens": 1,
+            "total_tokens": 23,
+        }
+
+        def select_second(_workspace):
+            edited = model_profiles.load(self.home, "default")
+            edited["configurations"]["medium"]["implementer"] = {
+                "agent": "claude",
+                "model": "claude-opus-5",
+                "effort": "high",
+            }
+            model_profiles.save(self.home, edited)
+
+        class AccountedMockRunner(runners.MockRunner):
+            def __init__(inner, script):
+                super().__init__(script)
+                inner.usages = [first_usage, second_usage]
+
+            def call(inner, *args, **kwargs):
+                result = super().call(*args, **kwargs)
+                usage = inner.usages[len(inner.calls) - 1]
+                result.token_usage = copy.deepcopy(usage)
+                result.cost_payloads = [copy.deepcopy(usage)]
+                return result
+
+        provider = AccountedMockRunner([
+            {
+                "expect_kind": contracts.KIND_IMPLEMENT,
+                "expect_family": "codex",
+                "response": "first malformed",
+                "side_effect": select_second,
+            },
+            {
+                "expect_kind": contracts.KIND_IMPLEMENT,
+                "expect_family": "claude",
+                "response": "second malformed",
+            },
+        ])
+        subject = self.resolver(path, provider)
+        with self.assertRaises(driver.StopStep):
+            subject._call(
+                "codex",
+                "KIND: implement\nFAMILY: codex\nWORKSPACE: %s\n\n"
+                "double malformed" % self.workspace,
+                contracts.KIND_IMPLEMENT,
+                "double-malformed-identity",
+                dispatch_resolver=subject._dispatch_for_act("implementer"),
+            )
+
+        incidents = [
+            event for event in state.load(path)["events"]
+            if event.get("type") == "worker_malformed"
+            and event.get("label") == "double-malformed-identity"
+        ]
+        self.assertEqual(len(incidents), 2)
+        self.assertEqual(
+            [(event["family"], event["model"], event["effort"])
+             for event in incidents],
+            [
+                ("codex", "gpt-5.6-sol", "low"),
+                ("claude", "claude-opus-5", "high"),
+            ],
+        )
+        self.assertEqual(
+            [event["token_usage"] for event in incidents],
+            [first_usage, second_usage],
+        )
+        self.assertEqual(
+            [event["fatal"] for event in incidents], [False, True]
+        )
+        self.assertNotIn("family codex", incidents[1]["error"])
+        for expected, event in zip(
+            ("first malformed", "second malformed"), incidents
+        ):
+            with open(
+                os.path.join(self.workspace, event["raw_path"]),
+                encoding="utf-8",
+            ) as handle:
+                self.assertEqual(handle.read(), expected)
+
+    def test_double_malformed_same_family_change_keeps_each_identity(self):
+        cases = (
+            (
+                "model",
+                {"agent": "codex", "model": "gpt-5.6-luna",
+                 "effort": "low"},
+            ),
+            (
+                "effort",
+                {"agent": "codex", "model": "gpt-5.6-sol",
+                 "effort": "high"},
+            ),
+        )
+        for index, (changed_field, second_entry) in enumerate(cases):
+            with self.subTest(changed_field=changed_field):
+                workspace = os.path.join(
+                    self.tmp.name, "same-family-%d" % index
+                )
+                config = copy.deepcopy(driver.DEFAULT_CONFIG)
+                config["error_classifier"] = False
+                path = self.init(workspace=workspace, config=config)
+                current = model_profiles.load(self.home, "default")
+                current["configurations"]["medium"]["implementer"] = {
+                    "agent": "codex", "model": "gpt-5.6-sol",
+                    "effort": "low",
+                }
+                model_profiles.save(self.home, current)
+
+                def select_second(_workspace):
+                    edited = model_profiles.load(self.home, "default")
+                    edited["configurations"]["medium"]["implementer"] = (
+                        copy.deepcopy(second_entry)
+                    )
+                    model_profiles.save(self.home, edited)
+
+                provider = runners.MockRunner([
+                    {
+                        "expect_kind": contracts.KIND_IMPLEMENT,
+                        "expect_family": "codex",
+                        "response": "first malformed",
+                        "side_effect": select_second,
+                    },
+                    {
+                        "expect_kind": contracts.KIND_IMPLEMENT,
+                        "expect_family": "codex",
+                        "response": "second malformed",
+                    },
+                ])
+                subject = self.resolver(path, provider)
+                label = "same-family-%s-change" % changed_field
+                with self.assertRaises(driver.StopStep):
+                    subject._call(
+                        "codex",
+                        "KIND: implement\nFAMILY: codex\nWORKSPACE: %s\n\n"
+                        "double malformed" % workspace,
+                        contracts.KIND_IMPLEMENT,
+                        label,
+                        dispatch_resolver=subject._dispatch_for_act(
+                            "implementer"
+                        ),
+                    )
+
+                incidents = [
+                    event for event in state.load(path)["events"]
+                    if event.get("type") == "worker_malformed"
+                    and event.get("label") == label
+                ]
+                self.assertEqual(len(incidents), 2)
+                self.assertEqual(
+                    [(event["family"], event["model"], event["effort"])
+                     for event in incidents],
+                    [
+                        ("codex", "gpt-5.6-sol", "low"),
+                        (
+                            second_entry["agent"],
+                            second_entry["model"],
+                            second_entry["effort"],
+                        ),
+                    ],
+                )
+                self.assertEqual(
+                    [event["fatal"] for event in incidents], [False, True]
+                )
+
+    def test_invalid_current_selection_or_profile_fails_without_fallback(self):
+        path = self.init()
+        mock_runner = runners.MockRunner([])
+        d = self.resolver(path, mock_runner)
+        self.write_runtime(
+            path, "model_profile.json", {"name": "missing", "rigor": "medium"}
+        )
+        with self.assertRaises(driver.StopStep):
+            d._act_profile("fixer")
+        self.assertEqual(mock_runner.calls, [])
+        self.assertIn("model-profile resolution failed",
+                      state.load(path)["failure"]["reason"])
+
+        model_profiles.save(self.home, profile("broken", {"fixer": "claude"}))
+        other_workspace = os.path.join(self.tmp.name, "invalid-profile")
+        other_path = self.init(workspace=other_workspace)
+        other_runner = runners.MockRunner([])
+        other = self.resolver(other_path, other_runner)
+        self.write_runtime(
+            other_path, "model_profile.json",
+            {"name": "broken", "rigor": "medium"},
+        )
+        stored = os.path.join(self.home, "model_profiles", "broken.json")
+        with open(stored, "w", encoding="utf-8") as fh:
+            fh.write("{not-json")
+        with self.assertRaises(driver.StopStep):
+            other._act_profile("fixer")
+        self.assertEqual(other_runner.calls, [])
+
+    def test_dangling_current_state_links_fail_without_fallback(self):
+        path = self.init()
+        config = state.load(path)["config"]
+        runtime_dir = os.path.dirname(path)
+
+        for filename, message in (
+            ("model_profile.json", "selection is unavailable"),
+            ("acts.json", "act overrides are unavailable"),
+        ):
+            with self.subTest(filename=filename):
+                link = os.path.join(runtime_dir, filename)
+                os.symlink(os.path.join(self.tmp.name, "missing-" + filename),
+                           link)
+                try:
+                    with self.assertRaisesRegex(
+                            model_profiles.ModelProfileError, message):
+                        driver.resolve_current_act(
+                            path, config, self.home, "fixer"
+                        )
+                finally:
+                    os.unlink(link)
+
+    def test_invalid_unrequested_live_act_fails_before_dispatch(self):
+        path = self.init()
+        for overlay in (
+            {"implemeter": "codex"},
+            {"review_codex": {"agent": "claude", "model": "x"}},
+        ):
+            with self.subTest(overlay=overlay):
+                self.write_runtime(path, "acts.json", overlay)
+                run_state = state.load(path)
+                run_state["failure"] = None
+                state.save(path, run_state)
+                mock_runner = runners.MockRunner([])
+                subject = self.resolver(path, mock_runner)
+                with self.assertRaises(driver.StopStep):
+                    subject._act_profile("fixer")
+                self.assertEqual(mock_runner.calls, [])
+                self.assertIn(
+                    "model-profile resolution failed",
+                    state.load(path)["failure"]["reason"],
+                )
+
+    def test_stale_binding_and_attribution_data_are_ignored(self):
+        path = self.init()
+        recorded = state.load(path)
+        recorded["model_profile"] = {"name": "missing", "rigor": "high"}
+        recorded["units"][0]["model_profile_binding"] = {
+            "name": "missing", "hash": "obsolete"
+        }
+        state.save(path, recorded)
+        before_events = list(recorded["events"])
+
+        d = self.resolver(path)
+        self.assertEqual(d._act_profile("fixer")[0], "codex")
+        after = state.load(path)
+        self.assertEqual(after["events"], before_events)
+        self.assertEqual(after["model_profile"]["name"], "missing")
+
+    def test_summary_choice_equals_next_call_without_intervening_change(self):
+        model_profiles.ensure_default(self.home)
+        current = model_profiles.load(self.home, "default")
+        current["configurations"]["medium"]["review_codex"] = {
+            "model": "summary-v1",
+            "effort": "high",
+        }
+        model_profiles.save(self.home, current)
+        model_profiles.save(self.home, profile("other", {
+            "review_codex": {"model": "selection-model", "effort": "low"},
+        }))
+        path = self.init()
+        run_state = state.load(path)
+        unit = state.current_unit(run_state)
+        unit["status"] = state.U_ROUNDS
+        unit["family_index"] = 0
+        state.save(path, run_state)
+
+        summary = service.load_summary(path, model_profiles_home=self.home)
+        self.assertEqual(summary["current_model"], "summary-v1")
+        self.assertEqual(
+            summary["current_model"],
+            driver.resolve_current_review_model(path, self.home),
+        )
+
+        current["configurations"]["medium"]["review_codex"]["model"] = (
+            "summary-v2"
+        )
+        model_profiles.save(self.home, current)
+        summary = service.load_summary(path, model_profiles_home=self.home)
+        self.assertEqual(summary["current_model"], "summary-v2")
+
+        self.write_runtime(
+            path,
+            "model_profile.json",
+            {"name": "other", "rigor": "medium"},
+        )
+        summary = service.load_summary(path, model_profiles_home=self.home)
+        self.assertEqual(summary["current_model"], "selection-model")
+
+        self.write_runtime(path, "acts.json", {
+            "review_codex": {"model": "override-model", "effort": "medium"}
+        })
+        summary = service.load_summary(path, model_profiles_home=self.home)
+        self.assertEqual(summary["current_model"], "override-model")
+        self.assertEqual(
+            summary["current_model"],
+            driver.resolve_current_review_model(path, self.home),
         )
 
 

@@ -1,9 +1,10 @@
 """Model profiles: named, reusable per-rigor act-staffing catalogues.
 
-The module owns the SOURCE catalogue: the stored document, shared
-configuration validation/identity, whole-document create/edit, listing, and
-the missing-only `default` seed. Runtime selection and binding stay in the
-driver; they reuse the validation and identity functions here.
+This module owns the source catalogue and the small validation helpers used by
+the current-state runtime resolver: stored documents, whole-document
+create/edit, listing, the missing-only `default` seed, current selection
+validation, and per-act authority validation. It retains no binding, snapshot,
+identity, or historical profile state.
 
 A model profile is a JSON document under `<home>/model_profiles/<name>.json`
 with EXACTLY three keys (closed schema — no version, sealed, description, or
@@ -41,10 +42,7 @@ case-sensitive and case-insensitive filesystems.
 
 import json
 import os
-
-# The strategy store's canonical content-identity pattern, reused as-is:
-# a pure hash over canonical JSON, no store coupling.
-from .profiles import semantic_hash
+import tempfile
 
 MODEL_PROFILES_DIRNAME = "model_profiles"
 
@@ -137,6 +135,57 @@ def _validate_entry(ctx, act, value):
             for field in allowed if field in value}
 
 
+def validate_act_entry(ctx, act, value):
+    """Validate one current override with the catalogue's authority matrix."""
+    if act not in PROFILE_ACT_KEYS:
+        raise ModelProfileError(
+            "%s: unknown act %r (allowed: %s)"
+            % (ctx, act, ", ".join(PROFILE_ACT_KEYS)))
+    return _validate_entry(ctx, act, value)
+
+
+def validate_selection(value, ctx="model profile selection"):
+    """Return the normalized current ``{name, rigor}`` selection."""
+    if not isinstance(value, dict):
+        raise ModelProfileError("%s must be an object" % ctx)
+    unknown = sorted(set(value) - {"name", "rigor"})
+    missing = [key for key in ("name", "rigor") if key not in value]
+    if unknown or missing:
+        raise ModelProfileError(
+            "%s must contain exactly name and rigor (missing: %s; unknown: %s)"
+            % (ctx, ", ".join(missing) or "none",
+               ", ".join(unknown) or "none"))
+    name = value["name"]
+    rigor = value["rigor"]
+    if not isinstance(name, str) or not name.strip():
+        raise ModelProfileError("%s.name must be a non-empty string" % ctx)
+    name = name.strip()
+    if not all(c.isalnum() or c in "-_" for c in name):
+        raise ModelProfileError(
+            "%s.name must be alphanumeric/-/_ : %r" % (ctx, name))
+    if rigor not in RIGORS:
+        raise ModelProfileError(
+            "%s.rigor %r is not one of %s"
+            % (ctx, rigor, ", ".join(RIGORS)))
+    return {"name": name, "rigor": rigor}
+
+
+def resolve_selection(home, selection=None):
+    """Load the selected profile's CURRENT validated rigor configuration.
+
+    Absence means current ``default@medium``. No source content is cached or
+    retained, so every caller observes the last completed catalogue write.
+    """
+    selected = validate_selection(
+        selection if selection is not None else {
+            "name": DEFAULT_PROFILE_NAME,
+            "rigor": "medium",
+        }
+    )
+    profile = load(home, selected["name"])
+    return selected, profile["configurations"][selected["rigor"]]
+
+
 def _validate_act_map(ctx, rigor, act_map):
     if not isinstance(act_map, dict):
         raise ModelProfileError(
@@ -211,8 +260,16 @@ def load(home, name):
     try:
         with open(path, "r", encoding="utf-8") as fh:
             doc = json.load(fh)
-    except FileNotFoundError:
+    except FileNotFoundError as exc:
+        if os.path.lexists(path):
+            raise ModelProfileError(
+                "model profile %r is unavailable: %s" % (name, exc)
+            ) from exc
         raise ModelProfileError("unknown model profile %r" % name)
+    except OSError as exc:
+        raise ModelProfileError(
+            "model profile %r is unreadable: %s" % (name, exc)
+        ) from exc
     except ValueError as exc:
         raise ModelProfileError(
             "model profile %r is not valid JSON: %s" % (name, exc))
@@ -222,38 +279,6 @@ def load(home, name):
             "model profile file %r names %r — the stored catalogue is "
             "damaged" % (name, doc["name"]))
     return doc
-
-
-def content_identity(configuration):
-    """Canonical identity of one resolved rigor configuration.
-
-    Hashed over the act map alone: editing a DIFFERENT rigor of the same
-    profile does not change what a selection of this rigor staffs, so it
-    must not change this identity either."""
-    return semantic_hash(configuration)
-
-
-def validate_configuration(configuration, context="model-profile configuration"):
-    """Validate one already-resolved rigor configuration.
-
-    Runtime bindings retain only the selected act map, not the mutable source
-    document around it.  Reuse the catalogue's act-map validator so a retained
-    snapshot can be checked structurally without consulting that source.
-    """
-    return _validate_act_map(context, "selected", configuration)
-
-
-def selection_content(home, name, rigor):
-    """Resolve one selection (name + rigor) against the CURRENT source.
-
-    Returns (configuration, content_identity). Loud on an unknown name,
-    unknown rigor, or invalid/corrupt stored source — the runtime binds
-    exactly what the operator named or nothing; there is no fallback."""
-    if rigor not in RIGORS:
-        raise ModelProfileError(
-            "unknown rigor %r (allowed: %s)" % (rigor, ", ".join(RIGORS)))
-    configuration = load(home, name)["configurations"][rigor]
-    return configuration, content_identity(configuration)
 
 
 def list_model_profiles(home):
@@ -303,10 +328,21 @@ def save(home, doc):
             "model profile %r conflicts with existing catalogue name %r; "
             "names are case-insensitively unique" % (doc["name"], variant))
     path = _path(home, doc["name"])
-    tmp = path + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as fh:
-        json.dump(doc, fh, indent=1, sort_keys=True)
-    os.replace(tmp, path)
+    # Staging files share the target directory for atomic replacement, but
+    # stay outside the ``*.json`` catalogue namespace.  Their short basename
+    # is independent of the validated profile name, so any name whose final
+    # stored filename fits also remains writable.
+    fd, tmp = tempfile.mkstemp(
+        prefix=".model-profile-", suffix=".tmp",
+        dir=model_profiles_dir(home),
+    )
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            json.dump(doc, fh, indent=1, sort_keys=True)
+        os.replace(tmp, path)
+    finally:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
     return doc
 
 
@@ -378,7 +414,7 @@ def ensure_default(home):
     an invalid stored `default` makes initialization fail loudly instead of
     being silently healed or replaced. Returns True when the seed was
     created."""
-    if os.path.exists(_path(home, DEFAULT_PROFILE_NAME)):
+    if os.path.lexists(_path(home, DEFAULT_PROFILE_NAME)):
         load(home, DEFAULT_PROFILE_NAME)
         return False
     save(home, json.loads(json.dumps(DEFAULT_SEED)))

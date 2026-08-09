@@ -511,6 +511,13 @@ class DriverImplementationSizeTest(unittest.TestCase):
             result = runners.RunnerResult(
                 "{}", 0, 2.0, token_usage=usage
             )
+            self.assertTrue(driver._mark_busy(
+                "rejected-size-call",
+                contracts.KIND_IMPLEMENT,
+                "codex",
+                model="gpt-5.6-sol",
+                effort="xhigh",
+            ))
 
             with self.assertRaises(drv.StopStep):
                 driver._fail_implementation_size(
@@ -524,6 +531,9 @@ class DriverImplementationSizeTest(unittest.TestCase):
                 if event["type"] == "worker_unaccepted"
             ]
             self.assertEqual(rejected[0]["token_usage"], usage)
+            self.assertEqual(rejected[0]["label"], "rejected-size-call")
+            self.assertEqual(rejected[0]["model"], "gpt-5.6-sol")
+            self.assertEqual(rejected[0]["effort"], "xhigh")
             self.assertEqual(st.summary(state)["work_token_usage"], usage)
 
     @staticmethod
@@ -1309,6 +1319,10 @@ class DriverImplementationSizeTest(unittest.TestCase):
             )
             self.assertIn("controlled size cutoff",
                           events["implementation_size_interrupted"]["reason"])
+            interrupted = events["implementation_size_interrupted"]
+            self.assertEqual(interrupted["family"], "codex")
+            self.assertIn("model", interrupted)
+            self.assertIn("effort", interrupted)
 
     def test_real_model_ack_uses_confirmed_grace_and_is_armed_before_send(self):
         with tempfile.TemporaryDirectory(prefix="orch-size-confirmed-") as ws:

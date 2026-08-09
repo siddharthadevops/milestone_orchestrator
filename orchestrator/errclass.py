@@ -263,7 +263,8 @@ _RAW_CLIP = 4000
 
 
 def llm_classify(runner, family, raw_texts, workspace, on_raw=None,
-                 model=None, effort=None, on_call=None, on_start=None):
+                 model=None, effort=None, on_call=None, on_start=None,
+                 resolve_dispatch=None):
     """One opposite-family attempt at classifying noisy failure output.
     NEVER raises and never blocks beyond its own timeout: any problem
     returns ("unknown", None, <why>).
@@ -294,6 +295,8 @@ def llm_classify(runner, family, raw_texts, workspace, on_raw=None,
     call_started = False
     started_at = time.time()
     try:
+        if resolve_dispatch is not None:
+            family, model, effort = resolve_dispatch()
         if on_start is not None:
             try:
                 on_start({
@@ -405,7 +408,8 @@ def llm_classify(runner, family, raw_texts, workspace, on_raw=None,
 def classify_failure(raw_texts, runner=None, opposite_family=None,
                      workspace=None, use_llm=True, on_llm_raw=None,
                      classifier_model=None, classifier_effort=None,
-                     on_llm_call=None, on_llm_start=None):
+                     on_llm_call=None, on_llm_start=None,
+                     resolve_dispatch=None):
     """Full chain: patterns first, LLM fallback, unknown last.
 
     Returns (type, resume_at_iso_or_None, evidence). on_llm_raw is forwarded
@@ -426,7 +430,8 @@ def classify_failure(raw_texts, runner=None, opposite_family=None,
                             on_raw=on_llm_raw,
                             model=classifier_model, effort=classifier_effort,
                             on_call=on_llm_call,
-                            on_start=on_llm_start)
+                            on_start=on_llm_start,
+                            resolve_dispatch=resolve_dispatch)
     return "unknown", None, "no pattern matched"
 
 
@@ -441,6 +446,7 @@ def classify_worker_failure(
     classifier_effort=None,
     on_llm_call=None,
     on_llm_start=None,
+    resolve_dispatch=None,
 ):
     """Classify one failed worker exception through the shared procedure.
 
@@ -465,4 +471,5 @@ def classify_worker_failure(
         classifier_effort=classifier_effort,
         on_llm_call=on_llm_call,
         on_llm_start=on_llm_start,
+        resolve_dispatch=resolve_dispatch,
     )

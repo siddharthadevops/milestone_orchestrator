@@ -41,14 +41,51 @@ class RunnerParticipantExecutor:
         model=None,
         effort=None,
         timeout_override=None,
+        current_resolver=None,
+        fresh_each_call=False,
     ):
         self.model_family = model_family
         self.runner = runner
         self.model = model
         self.effort = effort
         self.timeout_override = timeout_override
+        self.current_resolver = current_resolver
+        self.fresh_each_call = bool(fresh_each_call)
+
+    def prepare_dispatch(self):
+        """Resolve optional current settings immediately before one call."""
+        if self.current_resolver is None:
+            return
+        current = self.current_resolver()
+        if not isinstance(current, dict):
+            raise ExecutionRejected(
+                "current participant resolver returned no staffing"
+            )
+        try:
+            family = brainstorming._text(
+                current["agent"], "current participant agent"
+            )
+            model = brainstorming._text(
+                current["model"], "current participant model"
+            )
+            effort = brainstorming._text(
+                current["effort"], "current participant effort"
+            )
+        except (KeyError, brainstorming.ContractError) as exc:
+            raise ExecutionRejected(
+                "current participant staffing is incomplete"
+            ) from exc
+        self.model_family = family
+        self.model = model
+        self.effort = effort
 
     def supports_continuation(self):
+        if self.current_resolver is not None:
+            # Current-state milestone seats deliberately start a fresh
+            # provider session for each dispatch; their prompts already point
+            # to the complete shared transcript. No retained provider binding
+            # can therefore freeze a prior family/model selection.
+            return True
         return self.runner.supports_session_continuation(self.model_family)
 
     def start(self, prompt, workspace_path, execution_context):
@@ -69,6 +106,16 @@ class RunnerParticipantExecutor:
         workspace_path,
         execution_context,
     ):
+        if self.fresh_each_call:
+            return self.runner.start_session(
+                self.model_family,
+                prompt,
+                workspace_path,
+                execution_context,
+                model=self.model,
+                effort=self.effort,
+                timeout_override=self.timeout_override,
+            )
         return self.runner.continue_session(
             self.model_family,
             session_ref,
@@ -133,6 +180,7 @@ class ParticipantExecution:
             )
         if (
             participant["delivery"] == "llm"
+            and getattr(binding, "current_resolver", None) is None
             and getattr(binding, "model_family", None)
             != participant["model_family"]
         ):
@@ -380,6 +428,11 @@ class ParticipantExecution:
         require_quiescence,
         evidence,
     ):
+        prepare = getattr(executor, "prepare_dispatch", None)
+        if callable(prepare):
+            # Resolution failure is pre-dispatch: do not manufacture a model
+            # call activity record when no provider was invoked.
+            prepare()
         started_at = time.time()
         try:
             result = self._invoke_executor(
@@ -560,7 +613,13 @@ class ParticipantExecution:
                 "the executor binding exposes no worker-quiescence evidence"
             )
         workspace_path = snapshot.state["request"]["workspace_path"]
-        provider_ref = self._durable_provider_ref(snapshot, participant)
+        fresh_each_call = bool(
+            getattr(executor, "fresh_each_call", False)
+        )
+        provider_ref = (
+            None if fresh_each_call
+            else self._durable_provider_ref(snapshot, participant)
+        )
 
         if provider_ref is None:
             result, started_at = self._invoke_tracked(
@@ -574,13 +633,16 @@ class ParticipantExecution:
             )
             try:
                 provider_ref = self._result_session_ref(result)
-                bound = self.store.bind_participant_session(
-                    session_id,
-                    snapshot.revision,
-                    participant_id,
-                    provider_ref,
-                )
-                provider_ref = self._durable_provider_ref(bound, participant)
+                if not fresh_each_call:
+                    bound = self.store.bind_participant_session(
+                        session_id,
+                        snapshot.revision,
+                        participant_id,
+                        provider_ref,
+                    )
+                    provider_ref = self._durable_provider_ref(
+                        bound, participant
+                    )
             except BaseException as exc:
                 self._record_activity(
                     session_id, participant, executor, started_at,
@@ -615,9 +677,12 @@ class ParticipantExecution:
 
         try:
             envelope = self._parse(result, validator)
-            self._require_current_binding(
-                session_id, participant, provider_ref
-            )
+            if fresh_each_call:
+                self._require_running(self.store.read(session_id))
+            else:
+                self._require_current_binding(
+                    session_id, participant, provider_ref
+                )
         except (ValueError, brainstorming.ContractError) as exc:
             self._record_activity(
                 session_id, participant, executor, started_at,
@@ -663,26 +728,36 @@ class ParticipantExecution:
                 if not getattr(exc, "raw_texts", None):
                     exc.raw_texts = [result.text]
                 raise
-        self._require_current_binding(
-            session_id, participant, provider_ref
-        )
+        if fresh_each_call:
+            self._require_running(self.store.read(session_id))
+        else:
+            self._require_current_binding(
+                session_id, participant, provider_ref
+            )
         repair_prompt = prompt + (runners.REPAIR_SUFFIX % first_error)
         result2, started_at2 = self._invoke_tracked(
             session_id,
             participant,
             executor,
-            executor.continue_session,
+            executor.start if fresh_each_call else executor.continue_session,
             (
-                provider_ref,
-                repair_prompt,
-                workspace_path,
-                execution_context,
+                (repair_prompt, workspace_path, execution_context)
+                if fresh_each_call else
+                (
+                    provider_ref,
+                    repair_prompt,
+                    workspace_path,
+                    execution_context,
+                )
             ),
             require_quiescence,
             evidence,
         )
         try:
-            self._result_session_ref(result2, expected=provider_ref)
+            self._result_session_ref(
+                result2,
+                expected=None if fresh_each_call else provider_ref,
+            )
         except BaseException as exc:
             self._record_activity(
                 session_id, participant, executor, started_at2,
@@ -692,9 +767,12 @@ class ParticipantExecution:
             raise
         try:
             envelope = self._parse(result2, validator)
-            self._require_current_binding(
-                session_id, participant, provider_ref
-            )
+            if fresh_each_call:
+                self._require_running(self.store.read(session_id))
+            else:
+                self._require_current_binding(
+                    session_id, participant, provider_ref
+                )
         except (ValueError, brainstorming.ContractError) as exc:
             self._record_activity(
                 session_id, participant, executor, started_at2,

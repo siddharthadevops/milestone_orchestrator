@@ -228,9 +228,8 @@
   .closing-label { width: 64px; flex: none; color: #a1a1aa;
     font-size: 10px; text-transform: uppercase; letter-spacing: .04em; }
   .final-agreement { border-color: #bbe7c9; background: #fbfefc; }
-  /* The model column carries the widest text in the grid — its
-     "default (gpt-5.6-sol)" hint names the real value, and a clipped
-     default is the same guesswork as no default at all. */
+  /* The model column carries the widest inheritance/default hint; clipping
+     it would hide whether the row follows the profile or an override. */
   .actgrid { display: grid; grid-template-columns: 90px 1fr 1.45fr .95fr;
     gap: 6px; align-items: center; }
   .actgrid label { font-size: 12px; color: #3f3f46; }
@@ -241,6 +240,12 @@
     /* without this the controls' intrinsic width beats the fr track
        sizes and the model column collapses */
     min-width: 0; }
+  .empty-act-overrides { display: flex; gap: 6px; flex-wrap: wrap;
+    align-items: center; margin-top: 8px; }
+  .empty-act-overrides .empty-act { border: 1px solid var(--line);
+    border-radius: 6px; padding: 3px 5px; }
+  .empty-act-overrides .btn { padding: 2px 5px; margin-left: 3px;
+    font-size: 11px; }
   .unit-title { color: #71717a; font-size: 11px; margin-left: 6px; }
   /* Brainstorming roster: one row per AI seat, configured like a
      milestone act (agent / model / effort) plus a remove control. */
@@ -578,14 +583,16 @@
       to open a fix cycle vs record as tracked debt). Every profile uses the
       same deterministic seal. No seed is pre-selected on purpose — the
       choice is explicit.</p>
-    <p><b>Acts</b> — implementation defaults to claude fable-5/max;
-      other empty rows use their family default (claude: opus-5/xhigh, codex:
-      gpt-5.6-sol/xhigh). Model options adapt to the agent; editable mid-run
-      from the run view. The Skeleton row drives all skeleton content work —
-      its draft, re-drafts and fixes (default: claude fable-5/max); only
-      skeleton reviews stay on the review rows. The two review rows tune each
-      fixed family for review rounds and delta reviews; family rotation never
-      changes. Sealing does not launch a model.</p>
+    <p><b>Acts</b> — an entirely blank launch row adds no panel override;
+      project defaults or Advanced config may still supply the current
+      override ahead of the model profile. Any nonblank row is a panel
+      override; its omitted fields use the structural/family defaults. Model
+      options adapt to the agent and remain editable mid-run from the run
+      view. The Skeleton row drives all skeleton
+      content work — its draft, re-drafts and fixes; only skeleton reviews stay
+      on the review rows. The two review rows tune each fixed family for review
+      rounds and delta reviews; family rotation never changes. Sealing does not
+      launch a model.</p>
     <p><b>Verification</b> — left empty, the implementer reports the repo's
       official suite and the driver arms the gates with it.</p>
   </div>
@@ -616,61 +623,61 @@
       <label>Skeleton</label>
       <select id="a_skeletoner_agent"
         onchange="onAgentChange('a_','skeletoner', true)">
-        <option value="">default (claude)</option>
+        <option value="">no panel override</option>
         <option>codex</option><option>claude</option></select>
       <input id="a_skeletoner_model" list="dl_a_skeletoner"
-        placeholder="default (fable-5)">
-      <select id="a_skeletoner_effort"><option value="">default (max)</option>
+        placeholder="no panel override">
+      <select id="a_skeletoner_effort"><option value="">no panel override</option>
         <option>low</option><option>medium</option><option>high</option>
         <option>xhigh</option><option>max</option></select>
       <label>Draft docs</label>
       <select id="a_drafter_agent" onchange="onAgentChange('a_','drafter', true)">
-        <option value="">default (codex)</option>
+        <option value="">no panel override</option>
         <option>codex</option><option>claude</option></select>
-      <input id="a_drafter_model" list="dl_a_drafter" placeholder="default (gpt-5.6-sol)">
-      <select id="a_drafter_effort"><option value="">default (xhigh)</option>
+      <input id="a_drafter_model" list="dl_a_drafter" placeholder="no panel override">
+      <select id="a_drafter_effort"><option value="">no panel override</option>
         <option>low</option><option>medium</option><option>high</option>
         <option>xhigh</option><option>max</option></select>
       <label>Implement</label>
       <select id="a_implementer_agent"
         onchange="onAgentChange('a_','implementer', true)">
-        <option value="">default (claude)</option>
+        <option value="">no panel override</option>
         <option>codex</option><option>claude</option></select>
       <input id="a_implementer_model" list="dl_a_implementer"
-        placeholder="default (fable-5)">
-      <select id="a_implementer_effort"><option value="">default (max)</option>
+        placeholder="no panel override">
+      <select id="a_implementer_effort"><option value="">no panel override</option>
         <option>low</option><option>medium</option><option>high</option>
         <option>xhigh</option><option>max</option></select>
       <label>Review · Codex</label>
       <span class="actfamily mono">codex</span>
       <input id="a_review_codex_model" list="dl_a_review_codex"
-        placeholder="default (gpt-5.6-sol)">
-      <select id="a_review_codex_effort"><option value="">default (xhigh)</option>
+        placeholder="no panel override">
+      <select id="a_review_codex_effort"><option value="">no panel override</option>
         <option>low</option><option>medium</option><option>high</option>
         <option>xhigh</option><option>max</option></select>
       <label>Review · Claude</label>
       <span class="actfamily mono">claude</span>
       <input id="a_review_claude_model" list="dl_a_review_claude"
-        placeholder="default (opus-5)">
-      <select id="a_review_claude_effort"><option value="">default (xhigh)</option>
+        placeholder="no panel override">
+      <select id="a_review_claude_effort"><option value="">no panel override</option>
         <option>low</option><option>medium</option><option>high</option>
         <option>xhigh</option><option>max</option></select>
       <label>Fix findings</label>
       <select id="a_fixer_agent" onchange="onAgentChange('a_','fixer', true)">
-        <option value="">default (codex)</option>
+        <option value="">no panel override</option>
         <option>codex</option><option>claude</option></select>
-      <input id="a_fixer_model" list="dl_a_fixer" placeholder="default (gpt-5.6-sol)">
-      <select id="a_fixer_effort"><option value="">default (xhigh)</option>
+      <input id="a_fixer_model" list="dl_a_fixer" placeholder="no panel override">
+      <select id="a_fixer_effort"><option value="">no panel override</option>
         <option>low</option><option>medium</option><option>high</option>
         <option>xhigh</option><option>max</option></select>
       <label>Reclassify</label>
       <select id="a_reclassifier_agent"
         onchange="onAgentChange('a_','reclassifier', true)">
-        <option value="">default (codex)</option>
+        <option value="">no panel override</option>
         <option>codex</option><option>claude</option></select>
       <input id="a_reclassifier_model" list="dl_a_reclassifier"
-        placeholder="default (gpt-5.6-sol)">
-      <select id="a_reclassifier_effort"><option value="">default (xhigh)</option>
+        placeholder="no panel override">
+      <select id="a_reclassifier_effort"><option value="">no panel override</option>
         <option>low</option><option>medium</option><option>high</option>
         <option>xhigh</option><option>max</option></select>
     </div>
@@ -680,7 +687,11 @@
     <datalist id="dl_a_review_codex"></datalist>
     <datalist id="dl_a_review_claude"></datalist>
     <datalist id="dl_a_fixer"></datalist>
-    <datalist id="dl_a_reclassifier"></datalist></div>
+    <datalist id="dl_a_reclassifier"></datalist>
+    <div class="hint">Entire blank row = no panel override. Project defaults
+      or Advanced config may still provide the current override; otherwise the
+      current model profile applies. In a nonblank panel override, omitted
+      fields use structural/family defaults.</div></div>
   <div class="field">
     <button class="btn" type="button" id="f_more_btn"
       onclick="toggleMore()">More options ▾</button></div>
@@ -912,51 +923,51 @@
     <label>Skeleton</label>
     <select id="ra_skeletoner_agent"
       onchange="onAgentChange('ra_','skeletoner', true)">
-      <option value="">default (claude)</option>
+      <option value="">current profile</option>
       <option>codex</option><option>claude</option></select>
     <input id="ra_skeletoner_model" list="dl_ra_skeletoner"
-      placeholder="default (fable-5)">
+      placeholder="current profile">
     <select id="ra_skeletoner_effort">
-      <option value="">default (max)</option></select>
+      <option value="">current profile</option></select>
     <label>Draft docs</label>
     <select id="ra_drafter_agent" onchange="onAgentChange('ra_','drafter', true)">
-      <option value="">default (codex)</option>
+      <option value="">current profile</option>
       <option>codex</option><option>claude</option></select>
-    <input id="ra_drafter_model" list="dl_ra_drafter" placeholder="default (gpt-5.6-sol)">
-    <select id="ra_drafter_effort"><option value="">default (xhigh)</option></select>
+    <input id="ra_drafter_model" list="dl_ra_drafter" placeholder="current profile">
+    <select id="ra_drafter_effort"><option value="">current profile</option></select>
     <label>Implement</label>
     <select id="ra_implementer_agent"
       onchange="onAgentChange('ra_','implementer', true)">
-      <option value="">default (claude)</option>
+      <option value="">current profile</option>
       <option>codex</option><option>claude</option></select>
     <input id="ra_implementer_model" list="dl_ra_implementer"
-      placeholder="default (fable-5)">
-    <select id="ra_implementer_effort"><option value="">default (max)</option></select>
+      placeholder="current profile">
+    <select id="ra_implementer_effort"><option value="">current profile</option></select>
     <label>Review · Codex</label>
     <span class="actfamily mono">codex</span>
     <input id="ra_review_codex_model" list="dl_ra_review_codex"
-      placeholder="default (gpt-5.6-sol)">
-    <select id="ra_review_codex_effort"><option value="">default (xhigh)</option></select>
+      placeholder="current profile">
+    <select id="ra_review_codex_effort"><option value="">current profile</option></select>
     <label>Review · Claude</label>
     <span class="actfamily mono">claude</span>
     <input id="ra_review_claude_model" list="dl_ra_review_claude"
-      placeholder="default (opus-5)">
-    <select id="ra_review_claude_effort"><option value="">default (xhigh)</option></select>
+      placeholder="current profile">
+    <select id="ra_review_claude_effort"><option value="">current profile</option></select>
     <label>Fix findings</label>
     <select id="ra_fixer_agent" onchange="onAgentChange('ra_','fixer', true)">
-      <option value="">default (codex)</option>
+      <option value="">current profile</option>
       <option>codex</option><option>claude</option></select>
-    <input id="ra_fixer_model" list="dl_ra_fixer" placeholder="default (gpt-5.6-sol)">
-    <select id="ra_fixer_effort"><option value="">default (xhigh)</option></select>
+    <input id="ra_fixer_model" list="dl_ra_fixer" placeholder="current profile">
+    <select id="ra_fixer_effort"><option value="">current profile</option></select>
     <label>Reclassify</label>
     <select id="ra_reclassifier_agent"
       onchange="onAgentChange('ra_','reclassifier', true)">
-      <option value="">default (codex)</option>
+      <option value="">current profile</option>
       <option>codex</option><option>claude</option></select>
     <input id="ra_reclassifier_model" list="dl_ra_reclassifier"
-      placeholder="default (gpt-5.6-sol)">
+      placeholder="current profile">
     <select id="ra_reclassifier_effort">
-      <option value="">default (xhigh)</option></select>
+      <option value="">current profile</option></select>
   </div>
   <datalist id="dl_ra_skeletoner"></datalist>
   <datalist id="dl_ra_drafter"></datalist>
@@ -965,7 +976,11 @@
   <datalist id="dl_ra_review_claude"></datalist>
   <datalist id="dl_ra_fixer"></datalist>
   <datalist id="dl_ra_reclassifier"></datalist>
-  <div class="hint" style="margin-top:8px">Empty = launch config / defaults.
+  <div id="ra_empty_overrides" class="empty-act-overrides hint"></div>
+  <div class="hint" style="margin-top:8px">Entire blank row = current model
+    profile. In a nonblank override, omitted fields use structural/family
+    defaults. Creation-time structural-default overrides are listed separately
+    above and remain in force until “Use profile”.
     Skeleton drives the skeleton's draft, re-drafts and fixes (not its
     reviews). Binds from the NEXT act resolution (drivers started before
     this feature need one Stop → Start).</div>
@@ -1415,6 +1430,26 @@ function sessionActorLabel(view, participantId, includeRole = false) {
   const role = includeRole ? sessionRoleLabel(participant.role) : "";
   return [family, model, role].filter(Boolean).join(" · ");
 }
+function sessionRecordedActorLabel(
+  view, item, participantId, includeRole = false
+) {
+  const participant = sessionParticipant(view, participantId);
+  const family = item && item.model_family
+    ? sessionFamilyLabel(item.model_family) : "";
+  const model = item && item.model
+    ? modelEffort(item.model, item.effort) : "";
+  const identity = [family, model].filter(Boolean).join(" · ") ||
+    participantId || "Participant";
+  const role = includeRole && participant
+    ? sessionRoleLabel(participant.role) : "";
+  return [identity, role].filter(Boolean).join(" · ");
+}
+function sessionClosureActivity(view, round, stage, participantId = null) {
+  return [...(view.activity || [])].reverse().find(item =>
+    item.round === round && item.stage === stage &&
+    item.status === "completed" &&
+    (participantId === null || item.participant_id === participantId)) || null;
+}
 function sessionChips(view) {
   // The same chip vocabulary as a milestone unit's history: one chip per
   // completed round, one per closure ballot, the live spinner chip for
@@ -1434,7 +1469,13 @@ function sessionChips(view) {
     const ballot = ballotsAfter[r];
     if (ballot) {
       const votes = (ballot.votes || []).map(item =>
-        `${sessionActorLabel(view, item.participant_id)}: ${item.vote}`
+        `${sessionRecordedActorLabel(
+          view,
+          sessionClosureActivity(
+            view, ballot.after_completed_rounds, "vote", item.participant_id
+          ),
+          item.participant_id
+        )}: ${item.vote}`
       ).join(" · ");
       chips.push(`<span class="chip ${ballot.approved ? "pass" : "sev23"}"
         title="${esc(votes)}">Ballot · ${ballot.approved ? "approved &#10003;" : "not approved"}</span>`);
@@ -1457,7 +1498,9 @@ function sessionChips(view) {
   return `<div class="history-chips">${chips.join("")}</div>`;
 }
 function sessionActivityChip(item, view) {
-  const actor = sessionActorLabel(view, item.participant_id);
+  const actor = sessionRecordedActorLabel(
+    view, item, item.participant_id
+  );
   const who = item.model
     ? modelEffort(item.model, item.effort)
     : (item.model_family || item.participant_id || "LLM");
@@ -1470,7 +1513,9 @@ function sessionActivityChip(item, view) {
     ? (repaired ? "repaired" : "failed") : "done";
   return `<span class="chip ${cls} clicky"
     onclick="showSessionActivity('${esc(escJsSq(item.id))}')"
-    title="${esc(sessionActorLabel(view, item.participant_id, true))}">${esc(
+    title="${esc(sessionRecordedActorLabel(
+      view, item, item.participant_id, true
+    ))}">${esc(
       item.stage === "proposal" || item.stage === "vote" ? actor : who
     )} · ${esc(phase)} · ${esc(outcome)}${fmtDur(item.duration_s)}</span>`;
 }
@@ -1524,14 +1569,26 @@ function sessionClosingCard(view) {
     participant => participant.role === "initial_position");
   let body = "";
   for (const ballot of ballots) {
+    const proposal = sessionClosureActivity(
+      view, ballot.after_completed_rounds, "proposal"
+    );
+    const proposalLabel = sessionRecordedActorLabel(
+      view, proposal, lead && lead.id
+    );
     const votes = (ballot.votes || []).map(vote =>
       `<span class="chip ${vote.vote === "accept" ? "pass" : "sev23"}">${esc(
-        sessionActorLabel(view, vote.participant_id)
+        sessionRecordedActorLabel(
+          view,
+          sessionClosureActivity(
+            view, ballot.after_completed_rounds, "vote", vote.participant_id
+          ),
+          vote.participant_id
+        )
       )} · ${vote.vote === "accept" ? "accepted" : "objected"}</span>`
     ).join(" ");
     body += `<div class="closing-attempt">
       <div class="closing-line"><span class="closing-label">Proposal</span>
-        <span><b>${esc(sessionActorLabel(view, lead && lead.id))}</b>
+        <span><b>${esc(proposalLabel)}</b>
         proposed the final agreement after round ${esc(String(ballot.after_completed_rounds))}.</span></div>
       <div class="closing-line"><span class="closing-label">Votes</span>
         <span class="history-chips">${votes}</span></div>
@@ -1546,14 +1603,21 @@ function sessionClosingCard(view) {
     : null;
   const awaitingDecision = !latestBallot || latestBallot.after_completed_rounds < closureRound;
   if (awaitingDecision) {
-    const proposalDone = closureActivity.some(item =>
-      item.round === closureRound && item.stage === "proposal" &&
-      item.status === "completed");
+    const proposal = sessionClosureActivity(view, closureRound, "proposal");
+    const proposalDone = proposal !== null;
+    const proposalLabel = sessionRecordedActorLabel(
+      view, proposal, lead && lead.id
+    );
+    const activeLabel = active ? sessionRecordedActorLabel(
+      view, active, active.participant_id
+    ) : null;
     const voter = active && active.stage === "vote"
-      ? sessionActorLabel(view, active.participant_id) : null;
+      ? activeLabel : null;
+    const draftingLabel = active && active.stage === "proposal"
+      ? activeLabel : proposalLabel;
     body += `<div class="closing-attempt">
       <div class="closing-line"><span class="closing-label">Proposal</span>
-        <span><b>${esc(sessionActorLabel(view, lead && lead.id))}</b> ${
+        <span><b>${esc(proposalDone ? proposalLabel : draftingLabel)}</b> ${
           proposalDone ? "has proposed the final agreement" : "is drafting the final agreement"}.</span></div>
       ${voter ? `<div class="closing-line"><span class="closing-label">Vote</span>
         <span><b>${esc(voter)}</b> is reviewing that proposal.</span></div>` : ""}
@@ -3551,16 +3615,14 @@ async function refreshDetail() {
     // them on the state summary, which can be transiently unreadable.
     // They live on the SETTINGS page (Edit), off the monitoring screen.
     lastActs = d.acts || {};
-    // EFFECTIVE acts: hot overlay wins per key over the launch config —
-    // exactly the driver's own merge. The card and the edit dialog work
-    // on these; saves still write the overlay only.
-    lastEffActs = {};
-    {
-      const cfgActs = (sum && sum.acts_config) || {};
-      for (const a of ACT_NAMES) {
-        lastEffActs[a] = lastActs[a] || cfgActs[a] || null;
-        if (lastActs[a]) lastEffActs[a + "_hot"] = true;
-      }
+    // This is the current OVERRIDE layer, not resolved staffing. Inherited
+    // profile/config values must stay empty in the editor: copying them back
+    // through Save would silently turn them into live overrides.
+    lastActOverrides = {};
+    for (const a of ACT_NAMES) {
+      const present = Object.prototype.hasOwnProperty.call(lastActs, a);
+      lastActOverrides[a] = present ? lastActs[a] : null;
+      lastActOverrides[a + "_hot"] = present;
     }
     lastProfile = d.profile || null;
     if (runView === "edit") {
@@ -3579,12 +3641,13 @@ async function refreshDetail() {
                       fixer: "fix", skeletoner: "skeleton",
                       reclassifier: "reclass"};
     const actsSum = ACT_NAMES.map(a => {
-      const v = lastEffActs[a];
+      const v = lastActOverrides[a];
+      const overridden = lastActOverrides[a + "_hot"];
       const e = typeof v === "string" ? {agent: v} : (v || {});
       const bits = [e.agent, e.model, e.effort].filter(Boolean).join(" · ");
-      return `${actLabel[a]}: ${bits || "default"}${lastEffActs[a + "_hot"] ? " (hot)" : ""}`;
+      return `${actLabel[a]}: ${bits || (overridden ? "structural default" : "inherited")}${overridden ? " (override)" : ""}`;
     }).join("   —   ");
-    html += `<div class="card"><h3>Acts (models and roles)</h3>
+    html += `<div class="card"><h3>Act overrides (models and roles)</h3>
       <div class="amendform">
         <span class="amend-hint mono" style="flex:1">${esc(actsSum)}</span>
         <button class="btn" onclick="openActs()">Edit…</button>
@@ -4007,13 +4070,69 @@ async function delAmend(aid) {
   refreshDetail();
 }
 let lastActs = {};
-let lastEffActs = {};
+let lastActOverrides = {};
+let openedActs = {};
+let openedActEditorEntries = {};
+let retainedEmptyActOverrides = new Set();
 let lastProfile = null;   // the run's profile block from the last detail poll
+function isEmptyActOverride(value) {
+  return value === null || value === "" ||
+    (value && typeof value === "object" && !Array.isArray(value) &&
+     Object.keys(value).length === 0);
+}
+function renderEmptyActOverrides() {
+  const el = document.getElementById("ra_empty_overrides");
+  const labels = {skeletoner: "Skeleton", drafter: "Draft docs",
+                  implementer: "Implement", review_codex: "Review · Codex",
+                  review_claude: "Review · Claude", fixer: "Fix findings",
+                  reclassifier: "Reclassify"};
+  const explicit = ACT_NAMES.filter(act =>
+    Object.prototype.hasOwnProperty.call(openedActs, act) &&
+    isEmptyActOverride(openedActs[act]));
+  el.innerHTML = explicit.map(act => retainedEmptyActOverrides.has(act)
+    ? `<span class="empty-act">${esc(labels[act])}: structural default override <button type="button" class="btn" onclick="clearEmptyActOverride('${act}')">Use profile</button></span>`
+    : `<span class="empty-act">${esc(labels[act])}: will use profile <button type="button" class="btn" onclick="restoreEmptyActOverride('${act}')">Undo</button></span>`
+  ).join("");
+}
+function clearEmptyActOverride(act) {
+  retainedEmptyActOverrides.delete(act);
+  clearActEditorRow(act);
+  renderEmptyActOverrides();
+}
+function restoreEmptyActOverride(act) {
+  retainedEmptyActOverrides.add(act);
+  clearActEditorRow(act);
+  renderEmptyActOverrides();
+}
+function clearActEditorRow(act) {
+  const agentEl = document.getElementById(`ra_${act}_agent`);
+  if (agentEl) agentEl.value = "";
+  document.getElementById(`ra_${act}_model`).value = "";
+  document.getElementById(`ra_${act}_effort`).value = "";
+  onAgentChange("ra_", act);
+}
+function readActEditorEntry(act) {
+  const fixed = FIXED_ACT_AGENTS[act];
+  const agentEl = document.getElementById(`ra_${act}_agent`);
+  const agent = agentEl ? agentEl.value : "";
+  const model = document.getElementById(`ra_${act}_model`).value.trim();
+  const effort = document.getElementById(`ra_${act}_effort`).value;
+  const entry = {};
+  if (!fixed && agent) entry.agent = agent;
+  if (model) entry.model = model;
+  if (effort) entry.effort = effort;
+  return entry;
+}
 function openActs() {
   // The dialog lives OUTSIDE the polled container: the 2s re-render can
   // never reset an edit in progress. Values are seeded once, on open.
+  openedActs = JSON.parse(JSON.stringify(lastActs));
+  openedActEditorEntries = {};
+  retainedEmptyActOverrides = new Set(ACT_NAMES.filter(act =>
+    Object.prototype.hasOwnProperty.call(openedActs, act) &&
+    isEmptyActOverride(openedActs[act])));
   for (const act of ACT_NAMES) {
-    const v = lastEffActs[act];
+    const v = openedActs[act];
     const entry = typeof v === "string" ? {agent: v} : (v || {});
     const agentEl = document.getElementById(`ra_${act}_agent`);
     if (agentEl) agentEl.value = entry.agent || "";
@@ -4022,28 +4141,42 @@ function openActs() {
     const eff = document.getElementById(`ra_${act}_effort`);
     eff.value = entry.effort || "";
     if (eff.value !== (entry.effort || "")) eff.value = "";
+    onAgentChange("ra_", act);
+    openedActEditorEntries[act] = readActEditorEntry(act);
   }
+  renderEmptyActOverrides();
   document.getElementById("actsdlg").showModal();
 }
-async function saveActs() {
-  const acts = {};
+function actsDialogPatch() {
+  // Send only changed rows. Omission preserves hidden acts and the meaningful
+  // explicit-empty entries whose separate controls remain enabled.
+  const changes = {};
   for (const act of ACT_NAMES) {
-    const fixed = FIXED_ACT_AGENTS[act];
-    const agentEl = document.getElementById(`ra_${act}_agent`);
-    const agent = agentEl ? agentEl.value : "";
-    const model = document.getElementById(`ra_${act}_model`).value.trim();
-    const effort = document.getElementById(`ra_${act}_effort`).value;
-    const entry = {};
-    if (!fixed && agent) entry.agent = agent;
-    if (model) entry.model = model;
-    if (effort) entry.effort = effort;
-    acts[act] = Object.keys(entry).length ? entry : null;
+    const entry = readActEditorEntry(act);
+    const had = Object.prototype.hasOwnProperty.call(openedActs, act);
+    const explicitEmpty = had && isEmptyActOverride(openedActs[act]);
+    const changed = JSON.stringify(entry) !==
+      JSON.stringify(openedActEditorEntries[act]);
+    if (!changed) {
+      if (explicitEmpty && !retainedEmptyActOverrides.has(act))
+        changes[act] = null;
+      continue;
+    }
+    changes[act] = Object.keys(entry).length ? entry : null;
+  }
+  return changes;
+}
+async function saveActs() {
+  const changes = actsDialogPatch();
+  if (!Object.keys(changes).length) {
+    document.getElementById("actsdlg").close();
+    return;
   }
   try {
     await api(`/api/runs/${selected}/acts`, {
-      method: "POST",
+      method: "PATCH",
       headers: {"Content-Type": "application/json"},
-      body: JSON.stringify(acts),
+      body: JSON.stringify(changes),
     });
     document.getElementById("actsdlg").close();
   } catch (e) { alert(e.message); }
@@ -4354,9 +4487,10 @@ const EFFORT_OPTS = {
   claude: ["low", "medium", "high", "xhigh", "max"],
   codex: ["low", "medium", "high", "xhigh", "max"],
 };
-// What an EMPTY row actually runs. Mirrors driver.DEFAULT_CONFIG
-// (model_defaults + acts) so every "default" label names a real value
-// instead of leaving the operator to guess. Keep in sync with driver.py.
+// Structural defaults used by a NONBLANK whole-act override when it omits
+// model or effort. A blank live row follows the current model profile; a blank
+// launch row adds no panel layer, but lower creation layers may still override
+// that profile. Keep these fallback labels in sync with driver.py.
 const FAMILY_DEFAULTS = {
   claude: {model: "claude-opus-5", effort: "xhigh"},
   codex: {model: "gpt-5.6-sol", effort: "xhigh"},
@@ -4375,9 +4509,8 @@ const ACT_DEFAULTS = {
   reclassifier: {agent: "codex", effort: "xhigh"},
 };
 function actDefaults(act, agent) {
-  // A pinned act keeps its own model/effort; anything unpinned falls to
-  // the family default of the agent in force (the chosen one, or the
-  // act's default agent while the row is empty).
+  // A pinned act keeps its own model/effort; anything unpinned falls to the
+  // family default of the agent in force once a whole-act override exists.
   const pin = ACT_DEFAULTS[act] || {};
   const moved = Boolean(agent) && agent !== pin.agent;
   const fam = FAMILY_DEFAULTS[agent || pin.agent] || {};
@@ -4397,35 +4530,59 @@ function agentEfforts(agent) {
 }
 function onAgentChange(prefix, act, userChanged) {
   const agentEl = document.getElementById(`${prefix}${act}_agent`);
-  const agent = FIXED_ACT_AGENTS[act] || (agentEl ? agentEl.value : "");
+  const explicitAgent = agentEl ? agentEl.value : "";
+  const agent = FIXED_ACT_AGENTS[act] || explicitAgent;
+  const modelEl = document.getElementById(`${prefix}${act}_model`);
+  const effEl = document.getElementById(`${prefix}${act}_effort`);
   if (userChanged) {
     // The family just changed: the other family's model/effort no longer
     // apply, so reset both to that family's default (empty = default)
     // instead of leaving a stale codex model selected under claude.
-    const modelEl = document.getElementById(`${prefix}${act}_model`);
     if (modelEl) modelEl.value = "";
-    const effEl = document.getElementById(`${prefix}${act}_effort`);
     if (effEl) effEl.value = "";
+  }
+  const profileLayer = prefix === "a_" || prefix === "ra_";
+  const retainedEmpty = prefix === "ra_" &&
+    retainedEmptyActOverrides.has(act);
+  const rowHasOverride = retainedEmpty || Boolean(
+    explicitAgent || (modelEl && modelEl.value.trim()) ||
+    (effEl && effEl.value)
+  );
+  const inheritsProfile = prefix === "ra_" && !rowHasOverride;
+  const noPanelOverride = prefix === "a_" && !rowHasOverride;
+  if (agentEl && profileLayer) {
+    const empty = agentEl.querySelector('option[value=""]');
+    if (empty) empty.textContent = inheritsProfile ? "current profile"
+      : noPanelOverride ? "no panel override" : "no family override";
   }
   const dl = document.getElementById(`dl_${prefix}${act}`);
   if (dl)
     dl.innerHTML = agentModels(agent)
       .map(m => `<option>${m}</option>`).join("");
   const def = actDefaults(act, agent);
-  const modelBox = document.getElementById(`${prefix}${act}_model`);
+  const modelBox = modelEl;
   if (modelBox)
-    modelBox.placeholder = def.model
+    modelBox.placeholder = inheritsProfile ? "current profile"
+      : noPanelOverride ? "no panel override" : def.model
       ? `default (${shortModel(def.model)})` : "default";
-  const eff = document.getElementById(`${prefix}${act}_effort`);
+  const eff = effEl;
   if (eff) {
     const cur = eff.value;
     const opts = agentEfforts(agent);
-    const label = def.effort ? `default (${def.effort})` : "default";
+    const label = inheritsProfile ? "current profile"
+      : noPanelOverride ? "no panel override" : def.effort
+      ? `default (${def.effort})` : "default";
     eff.innerHTML = `<option value="">${label}</option>` +
       opts.map(o => `<option ${o === cur ? "selected" : ""}>${o}</option>`).join("");
     if (cur && !opts.includes(cur)) eff.value = "";
   }
 }
+function refreshActInheritanceLabel(event) {
+  const match = /^(a_|ra_)(.+)_(model|effort)$/.exec(event.target.id || "");
+  if (match) onAgentChange(match[1], match[2]);
+}
+document.addEventListener("input", refreshActInheritanceLabel);
+document.addEventListener("change", refreshActInheritanceLabel);
 function toggleMore() {
   const el = document.getElementById("f_more");
   const open = el.style.display !== "none";

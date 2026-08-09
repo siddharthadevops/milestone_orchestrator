@@ -151,3 +151,146 @@
 - `claude-S2A-ONE-SHOT-SIDECAR-MACHINERY` (raised claude, cleared codex): The selection sidecar is built as a driver-deleted one-shot command guarded by a stat-based physical-identity token plus a new persisted `selection_request_ack` state key and two crash-recovery branches, to serve a re-adoption capability no reviewed document requires; the note's pinned mechanism is the read-only acts.json overlay pattern. — The code and focused tests canonize unsupported same-selection re-adoption through deletion and crash-recovery state, so Slice 3 could silently inherit wrong behavior, but correction is a local simplification to name-and-rigor comparison plus focused test updates.
 - `claude-S2A-MIDSTEP-SAVE-DROPS-PARENT-CALL-ACCOUNTING` (raised claude, cleared codex): `_ensure_model_profile_runtime` calls `self._save()` mid-handler; a selection change applied at the reclassifier resolution inside `_partition_defer_candidates` advances the state file between the completed review call and the nested `_mark_busy(nested=True)`, so the digest check drops the parent call's unsaved accounting from `pending_calls`. — This is a silent correctness and test-coverage gap that contradicts the stated completed-parent accounting invariant and can mislead later work, while correction is a local digest/marker preservation change plus a focused regression test.
 
+## slice_impl-02-b (Profile resolution, binding, and attribution)
+
+- draft: kind `implement`, artifact `-` (raw: `implementation/milestones/model-profiles/.run/raw/slice_impl-02-b-draft.txt`)
+
+| Round | Kind | Family | Findings | Triage | Raw |
+|---|---|---|---|---|---|
+| slice_impl-02-b-codex-r1 | review_round | codex | 6 | 6 reported | `implementation/milestones/model-profiles/.run/raw/slice_impl-02-b-codex-r1.txt` |
+| slice_impl-02-b-codex-r2 | fix_findings | codex | 6 | 6 fixed | `implementation/milestones/model-profiles/.run/raw/slice_impl-02-b-fix1.txt` |
+| slice_impl-02-b-codex-r3 | delta_review | codex | 1 | 1 reported | `implementation/milestones/model-profiles/.run/raw/slice_impl-02-b-delta1.txt` |
+| slice_impl-02-b-codex-r4 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/model-profiles/.run/raw/slice_impl-02-b-fix2.txt` |
+| slice_impl-02-b-codex-r5 | delta_review | codex | 1 | 1 reported | `implementation/milestones/model-profiles/.run/raw/slice_impl-02-b-delta2.txt` |
+| slice_impl-02-b-codex-r6 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/model-profiles/.run/raw/slice_impl-02-b-fix3.txt` |
+| slice_impl-02-b-codex-r7 | delta_review | codex | 0 | clean | `implementation/milestones/model-profiles/.run/raw/slice_impl-02-b-delta3.txt` |
+| slice_impl-02-b-codex-r8 | review_round | codex | 2 | 2 reported | `implementation/milestones/model-profiles/.run/raw/slice_impl-02-b-codex-r2.txt` |
+| slice_impl-02-b-codex-r9 | fix_findings | codex | 2 | 2 fixed | `implementation/milestones/model-profiles/.run/raw/slice_impl-02-b-fix4.txt` |
+| slice_impl-02-b-codex-r10 | delta_review | codex | 0 | clean | `implementation/milestones/model-profiles/.run/raw/slice_impl-02-b-delta4.txt` |
+| slice_impl-02-b-codex-r11 | review_round | codex | 3 | 3 reported | `implementation/milestones/model-profiles/.run/raw/slice_impl-02-b-codex-r3.txt` |
+| slice_impl-02-b-codex-r12 | fix_findings | codex | 3 | 3 fixed | `implementation/milestones/model-profiles/.run/raw/slice_impl-02-b-fix5.txt` |
+| slice_impl-02-b-codex-r13 | delta_review | codex | 0 | clean | `implementation/milestones/model-profiles/.run/raw/slice_impl-02-b-delta5.txt` |
+| slice_impl-02-b-codex-r14 | review_round | codex | 2 | 2 reported | `implementation/milestones/model-profiles/.run/raw/slice_impl-02-b-codex-r4.txt` |
+| slice_impl-02-b-codex-r15 | fix_findings | codex | 2 | 2 fixed | `implementation/milestones/model-profiles/.run/raw/slice_impl-02-b-fix6.txt` |
+| slice_impl-02-b-codex-r16 | delta_review | codex | 0 | clean | `implementation/milestones/model-profiles/.run/raw/slice_impl-02-b-delta6.txt` |
+| slice_impl-02-b-codex-r17 | review_round | codex | 1 | 1 reported | `implementation/milestones/model-profiles/.run/raw/slice_impl-02-b-codex-r5.txt` |
+| slice_impl-02-b-codex-r18 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/model-profiles/.run/raw/slice_impl-02-b-fix7.txt` |
+| slice_impl-02-b-codex-r19 | delta_review | codex | 0 | clean | `implementation/milestones/model-profiles/.run/raw/slice_impl-02-b-delta7.txt` |
+| slice_impl-02-b-codex-r20 | review_round | codex | 1 | DEBT-CLEAN (reclassified) | `implementation/milestones/model-profiles/.run/raw/slice_impl-02-b-codex-r6.txt` |
+| slice_impl-02-b-claude-r1 | review_round | claude | 1 | 1 reported | `implementation/milestones/model-profiles/.run/raw/slice_impl-02-b-claude-r1.txt` |
+| slice_impl-02-b-codex-r21 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/model-profiles/.run/raw/slice_impl-02-b-fix8.txt` |
+| slice_impl-02-b-codex-r22 | delta_review | codex | 2 | 2 reported | `implementation/milestones/model-profiles/.run/raw/slice_impl-02-b-delta8.txt` |
+| slice_impl-02-b-codex-r23 | fix_findings | codex | 2 | 2 fixed | `implementation/milestones/model-profiles/.run/raw/slice_impl-02-b-fix9.txt` |
+| slice_impl-02-b-codex-r24 | delta_review | codex | 0 | clean | `implementation/milestones/model-profiles/.run/raw/slice_impl-02-b-delta9.txt` |
+| slice_impl-02-b-codex-r25 | review_round | codex | 0 | clean | `implementation/milestones/model-profiles/.run/raw/slice_impl-02-b-codex-r7.txt` |
+| slice_impl-02-b-claude-r2 | review_round | claude | 4 | 4 reported | `implementation/milestones/model-profiles/.run/raw/slice_impl-02-b-claude-r2.txt` |
+| slice_impl-02-b-codex-r26 | fix_findings | codex | 3 | 3 fixed | `implementation/milestones/model-profiles/.run/raw/slice_impl-02-b-fix10.txt` |
+| slice_impl-02-b-codex-r27 | delta_review | codex | 0 | clean | `implementation/milestones/model-profiles/.run/raw/slice_impl-02-b-delta10.txt` |
+| slice_impl-02-b-codex-r28 | review_round | codex | 1 | 1 reported | `implementation/milestones/model-profiles/.run/raw/slice_impl-02-b-codex-r8.txt` |
+| slice_impl-02-b-codex-r29 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/model-profiles/.run/raw/slice_impl-02-b-fix11.txt` |
+| slice_impl-02-b-codex-r30 | delta_review | codex | 1 | 1 reported | `implementation/milestones/model-profiles/.run/raw/slice_impl-02-b-delta11.txt` |
+| slice_impl-02-b-codex-r31 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/model-profiles/.run/raw/slice_impl-02-b-fix12.txt` |
+| slice_impl-02-b-codex-r32 | delta_review | codex | 2 | 2 reported | `implementation/milestones/model-profiles/.run/raw/slice_impl-02-b-delta12.txt` |
+| slice_impl-02-b-codex-r33 | fix_findings | codex | 2 | 2 fixed | `implementation/milestones/model-profiles/.run/raw/slice_impl-02-b-fix13-rethink-return.txt` |
+| slice_impl-02-b-codex-r34 | delta_review | codex | 2 | 2 reported | `implementation/milestones/model-profiles/.run/raw/slice_impl-02-b-delta13.txt` |
+| slice_impl-02-b-codex-r35 | fix_findings | codex | 2 | 2 fixed | `implementation/milestones/model-profiles/.run/raw/slice_impl-02-b-fix14.txt` |
+| slice_impl-02-b-codex-r36 | delta_review | codex | 4 | 4 reported | `implementation/milestones/model-profiles/.run/raw/slice_impl-02-b-delta14.txt` |
+| slice_impl-02-b-codex-r37 | fix_findings | codex | 4 | 4 fixed | `implementation/milestones/model-profiles/.run/raw/slice_impl-02-b-fix15.txt` |
+| slice_impl-02-b-codex-r38 | review_round | codex | 2 | 2 reported | `implementation/milestones/model-profiles/.run/raw/slice_impl-02-b-codex-r9.txt` |
+| slice_impl-02-b-codex-r39 | fix_findings | codex | 2 | 2 fixed | `implementation/milestones/model-profiles/.run/raw/slice_impl-02-b-fix16.txt` |
+| slice_impl-02-b-codex-r40 | delta_review | codex | 2 | 2 reported | `implementation/milestones/model-profiles/.run/raw/slice_impl-02-b-delta15.txt` |
+| slice_impl-02-b-codex-r41 | fix_findings | codex | 2 | 2 fixed | `implementation/milestones/model-profiles/.run/raw/slice_impl-02-b-fix17.txt` |
+| slice_impl-02-b-codex-r42 | delta_review | codex | 2 | 2 reported | `implementation/milestones/model-profiles/.run/raw/slice_impl-02-b-delta16.txt` |
+| slice_impl-02-b-codex-r43 | fix_findings | codex | 2 | 2 fixed | `implementation/milestones/model-profiles/.run/raw/slice_impl-02-b-fix18.txt` |
+| slice_impl-02-b-codex-r44 | delta_review | codex | 4 | 4 reported | `implementation/milestones/model-profiles/.run/raw/slice_impl-02-b-delta17.txt` |
+| slice_impl-02-b-codex-r45 | fix_findings | codex | 4 | 4 fixed | `implementation/milestones/model-profiles/.run/raw/slice_impl-02-b-fix19.txt` |
+| slice_impl-02-b-codex-r46 | delta_review | codex | 2 | 2 reported | `implementation/milestones/model-profiles/.run/raw/slice_impl-02-b-delta18.txt` |
+| slice_impl-02-b-codex-r47 | fix_findings | codex | 2 | 2 fixed | `implementation/milestones/model-profiles/.run/raw/slice_impl-02-b-fix20.txt` |
+| slice_impl-02-b-codex-r48 | review_round | codex | 1 | DEBT-CLEAN (reclassified) | `implementation/milestones/model-profiles/.run/raw/slice_impl-02-b-codex-r10.txt` |
+| slice_impl-02-b-claude-r3 | review_round | claude | 4 | 4 reported | `implementation/milestones/model-profiles/.run/raw/slice_impl-02-b-claude-r3.txt` |
+| slice_impl-02-b-codex-r49 | fix_findings | codex | 4 | 3 fixed, 1 rejected (1 consulted) | `implementation/milestones/model-profiles/.run/raw/slice_impl-02-b-fix21.txt` |
+| slice_impl-02-b-codex-r50 | delta_review | codex | 1 | 1 reported | `implementation/milestones/model-profiles/.run/raw/slice_impl-02-b-delta19.txt` |
+| slice_impl-02-b-codex-r51 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/model-profiles/.run/raw/slice_impl-02-b-fix22.txt` |
+| slice_impl-02-b-codex-r52 | delta_review | codex | 0 | clean | `implementation/milestones/model-profiles/.run/raw/slice_impl-02-b-delta20.txt` |
+| slice_impl-02-b-codex-r53 | review_round | codex | 1 | 1 reported | `implementation/milestones/model-profiles/.run/raw/slice_impl-02-b-codex-r11.txt` |
+| slice_impl-02-b-codex-r54 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/model-profiles/.run/raw/slice_impl-02-b-fix23.txt` |
+| slice_impl-02-b-codex-r55 | delta_review | codex | 0 | clean | `implementation/milestones/model-profiles/.run/raw/slice_impl-02-b-delta21.txt` |
+| slice_impl-02-b-codex-r56 | review_round | codex | 0 | clean | `implementation/milestones/model-profiles/.run/raw/slice_impl-02-b-codex-r12.txt` |
+| slice_impl-02-b-claude-r4 | review_round | claude | 3 | 3 reported | `implementation/milestones/model-profiles/.run/raw/slice_impl-02-b-claude-r4.txt` |
+| slice_impl-02-b-codex-r57 | fix_findings | codex | 2 | 2 fixed | `implementation/milestones/model-profiles/.run/raw/slice_impl-02-b-fix24.txt` |
+| slice_impl-02-b-codex-r58 | delta_review | codex | 1 | 1 reported | `implementation/milestones/model-profiles/.run/raw/slice_impl-02-b-delta22.txt` |
+| slice_impl-02-b-codex-r59 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/model-profiles/.run/raw/slice_impl-02-b-fix25.txt` |
+| slice_impl-02-b-codex-r60 | delta_review | codex | 1 | 1 reported | `implementation/milestones/model-profiles/.run/raw/slice_impl-02-b-delta23.txt` |
+| slice_impl-02-b-codex-r61 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/model-profiles/.run/raw/slice_impl-02-b-fix26.txt` |
+| slice_impl-02-b-codex-r62 | delta_review | codex | 2 | 2 reported | `implementation/milestones/model-profiles/.run/raw/slice_impl-02-b-delta24.txt` |
+| slice_impl-02-b-codex-r63 | fix_findings | codex | 2 | 2 fixed | `implementation/milestones/model-profiles/.run/raw/slice_impl-02-b-fix27.txt` |
+| slice_impl-02-b-codex-r64 | delta_review | codex | 1 | 1 reported | `implementation/milestones/model-profiles/.run/raw/slice_impl-02-b-delta25.txt` |
+| slice_impl-02-b-codex-r65 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/model-profiles/.run/raw/slice_impl-02-b-fix28.txt` |
+| slice_impl-02-b-codex-r66 | review_round | codex | 3 | 3 reported | `implementation/milestones/model-profiles/.run/raw/slice_impl-02-b-codex-r13.txt` |
+| slice_impl-02-b-codex-r67 | fix_findings | codex | 3 | 3 fixed | `implementation/milestones/model-profiles/.run/raw/slice_impl-02-b-fix29.txt` |
+| slice_impl-02-b-codex-r68 | delta_review | codex | 1 | 1 reported | `implementation/milestones/model-profiles/.run/raw/slice_impl-02-b-delta26.txt` |
+| slice_impl-02-b-codex-r69 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/model-profiles/.run/raw/slice_impl-02-b-fix30.txt` |
+| slice_impl-02-b-codex-r70 | delta_review | codex | 2 | 2 reported | `implementation/milestones/model-profiles/.run/raw/slice_impl-02-b-delta27.txt` |
+| slice_impl-02-b-codex-r71 | fix_findings | codex | 2 | 2 fixed | `implementation/milestones/model-profiles/.run/raw/slice_impl-02-b-fix31.txt` |
+| slice_impl-02-b-codex-r72 | delta_review | codex | 3 | 3 reported | `implementation/milestones/model-profiles/.run/raw/slice_impl-02-b-delta28.txt` |
+| slice_impl-02-b-codex-r73 | fix_findings | codex | 3 | 3 fixed | `implementation/milestones/model-profiles/.run/raw/slice_impl-02-b-fix32.txt` |
+| slice_impl-02-b-codex-r74 | delta_review | codex | 0 | clean | `implementation/milestones/model-profiles/.run/raw/slice_impl-02-b-delta29.txt` |
+| slice_impl-02-b-codex-r75 | review_round | codex | 2 | 2 reported | `implementation/milestones/model-profiles/.run/raw/slice_impl-02-b-codex-r14.txt` |
+| slice_impl-02-b-codex-r76 | fix_findings | codex | 2 | 2 fixed | `implementation/milestones/model-profiles/.run/raw/slice_impl-02-b-fix33.txt` |
+| slice_impl-02-b-codex-r77 | delta_review | codex | 1 | 1 reported | `implementation/milestones/model-profiles/.run/raw/slice_impl-02-b-delta30.txt` |
+| slice_impl-02-b-codex-r78 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/model-profiles/.run/raw/slice_impl-02-b-fix34.txt` |
+| slice_impl-02-b-codex-r79 | delta_review | codex | 1 | 1 reported | `implementation/milestones/model-profiles/.run/raw/slice_impl-02-b-delta31.txt` |
+| slice_impl-02-b-codex-r80 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/model-profiles/.run/raw/slice_impl-02-b-fix35.txt` |
+| slice_impl-02-b-codex-r81 | delta_review | codex | 1 | 1 reported | `implementation/milestones/model-profiles/.run/raw/slice_impl-02-b-delta32.txt` |
+| slice_impl-02-b-codex-r82 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/model-profiles/.run/raw/slice_impl-02-b-fix36.txt` |
+| slice_impl-02-b-codex-r83 | delta_review | codex | 1 | 1 reported | `implementation/milestones/model-profiles/.run/raw/slice_impl-02-b-delta33.txt` |
+| slice_impl-02-b-codex-r84 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/model-profiles/.run/raw/slice_impl-02-b-fix37.txt` |
+| slice_impl-02-b-codex-r85 | review_round | codex | 3 | 3 reported | `implementation/milestones/model-profiles/.run/raw/slice_impl-02-b-codex-r15.txt` |
+| slice_impl-02-b-codex-r86 | fix_findings | codex | 2 | 2 fixed | `implementation/milestones/model-profiles/.run/raw/slice_impl-02-b-fix38.txt` |
+| slice_impl-02-b-codex-r87 | delta_review | codex | 2 | 2 reported | `implementation/milestones/model-profiles/.run/raw/slice_impl-02-b-delta34.txt` |
+| slice_impl-02-b-codex-r88 | fix_findings | codex | 2 | 2 fixed | `implementation/milestones/model-profiles/.run/raw/slice_impl-02-b-fix39.txt` |
+| slice_impl-02-b-codex-r89 | delta_review | codex | 3 | 3 reported | `implementation/milestones/model-profiles/.run/raw/slice_impl-02-b-delta35.txt` |
+| slice_impl-02-b-codex-r90 | fix_findings | codex | 3 | 3 fixed | `implementation/milestones/model-profiles/.run/raw/slice_impl-02-b-fix40.txt` |
+| slice_impl-02-b-codex-r91 | delta_review | codex | 2 | 2 reported | `implementation/milestones/model-profiles/.run/raw/slice_impl-02-b-delta36.txt` |
+| slice_impl-02-b-codex-r92 | fix_findings | codex | 2 | 2 fixed | `implementation/milestones/model-profiles/.run/raw/slice_impl-02-b-fix41.txt` |
+| slice_impl-02-b-codex-r93 | delta_review | codex | 3 | 3 reported | `implementation/milestones/model-profiles/.run/raw/slice_impl-02-b-delta37.txt` |
+| slice_impl-02-b-codex-r94 | fix_findings | codex | 3 | 2 fixed, 1 rejected (1 consulted) | `implementation/milestones/model-profiles/.run/raw/slice_impl-02-b-fix42.txt` |
+| slice_impl-02-b-codex-r95 | review_round | codex | 2 | 2 reported | `implementation/milestones/model-profiles/.run/raw/slice_impl-02-b-codex-r16.txt` |
+| slice_impl-02-b-codex-r96 | fix_findings | codex | 2 | 2 fixed | `implementation/milestones/model-profiles/.run/raw/slice_impl-02-b-fix43.txt` |
+| slice_impl-02-b-codex-r97 | delta_review | codex | 2 | 2 reported | `implementation/milestones/model-profiles/.run/raw/slice_impl-02-b-delta38.txt` |
+| slice_impl-02-b-codex-r98 | fix_findings | codex | 2 | 2 fixed | `implementation/milestones/model-profiles/.run/raw/slice_impl-02-b-fix44.txt` |
+| slice_impl-02-b-codex-r99 | delta_review | codex | 0 | clean | `implementation/milestones/model-profiles/.run/raw/slice_impl-02-b-delta39.txt` |
+| slice_impl-02-b-codex-r100 | review_round | codex | 1 | 1 reported | `implementation/milestones/model-profiles/.run/raw/slice_impl-02-b-codex-r17.txt` |
+| slice_impl-02-b-codex-r101 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/model-profiles/.run/raw/slice_impl-02-b-fix45.txt` |
+| slice_impl-02-b-codex-r102 | delta_review | codex | 1 | 1 reported | `implementation/milestones/model-profiles/.run/raw/slice_impl-02-b-delta40.txt` |
+| slice_impl-02-b-codex-r103 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/model-profiles/.run/raw/slice_impl-02-b-fix46.txt` |
+| slice_impl-02-b-codex-r104 | delta_review | codex | 1 | 1 reported | `implementation/milestones/model-profiles/.run/raw/slice_impl-02-b-delta41.txt` |
+| slice_impl-02-b-codex-r105 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/model-profiles/.run/raw/slice_impl-02-b-fix47.txt` |
+| slice_impl-02-b-codex-r106 | delta_review | codex | 1 | 1 reported | `implementation/milestones/model-profiles/.run/raw/slice_impl-02-b-delta42.txt` |
+| slice_impl-02-b-codex-r107 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/model-profiles/.run/raw/slice_impl-02-b-fix48.txt` |
+| slice_impl-02-b-codex-r108 | delta_review | codex | 1 | 1 reported | `implementation/milestones/model-profiles/.run/raw/slice_impl-02-b-delta43.txt` |
+| slice_impl-02-b-codex-r109 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/model-profiles/.run/raw/slice_impl-02-b-fix49.txt` |
+| slice_impl-02-b-codex-r110 | review_round | codex | 0 | clean | `implementation/milestones/model-profiles/.run/raw/slice_impl-02-b-codex-r18.txt` |
+| slice_impl-02-b-claude-r5 | review_round | claude | 1 | 1 reported | `implementation/milestones/model-profiles/.run/raw/slice_impl-02-b-claude-r5.txt` |
+| slice_impl-02-b-codex-r111 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/model-profiles/.run/raw/slice_impl-02-b-fix50.txt` |
+| slice_impl-02-b-codex-r112 | delta_review | codex | 0 | clean | `implementation/milestones/model-profiles/.run/raw/slice_impl-02-b-delta44.txt` |
+| slice_impl-02-b-codex-r113 | review_round | codex | 1 | 1 reported | `implementation/milestones/model-profiles/.run/raw/slice_impl-02-b-codex-r19.txt` |
+| slice_impl-02-b-codex-r114 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/model-profiles/.run/raw/slice_impl-02-b-fix51.txt` |
+| slice_impl-02-b-codex-r115 | delta_review | codex | 1 | 1 reported | `implementation/milestones/model-profiles/.run/raw/slice_impl-02-b-delta45.txt` |
+| slice_impl-02-b-codex-r116 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/model-profiles/.run/raw/slice_impl-02-b-fix52.txt` |
+| slice_impl-02-b-codex-r117 | delta_review | codex | 0 | clean | `implementation/milestones/model-profiles/.run/raw/slice_impl-02-b-delta46.txt` |
+| slice_impl-02-b-codex-r118 | review_round | codex | 0 | clean | `implementation/milestones/model-profiles/.run/raw/slice_impl-02-b-codex-r20.txt` |
+| slice_impl-02-b-claude-r6 | review_round | claude | 0 | clean | `implementation/milestones/model-profiles/.run/raw/slice_impl-02-b-claude-r6.txt` |
+
+### Review completion — SATISFIED
+
+- deterministic result: every configured family was clean or debt-clean on the same current bytes; full verification was not due at this boundary; no extra reviewer was called
+- cited reviews: `slice_impl-02-b-codex-r118`, `slice_impl-02-b-claude-r6`
+
+**Deferred debt (opposite-family verified):**
+- `codex-S2B-SUMMARY-MALFORMED-MARKER` (raised codex, cleared codex): Malformed feature state is silently presented as a legacy/default choice — This correctness defect positively misreports executable staffing and can silently steer the next panel/API unit, but the first attempted call exposes it and correction is a local summary validation plus regression test.
+- `claude-S2B-ACTS-GENERATION-SAVE-DROPS-PARENT-CALL` (raised claude, cleared codex): `_record_act_overrides_generation` (driver.py:6284-6317) writes run state with `self._save()` from inside `_act_staffing`, including at `_partition_defer_candidates` (driver.py:8564-8580) — after a review call completed but before its accounting is recorded — which changes the state digest the completed call's busy marker is bound to, so the nested reclassifier's `_mark_busy(nested=True)` drops that parent from `pending_calls` and a crash there loses the paid review call's duration, tokens, cost and attribution. — The implementation states that nested accounting preserves completed parent calls, yet this override-triggered save silently breaks that invariant under the stated race, so later work can trust false crash-recovery behavior, while correction is a local marker/save-order repair plus a focused regress
+- `codex-codex-S2B-RECLASSIFIER-REPAIR-ATTEMPT-DROPPED` (raised codex, cleared codex): A reclassifier repair cancelled by current policy drops the completed first call — The policy-change branch silently violates generic accounting and escapes adjacent tests, so a capable builder can trust false completeness, but correction is a local handler change plus one focused regression test with no propagated rework.
+- `claude-claude-S2B-CONSULTATION-COMMAND-BREAKS-REPO-TEST-ON-MISSING-ATTR` (raised claude, cleared codex): `_consultation_command` unconditionally dereferences `self.model_profiles_home`, which leaves `orchestrator/tests/test_design_update_rethink.py` failing with AttributeError, so the slice's declared repository full-suite gate is red on this unit's commit. — The verified failure is an immediate, deterministic test error confined to a lightweight fixture missing an initialized attribute, so silent drift is unlikely and correction is a small local fix caught on first verification.
+- `codex-codex-S2B-EMPTY-OVERRIDE-INVENTS-ORIGIN` (raised codex, cleared codex): The panel invents creation provenance for empty overrides — The panel states a forbidden creation origin for every empty current override despite having no origin data, which could silently preserve a false contract distinction, but correction is a local wording/test fix exposed on first editor use.
+

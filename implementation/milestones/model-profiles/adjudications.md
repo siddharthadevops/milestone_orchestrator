@@ -12,3 +12,19 @@ genuinely new evidence (`contests`).
 - finding: The slice impermissibly narrows strict every-call attribution for fixer consultations
 - rationale: Claude independently inspected both documents and clearly agreed that the finding is factually inapplicable and needs no prevention edit.
 
+## [slice_impl-02-b-claude-r3/claude-S2B-OLD-RUN-LAUNCH-ACTS-DEMOTED-BELOW-PROFILE]
+
+- unit: slice_impl-02-b
+- severity: P1
+- finding: Runs created before this change keep their launch/CLI per-act staffing in baseline config, where the seeded default profile now outranks it, silently restaffing implementer/fixer/skeletoner/consultation/reclassifier to shipped defaults on the next call.
+- rationale: Claude clearly agreed: the behavior is real but permitted by the no-inference/no-migration baseline, so no enforceable guarantee is violated. It recommended the added narrow clarification.
+- prevention: implementation/milestones/model-profiles/slices/slice-02.md (Clarified that pre-feature config acts are not inferred or migrated and remain baseline after adoption.)
+
+## [slice_impl-02-b-codex-r93/codex-S2B-FORCED-STAGE-BYPASSES-CATALOGUE-ISOLATION]
+
+- unit: slice_impl-02-b
+- severity: P1
+- finding: Ignored catalogue content can still enter the index and artifact history
+- rationale: Claude independently agreed that the finding relies on a self-created isolation baseline absent from A1/B1; exposure requires both a custom workspace-local home and deliberate force-stage, so exceeds_baseline is false.
+- prevention: implementation/milestones/model-profiles/skeleton.md (Clarified that catalogues add no Git policy and custom workspace-local homes receive ordinary repository semantics.)
+

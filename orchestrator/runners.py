@@ -2792,7 +2792,7 @@ def _note_recovery(result, closers):
 
 
 def _attach_call_accounting(exc, *results):
-    """Keep completed provider cost on a post-call validation failure."""
+    """Keep completed provider accounting on a post-call validation failure."""
     usages = [getattr(result, "token_usage", None) for result in results]
     durations = [
         result.duration_s for result in results
@@ -2808,13 +2808,43 @@ def _attach_call_accounting(exc, *results):
     exc.cost_payloads = merged_cost_payloads(*results)
     if durations:
         exc.duration_s = sum(durations)
+    completed = [result for result in results if result is not None]
+    if completed:
+        final = completed[-1]
+        exc.resolved_family = getattr(final, "resolved_family", None)
+        exc.resolved_model = getattr(final, "resolved_model", None)
+        exc.resolved_effort = getattr(final, "resolved_effort", None)
+        exc.physical_dispatches = [
+            _physical_dispatch(result) for result in completed
+        ]
+
+
+def _physical_dispatch(result, family=None, model=None, effort=None,
+                       error=None):
+    """Describe one provider invocation for generic incident accounting."""
+    usage = normalize_token_usage(getattr(result, "token_usage", None))
+    return {
+        "family": getattr(result, "resolved_family", None) or family,
+        "model": getattr(result, "resolved_model", None) or model,
+        "effort": getattr(result, "resolved_effort", None) or effort,
+        "duration_s": getattr(result, "duration_s", None),
+        "token_usage": usage,
+        "token_usage_partial": bool(
+            getattr(result, "token_usage_partial", False) or usage is None
+        ),
+        "cost_payloads": list(
+            getattr(result, "cost_payloads", None) or []
+        ),
+        "error": str(error) if error is not None else None,
+    }
 
 
 def call_worker(runner, family, prompt, kind, workspace,
                 model=None, effort=None, extensions=None, roots=None,
                 validate_opts=None, start_session=False, session_ref=None,
                 execution_context=_AMBIENT_EXECUTION,
-                active_control=None):
+                active_control=None, resolve_dispatch=None,
+                continuation_family=None, on_dispatch=None):
     """Run the CLI and return (validated_output, RunnerResult).
 
     Exactly one repair retry on contract violation; then
@@ -2860,10 +2890,83 @@ def call_worker(runner, family, prompt, kind, workspace,
         transport = getattr(result, "transport_text", None)
         return transport if isinstance(transport, str) and transport else text
 
+    def current_family_prompt(call_prompt, call_family):
+        """Keep the machine header coherent with late dispatch resolution."""
+        lines = call_prompt.splitlines(keepends=True)
+        for index, line in enumerate(lines[:3]):
+            body = line.rstrip("\r\n")
+            if body.startswith("FAMILY:"):
+                lines[index] = "FAMILY: %s%s" % (
+                    call_family, line[len(body):]
+                )
+                return "".join(lines)
+        return call_prompt
+
+    def attach_completed_attempt(exc, result, first_error):
+        """Carry a completed malformed attempt across a blocked repair."""
+        existing = getattr(exc, "raw_texts", None)
+        raw_texts = [diagnostic_text(result)]
+        if isinstance(existing, (list, tuple)):
+            raw_texts.extend(existing)
+        elif isinstance(existing, str) and existing:
+            raw_texts.append(existing)
+        exc.raw_texts = raw_texts
+        exc.duration_s = getattr(result, "duration_s", None)
+        exc.token_usage = normalize_token_usage(
+            getattr(result, "token_usage", None)
+        )
+        exc.token_usage_partial = bool(
+            getattr(result, "token_usage", None) is None
+            or getattr(result, "token_usage_partial", False)
+        )
+        exc.cost_payloads = merged_cost_payloads(result)
+        exc.physical_dispatches = [
+            _physical_dispatch(
+                result, family, model, effort, error=first_error
+            )
+        ]
+        exc.resolved_family = getattr(result, "resolved_family", family)
+        exc.resolved_model = getattr(result, "resolved_model", model)
+        exc.resolved_effort = getattr(result, "resolved_effort", effort)
+        exc.completed_attempt_before_dispatch_failure = True
+        exc.incident_error = first_error
+
     def invoke(call_prompt, continuation_ref=None,
-               call_control=active_control):
+               call_control=active_control,
+               continuation_bound_family=continuation_family):
+        call_family, call_model, call_effort = family, model, effort
+        if resolve_dispatch is not None:
+            try:
+                resolved = resolve_dispatch()
+            except BaseException as exc:
+                exc.provider_dispatch_started = False
+                raise
+            if (
+                not isinstance(resolved, (tuple, list))
+                or len(resolved) != 3
+            ):
+                raise RunnerError(
+                    "current dispatch resolver must return family, model, effort"
+                )
+            call_family, call_model, call_effort = resolved
+        if resolve_dispatch is not None:
+            call_prompt = current_family_prompt(call_prompt, call_family)
+        if on_dispatch is not None:
+            try:
+                on_dispatch(call_family, call_model, call_effort)
+            except Exception as exc:
+                error = RunnerError(
+                    "provider dispatch could not update its call marker: %s"
+                    % exc
+                )
+                error.resolved_family = call_family
+                error.resolved_model = call_model
+                error.resolved_effort = call_effort
+                error.provider_dispatch_started = False
+                raise error from exc
+
         def compatible_call(method, *args):
-            kwargs = {"model": model, "effort": effort}
+            kwargs = {"model": call_model, "effort": call_effort}
             accepts_control = False
             if call_control is not None:
                 try:
@@ -2881,14 +2984,30 @@ def call_worker(runner, family, prompt, kind, workspace,
                 if accepts_control:
                     kwargs["active_control"] = call_control
             try:
-                return method(*args, **kwargs)
+                result = method(*args, **kwargs)
+            except BaseException as exc:
+                exc.resolved_family = call_family
+                exc.resolved_model = call_model
+                exc.resolved_effort = call_effort
+                exc.provider_dispatch_started = True
+                raise
+            else:
+                result.resolved_family = call_family
+                result.resolved_model = call_model
+                result.resolved_effort = call_effort
+                return result
             finally:
                 if call_control is not None and not accepts_control:
                     # Historical injected runners remain valid. They cannot
                     # be steered live, but the driver's post-call hard-size
                     # check still enforces the boundary.
                     call_control._close()
-        if continuation_ref is not None:
+        force_fresh = bool(
+            continuation_ref is not None
+            and continuation_bound_family is not None
+            and call_family != continuation_bound_family
+        )
+        if continuation_ref is not None and not force_fresh:
             continuation = getattr(runner, "continue_session", None)
             if not callable(continuation):
                 raise RunnerError(
@@ -2896,37 +3015,37 @@ def call_worker(runner, family, prompt, kind, workspace,
                 )
             return compatible_call(
                 continuation,
-                family,
+                call_family,
                 continuation_ref,
                 call_prompt,
                 workspace,
                 execution_context,
             )
-        if start_session:
+        if start_session or force_fresh:
             starter = getattr(runner, "start_session", None)
             support = getattr(runner, "supports_session_continuation", None)
             if callable(support):
                 try:
-                    supported = support(family, ambient=True)
+                    supported = support(call_family, ambient=True)
                 except TypeError:
-                    supported = support(family)
+                    supported = support(call_family)
                 if not supported:
                     return compatible_call(
                         runner.call,
-                        family,
+                        call_family,
                         call_prompt,
                         workspace,
                     )
             if callable(starter):
                 return compatible_call(
                     starter,
-                    family,
+                    call_family,
                     call_prompt,
                     workspace,
                     execution_context,
                 )
         return compatible_call(
-            runner.call, family, call_prompt, workspace
+            runner.call, call_family, call_prompt, workspace
         )
 
     result = invoke(prompt, continuation_ref=session_ref)
@@ -2954,8 +3073,14 @@ def call_worker(runner, family, prompt, kind, workspace,
             repair_prompt,
             continuation_ref=repair_ref,
             call_control=repair_control,
+            continuation_bound_family=getattr(
+                result, "resolved_family", family
+            ),
         )
     except RunnerError as exc:
+        if not getattr(exc, "provider_dispatch_started", True):
+            attach_completed_attempt(exc, result, first_error)
+            raise
         raw_texts = [diagnostic_text(result)]
         existing = getattr(exc, "raw_texts", None)
         if isinstance(existing, (list, tuple)):
@@ -2974,6 +3099,14 @@ def call_worker(runner, family, prompt, kind, workspace,
             getattr(exc, "token_usage", None)
         )
         exc.token_usage = add_token_usage(first_usage, repair_usage)
+        exc.physical_dispatches = [
+            _physical_dispatch(
+                result, family, model, effort, error=first_error
+            ),
+            _physical_dispatch(
+                exc, family, model, effort, error=exc
+            ),
+        ]
         exc.cost_payloads = merged_cost_payloads(result, exc)
         first_duration = getattr(result, "duration_s", None)
         repair_duration = getattr(exc, "duration_s", None)
@@ -2991,10 +3124,19 @@ def call_worker(runner, family, prompt, kind, workspace,
             or repair_usage is None
         )
         raise
+    except Exception as exc:
+        # Current-state validation can deliberately stop before the repair
+        # dispatch. The first provider call nevertheless completed and its
+        # generic evidence/accounting must cross that pre-dispatch boundary.
+        attach_completed_attempt(exc, result, first_error)
+        raise
     if isinstance(result2, ControlledInterruptionResult):
         result2.repair = {
             "error": first_error,
             "raw_text": diagnostic_text(result),
+            "family": getattr(result, "resolved_family", family),
+            "model": getattr(result, "resolved_model", model),
+            "effort": getattr(result, "resolved_effort", effort),
             "duration_s": result.duration_s,
             "token_usage": result.token_usage,
             "token_usage_partial": bool(
@@ -3015,6 +3157,9 @@ def call_worker(runner, family, prompt, kind, workspace,
         result2.repair = {
             "error": first_error,
             "raw_text": diagnostic_text(result),
+            "family": getattr(result, "resolved_family", family),
+            "model": getattr(result, "resolved_model", model),
+            "effort": getattr(result, "resolved_effort", effort),
             "duration_s": result.duration_s,
             "token_usage": result.token_usage,
             "token_usage_partial": bool(
@@ -3026,10 +3171,13 @@ def call_worker(runner, family, prompt, kind, workspace,
         return validated, result2
     except (ValueError, contracts.ContractError) as exc:
         token_usage = add_token_usage(result.token_usage, result2.token_usage)
-        raise WorkerProtocolError(
-            "family %s produced contract-violating output twice for kind %s: "
-            "first error: %s; second error: %s"
-            % (family, kind, first_error, exc),
+        first_family = getattr(result, "resolved_family", family)
+        second_family = getattr(result2, "resolved_family", family)
+        error = WorkerProtocolError(
+            "worker produced contract-violating output twice for kind %s: "
+            "first error (dispatch family %s): %s; "
+            "second error (dispatch family %s): %s"
+            % (kind, first_family, first_error, second_family, exc),
             raw_texts=[diagnostic_text(result), diagnostic_text(result2)],
             duration_s=result.duration_s + result2.duration_s,
             token_usage=token_usage,
@@ -3038,6 +3186,18 @@ def call_worker(runner, family, prompt, kind, workspace,
             ),
             cost_payloads=merged_cost_payloads(result, result2),
         )
+        error.resolved_family = getattr(result2, "resolved_family", family)
+        error.resolved_model = getattr(result2, "resolved_model", model)
+        error.resolved_effort = getattr(result2, "resolved_effort", effort)
+        error.physical_dispatches = [
+            _physical_dispatch(
+                result, family, model, effort, error=first_error
+            ),
+            _physical_dispatch(
+                result2, family, model, effort, error=exc
+            ),
+        ]
+        raise error
     except BaseException as exc:
         if extensions and isinstance(exc, verifiers.VerifierError):
             _attach_call_accounting(exc, result, result2)

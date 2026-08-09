@@ -15,6 +15,7 @@ declare/confirm (the file-backed lesson from Slice 1's seal history);
 exactly-once and stability drive the real Driver over MockRunner.
 """
 
+import json
 import os
 import tempfile
 import unittest
@@ -532,6 +533,40 @@ class TestStabilityAfterInit(RunInitTestCase):
 
 
 class TestDefaultsPrecedence(RunInitTestCase):
+    def test_creation_acts_are_single_homed_without_staffing_drift(self):
+        self.seed()
+        home = os.path.join(self._tmp.name, "profile-home")
+        path = drv.init_run(
+            GOAL,
+            project=self.binding(defaults={
+                "acts": {"drafter": "claude", "fixer": "claude"}
+            }),
+            config_override={"acts": {"fixer": "codex"}},
+            model_profiles_home=home,
+        )
+
+        with open(os.path.join(os.path.dirname(path), "acts.json"),
+                  encoding="utf-8") as fh:
+            self.assertEqual(json.load(fh), {
+                "drafter": "claude", "fixer": "codex"
+            })
+        self.assertEqual(
+            st.load(path)["config"]["acts"], drv.DEFAULT_CONFIG["acts"]
+        )
+
+    def test_higher_object_replaces_lower_whole_map_clear(self):
+        self.seed()
+        home = os.path.join(self._tmp.name, "clear-profile-home")
+        path = drv.init_run(
+            GOAL,
+            project=self.binding(defaults={"acts": None}),
+            config_override={"acts": {"fixer": "claude"}},
+            model_profiles_home=home,
+        )
+        with open(os.path.join(os.path.dirname(path), "acts.json"),
+                  encoding="utf-8") as fh:
+            self.assertEqual(json.load(fh), {"fixer": "claude"})
+
     def test_project_default_applies_when_launch_does_not_set_it(self):
         self.seed()
         path = drv.init_run(
