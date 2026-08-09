@@ -103,3 +103,23 @@
 - `codex-MP-S01-001` (raised codex, cleared codex): Schema-valid long names fail as server errors — The declared schema wrongly promises that the 247-character name is valid, so later UI or API work could plausibly preserve that false contract without stopping, while correction is a local filename-or-length fix plus one boundary test and the affected POST exposes the defect immediately.
 - `codex-MP-S01-002` (raised codex, cleared codex): Length validation is stricter than the existing act input posture — The validator checks the raw model string’s 100-character limit before trimming, unlike the acts API, but this narrow boundary mismatch produces an immediate 400 rather than silent state drift and needs only a local validation-order fix plus a regression test.
 
+## slice_doc-02 (Profile resolution, binding, and attribution)
+
+- draft: kind `draft_slice_note`, artifact `implementation/milestones/model-profiles/slices/slice-02.md` (raw: `implementation/milestones/model-profiles/.run/raw/slice_doc-02-draft.txt`)
+
+| Round | Kind | Family | Findings | Triage | Raw |
+|---|---|---|---|---|---|
+| slice_doc-02-codex-r1 | review_round | codex | 1 | 1 reported | `implementation/milestones/model-profiles/.run/raw/slice_doc-02-codex-r1.txt` |
+| slice_doc-02-codex-r2 | fix_findings | codex | 1 | 1 rejected (1 consulted) | `implementation/milestones/model-profiles/.run/raw/slice_doc-02-fix1.txt` |
+| slice_doc-02-codex-r3 | review_round | codex | 1 | DEBT-CLEAN (reclassified) | `implementation/milestones/model-profiles/.run/raw/slice_doc-02-codex-r2.txt` |
+| slice_doc-02-claude-r1 | review_round | claude | 1 | DEBT-CLEAN (reclassified) | `implementation/milestones/model-profiles/.run/raw/slice_doc-02-claude-r1.txt` |
+
+### Review completion — SATISFIED
+
+- deterministic result: every configured family was clean or debt-clean on the same current bytes; full verification was not due at this boundary; no extra reviewer was called
+- cited reviews: `slice_doc-02-codex-r3`, `slice_doc-02-claude-r1`
+
+**Deferred debt (opposite-family verified):**
+- `codex-S2-OVERRIDE-REPLACEMENT-ERASURE` (raised codex, cleared codex): Single-homed creation overrides can be erased by an unrelated act edit — The artifact explicitly combines single-homed creation overrides with replacement saves that clear omitted acts, so faithful implementation likely preserves the silent erasure, while correction is a small local preservation change once detected.
+- `claude-MP-S02-CLAUDE-001` (raised claude, cleared codex): The note performs the creation-acts single-homing but never pins the run summary's rounds-phase review-model report (state.summary -> current_model, orchestrator/state.py:2506-2516), which the skeleton explicitly requires to move with it; that reporter reads merged config acts alone, so a launch-set review model silently stops being reported for the whole rounds phase. — The slice omits the exact rounds-phase lookup move but its strict summary-to-dispatch check, summary-projection scope, and skeleton reference should lead a careful builder to it, while any miss is corrected by one local reporter lookup and regression case.
+

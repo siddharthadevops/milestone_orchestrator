@@ -2,4 +2,13 @@
 
 # Adjudicated Rejections
 
-(none)
+Settled findings: re-raising one requires referencing its id with
+genuinely new evidence (`contests`).
+
+## [slice_doc-02-codex-r1/S2-CONSULTATION-ATTRIBUTION]
+
+- unit: slice_doc-02
+- severity: P1
+- finding: The slice impermissibly narrows strict every-call attribution for fixer consultations
+- rationale: Claude independently inspected both documents and clearly agreed that the finding is factually inapplicable and needs no prevention edit.
+
