@@ -123,3 +123,31 @@
 - `codex-S2-OVERRIDE-REPLACEMENT-ERASURE` (raised codex, cleared codex): Single-homed creation overrides can be erased by an unrelated act edit — The artifact explicitly combines single-homed creation overrides with replacement saves that clear omitted acts, so faithful implementation likely preserves the silent erasure, while correction is a small local preservation change once detected.
 - `claude-MP-S02-CLAUDE-001` (raised claude, cleared codex): The note performs the creation-acts single-homing but never pins the run summary's rounds-phase review-model report (state.summary -> current_model, orchestrator/state.py:2506-2516), which the skeleton explicitly requires to move with it; that reporter reads merged config acts alone, so a launch-set review model silently stops being reported for the whole rounds phase. — The slice omits the exact rounds-phase lookup move but its strict summary-to-dispatch check, summary-projection scope, and skeleton reference should lead a careful builder to it, while any miss is corrected by one local reporter lookup and regression case.
 
+## slice_impl-02-a (Profile resolution, binding, and attribution)
+
+- draft: kind `implement`, artifact `-` (raw: `implementation/milestones/model-profiles/.run/raw/slice_impl-02-draft.txt`)
+
+| Round | Kind | Family | Findings | Triage | Raw |
+|---|---|---|---|---|---|
+| slice_impl-02-codex-r1 | review_round | codex | 1 | 1 reported | `implementation/milestones/model-profiles/.run/raw/slice_impl-02-codex-r1.txt` |
+| slice_impl-02-codex-r2 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/model-profiles/.run/raw/slice_impl-02-fix1.txt` |
+| slice_impl-02-codex-r3 | delta_review | codex | 0 | clean | `implementation/milestones/model-profiles/.run/raw/slice_impl-02-delta1.txt` |
+| slice_impl-02-codex-r4 | review_round | codex | 4 | 4 reported | `implementation/milestones/model-profiles/.run/raw/slice_impl-02-codex-r2.txt` |
+| slice_impl-02-codex-r5 | fix_findings | codex | 4 | 4 fixed | `implementation/milestones/model-profiles/.run/raw/slice_impl-02-fix2.txt` |
+| slice_impl-02-codex-r6 | delta_review | codex | 0 | clean | `implementation/milestones/model-profiles/.run/raw/slice_impl-02-delta2.txt` |
+| slice_impl-02-codex-r7 | review_round | codex | 2 | 2 reported | `implementation/milestones/model-profiles/.run/raw/slice_impl-02-codex-r3.txt` |
+| slice_impl-02-codex-r8 | fix_findings | codex | 2 | 2 fixed | `implementation/milestones/model-profiles/.run/raw/slice_impl-02-fix3.txt` |
+| slice_impl-02-codex-r9 | delta_review | codex | 0 | clean | `implementation/milestones/model-profiles/.run/raw/slice_impl-02-delta3.txt` |
+| slice_impl-02-codex-r10 | review_round | codex | 0 | clean | `implementation/milestones/model-profiles/.run/raw/slice_impl-02-codex-r4.txt` |
+| slice_impl-02-claude-r1 | review_round | claude | 3 | DEBT-CLEAN (reclassified) | `implementation/milestones/model-profiles/.run/raw/slice_impl-02-claude-r1.txt` |
+
+### Review completion — SATISFIED
+
+- deterministic result: every configured family was clean or debt-clean on the same current bytes; full verification was not due at this boundary; no extra reviewer was called
+- cited reviews: `slice_impl-02-codex-r10`, `slice_impl-02-claude-r1`
+
+**Deferred debt (opposite-family verified):**
+- `claude-S2A-SELECTION-SILENTLY-DISCARDED` (raised claude, cleared codex): An explicit selection request whose name+rigor and resolved content already match what is in force is unlinked from disk while `state.model_profile.selection` is never written and no event is appended, so the operator's explicit choice leaves no trace and every later binding keeps reporting `origin: "implicit-default"`. — The reproduced path silently consumes a valid explicit default@medium request while retaining null selection, no change event, and implicit-default attribution, so a capable next-slice builder could propagate false provenance without triggering the stop path, but correction is a local selection/even
+- `claude-S2A-ONE-SHOT-SIDECAR-MACHINERY` (raised claude, cleared codex): The selection sidecar is built as a driver-deleted one-shot command guarded by a stat-based physical-identity token plus a new persisted `selection_request_ack` state key and two crash-recovery branches, to serve a re-adoption capability no reviewed document requires; the note's pinned mechanism is the read-only acts.json overlay pattern. — The code and focused tests canonize unsupported same-selection re-adoption through deletion and crash-recovery state, so Slice 3 could silently inherit wrong behavior, but correction is a local simplification to name-and-rigor comparison plus focused test updates.
+- `claude-S2A-MIDSTEP-SAVE-DROPS-PARENT-CALL-ACCOUNTING` (raised claude, cleared codex): `_ensure_model_profile_runtime` calls `self._save()` mid-handler; a selection change applied at the reclassifier resolution inside `_partition_defer_candidates` advances the state file between the completed review call and the nested `_mark_busy(nested=True)`, so the digest check drops the parent call's unsaved accounting from `pending_calls`. — This is a silent correctness and test-coverage gap that contradicts the stated completed-parent accounting invariant and can mislead later work, while correction is a local digest/marker preservation change plus a focused regression test.
+

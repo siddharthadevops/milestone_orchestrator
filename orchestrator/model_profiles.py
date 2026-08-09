@@ -1,11 +1,9 @@
 """Model profiles: named, reusable per-rigor act-staffing catalogues.
 
-Slice 1 of the model-profiles milestone (see
-implementation/milestones/model-profiles/skeleton.md). This module owns the
-SOURCE catalogue only: the stored document, its validation, whole-document
-create/edit, listing, and the missing-only `default` seed. Nothing here
-selects a profile for a run, resolves acts, or binds a snapshot — that is
-later-slice work; no run consults this store yet.
+The module owns the SOURCE catalogue: the stored document, shared
+configuration validation/identity, whole-document create/edit, listing, and
+the missing-only `default` seed. Runtime selection and binding stay in the
+driver; they reuse the validation and identity functions here.
 
 A model profile is a JSON document under `<home>/model_profiles/<name>.json`
 with EXACTLY three keys (closed schema — no version, sealed, description, or
@@ -43,6 +41,10 @@ case-sensitive and case-insensitive filesystems.
 
 import json
 import os
+
+# The strategy store's canonical content-identity pattern, reused as-is:
+# a pure hash over canonical JSON, no store coupling.
+from .profiles import semantic_hash
 
 MODEL_PROFILES_DIRNAME = "model_profiles"
 
@@ -220,6 +222,38 @@ def load(home, name):
             "model profile file %r names %r — the stored catalogue is "
             "damaged" % (name, doc["name"]))
     return doc
+
+
+def content_identity(configuration):
+    """Canonical identity of one resolved rigor configuration.
+
+    Hashed over the act map alone: editing a DIFFERENT rigor of the same
+    profile does not change what a selection of this rigor staffs, so it
+    must not change this identity either."""
+    return semantic_hash(configuration)
+
+
+def validate_configuration(configuration, context="model-profile configuration"):
+    """Validate one already-resolved rigor configuration.
+
+    Runtime bindings retain only the selected act map, not the mutable source
+    document around it.  Reuse the catalogue's act-map validator so a retained
+    snapshot can be checked structurally without consulting that source.
+    """
+    return _validate_act_map(context, "selected", configuration)
+
+
+def selection_content(home, name, rigor):
+    """Resolve one selection (name + rigor) against the CURRENT source.
+
+    Returns (configuration, content_identity). Loud on an unknown name,
+    unknown rigor, or invalid/corrupt stored source — the runtime binds
+    exactly what the operator named or nothing; there is no fallback."""
+    if rigor not in RIGORS:
+        raise ModelProfileError(
+            "unknown rigor %r (allowed: %s)" % (rigor, ", ".join(RIGORS)))
+    configuration = load(home, name)["configurations"][rigor]
+    return configuration, content_identity(configuration)
 
 
 def list_model_profiles(home):

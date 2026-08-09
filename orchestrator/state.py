@@ -120,7 +120,8 @@ def _orchestrator_rev():
     return rev if proc.returncode == 0 and rev else None
 
 
-def new_state(goal, workspace, config, name=None, slug=None, project=None):
+def new_state(goal, workspace, config, name=None, slug=None, project=None,
+              model_profile=None):
     docs_template = (config or {}).get("docs_dir") or "docs"
     docs_dir = os.path.normpath(
         docs_template.replace("{slug}", slug or slugify(name))
@@ -165,6 +166,15 @@ def new_state(goal, workspace, config, name=None, slug=None, project=None):
         # life; the key is ABSENT for a project-less run, never
         # present-null, so pre-project state documents gain nothing.
         state["project"] = project
+    if model_profile is not None:
+        # Model-profile runtime marker: {home, selection}. Written ONLY at
+        # new-state initialization by a creation channel that enables the
+        # feature; ABSENT for pre-feature states and for direct callers
+        # that pass nothing, which keep the exact config-only resolution
+        # path and never read the catalogue. `selection` is None until an
+        # explicit choice lands (unselected work binds default@medium at
+        # each unit's first act resolution).
+        state["model_profile"] = copy.deepcopy(model_profile)
     return state
 
 
@@ -705,8 +715,14 @@ def set_discovered_suite(state, command, replace=False):
 
 def record_draft(state, unit, kind, result, raw_path=None, family=None,
                  duration=None, model=None, effort=None, token_usage=None,
-                 token_usage_partial=False, cost=None, cost_partial=False):
-    """Write-once record of the unit's draft/implement call."""
+                 token_usage_partial=False, cost=None, cost_partial=False,
+                 attribution=None):
+    """Write-once record of the unit's draft/implement call.
+
+    attribution: model-profile provenance for feature-enabled runs —
+    {"model_profile": {name, rigor, content_hash, origin},
+     "act_override": {act, entry}?}. None for a pre-feature run, whose
+    record keeps its exact historical shape (no fabricated selection)."""
     if unit["status"] != U_PENDING:
         raise IllegalTransition(
             "unit %s: draft can only be recorded from pending (is %s)"
@@ -744,6 +760,14 @@ def record_draft(state, unit, kind, result, raw_path=None, family=None,
         unit["draft"]["cost"] = copy.deepcopy(cost)
     if cost_partial or cost is None:
         unit["draft"]["cost_partial"] = True
+    if attribution:
+        unit["draft"]["model_profile"] = copy.deepcopy(
+            attribution.get("model_profile")
+        )
+        if attribution.get("act_override") is not None:
+            unit["draft"]["act_override"] = copy.deepcopy(
+                attribution["act_override"]
+            )
     unit["artifact"] = result.get("artifact")
     # Keep the lightweight implementation/draft history in the immutable
     # ledger too. A unit can exceptionally be reset to pending after a
@@ -767,6 +791,15 @@ def record_draft(state, unit, kind, result, raw_path=None, family=None,
             if token_usage is not None else {}
         ),
         **({"cost": copy.deepcopy(cost)} if cost is not None else {}),
+        **(
+            {"model_profile": copy.deepcopy(attribution["model_profile"])}
+            if attribution else {}
+        ),
+        **(
+            {"act_override": copy.deepcopy(attribution["act_override"])}
+            if attribution and attribution.get("act_override") is not None
+            else {}
+        ),
     )
     return unit["draft"]
 
