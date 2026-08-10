@@ -550,12 +550,13 @@
 <main>
   <aside>
     <!-- Launching is a PROJECT act: both "New milestone" and "New
-         brainstorming" live in each project's ⋯ menu, so nothing can be
-         started without first naming where it runs. Only declaring a
-         project itself stays a standing sidebar button. -->
+         brainstorming" live in each project's ⋯ menu. The standing buttons
+         manage service-wide project and model-profile catalogues. -->
     <div class="actions" id="sidebarActions" style="display:none">
       <button class="btn" id="newProjectBtn" style="display:none"
         onclick="openProjectCreate()" title="Declare a project">+ Project</button>
+      <button class="btn" id="modelProfilesBtn" style="display:none"
+        onclick="openModelProfiles()">Model profiles</button>
     </div>
     <div id="runs"></div>
   </aside>
@@ -616,6 +617,15 @@
     <select id="f_profile" onchange="onProfileChange()">
       <option value="" disabled selected>— choose: strict / light / legacy —</option></select>
     <div class="hint" id="f_profile_hint"></div></div>
+  <div class="field"><label>Model profile</label>
+    <div class="pathrow">
+      <select id="f_model_profile" onchange="onLaunchModelProfileChange()">
+        <option value="">default@medium — no saved selection</option></select>
+      <select id="f_model_rigor" disabled onchange="onLaunchModelProfileChange()">
+        <option>low</option><option selected>medium</option><option>high</option>
+      </select>
+    </div>
+    <div class="hint" id="f_model_profile_hint"></div></div>
   <div class="field"><label>Agents, models and effort</label>
     <div class="actgrid">
       <span></span><span class="acthead">agent</span>
@@ -1097,6 +1107,34 @@
   </div>
 </dialog>
 
+<dialog id="modelprofilesdlg">
+  <h2>Model profiles</h2>
+  <div id="mp_error" class="failure" style="display:none"></div>
+  <div id="mp_catalogue"></div>
+  <div class="formrow">
+    <span></span>
+    <button class="btn" onclick="document.getElementById('modelprofilesdlg').close()">Close</button>
+    <button class="btn primary" id="mp_new" onclick="newModelProfile()">New profile</button>
+  </div>
+</dialog>
+
+<dialog id="modelprofileselectiondlg">
+  <h2>Current model profile</h2>
+  <div class="field"><label>Profile</label>
+    <select id="mps_name" onchange="onRunModelProfileChange()"></select>
+  </div>
+  <div class="field"><label>Rigor</label>
+    <select id="mps_rigor">
+      <option>low</option><option>medium</option><option>high</option>
+    </select>
+    <div class="hint" id="mps_hint"></div></div>
+  <div class="formrow">
+    <span id="mps_error" style="color:var(--bad);font-size:12px;margin-right:auto"></span>
+    <button class="btn" onclick="document.getElementById('modelprofileselectiondlg').close()">Cancel</button>
+    <button class="btn primary" onclick="saveRunModelProfile()">Save</button>
+  </div>
+</dialog>
+
 <script>
 let selected = null;
 let runView = "main";  // "main" | "edit" — the run's settings page
@@ -1176,10 +1214,12 @@ async function loadAccess() {
   };
   document.getElementById("newProjectBtn").style.display =
     appAccess.admin ? "" : "none";
-  // The row exists only for "+ Project"; without it there is nothing to
-  // reserve sidebar height for.
+  document.getElementById("modelProfilesBtn").style.display =
+    appAccess.user ? "" : "none";
+  // Catalogue reads are member-visible; only its mutation controls and the
+  // project-creation action are administrative.
   document.getElementById("sidebarActions").style.display =
-    appAccess.admin ? "" : "none";
+    appAccess.user ? "" : "none";
   // The brainstorming pickers ride the work-area-scoped listing, so they
   // are offered to every project member; syncBsPickers decides per
   // selection, because without a bound area there is nothing to scope to.
@@ -3529,6 +3569,13 @@ async function refreshDetail() {
   const seq = ++detailSeq, runId = selected;
   try {
     const d = await api("/api/runs/" + runId);
+    let modelProfileSelection = null, modelProfileSelectionError = "";
+    if (runView === "edit") {
+      try {
+        const current = await api(`/api/runs/${runId}/model-profile`);
+        modelProfileSelection = current.selection;
+      } catch (e) { modelProfileSelectionError = e.message; }
+    }
     if (seq !== detailSeq || runId !== selected) return;
     const s = d.status, sum = d.summary;
     currentRunName = s.name || "";
@@ -3625,6 +3672,8 @@ async function refreshDetail() {
       lastActOverrides[a + "_hot"] = present;
     }
     lastProfile = d.profile || null;
+    lastModelProfileSelection = modelProfileSelection;
+    lastModelProfileSelectionError = modelProfileSelectionError;
     if (runView === "edit") {
     html += `<div class="card"><h3>Operator amendments</h3>` +
       ((d.amendments || []).map(a =>
@@ -3635,6 +3684,14 @@ async function refreshDetail() {
          <button class="btn" onclick="addAmend()">Add</button>
        </div>
        <div class="amend-hint">Applies from the next worker call. Drivers started before this feature exists need one Stop → Start to begin reading amendments.</div></div>`;
+    const modelProfileLabel = lastModelProfileSelection
+      ? `${lastModelProfileSelection.name}@${lastModelProfileSelection.rigor}`
+      : `unavailable: ${lastModelProfileSelectionError || "not readable"}`;
+    html += `<div class="card"><h3>Model profile</h3>
+      <div class="amendform">
+        <span class="amend-hint mono" style="flex:1">${esc(modelProfileLabel)}</span>
+        <button class="btn" onclick="openRunModelProfile()">Change…</button>
+      </div></div>`;
     const actLabel = {drafter: "draft", implementer: "impl",
                       review_codex: "review codex",
                       review_claude: "review claude",
@@ -4075,6 +4132,8 @@ let openedActs = {};
 let openedActEditorEntries = {};
 let retainedEmptyActOverrides = new Set();
 let lastProfile = null;   // the run's profile block from the last detail poll
+let lastModelProfileSelection = null;
+let lastModelProfileSelectionError = "";
 function isEmptyActOverride(value) {
   return value === null || value === "" ||
     (value && typeof value === "object" && !Array.isArray(value) &&
@@ -4255,8 +4314,141 @@ function openForm(preselect) {
   loadRecents();
   loadLaunchProjects(preselect);
   loadProfiles();
+  loadModelProfileCatalogue();
   for (const act of ACT_NAMES) onAgentChange("a_", act);
   document.getElementById("form").showModal();
+}
+
+/* ---- model-profile catalogue and current selection. The server remains the
+       one semantic validator; this panel only preserves Edit's opened name. */
+let modelProfileCatalogue = [];
+let modelProfileCatalogueError = "";
+async function loadModelProfileCatalogue() {
+  modelProfileCatalogue = [];
+  modelProfileCatalogueError = "";
+  try {
+    const data = await api("/api/model-profiles");
+    modelProfileCatalogue = data.profiles || [];
+  } catch (e) { modelProfileCatalogueError = e.message; }
+  syncLaunchModelProfiles();
+  if (document.getElementById("modelprofilesdlg").open)
+    renderModelProfiles();
+}
+function syncLaunchModelProfiles() {
+  const select = document.getElementById("f_model_profile");
+  const keep = select.value;
+  select.innerHTML =
+    `<option value="">default@medium — no saved selection</option>` +
+    modelProfileCatalogue.map(p =>
+      `<option value="${esc(p.name)}">${esc(p.name)}</option>`
+    ).join("");
+  select.value = modelProfileCatalogue.some(p => p.name === keep) ? keep : "";
+  onLaunchModelProfileChange();
+}
+function onLaunchModelProfileChange() {
+  const name = document.getElementById("f_model_profile").value;
+  const rigor = document.getElementById("f_model_rigor");
+  rigor.disabled = !name;
+  if (!name) rigor.value = "medium";
+  const profile = modelProfileCatalogue.find(p => p.name === name);
+  document.getElementById("f_model_profile_hint").textContent =
+    modelProfileCatalogueError || (profile ? profile.examples.join(" · ") :
+      "No saved choice uses the current default at medium.");
+}
+async function openModelProfiles() {
+  document.getElementById("modelprofilesdlg").showModal();
+  await loadModelProfileCatalogue();
+}
+function renderModelProfiles() {
+  const error = document.getElementById("mp_error");
+  error.textContent = modelProfileCatalogueError;
+  error.style.display = modelProfileCatalogueError ? "block" : "none";
+  document.getElementById("mp_new").style.display = appAccess.admin ? "" : "none";
+  document.getElementById("mp_catalogue").innerHTML =
+    modelProfileCatalogue.map(profile => {
+      const configs = ["low", "medium", "high"].map(rigor =>
+        `<div><b>${rigor}</b><pre class="mono">${esc(JSON.stringify(
+          profile.configurations[rigor], null, 1))}</pre></div>`
+      ).join("");
+      return `<div class="card"><h3>${esc(profile.name)}</h3>
+        <div class="amend-hint">${esc(profile.examples.join(" · "))}</div>
+        ${configs}
+        ${appAccess.admin ? `<button class="btn" onclick="editModelProfile('${esc(escJsSq(profile.name))}')">Edit…</button>` : ""}
+      </div>`;
+    }).join("") || (modelProfileCatalogueError ? "" :
+      `<div class="empty">No model profiles.</div>`);
+}
+function newModelProfile() {
+  if (!appAccess.admin) return;
+  document.getElementById("modelprofilesdlg").close();
+  openSgEditor({
+    title: "New model profile",
+    value: {name: "", examples: ["matching work"], configurations: {
+      low: {}, medium: {}, high: {},
+    }},
+    hint: "Create supplies a new name and all three rigor configurations.",
+    onSave: parsed => {
+      if (parsed && modelProfileCatalogue.some(p => p.name === parsed.name))
+        throw new Error("Profile Create needs a new name; use Edit.");
+      return postJSON("/api/model-profiles", parsed);
+    },
+    afterSave: openModelProfiles,
+  });
+}
+function editModelProfile(name) {
+  if (!appAccess.admin) return;
+  const opened = modelProfileCatalogue.find(p => p.name === name);
+  if (!opened) return;
+  const openedName = opened.name;
+  document.getElementById("modelprofilesdlg").close();
+  openSgEditor({
+    title: `Edit model profile — ${openedName}`,
+    value: opened,
+    hint: "Profile Edit wholly replaces this definition; its opened name is immutable.",
+    onSave: parsed => {
+      if (!parsed || Array.isArray(parsed) || parsed.name !== openedName)
+        throw new Error(`Profile Edit keeps the opened name “${openedName}”.`);
+      return postJSON("/api/model-profiles", parsed);
+    },
+    afterSave: openModelProfiles,
+  });
+}
+async function openRunModelProfile() {
+  const error = document.getElementById("mps_error");
+  error.textContent = "";
+  await loadModelProfileCatalogue();
+  const select = document.getElementById("mps_name");
+  select.innerHTML = `<option value="">— choose profile —</option>` +
+    modelProfileCatalogue.map(profile =>
+      `<option value="${esc(profile.name)}">${esc(profile.name)}</option>`
+    ).join("");
+  try {
+    const current = await api(`/api/runs/${selected}/model-profile`);
+    select.value = current.selection.name;
+    document.getElementById("mps_rigor").value = current.selection.rigor;
+  } catch (e) { error.textContent = e.message; }
+  if (modelProfileCatalogueError) error.textContent = modelProfileCatalogueError;
+  onRunModelProfileChange();
+  document.getElementById("modelprofileselectiondlg").showModal();
+}
+function onRunModelProfileChange() {
+  const profile = modelProfileCatalogue.find(p => p.name ===
+    document.getElementById("mps_name").value);
+  document.getElementById("mps_hint").textContent = profile
+    ? profile.examples.join(" · ") : "";
+}
+async function saveRunModelProfile() {
+  const error = document.getElementById("mps_error");
+  const name = document.getElementById("mps_name").value;
+  if (!name) { error.textContent = "Choose a model profile."; return; }
+  try {
+    await postJSON(`/api/runs/${selected}/model-profile`, {
+      name,
+      rigor: document.getElementById("mps_rigor").value,
+    });
+  } catch (e) { error.textContent = e.message; return; }
+  document.getElementById("modelprofileselectiondlg").close();
+  refreshDetail();
 }
 /* ---- strategy profile selector: the run's review strategy, chosen at
         creation. The list loads when the form opens; picking one shows its
@@ -4651,6 +4843,11 @@ async function submitForm() {
     return;
   }
   payload.profile = profile;
+  const modelProfile = document.getElementById("f_model_profile").value;
+  if (modelProfile) payload.model_profile = {
+    name: modelProfile,
+    rigor: document.getElementById("f_model_rigor").value,
+  };
   try {
     const data = await api("/api/runs", {
       method: "POST",
@@ -5550,7 +5747,8 @@ async function saveSgEditor() {
     await sgEditor.onSave(parsed);
   } catch (e) { err.textContent = e.message; return; }  // token verbatim
   document.getElementById("sgeditor").close();
-  await loadProjects();
+  if (sgEditor.afterSave) await sgEditor.afterSave();
+  else await loadProjects();
 }
 
 loadAccess().then(() => Promise.all([loadUiState(), loadProjects()]))

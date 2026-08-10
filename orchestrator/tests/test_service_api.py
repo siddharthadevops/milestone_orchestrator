@@ -2250,6 +2250,398 @@ class ModelProfilesApiTest(ServiceApiTest):
                  "profile"})
 
 
+class ModelProfileSurfacesApiTest(ServiceApiTest):
+    """Slice 3's current-selection, launch, and panel-facing contracts."""
+
+    def catalogue_doc(self, name, model="profile-model"):
+        return {
+            "name": name,
+            "examples": ["surface test"],
+            "configurations": {
+                "low": {},
+                "medium": {"fixer": {
+                    "agent": "codex", "model": model, "effort": "medium"
+                }},
+                "high": {},
+            },
+        }
+
+    def selection_path(self, run_id):
+        entry = registry.get(registry.load(self.home), run_id)
+        return os.path.join(
+            os.path.dirname(entry["state_path"]), "model_profile.json"
+        )
+
+    def remote_request_json(self, email, method, path, payload=None):
+        data = (json.dumps(payload).encode("utf-8")
+                if payload is not None else None)
+        req = urllib.request.Request(
+            self.base + path, data=data, method=method
+        )
+        req.add_header("Content-Type", "application/json")
+        req.add_header("Host", "example.ngrok-free.dev")
+        req.add_header(access.REMOTE_HEADER, access.REMOTE_MARKER)
+        req.add_header(access.USER_HEADER, email)
+        try:
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                return resp.status, json.loads(resp.read().decode("utf-8"))
+        except urllib.error.HTTPError as exc:
+            with exc:
+                return exc.code, json.loads(exc.read().decode("utf-8"))
+
+    def test_current_selection_default_read_and_whole_replace(self):
+        model_profiles.save(self.home, self.catalogue_doc("work"))
+        new_ws = self.workspace("ws-selection-new")
+        status, created = self.create_run(new_ws)
+        self.assertEqual(status, 201, created)
+
+        old_ws = self.workspace("ws-selection-old")
+        driver.init_run(
+            "old run", old_ws, state_path=driver.default_state_path(old_ws)
+        )
+        status, attached = self.request_json("POST", "/api/runs", {
+            "workspace": old_ws, "attach": True, "autostart": False,
+        })
+        self.assertEqual(status, 201, attached)
+
+        for run_id in (created["run"]["id"], attached["run"]["id"]):
+            path = self.selection_path(run_id)
+            self.assertFalse(os.path.lexists(path))
+            status, body = self.request_json(
+                "GET", "/api/runs/%s/model-profile" % run_id
+            )
+            self.assertEqual(status, 200, body)
+            self.assertEqual(body, {"ok": True, "selection": {
+                "name": "default", "rigor": "medium"
+            }})
+            self.assertFalse(os.path.lexists(path))
+
+        run_id = created["run"]["id"]
+        status, body = self.request_json(
+            "POST", "/api/runs/%s/model-profile" % run_id,
+            {"name": "work", "rigor": "high"},
+        )
+        self.assertEqual(status, 200, body)
+        self.assertEqual(body["selection"], {"name": "work", "rigor": "high"})
+        with open(self.selection_path(run_id), encoding="utf-8") as fh:
+            self.assertEqual(json.load(fh), body["selection"])
+
+    def test_current_selection_refusal_preserves_prior_bytes(self):
+        model_profiles.save(self.home, self.catalogue_doc("work"))
+        _, created = self.create_run(self.workspace("ws-selection-refusal"))
+        run_id = created["run"]["id"]
+        route = "/api/runs/%s/model-profile" % run_id
+        self.request_json(
+            "POST", route, {"name": "work", "rigor": "medium"}
+        )
+        path = self.selection_path(run_id)
+        with open(path, "rb") as fh:
+            before = fh.read()
+
+        for invalid in (
+            {"name": "work"},
+            {"name": "work", "rigor": "extreme"},
+            {"name": "missing", "rigor": "medium"},
+            {"name": "work", "rigor": "medium", "origin": "panel"},
+        ):
+            status, body = self.request_json("POST", route, invalid)
+            self.assertEqual(status, 400, body)
+            with open(path, "rb") as fh:
+                self.assertEqual(fh.read(), before)
+
+        with open(path, "wb") as fh:
+            fh.write(b"{broken")
+        status, body = self.request_json("GET", route)
+        self.assertEqual(status, 500, body)
+        self.assertTrue(body["error"])
+
+        missing = os.path.join(self.tmp.name, "missing-selection")
+        os.unlink(path)
+        os.symlink(missing, path)
+        status, body = self.request_json("GET", route)
+        self.assertEqual(status, 500, body)
+
+        os.unlink(path)
+        with open(path, "wb") as fh:
+            fh.write(before)
+        stored_profile = os.path.join(
+            self.home, model_profiles.MODEL_PROFILES_DIRNAME, "work.json"
+        )
+        with open(stored_profile, "w", encoding="utf-8") as fh:
+            fh.write("{broken")
+        status, body = self.request_json("GET", route)
+        self.assertEqual(status, 500, body)
+        status, body = self.request_json(
+            "POST", route, {"name": "work", "rigor": "medium"}
+        )
+        self.assertEqual(status, 400, body)
+        with open(path, "rb") as fh:
+            self.assertEqual(fh.read(), before)
+
+    def test_launch_selection_precedes_autostart_and_omission_stays_default(self):
+        model_profiles.save(self.home, self.catalogue_doc("launch"))
+        observed = []
+
+        def fake_start(home, run_id):
+            entry = registry.get(registry.load(home), run_id)
+            observed.append(driver.read_current_model_profile_selection(
+                entry["state_path"]
+            ))
+            return entry
+
+        ws = self.workspace("ws-selection-launch")
+        with mock.patch("orchestrator.service.start_run", side_effect=fake_start):
+            status, body = self.request_json("POST", "/api/runs", {
+                "workspace": ws, "goal": "launch", "autostart": True,
+                "config": {"docs_dir": "docs"},
+                "model_profile": {"name": "launch", "rigor": "low"},
+            })
+        self.assertEqual(status, 201, body)
+        self.assertEqual(observed, [{"name": "launch", "rigor": "low"}])
+
+        plain_ws = self.workspace("ws-selection-launch-default")
+        status, plain = self.create_run(plain_ws)
+        self.assertEqual(status, 201, plain)
+        self.assertFalse(os.path.lexists(
+            self.selection_path(plain["run"]["id"])
+        ))
+
+        bad_ws = self.workspace("ws-selection-launch-bad")
+        status, _body = self.request_json("POST", "/api/runs", {
+            "workspace": bad_ws, "goal": "bad", "autostart": False,
+            "config": {"docs_dir": "docs"},
+            "model_profile": {"name": "missing", "rigor": "medium"},
+        })
+        self.assertEqual(status, 400)
+        self.assertFalse(os.path.exists(driver.default_state_path(bad_ws)))
+
+        null_ws = self.workspace("ws-selection-launch-null")
+        with mock.patch("orchestrator.service.start_run") as mocked_start:
+            status, body = self.request_json("POST", "/api/runs", {
+                "workspace": null_ws, "goal": "null", "autostart": True,
+                "config": {"docs_dir": "docs"},
+                "model_profile": None,
+            })
+        self.assertEqual(status, 400, body)
+        self.assertTrue(body["error"])
+        self.assertFalse(os.path.exists(driver.default_state_path(null_ws)))
+        mocked_start.assert_not_called()
+
+        attach_ws = self.workspace("ws-selection-launch-attach")
+        driver.init_run(
+            "attach", attach_ws, state_path=driver.default_state_path(attach_ws)
+        )
+        status, body = self.request_json("POST", "/api/runs", {
+            "workspace": attach_ws, "attach": True, "autostart": False,
+            "model_profile": {"name": "launch", "rigor": "medium"},
+        })
+        self.assertEqual(status, 400, body)
+        self.assertIn("attach", body["error"])
+
+        status, body = self.request_json("POST", "/api/runs", {
+            "workspace": attach_ws, "attach": True, "autostart": False,
+            "model_profile": None,
+        })
+        self.assertEqual(status, 400, body)
+        self.assertIn("attach", body["error"])
+
+    def test_current_selection_access_and_strategy_route_separation(self):
+        model_profiles.save(self.home, self.catalogue_doc("member-work"))
+        _, created = self.create_run(self.workspace("ws-selection-access"))
+        run_id = created["run"]["id"]
+        service.create_project(self.home, {"slug": "shared"})
+        service.update_project_users(
+            self.home, "shared", {"users": [access.USER_EMAILS[0]]}
+        )
+        registry.update(
+            self.home, run_id, project="shared", work_area="main"
+        )
+        route = "/api/runs/%s/model-profile" % run_id
+
+        status, body = self.remote_request_json(
+            access.USER_EMAILS[0], "GET", route
+        )
+        self.assertEqual(status, 200, body)
+        status, body = self.remote_request_json(
+            access.USER_EMAILS[0], "POST", route,
+            {"name": "member-work", "rigor": "medium"},
+        )
+        self.assertEqual(status, 200, body)
+        status, _body = self.remote_request_json(
+            access.USER_EMAILS[1], "GET", route
+        )
+        self.assertEqual(status, 403)
+        status, _body = self.request_json(
+            "GET", "/api/runs/no-such-run/model-profile"
+        )
+        self.assertEqual(status, 404)
+
+        before = body["selection"]
+        status, strategy = self.request_json("GET", "/api/profiles")
+        self.assertEqual(status, 200, strategy)
+        status, _swap = self.request_json(
+            "POST", "/api/runs/%s/profile" % run_id,
+            {"profile": "light"},
+        )
+        self.assertEqual(status, 200)
+        _, after = self.request_json("GET", route)
+        self.assertEqual(after["selection"], before)
+
+    def test_concurrent_selection_replacements_are_atomic_and_last_completion_wins(self):
+        for name in ("first", "second"):
+            model_profiles.save(self.home, self.catalogue_doc(name, name))
+        _, created = self.create_run(self.workspace("ws-selection-concurrent"))
+        run_id = created["run"]["id"]
+        service.set_model_profile_selection(
+            self.home, run_id, {"name": "default", "rigor": "medium"}
+        )
+        path = self.selection_path(run_id)
+        first = {"name": "first", "rigor": "low"}
+        second = {"name": "second", "rigor": "high"}
+        real_replace = os.replace
+        ready = threading.Barrier(2)
+        first_done = threading.Event()
+        stop_reader = threading.Event()
+        seen, errors = [], []
+
+        def ordered_replace(source, target):
+            ready.wait(timeout=5)
+            if threading.current_thread().name == "selection-first":
+                real_replace(source, target)
+                first_done.set()
+            else:
+                self.assertTrue(first_done.wait(timeout=5))
+                real_replace(source, target)
+
+        def write(selection):
+            try:
+                service.set_model_profile_selection(
+                    self.home, run_id, selection
+                )
+            except Exception as exc:
+                errors.append(exc)
+
+        def read():
+            while not stop_reader.is_set():
+                try:
+                    with open(path, encoding="utf-8") as fh:
+                        seen.append(json.load(fh))
+                except Exception as exc:
+                    errors.append(exc)
+                    return
+
+        reader = threading.Thread(target=read)
+        reader.start()
+        with mock.patch(
+                "orchestrator.service.os.replace", side_effect=ordered_replace):
+            writers = (
+                threading.Thread(
+                    target=write, args=(first,), name="selection-first"
+                ),
+                threading.Thread(
+                    target=write, args=(second,), name="selection-second"
+                ),
+            )
+            for thread in writers:
+                thread.start()
+            for thread in writers:
+                thread.join(timeout=10)
+        stop_reader.set()
+        reader.join(timeout=5)
+
+        self.assertFalse(any(thread.is_alive() for thread in writers))
+        self.assertEqual(errors, [])
+        self.assertTrue(seen)
+        self.assertTrue(all(value in (
+            {"name": "default", "rigor": "medium"}, first, second
+        ) for value in seen))
+        self.assertEqual(
+            service.read_model_profile_selection(self.home, run_id), second
+        )
+
+    def test_panel_catalogue_selection_and_override_contract(self):
+        status, body = self.request("GET", "/")
+        self.assertEqual(status, 200)
+        panel = body.decode("utf-8")
+        self.assertIn('id="modelprofilesdlg"', panel)
+        self.assertIn('id="f_model_profile"', panel)
+        self.assertIn('id="modelprofileselectiondlg"', panel)
+        self.assertIn('api("/api/model-profiles")', panel)
+        self.assertIn('profile.configurations[rigor]', panel)
+        self.assertIn('payload.model_profile = {', panel)
+        self.assertIn('api(`/api/runs/${runId}/model-profile`)', panel)
+        self.assertIn('postJSON(`/api/runs/${selected}/model-profile`', panel)
+        self.assertIn("default@medium — no saved selection", panel)
+        self.assertIn("current profile", panel)
+
+        model_surface = panel[
+            panel.index("/* ---- model-profile catalogue"):
+            panel.index("/* ---- strategy profile selector")
+        ].lower()
+        self.assertNotIn("/acts", model_surface)
+        for forbidden in ("origin", "provenance", "history"):
+            self.assertNotIn(forbidden, model_surface)
+
+    def test_panel_catalogue_is_member_visible_and_edits_stay_admin_only(self):
+        status, body = self.remote_request_json(
+            access.USER_EMAILS[0], "GET", "/api/model-profiles"
+        )
+        self.assertEqual(status, 200, body)
+
+        status, raw_panel = self.request("GET", "/")
+        self.assertEqual(status, 200)
+        panel = raw_panel.decode("utf-8")
+        access_setup = panel[
+            panel.index("async function loadAccess()"):
+            panel.index("function bsPickerScope()")
+        ]
+        self.assertIn(
+            'modelProfilesBtn").style.display =\n    appAccess.user ? "" : "none"',
+            access_setup,
+        )
+        self.assertIn(
+            'sidebarActions").style.display =\n    appAccess.user ? "" : "none"',
+            access_setup,
+        )
+
+        open_catalogue = panel[
+            panel.index("async function openModelProfiles()"):
+            panel.index("function renderModelProfiles()")
+        ]
+        self.assertNotIn("appAccess.admin", open_catalogue)
+
+        render_catalogue = panel[
+            panel.index("function renderModelProfiles()"):
+            panel.index("function newModelProfile()")
+        ]
+        self.assertIn("profile.examples", render_catalogue)
+        self.assertIn("profile.configurations[rigor]", render_catalogue)
+        self.assertIn("appAccess.admin ?", render_catalogue)
+        self.assertIn("Edit…", render_catalogue)
+        self.assertIn("if (!appAccess.admin) return;", panel[
+            panel.index("function newModelProfile()"):
+            panel.index("async function openRunModelProfile()")
+        ])
+
+    def test_panel_profile_edit_keeps_opened_name(self):
+        status, body = self.request("GET", "/")
+        self.assertEqual(status, 200)
+        panel = body.decode("utf-8")
+        edit = panel[
+            panel.index("function editModelProfile(name)"):
+            panel.index("async function openRunModelProfile()")
+        ]
+        self.assertIn("const openedName = opened.name", edit)
+        self.assertIn("parsed.name !== openedName", edit)
+        self.assertIn("Profile Edit keeps the opened name", edit)
+        self.assertIn('postJSON("/api/model-profiles", parsed)', edit)
+        create = panel[
+            panel.index("function newModelProfile()"):
+            panel.index("function editModelProfile(name)")
+        ]
+        self.assertIn("Profile Create needs a new name", create)
+
+
 class CommitWebBaseTest(unittest.TestCase):
     """commit_web_base derives an https web URL from a workspace's origin
     remote so the panel can link gate commits. No HTTP server needed."""

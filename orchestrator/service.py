@@ -13,12 +13,17 @@ run's live state) and a JSON API:
                                    directory instead of 404-ing)
     GET    /api/recents            MRU workspaces/goal docs (form memory)
     POST   /api/runs               launch: {name?, workspace, goal? | goal_doc?,
-                                   config?, autostart?, attach?}; attach adopts
+                                   config?, model_profile?, autostart?, attach?};
+                                   attach adopts
                                    an existing state exactly as it is on disk
                                    (goal/goal_doc/config are rejected with it)
     GET    /api/runs/<id>          entry + full state summary + log tail +
                                    commit_web_base (workspace origin as an
                                    https web URL, for gate-commit links)
+    GET    /api/runs/<id>/model-profile
+                                   current {name, rigor} model-profile choice
+    POST   /api/runs/<id>/model-profile
+                                   wholly replace that current choice
     GET    /api/runs/<id>/artifact ?unit=<unit_key> — the unit's recorded
                                    markdown artifact (skeleton/slice doc),
                                    served for the panel's doc viewer
@@ -2004,6 +2009,30 @@ def create_run(home, payload):
         except profiles.ProfileError as exc:
             raise ApiError(400, str(exc))
 
+    # Model profiles are current settings, not creation snapshots.  Validate
+    # an optional first selection before creating any run state; once written
+    # below it is the same sidecar the live replacement route owns.
+    model_profile_supplied = "model_profile" in payload
+    model_profile_selection = payload.get("model_profile")
+    if attach and model_profile_supplied:
+        raise ApiError(
+            400,
+            "attach adopts the existing state as-is; 'model_profile' cannot "
+            "be combined with it",
+        )
+    if model_profile_supplied:
+        try:
+            model_profile_selection = model_profiles.validate_selection(
+                model_profile_selection
+            )
+            model_profile_selection, _configuration = (
+                model_profiles.resolve_selection(
+                    home, model_profile_selection
+                )
+            )
+        except model_profiles.ModelProfileError as exc:
+            raise ApiError(400, str(exc))
+
     goal_doc = None
     if attach:
         # Attach adopts the on-disk state exactly as it is; a supplied
@@ -2013,7 +2042,7 @@ def create_run(home, payload):
         # legacy workspace-root state, or an explicit `state_path` for a
         # per-milestone run.
         for key in ("goal", "goal_doc", "config", "project", "work_area",
-                    "profile"):
+                    "profile", "model_profile"):
             if payload.get(key) is not None:
                 raise ApiError(
                     400,
@@ -2111,6 +2140,11 @@ def create_run(home, payload):
             raise ApiError(400, str(exc))
         except FileExistsError as exc:
             raise ApiError(409, str(exc) + ' (use "attach": true to adopt it)')
+
+    if model_profile_supplied:
+        _write_model_profile_selection(
+            state_path, model_profile_selection
+        )
 
     if profile_name is not None:
         # The state exists now: seal the profile (first production
@@ -2650,6 +2684,54 @@ def save_model_profile(home, body):
         return model_profiles.save(home, body)
     except model_profiles.ModelProfileError as exc:
         raise ApiError(400, str(exc))
+
+
+def _write_model_profile_selection(state_path, selection):
+    """Atomically replace one run's exact current selection."""
+    path = os.path.join(
+        os.path.dirname(os.path.abspath(state_path)), "model_profile.json"
+    )
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    fd, tmp = tempfile.mkstemp(
+        prefix=".model-profile-selection-",
+        suffix=".tmp",
+        dir=os.path.dirname(path),
+    )
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            json.dump(selection, fh, indent=1, sort_keys=True)
+        os.replace(tmp, path)
+    finally:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+
+
+def read_model_profile_selection(home, run_id):
+    """Return the validated current choice; absence reads default@medium."""
+    entry = registry.get(registry.load(home), run_id)
+    if entry is None:
+        raise ApiError(404, "unknown run %r" % run_id)
+    selection = driver.read_current_model_profile_selection(
+        entry["state_path"]
+    )
+    selected, _configuration = model_profiles.resolve_selection(
+        home, selection
+    )
+    return selected
+
+
+def set_model_profile_selection(home, run_id, body):
+    """Validate, then wholly replace one run's current model-profile choice."""
+    entry = registry.get(registry.load(home), run_id)
+    if entry is None:
+        raise ApiError(404, "unknown run %r" % run_id)
+    try:
+        selected, _configuration = model_profiles.resolve_selection(home, body)
+    except model_profiles.ModelProfileError as exc:
+        raise ApiError(400, str(exc))
+    _write_model_profile_selection(entry["state_path"], selected)
+    _evict_summary(entry["state_path"])
+    return selected
 
 
 def set_profile_swap(home, run_id, body):
@@ -3792,6 +3874,13 @@ def make_handler(home):
                             **run_commit(home, parts[3],
                                          query.get("unit", "")),
                         })
+                    elif len(parts) == 5 and parts[4] == "model-profile":
+                        selection = read_model_profile_selection(
+                            home, parts[3]
+                        )
+                        self._json(
+                            200, {"ok": True, "selection": selection}
+                        )
                     else:
                         self._json(404, {"ok": False, "error": "not found"})
                 else:
@@ -3995,6 +4084,13 @@ def make_handler(home):
                     elif len(parts) == 5 and parts[4] == "acts":
                         acts = set_acts(home, parts[3], self._body())
                         self._json(200, {"ok": True, "acts": acts})
+                    elif len(parts) == 5 and parts[4] == "model-profile":
+                        selection = set_model_profile_selection(
+                            home, parts[3], self._body()
+                        )
+                        self._json(
+                            200, {"ok": True, "selection": selection}
+                        )
                     elif len(parts) == 5 and parts[4] == "profile":
                         swap = set_profile_swap(home, parts[3], self._body())
                         self._json(200, {"ok": True, "profile_swap": swap})

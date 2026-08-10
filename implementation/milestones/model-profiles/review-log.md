@@ -333,3 +333,26 @@
 **Deferred debt (opposite-family verified):**
 - `claude-slice_doc-03-claude-r1/S3-EDIT-NAME-GUARD-UNVERIFIABLE` (raised claude, cleared codex): The strict Profile-Edit identity guarantee lives only in unexecuted panel JavaScript, and the pass conditions pinned for `test_panel_profile_edit_keeps_opened_name` (Verification Contract row 'Profile Edit preserves identity', Enforceability Gate row 1, and the answered `enforceability` battery entry) claim to prove which catalogue entries are written — a behavioural fact the repository's panel tests cannot observe, because every existing panel check (`test_service_api.py:1012-1025,1121-1154`) is a served-HTML source assertion and there is no JS runtime in `orchestrator/tests`. — The slice falsely treats served-HTML assertions as behavioural proof of edit identity, plausibly allowing wrong panel code and tests to pass silently, while correction remains bounded to making the guard executable and verifiable within Slice 3.
 
+## slice_impl-03 (Model-profile selection and override surfaces)
+
+- draft: kind `implement`, artifact `-` (raw: `implementation/milestones/model-profiles/.run/raw/slice_impl-03-draft.txt`)
+
+| Round | Kind | Family | Findings | Triage | Raw |
+|---|---|---|---|---|---|
+| slice_impl-03-codex-r1 | review_round | codex | 2 | 2 reported | `implementation/milestones/model-profiles/.run/raw/slice_impl-03-codex-r1.txt` |
+| slice_impl-03-codex-r2 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/model-profiles/.run/raw/slice_impl-03-fix1.txt` |
+| slice_impl-03-codex-r3 | delta_review | codex | 0 | clean | `implementation/milestones/model-profiles/.run/raw/slice_impl-03-delta1.txt` |
+| slice_impl-03-codex-r4 | review_round | codex | 1 | 1 reported | `implementation/milestones/model-profiles/.run/raw/slice_impl-03-codex-r2.txt` |
+| slice_impl-03-codex-r5 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/model-profiles/.run/raw/slice_impl-03-fix2.txt` |
+| slice_impl-03-codex-r6 | delta_review | codex | 0 | clean | `implementation/milestones/model-profiles/.run/raw/slice_impl-03-delta2.txt` |
+| slice_impl-03-codex-r7 | review_round | codex | 0 | clean | `implementation/milestones/model-profiles/.run/raw/slice_impl-03-codex-r3.txt` |
+| slice_impl-03-claude-r1 | review_round | claude | 0 | clean | `implementation/milestones/model-profiles/.run/raw/slice_impl-03-claude-r1.txt` |
+
+### Review completion — SATISFIED
+
+- deterministic result: every configured family was clean or debt-clean on the same current bytes; full verification was not due at this boundary; no extra reviewer was called
+- cited reviews: `slice_impl-03-codex-r7`, `slice_impl-03-claude-r1`
+
+**Deferred debt (opposite-family verified):**
+- `codex-codex-S3-VERIFICATION-GATE-NONEXECUTABLE` (raised codex, cleared codex): The focused gate does not execute two promised interaction guarantees — The green gate can silently misrepresent two behavioral guarantees because it checks source text and a returned tuple rather than the panel edit and blocked call, but correction is bounded to executable Slice 3 tests and any local fixes they expose.
+

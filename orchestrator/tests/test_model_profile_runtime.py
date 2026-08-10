@@ -193,34 +193,38 @@ class CurrentModelProfileRuntimeTest(unittest.TestCase):
                       "effort": "low"},
         }))
         path = self.init()
+        run_id = "runtime-surface"
+        registry.add(self.home, registry.new_entry(
+            run_id, "runtime", self.workspace, path
+        ))
         d = self.resolver(path)
-        self.write_runtime(
-            path, "model_profile.json", {"name": "work", "rigor": "medium"}
+        service.set_model_profile_selection(
+            self.home, run_id, {"name": "work", "rigor": "medium"}
         )
         dispatched = d._act_profile("fixer")
         self.assertEqual(dispatched, ("claude", "profile-v1", "medium"))
 
         edited = model_profiles.load(self.home, "work")
         edited["configurations"]["medium"]["fixer"]["model"] = "profile-v2"
-        model_profiles.save(self.home, edited)
+        service.save_model_profile(self.home, edited)
         self.assertEqual(d._act_profile("fixer"),
                          ("claude", "profile-v2", "medium"))
         self.assertEqual(dispatched, ("claude", "profile-v1", "medium"))
 
-        self.write_runtime(
-            path, "model_profile.json", {"name": "other", "rigor": "medium"}
+        service.set_model_profile_selection(
+            self.home, run_id, {"name": "other", "rigor": "medium"}
         )
         self.assertEqual(d._act_profile("fixer"),
                          ("codex", "other-profile", "low"))
 
-        self.write_runtime(
-            path, "acts.json",
+        service.set_acts(
+            self.home, run_id,
             {"fixer": {"agent": "codex", "model": "override",
                        "effort": "high"}},
         )
         self.assertEqual(d._act_profile("fixer"),
                          ("codex", "override", "high"))
-        self.write_runtime(path, "acts.json", {})
+        service.set_acts(self.home, run_id, {})
         self.assertEqual(d._act_profile("fixer"),
                          ("codex", "other-profile", "low"))
 
