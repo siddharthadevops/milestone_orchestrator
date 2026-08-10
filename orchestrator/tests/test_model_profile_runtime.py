@@ -2,12 +2,14 @@
 
 import contextlib
 import copy
+import http.client
 import io
 import json
 import os
 import shlex
 import subprocess
 import tempfile
+import threading
 import time
 import types
 import unittest
@@ -428,6 +430,265 @@ class CurrentModelProfileRuntimeTest(unittest.TestCase):
             self.resolver(second["state_path"])._act_profile("fixer"),
             ("codex", None, None),
         )
+
+    def test_profile_and_override_authority_matrix_share_one_result(self):
+        model_profiles.ensure_default(self.home)
+        model_profiles.save(self.home, profile("matrix", {}))
+        path = self.init()
+        self.write_runtime(
+            path, "model_profile.json",
+            {"name": "matrix", "rigor": "medium"},
+        )
+        run_id = "matrix-run"
+        registry.add(
+            self.home,
+            registry.new_entry(
+                run_id, "authority matrix", self.workspace, path
+            ),
+        )
+        subject = self.resolver(path)
+
+        full_values = {
+            "agent": "claude",
+            "model": "matrix-model",
+            "effort": "high",
+        }
+        full_objects = [
+            {key: value for bit, (key, value) in enumerate(full_values.items())
+             if mask & (1 << bit)}
+            for mask in range(1, 1 << len(full_values))
+        ]
+        model_effort_values = {
+            "model": "matrix-model",
+            "effort": "high",
+        }
+        model_effort_objects = [
+            {key: value
+             for bit, (key, value) in enumerate(model_effort_values.items())
+             if mask & (1 << bit)}
+            for mask in range(1, 1 << len(model_effort_values))
+        ]
+        family_policies = (
+            "codex", "claude", "self", "opposite", "future-family",
+        )
+        cases = [
+            (act, copy.deepcopy(entry))
+            for act in model_profiles.FULL_POLICY_ACTS
+            for entry in family_policies + tuple(full_objects)
+        ] + [
+            (act, copy.deepcopy(entry))
+            for act in model_profiles.MODEL_EFFORT_ACTS
+            for entry in model_effort_objects
+        ] + [
+            ("consultation", entry) for entry in family_policies
+        ]
+
+        def effective_result(act):
+            if act == "review_codex":
+                return ("codex",) + subject._review_profile("codex")
+            if act == "review_claude":
+                return ("claude",) + subject._review_profile("claude")
+            if act == "brainstorming_counterpart":
+                resolved = driver.resolve_current_brainstorming_profile(
+                    path, self.home, counterpart=True
+                )
+                return (
+                    resolved["agent"], resolved["model"], resolved["effort"]
+                )
+            if act == "consultation":
+                return (subject._resolve_act(act, "codex"),)
+            return subject._act_profile(act, origin_family="codex")
+
+        real_seam = driver._resolve_act_from_layers
+        for act, entry in cases:
+            with self.subTest(act=act, entry=entry):
+                model_profiles.save(
+                    self.home,
+                    profile("matrix", {act: copy.deepcopy(entry)}),
+                )
+                service.set_acts(self.home, run_id, {})
+                with mock.patch.object(
+                    driver, "_resolve_act_from_layers", wraps=real_seam
+                ) as seam:
+                    from_profile = effective_result(act)
+                    profile_hits = seam.call_count
+                    self.assertGreater(profile_hits, 0)
+
+                    model_profiles.save(self.home, profile("matrix", {}))
+                    service.set_acts(
+                        self.home, run_id, {act: copy.deepcopy(entry)}
+                    )
+                    from_override = effective_result(act)
+                    self.assertGreater(seam.call_count, profile_hits)
+
+                self.assertEqual(from_override, from_profile)
+
+        # Empty live submissions are the route's clear forms: they expose the
+        # current profile again instead of becoming a second policy shape.
+        model_profiles.save(
+            self.home, profile("matrix", {"fixer": "claude"})
+        )
+        for empty in (None, "", {}):
+            with self.subTest(clear=empty):
+                service.set_acts(self.home, run_id, {"fixer": "codex"})
+                self.assertEqual(
+                    service.set_acts(
+                        self.home, run_id, {"fixer": copy.deepcopy(empty)}
+                    ),
+                    {},
+                )
+                self.assertEqual(
+                    subject._act_profile("fixer")[0], "claude"
+                )
+
+        # The independently supervised Brainstorming dispatch consumes the
+        # counterpart override, while its family remains structurally opposite.
+        model_profiles.save(self.home, profile("matrix", {}))
+        service.set_acts(self.home, run_id, {
+            "implementer": {
+                "agent": "claude", "model": "lead-live", "effort": "high",
+            },
+            "fixer": {"agent": "claude", "effort": "high"},
+            "brainstorming_counterpart": {
+                "model": "counterpart-live", "effort": "low",
+            },
+            "review_codex": {"model": "review-live", "effort": "medium"},
+            "consultation": "opposite",
+        })
+        lead, counterpart = driver.resolve_current_brainstorming_profiles(
+            path, self.home
+        )
+        self.assertEqual(lead, {
+            "agent": "claude", "model": "lead-live", "effort": "high",
+        })
+        self.assertEqual(counterpart, {
+            "agent": "codex", "model": "counterpart-live", "effort": "low",
+        })
+        self.assertEqual(
+            subject._delta_review_profile("codex"),
+            ("codex", "review-live", "medium"),
+        )
+        consultation = current_model_call.consultation_command(
+            path, self.home, "fixer"
+        )
+        self.assertIn("gpt-5.6-sol", consultation)
+        self.assertIn("model_reasoning_effort=high", consultation)
+
+        # The actual hot endpoint refuses unknown acts and attempts to cross a
+        # structural authority ceiling before its atomic writer can run.
+        service.set_acts(self.home, run_id, {"fixer": "claude"})
+        acts_path = self.runtime_path(path, "acts.json")
+        with open(acts_path, "rb") as fh:
+            prior_bytes = fh.read()
+        invalid = (
+            {"reviewer": "claude"},
+            {"delta_review": {"agent": "claude", "model": "illegal"}},
+            {"review_codex": {"agent": "claude", "model": "illegal"}},
+            {"brainstorming_counterpart": {
+                "agent": "codex", "model": "illegal",
+            }},
+            {"consultation": {"model": "illegal", "effort": "low"}},
+        )
+        server = service.make_server(self.home, 0)
+        server_thread = threading.Thread(
+            target=server.serve_forever, daemon=True
+        )
+        server_thread.start()
+        try:
+            for body in invalid:
+                with self.subTest(hot_refusal=body):
+                    connection = http.client.HTTPConnection(
+                        "127.0.0.1", server.server_address[1], timeout=5
+                    )
+                    try:
+                        connection.request(
+                            "POST", "/api/runs/%s/acts" % run_id,
+                            body=json.dumps(body),
+                            headers={"Content-Type": "application/json"},
+                        )
+                        response = connection.getresponse()
+                        response.read()
+                        self.assertEqual(response.status, 400)
+                    finally:
+                        connection.close()
+                    with open(acts_path, "rb") as fh:
+                        self.assertEqual(fh.read(), prior_bytes)
+        finally:
+            server.shutdown()
+            server.server_close()
+            server_thread.join(timeout=5)
+
+        malformed = (
+            (
+                "review", "review_codex",
+                {"agent": "claude", "model": "illegal"},
+                lambda current, _path: current._review_profile("codex"),
+                driver.StopStep,
+            ),
+            (
+                "delta", "delta_review",
+                {"agent": "claude", "model": "illegal"},
+                lambda current, _path: current._delta_review_profile("codex"),
+                driver.StopStep,
+            ),
+            (
+                "counterpart", "brainstorming_counterpart",
+                {"agent": "codex", "model": "illegal"},
+                lambda _current, current_path:
+                    driver.resolve_current_brainstorming_profile(
+                        current_path, self.home, counterpart=True
+                    ),
+                model_profiles.ModelProfileError,
+            ),
+            (
+                "consultation", "consultation",
+                {"model": "illegal", "effort": "low"},
+                lambda _current, current_path:
+                    current_model_call.consultation_command(
+                        current_path, self.home, "fixer"
+                    ),
+                model_profiles.ModelProfileError,
+            ),
+        )
+        for source in ("profile", "override"):
+            for index, (seat, act, entry, resolve, error) in enumerate(
+                malformed
+            ):
+                with self.subTest(source=source, seat=seat):
+                    workspace = os.path.join(
+                        self.tmp.name, "malformed-%s-%s" % (source, seat)
+                    )
+                    malformed_path = self.init(workspace=workspace)
+                    runner = runners.MockRunner([])
+                    current = self.resolver(malformed_path, runner)
+                    if source == "profile":
+                        name = "malformed-%d" % index
+                        damaged = profile(name, {})
+                        damaged["configurations"]["medium"][act] = (
+                            copy.deepcopy(entry)
+                        )
+                        with open(
+                            os.path.join(
+                                model_profiles.model_profiles_dir(self.home),
+                                "%s.json" % name,
+                            ),
+                            "w",
+                            encoding="utf-8",
+                        ) as fh:
+                            json.dump(damaged, fh)
+                        self.write_runtime(
+                            malformed_path, "model_profile.json",
+                            {"name": name, "rigor": "medium"},
+                        )
+                    else:
+                        self.write_runtime(
+                            malformed_path, "acts.json",
+                            {act: copy.deepcopy(entry)},
+                        )
+
+                    with self.assertRaises(error):
+                        resolve(current, malformed_path)
+                    self.assertEqual(runner.calls, [])
 
     def test_current_precedence_and_structural_authority(self):
         model_profiles.ensure_default(self.home)
