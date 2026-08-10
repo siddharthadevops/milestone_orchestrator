@@ -497,3 +497,24 @@
 - `claude-claude-S5-CASE-VARIANT-LOAD-CLAIMS-CATALOGUE-DAMAGE` (raised claude, cleared codex): `load` reports a false "stored catalogue is damaged" error for a case-variant profile lookup on a case-insensitive filesystem, and a selection that previously resolved now fails. — The case-insensitive open followed by an exact embedded-name check causes a visible pre-creation HTTP 400 while the catalogue remains valid, so silent drift is unlikely and correction is a local lookup adjustment plus regression test.
 - `claude-claude-S5-PANEL-TEST-ASSERTS-SOURCE-TEXT-NOT-BEHAVIOR` (raised claude, cleared codex): `test_invalid_stored_profile_failure_is_visible_on_launch_surface` asserts that two literal JavaScript source substrings appear in the served panel HTML, so it can never detect the launch surface actually failing to show the error. — The source-text assertion can silently bless a real launch-error-display regression despite a passing suite, but correction is a local behavior-level test and, if needed, a small display-path fix.
 
+## slice_doc-06 (Strategy configurator panel)
+
+- draft: kind `draft_slice_note`, artifact `implementation/milestones/model-profiles/slices/slice-06.md` (raw: `implementation/milestones/model-profiles/.run/raw/slice_doc-06-draft.txt`)
+
+| Round | Kind | Family | Findings | Triage | Raw |
+|---|---|---|---|---|---|
+| slice_doc-06-codex-r1 | review_round | codex | 3 | 3 reported | `implementation/milestones/model-profiles/.run/raw/slice_doc-06-codex-r1.txt` |
+| slice_doc-06-codex-r2 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/model-profiles/.run/raw/slice_doc-06-fix1.txt` |
+| slice_doc-06-codex-r3 | delta_review | codex | 0 | clean | `implementation/milestones/model-profiles/.run/raw/slice_doc-06-delta1.txt` |
+| slice_doc-06-codex-r4 | review_round | codex | 0 | clean | `implementation/milestones/model-profiles/.run/raw/slice_doc-06-codex-r2.txt` |
+| slice_doc-06-claude-r1 | review_round | claude | 0 | clean | `implementation/milestones/model-profiles/.run/raw/slice_doc-06-claude-r1.txt` |
+
+### Review completion — SATISFIED
+
+- deterministic result: every configured family was clean or debt-clean on the same current bytes; full verification was not due at this boundary; no extra reviewer was called
+- cited reviews: `slice_doc-06-codex-r4`, `slice_doc-06-claude-r1`
+
+**Deferred debt (opposite-family verified):**
+- `codex-S6-PANEL-VERIFICATION-UNENFORCEABLE` (raised codex, cleared codex): The verification contract claims browser behavior without an executable browser or JavaScript seam — The note falsely treats static panel/API checks as strict executable proof, so the builder can silently ship incorrect boolean serialization, but the first real submission exposes it and correction is a local browser-mapping and focused-test-seam fix.
+- `codex-S6-CONCURRENT-SAVE-EVIDENCE-MISMATCH` (raised codex, cleared codex): The focused concurrency row cites tests that never overlap two saves — The row explicitly overstates focused test coverage because neither named test overlaps two saves, so a capable builder may silently trust a false verification claim, but correction is a local test-reference change and the existing true concurrency test is exercised by the full-suite gate.
+
