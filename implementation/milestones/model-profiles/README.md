@@ -251,4 +251,5 @@ The milestone is complete when:
 | slice_doc-02 (Profile resolution, binding, and attribution) | reviewed | 4 | satisfied | 81acae6 |
 | slice_impl-02-a (Profile resolution, binding, and attribution) | reviewed | 11 | satisfied | fc62d64 |
 | slice_impl-02-b (Profile resolution, binding, and attribution) | reviewed | 124 | satisfied | 81acae6 |
-| slice_impl-02-c (Profile resolution, binding, and attribution) | reviewed | 2 | satisfied | - |
+| slice_impl-02-c (Profile resolution, binding, and attribution) | reviewed | 2 | satisfied | ddf9ccf |
+| slice_doc-03 (Model-profile selection and override surfaces) | reviewed | 5 | satisfied | - |
