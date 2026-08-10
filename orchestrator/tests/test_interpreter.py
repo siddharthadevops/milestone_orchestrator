@@ -31,6 +31,21 @@ class GoverningProfileTest(unittest.TestCase):
         self.assertEqual(
             it.governing_profile(_state({"profile": content})), content)
 
+    def test_latest_applied_change_governs_with_its_matching_identity(self):
+        base = {"stages": [{"loop": "family_until_clean"}]}
+        replacement = {"stages": [], "p3_defer_max_risk": "high"}
+        base_ref = {"name": "base", "version": 1,
+                    "hash": profiles.semantic_hash(base)}
+        replacement_ref = {"name": "next", "version": 1,
+                           "hash": profiles.semantic_hash(replacement)}
+        state = _state({"profile": base, "profile_ref": base_ref})
+        state["events"] = [{
+            "type": "profile_changed", "from": base_ref,
+            "to": replacement_ref, "profile": replacement,
+        }]
+        self.assertEqual(it.governing_profile(state), replacement)
+        self.assertEqual(it.governing_profile_ref(state), replacement_ref)
+
 
 class RoundsLoopTest(unittest.TestCase):
     def test_profileless_is_family_until_clean(self):
@@ -122,6 +137,34 @@ class VerifyEmbeddedTest(unittest.TestCase):
         # No recorded hash to check against (a bare content embed) — not an
         # inconsistency, just nothing to verify.
         it.verify_embedded(_state({"profile": {"stages": []}}))
+
+    def test_consistent_transition_chain_passes(self):
+        base = profiles.SEEDS["light"]["profile"]
+        changed = profiles.SEEDS["strict"]["profile"]
+        base_ref = {"name": "light", "version": 1,
+                    "hash": profiles.semantic_hash(base)}
+        changed_ref = {"name": "strict", "version": 1,
+                       "hash": profiles.semantic_hash(changed)}
+        state = _state({"profile": base, "profile_ref": base_ref})
+        state["events"] = [{
+            "type": "profile_changed", "from": base_ref,
+            "to": changed_ref, "profile": changed,
+        }]
+        it.verify_embedded(state)
+
+    def test_transition_with_mismatched_content_fails_loudly(self):
+        base = profiles.SEEDS["light"]["profile"]
+        base_ref = {"name": "light", "version": 1,
+                    "hash": profiles.semantic_hash(base)}
+        wrong_ref = {"name": "strict", "version": 1,
+                     "hash": "deadbeef"}
+        state = _state({"profile": base, "profile_ref": base_ref})
+        state["events"] = [{
+            "type": "profile_changed", "from": base_ref,
+            "to": wrong_ref, "profile": profiles.SEEDS["strict"]["profile"],
+        }]
+        with self.assertRaises(ValueError):
+            it.verify_embedded(state)
 
 
 class DocDeferScopeTest(unittest.TestCase):

@@ -1,20 +1,20 @@
-"""Strategy profiles: store, identity hashing, sealing, cloning, seeds.
+"""Strategy profiles: editable store, retained identity, and seeds.
 
 Phase 1 of the build-driven review reform. The invariants under test:
 
 - identity = hash of the canonical SEMANTIC content only; metadata
   (name, version, description, sealed) never moves it;
-- a profile seals on first production reference and its semantic
-  content becomes immutable (metadata edits stay legal);
-- editing sealed content requires clone();
-- a run's stored reference is verified against the file on disk and
-  divergence fails loudly;
+- selecting a profile never mutates or freezes the reusable source;
+- identity and content are resolved from one document and retained together;
+- retained verification never consults a later mutable source;
 - seeds are written only when missing.
 """
 
 import os
 import tempfile
+import threading
 import unittest
+from unittest import mock
 
 from orchestrator import profiles as pr
 
@@ -41,13 +41,12 @@ class TestIdentity(ProfilesCase):
             pr.semantic_hash(a["profile"]), pr.semantic_hash(b["profile"])
         )
 
-    def test_sealing_does_not_change_identity(self):
-        pr.save(self.home, self.doc("p"))
-        before = pr.semantic_hash(pr.load(self.home, "p")["profile"])
-        pr.seal(self.home, "p")
-        after = pr.semantic_hash(pr.load(self.home, "p")["profile"])
-        self.assertEqual(before, after)
-        self.assertTrue(pr.load(self.home, "p")["sealed"])
+    def test_legacy_seal_metadata_does_not_change_identity(self):
+        a = self.doc("p")
+        b = dict(a, sealed=True)
+        self.assertEqual(
+            pr.semantic_hash(a["profile"]), pr.semantic_hash(b["profile"])
+        )
 
     def test_canonicalization_ignores_key_order(self):
         self.assertEqual(
@@ -56,55 +55,86 @@ class TestIdentity(ProfilesCase):
         )
 
 
-class TestSealing(ProfilesCase):
-    def test_sealed_semantic_content_is_immutable(self):
+class TestEditability(ProfilesCase):
+    def test_concurrent_same_name_saves_do_not_share_staging_file(self):
         pr.save(self.home, self.doc("p"))
-        pr.seal(self.home, "p")
-        changed = self.doc("p", threshold="y")
-        with self.assertRaises(pr.ProfileError):
-            pr.save(self.home, changed)
+        documents = [self.doc("p", threshold=value) for value in ("a", "b")]
+        replacements_ready = threading.Barrier(2)
+        real_replace = os.replace
+        staging_paths = []
+        results = []
+        errors = []
 
-    def test_sealed_metadata_edits_stay_legal_and_seal_sticks(self):
-        pr.save(self.home, self.doc("p"))
-        pr.seal(self.home, "p")
-        edit = self.doc("p")
-        edit["description"] = "clearer words"
-        edit["sealed"] = False  # an attempt to un-seal is ignored
-        saved = pr.save(self.home, edit)
-        self.assertTrue(saved["sealed"])
-        self.assertEqual(pr.load(self.home, "p")["description"],
-                         "clearer words")
+        def synchronized_replace(source, target):
+            staging_paths.append(source)
+            replacements_ready.wait(timeout=5)
+            real_replace(source, target)
 
-    def test_reference_seals_and_snapshots_identity(self):
+        def save(document):
+            try:
+                results.append(pr.save(self.home, document))
+            except Exception as exc:
+                errors.append(exc)
+
+        with mock.patch.object(pr.os, "replace", side_effect=synchronized_replace):
+            threads = [threading.Thread(target=save, args=(doc,))
+                       for doc in documents]
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join(timeout=10)
+
+        self.assertFalse(any(thread.is_alive() for thread in threads))
+        self.assertEqual(errors, [])
+        self.assertEqual(len(set(staging_paths)), 2)
+        self.assertCountEqual(results, documents)
+        self.assertIn(pr.load(self.home, "p"), documents)
+
+    def test_used_profile_edit_replaces_content_without_first_use_mutation(self):
         pr.save(self.home, self.doc("p"))
+        path = os.path.join(pr.profiles_dir(self.home), "p.json")
+        with open(path, "rb") as fh:
+            before = fh.read()
         ref = pr.reference(self.home, "p")
-        self.assertTrue(pr.load(self.home, "p")["sealed"])
+        with open(path, "rb") as fh:
+            self.assertEqual(fh.read(), before)
         self.assertEqual(
             ref,
             {"name": "p", "version": 1,
              "hash": pr.semantic_hash(self.doc()["profile"])},
         )
+        changed = self.doc("p", threshold="y")
+        changed["sealed"] = True  # legacy input has no authority
+        saved = pr.save(self.home, changed)
+        self.assertFalse(saved["sealed"])
+        self.assertEqual(pr.load(self.home, "p")["profile"]["threshold"], "y")
 
-    def test_verify_reference_fails_loudly_on_hand_mutation(self):
+    def test_legacy_stored_seal_does_not_block_edit(self):
         pr.save(self.home, self.doc("p"))
-        ref = pr.reference(self.home, "p")
-        # Hand-mutate the sealed file behind the store's back.
         path = os.path.join(pr.profiles_dir(self.home), "p.json")
         import json
-        raw = json.load(open(path))
-        raw["profile"]["threshold"] = "tampered"
-        json.dump(raw, open(path, "w"))
-        with self.assertRaises(pr.ProfileError):
-            pr.verify_reference(self.home, ref)
+        with open(path) as fh:
+            raw = json.load(fh)
+        raw["sealed"] = True
+        with open(path, "w") as fh:
+            json.dump(raw, fh)
+        saved = pr.save(self.home, self.doc("p", threshold="new"))
+        self.assertFalse(saved["sealed"])
+        self.assertEqual(saved["profile"]["threshold"], "new")
 
-    def test_clone_copies_content_unsealed_under_new_identity_name(self):
+    def test_resolve_returns_one_detached_matching_pair(self):
         pr.save(self.home, self.doc("p"))
-        pr.seal(self.home, "p")
-        c = pr.clone(self.home, "p", "p2")
-        self.assertFalse(c["sealed"])
-        self.assertEqual(c["profile"], self.doc()["profile"])
+        ref, content = pr.resolve(self.home, "p")
+        self.assertTrue(pr.verify_retained(ref, content))
+        content["threshold"] = "local change"
+        self.assertEqual(pr.load(self.home, "p")["profile"]["threshold"], "x")
+
+    def test_verify_retained_fails_loudly_on_mismatch(self):
+        pr.save(self.home, self.doc("p"))
+        ref, content = pr.resolve(self.home, "p")
+        content["threshold"] = "tampered"
         with self.assertRaises(pr.ProfileError):
-            pr.clone(self.home, "p", "p2")  # name collision refused
+            pr.verify_retained(ref, content)
 
 
 class TestValidationAndSeeds(ProfilesCase):

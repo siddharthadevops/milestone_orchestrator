@@ -20,7 +20,7 @@ import urllib.error
 import urllib.request
 from unittest import mock
 
-from orchestrator import access, driver, model_profiles, profiles, registry
+from orchestrator import access, driver, interpreter, model_profiles, profiles, registry
 from orchestrator import service, state as st
 
 
@@ -1891,9 +1891,37 @@ class TestPerMilestoneLayout(ServiceApiTest):
 
 
 class ProfilesApiTest(ServiceApiTest):
-    """Per-run strategy profiles (build-driven review reform, phase 1b):
-    the seeds are listable, a run snapshots+seals its chosen profile, and
-    profile-less runs stay untouched."""
+    """Editable strategy definitions with run-retained identity/content."""
+
+    def _race_strategy_read_with_edit(self, name, operation):
+        before = profiles.load(self.home, name)["profile"]
+        observed = threading.Event()
+        release = threading.Event()
+        result = {}
+        real_load = profiles.load
+
+        def paused_load(home, candidate):
+            doc = real_load(home, candidate)
+            if candidate == name and not observed.is_set():
+                observed.set()
+                release.wait(timeout=5)
+            return doc
+
+        def run_operation():
+            result["value"] = operation()
+
+        with mock.patch.object(profiles, "load", side_effect=paused_load):
+            thread = threading.Thread(target=run_operation)
+            thread.start()
+            self.assertTrue(observed.wait(timeout=5))
+            edited = real_load(self.home, name)
+            edited["profile"] = {"definition": "after"}
+            profiles.save(self.home, edited)
+            release.set()
+            thread.join(timeout=10)
+        self.assertFalse(thread.is_alive())
+        after = profiles.load(self.home, name)["profile"]
+        return result["value"], before, after
 
     def test_seeds_listed_with_hash_and_content(self):
         status, body = self.request_json("GET", "/api/profiles")
@@ -1906,13 +1934,46 @@ class ProfilesApiTest(ServiceApiTest):
         # The decomposition travels so the new-run form can show it.
         self.assertEqual(strict["profile"]["fuser_discard"], "evidence+concur")
 
-    def test_create_with_profile_snapshots_and_seals(self):
+    def test_strategy_views_and_panel_have_no_sealed_presentation(self):
+        legacy = profiles.load(self.home, "legacy")
+        legacy["description"] = "Operator edited compatibility description"
+        legacy["sealed"] = True
+        status, saved = self.request_json("POST", "/api/profiles", legacy)
+        self.assertEqual(status, 200)
+        self.assertNotIn("sealed", saved["profile"])
+        self.assertEqual(
+            saved["profile"]["description"], legacy["description"]
+        )
+        status, listed = self.request_json("GET", "/api/profiles")
+        self.assertEqual(status, 200)
+        self.assertTrue(all("sealed" not in p for p in listed["profiles"]))
+        listed_legacy = next(
+            p for p in listed["profiles"] if p["name"] == "legacy"
+        )
+        self.assertEqual(listed_legacy["description"], legacy["description"])
+
+        status, raw_panel = self.request("GET", "/")
+        self.assertEqual(status, 200)
+        panel = raw_panel.decode("utf-8")
+        label = panel[
+            panel.index("function profileLabel(p)"):
+            panel.index("let launchProfiles")
+        ]
+        self.assertNotIn("sealed", label.lower())
+        self.assertNotIn("interpreter that honors it lands", panel)
+        self.assertNotIn("for now it re-labels", panel)
+
+    def test_creation_retains_content_and_identity_across_source_edit(self):
         ws = self.workspace("ws-profiled")
+        source_path = os.path.join(profiles.profiles_dir(self.home), "light.json")
+        with open(source_path, "rb") as fh:
+            before_use = fh.read()
         status, body = self.create_run(ws, profile="light")
         self.assertEqual(status, 201)
         rid = body["run"]["id"]
-        # The run config carries the {name, version, hash} snapshot.
-        cfg = st.load(driver.default_state_path(ws))["config"]
+        state_path = driver.default_state_path(ws)
+        state = st.load(state_path)
+        cfg = state["config"]
         ref = cfg["profile_ref"]
         light = profiles.load(self.home, "light")
         self.assertEqual(
@@ -1920,17 +1981,42 @@ class ProfilesApiTest(ServiceApiTest):
             {"name": "light", "version": light["version"],
              "hash": profiles.semantic_hash(light["profile"])},
         )
-        # The sealed semantic content is embedded too, so the driver can
-        # interpret the run self-containedly and its hash matches the ref.
         self.assertEqual(cfg["profile"], light["profile"])
+        self.assertTrue(profiles.verify_retained(ref, cfg["profile"]))
+        with open(source_path, "rb") as fh:
+            self.assertEqual(fh.read(), before_use)
+
+        edited = profiles.load(self.home, "light")
+        edited["profile"]["p3_defer_max_risk"] = "high"
+        profiles.save(self.home, edited)
+        retained = st.load(state_path)
+        interpreter.verify_embedded(retained)
         self.assertEqual(
-            profiles.semantic_hash(cfg["profile"]), ref["hash"])
-        # First production reference sealed the profile on disk.
-        self.assertTrue(light["sealed"])
-        # run_detail surfaces the governing profile for the panel.
+            retained["config"]["profile"]["p3_defer_max_risk"], "medium"
+        )
+        self.assertEqual(
+            interpreter.effective_config(retained)["p3_defer_max_risk"],
+            "medium",
+        )
         status, detail = self.request_json("GET", "/api/runs/%s" % rid)
         self.assertEqual(status, 200)
         self.assertEqual(detail["profile"]["governing"], ref)
+
+    def test_creation_racing_edit_retains_one_complete_definition(self):
+        profiles.save(self.home, {
+            "name": "creation-race", "version": 1, "sealed": False,
+            "description": "race", "profile": {"definition": "before"},
+        })
+        ws = self.workspace("ws-creation-race")
+        response, before, after = self._race_strategy_read_with_edit(
+            "creation-race", lambda: self.create_run(ws, profile="creation-race")
+        )
+        self.assertEqual(response[0], 201)
+        cfg = st.load(driver.default_state_path(ws))["config"]
+        self.assertIn(cfg["profile"], (before, after))
+        self.assertEqual(
+            cfg["profile_ref"]["hash"], profiles.semantic_hash(cfg["profile"])
+        )
 
     def test_create_unknown_profile_400_and_no_state(self):
         ws = self.workspace("ws-badprofile")
@@ -1967,25 +2053,24 @@ class ProfilesApiTest(ServiceApiTest):
             "GET", "/api/runs/%s" % body["run"]["id"])
         self.assertIsNone(detail["profile"])
 
-    def test_post_creates_profile_unsealed(self):
+    def test_post_creates_editable_profile(self):
         doc = {"name": "custom", "version": 1, "sealed": False,
                "description": "d", "profile": {"p3_defer_max_risk": "high"}}
         status, body = self.request_json("POST", "/api/profiles", doc)
         self.assertEqual(status, 200)
-        self.assertFalse(body["profile"]["sealed"])
+        self.assertNotIn("sealed", body["profile"])
         self.assertEqual(
             body["profile"]["hash"], profiles.semantic_hash(doc["profile"]))
         # It now shows up in the listing.
         _, listed = self.request_json("GET", "/api/profiles")
         self.assertIn("custom", {p["name"] for p in listed["profiles"]})
 
-    def test_post_never_seals_even_if_body_asks(self):
-        # The save API must not seal — only a run's first reference does.
+    def test_post_ignores_legacy_sealed_input(self):
         doc = {"name": "wannaseal", "version": 1, "sealed": True,
                "description": "d", "profile": {"a": 1}}
         status, body = self.request_json("POST", "/api/profiles", doc)
         self.assertEqual(status, 200)
-        self.assertFalse(body["profile"]["sealed"])
+        self.assertNotIn("sealed", body["profile"])
         self.assertFalse(profiles.load(self.home, "wannaseal")["sealed"])
 
     def test_post_rejects_bad_document(self):
@@ -1995,33 +2080,199 @@ class ProfilesApiTest(ServiceApiTest):
             self.assertEqual(status, 400)
             self.assertFalse(body["ok"])
 
-    def test_profile_swap_writes_overlay_and_regoverns(self):
+    def test_invalid_strategy_edit_preserves_prior_definition(self):
+        doc = {"name": "steady", "version": 1, "sealed": False,
+               "description": "before", "profile": {"a": 1}}
+        self.request_json("POST", "/api/profiles", doc)
+        invalid = dict(doc, profile={})
+        status, body = self.request_json("POST", "/api/profiles", invalid)
+        self.assertEqual(status, 400)
+        self.assertTrue(body["error"])
+        self.assertEqual(profiles.load(self.home, "steady"), doc)
+
+    def test_profile_swap_retains_content_and_governs_future_decisions(self):
         ws = self.workspace("ws-swap")
-        status, body = self.create_run(ws, profile="light")
+        status, body = self.create_run(
+            ws, profile="light", config={"git": {"enabled": False}}
+        )
         self.assertEqual(status, 201)
         rid = body["run"]["id"]
-        # Repoint the run at strict.
+        entry = registry.get(registry.load(self.home), rid)
+        before_state = st.load(entry["state_path"])
+        prior_events = json.loads(json.dumps(before_state["events"]))
+        base_ref = before_state["config"]["profile_ref"]
+        strict_path = os.path.join(
+            profiles.profiles_dir(self.home), "strict.json"
+        )
+        with open(strict_path, "rb") as fh:
+            strict_before = fh.read()
+
         status, sw = self.request_json(
             "POST", "/api/runs/%s/profile" % rid, {"profile": "strict"})
         self.assertEqual(status, 200)
+        with open(strict_path, "rb") as fh:
+            self.assertEqual(fh.read(), strict_before)
         strict = profiles.load(self.home, "strict")
-        self.assertEqual(sw["profile_swap"]["ref"]["name"], "strict")
-        self.assertTrue(strict["sealed"])  # referencing strict sealed it
-        # The overlay file sits beside the state, operator-owned.
-        entry = registry.get(registry.load(self.home), rid)
+        swap = sw["profile_swap"]
+        self.assertEqual(swap["ref"]["name"], "strict")
+        self.assertEqual(swap["profile"], strict["profile"])
+        self.assertTrue(profiles.verify_retained(swap["ref"], swap["profile"]))
         overlay = os.path.join(
             os.path.dirname(entry["state_path"]), "profile_swap.json")
         self.assertTrue(os.path.isfile(overlay))
-        # run_detail now governs by the swap; base is preserved.
         status, detail = self.request_json("GET", "/api/runs/%s" % rid)
         self.assertEqual(detail["profile"]["base"]["name"], "light")
         self.assertEqual(detail["profile"]["governing"]["name"], "strict")
+
+        runtime = driver.Driver(
+            entry["state_path"], runner=mock.Mock(),
+            model_profiles_home=self.home,
+        )
+        def observe_transition():
+            on_disk = st.load(entry["state_path"])
+            self.assertEqual(on_disk["events"][-1]["type"], "profile_changed")
+            return "observed"
+
+        with mock.patch.object(runtime, "_do_draft", side_effect=observe_transition):
+            action, _note = runtime.step()
+        self.assertEqual(action.type, driver.A_DRAFT)
+        applied = st.load(entry["state_path"])
+        self.assertEqual(applied["events"][:len(prior_events)], prior_events)
+        transitions = [
+            event for event in applied["events"]
+            if event.get("type") == "profile_changed"
+        ]
+        self.assertEqual(len(transitions), 1)
         self.assertEqual(
-            detail["profile"]["swap"]["ref"]["hash"],
-            profiles.semantic_hash(strict["profile"]))
-        # Base config.profile_ref is untouched — swap != edit of the run.
-        cfg = st.load(entry["state_path"])["config"]
-        self.assertEqual(cfg["profile_ref"]["name"], "light")
+            transitions[0],
+            {
+                "seq": len(prior_events),
+                "at": transitions[0]["at"],
+                "type": "profile_changed",
+                "from": base_ref,
+                "to": swap["ref"],
+                "profile": swap["profile"],
+            },
+        )
+        self.assertEqual(interpreter.governing_profile(applied), swap["profile"])
+        self.assertEqual(runtime.config["p3_defer_max_risk"], "low")
+
+        edited = profiles.load(self.home, "strict")
+        edited["profile"]["p3_defer_max_risk"] = "high"
+        profiles.save(self.home, edited)
+        self.assertEqual(
+            interpreter.governing_profile(st.load(entry["state_path"]))
+            ["p3_defer_max_risk"],
+            "low",
+        )
+        with mock.patch.object(runtime, "_do_draft", return_value="again"):
+            runtime.step()
+        self.assertEqual(
+            len([e for e in runtime.state["events"]
+                 if e.get("type") == "profile_changed"]),
+            1,
+        )
+
+    def test_delayed_uninterpretable_profile_swap_fails_without_raw_exception(self):
+        status, _body = self.request_json("POST", "/api/profiles", {
+            "name": "uninterpretable",
+            "version": 1,
+            "sealed": False,
+            "description": "accepted but not implemented",
+            "profile": {"stages": [{"loop": "parallel"}]},
+        })
+        self.assertEqual(status, 200)
+        ws = self.workspace("ws-uninterpretable-swap")
+        _, created = self.create_run(
+            ws, profile="light", config={"git": {"enabled": False}}
+        )
+        run_id = created["run"]["id"]
+        entry = registry.get(registry.load(self.home), run_id)
+        status, _swap = self.request_json(
+            "POST", "/api/runs/%s/profile" % run_id,
+            {"profile": "uninterpretable"},
+        )
+        self.assertEqual(status, 200)
+        runtime = driver.Driver(
+            entry["state_path"], runner=mock.Mock(),
+            model_profiles_home=self.home,
+        )
+        def finish_draft():
+            st.transition_unit(
+                runtime.state,
+                st.current_unit(runtime.state),
+                st.U_PRE_REVIEW_VERIFY,
+                reason="drafted",
+            )
+            return "drafted"
+
+        with mock.patch.object(
+            runtime, "_do_draft", side_effect=finish_draft
+        ):
+            action, _note = runtime.step()
+        self.assertEqual(action.type, driver.A_DRAFT)
+        self.assertEqual(runtime.state["events"][-1]["type"], "unit_transition")
+        st.transition_unit(
+            runtime.state,
+            st.current_unit(runtime.state),
+            st.U_ROUNDS,
+            reason="verified",
+        )
+        runtime._save()
+
+        action, note = runtime.step()
+
+        self.assertEqual(action.type, driver.A_FAILED)
+        self.assertIn("not interpreted yet", note)
+        persisted = st.load(entry["state_path"])
+        self.assertEqual(persisted["failure"]["type"], "orchestrator")
+        self.assertIn("not interpretable", persisted["failure"]["reason"])
+        event_types = [event["type"] for event in persisted["events"]]
+        change_index = event_types.index("profile_changed")
+        self.assertEqual(
+            event_types[change_index:],
+            [
+                "profile_changed",
+                "unit_transition",
+                "unit_transition",
+                "run_failed",
+            ],
+        )
+        self.assertEqual(driver.decide(persisted).type, driver.A_FAILED)
+
+    def test_legacy_identity_only_profile_swap_is_inert(self):
+        ws = self.workspace("ws-legacy-swap")
+        _, created = self.create_run(
+            ws, config={"git": {"enabled": False}}
+        )
+        run_id = created["run"]["id"]
+        entry = registry.get(registry.load(self.home), run_id)
+        overlay_path = os.path.join(
+            os.path.dirname(entry["state_path"]), "profile_swap.json"
+        )
+        legacy_overlay = {
+            "ref": profiles.reference(self.home, "light"),
+            "at": registry.now_iso(),
+        }
+        with open(overlay_path, "w", encoding="utf-8") as fh:
+            json.dump(legacy_overlay, fh)
+
+        self.assertIsNone(service.read_profile(entry))
+        runtime = driver.Driver(
+            entry["state_path"], runner=mock.Mock(),
+            model_profiles_home=self.home,
+        )
+        with mock.patch.object(runtime, "_do_draft", return_value="observed"):
+            action, note = runtime.step()
+
+        self.assertEqual(action.type, driver.A_DRAFT)
+        self.assertEqual(note, "observed")
+        self.assertFalse(any(
+            event.get("type") == "profile_changed"
+            for event in runtime.state["events"]
+        ))
+        with open(overlay_path, "r", encoding="utf-8") as fh:
+            self.assertEqual(json.load(fh), legacy_overlay)
 
     def test_profile_swap_unknown_profile_400(self):
         ws = self.workspace("ws-swap-bad")
@@ -2031,6 +2282,99 @@ class ProfilesApiTest(ServiceApiTest):
             "POST", "/api/runs/%s/profile" % rid, {"profile": "ghost"})
         self.assertEqual(status, 400)
         self.assertIn("ghost", out["error"])
+
+    def test_profile_swap_can_govern_a_run_without_a_base_strategy(self):
+        ws = self.workspace("ws-swap-profileless")
+        _, body = self.create_run(
+            ws, config={"git": {"enabled": False}}
+        )
+        rid = body["run"]["id"]
+        status, swap = self.request_json(
+            "POST", "/api/runs/%s/profile" % rid, {"profile": "light"}
+        )
+        self.assertEqual(status, 200)
+        entry = registry.get(registry.load(self.home), rid)
+        runtime = driver.Driver(
+            entry["state_path"], runner=mock.Mock(),
+            model_profiles_home=self.home,
+        )
+        with mock.patch.object(runtime, "_do_draft", return_value="observed"):
+            runtime.step()
+        event = next(
+            e for e in runtime.state["events"]
+            if e.get("type") == "profile_changed"
+        )
+        self.assertIsNone(event["from"])
+        self.assertEqual(event["to"], swap["profile_swap"]["ref"])
+
+    def test_profile_swap_racing_edit_retains_one_complete_definition(self):
+        profiles.save(self.home, {
+            "name": "swap-race", "version": 1, "sealed": False,
+            "description": "race", "profile": {"definition": "before"},
+        })
+        _, created = self.create_run(self.workspace("ws-swap-race"))
+        run_id = created["run"]["id"]
+        response, before, after = self._race_strategy_read_with_edit(
+            "swap-race",
+            lambda: self.request_json(
+                "POST", "/api/runs/%s/profile" % run_id,
+                {"profile": "swap-race"},
+            ),
+        )
+        self.assertEqual(response[0], 200)
+        retained = response[1]["profile_swap"]
+        self.assertIn(retained["profile"], (before, after))
+        self.assertEqual(
+            retained["ref"]["hash"],
+            profiles.semantic_hash(retained["profile"]),
+        )
+
+    def test_concurrent_profile_swaps_do_not_share_staging_file(self):
+        profiles.save(self.home, {
+            "name": "swap-a", "version": 1, "sealed": False,
+            "description": "a", "profile": {"definition": "a"},
+        })
+        profiles.save(self.home, {
+            "name": "swap-b", "version": 1, "sealed": False,
+            "description": "b", "profile": {"definition": "b"},
+        })
+        _, created = self.create_run(self.workspace("ws-concurrent-swaps"))
+        run_id = created["run"]["id"]
+        replacements_ready = threading.Barrier(2)
+        real_replace = os.replace
+        staging_paths = []
+        results = []
+        errors = []
+
+        def synchronized_replace(source, target):
+            staging_paths.append(source)
+            replacements_ready.wait(timeout=5)
+            real_replace(source, target)
+
+        def change(name):
+            try:
+                results.append(service.set_profile_swap(
+                    self.home, run_id, {"profile": name}
+                ))
+            except Exception as exc:
+                errors.append(exc)
+
+        with mock.patch.object(
+                service.os, "replace", side_effect=synchronized_replace):
+            threads = [threading.Thread(target=change, args=(name,))
+                       for name in ("swap-a", "swap-b")]
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join(timeout=10)
+
+        self.assertFalse(any(thread.is_alive() for thread in threads))
+        self.assertEqual(errors, [])
+        self.assertEqual(len(set(staging_paths)), 2)
+        self.assertEqual({item["ref"]["name"] for item in results},
+                         {"swap-a", "swap-b"})
+        entry = registry.get(registry.load(self.home), run_id)
+        self.assertIn(service.read_profile_overlay(entry), results)
 
     def test_profile_swap_unknown_run_404(self):
         status, out = self.request_json(
@@ -2046,22 +2390,16 @@ class ProfilesApiTest(ServiceApiTest):
         self.assertEqual(status, 400)
         self.assertIn("profile", out["error"])
 
-    def test_post_preserves_seal_and_refuses_content_change(self):
+    def test_used_profile_edit_replaces_content(self):
         doc = {"name": "frozen", "version": 1, "sealed": False,
                "description": "d", "profile": {"a": 1}}
         self.request_json("POST", "/api/profiles", doc)
-        profiles.reference(self.home, "frozen")  # first production use seals it
-        # A metadata-only edit still lands.
-        meta = dict(doc, description="clearer words")
-        status, body = self.request_json("POST", "/api/profiles", meta)
-        self.assertEqual(status, 200)
-        self.assertTrue(body["profile"]["sealed"])
-        self.assertEqual(body["profile"]["description"], "clearer words")
-        # A semantic-content change on the sealed profile is refused.
+        profiles.reference(self.home, "frozen")
         changed = dict(doc, profile={"a": 2})
         status, body = self.request_json("POST", "/api/profiles", changed)
-        self.assertEqual(status, 400)
-        self.assertIn("sealed", body["error"])
+        self.assertEqual(status, 200)
+        self.assertEqual(body["profile"]["profile"], {"a": 2})
+        self.assertNotIn("sealed", body["profile"])
 
 
 class ModelProfilesApiTest(ServiceApiTest):
@@ -2237,8 +2575,8 @@ class ModelProfilesApiTest(ServiceApiTest):
         status, body = self.request_json("GET", "/api/model-profiles")
         self.assertEqual(status, 200)
 
-        # The strategy-profile surface is untouched by the new catalogue:
-        # same names, same envelope keys, and no model profile leaks in.
+        # The strategy catalogue remains separate: no model-profile fields
+        # leak in, and editable strategy definitions expose no seal status.
         status, body = self.request_json("GET", "/api/profiles")
         self.assertEqual(status, 200)
         strategy = {p["name"]: p for p in body["profiles"]}
@@ -2246,8 +2584,7 @@ class ModelProfilesApiTest(ServiceApiTest):
         for entry in strategy.values():
             self.assertEqual(
                 set(entry),
-                {"name", "version", "sealed", "description", "hash",
-                 "profile"})
+                {"name", "version", "description", "hash", "profile"})
 
 
 class ModelProfileSurfacesApiTest(ServiceApiTest):

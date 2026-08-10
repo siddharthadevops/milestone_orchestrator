@@ -254,4 +254,5 @@ The milestone is complete when:
 | slice_impl-02-c (Profile resolution, binding, and attribution) | reviewed | 2 | satisfied | ddf9ccf |
 | slice_doc-03 (Model-profile selection and override surfaces) | reviewed | 5 | satisfied | e741a95 |
 | slice_impl-03 (Model-profile selection and override surfaces) | reviewed | 8 | satisfied | 0f9fead |
-| slice_doc-04 (Strategy editability without first-use seals) | reviewed | 2 | satisfied | - |
+| slice_doc-04 (Strategy editability without first-use seals) | reviewed | 2 | satisfied | 4972304 |
+| slice_impl-04 (Strategy editability without first-use seals) | reviewed | 23 | satisfied | - |

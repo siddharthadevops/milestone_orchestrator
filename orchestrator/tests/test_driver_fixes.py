@@ -29,6 +29,7 @@ import unittest
 
 from orchestrator import contracts
 from orchestrator import driver as drv
+from orchestrator import profiles
 from orchestrator import runners
 from orchestrator import state as st
 
@@ -601,6 +602,71 @@ class TestMilestoneCloseIdempotent(DriverTestCase):
                 again = drv.Driver(path, runner=runners.MockRunner([]))
                 self.assertEqual(again.run(), 0)
             self.assertEqual(closed_count(), 1)
+
+
+class TestRunStepLimitTerminalObservation(unittest.TestCase):
+    def queue_profile_swap(self, driver):
+        profile = {"p3_defer_max_risk": "low"}
+        ref = {
+            "name": "replacement",
+            "version": 1,
+            "hash": profiles.semantic_hash(profile),
+        }
+        with open(driver._profile_swap_path(), "w", encoding="utf-8") as fh:
+            json.dump({"ref": ref, "profile": profile}, fh)
+        return ref
+
+    def test_last_allowed_action_reports_terminal_success(self):
+        with tempfile.TemporaryDirectory(prefix="orch-step-limit-") as ws:
+            path = init_state(ws, make_config())
+            driver = drv.Driver(path, runner=runners.MockRunner([]))
+            replacement_refs = []
+
+            def close_on_step():
+                replacement_refs.append(self.queue_profile_swap(driver))
+                with driver._exclusive():
+                    driver._assert_not_stale()
+                    st.current_unit(driver.state)["status"] = st.U_SEALED
+                    driver._save()
+                return drv.Action(drv.A_SEAL_ATTEMPT), None
+
+            driver.step = close_on_step
+            self.assertEqual(driver.run(max_steps=1), 0)
+            state = st.load(path)
+            self.assertEqual(state["milestone"]["status"], st.M_CLOSED)
+            self.assertEqual(
+                [e["to"] for e in state["events"]
+                 if e["type"] == "profile_changed"],
+                replacement_refs,
+            )
+
+    def test_last_allowed_action_reports_terminal_failure(self):
+        with tempfile.TemporaryDirectory(prefix="orch-step-limit-") as ws:
+            path = init_state(ws, make_config())
+            driver = drv.Driver(path, runner=runners.MockRunner([]))
+            replacement_refs = []
+
+            def fail_on_step():
+                replacement_refs.append(self.queue_profile_swap(driver))
+                with driver._exclusive():
+                    driver._assert_not_stale()
+                    st.fail_run(
+                        driver.state,
+                        "terminal failure on final allowed action",
+                        unit=st.current_unit(driver.state),
+                        type_="orchestrator",
+                    )
+                    driver._save()
+                return drv.Action(drv.A_VERIFY), "run failed"
+
+            driver.step = fail_on_step
+            self.assertEqual(driver.run(max_steps=1), 2)
+            state = st.load(path)
+            self.assertEqual(
+                [e["to"] for e in state["events"]
+                 if e["type"] == "profile_changed"],
+                replacement_refs,
+            )
 
 
 class TestProtocolFailureRawOutputs(DriverTestCase):

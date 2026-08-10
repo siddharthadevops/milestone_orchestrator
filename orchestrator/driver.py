@@ -38,7 +38,7 @@ except ImportError:  # pragma: no cover - non-POSIX: flock degrades to the
 
 from . import brainstorming, brainstorming_lifecycle, brainstorming_milestone
 from . import contracts, errclass, gitops, interpreter, kvstore, ledgers
-from . import model_profiles, pricing, projects, prompts, registry, runners
+from . import model_profiles, pricing, profiles, projects, prompts, registry, runners
 from . import verifiers, workareas
 from . import state as st
 
@@ -703,6 +703,8 @@ def resolve_current_brainstorming_profile(
 
 
 class Driver(object):
+    model_profiles_home = None
+
     def __init__(self, state_path, runner=None, model_profiles_home=None):
         self.state_path = state_path
         self.state = st.load(state_path)
@@ -710,16 +712,12 @@ class Driver(object):
             os.path.abspath(model_profiles_home)
             if model_profiles_home is not None else None
         )
-        # The governing profile's dials merge over the run config here
-        # (spec §5). Profile-less runs and the dial-less `legacy` profile
-        # get the raw config unchanged, so they stay bit-identical; a
-        # `strict`/`light` run reads its own thresholds through the same
-        # self.config every existing read-site already uses.
-        self.config = interpreter.effective_config(self.state)
-        # Fail loudly at startup if an embedded profile snapshot is
-        # inconsistent (content hash vs recorded profile_ref hash). No-op
-        # for profile-less runs and ref-only labels.
+        # Fail loudly before interpreting any retained strategy pair.
         interpreter.verify_embedded(self.state)
+        # Merge strategy dials here and whenever an active-run replacement
+        # is applied at a later step boundary. Profile-less and dial-less
+        # runs keep the raw config unchanged.
+        self.config = interpreter.effective_config(self.state)
         self._validate_billing()
         self.workspace = self.state["workspace"]
         self._busy_lock = threading.RLock()
@@ -851,6 +849,74 @@ class Driver(object):
 
     def _control_path(self):
         return os.path.join(os.path.dirname(self.state_path), "control.json")
+
+    def _profile_swap_path(self):
+        return os.path.join(
+            os.path.dirname(self.state_path), "profile_swap.json"
+        )
+
+    def _read_profile_swap(self):
+        """Read and validate the operator's retained strategy replacement."""
+        try:
+            with open(self._profile_swap_path(), "r", encoding="utf-8") as fh:
+                overlay = json.load(fh)
+        except FileNotFoundError:
+            return None
+        except (OSError, ValueError) as exc:
+            raise profiles.ProfileError(
+                "strategy profile change is unreadable: %s" % exc
+            )
+        if not isinstance(overlay, dict):
+            raise profiles.ProfileError(
+                "strategy profile change must be an object"
+            )
+        ref = overlay.get("ref")
+        if (
+            set(overlay) == {"ref", "at"}
+            and isinstance(ref, dict)
+            and set(ref) == {"name", "version", "hash"}
+            and isinstance(ref.get("name"), str)
+            and bool(ref["name"])
+            and isinstance(ref.get("version"), int)
+            and ref["version"] >= 1
+            and isinstance(ref.get("hash"), str)
+            and bool(ref["hash"])
+            and isinstance(overlay.get("at"), str)
+        ):
+            # The pre-retention service wrote this identity-only shape but
+            # never applied it. It cannot be upgraded from mutable catalogue
+            # state without inventing retained content, so it stays inert.
+            return None
+        profiles.verify_retained(
+            ref, overlay.get("profile")
+        )
+        return overlay
+
+    def _apply_profile_swap(self):
+        """Apply one pending replacement before the next action decision.
+
+        The generic event becomes the interpreter's new authority. Leaving
+        the overlay in place makes restart recovery idempotent because an
+        already-governing identity is a no-op.
+        """
+        overlay = self._read_profile_swap()
+        if overlay is None:
+            return False
+        prior = interpreter.governing_profile_ref(self.state)
+        if overlay["ref"] == prior:
+            return False
+        st.append_event(
+            self.state,
+            "profile_changed",
+            **{
+                "from": copy.deepcopy(prior),
+                "to": copy.deepcopy(overlay["ref"]),
+                "profile": copy.deepcopy(overlay["profile"]),
+            }
+        )
+        interpreter.verify_embedded(self.state)
+        self.config = interpreter.effective_config(self.state)
+        return True
 
     def _control(self):
         try:
@@ -5058,30 +5124,78 @@ class Driver(object):
 
     # -- action executors --------------------------------------------------
 
+    def _decide_at_strategy_boundary(self):
+        """Apply a pending strategy replacement before deciding an action."""
+        try:
+            if self._apply_profile_swap():
+                # Persist the transition before any newly governed worker
+                # dispatch. A killed call cannot erase or duplicate it.
+                self._save()
+        except profiles.ProfileError as exc:
+            st.fail_run(
+                self.state,
+                "strategy profile change invalid: %s" % exc,
+                unit=st.current_unit(self.state),
+                type_="orchestrator",
+            )
+            self._save()
+            return (
+                Action(A_FAILED, reason=str(exc)),
+                "run failed: %s" % exc,
+            )
+        try:
+            return decide(self.state), None
+        except st.IllegalTransition as exc:
+            unit = st.current_unit(self.state)
+            events = self.state.get("events") or []
+            changed_profile_governs = any(
+                event.get("type") == "profile_changed"
+                for event in reversed(events)
+            )
+            if (
+                not changed_profile_governs
+                or unit is None
+                or unit.get("status") != st.U_ROUNDS
+                or interpreter.rounds_loop(self.state)
+                == interpreter.FAMILY_UNTIL_CLEAN
+            ):
+                raise
+            st.fail_run(
+                self.state,
+                "strategy profile change is not interpretable: %s" % exc,
+                unit=unit,
+                type_="orchestrator",
+            )
+            self._save()
+            return (
+                Action(A_FAILED, reason=str(exc)),
+                "run failed: %s" % exc,
+            )
+
     def step(self):
         """Execute exactly one action. Returns (action, note).
 
         Worker calls have at-least-once semantics: records are saved only
         after the handler completes, so a crash mid-handler re-executes the
         same call on resume (see README, "Operational semantics")."""
-        action = decide(self.state)
-        if action.type in (A_DONE, A_FAILED):
-            return action, None
-        handler = {
-            A_DRAFT: self._do_draft,
-            A_VERIFY: self._do_verify,
-            A_REVIEW_ROUND: self._do_review_round,
-            A_FIX: self._do_fix,
-            A_DELTA_REVIEW: self._do_delta_review,
-            A_SEAL_ATTEMPT: self._do_seal_attempt,
-            A_BRAINSTORM_WAIT: self._do_brainstorming_wait,
-        }[action.type]
-        waiting_session = (
-            self._brainstorming_wait_session()
-            if action.type == A_BRAINSTORM_WAIT else None
-        )
         with self._exclusive():
             self._assert_not_stale()
+            action, boundary_note = self._decide_at_strategy_boundary()
+            if action.type in (A_DONE, A_FAILED):
+                return action, boundary_note
+            handler = {
+                A_DRAFT: self._do_draft,
+                A_VERIFY: self._do_verify,
+                A_REVIEW_ROUND: self._do_review_round,
+                A_FIX: self._do_fix,
+                A_DELTA_REVIEW: self._do_delta_review,
+                A_SEAL_ATTEMPT: self._do_seal_attempt,
+                A_BRAINSTORM_WAIT: self._do_brainstorming_wait,
+            }[action.type]
+            waiting_session = (
+                self._brainstorming_wait_session()
+                if action.type == A_BRAINSTORM_WAIT else None
+            )
             try:
                 note = handler()
             except StopStep as exc:
@@ -5104,7 +5218,18 @@ class Driver(object):
     def run(self, max_steps=1000):
         steps = 0
         while True:
-            action = decide(self.state)
+            unit = st.current_unit(self.state)
+            waiting = bool(unit and unit.get("brainstorming_wait"))
+            waiting_session = self._brainstorming_wait_session()
+            if steps >= max_steps and not waiting:
+                with self._exclusive():
+                    self._assert_not_stale()
+                    action, _note = self._decide_at_strategy_boundary()
+                if action.type not in (A_DONE, A_FAILED):
+                    return 3
+            else:
+                sealed_before = self._sealed_keys()
+                action, _note = self.step()
             if action.type == A_DONE:
                 if st.current_unit(self.state) is None:
                     with self._exclusive():
@@ -5114,14 +5239,6 @@ class Driver(object):
                 return 0
             if action.type == A_FAILED:
                 return 2
-            if steps >= max_steps and action.type != A_BRAINSTORM_WAIT:
-                return 3
-            sealed_before = self._sealed_keys()
-            waiting_session = (
-                self._brainstorming_wait_session()
-                if action.type == A_BRAINSTORM_WAIT else None
-            )
-            self.step()
             if (
                 action.type == A_BRAINSTORM_WAIT
                 and self._brainstorming_wait_session() == waiting_session

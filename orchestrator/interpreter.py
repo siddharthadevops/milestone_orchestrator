@@ -31,13 +31,22 @@ PROFILE_DIALS = ("p3_defer_max_risk", "p3_reclassify_debt")
 
 def governing_profile(state):
     """The semantic content of the run's governing strategy profile, or
-    None. Embedded in the run config as a self-contained snapshot, so the
-    driver needs no service home to interpret it; its identity hash rides
-    alongside in `profile_ref`. Absent for a profile-less run — and absent
-    for a run that recorded only a profile_ref label without embedded
-    content, which the interpreter treats exactly like profile-less
-    (family_until_clean)."""
+    None. Creation content is embedded in config. Each applied active-run
+    change appends a complete retained replacement to the generic event
+    ledger; the latest such event wins without consulting the mutable source.
+    """
+    for event in reversed(state.get("events") or []):
+        if event.get("type") == "profile_changed":
+            return event.get("profile")
     return (state.get("config") or {}).get("profile")
+
+
+def governing_profile_ref(state):
+    """Identity paired with :func:`governing_profile`, if one exists."""
+    for event in reversed(state.get("events") or []):
+        if event.get("type") == "profile_changed":
+            return event.get("to")
+    return (state.get("config") or {}).get("profile_ref")
 
 
 def rounds_loop(state):
@@ -178,26 +187,33 @@ def defer_scope_for(state, unit_kind):
 
 
 def verify_embedded(state):
-    """Fail loudly if an embedded profile snapshot is internally
-    inconsistent — its content hash must match the recorded profile_ref
-    hash (spec decision 15, 'verified on load'). No-op for a profile-less
-    run and for a ref-only label with no embedded content (interpreted as
-    family_until_clean); a content/hash mismatch means the snapshot was
-    tampered with or written wrong, and running it would silently govern a
-    unit by the wrong profile."""
+    """Fail loudly if any retained strategy pair or transition is invalid.
+
+    Verification is entirely run-local: later catalogue contents have no
+    authority. The creation pair lives in config and applied replacements
+    live in append-only ``profile_changed`` events.
+    """
     from . import profiles
 
     cfg = state.get("config") or {}
     content = cfg.get("profile")
-    if content is None:
-        return
-    ref = cfg.get("profile_ref") or {}
-    recorded = ref.get("hash")
-    if not recorded:
-        return
-    actual = profiles.semantic_hash(content)
-    if actual != recorded:
-        raise ValueError(
-            "embedded profile snapshot is inconsistent: content hash %s != "
-            "recorded profile_ref hash %s" % (actual, recorded)
-        )
+    current_ref = cfg.get("profile_ref")
+    if content is not None and (current_ref or {}).get("hash"):
+        try:
+            profiles.verify_retained(current_ref, content)
+        except profiles.ProfileError as exc:
+            raise ValueError("embedded profile is inconsistent: %s" % exc)
+
+    for event in state.get("events") or []:
+        if event.get("type") != "profile_changed":
+            continue
+        if event.get("from") != current_ref:
+            raise ValueError(
+                "profile_changed transition is inconsistent: from %r != %r"
+                % (event.get("from"), current_ref)
+            )
+        try:
+            profiles.verify_retained(event.get("to"), event.get("profile"))
+        except profiles.ProfileError as exc:
+            raise ValueError("profile_changed transition is inconsistent: %s" % exc)
+        current_ref = event["to"]

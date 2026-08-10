@@ -1008,10 +1008,9 @@
     <select id="ps_sel" onchange="onPsChange()"></select>
     <div class="hint" id="ps_hint"></div></div>
   <div class="hint" style="margin-top:8px">Swap ≠ edit: the run points at
-    another profile; the profile itself is never mutated. The repoint takes
-    effect at the next stage boundary — the interpreter that honors it lands
-    in a later phase; for now it re-labels the run's governing profile and
-    records the operator's intent.</div>
+    another profile; the reusable definition itself is never mutated. The
+    resolved replacement takes effect before the driver's next action
+    decision; work already decided keeps its prior strategy.</div>
   <div class="formrow">
     <span id="ps_err" style="color:var(--bad,#c33);font-size:12px"></span>
     <button class="btn"
@@ -3719,8 +3718,8 @@ async function refreshDetail() {
             swapped ? ` · swapped (base ${esc(baseLabel)})` : ""}</span>
           <button class="btn" onclick="openProfileSwap()">Change…</button>
         </div>
-        <div class="amend-hint">Repoint takes effect at the next stage
-          boundary; the interpreter that honors it lands in a later phase.</div></div>`;
+        <div class="amend-hint">The retained replacement takes effect before
+          the driver's next action decision.</div></div>`;
     }
     html += `<div class="card danger-zone"><h3>Danger zone</h3>
       <div class="danger-copy">Discarding removes this run from the panel and
@@ -4457,7 +4456,7 @@ async function saveRunModelProfile() {
 // it only once a profile has actually been cloned/versioned past v1.
 function profileLabel(p) {
   const v = p.version > 1 ? `@${p.version}` : "";
-  return `${p.name}${v}${p.sealed ? " · sealed" : ""}`;
+  return `${p.name}${v}`;
 }
 let launchProfiles = [];
 async function loadProfiles() {

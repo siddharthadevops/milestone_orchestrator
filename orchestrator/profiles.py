@@ -1,4 +1,4 @@
-"""Strategy profiles: named, sealed, reusable review-strategy documents.
+"""Strategy profiles: named, editable review-strategy documents.
 
 Phase 1 of the build-driven review reform (see
 implementation/brainstorming/build-driven-review-and-strategy-profiles.md).
@@ -11,19 +11,18 @@ A profile is a JSON document under `<home>/profiles/<name>.json`:
      "description": "...",
      "profile": { ...semantic content: stages, dials... }}
 
-Identity and sealing (the spec's decision 15, hash-vs-seal corrected):
+Identity and run retention:
 
 - The IDENTITY of a profile is the content hash of its CANONICAL
   SEMANTIC CONTENT — the `profile` object only, serialized as canonical
   JSON (sorted keys, no whitespace). `name`, `version`, `description`,
-  and `sealed` are METADATA outside the hash: sealing flips metadata
-  and never changes identity.
-- A profile SEALS on first production use (a run created with it). A
-  sealed profile is immutable: saving over it with different semantic
-  content is refused — editing means CLONING to a new name@version.
-- Runs snapshot `{name, version, hash}` into their config at creation;
-  loaders verify the stored hash against the file and fail loudly on
-  divergence (a hand-mutated sealed profile cannot silently govern).
+  and legacy `sealed` metadata are outside the hash.
+- Reusable definitions remain editable after use. A run resolves one
+  complete `{name, version, hash}` plus semantic-content pair and retains
+  that pair, so later source edits never re-govern it.
+- Legacy `sealed` metadata is accepted on read but has no authority. An
+  ordinary save normalizes it away; selecting a profile never mutates the
+  reusable source.
 
 The two SEED profiles (`strict`, `light`) express today's flow plus the
 reform's first dials. Their stage vocabulary is interpreted by later
@@ -34,6 +33,7 @@ machinery that lands in phase 2+ without breaking phase 1.
 import hashlib
 import json
 import os
+import tempfile
 
 PROFILES_DIRNAME = "profiles"
 
@@ -43,7 +43,7 @@ _RISK_LEVELS = ("low", "medium", "high", "xhigh")
 
 
 class ProfileError(RuntimeError):
-    """Invalid profile document, identity mismatch, or sealed-mutation."""
+    """Invalid profile document or retained identity/content mismatch."""
 
 
 def profiles_dir(home):
@@ -122,85 +122,71 @@ def list_profiles(home):
 
 
 def save(home, doc):
-    """Create or update a profile document.
+    """Create or wholly replace an editable profile document.
 
-    A SEALED profile's semantic content is immutable: overwriting is
-    allowed only when the semantic hash is unchanged (metadata edits —
-    e.g. description — stay legal). Changing sealed content requires
-    clone()."""
-    doc = _validate(doc, "profile %r" % (doc.get("name") if isinstance(doc, dict) else None))
+    The legacy ``sealed`` member remains accepted for stored-file
+    compatibility but never blocks an edit and is normalized to false by an
+    ordinary save.
+    """
+    doc = dict(_validate(
+        doc,
+        "profile %r" % (doc.get("name") if isinstance(doc, dict) else None),
+    ))
+    doc["sealed"] = False
     path = _path(home, doc["name"])
-    if os.path.exists(path):
-        existing = load(home, doc["name"])
-        if existing["sealed"]:
-            if semantic_hash(existing["profile"]) != semantic_hash(doc["profile"]):
-                raise ProfileError(
-                    "profile %r is sealed; its semantic content is "
-                    "immutable — clone it to a new name/version instead"
-                    % doc["name"]
-                )
-            doc = dict(doc, sealed=True)  # a seal is never un-flipped
     os.makedirs(profiles_dir(home), exist_ok=True)
-    tmp = path + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as fh:
-        json.dump(doc, fh, indent=1, sort_keys=True)
-    os.replace(tmp, path)
-    return doc
-
-
-def clone(home, name, new_name):
-    """Copy a profile's semantic content to a new UNSEALED document."""
-    src = load(home, name)
-    if os.path.exists(_path(home, new_name)):
-        raise ProfileError("profile %r already exists" % new_name)
-    doc = {
-        "name": new_name,
-        "version": 1,
-        "sealed": False,
-        "description": "cloned from %s@%s (%s)" % (
-            src["name"], src["version"], semantic_hash(src["profile"])
-        ),
-        "profile": json.loads(json.dumps(src["profile"])),
-    }
-    return save(home, doc)
-
-
-def seal(home, name):
-    """Seal a profile (first production use does this). Idempotent."""
-    doc = load(home, name)
-    if not doc["sealed"]:
-        doc["sealed"] = True
-        path = _path(home, name)
-        tmp = path + ".tmp"
-        with open(tmp, "w", encoding="utf-8") as fh:
+    fd, tmp = tempfile.mkstemp(
+        prefix=".strategy-profile-", suffix=".tmp", dir=profiles_dir(home)
+    )
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
             json.dump(doc, fh, indent=1, sort_keys=True)
         os.replace(tmp, path)
+    finally:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
     return doc
+
+
+def resolve(home, name):
+    """Resolve one self-consistent retained identity/content pair.
+
+    ``load`` observes one complete file replacement. Both the identity and
+    the detached semantic content are derived from that single document, so
+    a concurrent catalogue edit may win before or after this read but cannot
+    mix the two definitions.
+    """
+    doc = load(home, name)
+    content = json.loads(json.dumps(doc["profile"]))
+    ref = {
+        "name": doc["name"],
+        "version": doc["version"],
+        "hash": semantic_hash(content),
+    }
+    return ref, content
 
 
 def reference(home, name):
-    """The snapshot a run stores at creation: {name, version, hash}.
-    SEALS the profile — a referenced profile is in production."""
-    doc = seal(home, name)
-    return {
-        "name": doc["name"],
-        "version": doc["version"],
-        "hash": semantic_hash(doc["profile"]),
-    }
+    """Return the current identity without mutating the reusable source."""
+    ref, _content = resolve(home, name)
+    return ref
 
 
-def verify_reference(home, ref):
-    """Check a run's stored profile reference against the file on disk.
-    Returns the profile document; raises ProfileError on divergence."""
-    doc = load(home, ref["name"])
-    actual = semantic_hash(doc["profile"])
+def verify_retained(ref, content):
+    """Validate one retained pair without consulting mutable catalogue data."""
+    if not isinstance(ref, dict) or not isinstance(content, dict) or not content:
+        raise ProfileError("retained profile needs identity and content objects")
+    if not isinstance(ref.get("name"), str) or not ref["name"]:
+        raise ProfileError("retained profile identity needs a name")
+    if not isinstance(ref.get("version"), int) or ref["version"] < 1:
+        raise ProfileError("retained profile identity needs a valid version")
+    actual = semantic_hash(content)
     if actual != ref.get("hash"):
         raise ProfileError(
-            "profile %r on disk (hash %s) no longer matches the run's "
-            "snapshot (hash %s) — a sealed profile was mutated by hand"
+            "retained profile %r content hash %s does not match identity %s"
             % (ref["name"], actual, ref.get("hash"))
         )
-    return doc
+    return True
 
 
 # ---------------------------------------------------------------------------
@@ -277,7 +263,7 @@ SEEDS = {
 
 def ensure_seeds(home):
     """Write any missing seed profile. Existing files are never touched
-    (a seeded profile the operator edited or sealed stays as-is)."""
+    (a seeded profile the operator edited stays as-is)."""
     created = []
     for name, doc in SEEDS.items():
         if not os.path.exists(_path(home, name)):

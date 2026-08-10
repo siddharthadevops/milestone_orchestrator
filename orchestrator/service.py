@@ -197,7 +197,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from . import access as panel_access
 from . import brainstorming_lifecycle
-from . import driver, errclass, gitops, gitsync, kvstore, model_profiles
+from . import driver, errclass, gitops, gitsync, interpreter, kvstore, model_profiles
 from . import profiles
 from . import projects, registry
 from . import reuse_audit
@@ -1953,11 +1953,10 @@ def _create_bound_run(home, payload, workspace):
 
 
 def _snapshot_profile(state_path, ref, content):
-    """Write the run's profile snapshot into its config: the identity
-    (`profile_ref` = {name, version, hash}) AND the sealed semantic content
-    (`profile`), so the driver can interpret the run's stages and dials
-    self-containedly — no service home needed at run time, and the run
-    carries its exact governing profile for provenance. Append-only-safe:
+    """Retain a run's resolved identity and complete semantic content.
+
+    The driver can interpret the run self-containedly without consulting the
+    later mutable catalogue. Append-only-safe:
     only config keys are added — events and units are untouched — so
     st.save's history guard passes. The state exists but the driver has not
     started yet, so no driver lock is contended."""
@@ -1989,23 +1988,18 @@ def create_run(home, payload):
         if not bound:
             raise ApiError(400, "workspace (string) is required")
 
-    # Per-run strategy profile (build-driven review reform, phase 1b). When
-    # supplied, the run stores a {name, version, hash} snapshot of the
-    # chosen profile in its config and the profile SEALS (first production
-    # use). It is OPTIONAL during the reform build-out: a run with no
-    # profile is profile-less and behaves exactly as today — the driver
-    # does not read profiles yet (that lands with the stage interpreter),
-    # so a profiled run is likewise bit-identical for now; only the stored
-    # snapshot differs. Validated for existence here so a typo fails fast
-    # before any state is created; sealed and snapshotted only once the
-    # state exists (below).
+    # Resolve an optional strategy profile before creating state. Identity
+    # and content come from one source read, so an edit racing creation may
+    # place either complete definition in the run but cannot create a mixed
+    # pair. Selection never mutates or freezes the reusable definition.
     profile_name = payload.get("profile")
+    profile_binding = None
     if profile_name is not None:
         if not isinstance(profile_name, str) or not profile_name.strip():
             raise ApiError(400, "profile must be a non-empty profile name")
         profile_name = profile_name.strip()
         try:
-            profiles.load(home, profile_name)  # existence/validity, no seal
+            profile_binding = profiles.resolve(home, profile_name)
         except profiles.ProfileError as exc:
             raise ApiError(400, str(exc))
 
@@ -2147,14 +2141,8 @@ def create_run(home, payload):
         )
 
     if profile_name is not None:
-        # The state exists now: seal the profile (first production
-        # reference) and snapshot its identity AND content into the config.
-        try:
-            profile_ref = profiles.reference(home, profile_name)
-            profile_doc = profiles.load(home, profile_name)
-        except profiles.ProfileError as exc:
-            raise ApiError(400, str(exc))
-        _snapshot_profile(state_path, profile_ref, profile_doc["profile"])
+        profile_ref, profile_content = profile_binding
+        _snapshot_profile(state_path, profile_ref, profile_content)
 
     name = payload.get("name") or os.path.basename(workspace.rstrip("/")) or "run"
     run_id = registry.make_run_id()
@@ -2579,10 +2567,9 @@ def _profile_overlay_path(entry):
 def read_profile_overlay(entry):
     """The operator's current runtime repoint for this run, or None. An
     operator-owned, lock-free file beside the state (the amendments/acts
-    pattern): the operator writes it, and the driver will re-read it at
-    stage boundaries and record the profile_changed ledger event when the
-    repoint actually takes effect — that driver-side pickup lands with the
-    stage interpreter. Tolerant of a mid-write race (returns None)."""
+    pattern): the operator writes one retained pair, and the driver records
+    ``profile_changed`` before its next action decision. Tolerant of an
+    unreadable or incomplete file (returns None)."""
     try:
         with open(_profile_overlay_path(entry), "r", encoding="utf-8") as fh:
             data = json.load(fh)
@@ -2590,32 +2577,34 @@ def read_profile_overlay(entry):
         return None
     if not isinstance(data, dict):
         return None
-    ref = data.get("ref")
-    if not isinstance(ref, dict) or "name" not in ref:
+    ref, content = data.get("ref"), data.get("profile")
+    try:
+        profiles.verify_retained(ref, content)
+    except profiles.ProfileError:
         return None
-    return {"ref": ref, "at": data.get("at")}
+    return {"ref": ref, "profile": content, "at": data.get("at")}
 
 
 def read_profile(entry):
     """The run's governing strategy profile for the panel, or None for a
     profile-less, never-swapped run. Read straight from state (like
     read_acts) and tolerant of a transiently unreadable state. `base` is
-    the snapshot stored in the run config at creation; `swap` is the
+    retained pair stored in the run config at creation; `swap` is the
     operator's runtime repoint (present only after a swap); `governing` is
-    the profile that rules the run right now — the swap when present, else
-    the base. The swap takes effect on run BEHAVIOR only once the driver
-    honors it at a stage boundary (the stage interpreter, a later phase);
-    the displayed governing profile reflects the operator's intent now."""
+    the profile selected for the run — the swap when present, else the base.
+    The displayed selection reflects operator intent immediately; the driver
+    applies its retained content before the next action decision."""
     try:
         state = st.load(entry["state_path"])
         base = (state.get("config") or {}).get("profile_ref")
+        applied = interpreter.governing_profile_ref(state)
     except Exception:
-        base = None
+        base = applied = None
     overlay = read_profile_overlay(entry)
-    if not base and not overlay:
+    if not applied and not overlay:
         return None
     swap = overlay["ref"] if overlay else None
-    out = {"base": base, "governing": swap or base}
+    out = {"base": base, "governing": swap or applied}
     if overlay:
         out["swap"] = overlay
     return out
@@ -2624,17 +2613,10 @@ def read_profile(entry):
 def _profile_view(doc):
     """The panel-facing shape of one profile document (identity hash
     exposed, semantic content included for the decomposition view)."""
-    description = doc.get("description", "")
-    if doc.get("name") == "legacy":
-        # Existing profile files are metadata-immutable seed snapshots. Show
-        # the current topology truth even when their old description claimed
-        # exact pre-reform sealing behavior.
-        description = profiles.SEEDS["legacy"]["description"]
     return {
         "name": doc["name"],
         "version": doc["version"],
-        "sealed": doc["sealed"],
-        "description": description,
+        "description": doc.get("description", ""),
         "hash": profiles.semantic_hash(doc["profile"]),
         "profile": doc["profile"],
     }
@@ -2648,12 +2630,11 @@ def profiles_list(home):
 
 
 def save_profile(home, body):
-    """Create or update a strategy profile from the panel. The save API
-    NEVER seals — a profile seals only on its first production reference by
-    a run (profiles.reference), so an operator can keep refining an unused
-    profile in place. An already-sealed profile's seal and its immutable
-    semantic content are preserved by profiles.save (a metadata-only edit,
-    e.g. the description, still lands; a content change is refused)."""
+    """Create or wholly replace an editable strategy profile.
+
+    An incoming legacy ``sealed`` member is tolerated but has no authority
+    and is omitted from the returned view.
+    """
     if not isinstance(body, dict):
         raise ApiError(400, "profile document must be an object")
     doc = dict(body)
@@ -2736,15 +2717,11 @@ def set_model_profile_selection(home, run_id, body):
 
 def set_profile_swap(home, run_id, body):
     """Repoint a run at another strategy profile at RUNTIME. Swap != edit:
-    the profile is never mutated in place; the run points elsewhere. Seals
-    the target (a referenced profile is in production) and writes the
-    operator-owned overlay (profile_swap.json) beside the state — the same
-    lock-free pattern as acts/amendments, so a hot repoint never collides
-    with the driver's lock. The repoint takes effect on run behavior at the
-    next stage boundary, where the driver records the profile_changed
-    ledger event and marks the run profile_mixed; that driver-side pickup
-    lands with the stage interpreter. Here we record the operator's intent
-    and the panel reflects the new governing profile immediately."""
+    the profile is never mutated in place. Resolve one complete retained
+    identity/content pair and write it to the existing operator-owned overlay
+    beside state. The driver applies it before its next action decision,
+    records the transition in the generic ledger, and never consults the
+    mutable source for that accepted change."""
     reg = registry.load(home)
     entry = registry.get(reg, run_id)
     if entry is None:
@@ -2755,16 +2732,22 @@ def set_profile_swap(home, run_id, body):
     if not isinstance(name, str) or not name.strip():
         raise ApiError(400, "profile (name) is required")
     try:
-        ref = profiles.reference(home, name.strip())
+        ref, content = profiles.resolve(home, name.strip())
     except profiles.ProfileError as exc:
         raise ApiError(400, str(exc))
-    overlay = {"ref": ref, "at": registry.now_iso()}
+    overlay = {"ref": ref, "profile": content, "at": registry.now_iso()}
     path = _profile_overlay_path(entry)
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    tmp = path + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as fh:
-        json.dump(overlay, fh, indent=1)
-    os.replace(tmp, path)
+    fd, tmp = tempfile.mkstemp(
+        prefix=".profile-swap-", suffix=".tmp", dir=os.path.dirname(path)
+    )
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            json.dump(overlay, fh, indent=1)
+        os.replace(tmp, path)
+    finally:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
     return overlay
 
 
