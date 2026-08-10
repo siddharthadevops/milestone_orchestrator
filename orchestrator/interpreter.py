@@ -17,9 +17,9 @@ read from the run config, so nothing about a run's behavior yet depends on
 which profile it carries.
 """
 
-from . import contracts
+from . import contracts, profiles
 
-FAMILY_UNTIL_CLEAN = "family_until_clean"
+FAMILY_UNTIL_CLEAN = profiles.FAMILY_UNTIL_CLEAN
 
 # Profile fields that decompose into run-config DIALS (spec §5: "profiles
 # decompose into config dials"). Only keys the driver actually consumes as

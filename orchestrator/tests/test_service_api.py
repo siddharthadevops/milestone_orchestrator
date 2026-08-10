@@ -1915,7 +1915,7 @@ class ProfilesApiTest(ServiceApiTest):
             thread.start()
             self.assertTrue(observed.wait(timeout=5))
             edited = real_load(self.home, name)
-            edited["profile"] = {"definition": "after"}
+            edited["profile"] = {"doc_register": "lay+hard-table"}
             profiles.save(self.home, edited)
             release.set()
             thread.join(timeout=10)
@@ -2005,7 +2005,7 @@ class ProfilesApiTest(ServiceApiTest):
     def test_creation_racing_edit_retains_one_complete_definition(self):
         profiles.save(self.home, {
             "name": "creation-race", "version": 1, "sealed": False,
-            "description": "race", "profile": {"definition": "before"},
+            "description": "race", "profile": {"doc_register": "dense"},
         })
         ws = self.workspace("ws-creation-race")
         response, before, after = self._race_strategy_read_with_edit(
@@ -2067,7 +2067,7 @@ class ProfilesApiTest(ServiceApiTest):
 
     def test_post_ignores_legacy_sealed_input(self):
         doc = {"name": "wannaseal", "version": 1, "sealed": True,
-               "description": "d", "profile": {"a": 1}}
+               "description": "d", "profile": {"doc_register": "dense"}}
         status, body = self.request_json("POST", "/api/profiles", doc)
         self.assertEqual(status, 200)
         self.assertNotIn("sealed", body["profile"])
@@ -2082,7 +2082,7 @@ class ProfilesApiTest(ServiceApiTest):
 
     def test_invalid_strategy_edit_preserves_prior_definition(self):
         doc = {"name": "steady", "version": 1, "sealed": False,
-               "description": "before", "profile": {"a": 1}}
+               "description": "before", "profile": {"doc_register": "dense"}}
         self.request_json("POST", "/api/profiles", doc)
         invalid = dict(doc, profile={})
         status, body = self.request_json("POST", "/api/profiles", invalid)
@@ -2173,7 +2173,7 @@ class ProfilesApiTest(ServiceApiTest):
             1,
         )
 
-    def test_delayed_uninterpretable_profile_swap_fails_without_raw_exception(self):
+    def test_uninterpretable_profile_is_rejected_before_selection(self):
         status, _body = self.request_json("POST", "/api/profiles", {
             "name": "uninterpretable",
             "version": 1,
@@ -2181,64 +2181,10 @@ class ProfilesApiTest(ServiceApiTest):
             "description": "accepted but not implemented",
             "profile": {"stages": [{"loop": "parallel"}]},
         })
-        self.assertEqual(status, 200)
-        ws = self.workspace("ws-uninterpretable-swap")
-        _, created = self.create_run(
-            ws, profile="light", config={"git": {"enabled": False}}
-        )
-        run_id = created["run"]["id"]
-        entry = registry.get(registry.load(self.home), run_id)
-        status, _swap = self.request_json(
-            "POST", "/api/runs/%s/profile" % run_id,
-            {"profile": "uninterpretable"},
-        )
-        self.assertEqual(status, 200)
-        runtime = driver.Driver(
-            entry["state_path"], runner=mock.Mock(),
-            model_profiles_home=self.home,
-        )
-        def finish_draft():
-            st.transition_unit(
-                runtime.state,
-                st.current_unit(runtime.state),
-                st.U_PRE_REVIEW_VERIFY,
-                reason="drafted",
-            )
-            return "drafted"
-
-        with mock.patch.object(
-            runtime, "_do_draft", side_effect=finish_draft
-        ):
-            action, _note = runtime.step()
-        self.assertEqual(action.type, driver.A_DRAFT)
-        self.assertEqual(runtime.state["events"][-1]["type"], "unit_transition")
-        st.transition_unit(
-            runtime.state,
-            st.current_unit(runtime.state),
-            st.U_ROUNDS,
-            reason="verified",
-        )
-        runtime._save()
-
-        action, note = runtime.step()
-
-        self.assertEqual(action.type, driver.A_FAILED)
-        self.assertIn("not interpreted yet", note)
-        persisted = st.load(entry["state_path"])
-        self.assertEqual(persisted["failure"]["type"], "orchestrator")
-        self.assertIn("not interpretable", persisted["failure"]["reason"])
-        event_types = [event["type"] for event in persisted["events"]]
-        change_index = event_types.index("profile_changed")
-        self.assertEqual(
-            event_types[change_index:],
-            [
-                "profile_changed",
-                "unit_transition",
-                "unit_transition",
-                "run_failed",
-            ],
-        )
-        self.assertEqual(driver.decide(persisted).type, driver.A_FAILED)
+        self.assertEqual(status, 400)
+        self.assertFalse(os.path.exists(os.path.join(
+            profiles.profiles_dir(self.home), "uninterpretable.json"
+        )))
 
     def test_legacy_identity_only_profile_swap_is_inert(self):
         ws = self.workspace("ws-legacy-swap")
@@ -2310,7 +2256,7 @@ class ProfilesApiTest(ServiceApiTest):
     def test_profile_swap_racing_edit_retains_one_complete_definition(self):
         profiles.save(self.home, {
             "name": "swap-race", "version": 1, "sealed": False,
-            "description": "race", "profile": {"definition": "before"},
+            "description": "race", "profile": {"doc_register": "dense"},
         })
         _, created = self.create_run(self.workspace("ws-swap-race"))
         run_id = created["run"]["id"]
@@ -2332,11 +2278,12 @@ class ProfilesApiTest(ServiceApiTest):
     def test_concurrent_profile_swaps_do_not_share_staging_file(self):
         profiles.save(self.home, {
             "name": "swap-a", "version": 1, "sealed": False,
-            "description": "a", "profile": {"definition": "a"},
+            "description": "a", "profile": {"doc_register": "dense"},
         })
         profiles.save(self.home, {
             "name": "swap-b", "version": 1, "sealed": False,
-            "description": "b", "profile": {"definition": "b"},
+            "description": "b",
+            "profile": {"doc_register": "lay+hard-table"},
         })
         _, created = self.create_run(self.workspace("ws-concurrent-swaps"))
         run_id = created["run"]["id"]
@@ -2392,14 +2339,271 @@ class ProfilesApiTest(ServiceApiTest):
 
     def test_used_profile_edit_replaces_content(self):
         doc = {"name": "frozen", "version": 1, "sealed": False,
-               "description": "d", "profile": {"a": 1}}
+               "description": "d", "profile": {"doc_register": "dense"}}
         self.request_json("POST", "/api/profiles", doc)
         profiles.reference(self.home, "frozen")
-        changed = dict(doc, profile={"a": 2})
+        changed = dict(doc, profile={"doc_register": "lay+hard-table"})
         status, body = self.request_json("POST", "/api/profiles", changed)
         self.assertEqual(status, 200)
-        self.assertEqual(body["profile"]["profile"], {"a": 2})
+        self.assertEqual(
+            body["profile"]["profile"], {"doc_register": "lay+hard-table"}
+        )
         self.assertNotIn("sealed", body["profile"])
+
+
+class ProfilesDecisionApiTest(ServiceApiTest):
+    def strategy_doc(self, name, content):
+        return {
+            "name": name,
+            "version": 1,
+            "sealed": False,
+            "description": "test",
+            "profile": content,
+        }
+
+    def test_catalogue_response_uses_shared_inventory(self):
+        status, body = self.request_json("GET", "/api/profiles")
+        self.assertEqual(status, 200)
+        self.assertEqual(set(body), {"ok", "profiles", "decisions"})
+        self.assertEqual(body["decisions"], profiles.decision_catalogue())
+
+    def test_fixed_open_action_is_not_a_composable_decision(self):
+        status, body = self.request_json(
+            "POST",
+            "/api/profiles",
+            self.strategy_doc(
+                "action-only",
+                {"stages": [{"actions": [{"scope": "open"}]}]},
+            ),
+        )
+        self.assertEqual(status, 400)
+        self.assertIn("stages[0].loop", body["error"])
+
+    def test_invalid_stored_profile_fails_listing_instead_of_disappearing(self):
+        profiles.save(
+            self.home,
+            self.strategy_doc("damaged", {"doc_register": "dense"}),
+        )
+        path = os.path.join(profiles.profiles_dir(self.home), "damaged.json")
+        with open(path, "w", encoding="utf-8") as fh:
+            json.dump(self.strategy_doc("damaged", {"unknown": True}), fh)
+        status, body = self.request_json("GET", "/api/profiles")
+        self.assertEqual(status, 500)
+        self.assertFalse(body["ok"])
+        self.assertTrue(body["error"])
+
+    def test_invalid_stored_profile_failure_is_visible_on_launch_surface(self):
+        status, raw_panel = self.request("GET", "/")
+        self.assertEqual(status, 200)
+        panel = raw_panel.decode("utf-8")
+        launch_surface = panel[
+            panel.index("let launchProfiles = [];"):
+            panel.index("/* ---- runtime profile swap")
+        ]
+        self.assertIn('catch (e) { launchProfilesError = e.message; }',
+                      launch_surface)
+        self.assertIn("hint.textContent = launchProfilesError;",
+                      launch_surface)
+
+    def test_advanced_config_validates_raw_strategy_content(self):
+        workspace = self.workspace("ws-raw-strategy-config")
+        status, body = self.create_run(
+            workspace,
+            config={
+                "git": {"enabled": False},
+                "profile": {"doc_register": "lay+hard-table"},
+            },
+        )
+        self.assertEqual(status, 201)
+        entry = registry.get(registry.load(self.home), body["run"]["id"])
+        state = st.load(entry["state_path"])
+        self.assertEqual(
+            state["config"]["profile"],
+            {"doc_register": "lay+hard-table"},
+        )
+        self.assertNotIn("profile_ref", state["config"])
+
+        invalid_workspace = self.workspace("ws-invalid-raw-strategy-config")
+        before_registry = registry.load(self.home)
+        status, body = self.create_run(
+            invalid_workspace,
+            config={
+                "git": {"enabled": False},
+                "profile": {"unknown": True},
+            },
+        )
+        self.assertEqual(status, 400)
+        self.assertIn("unknown strategy decision", body["error"])
+        self.assertEqual(registry.load(self.home), before_registry)
+        self.assertFalse(os.path.exists(
+            driver.default_state_path(invalid_workspace)
+        ))
+
+    def test_project_defaults_validate_raw_strategy_content(self):
+        project = "strategy-defaults"
+        workspace = self.workspace("ws-project-default-strategy")
+        service.create_project(self.home, {
+            "slug": project,
+            "defaults": {
+                "git": {"enabled": False},
+                "profile": {"doc_register": "lay+hard-table"},
+            },
+        })
+        service.declare_work_area(self.home, project, {
+            "name": "main",
+            "primary_path": workspace,
+        })
+        status, body = self.request_json("POST", "/api/runs", {
+            "project": project,
+            "work_area": "main",
+            "goal": "Test goal",
+            "autostart": False,
+            "config": {"docs_dir": "docs"},
+        })
+        self.assertEqual(status, 201)
+        entry = registry.get(registry.load(self.home), body["run"]["id"])
+        state = st.load(entry["state_path"])
+        self.assertEqual(
+            state["config"]["profile"],
+            {"doc_register": "lay+hard-table"},
+        )
+        self.assertNotIn("profile_ref", state["config"])
+
+        invalid_workspace = self.workspace("ws-project-invalid-strategy")
+        service.update_project(self.home, project, {
+            "defaults": {
+                "git": {"enabled": False},
+                "profile": {"unknown": True},
+            },
+        })
+        service.declare_work_area(self.home, project, {
+            "name": "invalid",
+            "primary_path": invalid_workspace,
+        })
+        before_registry = registry.load(self.home)
+        status, body = self.request_json("POST", "/api/runs", {
+            "project": project,
+            "work_area": "invalid",
+            "goal": "Test goal",
+            "autostart": False,
+            "config": {"docs_dir": "docs"},
+        })
+        self.assertEqual(status, 400)
+        self.assertIn("unknown strategy decision", body["error"])
+        self.assertEqual(registry.load(self.home), before_registry)
+        self.assertFalse(os.path.exists(
+            driver.default_state_path(invalid_workspace)
+        ))
+
+    def test_case_variant_cannot_replace_legacy_compatibility_profile(self):
+        path = os.path.join(profiles.profiles_dir(self.home), "legacy.json")
+        with open(path, "rb") as fh:
+            prior_bytes = fh.read()
+        status, body = self.request_json(
+            "POST",
+            "/api/profiles",
+            self.strategy_doc("Legacy", {"doc_register": "lay+hard-table"}),
+        )
+        self.assertEqual(status, 400)
+        self.assertIn("exactly 'legacy'", body["error"])
+        with open(path, "rb") as fh:
+            self.assertEqual(fh.read(), prior_bytes)
+
+        workspace = self.workspace("ws-exact-legacy")
+        status, created = self.create_run(workspace, profile="legacy")
+        self.assertEqual(status, 201)
+        entry = registry.get(registry.load(self.home), created["run"]["id"])
+        state = st.load(entry["state_path"])
+        self.assertEqual(
+            state["config"]["profile"], profiles.SEEDS["legacy"]["profile"]
+        )
+        self.assertFalse(interpreter.reform_active(state))
+
+    def test_invalid_strategy_never_creates_or_repoints_a_run(self):
+        profiles.save(
+            self.home,
+            self.strategy_doc("damaged", {"doc_register": "dense"}),
+        )
+        path = os.path.join(profiles.profiles_dir(self.home), "damaged.json")
+        with open(path, "w", encoding="utf-8") as fh:
+            json.dump(self.strategy_doc("damaged", {"unknown": True}), fh)
+
+        rejected_ws = self.workspace("ws-invalid-create")
+        status, body = self.create_run(rejected_ws, profile="damaged")
+        self.assertEqual(status, 400)
+        self.assertTrue(body["error"])
+        self.assertFalse(os.path.exists(driver.default_state_path(rejected_ws)))
+
+        _, created = self.create_run(self.workspace("ws-invalid-repoint"))
+        run_id = created["run"]["id"]
+        status, valid = self.request_json(
+            "POST", "/api/runs/%s/profile" % run_id, {"profile": "strict"}
+        )
+        self.assertEqual(status, 200)
+        entry = registry.get(registry.load(self.home), run_id)
+        overlay_path = service._profile_overlay_path(entry)
+        with open(overlay_path, "rb") as fh:
+            prior_bytes = fh.read()
+        status, body = self.request_json(
+            "POST", "/api/runs/%s/profile" % run_id, {"profile": "damaged"}
+        )
+        self.assertEqual(status, 400)
+        self.assertTrue(body["error"])
+        with open(overlay_path, "rb") as fh:
+            self.assertEqual(fh.read(), prior_bytes)
+        self.assertEqual(service.read_profile_overlay(entry), valid["profile_swap"])
+
+    def test_reserved_content_round_trips_without_runtime_effect(self):
+        semantics = (
+            {
+                "doc_register": "dense",
+                "fuser_discard": "evidence",
+                "final_open_pass": False,
+            },
+            {
+                "doc_register": "dense",
+                "fuser_discard": "evidence+concur",
+                "final_open_pass": True,
+            },
+        )
+        states = []
+        for index, content in enumerate(semantics):
+            name = "reserved-%d" % index
+            status, _body = self.request_json(
+                "POST", "/api/profiles", self.strategy_doc(name, content)
+            )
+            self.assertEqual(status, 200)
+            ref, resolved = profiles.resolve(self.home, name)
+            self.assertEqual(resolved, content)
+            self.assertTrue(profiles.verify_retained(ref, resolved))
+            _, created = self.create_run(
+                self.workspace("ws-%s" % name), profile=name
+            )
+            entry = registry.get(registry.load(self.home), created["run"]["id"])
+            state = st.load(entry["state_path"])
+            self.assertEqual(state["config"]["profile"], content)
+            states.append(state)
+
+        _, listed = self.request_json("GET", "/api/profiles")
+        listed = {item["name"]: item["profile"] for item in listed["profiles"]}
+        self.assertEqual([listed["reserved-%d" % i] for i in range(2)], list(semantics))
+        self.assertEqual(
+            [interpreter.rounds_loop(state) for state in states],
+            [interpreter.FAMILY_UNTIL_CLEAN] * 2,
+        )
+        self.assertEqual(
+            [interpreter.doc_register(state) for state in states],
+            ["dense", "dense"],
+        )
+        effective_risks = [
+            interpreter.effective_config(state).get("p3_defer_max_risk")
+            for state in states
+        ]
+        self.assertEqual(effective_risks[0], effective_risks[1])
+        self.assertEqual(
+            [driver.decide(state).type for state in states],
+            [driver.A_DRAFT, driver.A_DRAFT],
+        )
 
 
 class ModelProfilesApiTest(ServiceApiTest):

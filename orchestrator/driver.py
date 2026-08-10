@@ -9515,6 +9515,20 @@ def _write_creation_acts(state_path, overrides):
     os.replace(tmp, path)
 
 
+def _validate_initial_strategy(config):
+    """Validate raw retained strategy content before creating run state."""
+    if not isinstance(config, dict) or "profile" not in config:
+        return
+    ref = config.get("profile_ref")
+    name = ref.get("name") if isinstance(ref, dict) else None
+    try:
+        profiles.validate_semantic_content(
+            config["profile"], name=name, ctx="initial strategy profile"
+        )
+    except profiles.ProfileError as exc:
+        raise ValueError(str(exc)) from exc
+
+
 def init_run(goal, workspace=None, config=None, state_path=None, name=None,
              project=None, config_override=None, model_profiles_home=None,
              creation_acts=_CREATION_ACTS_UNSET):
@@ -9587,6 +9601,7 @@ def init_run(goal, workspace=None, config=None, state_path=None, name=None,
         os.makedirs(workspace, exist_ok=True)
         if config is None:
             config = load_config(None)
+    _validate_initial_strategy(config)
     creation_overrides = {}
     if model_profiles_home is not None:
         creation_overrides = _creation_act_overrides(creation_act_layers)

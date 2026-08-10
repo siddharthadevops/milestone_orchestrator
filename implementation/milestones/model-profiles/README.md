@@ -256,4 +256,5 @@ The milestone is complete when:
 | slice_impl-03 (Model-profile selection and override surfaces) | reviewed | 8 | satisfied | 0f9fead |
 | slice_doc-04 (Strategy editability without first-use seals) | reviewed | 2 | satisfied | 4972304 |
 | slice_impl-04 (Strategy editability without first-use seals) | reviewed | 23 | satisfied | 44058a5 |
-| slice_doc-05 (Strategy decision catalogue and validation) | reviewed | 5 | satisfied | - |
+| slice_doc-05 (Strategy decision catalogue and validation) | reviewed | 5 | satisfied | efd31b8 |
+| slice_impl-05 (Strategy decision catalogue and validation) | reviewed | 32 | satisfied | - |

@@ -4459,12 +4459,14 @@ function profileLabel(p) {
   return `${p.name}${v}`;
 }
 let launchProfiles = [];
+let launchProfilesError = "";
 async function loadProfiles() {
   launchProfiles = [];
+  launchProfilesError = "";
   try {
     const data = await api("/api/profiles");
     launchProfiles = data.profiles || [];
-  } catch (e) { /* the selector stays at "none" — never blocks a launch */ }
+  } catch (e) { launchProfilesError = e.message; }
   const sel = document.getElementById("f_profile");
   const keep = sel.value;
   sel.innerHTML =
@@ -4483,7 +4485,7 @@ function onProfileChange() {
   const hint = document.getElementById("f_profile_hint");
   const p = launchProfiles.find(x => x.name ===
     document.getElementById("f_profile").value);
-  if (!p) { hint.innerHTML = ""; return; }
+  if (!p) { hint.textContent = launchProfilesError; return; }
   const dials = profileDials(p);
   hint.innerHTML =
     `<span class="mono">${esc(p.hash)}</span>${dials ? " · " + esc(dials) : ""}` +

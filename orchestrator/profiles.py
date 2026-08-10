@@ -1,9 +1,8 @@
-"""Strategy profiles: named, editable review-strategy documents.
+"""Named, editable review-strategy documents and their decision catalogue.
 
-Phase 1 of the build-driven review reform (see
-implementation/brainstorming/build-driven-review-and-strategy-profiles.md).
-This module is deliberately INERT for existing runs: nothing reads a
-profile unless a run was created with one.
+The catalogue is the single source for accepted semantic keys, values, and
+support status.  Reserved decisions remain stored content; validation does not
+make them operative.
 
 A profile is a JSON document under `<home>/profiles/<name>.json`:
 
@@ -24,10 +23,10 @@ Identity and run retention:
   ordinary save normalizes it away; selecting a profile never mutates the
   reusable source.
 
-The two SEED profiles (`strict`, `light`) express today's flow plus the
-reform's first dials. Their stage vocabulary is interpreted by later
-phases; unknown fields are carried, not validated, so seeds can name
-machinery that lands in phase 2+ without breaking phase 1.
+The two composable seeds (`strict`, `light`) use the complete six-decision
+catalogue.  Their fixed open-action envelope is structural seed content, not
+an operator decision.  The `legacy` seed is an exact compatibility fence and
+is never composable.
 """
 
 import hashlib
@@ -35,11 +34,25 @@ import json
 import os
 import tempfile
 
+from . import contracts
+
 PROFILES_DIRNAME = "profiles"
 
-# Ordered drift-risk scale lives in contracts; profiles reference it by
-# value only, so no import cycle.
-_RISK_LEVELS = ("low", "medium", "high", "xhigh")
+FAMILY_UNTIL_CLEAN = "family_until_clean"
+_FIXED_ACTION_SCOPE = "open"
+
+_DECISION_SPECS = (
+    ("stages[0].loop", "active", (FAMILY_UNTIL_CLEAN,)),
+    ("p3_defer_max_risk", "active", contracts.DRIFT_RISK_LEVELS),
+    ("p3_reclassify_debt", "active", (False, True)),
+    ("doc_register", "active", ("dense", "lay+hard-table")),
+    ("fuser_discard", "reserved", ("evidence", "evidence+concur")),
+    ("final_open_pass", "reserved", (False, True)),
+)
+_DECISION_VALUES = {key: values for key, _status, values in _DECISION_SPECS}
+_TOP_LEVEL_DECISIONS = {
+    key for key in _DECISION_VALUES if "[" not in key
+}
 
 
 class ProfileError(RuntimeError):
@@ -50,12 +63,99 @@ def profiles_dir(home):
     return os.path.join(home, PROFILES_DIRNAME)
 
 
-def semantic_hash(profile_content):
-    """Identity hash over the canonical semantic content ONLY."""
-    canon = json.dumps(
+def decision_catalogue():
+    """Return the closed composable inventory in its API-ready shape."""
+    return [
+        {"key": key, "status": status, "values": list(values)}
+        for key, status, values in _DECISION_SPECS
+    ]
+
+
+def _canonical_semantic(profile_content):
+    return json.dumps(
         profile_content, sort_keys=True, separators=(",", ":")
     )
+
+
+def semantic_hash(profile_content):
+    """Identity hash over the canonical semantic content ONLY."""
+    canon = _canonical_semantic(profile_content)
     return hashlib.sha256(canon.encode("utf-8")).hexdigest()[:16]
+
+
+def _validate_value(value, key, ctx):
+    values = _DECISION_VALUES[key]
+    if not any(type(value) is type(candidate) and value == candidate
+               for candidate in values):
+        raise ProfileError(
+            "%s: %s %r is not one of %s"
+            % (ctx, key, value, "|".join(map(str, values)))
+        )
+
+
+def _validate_stages(stages, ctx):
+    if not isinstance(stages, list) or len(stages) != 1:
+        raise ProfileError("%s: stages must contain exactly one stage" % ctx)
+    stage = stages[0]
+    if not isinstance(stage, dict) or not stage:
+        raise ProfileError("%s: stages[0] must be a non-empty object" % ctx)
+    unknown = set(stage) - {"loop", "actions"}
+    if unknown:
+        raise ProfileError(
+            "%s: unknown stages[0] decision(s): %s"
+            % (ctx, ", ".join(sorted(unknown)))
+        )
+    if "loop" not in stage:
+        raise ProfileError(
+            "%s: stages[0] must include the stages[0].loop decision" % ctx
+        )
+    _validate_value(stage["loop"], "stages[0].loop", ctx)
+    if "actions" in stage:
+        actions = stage["actions"]
+        if not isinstance(actions, list) or len(actions) != 1:
+            raise ProfileError(
+                "%s: stages[0].actions must contain exactly one action" % ctx
+            )
+        action = actions[0]
+        if not isinstance(action, dict) or set(action) != {"scope"}:
+            raise ProfileError(
+                "%s: stages[0].actions[0] must contain only scope" % ctx
+            )
+        if action["scope"] != _FIXED_ACTION_SCOPE:
+            raise ProfileError(
+                "%s: stages[0].actions[0].scope must be the fixed %r value"
+                % (ctx, _FIXED_ACTION_SCOPE)
+            )
+
+
+def _validate_semantic(name, content, ctx):
+    if name == "legacy":
+        if _canonical_semantic(content) != _canonical_semantic(
+            SEEDS["legacy"]["profile"]
+        ):
+            raise ProfileError(
+                "%s: legacy semantic content must match its compatibility fence"
+                % ctx
+            )
+        return
+    unknown = set(content) - (_TOP_LEVEL_DECISIONS | {"stages"})
+    if unknown:
+        raise ProfileError(
+            "%s: unknown strategy decision(s): %s"
+            % (ctx, ", ".join(sorted(unknown)))
+        )
+    for key in _TOP_LEVEL_DECISIONS & set(content):
+        _validate_value(content[key], key, ctx)
+    if "stages" in content:
+        _validate_stages(content["stages"], ctx)
+
+
+def validate_semantic_content(content, name=None, ctx="strategy profile"):
+    """Validate semantic content without requiring a catalogue document."""
+    if not isinstance(content, dict) or not content:
+        raise ProfileError("%s must be a non-empty object" % ctx)
+    _validate_semantic(name, content, ctx)
+    return content
 
 
 def _validate(doc, ctx):
@@ -68,6 +168,11 @@ def _validate(doc, ctx):
         raise ProfileError(
             "%s: profile name must be alphanumeric/-/_ : %r" % (ctx, name)
         )
+    if name.casefold() == "legacy" and name != "legacy":
+        raise ProfileError(
+            "%s: the legacy compatibility name must be exactly 'legacy'"
+            % ctx
+        )
     version = doc.get("version")
     if not isinstance(version, int) or version < 1:
         raise ProfileError("%s: version must be a positive integer" % ctx)
@@ -79,12 +184,7 @@ def _validate(doc, ctx):
             "%s: profile (the semantic content) must be a non-empty object"
             % ctx
         )
-    thr = content.get("p3_defer_max_risk")
-    if thr is not None and thr not in _RISK_LEVELS:
-        raise ProfileError(
-            "%s: p3_defer_max_risk %r not in %s"
-            % (ctx, thr, "|".join(_RISK_LEVELS))
-        )
+    validate_semantic_content(content, name=name, ctx=ctx)
     return doc
 
 
@@ -102,11 +202,17 @@ def load(home, name):
         raise ProfileError("unknown profile %r" % name)
     except ValueError as exc:
         raise ProfileError("profile %r is not valid JSON: %s" % (name, exc))
-    return _validate(doc, "profile %r" % name)
+    doc = _validate(doc, "profile %r" % name)
+    if doc["name"] != name:
+        raise ProfileError(
+            "profile file %r names %r — the stored catalogue is damaged"
+            % (name, doc["name"])
+        )
+    return doc
 
 
 def list_profiles(home):
-    """All profile documents, sorted by name; unreadable files skipped."""
+    """All profile documents, sorted by name; invalid content fails loudly."""
     d = profiles_dir(home)
     out = []
     if not os.path.isdir(d):
@@ -114,11 +220,27 @@ def list_profiles(home):
     for fn in sorted(os.listdir(d)):
         if not fn.endswith(".json"):
             continue
-        try:
-            out.append(load(home, fn[:-5]))
-        except ProfileError:
-            continue
+        out.append(load(home, fn[:-5]))
     return out
+
+
+def _existing_profile_name(home, name):
+    """Return the stored spelling addressed by ``name``, if any."""
+    directory = profiles_dir(home)
+    requested = "%s.json" % name
+    filenames = os.listdir(directory)
+    if requested in filenames:
+        return name
+    target = _path(home, name)
+    for filename in filenames:
+        if not filename.endswith(".json"):
+            continue
+        try:
+            if os.path.samefile(os.path.join(directory, filename), target):
+                return filename[:-5]
+        except FileNotFoundError:
+            continue
+    return None
 
 
 def save(home, doc):
@@ -133,15 +255,30 @@ def save(home, doc):
         "profile %r" % (doc.get("name") if isinstance(doc, dict) else None),
     ))
     doc["sealed"] = False
-    path = _path(home, doc["name"])
     os.makedirs(profiles_dir(home), exist_ok=True)
+    path = _path(home, doc["name"])
     fd, tmp = tempfile.mkstemp(
         prefix=".strategy-profile-", suffix=".tmp", dir=profiles_dir(home)
     )
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as fh:
             json.dump(doc, fh, indent=1, sort_keys=True)
-        os.replace(tmp, path)
+        try:
+            # Claim a new path with the complete staged document. This also
+            # exposes a case-only alias before it can overwrite another entry.
+            os.link(tmp, path)
+        except FileExistsError:
+            existing_name = _existing_profile_name(home, doc["name"])
+            if existing_name != doc["name"]:
+                if existing_name is None:
+                    raise ProfileError(
+                        "profile %r target changed during save" % doc["name"]
+                    )
+                raise ProfileError(
+                    "profile %r conflicts with existing catalogue name %r"
+                    % (doc["name"], existing_name)
+                )
+            os.replace(tmp, path)
     finally:
         if os.path.exists(tmp):
             os.unlink(tmp)
@@ -201,8 +338,8 @@ SEEDS = {
         "description": (
             "Cost-of-being-wrong: high (storage/contract work; the canon "
             "itself). Every finding opens a fix cycle; dense contract "
-            "register; fuser discards need evidence + opposite-family "
-            "concur."
+            "register. Reserved fuser-discard and final-pass choices are "
+            "retained but non-operative."
         ),
         "profile": {
             "p3_defer_max_risk": "low",
@@ -223,7 +360,8 @@ SEEDS = {
         "description": (
             "Cost-of-being-wrong: low (UI shell work). Findings rated "
             "at-or-below medium record as debt; lay register + hard "
-            "table; fuser discards need citing evidence."
+            "table. Reserved fuser-discard and final-pass choices are "
+            "retained but non-operative."
         ),
         "profile": {
             "p3_defer_max_risk": "medium",

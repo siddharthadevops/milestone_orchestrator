@@ -3696,7 +3696,11 @@ def make_handler(home):
                 elif route == "/api/ui-state":
                     self._json(200, {"ok": True, **registry.load_ui_state(home)})
                 elif route == "/api/profiles":
-                    self._json(200, {"ok": True, "profiles": profiles_list(home)})
+                    self._json(200, {
+                        "ok": True,
+                        "profiles": profiles_list(home),
+                        "decisions": profiles.decision_catalogue(),
+                    })
                 elif route == "/api/model-profiles":
                     self._json(
                         200,
