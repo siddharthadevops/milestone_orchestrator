@@ -2,7 +2,7 @@
 
 # Milestone
 
-Status: **open**
+Status: **closed**
 
 ## Goal
 
@@ -259,4 +259,4 @@ The milestone is complete when:
 | slice_doc-05 (Strategy decision catalogue and validation) | reviewed | 5 | satisfied | efd31b8 |
 | slice_impl-05 (Strategy decision catalogue and validation) | reviewed | 32 | satisfied | 54df41f |
 | slice_doc-06 (Strategy configurator panel) | reviewed | 5 | satisfied | 3bd51a0 |
-| slice_impl-06 (Strategy configurator panel) | reviewed | 18 | satisfied | - |
+| slice_impl-06 (Strategy configurator panel) | reviewed | 18 | satisfied | 40eb3c1 |

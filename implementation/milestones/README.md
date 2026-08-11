@@ -39,5 +39,5 @@ milestones.
 |---|---|---|---|---|
 | [Canon - Project Concept (isolated)](canon-project-concept-isolated/) | open | 9 | 2026-07-06 | - |
 | [Brainstorming](brainstorming/) | open | 8 | 2026-07-23 | - |
-| [Model profiles](model-profiles/) | open | 6 | 2026-08-08 | - |
+| [Model profiles](model-profiles/) | closed | 6 | 2026-08-08 | 2026-08-11 |
 <!-- impl_roadmap:milestones:end -->
