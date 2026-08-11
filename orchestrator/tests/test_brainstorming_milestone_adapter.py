@@ -263,12 +263,24 @@ class BrainstormingMilestoneAdapterTest(unittest.TestCase):
             )
             self.assertEqual(value["max_rounds"], 10)
 
+        # Claiming the kind's own work product contradicts help-seeking and
+        # is still fatal; an ordinary surplus field beside it is ignored.
         with self.assertRaises(contracts.ContractError):
             contracts.validate_worker_output(
                 rethink(contracts.KIND_IMPLEMENT)
                 | {"files_changed": ["already-finished.py"]},
                 contracts.KIND_IMPLEMENT,
             )
+        tolerated = rethink(contracts.KIND_IMPLEMENT) | {
+            "notes": "asking before finishing",
+            "confidence": 0.4,
+        }
+        self.assertIs(
+            contracts.validate_worker_output(
+                tolerated, contracts.KIND_IMPLEMENT
+            ),
+            tolerated,
+        )
         with self.assertRaises(contracts.ContractError):
             contracts.validate_worker_output(
                 rethink(contracts.KIND_DRAFT_SKELETON),

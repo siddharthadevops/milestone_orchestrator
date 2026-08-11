@@ -14,8 +14,9 @@ class ExecutionRejected(RuntimeError):
 
 
 def validate_discussion_turn_envelope(envelope):
-    """Accept exactly the two model-supplied discussion-turn fields."""
-    brainstorming._exact_keys(
+    """Accept the two model-supplied discussion-turn fields; surplus is
+    dropped rather than rejected."""
+    brainstorming._model_keys(
         envelope,
         ("kind", "markdown"),
         (),

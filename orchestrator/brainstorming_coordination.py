@@ -790,8 +790,8 @@ characters, but never omit material meaning merely to fit.
 
 
 def validate_closure_proposal_envelope(envelope):
-    """Validate the Initial Position's exact proposed agreement."""
-    brainstorming._exact_keys(
+    """Validate the Initial Position's proposed agreement."""
+    brainstorming._model_keys(
         envelope,
         ("kind", "propose", "closing_summary"),
         (),
@@ -805,7 +805,7 @@ def validate_closure_proposal_envelope(envelope):
         raise brainstorming.ContractError(
             "closure_proposal.propose must be a boolean"
         )
-    summary = brainstorming.validate_closing_summary_shape(
+    summary = brainstorming.validate_model_closing_summary(
         envelope["closing_summary"]
     )
     if "open_questions" not in summary:
@@ -820,8 +820,9 @@ def validate_closure_proposal_envelope(envelope):
 
 
 def validate_closure_vote_envelope(envelope):
-    """Validate one Contrary Position vote without extra rationale."""
-    brainstorming._exact_keys(
+    """Validate one Contrary Position vote; extra rationale is dropped, not
+    a rejected ballot."""
+    brainstorming._model_keys(
         envelope, ("kind", "vote"), (), "closure_vote"
     )
     if envelope["kind"] != "closure_vote":

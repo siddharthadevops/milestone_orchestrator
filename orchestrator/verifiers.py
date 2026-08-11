@@ -330,11 +330,15 @@ def _validate_extension_shape(obj, ext, ctx):
         ictx = "%s[%d]" % (fctx, i)
         if not isinstance(item, dict):
             raise contracts.ContractError("%s: entry must be an object" % ictx)
-        if set(item) != declared:
+        missing = sorted(declared - set(item))
+        if missing:
             raise contracts.ContractError(
-                "%s: entry keys must be exactly %s, got %s"
-                % (ictx, sorted(declared), sorted(item, key=str))
+                "%s: entry is missing the declared keys %s, got %s"
+                % (ictx, missing, sorted(item, key=str))
             )
+        # Surplus keys are dropped, never fatal: the policy declares what an
+        # entry must carry, not what the worker may not add beside it.
+        contracts._prune_extras(item, declared)
         for name in ext.entry:
             _validate_entry_value(
                 ext.entry[name], item[name], "%s.%s" % (ictx, name)

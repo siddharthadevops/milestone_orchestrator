@@ -400,6 +400,21 @@ def _exact_keys(value, required, optional, ctx):
         raise ContractError("%s has unsupported fields %s" % (ctx, extra))
 
 
+def _model_keys(value, required, optional, ctx):
+    """Key check for a MODEL-authored envelope: presence is mandatory,
+    surplus is dropped in place (operator rule, 2026-08-11 — see
+    contracts._require_keys). Stored records, run configs and API payloads
+    keep _exact_keys: a surplus field there is our own typo, and it must
+    still fail loudly."""
+    _object(value, ctx)
+    missing = sorted(set(required) - set(value))
+    if missing:
+        raise ContractError("%s is missing %s" % (ctx, missing))
+    allowed = set(required) | set(optional)
+    for key in sorted(set(value) - allowed):
+        del value[key]
+
+
 def _text(value, ctx):
     if not isinstance(value, str) or not value.strip():
         raise ContractError("%s must be a non-empty string" % ctx)
@@ -1766,19 +1781,39 @@ def validate_closure_ballot(ballot, run_config):
     return checked
 
 
+CLOSING_SUMMARY_REQUIRED = (
+    "reason",
+    "unresolved_objections",
+    "affected_parties",
+    "damage_altitude",
+    "proportionality",
+    "escalation_evidence",
+)
+
+CLOSING_SUMMARY_OPTIONAL = ("open_questions",)
+
+
+def validate_model_closing_summary(summary):
+    """The participant-authored summary as it arrives from the model: its
+    surplus is dropped AT THE DOOR (operator rule, 2026-08-11), and what
+    passes is then the ordinary stored shape. Every later validation runs
+    on a session record we own, where a surplus field is our own bug and
+    must still fail loudly."""
+    _model_keys(
+        summary,
+        CLOSING_SUMMARY_REQUIRED,
+        CLOSING_SUMMARY_OPTIONAL,
+        "closing_summary",
+    )
+    return validate_closing_summary_shape(summary)
+
+
 def validate_closing_summary_shape(summary):
     """Validate the participant-authored fields shared by both outcomes."""
     _exact_keys(
         summary,
-        (
-            "reason",
-            "unresolved_objections",
-            "affected_parties",
-            "damage_altitude",
-            "proportionality",
-            "escalation_evidence",
-        ),
-        ("open_questions",),
+        CLOSING_SUMMARY_REQUIRED,
+        CLOSING_SUMMARY_OPTIONAL,
         "closing_summary",
     )
     for field in (

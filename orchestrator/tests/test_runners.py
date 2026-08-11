@@ -498,6 +498,33 @@ class TestValidateWorkerOutputHappy(unittest.TestCase):
             contracts.validate_worker_output(obj, contracts.KIND_IMPLEMENT), obj
         )
 
+    def test_surplus_keys_on_a_report_finding_are_dropped_not_fatal(self):
+        # The live loss (2026-08-11): one complete P2 review discarded
+        # twice — first for carrying `file`/`line` on the finding, then,
+        # on the regenerated attempt, for an empty `incremental_harm_note`
+        # inside `validity`. Both deliveries answered the question.
+        finding = dict(report_finding(), file="orchestrator/driver.py", line=42)
+        finding["validity"]["incremental_harm_note"] = None
+        obj = ok_output(contracts.KIND_REVIEW_ROUND, findings=[finding])
+        contracts.validate_worker_output(obj, contracts.KIND_REVIEW_ROUND)
+        self.assertEqual(
+            sorted(obj["findings"][0]),
+            ["id", "severity", "summary", "validity"],
+        )
+        self.assertNotIn(
+            "incremental_harm_note", obj["findings"][0]["validity"]
+        )
+
+    def test_a_missing_validity_field_is_still_fatal(self):
+        # Tolerating surplus never relaxes presence: the damage battery is
+        # what makes a finding real.
+        finding = report_finding()
+        del finding["validity"]["actual_outcome"]
+        obj = ok_output(contracts.KIND_REVIEW_ROUND, findings=[finding])
+        with self.assertRaises(contracts.ContractError) as cm:
+            contracts.validate_worker_output(obj, contracts.KIND_REVIEW_ROUND)
+        self.assertIn("actual_outcome", str(cm.exception))
+
     def test_review_round_clean(self):
         obj = ok_output(contracts.KIND_REVIEW_ROUND, findings=[])
         contracts.validate_worker_output(obj, contracts.KIND_REVIEW_ROUND)
@@ -593,7 +620,10 @@ class TestValidateWorkerOutputHappy(unittest.TestCase):
                         contracts.KIND_REVIEW_ROUND,
                     )
 
-    def test_report_finding_rejects_unbounded_extension_fields(self):
+    def test_unbounded_extension_fields_are_dropped_from_a_report_finding(self):
+        # The bound stays enforced where it matters — nothing unbounded
+        # reaches the ledger — but a surplus field, however large, costs
+        # the round nothing.
         cases = []
 
         finding = report_finding()
@@ -613,14 +643,16 @@ class TestValidateWorkerOutputHappy(unittest.TestCase):
 
         for finding, field in cases:
             with self.subTest(field=field):
-                with self.assertRaisesRegex(contracts.ContractError, field):
-                    contracts.validate_worker_output(
-                        ok_output(
-                            contracts.KIND_REVIEW_ROUND,
-                            findings=[finding],
-                        ),
-                        contracts.KIND_REVIEW_ROUND,
-                    )
+                obj = ok_output(
+                    contracts.KIND_REVIEW_ROUND, findings=[finding]
+                )
+                contracts.validate_worker_output(
+                    obj, contracts.KIND_REVIEW_ROUND
+                )
+                stored = obj["findings"][0]
+                self.assertNotIn("extra", stored)
+                self.assertNotIn("extra", stored["validity"])
+                self.assertNotIn("extra", stored.get("contests") or {})
 
     def test_fixer_disposition_must_match_the_baseline_delta(self):
         cases = (
@@ -661,7 +693,9 @@ class TestValidateWorkerOutputHappy(unittest.TestCase):
             with self.subTest(case="missing", key=key):
                 finding = full_finding()
                 del finding["validity"][key]
-                with self.assertRaisesRegex(contracts.ContractError, "exactly"):
+                with self.assertRaisesRegex(
+                    contracts.ContractError, "missing required keys"
+                ):
                     contracts.validate_worker_output(
                         ok_output(
                             contracts.KIND_FIX_FINDINGS,
@@ -698,14 +732,14 @@ class TestValidateWorkerOutputHappy(unittest.TestCase):
 
         legacy = full_finding()
         legacy["validity"]["actual_outcome"] = "legacy fixer field"
-        with self.assertRaisesRegex(contracts.ContractError, "exactly"):
-            contracts.validate_worker_output(
-                ok_output(
-                    contracts.KIND_FIX_FINDINGS,
-                    findings=[legacy],
-                ),
-                contracts.KIND_FIX_FINDINGS,
-            )
+        obj = ok_output(contracts.KIND_FIX_FINDINGS, findings=[legacy])
+        contracts.validate_worker_output(obj, contracts.KIND_FIX_FINDINGS)
+        # The reviewer-only field is dropped, not fatal: the fixer battery
+        # still answers its own five questions and nothing else.
+        self.assertEqual(
+            sorted(obj["findings"][0]["validity"]),
+            sorted(text_fields + ("exceeds_baseline",)),
+        )
 
     def test_reviewer_validity_schema_stays_unchanged(self):
         obj = ok_output(
@@ -717,14 +751,17 @@ class TestValidateWorkerOutputHappy(unittest.TestCase):
         )
         finding = report_finding()
         finding["validity"]["affected_party"] = "a user"
-        with self.assertRaisesRegex(contracts.ContractError, "exactly"):
-            contracts.validate_worker_output(
-                ok_output(
-                    contracts.KIND_REVIEW_ROUND,
-                    findings=[finding],
-                ),
-                contracts.KIND_REVIEW_ROUND,
-            )
+        surplus = ok_output(contracts.KIND_REVIEW_ROUND, findings=[finding])
+        contracts.validate_worker_output(surplus, contracts.KIND_REVIEW_ROUND)
+        # The fixer-only field is dropped rather than fatal: the reviewer
+        # and fixer batteries stay distinct without costing the round.
+        self.assertEqual(
+            sorted(surplus["findings"][0]["validity"]),
+            [
+                "actual_outcome", "exceeds_baseline", "incremental_harm",
+                "permitted_baseline",
+            ],
+        )
 
     def test_report_finding_accepts_the_plain_language_mirror(self):
         # `plain` (one lay-language sentence naming what is being built
@@ -899,16 +936,21 @@ class TestValidateWorkerOutputViolations(unittest.TestCase):
             contracts.KIND_IMPLEMENT,
         )
 
-    def test_implementation_cut_requires_exact_non_empty_scopes(self):
+    def test_implementation_cut_requires_both_non_empty_scopes(self):
+        # A cut that also names its next part keeps its two scopes and
+        # loses the surplus: labels and sequencing are the machine's.
+        cut = {"cut_scope": "core", "remaining_scope": "CLI", "next_part": "b"}
+        obj = ok_output(
+            contracts.KIND_IMPLEMENT,
+            files_changed=["calc.py"],
+            implementation_cut=cut,
+        )
+        contracts.validate_worker_output(obj, contracts.KIND_IMPLEMENT)
+        self.assertEqual(cut, {"cut_scope": "core", "remaining_scope": "CLI"})
         cases = (
             {},
             {"cut_scope": "core"},
             {"cut_scope": "core", "remaining_scope": "  "},
-            {
-                "cut_scope": "core",
-                "remaining_scope": "CLI",
-                "next_part": "b",
-            },
         )
         for cut in cases:
             with self.subTest(cut=cut):
@@ -1208,14 +1250,19 @@ class TestValidateWorkerOutputViolations(unittest.TestCase):
         )
         self.assertContract(obj, contracts.KIND_FIX_FINDINGS, "disposition")
 
-    def test_disposition_on_review_finding_rejected(self):
-        # Old model allowed (required) dispositions on review findings; the
-        # redesign forbids them on EVERY report kind: reviewers never triage.
+    def test_disposition_on_review_finding_is_ignored(self):
+        # Reviewers never triage, and a disposition they add anyway is
+        # surplus like any other undefined key: pruned before the ledger
+        # reads it, never a discarded round.
         for kind in contracts.REPORT_KINDS:
             for disp in contracts.DISPOSITIONS:
                 with self.subTest(kind=kind, disposition=disp):
-                    obj = ok_output(kind, findings=[full_finding(disp)])
-                    self.assertContract(obj, kind, "no disposition")
+                    obj = ok_output(
+                        kind,
+                        findings=[dict(report_finding(), disposition=disp)],
+                    )
+                    contracts.validate_worker_output(obj, kind)
+                    self.assertNotIn("disposition", obj["findings"][0])
 
     def test_missing_disposition_on_fix_finding(self):
         obj = ok_output(

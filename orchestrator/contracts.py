@@ -129,6 +129,34 @@ def _optional(obj, key, types, ctx, default=None):
     return val
 
 
+def _require_keys(obj, expected, ctx):
+    """Presence check only: the contract asks for these fields, nothing more.
+
+    Operator rule (2026-08-11): a worker that filled every required field and
+    then added one nobody asked for has ANSWERED. Rejecting the whole delivery
+    over the surplus threw away complete work — a live P2 review was lost twice
+    in a row, first for carrying `file`/`line` on its findings, then for an
+    empty `incremental_harm_note` inside `validity`. Surplus is not a defect.
+    """
+    missing = sorted(set(expected) - set(obj))
+    if missing:
+        raise ContractError("%s: missing required keys %s" % (ctx, missing))
+    return obj
+
+
+def _prune_extras(obj, allowed):
+    """Drop the surplus in place so nothing downstream can read it.
+
+    Ignoring means ignoring: the keys never reach the ledger, so a field the
+    contract does not define can neither be mistaken for one it does nor
+    smuggle authority the worker lacks. The raw worker output is saved
+    verbatim, so what was dropped stays auditable.
+    """
+    for key in sorted(set(obj) - set(allowed)):
+        del obj[key]
+    return obj
+
+
 REPORT_VALIDITY_TEXT_FIELDS = (
     "permitted_baseline",
     "actual_outcome",
@@ -159,11 +187,8 @@ def _validate_finding_validity(
     validity = _require(finding, "validity", dict, ctx)
     vctx = "%s.validity" % ctx
     expected = set(text_fields) | {"exceeds_baseline"}
-    if set(validity) != expected:
-        raise ContractError(
-            "%s: validity must contain exactly %s"
-            % (vctx, sorted(expected))
-        )
+    _require_keys(validity, expected, vctx)
+    _prune_extras(validity, expected)
     for key in text_fields:
         value = _require(validity, key, str, vctx)
         if not value.strip():
@@ -217,10 +242,8 @@ def validate_implementation_cut(cut, ctx):
     if not isinstance(cut, dict):
         raise ContractError("%s: must be an object" % ctx)
     expected = {"cut_scope", "remaining_scope"}
-    if set(cut) != expected:
-        raise ContractError(
-            "%s: must contain exactly %s" % (ctx, sorted(expected))
-        )
+    _require_keys(cut, expected, ctx)
+    _prune_extras(cut, expected)
     for key in sorted(expected):
         value = _require(cut, key, str, ctx)
         if not value.strip():
@@ -256,11 +279,9 @@ def validate_report_finding(finding, ctx, require_plain=False):
     sev = _require(finding, "severity", str, ctx)
     if sev not in SEVERITIES:
         raise ContractError("%s: severity %r not in %s" % (ctx, sev, SEVERITIES))
-    if finding.get("disposition") is not None:
-        raise ContractError(
-            "%s: reviewer findings carry no disposition (whoever detects "
-            "never fixes; triage belongs to the fixer)" % ctx
-        )
+    # A reviewer that triages anyway (`disposition`) is surplus like any
+    # other undefined key: pruned below, never read, so the doctrine holds
+    # without costing the round.
     _validate_finding_validity(finding, ctx, expected_exceeds_baseline=True)
     # The lay-language mirror and the minimal failure example. Optional
     # for now (workers spawned before the fields existed must keep
@@ -291,11 +312,8 @@ def validate_report_finding(finding, ctx, require_plain=False):
     contests = _optional(finding, "contests", dict, ctx)
     if contests is not None:
         expected = {"rejection_id", "new_evidence"}
-        if set(contests) != expected:
-            raise ContractError(
-                "%s.contests must contain exactly %s"
-                % (ctx, sorted(expected))
-            )
+        _require_keys(contests, expected, "%s.contests" % ctx)
+        _prune_extras(contests, expected)
         rid = contests.get("rejection_id")
         evidence = contests.get("new_evidence")
         if not rid or not isinstance(rid, str):
@@ -321,11 +339,7 @@ def validate_report_finding(finding, ctx, require_plain=False):
         "id", "severity", "summary", "validity", "plain", "example",
         "contests",
     }
-    extras = sorted(set(finding) - allowed)
-    if extras:
-        raise ContractError(
-            "%s: reviewer finding has unexpected keys %s" % (ctx, extras)
-        )
+    _prune_extras(finding, allowed)
     return finding
 
 
@@ -509,41 +523,49 @@ def validate_design_correction(value, ctx):
             "%s.design_correction requires exactly one authority_artifact "
             "or brainstorming_authority" % ctx
         )
+    # Which authority is in play is decided by the pair above, never by the
+    # key inventory: surplus (including the other authority left explicitly
+    # null) is pruned, not rejected.
     if artifact_authority is not None:
         if (
-            set(value)
-            != {
-                "artifact",
-                "authority_artifact",
-                "contradiction",
-                "resolution",
-            }
-            or not isinstance(artifact_authority, str)
+            not isinstance(artifact_authority, str)
             or not artifact_authority.strip()
         ):
             raise ContractError(
                 "%s.design_correction.authority_artifact must be the one "
                 "non-empty authority" % ctx
             )
+        _prune_extras(
+            value,
+            {
+                "artifact",
+                "authority_artifact",
+                "contradiction",
+                "resolution",
+            },
+        )
     else:
-        if set(value) != {
-            "artifact",
-            "brainstorming_authority",
-            "contradiction",
-            "resolution",
-        } or not isinstance(brainstorming_authority, dict):
+        if not isinstance(brainstorming_authority, dict):
             raise ContractError(
                 "%s.design_correction.brainstorming_authority is invalid"
                 % ctx
             )
-        if set(brainstorming_authority) != {
-            "session_id",
-            "accepted_target_revision",
-        }:
-            raise ContractError(
-                "%s.design_correction.brainstorming_authority must contain "
-                "exactly session_id and accepted_target_revision" % ctx
-            )
+        expected = {"session_id", "accepted_target_revision"}
+        _require_keys(
+            brainstorming_authority,
+            expected,
+            "%s.design_correction.brainstorming_authority" % ctx,
+        )
+        _prune_extras(brainstorming_authority, expected)
+        _prune_extras(
+            value,
+            {
+                "artifact",
+                "brainstorming_authority",
+                "contradiction",
+                "resolution",
+            },
+        )
         for field in ("session_id", "accepted_target_revision"):
             item = brainstorming_authority.get(field)
             if not isinstance(item, str) or not item.strip():
@@ -713,12 +735,18 @@ def validate_need_rethink(
         "target_path",
         "max_rounds",
     }
-    allowed = required | {"result_mode", "failure_gap"}
-    if not required.issubset(obj) or not set(obj).issubset(allowed):
+    _require_keys(obj, required, "%s: need_rethink" % ctx)
+    # Surplus is ignored here as everywhere else (an envelope carrying
+    # `notes` used to be rejected on this path alone) — with ONE exception
+    # that is not noise: the kind's own work product. need_rethink is
+    # help-seeking, not completion, so a rethink that also claims
+    # files_changed / artifact / findings is a contradiction, not a
+    # surplus field.
+    claimed = sorted(set(obj) & KIND_OUTPUT_KEYS.get(kind, frozenset()))
+    if claimed:
         raise ContractError(
-            "%s: need_rethink must contain %s and may additionally contain "
-            "only result_mode or the legacy failure_gap"
-            % (ctx, sorted(required))
+            "%s: need_rethink is help-seeking, not completion; it must not "
+            "also claim %s" % (ctx, claimed)
         )
     result_mode = obj.get("result_mode", RETHINK_RESULT_PROPOSAL)
     if result_mode not in RETHINK_RESULT_MODES:

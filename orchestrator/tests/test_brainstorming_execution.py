@@ -955,19 +955,31 @@ class BrainstormingExecutionTest(unittest.TestCase):
             {"kind": "other", "markdown": "text"},
             {"kind": "discussion_turn", "markdown": ""},
             {"kind": "discussion_turn", "markdown": 3},
-            dict(valid, participant_id="editor"),
-            dict(valid, role="lead"),
-            dict(valid, round=1),
-            dict(valid, target="changed"),
-            dict(valid, revision=2),
-            dict(valid, vote="accept"),
-            dict(valid, result="success"),
-            dict(valid, transport_status="ok"),
         ]
         for candidate in invalid:
             with self.subTest(candidate=candidate):
                 with self.assertRaises(bs.ContractError):
                     execution.validate_discussion_turn_envelope(candidate)
+
+        # A complete turn that also carries fields nobody asked for is a
+        # complete turn: the surplus is dropped, the contribution stands.
+        for surplus in (
+            {"participant_id": "editor"},
+            {"role": "lead"},
+            {"round": 1},
+            {"target": "changed"},
+            {"revision": 2},
+            {"vote": "accept"},
+            {"result": "success"},
+            {"transport_status": "ok"},
+        ):
+            with self.subTest(surplus=surplus):
+                self.assertEqual(
+                    execution.validate_discussion_turn_envelope(
+                        dict(valid, **surplus)
+                    ),
+                    valid,
+                )
 
         ambiguous = runners.RunnerResult(
             json.dumps(valid) + "\n" + json.dumps(valid), 0, 0.01

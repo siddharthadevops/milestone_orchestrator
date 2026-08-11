@@ -386,16 +386,22 @@ class TestEntryShapeValidation(unittest.TestCase):
         for bad in ("invent", "", True, 1, None, ["adopt"]):
             self.assert_value_rejected(ext, bad)
 
-    def test_entry_key_set_must_match_exactly(self):
+    def test_entry_requires_declared_keys_and_ignores_surplus(self):
         ext = verifiers.compile_policy(
             make_policy(entry={"a": {"type": "string"},
                                "b": {"type": "string"}})
         )
         ok = implement_output(reuse_audit=[{"a": "x", "b": "y"}])
         verifiers.validate_merged_output(ok, "implement", [ext], None)
+        # An entry that declares everything and then adds more is valid;
+        # the surplus is pruned so only declared fields reach the ledger.
+        surplus = implement_output(
+            reuse_audit=[{"a": "x", "b": "y", "c": "z"}]
+        )
+        verifiers.validate_merged_output(surplus, "implement", [ext], None)
+        self.assertEqual(surplus["reuse_audit"][0], {"a": "x", "b": "y"})
         for bad_entry in (
             {"a": "x"},                      # missing key
-            {"a": "x", "b": "y", "c": "z"},  # extra key
             "not-an-object",
             ["a", "b"],
             5,
