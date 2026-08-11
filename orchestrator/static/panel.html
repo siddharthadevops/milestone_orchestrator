@@ -240,6 +240,18 @@
     /* without this the controls' intrinsic width beats the fr track
        sizes and the model column collapses */
     min-width: 0; }
+  /* model-profile editor: one rigor at a time, the same act grid the
+     launch form uses, plus a managed example list. */
+  .mp-tabs { display: flex; gap: 6px; margin-bottom: 8px; }
+  .mp-tabs .btn.on { background: var(--accent); color: #fff;
+    border-color: var(--accent); }
+  .mp-listrow { display: flex; gap: 6px; align-items: center;
+    margin-bottom: 4px; }
+  .mp-listrow input { flex: 1; }
+  .mp-summary { display: grid; grid-template-columns: auto auto auto auto;
+    gap: 2px 10px; font-size: 12px; align-items: baseline; }
+  .mp-summary .mp-act { color: #3f3f46; }
+  .mp-summary .mp-unset { color: #a1a1aa; }
   .empty-act-overrides { display: flex; gap: 6px; flex-wrap: wrap;
     align-items: center; margin-top: 8px; }
   .empty-act-overrides .empty-act { border: 1px solid var(--line);
@@ -1173,6 +1185,30 @@
     <span></span>
     <button class="btn" onclick="document.getElementById('modelprofilesdlg').close()">Close</button>
     <button class="btn primary" id="mp_new" onclick="newModelProfile()">New profile</button>
+  </div>
+</dialog>
+
+<dialog id="mpeditor">
+  <h2 class="dlgtitle" id="mpe_title">Model profile</h2>
+  <div class="field"><label>Name</label>
+    <input id="mpe_name" placeholder="web-ui">
+    <div class="hint" id="mpe_name_hint"></div></div>
+  <div class="field"><label>When this profile matches</label>
+    <div id="mpe_examples"></div>
+    <button class="btn" type="button" onclick="mpAddExample()">+ example</button>
+    <div class="hint">Short clues, five words at most each. They are what you
+      read when you pick a profile at launch.</div></div>
+  <div class="field"><label>Staffing</label>
+    <div class="mp-tabs" id="mpe_tabs"></div>
+    <div class="actgrid" id="mpe_grid"></div>
+    <div class="hint">Rigor is chosen per run at launch, so each of the three
+      is staffed here. A blank row leaves that act out of the profile: it
+      keeps whatever the run already assigns, then the family default.</div>
+  </div>
+  <div class="formrow">
+    <span id="mpe_error" style="color:var(--bad);font-size:12px;margin-right:auto"></span>
+    <button class="btn" onclick="document.getElementById('mpeditor').close()">Cancel</button>
+    <button class="btn primary" onclick="saveModelProfileEditor()">Save</button>
   </div>
 </dialog>
 
@@ -4419,6 +4455,42 @@ async function openModelProfiles() {
   document.getElementById("modelprofilesdlg").showModal();
   await loadModelProfileCatalogue();
 }
+/* The nine seats a profile can staff, in the order the run uses them, with
+   what each seat actually honors: `full` takes a family and may tune model
+   and effort; `tuned` has a structurally fixed or derived family and only
+   tunes model/effort; `family` (consultation) derives both, so it chooses
+   only who answers. Sending anything else is an input error server-side —
+   the grid simply never offers it. */
+const MP_ROWS = [
+  {act: "skeletoner", label: "Skeleton", kind: "full"},
+  {act: "drafter", label: "Draft docs", kind: "full"},
+  {act: "implementer", label: "Implement", kind: "full"},
+  {act: "review_codex", label: "Review · Codex", kind: "tuned",
+   family: "codex"},
+  {act: "review_claude", label: "Review · Claude", kind: "tuned",
+   family: "claude"},
+  {act: "fixer", label: "Fix findings", kind: "full"},
+  {act: "reclassifier", label: "Reclassify", kind: "full"},
+  {act: "brainstorming_counterpart", label: "Counterpart", kind: "tuned",
+   family: "opposite"},
+  {act: "consultation", label: "Consultation", kind: "family"},
+];
+const MP_FAMILY_OPTS = ["codex", "claude", "self", "opposite"];
+const MP_RIGORS = ["low", "medium", "high"];
+function mpEntryFields(entry) {
+  // One seat is stored either as a bare family-policy string or as an
+  // object; the grid reads both and the operator sees neither.
+  if (typeof entry === "string")
+    return {agent: entry, model: "", effort: ""};
+  if (entry && typeof entry === "object")
+    return {agent: entry.agent || "", model: entry.model || "",
+            effort: entry.effort || ""};
+  return {agent: "", model: "", effort: ""};
+}
+function mpModelOpts(family) {
+  return MODEL_OPTS[family] ||
+    [...MODEL_OPTS.claude, ...MODEL_OPTS.codex];
+}
 function renderModelProfiles() {
   const error = document.getElementById("mp_error");
   error.textContent = modelProfileCatalogueError;
@@ -4426,9 +4498,9 @@ function renderModelProfiles() {
   document.getElementById("mp_new").style.display = appAccess.admin ? "" : "none";
   document.getElementById("mp_catalogue").innerHTML =
     modelProfileCatalogue.map(profile => {
-      const configs = ["low", "medium", "high"].map(rigor =>
-        `<div><b>${rigor}</b><pre class="mono">${esc(JSON.stringify(
-          profile.configurations[rigor], null, 1))}</pre></div>`
+      const configs = MP_RIGORS.map(rigor =>
+        `<div><b>${rigor}</b>${
+          mpRigorSummary(profile.configurations[rigor])}</div>`
       ).join("");
       return `<div class="card"><h3>${esc(profile.name)}</h3>
         <div class="amend-hint">${esc(profile.examples.join(" · "))}</div>
@@ -4438,40 +4510,180 @@ function renderModelProfiles() {
     }).join("") || (modelProfileCatalogueError ? "" :
       `<div class="empty">No model profiles.</div>`);
 }
+function mpRigorSummary(cfg) {
+  const rows = MP_ROWS.filter(row => cfg && cfg[row.act] !== undefined);
+  if (!rows.length)
+    return `<div class="mp-unset">nothing staffed — run defaults</div>`;
+  return `<div class="mp-summary">` + rows.map(row => {
+    const f = mpEntryFields(cfg[row.act]);
+    const family = row.kind === "tuned" ? row.family : f.agent;
+    return `<span class="mp-act">${esc(row.label)}</span>
+      <span class="mono">${esc(family || "—")}</span>
+      <span class="mono">${esc(shortModel(f.model) || "—")}</span>
+      <span class="mono">${esc(f.effort || "—")}</span>`;
+  }).join("") + `</div>`;
+}
+
+/* ---- the model-profile editor. Every control is a staffing DECISION —
+   who answers, with which model, at what effort — one rigor at a time, in
+   the same three columns as the launch act grid. The document shape that
+   carries the decision is the panel's problem, not the operator's; the
+   service stays the one semantic validator. */
+let mpEdit = null;
 function newModelProfile() {
   if (!appAccess.admin) return;
   document.getElementById("modelprofilesdlg").close();
-  openSgEditor({
-    title: "New model profile",
-    value: {name: "", examples: ["matching work"], configurations: {
-      low: {}, medium: {}, high: {},
-    }},
-    hint: "Create supplies a new name and all three rigor configurations.",
-    onSave: parsed => {
-      if (parsed && modelProfileCatalogue.some(p => p.name === parsed.name))
-        throw new Error("Profile Create needs a new name; use Edit.");
-      return postJSON("/api/model-profiles", parsed);
-    },
-    afterSave: openModelProfiles,
-  });
+  openModelProfileEditor({name: "", examples: [""], configurations: {}}, true);
 }
 function editModelProfile(name) {
   if (!appAccess.admin) return;
   const opened = modelProfileCatalogue.find(p => p.name === name);
   if (!opened) return;
-  const openedName = opened.name;
   document.getElementById("modelprofilesdlg").close();
-  openSgEditor({
-    title: `Edit model profile — ${openedName}`,
-    value: opened,
-    hint: "Profile Edit wholly replaces this definition; its opened name is immutable.",
-    onSave: parsed => {
-      if (!parsed || Array.isArray(parsed) || parsed.name !== openedName)
-        throw new Error(`Profile Edit keeps the opened name “${openedName}”.`);
-      return postJSON("/api/model-profiles", parsed);
-    },
-    afterSave: openModelProfiles,
-  });
+  openModelProfileEditor(opened, false);
+}
+function openModelProfileEditor(profile, create) {
+  mpEdit = {
+    create: Boolean(create),
+    name: profile.name || "",
+    examples: (profile.examples || []).slice(),
+    configurations: JSON.parse(
+      JSON.stringify(profile.configurations || {})),
+    rigor: "medium",
+  };
+  for (const rigor of MP_RIGORS) {
+    const cfg = mpEdit.configurations[rigor];
+    if (!cfg || typeof cfg !== "object" || Array.isArray(cfg))
+      mpEdit.configurations[rigor] = {};
+  }
+  if (!mpEdit.examples.length) mpEdit.examples = [""];
+  document.getElementById("mpe_title").textContent = create
+    ? "New model profile" : `Model profile — ${mpEdit.name}`;
+  const nameEl = document.getElementById("mpe_name");
+  nameEl.value = mpEdit.name;
+  nameEl.disabled = !create;
+  document.getElementById("mpe_name_hint").textContent = create
+    ? "Letters, digits, - and _ — this is how you pick it at launch."
+    : "A saved profile keeps its name; Save replaces the whole definition.";
+  document.getElementById("mpe_error").textContent = "";
+  mpRenderExamples();
+  mpRenderTabs();
+  mpRenderGrid();
+  document.getElementById("mpeditor").showModal();
+}
+function mpRenderExamples() {
+  document.getElementById("mpe_examples").innerHTML =
+    mpEdit.examples.map((example, i) =>
+      `<div class="mp-listrow">
+         <input value="${esc(example)}" placeholder="public API contract"
+           oninput="mpSetExample(${i}, this.value)">
+         <button class="btn" type="button" onclick="mpRemoveExample(${i})"
+           ${mpEdit.examples.length < 2 ? "disabled" : ""}>×</button>
+       </div>`).join("");
+}
+function mpSetExample(i, value) { mpEdit.examples[i] = value; }
+function mpAddExample() { mpEdit.examples.push(""); mpRenderExamples(); }
+function mpRemoveExample(i) {
+  mpEdit.examples.splice(i, 1);
+  mpRenderExamples();
+}
+function mpRenderTabs() {
+  document.getElementById("mpe_tabs").innerHTML = MP_RIGORS.map(rigor =>
+    `<button class="btn ${rigor === mpEdit.rigor ? "on" : ""}" type="button"
+       onclick="mpSelectRigor('${rigor}')">${rigor}</button>`).join("");
+}
+function mpSelectRigor(rigor) {
+  mpEdit.rigor = rigor;
+  mpRenderTabs();
+  mpRenderGrid();
+}
+function mpOptions(values, current, emptyLabel) {
+  return `<option value="">— ${esc(emptyLabel)} —</option>` +
+    values.map(v =>
+      `<option ${v === current ? "selected" : ""}>${esc(v)}</option>`
+    ).join("");
+}
+function mpRenderGrid() {
+  const cfg = mpEdit.configurations[mpEdit.rigor];
+  document.getElementById("mpe_grid").innerHTML =
+    `<span></span><span class="acthead">family</span>
+     <span class="acthead">model</span><span class="acthead">effort</span>` +
+    MP_ROWS.map(row => {
+      const f = mpEntryFields(cfg[row.act]);
+      const declared = row.kind === "full" ? f.agent : row.family;
+      const family = row.kind === "full"
+        ? `<select id="mpe_${row.act}_agent"
+             onchange="mpOnFamily('${row.act}')">
+             ${mpOptions(MP_FAMILY_OPTS, f.agent, "unset")}</select>`
+        : row.kind === "family"
+        ? `<select id="mpe_${row.act}_agent"
+             onchange="mpOnField('${row.act}')">
+             ${mpOptions(MP_FAMILY_OPTS, f.agent, "unset")}</select>`
+        : `<span class="actfamily mono">${esc(row.family)}${
+             row.family === "opposite" ? " (derived)" : ""}</span>`;
+      const model = row.kind === "family"
+        ? `<span class="actfamily mono">derived</span>`
+        : `<select id="mpe_${row.act}_model"
+             onchange="mpOnField('${row.act}')">
+             ${mpOptions(mpModelOpts(declared), f.model,
+                         "family default")}</select>`;
+      const effort = row.kind === "family"
+        ? `<span class="actfamily mono">caller's</span>`
+        : `<select id="mpe_${row.act}_effort"
+             onchange="mpOnField('${row.act}')">
+             ${mpOptions(EFFORT_OPTS.claude, f.effort,
+                         "family default")}</select>`;
+      return `<label title="${esc(row.act)}">${esc(row.label)}</label>` +
+        family + model + effort;
+    }).join("");
+}
+function mpOnFamily(act) {
+  // The family just changed, so the other family's model no longer
+  // applies: clear the tuning and re-offer this family's models.
+  mpWriteAct(act, true);
+  mpRenderGrid();
+}
+function mpOnField(act) { mpWriteAct(act, false); }
+function mpWriteAct(act, familyChanged) {
+  const cfg = mpEdit.configurations[mpEdit.rigor];
+  const row = MP_ROWS.find(r => r.act === act);
+  const read = field => {
+    const el = document.getElementById(`mpe_${act}_${field}`);
+    return el ? el.value : "";
+  };
+  const agent = row.kind === "tuned" ? "" : read("agent");
+  const model = familyChanged ? "" : read("model");
+  const effort = familyChanged ? "" : read("effort");
+  // A wholly blank row is an ABSENT act, not an empty one: the run keeps
+  // its own assignment and then the family default.
+  if (!agent && !model && !effort) { delete cfg[act]; return; }
+  // Consultation derives model and effort, so its only form is the family
+  // policy; any other seat with nothing tuned takes that same short form.
+  if (agent && !model && !effort) { cfg[act] = agent; return; }
+  const entry = {};
+  if (agent) entry.agent = agent;
+  if (model) entry.model = model;
+  if (effort) entry.effort = effort;
+  cfg[act] = entry;
+}
+async function saveModelProfileEditor() {
+  const error = document.getElementById("mpe_error");
+  error.textContent = "";
+  const name = mpEdit.create
+    ? document.getElementById("mpe_name").value.trim() : mpEdit.name;
+  const document_ = {
+    name,
+    examples: mpEdit.examples.map(e => e.trim()).filter(Boolean),
+    configurations: mpEdit.configurations,
+  };
+  try {
+    if (mpEdit.create &&
+        modelProfileCatalogue.some(p => p.name === name))
+      throw new Error("That name already exists — open it with Edit.");
+    await postJSON("/api/model-profiles", document_);
+  } catch (e) { error.textContent = e.message; return; }  // token verbatim
+  document.getElementById("mpeditor").close();
+  await openModelProfiles();
 }
 async function openRunModelProfile() {
   const error = document.getElementById("mps_error");

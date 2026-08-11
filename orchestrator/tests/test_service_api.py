@@ -3510,19 +3510,52 @@ class ModelProfileSurfacesApiTest(ServiceApiTest):
         status, body = self.request("GET", "/")
         self.assertEqual(status, 200)
         panel = body.decode("utf-8")
-        edit = panel[
-            panel.index("function editModelProfile(name)"):
+        editor = panel[
+            panel.index("function openModelProfileEditor(profile, create)"):
             panel.index("async function openRunModelProfile()")
         ]
-        self.assertIn("const openedName = opened.name", edit)
-        self.assertIn("parsed.name !== openedName", edit)
-        self.assertIn("Profile Edit keeps the opened name", edit)
-        self.assertIn('postJSON("/api/model-profiles", parsed)', edit)
-        create = panel[
-            panel.index("function newModelProfile()"):
-            panel.index("function editModelProfile(name)")
+        # An opened profile's name is not editable and is never read back
+        # from the form: Save reuses the opened one, so Edit cannot rename.
+        self.assertIn("nameEl.disabled = !create", editor)
+        save = panel[
+            panel.index("async function saveModelProfileEditor()"):
+            panel.index("async function openRunModelProfile()")
         ]
-        self.assertIn("Profile Create needs a new name", create)
+        self.assertIn("mpEdit.create", save)
+        self.assertIn(": mpEdit.name", save)
+        self.assertIn("That name already exists", save)
+        self.assertIn('postJSON("/api/model-profiles", document_)', save)
+
+    def test_panel_model_profile_editor_offers_controls_not_raw_json(self):
+        # The operator edits STAFFING (who answers, which model, how hard),
+        # never the document that carries it: the shared JSON editor is not
+        # on this path at all.
+        status, body = self.request("GET", "/")
+        self.assertEqual(status, 200)
+        panel = body.decode("utf-8")
+        self.assertIn('id="mpeditor"', panel)
+        section = panel[
+            panel.index("/* ---- the model-profile editor."):
+            panel.index("async function openRunModelProfile()")
+        ]
+        self.assertNotIn("openSgEditor", section)
+        self.assertNotIn("sg_json", section)
+        rows = panel[
+            panel.index("const MP_ROWS = ["):
+            panel.index("const MP_FAMILY_OPTS")
+        ]
+        for act in model_profiles.PROFILE_ACT_KEYS:
+            self.assertIn('"%s"' % act, rows)
+        # Every honored field is a control, and only the honored ones: the
+        # fixed/derived-family seats offer no family picker.
+        grid = panel[
+            panel.index("function mpRenderGrid()"):
+            panel.index("function mpOnFamily(act)")
+        ]
+        for field in ("_agent", "_model", "_effort"):
+            self.assertIn('mpe_${row.act}%s' % field, grid)
+        self.assertIn('kind === "full"', grid)
+        self.assertIn('kind === "family"', grid)
 
 
 class CommitWebBaseTest(unittest.TestCase):
