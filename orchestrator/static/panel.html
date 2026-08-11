@@ -32,7 +32,7 @@
   /* left: launched milestones */
   aside { width: 320px; min-width: 260px; border-right: 1px solid #e5e5e5;
           background: #f7f7f7; display: flex; flex-direction: column; }
-  aside .actions { display: flex; gap: 8px; padding: 12px; }
+  aside .actions { display: flex; flex-wrap: wrap; gap: 8px; padding: 12px; }
   .btn { display: inline-block; border: 1px solid var(--line); background: #fff;
          border-radius: 8px; padding: 6px 12px; font-size: 13px; cursor: pointer; }
   .btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
@@ -366,6 +366,22 @@
   #formError { color: var(--bad); font-size: 12px; margin-right: auto; }
   .pathrow { display: flex; gap: 6px; }
   .pathrow input { flex: 1; }
+  #strategyprofilesdlg, #strategyprofileeditor {
+    width: min(760px, 92vw); max-height: 90vh; overflow-y: auto; }
+  .strategy-decisions { border: 1px solid var(--line); border-radius: 8px;
+    overflow: hidden; margin-bottom: 12px; }
+  .strategy-decision { display: grid; grid-template-columns: minmax(150px, 1fr)
+    minmax(150px, 1fr) auto; gap: 10px; align-items: center;
+    padding: 8px 10px; border-bottom: 1px solid var(--line); }
+  .strategy-decision:last-child { border-bottom: 0; }
+  .strategy-decision select { min-width: 0; width: 100%; border: 1px solid var(--line);
+    border-radius: 7px; padding: 5px 7px; font: inherit; }
+  .strategy-support { color: var(--dim); font-size: 11px; white-space: nowrap; }
+  .strategy-support.reserved { color: var(--warn); }
+  .strategy-value.unresolved { color: var(--warn); font-style: italic; }
+  .strategy-source { max-height: 180px; overflow: auto; white-space: pre-wrap;
+    overflow-wrap: anywhere; border: 1px solid var(--line); border-radius: 8px;
+    background: var(--panel); padding: 8px 10px; font-size: 11px; }
 
   /* doc viewer (unit markdown artifacts) */
   .chip.doc { color: var(--accent); border-color: #c3d4fb; }
@@ -527,6 +543,8 @@
     body.m-detail #backbtn { display: inline-block; }
     dialog { width: calc(100vw - 20px); max-width: calc(100vw - 20px);
              padding: 14px; }
+    .strategy-decision { grid-template-columns: minmax(0, 1fr); gap: 4px; }
+    .strategy-support { white-space: normal; }
     .storybody { min-width: 0; max-width: none; }
     .actgrid { grid-template-columns: 70px 1fr 1.45fr .95fr; }
     .pathrow { flex-wrap: wrap; }
@@ -551,12 +569,14 @@
   <aside>
     <!-- Launching is a PROJECT act: both "New milestone" and "New
          brainstorming" live in each project's ⋯ menu. The standing buttons
-         manage service-wide project and model-profile catalogues. -->
+         manage service-wide project, strategy, and model-profile catalogues. -->
     <div class="actions" id="sidebarActions" style="display:none">
       <button class="btn" id="newProjectBtn" style="display:none"
         onclick="openProjectCreate()" title="Declare a project">+ Project</button>
       <button class="btn" id="modelProfilesBtn" style="display:none"
         onclick="openModelProfiles()">Model profiles</button>
+      <button class="btn" id="strategyProfilesBtn" style="display:none"
+        onclick="openStrategyProfiles()">Strategy profiles</button>
     </div>
     <div id="runs"></div>
   </aside>
@@ -1093,6 +1113,45 @@
   </div>
 </dialog>
 
+<dialog id="strategyprofilesdlg">
+  <h2>Strategy profiles</h2>
+  <div id="sp_error" class="failure" style="display:none"></div>
+  <div id="sp_catalogue"></div>
+  <div class="formrow">
+    <span></span>
+    <button class="btn"
+      onclick="document.getElementById('strategyprofilesdlg').close()">Close</button>
+    <button class="btn primary" id="sp_new" style="display:none"
+      onclick="newStrategyProfile()">New strategy</button>
+  </div>
+</dialog>
+
+<dialog id="strategyprofileeditor">
+  <h2 id="spe_title">Strategy profile</h2>
+  <div class="field"><label>Name *</label>
+    <input id="spe_name" oninput="updateStrategyEditorState()"></div>
+  <div class="field"><label>Version *</label>
+    <input id="spe_version" type="number" min="1" step="1"
+      oninput="updateStrategyEditorState()"></div>
+  <div class="field"><label>Description</label>
+    <textarea id="spe_description"></textarea></div>
+  <div id="spe_decisions"></div>
+  <div id="spe_compat" style="display:none">
+    <div class="hint" style="margin-bottom:6px">Compatibility semantics are
+      inspectable but not composable. Saving carries them through unchanged.</div>
+    <pre id="spe_compat_source" class="strategy-source mono"></pre>
+  </div>
+  <div class="hint" id="spe_hint"></div>
+  <div class="formrow">
+    <span id="spe_error"
+      style="color:var(--bad);font-size:12px;margin-right:auto"></span>
+    <button class="btn"
+      onclick="document.getElementById('strategyprofileeditor').close()">Cancel</button>
+    <button class="btn primary" id="spe_save"
+      onclick="saveStrategyProfile()">Save</button>
+  </div>
+</dialog>
+
 <dialog id="sgeditor">
   <h2 id="sg_title">Edit</h2>
   <div class="field">
@@ -1214,6 +1273,8 @@ async function loadAccess() {
   document.getElementById("newProjectBtn").style.display =
     appAccess.admin ? "" : "none";
   document.getElementById("modelProfilesBtn").style.display =
+    appAccess.user ? "" : "none";
+  document.getElementById("strategyProfilesBtn").style.display =
     appAccess.user ? "" : "none";
   // Catalogue reads are member-visible; only its mutation controls and the
   // project-creation action are administrative.
@@ -4449,39 +4510,250 @@ async function saveRunModelProfile() {
   document.getElementById("modelprofileselectiondlg").close();
   refreshDetail();
 }
-/* ---- strategy profile selector: the run's review strategy, chosen at
-        creation. The list loads when the form opens; picking one shows its
-        decomposition (dials) so the operator sees what it means. ---- */
-// version is noise for the common case (every seed starts at v1); show
-// it only once a profile has actually been cloned/versioned past v1.
+/* ---- strategy catalogue, configurator, launch selection and live repoint.
+   One GET supplies every semantic key, legal value and support label. ---- */
 function profileLabel(p) {
   const v = p.version > 1 ? `@${p.version}` : "";
   return `${p.name}${v}`;
 }
+function strategyPathParts(key) {
+  const parts = [];
+  String(key).replace(/([^[.\]]+)|\[(\d+)\]/g, (_all, name, index) => {
+    parts.push(index === undefined ? name : Number(index));
+  });
+  return parts;
+}
+function strategyDecisionValue(content, key) {
+  let current = content;
+  for (const part of strategyPathParts(key)) {
+    if (current == null || typeof current !== "object" || !(part in current))
+      return undefined;
+    current = current[part];
+  }
+  return current;
+}
+function setStrategyDecision(content, key, value) {
+  const parts = strategyPathParts(key);
+  let current = content;
+  parts.forEach((part, index) => {
+    if (index === parts.length - 1) { current[part] = value; return; }
+    const nextIsIndex = typeof parts[index + 1] === "number";
+    if (current[part] == null || typeof current[part] !== "object")
+      current[part] = nextIsIndex ? [] : {};
+    current = current[part];
+  });
+}
+function strategyValueText(value) {
+  return typeof value === "string" ? value : JSON.stringify(value);
+}
+function strategySupportText(decision) {
+  return decision.status === "reserved"
+    ? "reserved — non-operative" : decision.status;
+}
+function strategyIsCompatibility(profile) {
+  return !!(profile && profile.profile && profile.profile.compat === true);
+}
+function strategyDescriptionText(description) {
+  if (typeof description === "string") return description;
+  const encoded = JSON.stringify(description);
+  return encoded === undefined ? "" : encoded;
+}
 let launchProfiles = [];
+let strategyDecisions = [];
 let launchProfilesError = "";
+let strategyEditor = null;
+let strategyCatalogueLoadSequence = 0;
+let strategyCatalogueLoading = false;
 async function loadProfiles() {
-  launchProfiles = [];
-  launchProfilesError = "";
-  try {
-    const data = await api("/api/profiles");
-    launchProfiles = data.profiles || [];
-  } catch (e) { launchProfilesError = e.message; }
+  const loadSequence = ++strategyCatalogueLoadSequence;
   const sel = document.getElementById("f_profile");
   const keep = sel.value;
+  launchProfiles = [];
+  strategyDecisions = [];
+  launchProfilesError = "";
+  strategyCatalogueLoading = true;
+  sel.disabled = true;
+  sel.innerHTML =
+    `<option value="" disabled selected>— loading strategy profiles —</option>`;
+  document.getElementById("f_profile_hint").textContent = "Loading…";
+  if (document.getElementById("strategyprofilesdlg").open)
+    renderStrategyProfiles();
+  let loadedProfiles = [];
+  let loadedDecisions = [];
+  let loadError = "";
+  try {
+    const data = await api("/api/profiles");
+    loadedProfiles = Array.isArray(data.profiles) ? data.profiles : [];
+    loadedDecisions = Array.isArray(data.decisions) ? data.decisions : [];
+  } catch (e) { loadError = e.message; }
+  if (loadSequence !== strategyCatalogueLoadSequence) return false;
+  launchProfiles = loadedProfiles;
+  strategyDecisions = loadedDecisions;
+  launchProfilesError = loadError;
+  strategyCatalogueLoading = false;
   sel.innerHTML =
     `<option value="" disabled${keep ? "" : " selected"}>— choose: strict / light / legacy —</option>` +
     launchProfiles.map(p => `<option value="${esc(p.name)}">${esc(profileLabel(p))}</option>`).join("");
-  // No seed is pre-selected: an explicit choice is required (R1-ARM — a
-  // silent default would no-op the operator's intent now that profiles
-  // change behavior). A prior in-progress choice is preserved on reload.
+  sel.disabled = !!launchProfilesError || !launchProfiles.length;
+  // No seed is pre-selected: an explicit choice is required. A prior
+  // in-progress choice survives a successful reload only while it exists.
   sel.value = launchProfiles.some(p => p.name === keep) ? keep : "";
   onProfileChange();
+  if (document.getElementById("strategyprofilesdlg").open)
+    renderStrategyProfiles();
+  return true;
+}
+async function openStrategyProfiles() {
+  document.getElementById("strategyprofilesdlg").showModal();
+  await loadProfiles();
+}
+function strategyDecisionRows(profile) {
+  return strategyDecisions.map(decision => {
+    const value = strategyDecisionValue(profile.profile, decision.key);
+    const missing = value === undefined;
+    return `<div class="strategy-decision">
+      <span class="mono">${esc(decision.key)}</span>
+      <span class="strategy-value${missing ? " unresolved" : ""}">${missing
+        ? "unresolved" : esc(strategyValueText(value))}</span>
+      <span class="strategy-support${decision.status === "reserved" ? " reserved" : ""}">${esc(strategySupportText(decision))}</span>
+    </div>`;
+  }).join("");
+}
+function renderStrategyProfiles() {
+  const error = document.getElementById("sp_error");
+  error.textContent = launchProfilesError;
+  error.style.display = launchProfilesError ? "block" : "none";
+  const create = document.getElementById("sp_new");
+  create.style.display = appAccess.admin ? "" : "none";
+  create.disabled = !!launchProfilesError || !strategyDecisions.length;
+  document.getElementById("sp_catalogue").innerHTML = launchProfiles.map(profile => {
+    const compatibility = strategyIsCompatibility(profile);
+    const semantics = compatibility
+      ? `<div class="hint">Compatibility semantics — not composable</div>
+         <pre class="strategy-source mono">${esc(JSON.stringify(profile.profile, null, 1))}</pre>`
+      : `<div class="strategy-decisions">${strategyDecisionRows(profile)}</div>`;
+    return `<div class="card"><h3>${esc(profileLabel(profile))}</h3>
+      <div class="amend-hint"><span class="mono">${esc(profile.hash)}</span>${
+        profile.description
+          ? " · " + esc(strategyDescriptionText(profile.description)) : ""}</div>
+      ${semantics}
+      ${appAccess.admin ? `<button class="btn" onclick="editStrategyProfile('${esc(escJsSq(profile.name))}')">Edit…</button>` : ""}
+    </div>`;
+  }).join("") || (launchProfilesError ? "" :
+    `<div class="empty">No strategy profiles.</div>`);
+}
+function renderStrategyEditor() {
+  const base = strategyEditor.baseProfile;
+  const compatibility = strategyEditor.compatibility;
+  document.getElementById("spe_decisions").innerHTML = compatibility ? "" :
+    `<div class="strategy-decisions">${strategyDecisions.map((decision, index) => {
+      const current = strategyDecisionValue(base, decision.key);
+      const options = decision.values.map((value, valueIndex) =>
+        `<option value="${valueIndex}"${
+          typeof current === typeof value && current === value ? " selected" : ""}>${
+          esc(strategyValueText(value))}</option>`).join("");
+      return `<div class="strategy-decision">
+        <label class="mono" for="spe_decision_${index}">${esc(decision.key)}</label>
+        <select id="spe_decision_${index}" onchange="updateStrategyEditorState()">
+          <option value="">— choose —</option>${options}</select>
+        <span class="strategy-support${decision.status === "reserved" ? " reserved" : ""}">${esc(strategySupportText(decision))}</span>
+      </div>`;
+    }).join("")}</div>`;
+  document.getElementById("spe_compat").style.display = compatibility ? "block" : "none";
+  document.getElementById("spe_compat_source").textContent = compatibility
+    ? JSON.stringify(base, null, 1) : "";
+  updateStrategyEditorState();
+}
+function openStrategyEditor(config) {
+  strategyEditor = config;
+  const descriptionText = strategyDescriptionText(config.description);
+  strategyEditor.descriptionText = descriptionText;
+  document.getElementById("strategyprofilesdlg").close();
+  document.getElementById("spe_title").textContent = config.mode === "create"
+    ? "New strategy profile" : `Edit strategy profile — ${config.openedName}`;
+  const name = document.getElementById("spe_name");
+  name.value = config.openedName || "";
+  name.disabled = config.mode === "edit";
+  document.getElementById("spe_version").value = config.version;
+  document.getElementById("spe_description").value = descriptionText;
+  document.getElementById("spe_error").textContent = "";
+  renderStrategyEditor();
+  document.getElementById("strategyprofileeditor").showModal();
+}
+function newStrategyProfile() {
+  if (!appAccess.admin || launchProfilesError || !strategyDecisions.length) return;
+  openStrategyEditor({
+    mode: "create", openedName: null, version: 1, description: "",
+    baseProfile: {}, compatibility: false,
+  });
+}
+function editStrategyProfile(name) {
+  if (!appAccess.admin) return;
+  const opened = launchProfiles.find(profile => profile.name === name);
+  if (!opened) return;
+  openStrategyEditor({
+    mode: "edit", openedName: opened.name, version: opened.version,
+    description: opened.description,
+    baseProfile: JSON.parse(JSON.stringify(opened.profile)),
+    compatibility: strategyIsCompatibility(opened),
+  });
+}
+function updateStrategyEditorState() {
+  if (!strategyEditor) return;
+  const name = document.getElementById("spe_name").value.trim();
+  const duplicate = strategyEditor.mode === "create" &&
+    launchProfiles.some(profile => profile.name === name);
+  const incomplete = !strategyEditor.compatibility && strategyDecisions.some(
+    (_decision, index) => !document.getElementById(`spe_decision_${index}`).value
+  );
+  const hint = document.getElementById("spe_hint");
+  hint.textContent = duplicate ? "That exact name already exists; use Edit."
+    : incomplete ? "Choose one value for every decision before saving." : "";
+  document.getElementById("spe_save").disabled = !appAccess.admin || !name ||
+    duplicate || incomplete || !!launchProfilesError || !strategyDecisions.length;
+}
+function configuredStrategyContent() {
+  const content = JSON.parse(JSON.stringify(strategyEditor.baseProfile));
+  if (strategyEditor.compatibility) return content;
+  strategyDecisions.forEach((decision, index) => {
+    const selectedIndex = Number(
+      document.getElementById(`spe_decision_${index}`).value
+    );
+    setStrategyDecision(content, decision.key, decision.values[selectedIndex]);
+  });
+  return content;
+}
+async function saveStrategyProfile() {
+  if (!strategyEditor || !appAccess.admin) return;
+  const error = document.getElementById("spe_error");
+  error.textContent = "";
+  const enteredName = document.getElementById("spe_name").value.trim();
+  const name = strategyEditor.mode === "edit"
+    ? strategyEditor.openedName : enteredName;
+  if (strategyEditor.mode === "create" &&
+      launchProfiles.some(profile => profile.name === name)) {
+    error.textContent = "That exact name already exists; use Edit.";
+    updateStrategyEditorState();
+    return;
+  }
+  updateStrategyEditorState();
+  if (document.getElementById("spe_save").disabled) return;
+  const descriptionText = document.getElementById("spe_description").value;
+  const documentValue = {
+    name,
+    version: Number(document.getElementById("spe_version").value),
+    description: strategyEditor.mode === "edit" &&
+      descriptionText === strategyEditor.descriptionText
+      ? strategyEditor.description : descriptionText,
+    profile: configuredStrategyContent(),
+  };
+  try {
+    await postJSON("/api/profiles", documentValue);
+  } catch (e) { error.textContent = e.message; return; }
+  document.getElementById("strategyprofileeditor").close();
+  await openStrategyProfiles();
 }
 function onProfileChange() {
-  // Empty until a profile is picked (the standing explanation lives
-  // behind the dialog's (i)); a picked profile shows its decomposition
-  // — live feedback, not standing prose.
   const hint = document.getElementById("f_profile_hint");
   const p = launchProfiles.find(x => x.name ===
     document.getElementById("f_profile").value);
@@ -4489,29 +4761,28 @@ function onProfileChange() {
   const dials = profileDials(p);
   hint.innerHTML =
     `<span class="mono">${esc(p.hash)}</span>${dials ? " · " + esc(dials) : ""}` +
-    (p.description ? `<br>${esc(p.description)}` : "");
+    (p.description
+      ? `<br>${esc(strategyDescriptionText(p.description))}` : "");
 }
-/* The profile's dials, as one lay line — shared by the new-run selector
-   and the runtime repoint dialog. */
-function profileDials(p) {
-  const c = (p && p.profile) || {}, bits = [];
-  if (c.doc_register) bits.push("register: " + c.doc_register);
-  if (c.p3_defer_max_risk) bits.push("defer ≤ " + c.p3_defer_max_risk);
-  if (c.fuser_discard) bits.push("fuser discard: " + c.fuser_discard);
-  if ("final_open_pass" in c)
-    bits.push("final open pass: " + (c.final_open_pass ? "yes" : "no"));
-  return bits.join(" · ");
+/* The same fetched support status accompanies values in both selectors. */
+function profileDials(profile) {
+  if (strategyIsCompatibility(profile)) return "compatibility — not composable";
+  return strategyDecisions.map(decision => {
+    const value = strategyDecisionValue(profile.profile, decision.key);
+    if (value === undefined) return null;
+    return `${decision.key}: ${strategyValueText(value)} ` +
+      `[${strategySupportText(decision)}]`;
+  }).filter(Boolean).join(" · ");
 }
 /* ---- runtime profile swap: repoint a live run at another profile. The
         dialog lives outside the polled container, seeded once on open. ---- */
 let psProfiles = [];
 async function openProfileSwap() {
   document.getElementById("ps_err").textContent = "";
-  psProfiles = [];
-  try {
-    const data = await api("/api/profiles");
-    psProfiles = data.profiles || [];
-  } catch (e) { document.getElementById("ps_err").textContent = e.message; }
+  if (!await loadProfiles()) return;
+  psProfiles = launchProfiles.slice();
+  if (launchProfilesError)
+    document.getElementById("ps_err").textContent = launchProfilesError;
   const sel = document.getElementById("ps_sel");
   sel.innerHTML = psProfiles.map(p =>
     `<option value="${esc(p.name)}">${esc(profileLabel(p))}</option>`
@@ -4837,10 +5108,22 @@ async function submitForm() {
     config.acts = Object.assign({}, config.acts || {}, acts);
   }
   if (Object.keys(config).length) payload.config = config;
+  if (strategyCatalogueLoading) {
+    err.textContent = "strategy profiles are still loading";
+    return;
+  }
+  if (launchProfilesError) {
+    err.textContent = launchProfilesError;
+    return;
+  }
   const profile = document.getElementById("f_profile").value;
   if (!profile) {
     err.textContent =
       "choose a strategy profile (legacy preserves the pre-reform review posture)";
+    return;
+  }
+  if (!launchProfiles.some(candidate => candidate.name === profile)) {
+    err.textContent = "choose a strategy profile from the current catalogue";
     return;
   }
   payload.profile = profile;

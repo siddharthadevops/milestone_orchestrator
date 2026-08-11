@@ -518,3 +518,42 @@
 - `codex-S6-PANEL-VERIFICATION-UNENFORCEABLE` (raised codex, cleared codex): The verification contract claims browser behavior without an executable browser or JavaScript seam — The note falsely treats static panel/API checks as strict executable proof, so the builder can silently ship incorrect boolean serialization, but the first real submission exposes it and correction is a local browser-mapping and focused-test-seam fix.
 - `codex-S6-CONCURRENT-SAVE-EVIDENCE-MISMATCH` (raised codex, cleared codex): The focused concurrency row cites tests that never overlap two saves — The row explicitly overstates focused test coverage because neither named test overlaps two saves, so a capable builder may silently trust a false verification claim, but correction is a local test-reference change and the existing true concurrency test is exercised by the full-suite gate.
 
+## slice_impl-06 (Strategy configurator panel)
+
+- draft: kind `implement`, artifact `-` (raw: `implementation/milestones/model-profiles/.run/raw/slice_impl-06-draft.txt`)
+
+| Round | Kind | Family | Findings | Triage | Raw |
+|---|---|---|---|---|---|
+| slice_impl-06-codex-r1 | review_round | codex | 2 | 2 reported | `implementation/milestones/model-profiles/.run/raw/slice_impl-06-codex-r1.txt` |
+| slice_impl-06-codex-r2 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/model-profiles/.run/raw/slice_impl-06-fix1.txt` |
+| slice_impl-06-codex-r3 | delta_review | codex | 0 | clean | `implementation/milestones/model-profiles/.run/raw/slice_impl-06-delta1.txt` |
+| slice_impl-06-codex-r4 | review_round | codex | 3 | 3 reported | `implementation/milestones/model-profiles/.run/raw/slice_impl-06-codex-r2.txt` |
+| slice_impl-06-codex-r5 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/model-profiles/.run/raw/slice_impl-06-fix2.txt` |
+| slice_impl-06-codex-r6 | delta_review | codex | 0 | clean | `implementation/milestones/model-profiles/.run/raw/slice_impl-06-delta2.txt` |
+| slice_impl-06-codex-r7 | review_round | codex | 1 | 1 reported | `implementation/milestones/model-profiles/.run/raw/slice_impl-06-codex-r3.txt` |
+| slice_impl-06-codex-r8 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/model-profiles/.run/raw/slice_impl-06-fix3.txt` |
+| slice_impl-06-codex-r9 | delta_review | codex | 0 | clean | `implementation/milestones/model-profiles/.run/raw/slice_impl-06-delta3.txt` |
+| slice_impl-06-codex-r10 | review_round | codex | 0 | clean | `implementation/milestones/model-profiles/.run/raw/slice_impl-06-codex-r4.txt` |
+| slice_impl-06-claude-r1 | review_round | claude | 4 | 4 reported | `implementation/milestones/model-profiles/.run/raw/slice_impl-06-claude-r1.txt` |
+| slice_impl-06-codex-r11 | fix_findings | codex | 2 | 2 fixed | `implementation/milestones/model-profiles/.run/raw/slice_impl-06-fix4.txt` |
+| slice_impl-06-codex-r12 | delta_review | codex | 0 | clean | `implementation/milestones/model-profiles/.run/raw/slice_impl-06-delta4.txt` |
+| slice_impl-06-codex-r13 | review_round | codex | 1 | 1 reported | `implementation/milestones/model-profiles/.run/raw/slice_impl-06-codex-r5.txt` |
+| slice_impl-06-codex-r14 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/model-profiles/.run/raw/slice_impl-06-fix5.txt` |
+| slice_impl-06-codex-r15 | delta_review | codex | 0 | clean | `implementation/milestones/model-profiles/.run/raw/slice_impl-06-delta5.txt` |
+| slice_impl-06-codex-r16 | review_round | codex | 0 | clean | `implementation/milestones/model-profiles/.run/raw/slice_impl-06-codex-r6.txt` |
+| slice_impl-06-claude-r2 | review_round | claude | 1 | DEBT-CLEAN (reclassified) | `implementation/milestones/model-profiles/.run/raw/slice_impl-06-claude-r2.txt` |
+
+### Review completion — SATISFIED
+
+- deterministic result: every configured family was clean or debt-clean on the same current bytes; the scheduled full verification passed; no extra reviewer was called
+- cited reviews: `slice_impl-06-codex-r16`, `slice_impl-06-claude-r2`
+- scheduled verification event: `1131`
+
+**Deferred debt (opposite-family verified):**
+- `codex-codex-S6-PANEL-TESTS-BYPASS-UI` (raised codex, cleared codex): Panel verification contract is source-scanned rather than executed — The Slice 6 note falsely claims rendered controls and submitted values are tested, while the suite uses direct API calls and source-string assertions, so green coverage can silently preserve description loss; correction is bounded to this unit’s UI test and request mapping and is exposed by first re
+- `codex-codex-S6-UNCHANGED-DESCRIPTION-NORMALIZED` (raised codex, cleared codex): Unchanged edits normalize valid description line endings — The editor compares the textarea’s LF-normalized value with the fetched CRLF string, so an unchanged save silently violates description preservation while the current source-string test misses it; correction is a local comparison fix plus one focused regression test.
+- `codex-codex-S6-UNSAFE-INTEGER-METADATA-ROUNDED` (raised codex, cleared codex): Server-valid metadata integers can be rounded during an unchanged edit — The panel silently rounds server-valid integers despite its lossless unchanged-edit guarantee, creating a correctness and test-coverage trap, while correction remains bounded to the configurator’s metadata round-trip and focused tests.
+- `claude-claude-S6-PROFILEDIALS-LOST-NULL-GUARD` (raised claude, cleared codex): The rewritten `profileDials(profile)` dropped the old `const c = (p && p.profile) || {}` guard and now dereferences `profile.profile` inside the `strategyDecisions.map` callback. `onPsChange()` calls `profileDials(p)` before its own `p ?` null check, so when the catalogue returns HTTP 200 with zero profiles, opening the active-run "Change…" (repoint) dialog throws `TypeError: Cannot read properties of undefined (reading 'profile')` and `openProfileSwap()` aborts before `showModal()`. — The source confirms a narrow null-dereference in the empty-catalogue repoint path, but it fails visibly before any write or modal display and correction is a local guard plus focused regression test, so it neither silently misstates the contract nor propagates rework.
+- `claude-claude-S6-CATALOGUE-DIALOG-CLAIMS-EMPTY-WHILE-LOADING` (raised claude, cleared codex): `openStrategyProfiles()` calls `showModal()` and then `loadProfiles()`, which renders the catalogue once *before* its fetch with `launchProfiles = []` and `launchProfilesError = ""`. `renderStrategyProfiles()` therefore emits `<div class="empty">No strategy profiles.</div>` for the whole duration of every catalogue load, unlike the launch selector on the same path, which correctly shows `— loading strategy profiles —`. — This is a real but transient UI behavior defect that is self-revealing on a slow load and requires only a local loading-state rendering fix once seen, so it is unlikely to silently steer later work and cheap to correct.
+- `claude-claude-S6-DEAD-LAUNCH-CATALOGUE-MEMBERSHIP-GUARD` (raised claude, cleared codex): The new third launch-time guard `if (!launchProfiles.some(candidate => candidate.name === profile))` in `submitForm` is unreachable — `#f_profile`'s options and `.value` are written only by `loadProfiles`, always from the same `launchProfiles` array — yet `test_launch_waits_for_current_catalogue_before_submission` pins it into the reviewed verification contract. — Because f_profile is populated and filtered solely from launchProfiles, the explicit test assertion could mislead a builder into preserving a meaningless catalogue invariant, but correction is only removing one dead branch and its assertion while server-side validation remains authoritative.
+

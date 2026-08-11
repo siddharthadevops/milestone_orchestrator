@@ -258,4 +258,5 @@ The milestone is complete when:
 | slice_impl-04 (Strategy editability without first-use seals) | reviewed | 23 | satisfied | 44058a5 |
 | slice_doc-05 (Strategy decision catalogue and validation) | reviewed | 5 | satisfied | efd31b8 |
 | slice_impl-05 (Strategy decision catalogue and validation) | reviewed | 32 | satisfied | 54df41f |
-| slice_doc-06 (Strategy configurator panel) | reviewed | 5 | satisfied | - |
+| slice_doc-06 (Strategy configurator panel) | reviewed | 5 | satisfied | 3bd51a0 |
+| slice_impl-06 (Strategy configurator panel) | reviewed | 18 | satisfied | - |

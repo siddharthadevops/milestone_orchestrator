@@ -2400,8 +2400,8 @@ class ProfilesDecisionApiTest(ServiceApiTest):
             panel.index("let launchProfiles = [];"):
             panel.index("/* ---- runtime profile swap")
         ]
-        self.assertIn('catch (e) { launchProfilesError = e.message; }',
-                      launch_surface)
+        self.assertIn("catch (e) { loadError = e.message; }", launch_surface)
+        self.assertIn("launchProfilesError = loadError;", launch_surface)
         self.assertIn("hint.textContent = launchProfilesError;",
                       launch_surface)
 
@@ -2603,6 +2603,348 @@ class ProfilesDecisionApiTest(ServiceApiTest):
         self.assertEqual(
             [driver.decide(state).type for state in states],
             [driver.A_DRAFT, driver.A_DRAFT],
+        )
+
+
+class StrategyConfiguratorPanelTest(ServiceApiTest):
+    """Slice 6: one catalogue-driven strategy form over the existing API."""
+
+    def panel_source(self):
+        status, body = self.request("GET", "/")
+        self.assertEqual(status, 200)
+        return body.decode("utf-8")
+
+    def strategy_source(self):
+        panel = self.panel_source()
+        return panel[
+            panel.index("/* ---- strategy catalogue, configurator"):
+            panel.index("function browseGoalDoc")
+        ]
+
+    def member_request_json(self, method, path, payload=None):
+        data = (json.dumps(payload).encode("utf-8")
+                if payload is not None else None)
+        req = urllib.request.Request(
+            self.base + path, data=data, method=method)
+        req.add_header("Content-Type", "application/json")
+        req.add_header("Host", "example.ngrok-free.dev")
+        req.add_header(access.REMOTE_HEADER, access.REMOTE_MARKER)
+        req.add_header(access.USER_HEADER, access.USER_EMAILS[0])
+        try:
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                return resp.status, json.loads(resp.read().decode("utf-8"))
+        except urllib.error.HTTPError as exc:
+            with exc:
+                return exc.code, json.loads(exc.read().decode("utf-8"))
+
+    @staticmethod
+    def editable(view):
+        return {
+            "name": view["name"],
+            "version": view["version"],
+            "description": view["description"],
+            "profile": json.loads(json.dumps(view["profile"])),
+        }
+
+    @staticmethod
+    def complete_content(decisions, value_index=0):
+        content = {}
+        for decision in decisions:
+            value = decision["values"][value_index % len(decision["values"])]
+            if decision["key"] == "stages[0].loop":
+                content["stages"] = [{"loop": value}]
+            else:
+                content[decision["key"]] = value
+        return content
+
+    def test_configurator_uses_catalogue_inventory_and_access(self):
+        panel = self.panel_source()
+        source = self.strategy_source()
+        self.assertIn('id="strategyprofilesdlg"', panel)
+        self.assertIn('id="strategyprofileeditor"', panel)
+        self.assertIn('id="sp_new" style="display:none"', panel)
+        self.assertIn("loadedDecisions = Array.isArray(data.decisions)", source)
+        self.assertIn("strategyDecisions.map(decision =>", source)
+        self.assertIn("decision.values.map((value, valueIndex)", source)
+        self.assertNotIn("openSgEditor", source)
+        self.assertNotIn("sg_json", source)
+        self.assertIn('create.style.display = appAccess.admin ? "" : "none";',
+                      source)
+        self.assertIn('appAccess.user ? "" : "none";', panel)
+
+        status, body = self.member_request_json("GET", "/api/profiles")
+        self.assertEqual(status, 200)
+        self.assertEqual(body["decisions"], profiles.decision_catalogue())
+        status, body = self.member_request_json(
+            "POST", "/api/profiles", {
+                "name": "member-write", "version": 1,
+                "description": "refused",
+                "profile": {"doc_register": "dense"},
+            })
+        self.assertEqual(status, 403)
+        self.assertFalse(body["ok"])
+
+    def test_configurator_create_posts_complete_decisions(self):
+        _, catalogue = self.request_json("GET", "/api/profiles")
+        content = self.complete_content(catalogue["decisions"])
+        request_doc = {
+            "name": "configured", "version": 1,
+            "description": "made in the decision form", "profile": content,
+        }
+        status, saved = self.request_json(
+            "POST", "/api/profiles", request_doc)
+        self.assertEqual(status, 200)
+        self.assertEqual(saved["profile"]["profile"], content)
+        self.assertEqual(
+            saved["profile"]["hash"], profiles.semantic_hash(content))
+        _, refreshed = self.request_json("GET", "/api/profiles")
+        configured = next(
+            item for item in refreshed["profiles"]
+            if item["name"] == "configured")
+        self.assertEqual(configured["profile"], content)
+
+        source = self.strategy_source()
+        save = source[
+            source.index("async function saveStrategyProfile"):
+            source.index("function onProfileChange")
+        ]
+        self.assertIn('launchProfiles.some(profile => profile.name === name)',
+                      save)
+        self.assertLess(save.index("launchProfiles.some"),
+                        save.index('postJSON("/api/profiles"'))
+        request_shape = save[
+            save.index("const documentValue = {"):save.index("try {")
+        ]
+        for field in ("name,", "version:", "description:", "profile:"):
+            self.assertIn(field, request_shape)
+        self.assertNotIn("hash", request_shape)
+        self.assertNotIn("sealed", request_shape)
+
+    def test_configurator_edit_preserves_opened_name_and_stage_content(self):
+        _, listed = self.request_json("GET", "/api/profiles")
+        strict = next(p for p in listed["profiles"] if p["name"] == "strict")
+        edited = self.editable(strict)
+        edited["profile"]["doc_register"] = "lay+hard-table"
+        status, saved = self.request_json("POST", "/api/profiles", edited)
+        self.assertEqual(status, 200)
+        self.assertEqual(saved["profile"]["name"], "strict")
+        self.assertEqual(
+            saved["profile"]["profile"]["stages"][0]["actions"],
+            [{"scope": "open"}],
+        )
+
+        source = self.strategy_source()
+        self.assertIn('name.disabled = config.mode === "edit";', source)
+        self.assertIn('? strategyEditor.openedName : enteredName;', source)
+        self.assertIn(
+            "const content = JSON.parse(JSON.stringify(strategyEditor.baseProfile));",
+            source,
+        )
+        self.assertIn("setStrategyDecision(content, decision.key", source)
+
+    def test_configurator_edit_preserves_non_string_description_until_changed(self):
+        _, listed = self.request_json("GET", "/api/profiles")
+        strict = next(p for p in listed["profiles"] if p["name"] == "strict")
+        edited = self.editable(strict)
+        edited["description"] = {
+            "format": "structured", "content": ["keep", 7, False],
+            "toString": "not-callable",
+        }
+        status, saved = self.request_json("POST", "/api/profiles", edited)
+        self.assertEqual(status, 200)
+        self.assertEqual(saved["profile"]["description"], edited["description"])
+        _, refreshed = self.request_json("GET", "/api/profiles")
+        refreshed_strict = next(
+            p for p in refreshed["profiles"] if p["name"] == "strict")
+        self.assertEqual(
+            refreshed_strict["description"], edited["description"])
+
+        source = self.strategy_source()
+        self.assertIn(
+            "const descriptionText = strategyDescriptionText(config.description);",
+            source,
+        )
+        self.assertIn(
+            'esc(strategyDescriptionText(profile.description))', source)
+        self.assertIn(
+            'esc(strategyDescriptionText(p.description))', source)
+        self.assertIn("strategyEditor.descriptionText = descriptionText;", source)
+        save = source[
+            source.index("async function saveStrategyProfile"):
+            source.index("function onProfileChange")
+        ]
+        self.assertIn(
+            "descriptionText === strategyEditor.descriptionText", save)
+        self.assertIn("? strategyEditor.description : descriptionText", save)
+
+    def test_configurator_strict_and_light_round_trip_exactly(self):
+        _, listed = self.request_json("GET", "/api/profiles")
+        views = {p["name"]: p for p in listed["profiles"]}
+        for name in ("strict", "light"):
+            before = views[name]
+            status, saved = self.request_json(
+                "POST", "/api/profiles", self.editable(before))
+            self.assertEqual(status, 200)
+            self.assertEqual(saved["profile"]["profile"], before["profile"])
+            self.assertEqual(saved["profile"]["hash"], before["hash"])
+            self.assertEqual(
+                saved["profile"]["profile"]["stages"][0]["actions"],
+                [{"scope": "open"}],
+            )
+
+    def test_configurator_partial_edit_requires_explicit_completion(self):
+        partial = {
+            "name": "partial", "version": 1, "description": "unfinished",
+            "profile": {"doc_register": "dense"},
+        }
+        status, _ = self.request_json("POST", "/api/profiles", partial)
+        self.assertEqual(status, 200)
+        path = os.path.join(profiles.profiles_dir(self.home), "partial.json")
+        with open(path, "rb") as fh:
+            before = fh.read()
+        self.panel_source()
+        with open(path, "rb") as fh:
+            self.assertEqual(fh.read(), before)
+
+        source = self.strategy_source()
+        self.assertIn('<option value="">— choose —</option>', source)
+        self.assertIn("const incomplete = !strategyEditor.compatibility", source)
+        self.assertIn("duplicate || incomplete", source)
+
+        _, catalogue = self.request_json("GET", "/api/profiles")
+        completed = dict(partial)
+        completed["profile"] = self.complete_content(
+            catalogue["decisions"], value_index=1)
+        status, saved = self.request_json(
+            "POST", "/api/profiles", completed)
+        self.assertEqual(status, 200)
+        for decision in catalogue["decisions"]:
+            key = decision["key"]
+            if key == "stages[0].loop":
+                self.assertIn("loop", saved["profile"]["profile"]["stages"][0])
+            else:
+                self.assertIn(key, saved["profile"]["profile"])
+
+    def test_configurator_legacy_is_metadata_only(self):
+        _, listed = self.request_json("GET", "/api/profiles")
+        legacy = next(p for p in listed["profiles"] if p["name"] == "legacy")
+        semantic = json.loads(json.dumps(legacy["profile"]))
+        edited = self.editable(legacy)
+        edited["description"] = "Compatibility, newly described"
+        status, saved = self.request_json("POST", "/api/profiles", edited)
+        self.assertEqual(status, 200)
+        self.assertEqual(saved["profile"]["profile"], semantic)
+        self.assertEqual(saved["profile"]["description"], edited["description"])
+
+        source = self.strategy_source()
+        self.assertIn("profile.profile.compat === true", source)
+        self.assertIn('innerHTML = compatibility ? "" :', source)
+        self.assertIn("if (strategyEditor.compatibility) return content;", source)
+        self.assertIn("Compatibility semantics — not composable", source)
+
+    def test_strategy_surfaces_mark_reserved_values_non_operative(self):
+        _, catalogue = self.request_json("GET", "/api/profiles")
+        reserved = [d for d in catalogue["decisions"]
+                    if d["status"] == "reserved"]
+        self.assertEqual(
+            [d["key"] for d in reserved],
+            ["fuser_discard", "final_open_pass"],
+        )
+        source = self.strategy_source()
+        self.assertIn('? "reserved — non-operative" : decision.status;', source)
+        self.assertIn("const dials = profileDials(p);", source)
+        self.assertEqual(source.count("const dials = profileDials(p);"), 2)
+        dials = source[
+            source.index("function profileDials"):
+            source.index("/* ---- runtime profile swap")
+        ]
+        self.assertIn("strategyDecisions.map(decision =>", dials)
+        self.assertIn("strategySupportText(decision)", dials)
+
+    def test_configurator_load_and_save_failures_do_not_fallback(self):
+        source = self.strategy_source()
+        load = source[
+            source.index("async function loadProfiles"):
+            source.index("async function openStrategyProfiles")
+        ]
+        self.assertLess(load.index("launchProfiles = [];"), load.index("try {"))
+        self.assertLess(load.index("strategyDecisions = [];"), load.index("try {"))
+        self.assertIn("loadError = e.message", load)
+        self.assertIn("create.disabled = !!launchProfilesError", source)
+
+        corrupt = os.path.join(
+            profiles.profiles_dir(self.home), "zz-corrupt.json")
+        with open(corrupt, "w", encoding="utf-8") as fh:
+            fh.write("{broken")
+        status, body = self.request_json("GET", "/api/profiles")
+        self.assertEqual(status, 500)
+        self.assertFalse(body["ok"])
+        os.unlink(corrupt)
+
+        strict_path = os.path.join(
+            profiles.profiles_dir(self.home), "strict.json")
+        with open(strict_path, "rb") as fh:
+            before = fh.read()
+        # Build the rejected whole document from the real stored source.
+        strict = profiles.load(self.home, "strict")
+        invalid = {
+            "name": strict["name"], "version": strict["version"],
+            "description": strict["description"],
+            "profile": {"unknown": True},
+        }
+        status, body = self.request_json("POST", "/api/profiles", invalid)
+        self.assertEqual(status, 400)
+        self.assertTrue(body["error"])
+        with open(strict_path, "rb") as fh:
+            self.assertEqual(fh.read(), before)
+        save = source[
+            source.index("async function saveStrategyProfile"):
+            source.index("function onProfileChange")
+        ]
+        self.assertLess(save.index("catch (e)"), save.index(
+            'document.getElementById("strategyprofileeditor").close()'))
+
+    def test_configurator_ignores_out_of_order_catalogue_loads(self):
+        source = self.strategy_source()
+        load = source[
+            source.index("async function loadProfiles"):
+            source.index("async function openStrategyProfiles")
+        ]
+        self.assertIn("const loadSequence = ++strategyCatalogueLoadSequence;",
+                      load)
+        stale_guard = (
+            "if (loadSequence !== strategyCatalogueLoadSequence) "
+            "return false;"
+        )
+        self.assertIn(stale_guard, load)
+        self.assertLess(load.index(stale_guard),
+                        load.index("launchProfiles = loadedProfiles;"))
+        self.assertLess(load.index(stale_guard),
+                        load.index("launchProfilesError = loadError;"))
+        self.assertIn("if (!await loadProfiles()) return;", source)
+
+    def test_launch_waits_for_current_catalogue_before_submission(self):
+        panel = self.panel_source()
+        source = self.strategy_source()
+        load = source[
+            source.index("async function loadProfiles"):
+            source.index("async function openStrategyProfiles")
+        ]
+        submit = panel[
+            panel.index("async function submitForm"):
+            panel.index("/* ---- launch binding")
+        ]
+        self.assertLess(load.index("strategyCatalogueLoading = true;"),
+                        load.index('await api("/api/profiles")'))
+        self.assertLess(load.index("sel.disabled = true;"),
+                        load.index('await api("/api/profiles")'))
+        self.assertIn("strategyCatalogueLoading = false;", load)
+        self.assertIn("sel.disabled = !!launchProfilesError", load)
+        self.assertIn("if (strategyCatalogueLoading)", submit)
+        self.assertIn("if (launchProfilesError)", submit)
+        self.assertIn(
+            "launchProfiles.some(candidate => candidate.name === profile)",
+            submit,
         )
 
 
@@ -3117,7 +3459,7 @@ class ModelProfileSurfacesApiTest(ServiceApiTest):
 
         model_surface = panel[
             panel.index("/* ---- model-profile catalogue"):
-            panel.index("/* ---- strategy profile selector")
+            panel.index("/* ---- strategy catalogue, configurator")
         ].lower()
         self.assertNotIn("/acts", model_surface)
         for forbidden in ("origin", "provenance", "history"):
