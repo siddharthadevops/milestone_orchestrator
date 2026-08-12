@@ -87,6 +87,7 @@ class BrainstormingTranscriptTest(unittest.TestCase):
         brief="Resolve one bounded design request.",
         target_path="docs/decision.md",
         payload=None,
+        deliver_chat=False,
     ):
         roster = roster or participants()
         workspace = os.path.join(self.root, "workspaces", session_id)
@@ -101,6 +102,9 @@ class BrainstormingTranscriptTest(unittest.TestCase):
             },
             "max_rounds": max_rounds,
         }
+        # Absent, exactly like a session that never asked for the chat.
+        if deliver_chat:
+            request["deliver_chat"] = True
         created = self.store.create(
             session_id, request, run_config(roster, policy), roster
         )
@@ -548,9 +552,33 @@ class BrainstormingTranscriptTest(unittest.TestCase):
         self.assertEqual(snapshot.state["rounds_used"], 1)
         self.assertEqual(len(snapshot.state["completed_turns"]), 2)
 
+    def test_the_chat_is_delivered_only_when_the_request_asks(self):
+        # Default posture: the discussion ends, the target stands, and
+        # nothing is written into the operator's work directory.
+        session_id = "no-delivery"
+        snapshot = self._initialize(session_id, self._create(session_id))
+        snapshot = self._turn(
+            session_id, snapshot, "lead-machine", "The position."
+        )
+        snapshot = self._turn(
+            session_id, snapshot, "critic-machine", "The objection."
+        )
+        delivered = self.store.delivered_transcript_ref(
+            session_id, snapshot.state["request"]
+        )
+        terminal = self._terminal(
+            session_id, snapshot, "success", "The discussion agreed."
+        )
+        self.assertFalse(os.path.exists(delivered))
+        # The session's own chat is untouched by the choice: it is always
+        # recorded and always readable.
+        self.assertIn("The objection.", self._read(terminal))
+
     def test_delivery_happens_once_when_the_discussion_ends(self):
         session_id = "delivery"
-        snapshot = self._initialize(session_id, self._create(session_id))
+        snapshot = self._initialize(
+            session_id, self._create(session_id, deliver_chat=True)
+        )
         snapshot = self._turn(
             session_id, snapshot, "lead-machine", "The position."
         )
@@ -739,7 +767,9 @@ class BrainstormingTranscriptTest(unittest.TestCase):
 
     def test_terminal_closing_is_complete_even_before_first_turn(self):
         success_id = "closing-success"
-        success = self._initialize(success_id, self._create(success_id))
+        success = self._initialize(
+            success_id, self._create(success_id, deliver_chat=True)
+        )
         success = self._turn(
             success_id, success, "lead-machine", "Proposal."
         )
@@ -751,7 +781,9 @@ class BrainstormingTranscriptTest(unittest.TestCase):
         )
 
         failure_id = "closing-failure"
-        failure = self._initialize(failure_id, self._create(failure_id))
+        failure = self._initialize(
+            failure_id, self._create(failure_id, deliver_chat=True)
+        )
         failure = self._turn(
             failure_id, failure, "lead-machine", "Unfinished proposal."
         )
@@ -760,7 +792,7 @@ class BrainstormingTranscriptTest(unittest.TestCase):
         )
 
         zero_id = "closing-zero"
-        zero = self._create(zero_id, status="created")
+        zero = self._create(zero_id, status="created", deliver_chat=True)
         zero = self._terminal(
             zero_id, zero, "failure", "No participant completed a turn."
         )

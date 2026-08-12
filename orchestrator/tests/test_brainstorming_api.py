@@ -1007,6 +1007,44 @@ class StandaloneBrainstormingApiTest(unittest.TestCase):
         self.assertEqual(status, 503, refused)
         self.assertEqual(refused["error"], lifecycle.UNAVAILABLE)
 
+    def test_deliver_chat_is_opt_in_and_typed(self):
+        """Handing the chat over is the operator's explicit choice."""
+        self._target("chat-flag.md")
+        self._target("chat-default.md")
+        payload = self._payload("chat-flag.md")
+        payload["request"]["deliver_chat"] = "yes"
+        status, refusal = self._request(
+            "POST", "/api/brainstorming/sessions", payload
+        )
+        self.assertEqual(status, 400, refusal)
+        self.assertEqual(refusal["error"], lifecycle.INVALID_REQUEST)
+
+        payload["request"]["deliver_chat"] = True
+        with mock.patch.object(
+            lifecycle,
+            "_launch_lifecycle_process",
+            side_effect=self._sleeper_launcher,
+        ):
+            status, body = self._request(
+                "POST", "/api/brainstorming/sessions", payload
+            )
+            self.assertEqual(status, 201, body)
+            self.assertIs(
+                body["session"]["state"]["request"]["deliver_chat"], True
+            )
+
+            # The default is absence, not a stored false: a session that
+            # never asked carries no key at all.
+            status, plain = self._request(
+                "POST",
+                "/api/brainstorming/sessions",
+                self._payload("chat-default.md"),
+            )
+            self.assertEqual(status, 201, plain)
+            self.assertNotIn(
+                "deliver_chat", plain["session"]["state"]["request"]
+            )
+
     def test_create_target_parents_makes_and_compensates_folders(self):
         """The panel's New… flow: fresh session folders, made at launch."""
         deep = os.path.join(

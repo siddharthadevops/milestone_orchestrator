@@ -204,6 +204,18 @@ class ServiceApiTest(unittest.TestCase):
         self.assertIn('onclick="newBsTarget()"', text)
         self.assertIn("function newBsTarget", text)
         self.assertIn("create_target_parents", text)
+        # Handing the chat over is an unticked box, and the key rides only
+        # when it is ticked: an untouched form launches exactly as before.
+        self.assertIn('type="checkbox" id="b_deliver_chat"', text)
+        self.assertIn(
+            'document.getElementById("b_deliver_chat").checked)\n'
+            "    requestDoc.deliver_chat = true;",
+            text,
+        )
+        self.assertIn(
+            'document.getElementById("b_deliver_chat").checked = false;',
+            text,
+        )
         self.assertIn("function browseGoalDoc", text)
         self.assertIn('"~/Development/source"', text)
         self.assertIn("picker.transform", text)

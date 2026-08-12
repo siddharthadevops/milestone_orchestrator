@@ -832,6 +832,13 @@
     </div>
     <div class="hint">read-only context for the discussion, relative to the
       work directory</div></div>
+  <div class="field"><label>Chat</label>
+    <label style="font-size:12px"><input type="checkbox" id="b_deliver_chat">
+      deliver the chat beside the target document when the session ends</label>
+    <div class="hint">off by default: the session's product is the target
+      document. The discussion is always recorded and readable here either
+      way — this only decides whether a copy is left in your work
+      directory.</div></div>
   <div class="formrow">
     <span id="bsError" style="color:var(--bad);font-size:12px;margin-right:auto"></span>
     <button class="btn" onclick="document.getElementById('bsform').close()">Cancel</button>
@@ -5567,6 +5574,9 @@ function openBrainstormingForm(preselect) {
   bsRoster = defaultBsRoster();
   bsRefs = [];
   bsCreateParents = false;
+  // Every session starts from the default posture, never from whatever
+  // the previous launch happened to tick.
+  document.getElementById("b_deliver_chat").checked = false;
   document.getElementById("b_ref_input").value = "";
   renderBsRoster();
   renderBsRefs();
@@ -5730,14 +5740,19 @@ async function submitBrainstorming() {
   });
   const context = {brief};
   if (bsRefs.length) context.references = bsRefs.slice();
+  const requestDoc = {
+    workspace_path: area.record.primary.path,
+    target_path: target,
+    request,
+    context,
+    max_rounds: rounds,
+  };
+  // Handing the chat over is opt-in: the key rides only when asked for,
+  // so an unchecked box launches exactly like every session before it.
+  if (document.getElementById("b_deliver_chat").checked)
+    requestDoc.deliver_chat = true;
   const payload = {
-    request: {
-      workspace_path: area.record.primary.path,
-      target_path: target,
-      request,
-      context,
-      max_rounds: rounds,
-    },
+    request: requestDoc,
     participants,
     closure_policy: document.getElementById("b_policy").value,
     project: project.slug,

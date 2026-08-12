@@ -1190,13 +1190,15 @@ def validate_request(request):
     _exact_keys(
         request,
         ("workspace_path", "target_path", "request", "context", "max_rounds"),
-        (),
+        ("deliver_chat",),
         "request",
     )
     for key in ("workspace_path", "target_path", "request"):
         _text(request[key], "request.%s" % key)
     if type(request["max_rounds"]) is not int or request["max_rounds"] <= 0:
         raise ContractError("request.max_rounds must be a positive integer")
+    if "deliver_chat" in request and type(request["deliver_chat"]) is not bool:
+        raise ContractError("request.deliver_chat must be a boolean")
 
     context = request["context"]
     _exact_keys(
@@ -1233,6 +1235,17 @@ def validate_request(request):
                     "request.context.amendments[%d].id" % index,
                 )
     return _json_copy(request, "request")
+
+
+def delivers_chat(request):
+    """Whether this session hands the chat over beside its target document.
+
+    Opt-in, and OFF unless the request says otherwise: the discussion's
+    product is the target document, and a session that also drops a
+    transcript into the operator's tree is doing something they must have
+    asked for. An older stored session carries no key and delivers nothing.
+    """
+    return bool(isinstance(request, dict) and request.get("deliver_chat"))
 
 
 def validate_run_config(run_config):
@@ -3048,7 +3061,15 @@ class SessionStore:
         once did — made delivery a side effect of looking at the session:
         the panel polls every two seconds, so an operator who deleted a
         delivered chat watched it come straight back.
+
+        Delivery is the operator's choice and is OFF by default, so the
+        gate lives here rather than at the one call site: nothing writes
+        the chat into the workspace unless the request asked for it. The
+        session's own transcript is unaffected — it is always kept, and
+        the panel always shows it.
         """
+        if not delivers_chat(state["request"]):
+            return None
         delivered = self.delivered_transcript_ref(
             session_id, state["request"]
         )
