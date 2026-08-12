@@ -832,13 +832,10 @@
     </div>
     <div class="hint">read-only context for the discussion, relative to the
       work directory</div></div>
-  <div class="field"><label>Chat</label>
-    <label style="font-size:12px"><input type="checkbox" id="b_deliver_chat">
-      deliver the chat beside the target document when the session ends</label>
-    <div class="hint">off by default: the session's product is the target
-      document. The discussion is always recorded and readable here either
-      way — this only decides whether a copy is left in your work
-      directory.</div></div>
+  <div class="field">
+    <label style="display:flex;align-items:center;gap:6px;font-size:12px">
+      <input type="checkbox" id="b_deliver_chat" style="width:auto">
+      deliver chat document</label></div>
   <div class="formrow">
     <span id="bsError" style="color:var(--bad);font-size:12px;margin-right:auto"></span>
     <button class="btn" onclick="document.getElementById('bsform').close()">Cancel</button>
