@@ -26,18 +26,31 @@ content becomes a named, pluggable **task**:
 The concept is `Milestone → Task`: milestones remain the long-horizon
 structure; tasks are the interchangeable executors of their content steps.
 
-The first wiring connects tasks where content is produced today — drafting,
-implementing, and fixing — and builds the plain TaskExecutor that simply
-calls the LLM, exactly as those steps run now: the default type.
+One task is one scheduling decision handed to one TaskExecutor and one durable
+result returned to its caller. A TaskExecutor may use one provider call or a
+whole subordinate process: the plain worker uses one current CLI call, while
+Brainstorming uses one bounded session with several participant calls. Those
+internal calls remain inspectable evidence, but they do not become extra tasks.
+
+The first wiring represents the existing drafting, implementing, reviewing,
+and fixing scheduling points as tasks. Drafting, implementing, and fixing use
+the plain TaskExecutor that simply calls the LLM exactly as those steps run
+now. Review stays milestone law. For this goal, one review task is one current
+review invocation — a whole-artifact or delta-review round — not the enclosing
+review-and-fix cycle. Each current fixer invocation is likewise a separate
+task. The milestone continues to sequence those tasks, invalidate approvals,
+enforce caps, verify, and seal. Alternative review and fix executors are future
+work; the new selectable path required here is a Brainstorming producer for a
+slice.
 
 ## Motivating case
 
 A milestone whose product is not code — a contract drafted for a lawyer, a
-policy set, structured prose. The skeleton, slices, review discipline, seals,
-and bookkeeping all still earn their keep, but a single implementer call is
-the wrong producer for some or all slices: deliberation among seats, not one
-worker's draft, is what the content step needs. Today the implementer call is
-the only path; the operator cannot order a milestone whose slices are
+policy document, structured prose. The skeleton, slices, review discipline,
+seals, and bookkeeping all still earn their keep, but a single implementer
+call is the wrong producer for some or all slices: deliberation among seats,
+not one worker's draft, is what the content step needs. Today the implementer
+call is the only path; the operator cannot order a milestone whose slices are
 executed by discussion. The widening is not one-way: a code slice may also
 warrant a deliberative task.
 
@@ -59,12 +72,15 @@ operator or a calling product, with the same request contract, the same
 self-description, and the same result and accounting records. Brainstorming
 already lives this way: standalone sessions with their own service records,
 consumed by milestones through the adapter. That shape becomes the rule for
-every task.
+every task. Ordering a task freezes its request, chosen TaskExecutor, resolved
+staffing, and inherited execution context; later catalogue or profile edits do
+not rewrite that execution's history.
 
 ## What defines a task type
 
-Milestone law consumes every task type through one contract and never
-interprets type internals. Each task type is backed by a **TaskExecutor**.
+Milestone law consumes every task type through one generic envelope and never
+interprets executor lifecycle internals. Each task type is backed by a
+**TaskExecutor**.
 The vocabulary is settled: `task` names the ordered unit of work,
 `TaskExecutor` the engine that runs it, and the record layer uses exactly
 these two words. A task type is self-describing; the record layer carries,
@@ -82,22 +98,38 @@ for every type:
 - **Available agent configurations**: the seats, agents, models, and efforts
   the type can be staffed with, composing with model profiles instead of
   duplicating them.
-- **Output**: a typed result — success or failure with a reason, plus
-  duration, token, and cost accounting, including partial figures when a
-  task fails mid-flight; a failed task still spent money.
+- **Output**: a typed envelope — success or failure with a reason, duration,
+  token and cost accounting, including partial figures when a task fails
+  mid-flight, plus the executor-native result needed by the caller. The task
+  layer preserves that native result without interpreting it; the existing
+  caller adapter validates and consumes it. Thus current worker findings,
+  fix dispositions, suite declarations, and Brainstorming references are not
+  flattened away.
 
-A task does not return an artifact and never enumerates what it produced:
-implementing a slice may touch five documents or fifty. It operates in the
-resolved work area, its effects land there, and milestone law keeps judging
-that work area with its own gates, reviews, and seals — seals bind
-decisions, not enumerations.
+The generic envelope does not enumerate produced artifacts: implementing a
+slice may touch five documents or fifty. Executor-native results may retain
+references required by their existing contracts, such as Brainstorming's
+target and transcript. The task operates in the resolved work area, its
+effects land there, and milestone law keeps judging that work area with its
+own gates, reviews, and seals — seals bind decisions, not enumerations.
+
+The Brainstorming TaskExecutor holds the same authority as any producer: it
+operates on the resolved work area and its effects land wherever the request
+calls for. Any single-target notion in the built Brainstorming contract is
+executor-internal legacy to adapt, not task law; the task layer never asks
+the caller to nominate what will be edited.
 
 ## The task request
 
 Every task type receives the same request contract; only the type's
 internals differ in how they use it:
 
-- **Request**: what this task must accomplish, as free text.
+- **Work area**: the resolved operational starting area and inherited caller
+  execution context. Access, liveness, and stop policy are inherited rather
+  than redefined by tasks.
+- **Request**: free text sent to the TaskExecutor. On the default worker path,
+  the milestone driver constructs today's complete prompt and supplies it here
+  verbatim; the plain TaskExecutor is transport, not a second prompt builder.
 - **Context**: the background needed to understand the request.
 - **Reference documents**: an ordered list of documents the task may consult
   or work over, so selecting one concrete document to work on is a
@@ -109,10 +141,19 @@ internals differ in how they use it:
 
 The request carries no artifact target and no domain taxonomy, matching the
 output rule: destinations and references are choices, never enumerated
-promises of what will be produced. The built Brainstorming contract's
-`target_path` becomes an executor internal: the Brainstorming task resolves
-it from the reference documents and the optional output directory; the
-generic request grows no target field.
+promises of what will be produced. There is no defined target: reference
+documents exist so a caller can mention a concrete document comfortably,
+nothing more. Where the built Brainstorming contract still wants an internal
+`target_path`, satisfying it is the TaskExecutor's private affair — adapted
+to this contract, never surfaced as a choice the task layer demands.
+
+Brainstorming-specific resolved configuration carries `max_rounds` and the
+closure policy required by the existing Brainstorming contract. The task
+type's catalogue entry supplies visible defaults, and the operator or calling
+product may change either value before ordering. Ordering freezes both
+alongside the resolved staffing, and the TaskExecutor passes them to the
+existing service. Majority with lead tie-break is never hidden or inferred:
+it governs only when that visible policy is selected for the order.
 
 ## Type-aware verification
 
@@ -125,21 +166,23 @@ profiles and strategy configurations or a decision inside one of them — that
 is for the discussion and the skeleton to settle.
 
 The review process keeps belonging to the milestone: when review happens and
-what convergence requires stay milestone law. The review itself is also a
-task — its default TaskExecutor is the current review run — and it may
-become interchangeable in the future without the milestone ceding that
-ownership. The fix cycle inside it is likewise a task, wired in the first
-connection to the plain LLM call it runs today.
+what convergence requires stay milestone law. Each review invocation is a
+task whose default TaskExecutor performs the current review call, and each
+fixer invocation is a separate task using the plain TaskExecutor. The
+enclosing review-and-fix cycle is not a task and contains no nested task
+accounting. Either invocation may become interchangeable in the future without
+the milestone ceding ownership of the cycle.
 
 ## Where the type is decided
 
-The task type of a slice is decided when work is planned, not discovered at
-runtime. The planner may propose a type per slice — reading each type's
-definition and usage examples to judge who best executes this work — but the
-proposal is visible in the
-skeleton, and the operator sees it and may override it before the run
-executes it. There is no silent runtime routing: an LLM proposes, the
-operator disposes.
+The producer task type of a slice is decided when work is planned, not
+discovered at runtime. The planner may propose a type per slice — reading each
+type's definition and usage examples to judge who best executes this work —
+but the proposal is visible in the skeleton, and the operator sees it and may
+override it before that task is ordered. A later change is prospective and
+does not rewrite an active or completed task. Selecting Brainstorming as the
+slice producer does not silently select it for review or fixing. There is no
+silent runtime routing: an LLM proposes, the operator disposes.
 
 ## Boundaries
 
@@ -151,13 +194,43 @@ operator disposes.
   not a coupling.
 - Tasks carry no domain taxonomy (legal, code, prose): domain lives in the
   content and its gates, not in the task machinery.
+- Tasks reuse existing execution, liveness, stop, adapter, and accounting
+  mechanisms. This goal adds no scheduler, permission system, artifact
+  inventory, or new retry/idempotency semantics.
+- Deterministic transitions, shell verification, and seals remain milestone
+  operations; they do not become tasks merely because the panel displays them.
+- Reclassification stays outside the task layer in this goal. Its current
+  record, cost accounting, aggregate contribution, and chip remain unchanged.
+- Task chips appear alongside existing verification, seal, repair,
+  reclassification, and other non-task activity; no existing record or chip is
+  removed.
 
 ## Completion
 
-The goal is achieved when the operator can order a milestone in which each
-slice names its task type, at least one slice executes end-to-end as a
-Brainstorming task through the existing adapter boundary, the default worker
-task remains byte-identical for runs that never choose otherwise, the run
-summary attributes result and cost per task exactly as it does today, and
-the panel's unit activity row shows one chip per executed task where it
-shows review rounds and seal attempts today.
+The goal is achieved when:
+
+- the panel and API expose the same self-described task types and allow a task
+  to be ordered either directly or by a milestone;
+- each slice visibly names its producer task type, the operator can override
+  it before execution, and at least one slice executes end-to-end through the
+  existing adapter as a Brainstorming task;
+- every Brainstorming order visibly resolves and freezes its round limit and
+  closure policy from catalogue defaults plus any pre-order caller changes,
+  then passes those exact values to the existing Brainstorming service;
+- each task order produces one durable task record and one activity chip,
+  while executor-internal calls remain inspectable without being counted as
+  additional tasks and existing non-task activity chips remain present;
+- every task preserves its native result and records duration, tokens, both
+  existing cost readings, and truthful partial accounting on failure, without
+  double-counting internal calls in unit or run totals;
+- runs that select only the default worker have the driver construct the same
+  prompt as today, the plain TaskExecutor pass it through and return the native
+  result unchanged, and retain the same milestone transitions, gates,
+  review/fix behavior, and aggregate accounting; existing resumable runs
+  require no new task selection; and
+- focused tests prove standalone and milestone ordering, default
+  compatibility, visible and prospective selection, visible and frozen
+  round/closure choices, Brainstorming execution, one-task review/fix
+  invocation boundaries, explicit reclassification exclusion, task/chip
+  cardinality without loss of non-task chips, native-result preservation,
+  and complete and partial accounting.
