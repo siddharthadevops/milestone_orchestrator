@@ -1,11 +1,16 @@
 """Focused tests for the generic task contracts and catalogue."""
 
 import copy
+from concurrent import futures
 import math
+import os
+import tempfile
+import threading
 import unittest
 from unittest import mock
 
 from orchestrator import brainstorming
+from orchestrator import state as st
 from orchestrator import tasks
 
 
@@ -48,6 +53,24 @@ def task_result(**changes):
     }
     value.update(changes)
     return value
+
+
+def task_order(task_executor="worker", **request_changes):
+    return {
+        "task_executor": task_executor,
+        "request": task_request(**request_changes),
+    }
+
+
+def persisted_state(workspace):
+    path = os.path.join(workspace, "state.json")
+    state = st.new_state(
+        "Exercise durable tasks.",
+        workspace,
+        {"families_order": ["codex", "claude"]},
+    )
+    st.save_new(path, state)
+    return path
 
 
 class TaskContractsTest(unittest.TestCase):
@@ -378,6 +401,325 @@ class TaskContractsTest(unittest.TestCase):
             with self.subTest(result=value):
                 with self.assertRaises(tasks.ContractError):
                     tasks.validate_result(copy.deepcopy(value))
+
+
+class DurableTaskRecordsTest(unittest.TestCase):
+    def assert_request_error(self, function, *args):
+        with self.assertRaises(tasks.TaskRequestError) as caught:
+            function(*args)
+        self.assertEqual(caught.exception.code, tasks.INVALID_TASK_REQUEST)
+
+    def test_admission_freezes_one_task_and_terminal_result(self):
+        with tempfile.TemporaryDirectory(prefix="orch-tasks-") as workspace:
+            state_path = persisted_state(workspace)
+            outside = os.path.join(os.path.dirname(workspace), "outside")
+            self.assert_request_error(
+                tasks.admit_persisted_task,
+                state_path,
+                task_order(output_directory=outside),
+                {"seat": "worker"},
+                workspace,
+            )
+            self.assertNotIn("tasks", st.load(state_path))
+            with mock.patch.object(tasks.st, "save", side_effect=OSError("disk")):
+                with self.assertRaises(OSError):
+                    tasks.admit_persisted_task(
+                        state_path,
+                        task_order(),
+                        {"seat": "worker"},
+                        workspace,
+                    )
+            self.assertEqual(tasks.task_records(st.load(state_path)), [])
+
+            source_order = task_order(output_directory="planned/missing")
+            source_staffing = {"seat": {"family": "codex", "ordinal": 1}}
+            first = tasks.admit_persisted_task(
+                state_path, source_order, source_staffing, workspace
+            )
+            second = tasks.admit_persisted_task(
+                state_path, source_order, source_staffing, workspace
+            )
+            self.assertNotEqual(first["id"], second["id"])
+            self.assertEqual(first["result"], None)
+            self.assertEqual(
+                first["order"]["request"]["output_directory"],
+                os.path.realpath(os.path.join(workspace, "planned/missing")),
+            )
+            self.assertFalse(os.path.exists(os.path.join(workspace, "planned")))
+
+            source_order["request"]["context"]["nested"].append("later")
+            source_staffing["seat"]["family"] = "claude"
+            first["order"]["request"]["request"] = "mutated return"
+            durable = st.load(state_path)
+            stored = tasks.task_record(durable, first["id"])
+            self.assertNotIn(
+                "later", stored["order"]["request"]["context"]["nested"]
+            )
+            self.assertEqual(
+                stored["resolved_staffing"],
+                {"seat": {"family": "codex", "ordinal": 1}},
+            )
+
+            source_result = task_result(native_result={"answer": [1]})
+            terminal = tasks.record_persisted_task_result(
+                state_path, first["id"], source_result
+            )
+            source_result["native_result"]["answer"].append(2)
+            terminal["result"]["native_result"]["answer"].append(3)
+            winner = tasks.task_record(st.load(state_path), first["id"])
+            self.assertEqual(winner["result"]["native_result"], {"answer": [1]})
+            for replacement in (
+                task_result(native_result={"answer": [4]}),
+                task_result(
+                    status="failure",
+                    reason="later failure",
+                    native_result={"finding": "F1"},
+                ),
+            ):
+                with self.assertRaises(tasks.TaskRecordError):
+                    tasks.record_persisted_task_result(
+                        state_path, first["id"], replacement
+                    )
+            self.assertEqual(
+                tasks.task_record(st.load(state_path), first["id"]), winner
+            )
+
+            failure = tasks.admit_persisted_task(
+                state_path, task_order(), {"seat": "worker"}, workspace
+            )
+            tasks.record_persisted_task_result(
+                state_path,
+                failure["id"],
+                task_result(
+                    status="failure",
+                    reason="provider unavailable",
+                    token_usage=None,
+                    token_usage_partial=True,
+                    cost=None,
+                    cost_partial=True,
+                    native_result={"request": "preserved"},
+                ),
+            )
+            self.assertEqual(
+                tasks.task_record(st.load(state_path), failure["id"])["result"]
+                ["reason"],
+                "provider unavailable",
+            )
+
+            rewritten = st.load(state_path)
+            rewritten["tasks"][0]["resolved_staffing"] = {"seat": "changed"}
+            with self.assertRaises(st.HistoryRewriteError):
+                st.save(state_path, rewritten)
+            rewritten = st.load(state_path)
+            rewritten["tasks"][0]["result"]["duration_s"] = 99
+            with self.assertRaises(st.HistoryRewriteError):
+                st.save(state_path, rewritten)
+
+            typed_rewrites = (
+                (
+                    lambda record: record["order"]["request"]["context"][
+                        "nested"
+                    ].__setitem__(0, 1.0),
+                    "order",
+                ),
+                (
+                    lambda record: record["resolved_staffing"]["seat"].__setitem__(
+                        "ordinal", True
+                    ),
+                    "staffing",
+                ),
+                (
+                    lambda record: record["result"]["native_result"].__setitem__(
+                        "answer", [True]
+                    ),
+                    "terminal result",
+                ),
+            )
+            for rewrite, field in typed_rewrites:
+                with self.subTest(json_distinct_rewrite=field):
+                    rewritten = st.load(state_path)
+                    rewrite(rewritten["tasks"][0])
+                    with self.assertRaises(st.HistoryRewriteError):
+                        st.save(state_path, rewritten)
+                    self.assertEqual(
+                        tasks.task_record(st.load(state_path), first["id"]), winner
+                    )
+
+    @unittest.skipIf(st.fcntl is None, "fcntl unavailable on this platform")
+    def test_concurrent_task_mutations_preserve_accepted_history(self):
+        with tempfile.TemporaryDirectory(prefix="orch-tasks-") as workspace:
+            state_path = persisted_state(workspace)
+
+            def together(*operations):
+                barrier = threading.Barrier(len(operations))
+
+                def run(operation):
+                    barrier.wait()
+                    return operation()
+
+                with futures.ThreadPoolExecutor(len(operations)) as pool:
+                    return [pool.submit(run, operation) for operation in operations]
+
+            admitted = together(
+                lambda: tasks.admit_persisted_task(
+                    state_path, task_order(), {"seat": "first"}, workspace
+                ),
+                lambda: tasks.admit_persisted_task(
+                    state_path, task_order(), {"seat": "second"}, workspace
+                ),
+            )
+            first, second = [future.result() for future in admitted]
+            self.assertEqual(
+                {record["id"] for record in tasks.task_records(st.load(state_path))},
+                {first["id"], second["id"]},
+            )
+
+            mixed = together(
+                lambda: tasks.admit_persisted_task(
+                    state_path, task_order(), {"seat": "third"}, workspace
+                ),
+                lambda: tasks.record_persisted_task_result(
+                    state_path, first["id"], task_result(native_result="done")
+                ),
+            )
+            third, terminal = [future.result() for future in mixed]
+            current = st.load(state_path)
+            self.assertEqual(tasks.task_record(current, first["id"]), terminal)
+            self.assertEqual(tasks.task_record(current, third["id"]), third)
+
+            contenders = together(
+                lambda: tasks.record_persisted_task_result(
+                    state_path, second["id"], task_result(native_result="A")
+                ),
+                lambda: tasks.record_persisted_task_result(
+                    state_path, second["id"], task_result(native_result="B")
+                ),
+            )
+            outcomes = []
+            for future in contenders:
+                try:
+                    outcomes.append(future.result()["result"]["native_result"])
+                except tasks.TaskRecordError:
+                    outcomes.append("refused")
+            self.assertEqual(outcomes.count("refused"), 1)
+            winner = tasks.task_record(st.load(state_path), second["id"])
+            self.assertIn(winner["result"]["native_result"], ("A", "B"))
+            with self.assertRaises(tasks.TaskRecordError):
+                tasks.record_persisted_task_result(
+                    state_path, second["id"], task_result(native_result="later")
+                )
+            self.assertEqual(
+                tasks.task_record(st.load(state_path), second["id"]), winner
+            )
+
+    def test_output_directory_admission_for_both_executors(self):
+        with tempfile.TemporaryDirectory(prefix="orch-tasks-") as root:
+            primary = os.path.join(root, "primary")
+            additional = os.path.join(root, "additional")
+            outside = os.path.join(root, "outside")
+            os.makedirs(os.path.join(primary, "inside"))
+            os.makedirs(additional)
+            os.makedirs(outside)
+            os.symlink(outside, os.path.join(primary, "linked-outside"))
+
+            for executor in ("worker", "brainstorming"):
+                with self.subTest(executor=executor):
+                    state = st.new_state("goal", primary, {})
+                    omitted = tasks.admit_task(
+                        state,
+                        task_order(executor),
+                        {"executor": executor},
+                        primary,
+                    )
+                    self.assertNotIn(
+                        "output_directory", omitted["order"]["request"]
+                    )
+                    relative = tasks.admit_task(
+                        state,
+                        task_order(executor, output_directory="missing/leaf"),
+                        {"executor": executor},
+                        primary,
+                    )
+                    absolute = tasks.admit_task(
+                        state,
+                        task_order(
+                            executor,
+                            output_directory=os.path.join(primary, "inside"),
+                        ),
+                        {"executor": executor},
+                        primary,
+                    )
+                    self.assertEqual(
+                        relative["order"]["request"]["output_directory"],
+                        os.path.realpath(os.path.join(primary, "missing/leaf")),
+                    )
+                    self.assertEqual(
+                        absolute["order"]["request"]["output_directory"],
+                        os.path.realpath(os.path.join(primary, "inside")),
+                    )
+                    self.assertFalse(os.path.exists(os.path.join(primary, "missing")))
+
+                    before = len(tasks.task_records(state))
+                    for invalid in (
+                        os.path.join(primary, "..", "outside"),
+                        additional,
+                        os.path.join(primary, "linked-outside", "child"),
+                    ):
+                        with self.subTest(executor=executor, invalid=invalid):
+                            self.assert_request_error(
+                                tasks.admit_task,
+                                state,
+                                task_order(executor, output_directory=invalid),
+                                {"executor": executor},
+                                primary,
+                            )
+                            self.assertEqual(len(tasks.task_records(state)), before)
+
+    def test_output_directory_derived_path_boundary(self):
+        with tempfile.TemporaryDirectory(prefix="orch-tasks-") as root:
+            output = os.path.realpath(os.path.join(root, "output"))
+            outside = os.path.realpath(os.path.join(root, "outside"))
+            os.makedirs(output)
+            os.makedirs(outside)
+            os.symlink(outside, os.path.join(output, "linked-outside"))
+            child = tasks.resolve_derived_path(output, "nested/missing.txt")
+            self.assertEqual(
+                child, os.path.realpath(os.path.join(output, "nested/missing.txt"))
+            )
+            self.assertFalse(os.path.exists(os.path.join(output, "nested")))
+            self.assertEqual(
+                tasks.resolve_derived_path(output, os.path.join(output, "file")),
+                os.path.realpath(os.path.join(output, "file")),
+            )
+            for invalid in (
+                "../outside/file",
+                os.path.join(outside, "file"),
+                "linked-outside/file",
+            ):
+                with self.subTest(invalid=invalid):
+                    self.assert_request_error(
+                        tasks.resolve_derived_path, output, invalid
+                    )
+
+    def test_post_admission_symlink_cannot_redirect_derived_path(self):
+        with tempfile.TemporaryDirectory(prefix="orch-tasks-") as root:
+            primary = os.path.join(root, "primary")
+            outside = os.path.join(root, "outside")
+            os.makedirs(primary)
+            os.makedirs(outside)
+            state = st.new_state("goal", primary, {})
+            admitted = tasks.admit_task(
+                state,
+                task_order(output_directory="planned"),
+                {"executor": "worker"},
+                primary,
+            )["order"]["request"]["output_directory"]
+
+            os.symlink(outside, admitted)
+
+            self.assert_request_error(
+                tasks.resolve_derived_path, admitted, "effect.txt"
+            )
 
 
 if __name__ == "__main__":

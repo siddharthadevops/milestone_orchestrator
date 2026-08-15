@@ -1200,23 +1200,15 @@ class Driver(object):
         concurrent invocations on the same state would each run
         side-effectful worker calls; without this, the divergence would be
         detected only afterwards, at save time, as HistoryRewriteError."""
-        if fcntl is None:
-            yield
-            return
-        lock_path = self.state_path + ".lock"
-        os.makedirs(os.path.dirname(os.path.abspath(lock_path)), exist_ok=True)
-        fh = open(lock_path, "a+")
         try:
-            try:
-                fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-            except OSError:
-                raise ConcurrentRunError(
-                    "another orchestrator invocation is active on %s "
-                    "(advisory lock %s is held)" % (self.state_path, lock_path)
-                )
-            yield
-        finally:
-            fh.close()  # closing the descriptor releases the flock
+            with st.exclusive_mutation(self.state_path):
+                yield
+        except st.ConcurrentStateMutation as exc:
+            raise ConcurrentRunError(
+                "another orchestrator invocation is active on %s "
+                "(advisory lock %s is held)"
+                % (self.state_path, self.state_path + ".lock")
+            ) from exc
 
     def _assert_not_stale(self):
         """Refuse to act on in-memory state that another invocation has

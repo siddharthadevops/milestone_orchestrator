@@ -1,14 +1,16 @@
-"""Pure contracts and the built-in TaskExecutor catalogue.
+"""Task contracts, built-in TaskExecutors, and durable task records.
 
-This module defines task vocabulary only.  Admission, persistence, staffing,
-dispatch, and effect validation belong to later integration layers.
+Dispatch and executor lifecycle remain in their integration layers.
 """
 
 from __future__ import annotations
 
 import math
+import os
+import uuid
 
 from orchestrator import brainstorming, contracts, kvstore
+from orchestrator import state as st
 
 
 UNKNOWN_TASK_EXECUTOR = "unknown_task_executor"
@@ -78,6 +80,10 @@ class TaskRequestError(ContractError):
     def __init__(self, code, detail):
         ContractError.__init__(self, detail)
         self.code = code
+
+
+class TaskRecordError(ContractError):
+    """A durable task transition is invalid."""
 
 
 def _exact_keys(value, required, optional, context):
@@ -235,6 +241,153 @@ def validate_order(order):
         return _json_copy(checked, "task order")
     except (ContractError, TypeError, ValueError) as exc:
         _request_error(exc)
+
+
+def _canonical_output_directory(order, primary_workspace):
+    request = order["request"]
+    if "output_directory" not in request:
+        return order
+    if not isinstance(primary_workspace, str) or not primary_workspace.strip():
+        raise TaskRequestError(
+            INVALID_TASK_REQUEST,
+            "a supplied output_directory requires a resolved primary workspace",
+        )
+    if not os.path.isabs(primary_workspace):
+        raise TaskRequestError(
+            INVALID_TASK_REQUEST,
+            "the resolved primary workspace must be absolute",
+        )
+    root = os.path.realpath(primary_workspace)
+    supplied = request["output_directory"]
+    candidate = (
+        supplied
+        if os.path.isabs(supplied)
+        else os.path.join(root, supplied)
+    )
+    canonical = os.path.realpath(candidate)
+    if not kvstore.path_is_inside_roots(canonical, [root]):
+        raise TaskRequestError(
+            INVALID_TASK_REQUEST,
+            "task request.output_directory must stay inside the primary workspace",
+        )
+    checked = _json_copy(order, "task order")
+    checked["request"]["output_directory"] = canonical
+    return checked
+
+
+def resolve_derived_path(output_directory, path):
+    """Canonicalize one task-owned path beneath an admitted destination."""
+    try:
+        root = _text(output_directory, "output_directory")
+        if not os.path.isabs(root):
+            raise ContractError("output_directory must be canonical and absolute")
+        if os.path.normpath(root) != root:
+            raise ContractError("output_directory must be canonical and absolute")
+        if os.path.realpath(root) != root:
+            raise ContractError(
+                "output_directory no longer resolves to its admitted path"
+            )
+        candidate = _text(path, "derived path")
+        canonical = os.path.realpath(
+            candidate if os.path.isabs(candidate) else os.path.join(root, candidate)
+        )
+        try:
+            inside = os.path.commonpath([root, canonical]) == root
+        except ValueError:
+            inside = False
+        if not inside:
+            raise ContractError("derived path must stay inside output_directory")
+        return canonical
+    except (ContractError, TypeError, ValueError) as exc:
+        _request_error(exc)
+
+
+def task_records(state):
+    """Return detached durable task history; pre-task state reads as empty."""
+    records = state.get("tasks", [])
+    if not isinstance(records, list):
+        raise TaskRecordError("task history must be a list")
+    return _json_copy(records, "task history")
+
+
+def task_record(state, task_id):
+    """Return one detached task record, or raise for an unknown identity."""
+    if not isinstance(task_id, str) or not task_id:
+        raise TaskRecordError("task id must be a non-empty string")
+    for record in task_records(state):
+        if record.get("id") == task_id:
+            return record
+    raise TaskRecordError("unknown task %r" % task_id)
+
+
+def admit_task(state, order, resolved_staffing, primary_workspace=None):
+    """Validate and append one frozen scheduling decision to loaded state."""
+    checked_order = _canonical_output_directory(
+        validate_order(order), primary_workspace
+    )
+    try:
+        staffing = _json_copy(resolved_staffing, "resolved staffing")
+    except ContractError as exc:
+        _request_error(exc)
+    existing = task_records(state)
+    known_ids = {record.get("id") for record in existing}
+    task_id = str(uuid.uuid4())
+    while task_id in known_ids:  # pragma: no cover - UUID collision guard
+        task_id = str(uuid.uuid4())
+    record = {
+        "id": task_id,
+        "order": checked_order,
+        "resolved_staffing": staffing,
+        "result": None,
+    }
+    state.setdefault("tasks", []).append(_json_copy(record, "task record"))
+    return _json_copy(record, "task record")
+
+
+def record_task_result(state, task_id, result):
+    """Perform the task record's sole legal mutation: null to terminal."""
+    checked_result = validate_result(result)
+    if not isinstance(task_id, str) or not task_id:
+        raise TaskRecordError("task id must be a non-empty string")
+    records = state.get("tasks", [])
+    if not isinstance(records, list):
+        raise TaskRecordError("task history must be a list")
+    for record in records:
+        if record.get("id") != task_id:
+            continue
+        if record.get("result") is not None:
+            raise TaskRecordError("task %s is already terminal" % task_id)
+        record["result"] = _json_copy(checked_result, "task result")
+        return _json_copy(record, "task record")
+    raise TaskRecordError("unknown task %r" % task_id)
+
+
+def _persisted_transition(state_path, transition):
+    with st.exclusive_mutation(state_path, wait=True):
+        state = st.load(state_path)
+        value = transition(state)
+        st.save(state_path, state)
+    return value
+
+
+def admit_persisted_task(
+    state_path, order, resolved_staffing, primary_workspace=None
+):
+    """Serialized persistent form of :func:`admit_task`."""
+    return _persisted_transition(
+        state_path,
+        lambda state: admit_task(
+            state, order, resolved_staffing, primary_workspace
+        ),
+    )
+
+
+def record_persisted_task_result(state_path, task_id, result):
+    """Serialized persistent form of :func:`record_task_result`."""
+    return _persisted_transition(
+        state_path,
+        lambda state: record_task_result(state, task_id, result),
+    )
 
 
 def _token_usage(value):

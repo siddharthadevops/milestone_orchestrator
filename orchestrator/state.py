@@ -26,12 +26,18 @@ part, or review/fix cycle.
 """
 
 import copy
+import contextlib
 from datetime import datetime
 import json
 import math
 import os
 import tempfile
 import time
+
+try:
+    import fcntl
+except ImportError:  # pragma: no cover - non-POSIX keeps existing fallback
+    fcntl = None
 
 SCHEMA_VERSION = 2
 
@@ -84,6 +90,10 @@ class IllegalTransition(RuntimeError):
 class HistoryRewriteError(RuntimeError):
     """An attempt was made to persist a state whose recorded history
     differs from the history already on disk."""
+
+
+class ConcurrentStateMutation(RuntimeError):
+    """The state's existing advisory mutation lock is already held."""
 
 
 def now_iso():
@@ -241,9 +251,30 @@ def _assert_list_prefix(old_list, new_list, ctx):
             )
 
 
+def _json_values_equal(left, right):
+    """Compare JSON values without Python's bool/number coercion."""
+    try:
+        return json.dumps(
+            left,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+            allow_nan=False,
+        ) == json.dumps(
+            right,
+            sort_keys=True,
+            separators=(",", ":"),
+            ensure_ascii=False,
+            allow_nan=False,
+        )
+    except (TypeError, ValueError):
+        return False
+
+
 def assert_append_only(old_state, new_state_):
     """Raise HistoryRewriteError if new_state_ rewrites recorded history."""
     _assert_list_prefix(old_state.get("events", []), new_state_.get("events", []), "events")
+    _assert_task_history(old_state.get("tasks", []), new_state_.get("tasks", []))
     old_units = old_state.get("units", [])
     new_units = new_state_.get("units", [])
     if len(new_units) < len(old_units):
@@ -300,6 +331,80 @@ def assert_append_only(old_state, new_state_):
             frozen_new = {k: v for k, v in nu.items() if k not in _post_seal}
             if frozen_old != frozen_new:
                 raise HistoryRewriteError("%s: terminal unit was modified" % uctx)
+
+
+def _assert_task_history(old_tasks, new_tasks):
+    """Allow only append and the first null-to-result task transition."""
+    if not isinstance(old_tasks, list) or not isinstance(new_tasks, list):
+        raise HistoryRewriteError("tasks: history must be a list")
+    if len(new_tasks) < len(old_tasks):
+        raise HistoryRewriteError("tasks: history shrank")
+    ids = []
+    for index, record in enumerate(new_tasks):
+        if not isinstance(record, dict):
+            raise HistoryRewriteError("tasks[%d]: record must be an object" % index)
+        if set(record) != {"id", "order", "resolved_staffing", "result"}:
+            raise HistoryRewriteError(
+                "tasks[%d]: record has invalid fields" % index
+            )
+        task_id = record.get("id")
+        if not isinstance(task_id, str) or not task_id:
+            raise HistoryRewriteError("tasks[%d]: invalid identity" % index)
+        ids.append(task_id)
+    if len(ids) != len(set(ids)):
+        raise HistoryRewriteError("tasks: identities must be unique")
+    for index, old_record in enumerate(old_tasks):
+        new_record = new_tasks[index]
+        ctx = "tasks[%d]" % index
+        if old_record.get("id") != new_record.get("id"):
+            raise HistoryRewriteError("%s: identity changed" % ctx)
+        old_frozen = dict(old_record)
+        new_frozen = dict(new_record)
+        old_result = old_frozen.pop("result", None)
+        new_result = new_frozen.pop("result", None)
+        if not _json_values_equal(old_frozen, new_frozen):
+            raise HistoryRewriteError("%s: frozen order was modified" % ctx)
+        if (
+            old_result is not None
+            and not _json_values_equal(old_result, new_result)
+        ):
+            raise HistoryRewriteError("%s: terminal result was modified" % ctx)
+        if old_result is None and new_result is not None:
+            from orchestrator import tasks  # lazy: tasks imports this module
+            try:
+                tasks.validate_result(new_result)
+            except tasks.ContractError as exc:
+                raise HistoryRewriteError(
+                    "%s: terminal result is invalid" % ctx
+                ) from exc
+    for index in range(len(old_tasks), len(new_tasks)):
+        if new_tasks[index]["result"] is not None:
+            raise HistoryRewriteError(
+                "tasks[%d]: a new task must be non-terminal" % index
+            )
+
+
+@contextlib.contextmanager
+def exclusive_mutation(path, wait=False):
+    """Share the one ``<state>.lock`` authority across state writers."""
+    if fcntl is None:
+        yield
+        return
+    lock_path = path + ".lock"
+    os.makedirs(os.path.dirname(os.path.abspath(lock_path)), exist_ok=True)
+    handle = open(lock_path, "a+")
+    try:
+        flags = fcntl.LOCK_EX | (0 if wait else fcntl.LOCK_NB)
+        try:
+            fcntl.flock(handle.fileno(), flags)
+        except OSError as exc:
+            raise ConcurrentStateMutation(
+                "another mutation is active on %s (advisory lock %s is held)"
+                % (path, lock_path)
+            ) from exc
+        yield
+    finally:
+        handle.close()
 
 
 def save_new(path, state):

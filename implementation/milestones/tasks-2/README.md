@@ -265,4 +265,5 @@ The goal is achieved when:
 | skeleton | reviewed | 30 | satisfied | fa4ea09 |
 | slice_doc-01 (Task contracts and catalogue) | reviewed | 6 | satisfied | 26e5650 |
 | slice_impl-01 (Task contracts and catalogue) | reviewed | 5 | satisfied | 5260b8b |
-| slice_doc-02 (Durable task orders and accounting) | reviewed | 5 | satisfied | - |
+| slice_doc-02 (Durable task orders and accounting) | reviewed | 5 | satisfied | 9d180e4 |
+| slice_impl-02-a (Durable task orders and accounting) | reviewed | 5 | satisfied | - |
