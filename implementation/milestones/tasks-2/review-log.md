@@ -176,3 +176,23 @@
 - deterministic result: every configured family was clean or debt-clean on the same current bytes; full verification was not due at this boundary; no extra reviewer was called
 - cited reviews: `slice_impl-02-b-codex-r7`, `slice_impl-02-b-claude-r1`
 
+## slice_doc-03 (Worker executor and default milestone cutover)
+
+- draft: kind `draft_slice_note`, artifact `implementation/milestones/tasks-2/slices/slice-03.md` (raw: `implementation/milestones/tasks-2/.run/raw/slice_doc-03-draft.txt`)
+
+| Round | Kind | Family | Findings | Triage | Raw |
+|---|---|---|---|---|---|
+| slice_doc-03-codex-r1 | review_round | codex | 0 | clean | `implementation/milestones/tasks-2/.run/raw/slice_doc-03-codex-r1.txt` |
+| slice_doc-03-claude-r1 | review_round | claude | 4 | DEBT-CLEAN (reclassified) | `implementation/milestones/tasks-2/.run/raw/slice_doc-03-claude-r1.txt` |
+
+### Review completion — SATISFIED
+
+- deterministic result: every configured family was clean or debt-clean on the same current bytes; full verification was not due at this boundary; no extra reviewer was called
+- cited reviews: `slice_doc-03-codex-r1`, `slice_doc-03-claude-r1`
+
+**Deferred debt (opposite-family verified):**
+- `claude-f1-worker-derived-path-check-has-no-subject` (raised claude, cleared codex): slice-03.md:215 and the pinned Destination boundary (line 202) require a named check that 'a representative Worker task-derived child cannot escape', but the note identifies no Worker path derived from `output_directory`, and Slice 2 already proved the shared primitive (`tasks.resolve_derived_path`, orchestrator/tasks.py:287; orchestrator/tests/test_tasks.py:681,707). — The slice names no Worker-derived path, so a capable builder should hit the missing test subject and stop rather than drift silently, while any duplicated proof or invented local seam would be cheap to remove once detected.
+- `claude-f2-frozen-worker-order-content-unpinned` (raised claude, cleared codex): This slice is the first and only producer of the frozen Worker order and staffing snapshot, yet slice-03.md:200-201 pins only `request` (the existing prompt) and `configuration: {}`; what the six milestone orders put in the remaining required request members (`work_area`, `context`, `reference_documents`) and what the Worker `resolved_staffing` snapshot contains are never stated. — The missing metadata policy is encountered directly when constructing the closed order, while the named compatibility test already requires admission to freeze default A in resolved_staffing, so a capable builder should stop rather than silently invent values and any miss is a local order-builder/te
+- `claude-f4-review-raw-noclobber-claimed-as-existing-reuse` (raised claude, cleared codex): slice-03.md:204,241,253 present no-clobber raw storage (`orchestrator/driver.py:1304-1324`) as an existing, already-applied seam that 'preserves reused numbering', but the accepted review output raw is written today by the clobbering `_save_raw` at orchestrator/driver.py:3102, so predecessor review evidence is currently overwritten and applying no-clobber is a behavior change the strict compatibility bullet (lines 46-50) does not carve out. — The artifact wrongly labels no-clobber review storage as existing although accepted review output still uses overwriting `_save_raw`, which could make the builder preserve incompatible behavior, but the explicit predecessor-evidence test or first repeated review exposes it and correction is a small 
+- `claude-f3-skeleton-assigns-chip-proof-to-slice-3` (raised claude, cleared codex): Canonical reference defect: skeleton.md:307 requires Slice 3 to prove 'later reviews use distinct ids/chips', contradicting skeleton.md:275 (Slice 3 has no projection scope) and skeleton.md:281-282, which give the task chip to Slices 9 and 10. — Slice 3 explicitly excludes chip projection, assigns it to later slices, and tests distinct task identity plus no-clobber evidence, so a capable builder is unlikely to follow the lone skeleton wording and any resulting review mistake needs only a local wording or expectation correction.
+
