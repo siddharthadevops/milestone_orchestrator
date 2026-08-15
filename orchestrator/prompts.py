@@ -790,6 +790,86 @@ def _amendments_block(amendments):
     return "\n".join(lines) + "\n\n"
 
 
+def worker_episode_authority_block(
+    amendments, project_context, operator_complete
+):
+    """Render one milestone-owned live-authority episode boundary.
+
+    The admitted request remains immutable.  This block states whether the
+    mutable operator file is complete enough to revoke omissions, repeats the
+    append-only accepted design decisions, and makes the current safeguard set
+    replace (rather than union with) prior episode validation.
+    """
+    amendments = list(amendments or [])
+    operator = [
+        item for item in amendments
+        if item.get("authority") != "brainstorming_design"
+    ]
+    design = [
+        item for item in amendments
+        if item.get("authority") == "brainstorming_design"
+    ]
+    lines = [
+        "WORKER EPISODE AUTHORITY REFRESH",
+        "This driver-owned block governs this milestone Worker episode. It",
+        "refines the immutable admitted request; it does not rewrite the order,",
+        "change frozen strategy or access, or create a successor task.",
+        "",
+    ]
+    if operator_complete:
+        lines += [
+            "MUTABLE OPERATOR AMENDMENTS: COMPLETE",
+            "The successfully parsed file is the complete current set. Any",
+            "previously shown mutable operator amendment omitted here is revoked.",
+        ]
+        if not operator:
+            lines.append("CURRENT MUTABLE OPERATOR AMENDMENTS: none.")
+    else:
+        lines += [
+            "MUTABLE OPERATOR AMENDMENTS: INCOMPLETE",
+            "The file was absent, unreadable, or malformed. This block revokes",
+            "nothing. Retain mutable operator authority already present in the",
+            "admitted prompt or provider history; there is no prior-set cache.",
+        ]
+    lines += [
+        "",
+        "ACCEPTED DESIGN AMENDMENTS: APPEND-ONLY",
+        "The complete accepted set is repeated below; omission never revokes one.",
+    ]
+    if not design:
+        lines.append("CURRENT ACCEPTED DESIGN AMENDMENTS: none.")
+    lines += [
+        "",
+        "PROJECT SAFEGUARDS: COMPLETE AND REPLACING",
+        "The in-scope set below replaces rather than unions with every earlier",
+        "episode set. Validation for this episode and its repair uses exactly it.",
+    ]
+    rendered_amendments = _amendments_block(operator + design)
+    rendered_project = _project_context_block(project_context)
+    if not project_context:
+        rendered_project = "PROJECT CONTEXT: no project safeguard set applies.\n\n"
+    return (
+        "\n".join(lines)
+        + "\n\n"
+        + rendered_amendments
+        + rendered_project
+    )
+
+
+def attach_worker_episode_authority(
+    prompt, amendments, project_context, operator_complete
+):
+    if not isinstance(prompt, str) or not prompt.strip():
+        raise ValueError("prompt must be a non-empty string")
+    return (
+        prompt.rstrip()
+        + "\n\n"
+        + worker_episode_authority_block(
+            amendments, project_context, operator_complete
+        )
+    )
+
+
 def _review_verification_block():
     """Keep review independent from another worker's suite choice."""
     return (
@@ -1510,6 +1590,8 @@ def build_rethink_continuation(
     verification_signal=None,
     unit_kind=None,
     gap_enabled=False,
+    original_request=None,
+    episode_authority=None,
 ):
     authority = {
         "session_id": handoff["session_id"],
@@ -1528,7 +1610,12 @@ def build_rethink_continuation(
         "It is a proposal, not approval: ordinary verification and review\n"
         "still apply.\n\n"
     )
-    if verification_repair:
+    if original_request is not None:
+        if not isinstance(original_request, str) or not original_request.strip():
+            raise ValueError("original_request must be a non-empty string")
+        continuation_task = ""
+        output_contract = ""
+    elif verification_repair:
         continuation_task = (
             "FULL-SUITE REPAIR CONTINUES\n"
             "Brainstorming resolved one design request; it did not complete\n"
@@ -1561,11 +1648,24 @@ def build_rethink_continuation(
     else:
         continuation_task = ""
         output_contract = _modern_contract(kind)
-    return (
+    frozen_request = (
+        original_request.rstrip()
+        + "\n\n"
+        + (episode_authority or "")
+        + ("\n" if episode_authority else "")
+        + "RETHINK CONTINUATION\n"
+        if original_request is not None else
         _header(kind, family, workspace)
         + "\n"
-        + _amendments_block(amendments)
-        + _project_context_block(project_context)
+        + (
+            episode_authority + "\n"
+            if episode_authority else
+            _amendments_block(amendments)
+            + _project_context_block(project_context)
+        )
+    )
+    return (
+        frozen_request
         + "The independent Brainstorming session requested by your previous\n"
         "turn has completed successfully. Continue the SAME original worker\n"
         "task in this provider conversation. The handoff supplies the retained\n"
@@ -1587,11 +1687,20 @@ def build_rethink_continuation(
         )
         + "\n\n"
         + _editable_design_block(editable_design_paths)
-        + "Finish the original task now and return its ordinary output under\n"
-        "the exact OUTPUT CONTRACT below. Only that ordinary envelope may\n"
-        "advance milestone state.\n\n"
+        + (
+            "Finish the original task now under the exact frozen request and\n"
+            "OUTPUT CONTRACT above. Only that ordinary envelope may advance\n"
+            "milestone state.\n\n"
+            if original_request is not None else
+            "Finish the original task now and return its ordinary output under\n"
+            "the exact OUTPUT CONTRACT below. Only that ordinary envelope may\n"
+            "advance milestone state.\n\n"
+        )
         + continuation_task
-        + (_battery_contract_block(battery) if battery else "")
+        + (
+            _battery_contract_block(battery)
+            if battery and original_request is None else ""
+        )
         + output_contract
     )
 
@@ -2015,16 +2124,7 @@ def build_fix_findings(
         "severity": "P1",
         "summary": "the configured full verification suite is not green",
     }
-    killed_block = ""
-    if killed_notice:
-        killed_block = (
-            "KILLED-CALL NOTICE\n"
-            "A previous fixer attempt on this queue was killed mid-edit\n"
-            "(operator stop or crash): the pending diff may contain its\n"
-            "PARTIAL work. Review the pending diff first; complete,\n"
-            "correct, or remove that partial work as part of your triage\n"
-            "so the episode's delta ends up coherent.\n\n"
-        )
+    killed_block = killed_call_notice() if killed_notice else ""
     phantom_block = ""
     if phantom_retry:
         phantom_block = (
@@ -2354,3 +2454,23 @@ def build_fix_findings(
         + consultation_block
         + output_contract
     )
+
+
+def killed_call_notice():
+    """The existing mixed-work recovery instruction, reusable at dispatch."""
+    return (
+        "KILLED-CALL NOTICE\n"
+        "A previous fixer attempt on this queue was killed mid-edit\n"
+        "(operator stop or crash): the pending diff may contain its\n"
+        "PARTIAL work. Review the pending diff first; complete,\n"
+        "correct, or remove that partial work as part of your triage\n"
+        "so the episode's delta ends up coherent.\n\n"
+    )
+
+
+def attach_killed_call_notice(prompt):
+    """Decorate one recovery call without rewriting its frozen task order."""
+    notice = killed_call_notice()
+    if notice in prompt:
+        return prompt
+    return notice + prompt

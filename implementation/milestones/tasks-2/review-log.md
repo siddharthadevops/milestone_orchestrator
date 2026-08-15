@@ -196,3 +196,76 @@
 - `claude-f4-review-raw-noclobber-claimed-as-existing-reuse` (raised claude, cleared codex): slice-03.md:204,241,253 present no-clobber raw storage (`orchestrator/driver.py:1304-1324`) as an existing, already-applied seam that 'preserves reused numbering', but the accepted review output raw is written today by the clobbering `_save_raw` at orchestrator/driver.py:3102, so predecessor review evidence is currently overwritten and applying no-clobber is a behavior change the strict compatibility bullet (lines 46-50) does not carve out. — The artifact wrongly labels no-clobber review storage as existing although accepted review output still uses overwriting `_save_raw`, which could make the builder preserve incompatible behavior, but the explicit predecessor-evidence test or first repeated review exposes it and correction is a small 
 - `claude-f3-skeleton-assigns-chip-proof-to-slice-3` (raised claude, cleared codex): Canonical reference defect: skeleton.md:307 requires Slice 3 to prove 'later reviews use distinct ids/chips', contradicting skeleton.md:275 (Slice 3 has no projection scope) and skeleton.md:281-282, which give the task chip to Slices 9 and 10. — Slice 3 explicitly excludes chip projection, assigns it to later slices, and tests distinct task identity plus no-clobber evidence, so a capable builder is unlikely to follow the lone skeleton wording and any resulting review mistake needs only a local wording or expectation correction.
 
+## slice_impl-03 (Worker executor and default milestone cutover)
+
+- draft: kind `implement`, artifact `-` (raw: `implementation/milestones/tasks-2/.run/raw/slice_impl-03-draft.txt`)
+
+| Round | Kind | Family | Findings | Triage | Raw |
+|---|---|---|---|---|---|
+| slice_impl-03-codex-r1 | review_round | codex | 4 | 4 reported | `implementation/milestones/tasks-2/.run/raw/slice_impl-03-codex-r1.txt` |
+| slice_impl-03-codex-r2 | fix_findings | codex | 3 | 3 fixed | `implementation/milestones/tasks-2/.run/raw/slice_impl-03-fix1.txt` |
+| slice_impl-03-codex-r3 | delta_review | codex | 1 | 1 reported | `implementation/milestones/tasks-2/.run/raw/slice_impl-03-delta1.txt` |
+| slice_impl-03-codex-r4 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/tasks-2/.run/raw/slice_impl-03-fix2.txt` |
+| slice_impl-03-codex-r5 | delta_review | codex | 0 | clean | `implementation/milestones/tasks-2/.run/raw/slice_impl-03-delta2.txt` |
+| slice_impl-03-codex-r6 | review_round | codex | 3 | 3 reported | `implementation/milestones/tasks-2/.run/raw/slice_impl-03-codex-r2.txt` |
+| slice_impl-03-codex-r7 | fix_findings | codex | 2 | 2 fixed | `implementation/milestones/tasks-2/.run/raw/slice_impl-03-fix3.txt` |
+| slice_impl-03-codex-r8 | delta_review | codex | 1 | 1 reported | `implementation/milestones/tasks-2/.run/raw/slice_impl-03-delta3.txt` |
+| slice_impl-03-codex-r9 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/tasks-2/.run/raw/slice_impl-03-fix4.txt` |
+| slice_impl-03-codex-r10 | delta_review | codex | 0 | clean | `implementation/milestones/tasks-2/.run/raw/slice_impl-03-delta4.txt` |
+| slice_impl-03-codex-r11 | review_round | codex | 3 | 3 reported | `implementation/milestones/tasks-2/.run/raw/slice_impl-03-codex-r3.txt` |
+| slice_impl-03-codex-r12 | fix_findings | codex | 3 | 3 fixed | `implementation/milestones/tasks-2/.run/raw/slice_impl-03-fix5.txt` |
+| slice_impl-03-codex-r13 | delta_review | codex | 2 | 2 reported | `implementation/milestones/tasks-2/.run/raw/slice_impl-03-delta5.txt` |
+| slice_impl-03-codex-r14 | fix_findings | codex | 2 | 2 fixed | `implementation/milestones/tasks-2/.run/raw/slice_impl-03-fix6.txt` |
+| slice_impl-03-codex-r15 | delta_review | codex | 0 | clean | `implementation/milestones/tasks-2/.run/raw/slice_impl-03-delta6.txt` |
+| slice_impl-03-codex-r16 | review_round | codex | 2 | 2 reported | `implementation/milestones/tasks-2/.run/raw/slice_impl-03-codex-r4.txt` |
+| slice_impl-03-codex-r17 | fix_findings | codex | 2 | 2 fixed | `implementation/milestones/tasks-2/.run/raw/slice_impl-03-fix7.txt` |
+| slice_impl-03-codex-r18 | delta_review | codex | 1 | 1 reported | `implementation/milestones/tasks-2/.run/raw/slice_impl-03-delta7.txt` |
+| slice_impl-03-codex-r19 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/tasks-2/.run/raw/slice_impl-03-fix8.txt` |
+| slice_impl-03-codex-r20 | delta_review | codex | 0 | clean | `implementation/milestones/tasks-2/.run/raw/slice_impl-03-delta8.txt` |
+| slice_impl-03-codex-r21 | review_round | codex | 2 | 2 reported | `implementation/milestones/tasks-2/.run/raw/slice_impl-03-codex-r5.txt` |
+| slice_impl-03-codex-r22 | fix_findings | codex | 2 | 2 fixed | `implementation/milestones/tasks-2/.run/raw/slice_impl-03-fix9.txt` |
+| slice_impl-03-codex-r23 | delta_review | codex | 2 | 2 reported | `implementation/milestones/tasks-2/.run/raw/slice_impl-03-delta9.txt` |
+| slice_impl-03-codex-r24 | fix_findings | codex | 2 | 2 fixed | `implementation/milestones/tasks-2/.run/raw/slice_impl-03-fix10.txt` |
+| slice_impl-03-codex-r25 | delta_review | codex | 0 | clean | `implementation/milestones/tasks-2/.run/raw/slice_impl-03-delta10.txt` |
+| slice_impl-03-codex-r26 | review_round | codex | 0 | clean | `implementation/milestones/tasks-2/.run/raw/slice_impl-03-codex-r6.txt` |
+| slice_impl-03-claude-r1 | review_round | claude | 3 | 3 reported | `implementation/milestones/tasks-2/.run/raw/slice_impl-03-claude-r1.txt` |
+| slice_impl-03-codex-r27 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/tasks-2/.run/raw/slice_impl-03-fix11.txt` |
+| slice_impl-03-codex-r28 | delta_review | codex | 0 | clean | `implementation/milestones/tasks-2/.run/raw/slice_impl-03-delta11.txt` |
+| slice_impl-03-codex-r29 | review_round | codex | 3 | 3 reported | `implementation/milestones/tasks-2/.run/raw/slice_impl-03-codex-r7.txt` |
+| slice_impl-03-codex-r30 | fix_findings | codex | 3 | 2 fixed, 1 rejected (1 consulted) | `implementation/milestones/tasks-2/.run/raw/slice_impl-03-fix12-rethink-return.txt` |
+| slice_impl-03-codex-r31 | delta_review | codex | 0 | clean | `implementation/milestones/tasks-2/.run/raw/slice_impl-03-delta12.txt` |
+| slice_impl-03-codex-r32 | review_round | codex | 0 | clean | `implementation/milestones/tasks-2/.run/raw/slice_impl-03-codex-r8.txt` |
+| slice_impl-03-claude-r2 | review_round | claude | 2 | 2 reported | `implementation/milestones/tasks-2/.run/raw/slice_impl-03-claude-r2.txt` |
+| slice_impl-03-codex-r33 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/tasks-2/.run/raw/slice_impl-03-fix13.txt` |
+| slice_impl-03-codex-r34 | delta_review | codex | 0 | clean | `implementation/milestones/tasks-2/.run/raw/slice_impl-03-delta13.txt` |
+| slice_impl-03-codex-r35 | review_round | codex | 0 | clean | `implementation/milestones/tasks-2/.run/raw/slice_impl-03-codex-r9.txt` |
+| slice_impl-03-claude-r3 | review_round | claude | 1 | 1 reported | `implementation/milestones/tasks-2/.run/raw/slice_impl-03-claude-r3.txt` |
+| slice_impl-03-codex-r36 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/tasks-2/.run/raw/slice_impl-03-fix14-rethink-return.txt` |
+| slice_impl-03-codex-r37 | delta_review | codex | 2 | 2 reported | `implementation/milestones/tasks-2/.run/raw/slice_impl-03-delta14.txt` |
+| slice_impl-03-codex-r38 | fix_findings | codex | 2 | 2 fixed | `implementation/milestones/tasks-2/.run/raw/slice_impl-03-fix15.txt` |
+| slice_impl-03-codex-r39 | delta_review | codex | 1 | 1 reported | `implementation/milestones/tasks-2/.run/raw/slice_impl-03-delta15.txt` |
+| slice_impl-03-codex-r40 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/tasks-2/.run/raw/slice_impl-03-fix16.txt` |
+| slice_impl-03-codex-r41 | delta_review | codex | 2 | 2 reported | `implementation/milestones/tasks-2/.run/raw/slice_impl-03-delta16.txt` |
+| slice_impl-03-codex-r42 | fix_findings | codex | 2 | 1 fixed, 1 rejected (1 consulted) | `implementation/milestones/tasks-2/.run/raw/slice_impl-03-fix17-rethink-return.txt` |
+| slice_impl-03-codex-r43 | delta_review | codex | 0 | clean | `implementation/milestones/tasks-2/.run/raw/slice_impl-03-delta17.txt` |
+| slice_impl-03-codex-r44 | review_round | codex | 3 | 3 reported | `implementation/milestones/tasks-2/.run/raw/slice_impl-03-codex-r10.txt` |
+| slice_impl-03-codex-r45 | fix_findings | codex | 3 | 3 fixed | `implementation/milestones/tasks-2/.run/raw/slice_impl-03-fix18.txt` |
+| slice_impl-03-codex-r46 | delta_review | codex | 0 | clean | `implementation/milestones/tasks-2/.run/raw/slice_impl-03-delta18.txt` |
+| slice_impl-03-codex-r47 | review_round | codex | 0 | clean | `implementation/milestones/tasks-2/.run/raw/slice_impl-03-codex-r11.txt` |
+| slice_impl-03-claude-r4 | review_round | claude | 3 | DEBT-CLEAN (reclassified) | `implementation/milestones/tasks-2/.run/raw/slice_impl-03-claude-r4.txt` |
+
+### Review completion — SATISFIED
+
+- deterministic result: every configured family was clean or debt-clean on the same current bytes; full verification was not due at this boundary; no extra reviewer was called
+- cited reviews: `slice_impl-03-codex-r47`, `slice_impl-03-claude-r4`
+
+**Deferred debt (opposite-family verified):**
+- `codex-S3-004` (raised codex, cleared codex): Invalid review rethink records the wrong terminal cause — The immutable task result contradicts B2’s most-specific-cause contract and can mislead downstream task consumers with a false attachment diagnosis, while the run’s precise error exposes the mismatch on first exercise and correction is a local reason-and-test change.
+- `codex-codex-S3-007` (raised codex, cleared codex): The focused suite does not prove its declared compatibility matrix — The green focused suite silently overclaims behavioral coverage because several abandonment cases assert only terminal failure and not preserved rethink evidence, so later builders can trust an unproved lifecycle foundation, while correction remains bounded to strengthening this unit’s compatibility
+- `claude-S3-DEAD-SAFEGUARD-PARAM` (raised claude, cleared codex): The `project_safeguards` write path added for order context is unreachable: no caller ever supplies it, so the branch that freezes context['project_safeguards'] can never execute. — Every production admission supplies the complete project context, so the dead compatibility parameter could mislead a hasty builder into preserving or extending a nonexistent writer path, but correction is a small local removal that leaves the useful legacy reader intact.
+- `claude-S3-FIXER-PROMPT-INDENT` (raised claude, cleared codex): The fixer prompt construction was moved under an `else:` without re-indenting its argument list, so ~48 continuation lines sit at the same indentation as the assignment and read as if the else-branch had ended. — The code is behaviorally correct and any later statement at the assignment’s indentation remains inside the else-suite, so a capable builder is unlikely to be silently misled and correction is only a local argument-list reindent.
+- `claude-claude-S3-CONTINUATION-AMENDMENT-CLAIM` (raised claude, cleared codex): When an attached discussion is adopted as a design amendment, the frozen-request continuation prompt still tells the worker the amendment 'is also rendered above', but that path deliberately renders no amendments block at all. — The location claim is false, but the adjacent instruction and handoff JSON explicitly supply and identify the accepted text as decision material, so silent misdirection is unlikely and correction is a one-line wording fix.
+- `claude-claude-S3-DEAD-ORDER-CONTEXT-READERS` (raised claude, cleared codex): The Worker-task order-context recovery helpers `_worker_task_project_inputs` and `_worker_task_enforcement` (orchestrator/driver.py:2703-2758, ~56 lines) have no caller anywhere in production or tests, and `_report_call`'s new `output_directory` parameter (orchestrator/driver.py:7810,7832) is never supplied by either call site; the slice therefore ships a block of unreachable machinery whose only purpose — reconstructing safeguard policies, compiling extensions and re-deriving frozen roots from the admitted order — is exactly what B6 forbids ('Validation uses episode extensions, never ones recovered from the order'). — Although unreachable today, the helpers explicitly encode the opposite of B6 and could plausibly be reused by a later recovery implementation, while correction is a small local deletion or rewire to live episode authority.
+- `claude-claude-S3-FOCUSED-COMMAND-OMITS-NAMED-CHECKS` (raised claude, cleared codex): The slice note's Verification Contract names four checks that its own declared focused command cannot run: `test_review_resume_refreshes_authority_without_replacing_open_task` and `test_version_bump_governs_next_review_without_invalidating_approval` live in orchestrator/tests/test_project_context.py, and `test_continuation_receives_current_amendments_and_project_law` and `test_attached_rethink_reads_project_law_at_session_start` live in orchestrator/tests/test_brainstorming_milestone_adapter.py, while the focused command (slice-03.md:167) is only `python3 -m unittest orchestrator.tests.test_worker_tasks orchestrator.tests.test_seal_predicate`. — The focused command passes 50 tests while silently omitting four named coverage checks, but correction is a local command edit and the separately declared discovery gate still runs those tests.
+- `claude-claude-S3-REVIEW-PROMPT-BUILT-THEN-DISCARDED` (raised claude, cleared codex): In `_do_review_round`, the full whole-artifact review prompt is always rendered by `prompts.build_review_round(...)` (orchestrator/driver.py:9815-9832) and then unconditionally overwritten two lines later when an open review task exists (driver.py:9833-9836), unlike the sibling `_do_delta_review`, which guards the equivalent build behind `if active_task is None` (driver.py:8902-8923). — The resumed path discards a purely rendered prompt without changing the stored request or behavior, so silent downstream drift is unlikely and correction is a small local guard readily exposed by a focused resume test.
+

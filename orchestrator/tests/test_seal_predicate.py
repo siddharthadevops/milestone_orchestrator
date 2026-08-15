@@ -339,7 +339,82 @@ class SealPredicateDriverTest(unittest.TestCase):
         self.assertIsNone(current.get("review_evidence_fingerprint"))
         self.assertIsNone(st.load(path)["failure"])
 
-    def test_new_amendment_after_reviews_invalidates_their_approval(self):
+    def test_seal_recovery_without_current_evidence_restarts_reviews(self):
+        cfg = self._config("strict")
+        state = st.new_state("persisted sealing run", self.ws, cfg)
+        st.append_event(state, "initialized", goal=state["goal"])
+        unit = state["units"][0]
+        unit["status"] = st.U_SEALING
+        unit.pop("review_evidence_fingerprint", None)
+        unit.pop("review_cycle_start", None)
+        unit["rounds"] = [
+            _rev("codex", rid="old-codex"),
+            _rev("claude", rid="old-claude"),
+        ]
+        path = drv.default_state_path(self.ws)
+        st.save(path, state)
+
+        resumed = drv.Driver(path, runner=runners.MockRunner([]))
+        resumed.step()
+
+        current = st.load(path)["units"][0]
+        self.assertEqual(current["status"], st.U_PRE_REVIEW_VERIFY)
+        self.assertIsNone(current.get("review_evidence_fingerprint"))
+        self.assertEqual(len(current["rounds"]), 2)
+        self.assertIsNone(st.load(path)["failure"])
+
+    def test_advanced_unbound_review_progress_restarts_and_seals_fresh(self):
+        cfg = self._config("strict")
+        state = st.new_state("schema-2 resumable run", self.ws, cfg)
+        st.append_event(state, "initialized", goal=state["goal"])
+        unit = state["units"][0]
+        unit["status"] = st.U_ROUNDS
+        unit["family_index"] = 1
+        unit.pop("review_evidence_fingerprint", None)
+        unit.pop("review_cycle_start", None)
+        unit["rounds"] = [_rev("codex", rid="unbound-codex")]
+        path = drv.default_state_path(self.ws)
+        st.save(path, state)
+        # A real schema-2 review has already materialized the generated goal
+        # snapshot; do so before binding candidate evidence.
+        seeded = drv.Driver(path, runner=runners.MockRunner([]))
+        seeded._goal_for(st.current_unit(seeded.state))
+        runner = runners.MockRunner([
+            step("review_round", report("review_round"), family="codex"),
+            step("review_round", report("review_round"), family="claude"),
+        ])
+        resumed = drv.Driver(path, runner=runner)
+
+        resumed.step()
+        restarted = st.load(path)["units"][0]
+        self.assertEqual(restarted["status"], st.U_PRE_REVIEW_VERIFY)
+        self.assertEqual(restarted["family_index"], 0)
+        self.assertEqual(restarted["review_cycle_start"], 1)
+        self.assertIsNone(restarted.get("review_evidence_fingerprint"))
+        self.assertEqual(len(runner.calls), 0)
+
+        for _ in range(10):
+            if resumed.state["units"][0]["status"] == st.U_SEALED:
+                break
+            resumed.step()
+
+        current = st.load(path)["units"][0]
+        reviews = [
+            round_ for round_ in current["rounds"]
+            if round_["kind"] == "review_round"
+        ]
+        self.assertEqual(current["status"], st.U_SEALED)
+        self.assertEqual(
+            [round_["family"] for round_ in reviews],
+            ["codex", "codex", "claude"],
+        )
+        self.assertEqual(
+            current["seals"][0]["reviews"],
+            [reviews[-2]["id"], reviews[-1]["id"]],
+        )
+        self.assertEqual(runner.script, [])
+
+    def test_new_amendment_after_reviews_does_not_revalidate_recorded_results(self):
         cfg = self._config("strict")
         script = self._skeleton_clean_no_seal_halves(
             battery=battery_entries(
@@ -363,16 +438,11 @@ class SealPredicateDriverTest(unittest.TestCase):
 
         driver.step()
 
-        self.assertEqual(driver.state["units"][0]["status"],
-                         st.U_PRE_REVIEW_VERIFY)
+        self.assertEqual(driver.state["units"][0]["status"], st.U_SEALED)
         self.assertFalse(any(
             event["type"] == "amendment_seen"
             for event in driver.state["events"]
         ))
-        for _ in range(20):
-            if driver.state["units"][0]["status"] == st.U_SEALED:
-                break
-            driver.step()
 
         state = st.load(path)
         unit = state["units"][0]
@@ -382,15 +452,10 @@ class SealPredicateDriverTest(unittest.TestCase):
         self.assertEqual(unit["status"], st.U_SEALED)
         self.assertEqual(
             [r["family"] for r in reviews],
-            ["codex", "claude", "codex", "claude"],
+            ["codex", "claude"],
         )
         self.assertEqual(unit["seals"][0]["reviews"],
-                         [reviews[-2]["id"], reviews[-1]["id"]])
-        self.assertEqual(
-            [e["amendment_id"] for e in state["events"]
-             if e["type"] == "amendment_seen"],
-            ["A1"],
-        )
+                         [reviews[0]["id"], reviews[1]["id"]])
 
     def test_legacy_also_seals_from_clean_reviews(self):
         script = self._skeleton_clean_no_seal_halves()

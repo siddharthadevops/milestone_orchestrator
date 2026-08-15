@@ -329,6 +329,26 @@ def task_record(state, task_id):
     raise TaskRecordError("unknown task %r" % task_id)
 
 
+def execute_worker(record, dispatch):
+    """Pass one admitted common request through the Worker unchanged.
+
+    Prompt construction, dispatch policy, and native-result validation remain
+    with the milestone caller.  This adapter deliberately has no staffing or
+    destination fallback: both authorities were settled before it is entered.
+    """
+    if not isinstance(record, dict):
+        raise TaskRecordError("Worker execution requires a task record")
+    order = record.get("order")
+    if not isinstance(order, dict) or order.get("task_executor") != "worker":
+        raise TaskRecordError("Worker execution requires a Worker task")
+    if record.get("result") is not None:
+        raise TaskRecordError("a terminal Worker task cannot execute")
+    if not callable(dispatch):
+        raise TaskRecordError("Worker execution requires a dispatch callback")
+    request = _json_copy(order.get("request"), "Worker task request")
+    return dispatch(request)
+
+
 def admit_task(state, order, resolved_staffing, primary_workspace=None):
     """Validate and append one frozen scheduling decision to loaded state."""
     checked_order = _canonical_output_directory(
@@ -492,6 +512,21 @@ def task_accounting(state, task_id):
         "cost": cost,
         "cost_partial": bool(cost_partial or not linked or cost is None),
     }
+
+
+def worker_result(state, task_id, native_result, status="success", reason=None):
+    """Build a terminal Worker envelope from its existing linked evidence."""
+    accounting = task_accounting(state, task_id)
+    result = {
+        "status": status,
+        **accounting,
+        "native_result": native_result,
+    }
+    if status == "failure":
+        result["reason"] = reason
+    elif reason is not None:
+        raise ContractError("a successful Worker task cannot carry a reason")
+    return validate_result(result)
 
 
 def _token_usage(value):

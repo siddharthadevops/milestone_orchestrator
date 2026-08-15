@@ -29,6 +29,7 @@ from orchestrator import projects
 from orchestrator import prompts
 from orchestrator import runners
 from orchestrator import state as st
+from orchestrator import tasks
 from orchestrator import workareas
 from orchestrator.tests import test_prompts as tp
 from orchestrator.tests.test_driver_mock import (
@@ -461,7 +462,7 @@ class TestSeenEvents(ProjectRunTestCase):
         self.drive_steps(driver, 4)  # draft, verify, codex round, claude round
         self.assertEqual(self.seen_pairs(driver.state), [("ctx-guard", 1)])
 
-    def test_version_bump_re_records_under_new_version(self):
+    def test_version_bump_governs_next_review_without_invalidating_approval(self):
         self.put_policy(kinds=("review_round",), unit_kinds=("skeleton",))
         path = self.init_bound()
         ack = {"context_ack": [{"note": "checked"}]}
@@ -469,10 +470,6 @@ class TestSeenEvents(ProjectRunTestCase):
             path,
             [
                 skeleton_draft_step(),
-                step("review_round", report("review_round") | ack,
-                     family="codex"),
-                # The v2 policy invalidates v1's Codex approval, so the
-                # whole review cycle restarts from family zero.
                 step("review_round", report("review_round") | ack,
                      family="codex"),
                 step("review_round", report("review_round") | ack,
@@ -484,18 +481,79 @@ class TestSeenEvents(ProjectRunTestCase):
         self.put_policy(
             version=2, kinds=("review_round",), unit_kinds=("skeleton",)
         )
-        driver.step()  # policy changed: invalidate v1 approval
-        self.assertEqual(
-            driver.state["units"][0]["status"], st.U_PRE_REVIEW_VERIFY
-        )
-        driver.step()  # verification
-        driver.step()  # fresh Codex round renders and records v2
-        driver.step()  # fresh Claude round sees the same v2 context
+        driver.step()  # Claude's new episode renders and records v2
         self.assertEqual(
             self.seen_pairs(driver.state), [("ctx-guard", 1), ("ctx-guard", 2)]
         )
         flat = normalized(driver.runner.calls[-1][2])
         self.assertIn("SAFEGUARD ctx-guard v2", flat)
+        self.assertEqual(driver.state["units"][0]["review_cycle_start"], 0)
+
+    def test_review_resume_refreshes_authority_without_replacing_open_task(self):
+        self.put_policy(
+            kinds=("review_round",),
+            unit_kinds=("skeleton",),
+            prompt="Return the original review acknowledgement.",
+            field="original_ack",
+        )
+        path = self.init_bound()
+        driver = self.make_driver(path, [skeleton_draft_step()])
+        driver.step()  # draft
+        driver.step()  # pre-review verification
+        with mock.patch.object(
+            tasks, "execute_worker", side_effect=KeyboardInterrupt
+        ):
+            with self.assertRaises(KeyboardInterrupt):
+                driver.step()
+
+        interrupted = st.load(path)
+        old_task = tasks.task_records(interrupted)[-1]
+        self.assertEqual(
+            old_task["order"]["request"]["context"]["task_kind"],
+            contracts.KIND_REVIEW_ROUND,
+        )
+        self.assertIsNone(old_task["result"])
+        self.assertIn(
+            "SAFEGUARD ctx-guard v1",
+            old_task["order"]["request"]["request"],
+        )
+
+        self.put_policy(
+            version=2,
+            kinds=("review_round",),
+            unit_kinds=("skeleton",),
+            prompt="Return the replacement review acknowledgement.",
+            field="replacement_ack",
+        )
+        resumed = self.make_driver(
+            path,
+            [
+                step(
+                    "review_round",
+                    report("review_round")
+                    | {"replacement_ack": [{"note": "checked"}]},
+                    family="codex",
+                )
+            ],
+        )
+        resumed.step()  # same task redispatches under fresh episode authority
+
+        refreshed = st.load(path)
+        records = tasks.task_records(refreshed)
+        self.assertEqual(len(records), 2)  # draft plus the one review task
+        review = tasks.task_record(refreshed, old_task["id"])
+        self.assertEqual(review["result"]["status"], "success")
+        self.assertEqual(
+            review["order"]["request"]["request"],
+            old_task["order"]["request"]["request"],
+        )
+        self.assertFalse([
+            event for event in refreshed["events"]
+            if event.get("type") == "review_cycle_restarted"
+        ])
+        self.assertIn("WORKER EPISODE AUTHORITY REFRESH", resumed.runner.calls[-1][2])
+        self.assertIn("SAFEGUARD ctx-guard v2", resumed.runner.calls[-1][2])
+        self.assertIn("replaces rather than unions", resumed.runner.calls[-1][2])
 
     def test_disabled_and_out_of_scope_render_nothing_and_record_zero(self):
         self.put_policy(pid="disabled-p", enabled=False)
@@ -558,6 +616,45 @@ class TestEnforcementBinding(ProjectRunTestCase):
         with open(path, "w", encoding="utf-8") as fh:
             fh.write("# shared\n")
         return "%s:%d" % (path, line)
+
+    def test_recovered_worker_requires_live_standing_law_before_dispatch(self):
+        self.put_policy(
+            prompt="Return the original acknowledgement.",
+            field="original_ack",
+        )
+        path = self.init_bound()
+        driver = self.make_driver(path, [])
+        with mock.patch.object(
+            tasks, "execute_worker", side_effect=KeyboardInterrupt
+        ):
+            with self.assertRaises(KeyboardInterrupt):
+                driver.step()
+
+        crashed = st.load(path)
+        admitted = tasks.task_records(crashed)[0]
+        self.assertEqual(self.seen_pairs(crashed), [("ctx-guard", 1)])
+        self.assertIn(
+            "SAFEGUARD ctx-guard v1",
+            admitted["order"]["request"]["request"],
+        )
+        self.put_policy(
+            version=2,
+            prompt="Return the replacement acknowledgement.",
+            field="replacement_ack",
+        )
+        shutil.rmtree(os.path.join(self.store_base, self.PROJECT))
+        resumed = self.make_driver(path, [])
+        resumed.step()
+
+        terminal = tasks.task_records(st.load(path))[0]
+        self.assertIsNone(terminal["result"])
+        self.assertIsNotNone(st.load(path)["failure"])
+        self.assertEqual(resumed.runner.calls, [])
+        self.assertEqual(self.seen_pairs(resumed.state), [("ctx-guard", 1)])
+        self.assertIn(
+            "SAFEGUARD ctx-guard v1",
+            terminal["order"]["request"]["request"],
+        )
 
     def test_missing_field_gets_exactly_one_repair_then_proceeds(self):
         self.cite_policy()
@@ -726,10 +823,6 @@ class TestLiveness(ProjectRunTestCase):
                 skeleton_draft_step(),
                 step("review_round", report("review_round") | ack,
                      family="codex"),
-                # Disabling the policy invalidates the v1 approval. The new
-                # family-zero cycle has no extension field on either round.
-                step("review_round", report("review_round"),
-                     family="codex"),
                 step("review_round", report("review_round"),
                      family="claude"),
             ],
@@ -742,15 +835,8 @@ class TestLiveness(ProjectRunTestCase):
             kinds=("review_round",),
             unit_kinds=("skeleton",),
         )
-        driver.step()  # policy changed: invalidate v1 approval
-        self.assertEqual(
-            driver.state["units"][0]["status"], st.U_PRE_REVIEW_VERIFY
-        )
-        driver.step()  # verification
-        driver.step()  # fresh Codex round with no policy
-        driver.step()  # fresh Claude round with no policy
+        driver.step()  # Claude's next episode has no policy
         self.assertIsNone(driver.state["failure"])
-        self.assertNotIn("SAFEGUARD", driver.runner.calls[-2][2])
         self.assertNotIn("SAFEGUARD", driver.runner.calls[-1][2])
         self.assertEqual(self.seen_pairs(driver.state), [("ctx-guard", 1)])
 

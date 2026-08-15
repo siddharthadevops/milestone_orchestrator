@@ -222,12 +222,12 @@ class TestP3Debt(DriverTestCase):
             original_mark = driver._mark_busy
 
             def admit(label, kind, family, model=None, effort=None,
-                      nested=False):
+                      nested=False, task_id=None):
                 if kind == contracts.KIND_RECLASSIFY:
                     return False
                 return original_mark(
                     label, kind, family, model=model, effort=effort,
-                    nested=nested,
+                    nested=nested, task_id=task_id,
                 )
 
             with mock.patch.object(driver, "_mark_busy", side_effect=admit):
@@ -304,7 +304,8 @@ class TestP3Debt(DriverTestCase):
             original_mark = subject._mark_busy
 
             def invalidate_after_nested_admission(
-                label, kind, family, model=None, effort=None, nested=False
+                label, kind, family, model=None, effort=None, nested=False,
+                task_id=None,
             ):
                 admitted = original_mark(
                     label,
@@ -313,6 +314,7 @@ class TestP3Debt(DriverTestCase):
                     model=model,
                     effort=effort,
                     nested=nested,
+                    task_id=task_id,
                 )
                 if admitted and kind == contracts.KIND_RECLASSIFY:
                     invalidate_selection(ws)
@@ -385,7 +387,8 @@ class TestP3Debt(DriverTestCase):
             original_mark = subject._mark_busy
 
             def remove_explicit_rater_after_admission(
-                label, kind, family, model=None, effort=None, nested=False
+                label, kind, family, model=None, effort=None, nested=False,
+                task_id=None,
             ):
                 admitted = original_mark(
                     label,
@@ -394,6 +397,7 @@ class TestP3Debt(DriverTestCase):
                     model=model,
                     effort=effort,
                     nested=nested,
+                    task_id=task_id,
                 )
                 if admitted and kind == contracts.KIND_RECLASSIFY:
                     edited = model_profiles.load(home, "default")

@@ -2,4 +2,22 @@
 
 # Adjudicated Rejections
 
-(none)
+Settled findings: re-raising one requires referencing its id with
+genuinely new evidence (`contests`).
+
+## [slice_impl-03-codex-r29/codex-S3-008]
+
+- unit: slice_impl-03
+- severity: P2
+- finding: Worker dispatch drops the admitted output directory
+- rationale: Claude independently confirmed that B5 makes the executor-context boundary authoritative, the implementation satisfies it, no concrete harm or functional deviation remains, and the proposed additional transport would be unauthorized machinery.
+- prevention: implementation/milestones/tasks-2/skeleton.md (Clarified Worker executor-context forwarding, caller prompt ownership, and the absence of a separate physical-call visibility guarantee.)
+
+## [slice_impl-03-codex-r41/codex-S3-010]
+
+- unit: slice_impl-03
+- severity: P2
+- finding: The new review fingerprint invalidates every persisted pre-delta approval
+- rationale: Claude verified the artifacts and implementation and agreed that B7 makes the claimed review repetition permitted baseline behavior with no violated guarantee or incremental harm.
+- prevention: implementation/milestones/tasks-2/skeleton.md (B7 now explicitly records ordinary pre-B6 mismatch handling and the narrow unbound advanced-family recovery guard.)
+

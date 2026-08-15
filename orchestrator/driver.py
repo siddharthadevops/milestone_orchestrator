@@ -39,6 +39,7 @@ except ImportError:  # pragma: no cover - non-POSIX: flock degrades to the
 from . import brainstorming, brainstorming_lifecycle, brainstorming_milestone
 from . import contracts, errclass, gitops, interpreter, kvstore, ledgers
 from . import model_profiles, pricing, profiles, projects, prompts, registry, runners
+from . import tasks
 from . import verifiers, workareas
 from . import state as st
 
@@ -1146,22 +1147,40 @@ class Driver(object):
         return None
 
     def _review_evidence_inputs(self, unit):
-        """Return the exact bytes and hot rules a full reviewer would see.
+        """Return immutable review evidence plus this episode's hot rules.
 
-        Reading is side-effect free: if the evidence differs from the bound
-        cycle, no ``*_seen`` event may imply that a reviewer saw it before the
-        family-zero restart actually runs.
+        Hot operator amendments and safeguards govern the next Worker episode,
+        but a later change to them does not make an already validated review
+        result stale.  Reading is side-effect free: no ``*_seen`` event may
+        imply that a reviewer saw the snapshot before dispatch actually runs.
         """
         snapshot = self._snapshot()
-        project_context, extensions, roots = self._project_prompt_inputs(
-            unit, contracts.KIND_REVIEW_ROUND, record_seen=False
+        authority = self._worker_episode_authority(
+            unit, contracts.KIND_REVIEW_ROUND
         )
-        amendments = self._amendments(record_seen=False)
+        project_context = authority["project_context"]
+        extensions = authority["extensions"]
+        roots = authority["roots"]
+        amendments = authority["amendments"]
+        fingerprint = self._review_evidence_fingerprint(
+            unit, snapshot=snapshot
+        )
+        return (
+            fingerprint,
+            project_context,
+            extensions,
+            roots,
+            amendments,
+            authority["operator_complete"],
+        )
+
+    def _review_evidence_fingerprint(self, unit, snapshot=None):
+        """Bind approvals to immutable review inputs, not episode authority."""
+        if snapshot is None:
+            snapshot = self._snapshot()
         payload = json.dumps(
             {
                 "candidate": self._candidate_fingerprint(snapshot),
-                "amendments": amendments,
-                "project_context": project_context,
                 "implementation_scope": self._implementation_scope(unit),
                 # Bind approvals to the exact execution plan, including
                 # command boundaries. Joining with ``&&`` is only a prompt
@@ -1173,13 +1192,9 @@ class Driver(object):
             sort_keys=True,
             separators=(",", ":"),
         ).encode("utf-8")
-        fingerprint = "review-evidence-sha256:%s" % hashlib.sha256(
+        return "review-evidence-sha256:%s" % hashlib.sha256(
             payload
         ).hexdigest()
-        return fingerprint, project_context, extensions, roots, amendments
-
-    def _review_evidence_fingerprint(self, unit):
-        return self._review_evidence_inputs(unit)[0]
 
     @staticmethod
     def _snapshot_diff(before, after):
@@ -1309,12 +1324,10 @@ class Driver(object):
 
     def _save_raw_noclobber(self, name, text):
         """Like _save_raw but never overwrites an existing file, appending
-        -2, -3 ... instead. Used for malformed-strike artifacts: a seal
-        attempt that failed leaves no seal record, so a manual resume runs
-        the SAME attempt number and would otherwise overwrite the earlier
-        attempt's strike raw — leaving a live ledger event pointing at
-        replaced bytes. Distinct per-family names keep concurrent halves
-        from racing; this guards only the across-resume reuse."""
+        -2, -3 ... instead. Used whenever a failed or non-completing call can
+        legitimately reuse its label, including malformed strikes and reviews
+        that leave no round record. Distinct per-family names keep concurrent
+        calls from racing; this guards only across-resume reuse."""
         raw_dir = self._raw_dir()
         candidate = name
         n = 1
@@ -1698,7 +1711,7 @@ class Driver(object):
         self, family, prompt, raw_name, model, effort, extensions, roots,
         validate_opts, start_session, base_tree, session_ref=None,
         stabilizing=False, dispatch_resolver=None,
-        continuation_family=None, task_id=None,
+        continuation_family=None, task_id=None, episode_refresher=None,
     ):
         if task_id is None and stabilizing:
             unit = st.current_unit(self.state)
@@ -1881,6 +1894,13 @@ class Driver(object):
         self._persist_implementation_stabilization(
             marker, task_id=task_id
         )
+        recovery_extensions, recovery_roots = extensions, roots
+        if episode_refresher is not None:
+            (
+                recovery_prompt,
+                recovery_extensions,
+                recovery_roots,
+            ) = episode_refresher(recovery_prompt)
         output, result, raw_path = self._call(
             family,
             recovery_prompt,
@@ -1888,8 +1908,8 @@ class Driver(object):
             raw_name + "-stabilize",
             model=model,
             effort=effort,
-            extensions=extensions,
-            roots=roots,
+            extensions=recovery_extensions,
+            roots=recovery_roots,
             validate_opts=validate_opts,
             # An interrupted continuation cannot safely reuse its provider
             # turn.  The stabilizer is deliberately a fresh conversation.
@@ -2244,24 +2264,45 @@ class Driver(object):
                     text=str(amendment.get("text"))[:300],
                 )
 
-    def _amendments(self, record_seen=True):
-        """Return operator amendments plus accepted design clarifications.
+    def _amendments_snapshot(
+        self, record_seen=True, retain_valid_operator_siblings=False
+    ):
+        """Return amendments plus mutable-file completeness for one read.
 
-        The panel-owned file remains read-only to the driver. Brainstorming
-        amendments live in the append-only run ledger with narrower authority:
-        they clarify sealed design but never amend the operator's goal.
+        A complete mutable file is authoritative even when its list is empty.
+        Any absent, unreadable, or malformed shape is incomplete and therefore
+        cannot revoke authority already present in a provider conversation.
+        Non-Worker briefings retain the prior tolerant posture by requesting
+        otherwise-valid entries from a list with malformed siblings.
+        Accepted design amendments come from append-only run state either way.
         """
         operator = []
+        operator_complete = False
         try:
             with open(self._amendments_path(), "r", encoding="utf-8") as fh:
                 data = json.load(fh)
-            operator = [
-                a
-                for a in (data.get("amendments") or [])
-                if isinstance(a, dict) and str(a.get("text") or "").strip()
-            ]
-        except (OSError, ValueError):
-            pass
+            raw = data.get("amendments") if isinstance(data, dict) else None
+            if not isinstance(raw, list):
+                raise ValueError("amendments must be a list")
+            operator = []
+            for item in raw:
+                if (
+                    not isinstance(item, dict)
+                    or not str(item.get("text") or "").strip()
+                ):
+                    continue
+                amendment = copy.deepcopy(item)
+                # Authority comes from the mutable operator file itself, never
+                # from an entry's self-description.  Removing a spoofed tier
+                # keeps the existing operator payload shape while letting the
+                # renderer's absent-authority default classify it correctly.
+                amendment.pop("authority", None)
+                operator.append(amendment)
+            operator_complete = len(operator) == len(raw)
+            if not operator_complete and not retain_valid_operator_siblings:
+                operator = []
+        except (OSError, ValueError, TypeError, UnicodeError):
+            operator = []
         if record_seen:
             self._record_amendments_seen(operator)
         design = [
@@ -2269,7 +2310,10 @@ class Driver(object):
                 "id": event.get("amendment_id"),
                 "text": event.get("text"),
                 "at": event.get("at"),
-                "authority": event.get("authority") or "brainstorming_design",
+                # Both supported event types are durable design sources.  An
+                # old migration event may carry ``historical_design_update``;
+                # that payload label must not promote it to operator law.
+                "authority": "brainstorming_design",
                 "session_id": event.get("session_id"),
                 "accepted_target_revision": event.get(
                     "accepted_target_revision"
@@ -2282,7 +2326,14 @@ class Driver(object):
             )
             and str(event.get("text") or "").strip()
         ]
-        return operator + design
+        return operator + design, operator_complete
+
+    def _amendments(self, record_seen=True):
+        """Return operator amendments plus accepted design clarifications."""
+        return self._amendments_snapshot(
+            record_seen=record_seen,
+            retain_valid_operator_siblings=True,
+        )[0]
 
     def _read_standing_law(self, worker_kind, unit_kind):
         """LIVE read of the project's standing law for one worker call:
@@ -2362,11 +2413,13 @@ class Driver(object):
             for e in self.state["events"]
             if e.get("type") == "project_safeguard_seen"
         }
+        recorded = False
         for policy in policies:
             key = (policy["id"], policy["version"])
             if key in seen:
                 continue
             seen.add(key)
+            recorded = True
             st.append_event(
                 self.state,
                 "project_safeguard_seen",
@@ -2374,6 +2427,7 @@ class Driver(object):
                 version=policy["version"],
                 text=str(policy["prompt"])[:300],
             )
+        return recorded
 
     def _project_prompt_inputs(self, unit, kind, record_seen=True):
         """Standing project law for one worker call of a project-bound
@@ -2423,6 +2477,56 @@ class Driver(object):
         }
         return project_context, extensions, roots
 
+    def _worker_episode_authority(self, unit, kind):
+        """Take one live authority snapshot for a milestone Worker episode."""
+        amendments, operator_complete = self._amendments_snapshot(
+            record_seen=False
+        )
+        project_context, extensions, roots = self._project_prompt_inputs(
+            unit, kind, record_seen=False
+        )
+        return {
+            "amendments": amendments,
+            "operator_complete": operator_complete,
+            "project_context": project_context,
+            "extensions": extensions,
+            "roots": roots,
+        }
+
+    def _activate_worker_episode_authority(self, snapshot):
+        """Persist existing seen traces before dispatching this snapshot."""
+        before = len(self.state.get("events") or [])
+        if snapshot.get("operator_complete"):
+            self._record_amendments_seen([
+                item for item in snapshot.get("amendments") or []
+                if item.get("authority") != "brainstorming_design"
+            ])
+        project_context = snapshot.get("project_context") or {}
+        self._record_safeguards_seen(
+            project_context.get("safeguards") or []
+        )
+        if len(self.state.get("events") or []) != before:
+            self._save()
+
+    @staticmethod
+    def _worker_episode_prompt(prompt, snapshot):
+        return prompts.attach_worker_episode_authority(
+            prompt,
+            snapshot.get("amendments") or [],
+            snapshot.get("project_context"),
+            bool(snapshot.get("operator_complete")),
+        )
+
+    def _refresh_worker_episode(self, unit, kind, prompt):
+        """Refresh and activate one later episode around an immutable prompt."""
+        snapshot = self._worker_episode_authority(unit, kind)
+        self._activate_worker_episode_authority(snapshot)
+        return (
+            self._worker_episode_prompt(prompt, snapshot),
+            snapshot["extensions"],
+            snapshot["roots"],
+        )
+
     def _busy_path(self):
         return os.path.join(self._runtime_dir(), "current.json")
 
@@ -2442,6 +2546,295 @@ class Driver(object):
         if not isinstance(task_id, str) or not task_id:
             raise ValueError("task_id must be a non-empty string")
         return {"task_id": task_id}
+
+    def _task_work_area(self):
+        """Freeze the execution context the milestone already resolved."""
+        project = self.state.get("project")
+        if project is not None:
+            return copy.deepcopy(project)
+        return {
+            "workspace_path": self.workspace,
+            "primary": self.workspace,
+            "additional": [],
+        }
+
+    def _active_worker_task(self, unit, kind):
+        reference = unit.get("active_task")
+        if reference is None:
+            return None
+        if (
+            not isinstance(reference, dict)
+            or set(reference) != {"id", "kind"}
+            or reference.get("kind") != kind
+        ):
+            raise st.IllegalTransition(
+                "unit %s has an incompatible active task" % st.unit_key(unit)
+            )
+        record = tasks.task_record(self.state, reference.get("id"))
+        if record["order"]["task_executor"] != "worker":
+            raise st.IllegalTransition("the active task is not a Worker task")
+        if record["result"] is not None:
+            raise st.IllegalTransition("the active Worker task is terminal")
+        return record
+
+    def _admit_worker_task(
+        self,
+        unit,
+        kind,
+        prompt,
+        family,
+        model=None,
+        effort=None,
+        dispatch_resolver=None,
+        output_directory=None,
+        project_context=None,
+        project_safeguards=None,
+        validate_opts=None,
+    ):
+        """Durably freeze one Worker scheduling decision before dispatch."""
+        active = self._active_worker_task(unit, kind)
+        if active is not None:
+            return active
+        staffing_family, staffing_model, staffing_effort = family, model, effort
+        if dispatch_resolver is not None:
+            staffing_family, staffing_model, staffing_effort = (
+                dispatch_resolver()
+            )
+        defaults = self._family_defaults(staffing_family)
+        staffing_model = staffing_model or defaults[0]
+        staffing_effort = staffing_effort or defaults[1]
+        context = {
+            "task_kind": kind,
+            "unit": st.unit_key(unit),
+            # These options are the machine-readable half of the admitted
+            # prompt contract. A later strategy change may govern successor
+            # tasks, but cannot make recovery validate this frozen request
+            # against requirements it never carried.
+            "worker_validation": json.loads(json.dumps(
+                validate_opts or {},
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=False,
+                allow_nan=False,
+            )),
+        }
+        if kind == contracts.KIND_REVIEW_ROUND:
+            # Freeze only the strategy decisions this review consumes after a
+            # validated result. Live model-profile dispatch and hot authority
+            # retain their separate call-time/episode boundaries.
+            context["worker_result_policy"] = self._worker_result_policy(unit)
+        if project_context is not None:
+            context["project_context"] = copy.deepcopy(project_context)
+        elif project_safeguards is not None:
+            # Compatibility for callers draining the first Slice 3 shape.
+            context["project_safeguards"] = copy.deepcopy(
+                project_safeguards
+            )
+        request = {
+            "work_area": self._task_work_area(),
+            "request": prompt,
+            "context": context,
+            "reference_documents": [],
+        }
+        if output_directory is not None:
+            request["output_directory"] = output_directory
+        record = tasks.admit_task(
+            self.state,
+            {
+                "task_executor": "worker",
+                "configuration": {},
+                "request": request,
+            },
+            {
+                "worker": {
+                    "agent": staffing_family,
+                    "model": staffing_model,
+                    "effort": staffing_effort,
+                }
+            },
+            self.workspace,
+        )
+        unit["active_task"] = {"id": record["id"], "kind": kind}
+        self._save()
+        return record
+
+    def _worker_result_policy(self, unit):
+        """Project the current strategy decisions owned by one Worker task."""
+        threshold = str(self.config.get("p3_defer_max_risk") or "low")
+        if threshold not in contracts.DRIFT_RISK_LEVELS:
+            threshold = "low"
+        return {
+            "defer_scope": list(
+                interpreter.defer_scope_for(self.state, unit["kind"])
+            ),
+            "p3_reclassify_debt": bool(
+                self.config.get("p3_reclassify_debt")
+            ),
+            "p3_defer_max_risk": threshold,
+            "gap_backstop": bool(interpreter.gap_semantics(self.state)),
+        }
+
+    def _worker_task_result_policy(self, record, unit):
+        """Recover frozen post-result strategy, with pre-field compatibility."""
+        context = ((record.get("order") or {}).get("request") or {}).get(
+            "context"
+        ) or {}
+        frozen = context.get("worker_result_policy")
+        if frozen is None:
+            return self._worker_result_policy(unit)
+        if not isinstance(frozen, dict):
+            raise st.IllegalTransition(
+                "Worker task has malformed frozen result policy"
+            )
+        scope = frozen.get("defer_scope")
+        threshold = frozen.get("p3_defer_max_risk")
+        if (
+            not isinstance(scope, list)
+            or any(item not in contracts.SEVERITIES for item in scope)
+            or threshold not in contracts.DRIFT_RISK_LEVELS
+            or not isinstance(frozen.get("p3_reclassify_debt"), bool)
+            or not isinstance(frozen.get("gap_backstop"), bool)
+        ):
+            raise st.IllegalTransition(
+                "Worker task has malformed frozen result policy"
+            )
+        return copy.deepcopy(frozen)
+
+    def _worker_task_project_inputs(
+        self, record, project_context=None, extensions=None, roots=None
+    ):
+        """Recover project prompt and enforcement inputs from task admission."""
+        request = record["order"]["request"]
+        context = request.get("context") or {}
+        frozen_context = context.get("project_context")
+        policies = None
+        if frozen_context is not None:
+            project_context = copy.deepcopy(frozen_context)
+            policies = project_context.get("safeguards") or []
+        elif "project_safeguards" in context:
+            # The first Slice 3 record shape froze policies and roots but not
+            # the already-rendered reuse-source projection. Reconstruct the
+            # available inherited context without reopening the project store.
+            policies = context.get("project_safeguards") or []
+            work_area = request.get("work_area") or {}
+            project_context = {
+                "project": work_area.get("project"),
+                "work_area": work_area.get("work_area"),
+                "primary": copy.deepcopy(work_area.get("primary")),
+                "additional": copy.deepcopy(work_area.get("additional") or []),
+                "reuse_sources": None,
+                "safeguards": copy.deepcopy(policies),
+            }
+        if policies is None:
+            return project_context, extensions, roots
+        work_area = request.get("work_area") or {}
+        primary = work_area.get("primary") or {}
+        additional = work_area.get("additional") or []
+        def root_path(root):
+            return root.get("path") if isinstance(root, dict) else root
+
+        frozen_roots = [root_path(primary)] + [
+            root_path(root) for root in additional
+        ]
+        if any(not isinstance(path, str) or not path for path in frozen_roots):
+            raise st.IllegalTransition(
+                "Worker task has incomplete frozen project roots"
+            )
+        frozen_extensions = verifiers.compile_extensions(policies)
+        if self._record_safeguards_seen(policies):
+            # Keep the existing before-dispatch ledger guarantee after moving
+            # safeguard authority behind durable task admission.
+            self._save()
+        return project_context, frozen_extensions, frozen_roots
+
+    def _worker_task_enforcement(self, record, extensions, roots):
+        """Recover the validators that accompanied the frozen Worker prompt."""
+        _project_context, extensions, roots = (
+            self._worker_task_project_inputs(
+                record, extensions=extensions, roots=roots
+            )
+        )
+        return extensions, roots
+
+    @staticmethod
+    def _worker_task_validate_opts(record, fallback=None):
+        """Recover prompt-aligned validation frozen at task admission.
+
+        Records admitted by the first Slice 3 implementation did not carry
+        this internal context member. Keep those historical records usable by
+        retaining their prior fallback behavior; every new task freezes the
+        value, including an explicit empty option set.
+        """
+        context = ((record.get("order") or {}).get("request") or {}).get(
+            "context"
+        ) or {}
+        if "worker_validation" not in context:
+            return copy.deepcopy(fallback)
+        frozen = context["worker_validation"]
+        if not isinstance(frozen, dict):
+            raise st.IllegalTransition(
+                "Worker task has invalid frozen validation options"
+            )
+        return copy.deepcopy(frozen) or None
+
+    def _terminalize_worker_task(
+        self,
+        unit,
+        native_result,
+        result=None,
+        status="success",
+        reason=None,
+        task_id=None,
+    ):
+        """Record one accepted outcome without changing legacy unstamped work."""
+        if task_id is None:
+            task_id = getattr(result, "task_id", None)
+        if task_id is None:
+            return None
+        if status == "failure":
+            origin_signal = getattr(result, "origin_rethink_signal", None)
+            if origin_signal is not None:
+                native_result = origin_signal
+        envelope = tasks.worker_result(
+            self.state,
+            task_id,
+            copy.deepcopy(native_result),
+            status=status,
+            reason=reason,
+        )
+        record = tasks.record_task_result(self.state, task_id, envelope)
+        reference = unit.get("active_task")
+        if isinstance(reference, dict) and reference.get("id") == task_id:
+            unit.pop("active_task", None)
+        return record
+
+    def _fail_waiting_worker_task(self, unit, wait, reason):
+        origin = wait.get("origin") or {}
+        return self._fail_worker_task_if_open(
+            unit,
+            wait.get("signal"),
+            task_id=origin.get("task_id"),
+            reason=reason,
+        )
+
+    def _fail_worker_task_if_open(
+        self, unit, native_result, reason, result=None, task_id=None
+    ):
+        if task_id is None:
+            task_id = getattr(result, "task_id", None)
+        if task_id is None:
+            return None
+        record = tasks.task_record(self.state, task_id)
+        if record["result"] is not None:
+            return record
+        return self._terminalize_worker_task(
+            unit,
+            native_result,
+            result=result,
+            status="failure",
+            reason=reason,
+            task_id=task_id,
+        )
 
     def _worker_task_fields(self, kind=None, family=None, label=None,
                             result=None):
@@ -3099,7 +3492,11 @@ class Driver(object):
             self._record_repair(raw_name, kind, actual_family, result)
             result.raw_path = raw_path
             return None, result, raw_path
-        raw_path = self._save_raw(raw_name, result.text)
+        raw_path = (
+            self._save_raw_noclobber(raw_name, result.text)
+            if kind in contracts.REPORT_KINDS
+            else self._save_raw(raw_name, result.text)
+        )
         actual_family, _actual_model, _actual_effort = self._result_identity(
             result, call_family, call_model, call_effort
         )
@@ -3575,9 +3972,51 @@ class Driver(object):
             context["retained_authority_encoding"] = "base64"
         return context
 
-    def _rollback_design_correction(self, unit, reason, correction=None):
+    def _rollback_design_correction(
+        self, unit, reason, correction=None, abandon_active_task=False
+    ):
         """Discard the provisional fixer delta and retry without authority."""
         correction = correction or unit.get("design_correction") or {}
+        if abandon_active_task:
+            reference = unit.get("active_task")
+            if isinstance(reference, dict):
+                task_id = reference.get("id")
+                native_result = None
+                resume = unit.get("brainstorming_resume")
+                if (
+                    isinstance(resume, dict)
+                    and resume.get("kind") == reference.get("kind")
+                    and resume.get("task_id") in (None, task_id)
+                ):
+                    if resume.get("task_id") == task_id:
+                        native_result = copy.deepcopy(
+                            resume.get("origin_rethink_signal")
+                        )
+                        # The continuation call completed and its accounting
+                        # is durable only in this carrier until ordinary
+                        # consumption records a draft/round.  Abandonment is
+                        # that carrier's terminal consumer, so move the known
+                        # charge into the existing unaccepted-call home before
+                        # deleting it.  Task and unit/run projections then see
+                        # the same underlying call once.
+                        self._record_worker_unaccepted(
+                            unit,
+                            resume["kind"],
+                            resume.get("family"),
+                            self._resume_result(resume),
+                            "completed continuation abandoned because "
+                            "provisional design authority became unusable",
+                        )
+                    unit.pop("brainstorming_resume", None)
+                self._fail_worker_task_if_open(
+                    unit,
+                    native_result,
+                    task_id=task_id,
+                    reason=(
+                        "provisional design authority became unusable before "
+                        "the Worker invocation completed: %s" % reason
+                    ),
+                )
         baseline = correction.get("baseline") or {}
         try:
             gitops.restore_to_snapshot(
@@ -3962,10 +4401,6 @@ class Driver(object):
                 kind=kind, family=family, label=raw_name, result=result
             ),
         )
-        # The paid origin call is complete before session creation begins.
-        # Persist its time now so a crash in the independent-session handoff
-        # cannot erase the call and make a later at-least-once retry hide it.
-        self._save()
         try:
             checked = brainstorming_milestone.validate_origin_signal(
                 signal,
@@ -3978,6 +4413,51 @@ class Driver(object):
                     {"findings": [copy.deepcopy(checked["finding"])]},
                     kind,
                 )
+                self._terminalize_worker_task(
+                    unit,
+                    signal,
+                    result=result,
+                    status="failure",
+                    reason=(
+                        "%s requested design help instead of returning its "
+                        "contracted review" % kind
+                    ),
+                )
+                # A review origin is terminal before the independent discussion
+                # is attached. Later review work must admit a fresh task.
+        except StopStep:
+            self._fail_worker_task_if_open(
+                unit,
+                signal,
+                result=result,
+                reason="need_rethink attachment failed",
+            )
+            self._save()
+            raise
+        except Exception as exc:
+            self._fail_worker_task_if_open(
+                unit,
+                signal,
+                result=result,
+                reason="need_rethink attachment failed: %s" % exc,
+            )
+            st.fail_run(
+                self.state,
+                "need_rethink could not create its independent session: %s"
+                % exc,
+                unit=unit,
+                type_="brainstorming_operational",
+            )
+            self._save()
+            raise StopStep("Brainstorming session creation failed")
+
+        # The paid origin call is complete before session creation begins.
+        # Persist its accounting now so a crash in the independent-session
+        # handoff cannot erase it. A non-continuable review's failed task result
+        # is part of this same write: no restart may reuse that task id merely
+        # because the discussion was not attached yet.
+        self._save()
+        try:
             provider_ref = getattr(result, "session_ref", None)
             if (
                 kind in contracts.RETHINK_CONTINUATION_KINDS
@@ -3994,6 +4474,9 @@ class Driver(object):
                 "amendments": self._amendments(record_seen=False),
             }
             if self._rethink_requests_design_amendment(checked):
+                # The attached discussion is independent non-Worker activity.
+                # Its briefing reads project law when the session starts; the
+                # origin task's frozen context governs only Worker execution.
                 project_context, _extensions, _roots = (
                     self._project_prompt_inputs(
                         unit, kind, record_seen=False
@@ -4034,9 +4517,21 @@ class Driver(object):
             # The origin call was already recorded above. Persist only the
             # structural failure here; report/fix callers instead add their
             # worker_unaccepted accounting before their single save.
+            self._fail_worker_task_if_open(
+                unit,
+                signal,
+                result=result,
+                reason="need_rethink attachment failed",
+            )
             self._save()
             raise
         except Exception as exc:
+            self._fail_worker_task_if_open(
+                unit,
+                signal,
+                result=result,
+                reason="need_rethink attachment failed: %s" % exc,
+            )
             st.fail_run(
                 self.state,
                 "need_rethink could not create its independent session: %s"
@@ -4118,6 +4613,10 @@ class Driver(object):
         result.origin_model = record.get("model")
         result.origin_effort = record.get("effort")
         result.origin_pre_snapshot = copy.deepcopy(record.get("pre_snapshot"))
+        if record.get("origin_rethink_signal") is not None:
+            result.origin_rethink_signal = copy.deepcopy(
+                record["origin_rethink_signal"]
+            )
         if record.get("task_id") is not None:
             result.task_id = record["task_id"]
         return result
@@ -4528,6 +5027,12 @@ class Driver(object):
                 raise StopStep("Brainstorming inspection failed")
             unit.pop("brainstorming_wait", None)
             origin_kind = (wait.get("origin") or {}).get("kind")
+            if origin_kind in contracts.RETHINK_CONTINUATION_KINDS:
+                self._fail_waiting_worker_task(
+                    unit,
+                    wait,
+                    "attached Brainstorming session is missing",
+                )
             st.append_event(
                 self.state,
                 "brainstorming_missing_detached",
@@ -4559,6 +5064,14 @@ class Driver(object):
                 cost_partial=getattr(exc, "work_cost_partial", False),
             )
             unit.pop("brainstorming_wait", None)
+            if (wait.get("origin") or {}).get("kind") \
+                    in contracts.RETHINK_CONTINUATION_KINDS:
+                self._fail_waiting_worker_task(
+                    unit,
+                    wait,
+                    "attached Brainstorming session ended operationally: %s"
+                    % exc,
+                )
             if (wait.get("origin") or {}).get("kind") \
                     == "guarantee_calibration":
                 unit["guarantee_calibration"] = {
@@ -4655,6 +5168,12 @@ class Driver(object):
         if handoff["result"]["outcome"] == "failure":
             if self._modern_design_updates():
                 unit.pop("brainstorming_wait", None)
+                if kind in contracts.RETHINK_CONTINUATION_KINDS:
+                    self._fail_waiting_worker_task(
+                        unit,
+                        wait,
+                        "focused design discussion ended without agreement",
+                    )
                 st.append_event(
                     self.state,
                     "brainstorming_failure_routed",
@@ -4678,6 +5197,12 @@ class Driver(object):
                 # A discussion failure cannot broaden the ordinary fixer-gap
                 # route. Preserve the fix episode and stop before any unwind.
                 unit.pop("brainstorming_wait", None)
+                self._fail_waiting_worker_task(
+                    unit,
+                    wait,
+                    "focused design discussion could not be adopted by the "
+                    "fixer route",
+                )
                 st.fail_run(
                     self.state,
                     "Brainstorming failed for a fixer outside the supported "
@@ -4691,6 +5216,12 @@ class Driver(object):
                     "Brainstorming fixer failure outside gap envelope"
                 )
             unit.pop("brainstorming_wait", None)
+            if kind in contracts.RETHINK_CONTINUATION_KINDS:
+                self._fail_waiting_worker_task(
+                    unit,
+                    wait,
+                    "focused design discussion routed the work elsewhere",
+                )
             st.append_event(
                 self.state,
                 "brainstorming_failure_routed",
@@ -4760,6 +5291,12 @@ class Driver(object):
                         )
                 except brainstorming_milestone.AdapterError as exc:
                     unit.pop("brainstorming_wait", None)
+                    self._fail_waiting_worker_task(
+                        unit,
+                        wait,
+                        "accepted design amendment could not be adopted: %s"
+                        % exc,
+                    )
                     st.fail_run(
                         self.state,
                         "accepted Brainstorming amendment could not be "
@@ -4779,23 +5316,72 @@ class Driver(object):
                 )
                 else None
             )
-            amendments = self._amendments()
-            battery = (
-                interpreter.battery_questions(self.state, unit["kind"])
-                if kind == contracts.KIND_DRAFT_SLICE_NOTE
-                else None
+            task_id = origin.get("task_id")
+            task = (
+                tasks.task_record(self.state, task_id)
+                if task_id is not None else None
             )
-            verification_repair = (
-                kind == contracts.KIND_FIX_FINDINGS
-                and (unit.get("fix_source") or {}).get("type")
-                == "verification"
+            authority = self._worker_episode_authority(unit, kind)
+            episode_authority = prompts.worker_episode_authority_block(
+                authority["amendments"],
+                authority["project_context"],
+                authority["operator_complete"],
+            )
+            if task is not None:
+                # Keep strategy and the admitted request frozen, while the
+                # continuation itself is a new live-authority episode.
+                validate_opts = self._worker_task_validate_opts(task)
+                project_context = authority["project_context"]
+                extensions = authority["extensions"]
+                roots = authority["roots"]
+                original_request = task["order"]["request"]["request"]
+                amendments = None
+            else:
+                # Compatibility for a pre-task retained wait.
+                amendments = None
+                current_battery = (
+                    interpreter.battery_questions(self.state, unit["kind"])
+                    if kind == contracts.KIND_DRAFT_SLICE_NOTE
+                    else None
+                )
+                current_verification_repair = (
+                    kind == contracts.KIND_FIX_FINDINGS
+                    and (unit.get("fix_source") or {}).get("type")
+                    == "verification"
+                )
+                validate_opts = {
+                    **(
+                        {"allow_design_correction": True}
+                        if design_context
+                        and design_context.get("mode") == "offer"
+                        else {}
+                    ),
+                    **(
+                        {"battery_questions": current_battery}
+                        if current_battery else {}
+                    ),
+                    **(
+                        {"require_failure_gap": True}
+                        if self._legacy_failure_gap_required(unit, kind)
+                        else {}
+                    ),
+                    **(
+                        {"verification_repair": True}
+                        if current_verification_repair else {}
+                    ),
+                } or None
+                project_context = authority["project_context"]
+                extensions = authority["extensions"]
+                roots = authority["roots"]
+                original_request = None
+            validation = validate_opts or {}
+            battery = validation.get("battery_questions")
+            verification_repair = bool(
+                validation.get("verification_repair")
             )
             verification_commands = (
                 self._verification_commands(unit)
-                if verification_repair else None
-            )
-            project_context, extensions, roots = (
-                self._project_prompt_inputs(unit, kind)
+                if verification_repair and original_request is None else None
             )
             prompt = prompts.build_rethink_continuation(
                 kind,
@@ -4807,8 +5393,7 @@ class Driver(object):
                     active_home=self.model_profiles_home,
                 ),
                 allow_design_correction=bool(
-                    design_context
-                    and design_context.get("mode") == "offer"
+                    validation.get("allow_design_correction")
                 ),
                 amendments=amendments,
                 project_context=project_context,
@@ -4828,8 +5413,11 @@ class Driver(object):
                 unit_kind=unit["kind"],
                 gap_enabled=(
                     self._fixer_gap_enabled(unit)
-                    if verification_repair else False
+                    if verification_repair and original_request is None
+                    else False
                 ),
+                original_request=original_request,
+                episode_authority=episode_authority,
             )
             durable_stabilization_size = None
             if kind == contracts.KIND_IMPLEMENT:
@@ -4869,31 +5457,11 @@ class Driver(object):
                     prompt = self._implementation_stabilizer_prompt(
                         prompt, durable_stabilization_size
                     )
+            self._activate_worker_episode_authority(authority)
             raw_name = "%s-rethink-return" % origin["raw_name"]
             design_before = (
                 self._snapshot() if unit.get("design_update") else None
             )
-            validate_opts = {
-                **(
-                    {"allow_design_correction": True}
-                    if design_context
-                    and design_context.get("mode") == "offer"
-                    else {}
-                ),
-                **(
-                    {"battery_questions": battery}
-                    if battery else {}
-                ),
-                **(
-                    {"require_failure_gap": True}
-                    if self._legacy_failure_gap_required(unit, kind)
-                    else {}
-                ),
-                **(
-                    {"verification_repair": True}
-                    if verification_repair else {}
-                ),
-            } or None
             implementation_size = None
             implementation_stabilized = False
             seed_usage = getattr(
@@ -4950,6 +5518,11 @@ class Driver(object):
                     ),
                     continuation_family=origin["family"],
                     task_id=origin.get("task_id"),
+                    episode_refresher=lambda next_prompt: (
+                        self._refresh_worker_episode(
+                            unit, kind, next_prompt
+                        )
+                    ),
                 )
                 if durable_stabilization_size is not None:
                     implementation_size = durable_stabilization_size
@@ -5046,6 +5619,7 @@ class Driver(object):
                 "model": current_model,
                 "effort": current_effort,
                 "pre_snapshot": continued_pre_snapshot,
+                "origin_rethink_signal": copy.deepcopy(wait["signal"]),
                 **(
                     {"task_id": origin["task_id"]}
                     if origin.get("task_id") is not None else {}
@@ -5152,6 +5726,13 @@ class Driver(object):
             )
             if detail:
                 reason += ": %s" % detail[:500]
+            self._terminalize_worker_task(
+                unit,
+                output,
+                result=result,
+                status="failure",
+                reason=reason,
+            )
             st.fail_run(
                 self.state,
                 reason,
@@ -5172,9 +5753,20 @@ class Driver(object):
             self._record_worker_unaccepted(
                 unit, kind, family, result, "worker reported blocked"
             )
+            reason = "%s worker blocked: %s" % (
+                kind,
+                output.get("blocked_reason"),
+            )
+            self._terminalize_worker_task(
+                unit,
+                output,
+                result=result,
+                status="failure",
+                reason=reason,
+            )
             st.fail_run(
                 self.state,
-                "%s worker blocked: %s" % (kind, output.get("blocked_reason")),
+                reason,
                 unit=unit, type_="worker_blocked",
             )
             self._save()
@@ -5184,10 +5776,20 @@ class Driver(object):
             self._record_worker_unaccepted(
                 unit, kind, family, result, "worker reported blocking findings"
             )
+            reason = "%s reported blocked findings needing the operator: %s" % (
+                kind,
+                "; ".join(f["summary"] for f in blocked),
+            )
+            self._terminalize_worker_task(
+                unit,
+                output,
+                result=result,
+                status="failure",
+                reason=reason,
+            )
             st.fail_run(
                 self.state,
-                "%s reported blocked findings needing the operator: %s"
-                % (kind, "; ".join(f["summary"] for f in blocked)),
+                reason,
                 unit=unit, type_="worker_blocked",
             )
             self._save()
@@ -5537,28 +6139,49 @@ class Driver(object):
                 reason="recovered pending unit with recorded draft",
             )
             return "recorded draft recovered; review cycle opened"
-        # Skeleton drafts (and re-drafts on remodel) run the `skeletoner`
-        # act — one operator-chosen model for all skeleton content work,
-        # default claude-fable-5/max; slice docs keep `drafter`, impl keeps
-        # `implementer`. Only skeleton REVIEWS stay on the review families.
-        if unit["kind"] == st.UNIT_SKELETON:
-            act = "skeletoner"
-            family, model, effort = self._skeletoner_profile()
-        else:
-            act = "implementer" if unit["kind"] == st.UNIT_SLICE_IMPL \
-                else "drafter"
-            family, model, effort = self._act_profile(act)
-        goal = self._goal_for(unit)
-        amendments = self._amendments()
         kind = {
             st.UNIT_SKELETON: contracts.KIND_DRAFT_SKELETON,
             st.UNIT_SLICE_DOC: contracts.KIND_DRAFT_SLICE_NOTE,
             st.UNIT_SLICE_IMPL: contracts.KIND_IMPLEMENT,
         }[unit["kind"]]
-        dispatch_resolver = self._dispatch_for_worker_kind(unit, kind)
-        project_context, extensions, roots = self._project_prompt_inputs(
-            unit, kind
-        )
+        active_task = self._active_worker_task(unit, kind)
+        carrier = unit.get("brainstorming_resume") or {}
+        has_validated_carrier = bool(carrier)
+        # A synchronously validated carrier already records the physical call's
+        # identity.  Consume that evidence before consulting current staffing;
+        # profile availability is relevant only when another dispatch may run.
+        if has_validated_carrier:
+            family = (
+                carrier.get("family")
+                or self.config["families_order"][0]
+            )
+            model = carrier.get("model")
+            effort = carrier.get("effort")
+            dispatch_resolver = None
+        else:
+            # Skeleton drafts (and re-drafts on remodel) run the `skeletoner`
+            # act; slice docs keep `drafter`, implementation keeps
+            # `implementer`. Only skeleton reviews use the review families.
+            if unit["kind"] == st.UNIT_SKELETON:
+                family, model, effort = self._skeletoner_profile()
+            else:
+                act = (
+                    "implementer"
+                    if unit["kind"] == st.UNIT_SLICE_IMPL else "drafter"
+                )
+                family, model, effort = self._act_profile(act)
+            dispatch_resolver = self._dispatch_for_worker_kind(unit, kind)
+        goal = self._goal_for(unit)
+        authority = None
+        if not has_validated_carrier:
+            authority = self._worker_episode_authority(unit, kind)
+            amendments = authority["amendments"]
+            project_context = authority["project_context"]
+            extensions = authority["extensions"]
+            roots = authority["roots"]
+        else:
+            amendments = []
+            project_context = extensions = roots = None
         # Reform profiles hand builders the gap exit (stop-report-repair-
         # resume); legacy/profile-less builders never see it. A profile
         # asking for the lay+hard-table register gets the two-register
@@ -5569,7 +6192,11 @@ class Driver(object):
         gap_enabled = self._legacy_gap_enabled()
         two_register = interpreter.doc_register(self.state) == "lay+hard-table"
         battery = interpreter.battery_questions(self.state, unit["kind"])
-        if unit["kind"] == st.UNIT_SKELETON:
+        if active_task is not None:
+            prompt = active_task["order"]["request"]["request"]
+            if authority is not None:
+                prompt = self._worker_episode_prompt(prompt, authority)
+        elif unit["kind"] == st.UNIT_SKELETON:
             prompt = prompts.build_draft_skeleton(
                 family, self.workspace, goal, amendments=amendments,
                 artifact_path=ledgers.skeleton_path(self.state),
@@ -5737,36 +6364,77 @@ class Driver(object):
                 ),
             } or None
             start_session = kind in contracts.RETHINK_CONTINUATION_KINDS
+            task = self._admit_worker_task(
+                unit,
+                kind,
+                prompt,
+                family,
+                model=model,
+                effort=effort,
+                dispatch_resolver=dispatch_resolver,
+                project_context=project_context,
+                validate_opts=validate_opts,
+            )
+            self._activate_worker_episode_authority(authority)
+            validate_opts = self._worker_task_validate_opts(
+                task, validate_opts
+            )
             if kind == contracts.KIND_IMPLEMENT:
+                def dispatch(request):
+                    # The admitted order is immutable scheduling history. A
+                    # later Worker episode decorates this physical call
+                    # without rewriting the frozen request in that order.
+                    call_prompt = prompt
+                    return self._call_implementation(
+                        family,
+                        call_prompt,
+                        raw_name,
+                        model,
+                        effort,
+                        extensions,
+                        roots,
+                        validate_opts,
+                        start_session,
+                        (implementation_attempt or {}).get("tree") or pre_tree,
+                        stabilizing=stabilization_size is not None,
+                        dispatch_resolver=dispatch_resolver,
+                        task_id=task["id"],
+                        episode_refresher=lambda next_prompt: (
+                            self._refresh_worker_episode(
+                                unit, kind, next_prompt
+                            )
+                        ),
+                    )
+
                 (
                     output,
                     result,
                     raw_path,
                     implementation_size,
                     implementation_stabilized,
-                ) = self._call_implementation(
-                    family,
-                    prompt,
-                    raw_name,
-                    model,
-                    effort,
-                    extensions,
-                    roots,
-                    validate_opts,
-                    start_session,
-                    (implementation_attempt or {}).get("tree") or pre_tree,
-                    stabilizing=stabilization_size is not None,
-                    dispatch_resolver=dispatch_resolver,
+                ) = tasks.execute_worker(
+                    task,
+                    dispatch,
                 )
                 if stabilization_size is not None:
                     implementation_size = stabilization_size
             else:
-                output, result, raw_path = self._call(
-                    family, prompt, kind, raw_name,
-                    model=model, effort=effort, extensions=extensions,
-                    roots=roots, validate_opts=validate_opts,
-                    start_session=start_session,
-                    dispatch_resolver=dispatch_resolver,
+                output, result, raw_path = tasks.execute_worker(
+                    task,
+                    lambda _request: self._call(
+                        family,
+                        prompt,
+                        kind,
+                        raw_name,
+                        model=model,
+                        effort=effort,
+                        extensions=extensions,
+                        roots=roots,
+                        validate_opts=validate_opts,
+                        start_session=start_session,
+                        dispatch_resolver=dispatch_resolver,
+                        task_id=task["id"],
+                    ),
                 )
             family, model, effort = self._result_identity(
                 result, family, model, effort
@@ -5820,6 +6488,7 @@ class Driver(object):
                                         result, "cost_partial", False
                                     ),
                                     task_id=getattr(result, "task_id", None),
+                                    result=result,
                                     pre_tree=pre_tree, pre_head=pre_head,
                                     pre_sym=pre_sym, pre_refs=pre_refs,
                                     pre_stash=pre_stash)
@@ -5856,6 +6525,7 @@ class Driver(object):
                             or getattr(result, "cost", None) is None
                         ),
                         task_id=getattr(result, "task_id", None))
+        self._terminalize_worker_task(unit, output, result=result)
         if kind == contracts.KIND_IMPLEMENT and output.get("suite_command"):
             st.set_discovered_suite(self.state, output["suite_command"])
         if unit["kind"] == st.UNIT_SKELETON:
@@ -5978,7 +6648,8 @@ class Driver(object):
                     token_usage_partial=False, cost=None, cost_partial=False,
                     pre_tree=None,
                     pre_head=None, pre_sym=None, pre_refs=None, pre_stash=None,
-                    pre_worktree_tree=None, from_fixer=False, task_id=None):
+                    pre_worktree_tree=None, from_fixer=False, task_id=None,
+                    result=None):
         gaps = output.get("gaps", [])
         st.append_event(
             self.state, "gap_reported", unit=st.unit_key(unit),
@@ -5995,6 +6666,14 @@ class Driver(object):
                    for k in ("classification", "forced_decision", "plain")}
                   for g in gaps],
             **self._task_id_fields(task_id),
+        )
+        self._terminalize_worker_task(
+            unit,
+            output,
+            status="failure",
+            reason="Worker routed the scheduling decision to gap handling",
+            task_id=task_id,
+            result=result,
         )
         # Persist the validated gap BEFORE any cleanup or routing. From the
         # moment the worker returns a gap, a crash must RE-ROUTE it on restart,
@@ -7128,7 +7807,9 @@ class Driver(object):
     def _report_call(self, unit, family, prompt, kind, raw_name,
                      extensions=None, roots=None, validate_opts=None,
                      model=None, effort=None, dispatch_resolver=None,
-                     task_id=None):
+                     task_id=None, output_directory=None,
+                     project_context=None,
+                     project_safeguards=None):
         """Run a report-only call.
 
         Report-only remains the CONTRACT — reviewers are told not to edit,
@@ -7138,12 +7819,42 @@ class Driver(object):
         report-only rounds the check never once caught a reviewer editing
         code, while its false positives (artifact churn a reviewer's own
         build or test run wrote) repeatedly discarded good reviews."""
-        output, result, raw_path = self._call(
-            family, prompt, kind, raw_name, model=model, effort=effort,
-            extensions=extensions, roots=roots, validate_opts=validate_opts,
-            dispatch_resolver=dispatch_resolver,
-            task_id=task_id,
-        )
+        task = None
+        if task_id is None:
+            task = self._admit_worker_task(
+                unit,
+                kind,
+                prompt,
+                family,
+                model=model,
+                effort=effort,
+                dispatch_resolver=dispatch_resolver,
+                output_directory=output_directory,
+                project_context=project_context,
+                project_safeguards=project_safeguards,
+                validate_opts=validate_opts,
+            )
+            task_id = task["id"]
+        else:
+            task = tasks.task_record(self.state, task_id)
+        validate_opts = self._worker_task_validate_opts(task, validate_opts)
+
+        def dispatch(_request):
+            return self._call(
+                family,
+                prompt,
+                kind,
+                raw_name,
+                model=model,
+                effort=effort,
+                extensions=extensions,
+                roots=roots,
+                validate_opts=validate_opts,
+                dispatch_resolver=dispatch_resolver,
+                task_id=task_id,
+            )
+
+        output, result, raw_path = tasks.execute_worker(task, dispatch)
         return output, result, raw_path
 
     def _do_fix(self):
@@ -7164,39 +7875,60 @@ class Driver(object):
             )
             self._save()
             raise StopStep("fix loop cap")
-        if unit["kind"] == st.UNIT_SKELETON:
-            # The skeleton is drafted, fixed, and re-drafted by ONE
-            # operator-chosen model (the `skeletoner` act, default
-            # claude-fable-5/max); only its reviews stay on the review
-            # families. So a skeleton fix runs `skeletoner`, not `fixer`.
-            family, fix_model, fix_effort = self._skeletoner_profile(
-                source.get("family")
-            )
-        else:
-            family, fix_model, fix_effort = self._act_profile(
-                "fixer", source.get("family"), default_family="codex"
-            )
-        dispatch_resolver = self._dispatch_for_worker_kind(
-            unit,
-            contracts.KIND_FIX_FINDINGS,
-            origin_family=source.get("family"),
-        )
-        consultation_family = self._resolve_act("consultation", family)
-        # The consultation runs at the fixer's own effort — its family
-        # default when the act pins none.
-        _fixer_model, fixer_family_effort = self._family_defaults(family)
-        consultation_cmd = self._consultation_command(
-            consultation_family,
-            fix_effort or fixer_family_effort,
-            caller_act=(
-                "skeletoner"
-                if unit["kind"] == st.UNIT_SKELETON else "fixer"
-            ),
-            caller_origin=source.get("family"),
-        )
-        project_context, extensions, roots = self._project_prompt_inputs(
+        active_task = self._active_worker_task(
             unit, contracts.KIND_FIX_FINDINGS
         )
+        carrier = unit.get("brainstorming_resume") or {}
+        has_validated_carrier = bool(carrier)
+        if has_validated_carrier:
+            family = (
+                carrier.get("family")
+                or source.get("family")
+                or self.config["families_order"][0]
+            )
+            fix_model = carrier.get("model")
+            fix_effort = carrier.get("effort")
+            dispatch_resolver = None
+            consultation_family = family
+            consultation_cmd = None
+        else:
+            if unit["kind"] == st.UNIT_SKELETON:
+                # Skeleton content uses the operator-selected `skeletoner`;
+                # only its reviews use the review families.
+                family, fix_model, fix_effort = self._skeletoner_profile(
+                    source.get("family")
+                )
+            else:
+                family, fix_model, fix_effort = self._act_profile(
+                    "fixer", source.get("family"), default_family="codex"
+                )
+            dispatch_resolver = self._dispatch_for_worker_kind(
+                unit,
+                contracts.KIND_FIX_FINDINGS,
+                origin_family=source.get("family"),
+            )
+            consultation_family = self._resolve_act("consultation", family)
+            # Consultation uses the fixer's effort, or its family default.
+            _fixer_model, fixer_family_effort = self._family_defaults(family)
+            consultation_cmd = self._consultation_command(
+                consultation_family,
+                fix_effort or fixer_family_effort,
+                caller_act=(
+                    "skeletoner"
+                    if unit["kind"] == st.UNIT_SKELETON else "fixer"
+                ),
+                caller_origin=source.get("family"),
+            )
+        authority = None
+        if not has_validated_carrier:
+            authority = self._worker_episode_authority(
+                unit, contracts.KIND_FIX_FINDINGS
+            )
+            project_context = authority["project_context"]
+            extensions = authority["extensions"]
+            roots = authority["roots"]
+        else:
+            project_context = extensions = roots = None
         # New runs amend design through need_rethink and the ordinary review
         # cycle. Keep the old one-note envelope only for an already-persisted
         # correction episode.
@@ -7221,7 +7953,10 @@ class Driver(object):
             )
             if correction_error:
                 return self._rollback_design_correction(
-                    unit, correction_error, design_context
+                    unit,
+                    correction_error,
+                    design_context,
+                    abandon_active_task=True,
                 )
             try:
                 design_context = self._design_correction_review_context(
@@ -7233,8 +7968,17 @@ class Driver(object):
                     "the retained Brainstorming authority could not be read: "
                     "%s" % exc,
                     design_context,
+                    abandon_active_task=True,
                 )
-        prompt = prompts.build_fix_findings(
+        killed_notice = bool(unit.get("killed_fix_notice"))
+        if active_task is not None:
+            prompt = active_task["order"]["request"]["request"]
+            if authority is not None:
+                prompt = self._worker_episode_prompt(prompt, authority)
+        elif has_validated_carrier:
+            prompt = ""
+        else:
+            prompt = prompts.build_fix_findings(
             family,
             self.workspace,
             self._goal_for(unit),
@@ -7244,9 +7988,9 @@ class Driver(object):
             consultation_family,
             consultation_cmd,
             unit_kind=unit["kind"],
-            amendments=self._amendments(),
+            amendments=(authority or {}).get("amendments"),
             phantom_retry=bool(unit.get("phantom_retried")),
-            killed_notice=bool(unit.pop("killed_fix_notice", None)),
+            killed_notice=killed_notice,
             project_context=project_context,
             debt=self._debt(unit),
             repair_artifact=(
@@ -7282,7 +8026,7 @@ class Driver(object):
             verification_repair=verification_repair,
             verification_commands=verification_commands,
             implementation_scope=self._implementation_scope(unit),
-        )
+            )
         n_fix = 1 + len(
             [r for r in unit["rounds"] if r["kind"] == contracts.KIND_FIX_FINDINGS]
         )
@@ -7329,39 +8073,69 @@ class Driver(object):
             pre_worktree_tree = original_pre.get("worktree_tree")
             pre_stash = original_pre.get("stash")
         else:
-            output, result, raw_path = self._call(
-                family,
-                prompt,
+            validate_opts = (
+                {
+                    **(
+                        {"allow_design_correction": True}
+                        if design_context
+                        and design_context.get("mode") == "offer"
+                        else {}
+                    ),
+                    **(
+                        {"require_failure_gap": True}
+                        if self._legacy_failure_gap_required(
+                            unit, contracts.KIND_FIX_FINDINGS
+                        )
+                        else {}
+                    ),
+                    **(
+                        {"verification_repair": True}
+                        if verification_repair else {}
+                    ),
+                } or None
+            )
+            task = self._admit_worker_task(
+                unit,
                 contracts.KIND_FIX_FINDINGS,
-                raw_name,
+                prompt,
+                family,
                 model=fix_model,
                 effort=fix_effort,
-                extensions=extensions,
-                roots=roots,
-                validate_opts=(
-                    {
-                        **(
-                            {"allow_design_correction": True}
-                            if design_context
-                            and design_context.get("mode") == "offer"
-                            else {}
-                        ),
-                        **(
-                            {"require_failure_gap": True}
-                            if self._legacy_failure_gap_required(
-                                unit, contracts.KIND_FIX_FINDINGS
-                            )
-                            else {}
-                        ),
-                        **(
-                            {"verification_repair": True}
-                            if verification_repair else {}
-                        ),
-                    } or None
-                ),
-                start_session=True,
                 dispatch_resolver=dispatch_resolver,
+                project_context=project_context,
+                validate_opts=validate_opts,
             )
+            self._activate_worker_episode_authority(authority)
+            validate_opts = self._worker_task_validate_opts(
+                task, validate_opts
+            )
+            def dispatch(_request):
+                call_prompt = prompt
+                if killed_notice:
+                    call_prompt = prompts.attach_killed_call_notice(
+                        call_prompt
+                    )
+                return self._call(
+                    family,
+                    call_prompt,
+                    contracts.KIND_FIX_FINDINGS,
+                    raw_name,
+                    model=fix_model,
+                    effort=fix_effort,
+                    extensions=extensions,
+                    roots=roots,
+                    validate_opts=validate_opts,
+                    start_session=True,
+                    dispatch_resolver=dispatch_resolver,
+                    task_id=task["id"],
+                )
+
+            output, result, raw_path = tasks.execute_worker(
+                task,
+                dispatch,
+            )
+            if killed_notice:
+                unit.pop("killed_fix_notice", None)
             family, fix_model, fix_effort = self._result_identity(
                 result, family, fix_model, fix_effort
             )
@@ -7393,6 +8167,12 @@ class Driver(object):
                 self._record_worker_unaccepted(
                     unit, contracts.KIND_FIX_FINDINGS, family, result,
                     "rethink requester modified protected artifacts",
+                )
+                self._fail_worker_task_if_open(
+                    unit,
+                    output,
+                    result=result,
+                    reason="rethink requester modified protected artifacts",
                 )
                 st.fail_run(
                     self.state,
@@ -7453,6 +8233,12 @@ class Driver(object):
                     unit, contracts.KIND_FIX_FINDINGS, family, result,
                     "fixer gap outside supported envelope",
                 )
+                self._fail_worker_task_if_open(
+                    unit,
+                    output,
+                    result=result,
+                    reason="fixer gap was outside the supported envelope",
+                )
                 st.fail_run(
                     self.state,
                     "%s returned a contradiction gap outside the supported "
@@ -7485,6 +8271,7 @@ class Driver(object):
                                         result, "cost_partial", False
                                     ),
                                     task_id=getattr(result, "task_id", None),
+                                    result=result,
                                     pre_tree=pre_tree, pre_head=pre_head,
                                     pre_sym=pre_sym, pre_refs=pre_refs,
                                     pre_stash=pre_stash,
@@ -7510,6 +8297,9 @@ class Driver(object):
                 reason = "fixer left an unsupported git mutation: %s" % exc
                 self._record_worker_unaccepted(
                     unit, contracts.KIND_FIX_FINDINGS, family, result, reason
+                )
+                self._fail_worker_task_if_open(
+                    unit, output, result=result, reason=reason
                 )
                 st.fail_run(
                     self.state, reason, unit=unit,
@@ -7538,6 +8328,9 @@ class Driver(object):
                 self._record_worker_unaccepted(
                     unit, contracts.KIND_FIX_FINDINGS, family, result, reason
                 )
+                self._fail_worker_task_if_open(
+                    unit, output, result=result, reason=reason
+                )
                 st.fail_run(
                     self.state, reason, unit=unit, type_="worker_protocol"
                 )
@@ -7552,6 +8345,9 @@ class Driver(object):
                 self._record_worker_unaccepted(
                     unit, contracts.KIND_FIX_FINDINGS, family, result, exc
                 )
+                self._fail_worker_task_if_open(
+                    unit, output, result=result, reason=str(exc)
+                )
                 st.fail_run(self.state, str(exc), unit=unit)
                 self._save()
                 raise StopStep(str(exc))
@@ -7561,6 +8357,9 @@ class Driver(object):
             except StopStep as exc:
                 self._record_worker_unaccepted(
                     unit, contracts.KIND_FIX_FINDINGS, family, result, exc
+                )
+                self._fail_worker_task_if_open(
+                    unit, output, result=result, reason=str(exc)
                 )
                 self._save()
                 raise
@@ -7577,6 +8376,9 @@ class Driver(object):
                 self._record_worker_unaccepted(
                     unit, contracts.KIND_FIX_FINDINGS, family, result,
                     correction_error,
+                )
+                self._fail_worker_task_if_open(
+                    unit, output, result=result, reason=correction_error
                 )
                 return self._rollback_design_correction(
                     unit, correction_error, active_correction
@@ -7607,6 +8409,9 @@ class Driver(object):
                 self._record_worker_unaccepted(
                     unit, contracts.KIND_FIX_FINDINGS, family, result,
                     correction_error,
+                )
+                self._fail_worker_task_if_open(
+                    unit, output, result=result, reason=correction_error
                 )
                 return self._rollback_design_correction(
                     unit, correction_error, candidate
@@ -7688,6 +8493,7 @@ class Driver(object):
                 ),
             },
         )
+        self._terminalize_worker_task(unit, output, result=result)
         if verification_repair:
             # The fixer owns the complete suite in this episode. Its `ok`
             # certifies the final workspace bytes; bind that assertion to the
@@ -7888,7 +8694,10 @@ class Driver(object):
             )
             if correction_error:
                 return self._rollback_design_correction(
-                    unit, correction_error, provisional
+                    unit,
+                    correction_error,
+                    provisional,
+                    abandon_active_task=True,
                 )
             try:
                 review_correction = self._design_correction_review_context(
@@ -7900,6 +8709,7 @@ class Driver(object):
                     "the retained Brainstorming authority could not be read: "
                     "%s" % exc,
                     provisional,
+                    abandon_active_task=True,
                 )
         source = unit.get("fix_source") or {}
         # The delta convergence checkpoint (delta_full_review_after_fixes)
@@ -7922,10 +8732,25 @@ class Driver(object):
             self._save()
             raise StopStep(str(exc))
         if not delta.strip():
+            empty_delta_reason = (
+                "the proposed correction left no delta to ratify"
+                if provisional
+                else "delta review was abandoned because no pending delta remained"
+            )
+            active_task = self._active_worker_task(
+                unit, contracts.KIND_DELTA_REVIEW
+            )
+            if active_task is not None:
+                self._fail_worker_task_if_open(
+                    unit,
+                    None,
+                    task_id=active_task["id"],
+                    reason=empty_delta_reason,
+                )
             if provisional:
                 return self._rollback_design_correction(
                     unit,
-                    "the proposed correction left no delta to ratify",
+                    empty_delta_reason,
                     provisional,
                 )
             # An all-rejections episode leaves no delta: nothing to amend.
@@ -7969,6 +8794,11 @@ class Driver(object):
                 )
                 self._save()
                 raise StopStep("fixer claimed edits with an empty delta")
+            review_handoff = unit.get("brainstorming_review_handoff") or {}
+            if review_handoff.get("kind") == contracts.KIND_DELTA_REVIEW:
+                self._consume_brainstorming_review_handoff(
+                    unit, contracts.KIND_DELTA_REVIEW
+                )
             unit.pop("phantom_retried", None)
             unit["fix_queue"] = []
             unit["fix_source"] = None
@@ -8060,36 +8890,48 @@ class Driver(object):
         family, delta_model, delta_effort = self._delta_review_profile(
             fixer_family
         )
-        project_context, extensions, roots = self._project_prompt_inputs(
+        active_task = self._active_worker_task(
             unit, contracts.KIND_DELTA_REVIEW
         )
-        prompt = prompts.build_delta_review(
-            family,
-            self.workspace,
-            self._goal_for(unit),
-            self._unit_desc(unit),
-            self._registry(),
-            unit_kind=unit["kind"],
-            governing=self._governing(unit),
-            amendments=self._amendments(),
-            project_context=project_context,
-            debt=self._debt(unit),
-            wave_docs=self._wave_doc_paths(unit),
-            gap_enabled=self._legacy_gap_enabled(),
-            design_correction=review_correction,
-            editable_design_paths=self._design_review_paths(unit),
-            implementation_scope=self._implementation_scope(unit),
+        authority = self._worker_episode_authority(
+            unit, contracts.KIND_DELTA_REVIEW
         )
+        project_context = authority["project_context"]
+        extensions = authority["extensions"]
+        roots = authority["roots"]
+        if active_task is None:
+            prompt = prompts.build_delta_review(
+                family,
+                self.workspace,
+                self._goal_for(unit),
+                self._unit_desc(unit),
+                self._registry(),
+                unit_kind=unit["kind"],
+                governing=self._governing(unit),
+                amendments=authority["amendments"],
+                project_context=project_context,
+                debt=self._debt(unit),
+                wave_docs=self._wave_doc_paths(unit),
+                gap_enabled=self._legacy_gap_enabled(),
+                design_correction=review_correction,
+                editable_design_paths=self._design_review_paths(unit),
+                implementation_scope=self._implementation_scope(unit),
+            )
+        else:
+            prompt = self._worker_episode_prompt(
+                active_task["order"]["request"]["request"], authority
+            )
         rethink_handoff = self._brainstorming_review_handoff(
             unit, contracts.KIND_DELTA_REVIEW
         )
-        if rethink_handoff is not None:
+        if rethink_handoff is not None and active_task is None:
             prompt = prompts.attach_rethink_review_handoff(
                 prompt, rethink_handoff
             )
         n_delta = 1 + len(
             [r for r in unit["rounds"] if r["kind"] == contracts.KIND_DELTA_REVIEW]
         )
+        self._activate_worker_episode_authority(authority)
         output, result, raw_path = self._report_call(
             unit,
             family,
@@ -8117,6 +8959,8 @@ class Driver(object):
                 origin_family=family,
                 fixed_family=family,
             ),
+            task_id=(active_task or {}).get("id"),
+            project_context=project_context,
         )
         family, delta_model, delta_effort = self._result_identity(
             result, family, delta_model, delta_effort
@@ -8148,6 +8992,9 @@ class Driver(object):
             self._record_worker_unaccepted(
                 unit, contracts.KIND_DELTA_REVIEW, family, result, exc
             )
+            self._fail_worker_task_if_open(
+                unit, output, result=result, reason=str(exc)
+            )
             self._save()
             raise
         st.record_round(
@@ -8171,6 +9018,7 @@ class Driver(object):
             meta={"model": delta_model, "effort": delta_effort},
             task_id=getattr(result, "task_id", None),
         )
+        self._terminalize_worker_task(unit, output, result=result)
         if provisional:
             verdict = output["design_correction_verdict"]
             decision = verdict["decision"]
@@ -8568,7 +9416,13 @@ class Driver(object):
         self._clear_busy()
 
     def _partition_defer_candidates(
-        self, unit, items, source_round=None, parent_call=None
+        self,
+        unit,
+        items,
+        source_round=None,
+        parent_call=None,
+        defer_threshold=None,
+        gap_backstop=None,
     ):
         """Rate candidates independently and split debt from fix work.
 
@@ -8580,7 +9434,11 @@ class Driver(object):
         debt = []
         retained = []
         levels = contracts.DRIFT_RISK_LEVELS
-        threshold = str(self.config.get("p3_defer_max_risk") or "low")
+        threshold = str(
+            defer_threshold
+            if defer_threshold is not None
+            else self.config.get("p3_defer_max_risk") or "low"
+        )
         if threshold not in levels:
             threshold = "low"
         try:
@@ -8636,15 +9494,20 @@ class Driver(object):
                     # the builder can come back), encoded in the judge.
                     # Legacy/profile-less prompts stay byte-identical.
                     builder_desc = None
-                    gap_backstop = interpreter.gap_semantics(self.state)
-                    if gap_backstop:
+                    effective_gap_backstop = (
+                        bool(gap_backstop)
+                        if gap_backstop is not None
+                        else interpreter.gap_semantics(self.state)
+                    )
+                    if effective_gap_backstop:
                         builder_desc = self._builders_desc()
                     prompt = prompts.build_reclassify(
                         opp, self.workspace, finding, self._artifact(unit),
                         unit_kind=unit["kind"], amendments=self._amendments(),
                         project_context=pc,
-                        builder_desc=builder_desc, gap_backstop=gap_backstop,
-                        two_axis=gap_backstop,
+                        builder_desc=builder_desc,
+                        gap_backstop=effective_gap_backstop,
+                        two_axis=effective_gap_backstop,
                         raising_family=(
                             raising_family
                             if self.model_profiles_home is not None else None
@@ -8717,7 +9580,7 @@ class Driver(object):
                                 effort=effective_effort,
                                 validate_opts=(
                                     {"require_drift_damage": True}
-                                    if gap_backstop else None
+                                    if effective_gap_backstop else None
                                 ),
                                 resolve_dispatch=resolve_rater,
                                 on_dispatch=lambda f, m, e: (
@@ -8778,7 +9641,7 @@ class Driver(object):
                             risk = output.get("drift_risk")
                             damage = output.get("drift_damage")
                             reason = str(output.get("reason") or "")[:300]
-                            gate = damage if gap_backstop else risk
+                            gate = damage if effective_gap_backstop else risk
                             defer_ok = (
                                 gate in levels
                                 and levels.index(gate)
@@ -8846,21 +9709,58 @@ class Driver(object):
 
     def _do_review_round(self):
         unit = st.current_unit(self.state)
+        review_inputs = self._review_evidence_inputs(unit)
         (
             evidence_fingerprint,
             project_context,
             extensions,
             roots,
             amendments,
-        ) = self._review_evidence_inputs(unit)
+        ) = review_inputs[:5]
+        operator_complete = (
+            bool(review_inputs[5]) if len(review_inputs) > 5 else False
+        )
+        active_review = self._active_worker_task(
+            unit, contracts.KIND_REVIEW_ROUND
+        )
         bound_fingerprint = unit.get("review_evidence_fingerprint")
-        if bound_fingerprint is None:
-            unit["review_evidence_fingerprint"] = evidence_fingerprint
-        elif bound_fingerprint != evidence_fingerprint:
+        if (
+            bound_fingerprint is None
+            and int(unit.get("family_index") or 0) > 0
+        ):
+            # Supported pre-field schema-2 state can carry review progress
+            # without the evidence binding later families need.  Preserve its
+            # history, but restart before dispatch so no family is skipped and
+            # no unbound round can contribute to sealing.
             st.restart_reviews_after_candidate_change(
                 self.state,
                 unit,
-                "candidate bytes or governing context changed between "
+                "advanced review progress lacked an evidence fingerprint",
+            )
+            st.transition_unit(
+                self.state,
+                unit,
+                st.U_PRE_REVIEW_VERIFY,
+                reason="unbound review progress restarted at family zero",
+            )
+            return "unbound review progress; cycle restarted"
+        if bound_fingerprint is None:
+            unit["review_evidence_fingerprint"] = evidence_fingerprint
+        elif bound_fingerprint != evidence_fingerprint:
+            if active_review is not None:
+                self._fail_worker_task_if_open(
+                    unit,
+                    None,
+                    task_id=active_review["id"],
+                    reason=(
+                        "review evidence changed before the review "
+                        "invocation completed"
+                    ),
+                )
+            st.restart_reviews_after_candidate_change(
+                self.state,
+                unit,
+                "candidate bytes or frozen execution plan changed between "
                 "reviewer calls",
             )
             st.transition_unit(
@@ -8871,9 +9771,13 @@ class Driver(object):
                         "invalidated"),
             )
             return "review evidence changed; cycle restarted"
-        self._record_amendments_seen(amendments)
-        if project_context is not None:
-            self._record_safeguards_seen(project_context["safeguards"])
+        authority = {
+            "amendments": amendments,
+            "operator_complete": operator_complete,
+            "project_context": project_context,
+            "extensions": extensions,
+            "roots": roots,
+        }
         family = st.current_family(self.state, unit)
         if family is None:
             raise st.IllegalTransition("rounds status with no family left")
@@ -8926,10 +9830,14 @@ class Driver(object):
             editable_design_paths=self._design_review_paths(unit),
             implementation_scope=self._implementation_scope(unit),
         )
+        if active_review is not None:
+            prompt = self._worker_episode_prompt(
+                active_review["order"]["request"]["request"], authority
+            )
         rethink_handoff = self._brainstorming_review_handoff(
             unit, contracts.KIND_REVIEW_ROUND
         )
-        if rethink_handoff is not None:
+        if rethink_handoff is not None and active_review is None:
             prompt = prompts.attach_rethink_review_handoff(
                 prompt, rethink_handoff
             )
@@ -8943,6 +9851,7 @@ class Driver(object):
                 if r["kind"] == contracts.KIND_REVIEW_ROUND
             ]
         )
+        self._activate_worker_episode_authority(authority)
         output, result, raw_path = self._report_call(
             unit,
             family,
@@ -8959,6 +9868,8 @@ class Driver(object):
                 origin_family=family,
                 fixed_family=family,
             ),
+            task_id=(active_review or {}).get("id"),
+            project_context=project_context,
         )
         family, review_model, review_effort = self._result_identity(
             result, family, review_model, review_effort
@@ -8990,20 +9901,27 @@ class Driver(object):
             self._record_worker_unaccepted(
                 unit, contracts.KIND_REVIEW_ROUND, family, result, exc
             )
+            self._fail_worker_task_if_open(
+                unit, output, result=result, reason=str(exc)
+            )
             self._save()
             raise
         findings = output.get("findings", [])
-        # Debt deferral: the profile/phase chooses the deferrable severity
-        # scope (interpreter.defer_scope_for): the DOC phase rates P3
+        review_task = tasks.task_record(
+            self.state, getattr(result, "task_id", None)
+        )
+        result_policy = self._worker_task_result_policy(review_task, unit)
+        # Debt deferral: the task's admitted profile/phase chooses the
+        # deferrable severity scope. The DOC phase rates P3
         # (legacy) or P2/P3 (reform); the IMPL phase rates P3 only (a code
         # P2 always fixes). P0/P1 always fix. Candidates are rated
         # independently: one serious finding must not drag cheap, accepted
         # debt into the fix queue with it.
-        defer_scope = interpreter.defer_scope_for(self.state, unit["kind"])
+        defer_scope = tuple(result_policy["defer_scope"])
         deferred = []
         fix_findings = list(findings)
         if (findings
-                and self.config.get("p3_reclassify_debt")
+                and result_policy["p3_reclassify_debt"]
                 and defer_scope):
             candidates = [
                 (f, family) for f in findings
@@ -9025,6 +9943,8 @@ class Driver(object):
                     parent_call=(
                         contracts.KIND_REVIEW_ROUND, family, result
                     ),
+                    defer_threshold=result_policy["p3_defer_max_risk"],
+                    gap_backstop=result_policy["gap_backstop"],
                 )
                 retained_ids = {f.get("id") for f, _family in retained}
                 fix_findings = [
@@ -9055,6 +9975,7 @@ class Driver(object):
             meta=round_meta,
             task_id=getattr(result, "task_id", None),
         )
+        self._terminalize_worker_task(unit, output, result=result)
         if deferred:
             st.record_debt(self.state, unit, deferred, "round", rec["id"])
         if not findings:

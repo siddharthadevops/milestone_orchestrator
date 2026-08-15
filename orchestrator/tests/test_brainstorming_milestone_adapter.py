@@ -17,6 +17,7 @@ from orchestrator import contracts
 from orchestrator import driver as drv
 from orchestrator import runners
 from orchestrator import state as st
+from orchestrator import tasks
 from orchestrator import verifiers
 from orchestrator.tests.test_driver_fixes import make_config
 
@@ -2201,7 +2202,7 @@ class MilestoneDriverRethinkTest(unittest.TestCase):
 
         def crash_on_outer_save():
             saves.append(len(saves) + 1)
-            if len(saves) == 3:
+            if len(saves) == 4:
                 raise KeyboardInterrupt()
             original_save()
 
@@ -2708,7 +2709,8 @@ class MilestoneDriverRethinkTest(unittest.TestCase):
         drv.Driver(path, runner=runner).step()
 
         continuation = runner.calls[1][2]
-        self.assertIn("FULL-SUITE REPAIR CONTINUES", continuation)
+        self.assertIn("FULL-SUITE REPAIR", continuation)
+        self.assertIn("RETHINK CONTINUATION", continuation)
         self.assertIn(command, continuation)
         self.assertIn("SUITE FAILURE JUDGMENT", continuation)
         self.assertIn("affected party", continuation)
@@ -2818,7 +2820,8 @@ class MilestoneDriverRethinkTest(unittest.TestCase):
         )
         self.assertEqual(merged[-1]["authority"], "brainstorming_design")
         self.assertEqual(merged[-1]["text"], handoff["retained_target"]["content"])
-        self.assertIn(handoff["retained_target"]["content"], runner.calls[1][2])
+        self.assertIn("Necessary semantic detail.", runner.calls[1][2])
+        self.assertIn("RETHINK CONTINUATION", runner.calls[1][2])
         self.assertEqual(unit["status"], st.U_ROUNDS)
         self.assertEqual(unit["fix_queue"], [])
         self.assertEqual(
@@ -2827,9 +2830,7 @@ class MilestoneDriverRethinkTest(unittest.TestCase):
         self.assertFalse(
             any(event["type"] == "phantom_fix_retry" for event in state["events"])
         )
-        self.assertIn(
-            "ACCEPTED BRAINSTORMING DESIGN AMENDMENTS", runner.calls[1][2]
-        )
+        self.assertIn("retained_target", runner.calls[1][2])
         self.assertEqual(
             runner.session_calls,
             [
@@ -2860,36 +2861,53 @@ class MilestoneDriverRethinkTest(unittest.TestCase):
 
     def test_continuation_receives_current_amendments_and_project_law(self):
         path = self._state_path()
-        policy = {
-            "id": "current-guard",
-            "version": 2,
+        admitted_policy = {
+            "id": "admitted-guard",
+            "version": 1,
             "enabled": True,
             "scope": {
                 "kinds": [contracts.KIND_IMPLEMENT],
                 "unit_kinds": [st.UNIT_SLICE_IMPL],
             },
-            "prompt": "Record the currently binding implementation check.",
+            "prompt": "Record the admitted implementation check.",
+            "contract": {
+                "field": "admitted_audit",
+                "required": True,
+                "entry": {"note": {"type": "string"}},
+                "checks": [{"kind": "non_empty", "field": "note"}],
+            },
+        }
+        admitted_extension = verifiers.compile_policy(admitted_policy)
+        admitted_context = {
+            "project": "orchestrators",
+            "work_area": "implementation",
+            "primary": {"path": self.workspace},
+            "additional": [],
+            "reuse_sources": None,
+            "safeguards": [admitted_policy],
+        }
+        current_policy = copy.deepcopy(admitted_policy)
+        current_policy.update({
+            "id": "current-guard",
+            "version": 2,
+            "prompt": "Record the current implementation check.",
             "contract": {
                 "field": "current_audit",
                 "required": True,
                 "entry": {"note": {"type": "string"}},
                 "checks": [{"kind": "non_empty", "field": "note"}],
             },
-        }
-        extension = verifiers.compile_policy(policy)
-        project_context = {
-            "project": "orchestrators",
-            "work_area": "implementation",
-            "primary": {"path": self.workspace},
-            "additional": [],
-            "reuse_sources": None,
-            "safeguards": [policy],
-        }
+        })
+        current_extension = verifiers.compile_policy(current_policy)
+        current_context = copy.deepcopy(admitted_context)
+        current_context["safeguards"] = [current_policy]
+        origin = rethink(contracts.KIND_IMPLEMENT)
+        origin["admitted_audit"] = [{"note": "checked admitted law"}]
         runner = runners.MockRunner(
             [
                 {
                     "expect_kind": contracts.KIND_IMPLEMENT,
-                    "response": rethink(contracts.KIND_IMPLEMENT),
+                    "response": origin,
                 },
                 {
                     "expect_kind": contracts.KIND_IMPLEMENT,
@@ -2902,8 +2920,19 @@ class MilestoneDriverRethinkTest(unittest.TestCase):
                 },
             ]
         )
-        with mock.patch.object(
-            adapter, "create_session", return_value=self._created()
+        with (
+            mock.patch.object(
+                adapter, "create_session", return_value=self._created()
+            ),
+            mock.patch.object(
+                drv.Driver,
+                "_project_prompt_inputs",
+                return_value=(
+                    admitted_context,
+                    [admitted_extension],
+                    [self.workspace],
+                ),
+            ),
         ):
             drv.Driver(path, runner=runner).step()
 
@@ -2923,8 +2952,8 @@ class MilestoneDriverRethinkTest(unittest.TestCase):
                 resumed,
                 "_project_prompt_inputs",
                 return_value=(
-                    project_context,
-                    [extension],
+                    current_context,
+                    [current_extension],
                     [self.workspace],
                 ),
             ),
@@ -2932,19 +2961,78 @@ class MilestoneDriverRethinkTest(unittest.TestCase):
             resumed.step()
 
         continuation_prompt = runner.calls[1][2]
-        self.assertIn("OPERATOR AMENDMENTS", continuation_prompt)
-        self.assertIn(
-            "[A-live] Use the newly selected behavior.", continuation_prompt
-        )
+        self.assertIn("[A-live]", continuation_prompt)
+        self.assertIn("WORKER EPISODE AUTHORITY REFRESH", continuation_prompt)
         self.assertIn("PROJECT CONTEXT", continuation_prompt)
         self.assertIn("SAFEGUARD current-guard v2", continuation_prompt)
-        self.assertIn("REQUIRED OUTPUT FIELD 'current_audit'", continuation_prompt)
+        self.assertIn(
+            "REQUIRED OUTPUT FIELD 'current_audit'", continuation_prompt
+        )
         self.assertEqual(
             runner.session_calls[-1],
             ("continue", "codex", "mock-session-1"),
         )
 
-    def test_ordinary_rethink_supplies_current_amendments_to_brainstorming(self):
+    def test_attached_rethink_reads_project_law_at_session_start(self):
+        path = self._state_path()
+        runner = runners.MockRunner([{
+            "expect_kind": contracts.KIND_IMPLEMENT,
+            "response": rethink(
+                contracts.KIND_IMPLEMENT, result_mode="design_amendment"
+            ),
+        }])
+        driver = drv.Driver(path, runner=runner)
+        admitted_context = {
+            "project": "admitted-project",
+            "work_area": "implementation",
+            "primary": {"path": self.workspace},
+            "additional": [],
+            "reuse_sources": None,
+            "safeguards": [],
+        }
+        current_context = copy.deepcopy(admitted_context)
+        current_context["project"] = "current-project"
+        captured = {}
+
+        def create(*args, **kwargs):
+            captured.update(copy.deepcopy(kwargs))
+            return self._created()
+
+        with (
+            mock.patch.object(
+                driver,
+                "_worker_episode_authority",
+                return_value={
+                    "amendments": [],
+                    "operator_complete": True,
+                    "project_context": admitted_context,
+                    "extensions": [],
+                    "roots": [self.workspace],
+                },
+            ),
+            mock.patch.object(
+                driver,
+                "_project_prompt_inputs",
+                return_value=(current_context, [], [self.workspace]),
+            ),
+            mock.patch.object(adapter, "create_session", side_effect=create),
+        ):
+            driver.step()
+
+        task = tasks.task_records(driver.state)[0]
+        self.assertEqual(
+            task["order"]["request"]["context"]["project_context"]
+            ["project"],
+            "admitted-project",
+        )
+        self.assertEqual(
+            captured["authority_context"]["project_context"]["project"],
+            "current-project",
+        )
+
+    def test_ordinary_rethink_preserves_valid_amendment_siblings_for_brainstorming(
+        self,
+    ):
         path = self._state_path()
         runner = runners.MockRunner([
             {
@@ -2958,7 +3046,7 @@ class MilestoneDriverRethinkTest(unittest.TestCase):
         with open(amendments_path, "w", encoding="utf-8") as handle:
             handle.write(
                 '{"amendments":[{"id":"A-live","text":'
-                '"Use the selected behavior."}]}'
+                '"Use the selected behavior."},{"id":"A-broken"}]}'
             )
         captured = {}
 
@@ -2969,6 +3057,7 @@ class MilestoneDriverRethinkTest(unittest.TestCase):
         with mock.patch.object(adapter, "create_session", side_effect=create):
             driver.step()
 
+        self.assertNotIn("[A-live]", runner.calls[0][2])
         self.assertEqual(
             captured["authority_context"]["amendments"],
             [{"id": "A-live", "text": "Use the selected behavior."}],

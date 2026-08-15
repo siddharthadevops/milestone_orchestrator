@@ -1120,7 +1120,7 @@ def seal_predicate_reviews(unit, families, current_fingerprint=None):
     """The seal predicate over the ledger. Returns the list
     of review-round ids that SATISFY it — every family's most recent
     whole-artifact review is clean (or clean-with-deferred-debt) AND on the
-    CURRENT bytes and hot governing context — or None when it is not
+    CURRENT bytes and immutable execution plan — or None when it is not
     satisfied (a family never reviewed in the current cycle, its latest look
     is dirty, or its evidence fingerprint is stale).
 

@@ -886,8 +886,17 @@ class TestFailedCallAccounting(DriverTestCase):
             driver = drv.Driver(
                 path, runner=runners.MockRunner([skeleton_script()[0]])
             )
+            original_save = st.save
+            saves = []
+
+            def fail_after_task_admission(*args, **kwargs):
+                saves.append(True)
+                if len(saves) > 1:
+                    raise OSError("state unavailable")
+                return original_save(*args, **kwargs)
+
             with mock.patch.object(
-                st, "save", side_effect=OSError("state unavailable")
+                st, "save", side_effect=fail_after_task_admission
             ), self.assertRaisesRegex(OSError, "state unavailable"):
                 driver.step()
 

@@ -16,9 +16,11 @@ dispatch authority in later slices.
 
 When a caller supplies an output directory, admission turns it into one canonical
 destination inside the writable primary workspace before freezing the order. The
-same destination is then available to either producer. Task-owned paths derived
-from that destination must remain beneath it. This is not a filesystem sandbox and
-does not prove where a full-access producer actually wrote.
+same destination is then available to either selected TaskExecutor as inherited
+context. This does not promise that it independently crosses every physical
+provider call. Task-owned paths genuinely derived from that destination must remain
+beneath it. This is not a filesystem sandbox and does not prove where a full-access
+producer actually wrote.
 
 Worker costs remain where they are already recorded. A task id links those existing
 records to their task so task accounting can be shown without charging the same
@@ -46,8 +48,10 @@ sequencing. Those later consumers receive the durable record built here.
   history, and competing terminalizations can accept only the first result.
 - **Strict — destination boundary:** a supplied output directory is canonicalized
   against the caller-resolved writable primary workspace before admission. An
-  outside destination is refused. Any path task machinery derives from the field
-  remains beneath the admitted destination.
+  outside destination is refused. The canonical value is frozen for the selected
+  TaskExecutor as inherited context. Any path task machinery derives from the
+  field remains beneath the admitted destination; no physical Worker-call channel
+  is created here.
 - **Strict — attribution and arithmetic:** new Worker records belong to a task only
   through an explicit task id carried from the pre-dispatch marker. Known duration,
   token, and cost values contribute once; missing evidence sets the matching partial

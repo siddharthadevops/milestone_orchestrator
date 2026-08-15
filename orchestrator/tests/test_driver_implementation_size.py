@@ -2291,6 +2291,19 @@ class DriverImplementationSizeTest(unittest.TestCase):
                     builder.call_args.kwargs["implementation_scope"], expected
                 )
 
+            # The injected call stopped after task admission. This test now
+            # changes lifecycle stages only to inspect prompt wiring, so close
+            # that synthetic probe without rewriting append-only task history.
+            admitted = continuation["active_task"]["id"]
+            driver._terminalize_worker_task(
+                continuation,
+                {"probe": "implementation prompt reached"},
+                status="failure",
+                reason="synthetic prompt-wiring probe stopped",
+                task_id=admitted,
+            )
+            driver._save()
+
             continuation["status"] = st.U_ROUNDS
             continuation["family_index"] = 0
             with mock.patch.object(
@@ -2331,6 +2344,16 @@ class DriverImplementationSizeTest(unittest.TestCase):
                 self.assertEqual(
                     builder.call_args.kwargs["implementation_scope"], expected
                 )
+
+            admitted = continuation["active_task"]["id"]
+            driver._terminalize_worker_task(
+                continuation,
+                {"probe": "fix prompt reached"},
+                status="failure",
+                reason="synthetic prompt-wiring probe stopped",
+                task_id=admitted,
+            )
+            driver._save()
 
             continuation["status"] = st.U_DELTA_REVIEW
             with mock.patch.object(
