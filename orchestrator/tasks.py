@@ -19,6 +19,15 @@ INVALID_TASK_REQUEST = "invalid_task_request"
 _MISSING = object()
 _RESULT_STATUSES = ("success", "failure")
 _COST_FIELDS = ("api_usd", "real_usd")
+_WORKER_ACCOUNTING_EVENTS = frozenset({
+    "brainstorming_origin_recorded",
+    "error_classifier_call",
+    "gap_reported",
+    "implementation_size_interrupted",
+    "worker_interrupted",
+    "worker_malformed",
+    "worker_unaccepted",
+})
 
 _TASK_EXECUTORS = (
     {
@@ -388,6 +397,101 @@ def record_persisted_task_result(state_path, task_id, result):
         state_path,
         lambda state: record_task_result(state, task_id, result),
     )
+
+
+def task_accounting(state, task_id):
+    """Project one Worker's linked accounting without creating a ledger."""
+    task_record(state, task_id)
+    duration_s = 0.0
+    token_usage = None
+    token_usage_partial = False
+    cost = None
+    cost_partial = False
+    linked = False
+
+    def account(record, missing_is_partial=False):
+        nonlocal duration_s, token_usage, token_usage_partial
+        nonlocal cost, cost_partial, linked
+        if record.get("task_id") != task_id:
+            return
+        linked = True
+        duration = st._completed_duration(record.get("duration_s"))
+        duration_s += duration
+        normalized_usage = st._normalized_token_usage(
+            record.get("token_usage")
+        )
+        normalized_cost = st._normalized_cost(record.get("cost"))
+        token_usage = st._add_token_usage(token_usage, normalized_usage)
+        cost = st._add_cost(cost, normalized_cost)
+        token_usage_partial = bool(
+            token_usage_partial
+            or record.get("token_usage_partial", False)
+            or (duration > 0 and normalized_usage is None)
+            or (missing_is_partial and normalized_usage is None)
+        )
+        cost_partial = bool(
+            cost_partial
+            or record.get("cost_partial", False)
+            or (duration > 0 and normalized_cost is None)
+            or (
+                record.get("cost") is not None
+                and normalized_cost is None
+            )
+            or (missing_is_partial and normalized_cost is None)
+        )
+
+    for unit in state.get("units") or []:
+        unit_key = st.unit_key(unit)
+        stabilization = (
+            (unit.get("implementation_stabilization") or {}).get(
+                "implementation_size"
+            )
+        )
+        if (
+            isinstance(stabilization, dict)
+            and stabilization.get("task_id") == task_id
+        ):
+            episode_id = stabilization.get("episode_id")
+            has_interrupt_accounting = bool(
+                episode_id
+                and any(
+                    event.get("type")
+                    == "implementation_size_interrupted"
+                    and event.get("unit") == unit_key
+                    and event.get("episode_id") == episode_id
+                    and event.get("task_id") == task_id
+                    for event in state.get("events") or []
+                )
+            )
+            if not has_interrupt_accounting:
+                token_usage_partial = True
+                cost_partial = True
+        for draft in st._draft_history(state, unit):
+            account(draft, missing_is_partial=True)
+        for round_ in unit.get("rounds") or []:
+            account(round_, missing_is_partial=True)
+
+    for event in state.get("events") or []:
+        if event.get("type") not in _WORKER_ACCOUNTING_EVENTS:
+            continue
+        if (
+            event.get("type") == "worker_malformed"
+            and event.get("duration_s") is None
+            and event.get("token_usage") is None
+            and not event.get("fatal")
+        ):
+            continue
+        account(event)
+
+    return {
+        "duration_s": duration_s,
+        "token_usage": token_usage,
+        "token_usage_partial": bool(
+            token_usage_partial or not linked or token_usage is None
+        ),
+        "cost": cost,
+        "cost_partial": bool(cost_partial or not linked or cost is None),
+    }
 
 
 def _token_usage(value):

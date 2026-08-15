@@ -156,3 +156,23 @@
 - `claude-claude-T2A-A2` (raised claude, cleared codex): state._assert_task_history (orchestrator/state.py:379-384) adds an invariant no pinned fact asks for: a task appearing for the first time in a save must carry result: null. Any single atomic save that both appends a task and records its terminal result is refused with HistoryRewriteError('tasks[N]: a new task must be non-terminal'). That is exactly the driver's documented persistence cadence — Driver.step() saves once after the whole handler completes (orchestrator/driver.py:5167-5201; orchestrator/README.md:547-551) — so an admit -> dispatch -> terminalize handler cannot persist at all. The reviewed contract (slice-02.md:170) requires only that terminalization replace null with exactly one validated result and that terminal data then be immutable; it never requires the open state to be observed on disk first. — The invariant is a real behavioral defect confirmed by an atomic admit→terminalize→save reproduction, but it raises HistoryRewriteError on first use and correction is a small local history-check and test change.
 - `claude-claude-T2A-A3` (raised claude, cleared codex): tasks.resolve_derived_path (orchestrator/tasks.py:295) open-codes the containment predicate — os.path.commonpath([root, canonical]) == root with its own ValueError branch — instead of reusing kvstore.path_is_inside_roots, which the same unit does use for destination admission (orchestrator/tasks.py:268). The slice note pins one shared primitive for both boundaries: 'existing containment primitive orchestrator/kvstore.py:687-703' (slice-02.md:171-172) and 'The same canonical containment check runs against the already-admitted destination' (slice-02.md:219). Reuse was available at zero cost: resolve_derived_path already computes `canonical`, so it could pass it to path_is_inside_roots exactly as _canonical_output_directory does. — The artifact falsely promises shared containment reuse while the implementation duplicates the predicate, so a later helper hardening could silently bypass derived paths, but correction is a small local substitution once discovered.
 
+## slice_impl-02-b (Durable task orders and accounting)
+
+- draft: kind `implement`, artifact `-` (raw: `implementation/milestones/tasks-2/.run/raw/slice_impl-02-b-draft.txt`)
+
+| Round | Kind | Family | Findings | Triage | Raw |
+|---|---|---|---|---|---|
+| slice_impl-02-b-codex-r1 | review_round | codex | 1 | 1 reported | `implementation/milestones/tasks-2/.run/raw/slice_impl-02-b-codex-r1.txt` |
+| slice_impl-02-b-codex-r2 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/tasks-2/.run/raw/slice_impl-02-b-fix1.txt` |
+| slice_impl-02-b-codex-r3 | delta_review | codex | 0 | clean | `implementation/milestones/tasks-2/.run/raw/slice_impl-02-b-delta1.txt` |
+| slice_impl-02-b-codex-r4 | review_round | codex | 2 | 2 reported | `implementation/milestones/tasks-2/.run/raw/slice_impl-02-b-codex-r2.txt` |
+| slice_impl-02-b-codex-r5 | fix_findings | codex | 2 | 2 fixed | `implementation/milestones/tasks-2/.run/raw/slice_impl-02-b-fix2.txt` |
+| slice_impl-02-b-codex-r6 | delta_review | codex | 0 | clean | `implementation/milestones/tasks-2/.run/raw/slice_impl-02-b-delta2.txt` |
+| slice_impl-02-b-codex-r7 | review_round | codex | 0 | clean | `implementation/milestones/tasks-2/.run/raw/slice_impl-02-b-codex-r3.txt` |
+| slice_impl-02-b-claude-r1 | review_round | claude | 0 | clean | `implementation/milestones/tasks-2/.run/raw/slice_impl-02-b-claude-r1.txt` |
+
+### Review completion — SATISFIED
+
+- deterministic result: every configured family was clean or debt-clean on the same current bytes; full verification was not due at this boundary; no extra reviewer was called
+- cited reviews: `slice_impl-02-b-codex-r7`, `slice_impl-02-b-claude-r1`
+

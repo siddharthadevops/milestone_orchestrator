@@ -810,8 +810,13 @@ def set_discovered_suite(state, command, replace=False):
 
 def record_draft(state, unit, kind, result, raw_path=None, family=None,
                  duration=None, model=None, effort=None, token_usage=None,
-                 token_usage_partial=False, cost=None, cost_partial=False):
+                 token_usage_partial=False, cost=None, cost_partial=False,
+                 task_id=None):
     """Write-once record of the unit's draft/implement call."""
+    if task_id is not None and (
+        not isinstance(task_id, str) or not task_id
+    ):
+        raise IllegalTransition("task_id must be a non-empty string")
     if unit["status"] != U_PENDING:
         raise IllegalTransition(
             "unit %s: draft can only be recorded from pending (is %s)"
@@ -849,6 +854,8 @@ def record_draft(state, unit, kind, result, raw_path=None, family=None,
         unit["draft"]["cost"] = copy.deepcopy(cost)
     if cost_partial or cost is None:
         unit["draft"]["cost_partial"] = True
+    if task_id is not None:
+        unit["draft"]["task_id"] = task_id
     unit["artifact"] = result.get("artifact")
     # Keep the lightweight implementation/draft history in the immutable
     # ledger too. A unit can exceptionally be reset to pending after a
@@ -872,6 +879,7 @@ def record_draft(state, unit, kind, result, raw_path=None, family=None,
             if token_usage is not None else {}
         ),
         **({"cost": copy.deepcopy(cost)} if cost is not None else {}),
+        **({"task_id": task_id} if task_id is not None else {}),
     )
     return unit["draft"]
 
@@ -981,7 +989,7 @@ def active_fix_dirty_deltas(state, unit):
 
 def record_round(state, unit, family, kind, result, raw_path=None, duration=None,
                  meta=None, token_usage=None, token_usage_partial=False,
-                 cost=None, cost_partial=False):
+                 cost=None, cost_partial=False, task_id=None):
     """Append an immutable round record. Never edited afterwards.
 
     meta: optional extra record fields (e.g. the fixer's source round id,
@@ -1008,8 +1016,14 @@ def record_round(state, unit, family, kind, result, raw_path=None, duration=None
         rec["cost"] = copy.deepcopy(cost)
     if cost_partial or cost is None:
         rec["cost_partial"] = True
+    if meta and "task_id" in meta:
+        raise IllegalTransition("task_id must use the explicit record link")
     if meta:
         rec.update(copy.deepcopy(meta))
+    if task_id is not None:
+        if not isinstance(task_id, str) or not task_id:
+            raise IllegalTransition("task_id must be a non-empty string")
+        rec["task_id"] = task_id
     unit["rounds"].append(rec)
     event_fields = {
         "unit": unit_key(unit),
@@ -1853,6 +1867,7 @@ def _draft_history(state, unit):
             current_matched = True
         records.append({
             "kind": source.get("kind"),
+            "task_id": source.get("task_id"),
             "family": source.get("family"),
             "model": source.get("model"),
             "effort": source.get("effort"),
@@ -1870,6 +1885,7 @@ def _draft_history(state, unit):
     if current and not current_matched:
         records.append({
             "kind": current.get("kind"),
+            "task_id": current.get("task_id"),
             "family": current.get("family"),
             "model": current.get("model"),
             "effort": current.get("effort"),

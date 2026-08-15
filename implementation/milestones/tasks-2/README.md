@@ -266,4 +266,5 @@ The goal is achieved when:
 | slice_doc-01 (Task contracts and catalogue) | reviewed | 6 | satisfied | 26e5650 |
 | slice_impl-01 (Task contracts and catalogue) | reviewed | 5 | satisfied | 5260b8b |
 | slice_doc-02 (Durable task orders and accounting) | reviewed | 5 | satisfied | 9d180e4 |
-| slice_impl-02-a (Durable task orders and accounting) | reviewed | 5 | satisfied | - |
+| slice_impl-02-a (Durable task orders and accounting) | reviewed | 5 | satisfied | 8cbaafa |
+| slice_impl-02-b (Durable task orders and accounting) | reviewed | 8 | satisfied | - |

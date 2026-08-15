@@ -1343,7 +1343,7 @@ class Driver(object):
     def _implementation_scope(self, unit):
         return st.implementation_scope(self.state, unit)
 
-    def _implementation_size_control(self, base_tree):
+    def _implementation_size_control(self, base_tree, task_id=None):
         """Live Git budget monitor for one implementation call.
 
         The observer never mutates Git. It asks once for a coherent cut at the
@@ -1502,7 +1502,7 @@ class Driver(object):
             observer=observe,
             on_interrupt=lambda reason: (
                 self._persist_implementation_stabilization(
-                    marker, interrupt_reason=reason
+                    marker, interrupt_reason=reason, task_id=task_id
                 )
             ),
             on_interrupt_rejected=lambda _reason: (
@@ -1511,7 +1511,7 @@ class Driver(object):
         ), marker
 
     def _persist_implementation_stabilization(
-        self, marker, interrupt_reason=None
+        self, marker, interrupt_reason=None, task_id=None
     ):
         """Durably cross the cutoff boundary before exposing interruption."""
         unit = st.current_unit(self.state)
@@ -1519,9 +1519,10 @@ class Driver(object):
         if created:
             durable_marker = copy.deepcopy(marker)
             call = self._matching_busy_call(kind=contracts.KIND_IMPLEMENT)
-            for key in ("family", "model", "effort"):
+            for key in ("family", "model", "effort", "task_id"):
                 if key in call:
                     durable_marker[key] = copy.deepcopy(call[key])
+            durable_marker.update(self._task_id_fields(task_id))
             if interrupt_reason:
                 durable_marker["interrupt_reason"] = interrupt_reason
             unit["implementation_stabilization"] = {
@@ -1597,7 +1598,7 @@ class Driver(object):
         }
         call_fields = {
             key: copy.deepcopy(marker[key])
-            for key in ("family", "model", "effort")
+            for key in ("family", "model", "effort", "task_id")
             if key in marker
         }
         added = False
@@ -1697,8 +1698,14 @@ class Driver(object):
         self, family, prompt, raw_name, model, effort, extensions, roots,
         validate_opts, start_session, base_tree, session_ref=None,
         stabilizing=False, dispatch_resolver=None,
-        continuation_family=None,
+        continuation_family=None, task_id=None,
     ):
+        if task_id is None and stabilizing:
+            unit = st.current_unit(self.state)
+            pending = (
+                (unit or {}).get("implementation_stabilization") or {}
+            ).get("implementation_size") or {}
+            task_id = pending.get("task_id")
         if stabilizing:
             output, result, raw_path = self._call(
                 family,
@@ -1716,9 +1723,12 @@ class Driver(object):
                 repeat_protocol=True,
                 dispatch_resolver=dispatch_resolver,
                 continuation_family=continuation_family,
+                task_id=task_id,
             )
             return output, result, raw_path, None, True
-        control, marker = self._implementation_size_control(base_tree)
+        control, marker = self._implementation_size_control(
+            base_tree, task_id=task_id
+        )
         if marker is None and gitops.enabled(self.config):
             st.fail_run(
                 self.state,
@@ -1745,6 +1755,7 @@ class Driver(object):
             active_control=control,
             dispatch_resolver=dispatch_resolver,
             continuation_family=continuation_family,
+            task_id=task_id,
         )
         if marker is None:
             return output, result, raw_path, None, False
@@ -1858,6 +1869,7 @@ class Driver(object):
             confirmed=marker.get("steer_confirmed"),
             grace_kind=marker.get("grace_kind"),
             hard_crossed_lines=marker.get("hard_crossed_lines"),
+            **self._task_id_fields(interrupted_call.get("task_id")),
         )
         recovery_prompt = self._implementation_stabilizer_prompt(
             prompt, marker
@@ -1866,7 +1878,9 @@ class Driver(object):
         # before the fresh worker starts so a provider failure or driver crash
         # cannot send Resume back through the ordinary size-monitored draft.
         # The marker stays until a valid implementation delivery is recorded.
-        self._persist_implementation_stabilization(marker)
+        self._persist_implementation_stabilization(
+            marker, task_id=task_id
+        )
         output, result, raw_path = self._call(
             family,
             recovery_prompt,
@@ -1886,6 +1900,7 @@ class Driver(object):
             repeat_protocol=True,
             dispatch_resolver=dispatch_resolver,
             continuation_family=continuation_family,
+            task_id=task_id,
         )
         return output, result, raw_path, marker, True
 
@@ -1982,6 +1997,7 @@ class Driver(object):
         NOT an LLM failure and records nothing here."""
         raw_paths = list(raw_paths or [])
         call = self._matching_busy_call(kind=kind, label=raw_name)
+        task_fields = self._task_id_fields(call.get("task_id"))
         dispatches = getattr(exc, "physical_dispatches", None)
         dispatch_identities = (
             {
@@ -2030,6 +2046,7 @@ class Driver(object):
                         raw_paths[index] if index < len(raw_paths) else None
                     ),
                     raw_path2=None,
+                    **task_fields,
                 )
             return
         st.append_event(
@@ -2063,6 +2080,7 @@ class Driver(object):
             ),
             raw_path=(raw_paths or [None])[0],
             raw_path2=(raw_paths[1] if len(raw_paths or []) > 1 else None),
+            **task_fields,
         )
 
     def _consume_stale_marker(self):
@@ -2141,6 +2159,7 @@ class Driver(object):
                     or not call.get("completed")
                     or call.get("cost") is None
                 ),
+                **self._task_id_fields(call.get("task_id")),
             )
             accounted = True
         if accounted:
@@ -2415,6 +2434,30 @@ class Driver(object):
             if key != "pending_calls"
         }
 
+    @staticmethod
+    def _task_id_fields(task_id):
+        """Return the optional explicit Worker ownership link."""
+        if task_id is None:
+            return {}
+        if not isinstance(task_id, str) or not task_id:
+            raise ValueError("task_id must be a non-empty string")
+        return {"task_id": task_id}
+
+    def _worker_task_fields(self, kind=None, family=None, label=None,
+                            result=None):
+        """Read ownership only from a carried result or durable marker."""
+        task_id = getattr(result, "task_id", None)
+        if task_id is None:
+            task_id = self._matching_busy_call(
+                kind=kind, family=family, label=label
+            ).get("task_id")
+        return self._task_id_fields(task_id)
+
+    @classmethod
+    def _retain_task_id(cls, call, task_id):
+        if task_id is not None:
+            call.task_id = cls._task_id_fields(task_id)["task_id"]
+
     def _matching_busy_call(self, kind=None, family=None, label=None):
         """Find the durable ordinary call identity for an incident."""
         marker = self._read_busy()
@@ -2464,7 +2507,7 @@ class Driver(object):
             return False
 
     def _mark_busy(self, label, kind, family, model=None, effort=None,
-                   nested=False):
+                   nested=False, task_id=None):
         """Durable in-flight marker, with any unsaved parent calls.
 
         The top-level fields remain the panel's active-call projection.
@@ -2492,6 +2535,7 @@ class Driver(object):
                 "call_id": str(uuid.uuid4()),
                 "state_digest": state_digest,
             }
+            marker.update(self._task_id_fields(task_id))
             if pending:
                 marker["pending_calls"] = pending
             return self._write_busy(marker)
@@ -2689,8 +2733,10 @@ class Driver(object):
         return duration, usage, bool(partial or usage is None)
 
     def _require_busy_accounting(self, kind, family, label, call,
-                                 duration_s=None, parent_call=None):
+                                 duration_s=None, parent_call=None,
+                                 task_id=None):
         """Do not continue after losing the only crash-safe call marker."""
+        self._retain_task_id(call, task_id)
         if self._update_busy_accounting(call, duration_s=duration_s):
             return
         unit = st.current_unit(self.state)
@@ -2726,7 +2772,7 @@ class Driver(object):
               extensions=None, roots=None, validate_opts=None,
               start_session=False, session_ref=None, active_control=None,
               repeat_protocol=False, dispatch_resolver=None,
-              continuation_family=None):
+              continuation_family=None, task_id=None):
         """Validated worker call; on protocol/runner failure, fail the run
         with the explanation recorded, then re-raise as StopStep.
 
@@ -2748,7 +2794,7 @@ class Driver(object):
                 call_family, call_model, call_effort = dispatch_resolver()
             if not self._mark_busy(
                 raw_name, kind, call_family,
-                model=call_model, effort=call_effort
+                model=call_model, effort=call_effort, task_id=task_id
             ):
                 st.fail_run(
                     self.state,
@@ -2787,7 +2833,7 @@ class Driver(object):
                     result, actual_model, actual_effort, actual_family
                 )
                 self._require_busy_accounting(
-                    kind, actual_family, raw_name, result
+                    kind, actual_family, raw_name, result, task_id=task_id
                 )
             except StopStep as exc:
                 if getattr(
@@ -2802,7 +2848,7 @@ class Driver(object):
                         exc, actual_model, actual_effort, actual_family
                     )
                     self._require_busy_accounting(
-                        kind, actual_family, raw_name, exc
+                        kind, actual_family, raw_name, exc, task_id=task_id
                     )
                     proto_paths = self._save_protocol_raws(raw_name, exc)
                     self._record_fatal_malformed(
@@ -2821,7 +2867,7 @@ class Driver(object):
                     exc, actual_model, actual_effort, actual_family
                 )
                 self._require_busy_accounting(
-                    kind, actual_family, raw_name, exc
+                    kind, actual_family, raw_name, exc, task_id=task_id
                 )
                 # Slice 4's non-repairable family (the operator's policy or
                 # the environment, e.g. a missing reuse-source directory —
@@ -2853,6 +2899,7 @@ class Driver(object):
                 self._require_busy_accounting(
                     kind, actual_family, raw_name, exc,
                     duration_s=failed_duration_s,
+                    task_id=task_id,
                 )
                 proto_paths = self._save_protocol_raws(raw_name, exc)
                 if call_control is not None and call_control.interrupted:
@@ -2877,6 +2924,9 @@ class Driver(object):
                         raw_path2=(
                             proto_paths[1]
                             if len(proto_paths) > 1 else None
+                        ),
+                        **self._worker_task_fields(
+                            kind=kind, label=raw_name, result=exc
                         ),
                     )
                     raw_texts = list(
@@ -2941,6 +2991,9 @@ class Driver(object):
                         raw_path2=(
                             proto_paths[1] if len(proto_paths) > 1 else None
                         ),
+                        **self._worker_task_fields(
+                            kind=kind, label=raw_name, result=exc
+                        ),
                     )
                     self._save()
                     # A repeated stabilization is a new worker, not another
@@ -2986,6 +3039,9 @@ class Driver(object):
                     }
                     if repeat_protocol:
                         incident["stabilizer_retry"] = True
+                    incident.update(self._worker_task_fields(
+                        kind=kind, label=raw_name, result=exc
+                    ))
                     st.append_event(
                         self.state, "worker_malformed", **incident
                     )
@@ -3029,6 +3085,7 @@ class Driver(object):
                 self._clear_busy()
                 raise StopStep(str(exc))
             break
+        self._retain_task_id(result, task_id)
         if isinstance(result, runners.ControlledInterruptionResult):
             raw_text = getattr(result, "transport_text", None)
             if not isinstance(raw_text, str) or not raw_text:
@@ -3058,6 +3115,7 @@ class Driver(object):
         the wasted duration, and the raw path — the panel surfaces it as a
         chip; prompt/contract tuning needs these strikes visible."""
         call = self._matching_busy_call(kind, family, raw_name)
+        task_fields = self._task_id_fields(call.get("task_id"))
         # BOTH channels, never `or`: a repair retry that itself needed
         # delimiter recovery produced two distinct strikes, and reporting
         # only the first would hide the second.
@@ -3101,6 +3159,7 @@ class Driver(object):
                     or rep.get("token_usage") is None
                 ),
                 raw_path=raw_path,
+                **task_fields,
             )
 
     def _classify_failure(self, family, exc, raw_name=None):
@@ -3114,6 +3173,7 @@ class Driver(object):
         auditable after the fact."""
         opposite = self._opposite(family)
         cls_model, cls_effort = self._family_defaults(opposite)
+        task_id = self._matching_busy_call(label=raw_name).get("task_id")
         return errclass.classify_worker_failure(
             exc,
             runner=self.runner,
@@ -3123,14 +3183,14 @@ class Driver(object):
             on_llm_raw=self._classify_raw_saver(raw_name),
             classifier_model=cls_model,
             classifier_effort=cls_effort,
-            on_llm_call=self._classify_call_recorder(raw_name),
-            on_llm_start=self._classify_call_starter(raw_name),
+            on_llm_call=self._classify_call_recorder(raw_name, task_id),
+            on_llm_start=self._classify_call_starter(raw_name, task_id),
             resolve_dispatch=self._structural_dispatch(
                 opposite, cls_model, cls_effort
             ),
         )
 
-    def _classify_call_starter(self, raw_name):
+    def _classify_call_starter(self, raw_name, task_id=None):
         """Mark the optional classifier only when its LLM call starts."""
         def _start(call):
             if not self._mark_busy(
@@ -3140,6 +3200,7 @@ class Driver(object):
                 model=call.get("model"),
                 effort=call.get("effort"),
                 nested=True,
+                task_id=task_id,
             ):
                 raise RuntimeError(
                     "classifier accounting marker is unavailable"
@@ -3147,7 +3208,7 @@ class Driver(object):
 
         return _start
 
-    def _classify_call_recorder(self, raw_name):
+    def _classify_call_recorder(self, raw_name, task_id=None):
         """Own the cost of the optional opposite-family classifier call."""
         def _record(call):
             self._update_busy_accounting(call)
@@ -3174,6 +3235,7 @@ class Driver(object):
                     or call.get("cost") is None
                 ),
                 prompt_path=call.get("prompt_path"),
+                **self._task_id_fields(task_id),
             )
 
         return _record
@@ -3896,6 +3958,9 @@ class Driver(object):
                 getattr(result, "cost_partial", False)
                 or getattr(result, "cost", None) is None
             ),
+            **self._worker_task_fields(
+                kind=kind, family=family, label=raw_name, result=result
+            ),
         )
         # The paid origin call is complete before session creation begins.
         # Persist its time now so a crash in the independent-session handoff
@@ -4011,6 +4076,9 @@ class Driver(object):
                 "raw_name": raw_name,
                 "duration_s": result.duration_s,
                 "pre_snapshot": copy.deepcopy(pre_snapshot),
+                **self._worker_task_fields(
+                    kind=kind, family=family, label=raw_name, result=result
+                ),
             },
         }
         st.append_event(
@@ -4050,6 +4118,8 @@ class Driver(object):
         result.origin_model = record.get("model")
         result.origin_effort = record.get("effort")
         result.origin_pre_snapshot = copy.deepcopy(record.get("pre_snapshot"))
+        if record.get("task_id") is not None:
+            result.task_id = record["task_id"]
         return result
 
     def _take_brainstorming_resume(self, unit, kind):
@@ -4879,6 +4949,7 @@ class Driver(object):
                         unit, kind
                     ),
                     continuation_family=origin["family"],
+                    task_id=origin.get("task_id"),
                 )
                 if durable_stabilization_size is not None:
                     implementation_size = durable_stabilization_size
@@ -4903,6 +4974,7 @@ class Driver(object):
                         ),
                     ),
                     continuation_family=origin["family"],
+                    task_id=origin.get("task_id"),
                 )
             family, current_model, current_effort = self._result_identity(
                 result,
@@ -4974,6 +5046,10 @@ class Driver(object):
                 "model": current_model,
                 "effort": current_effort,
                 "pre_snapshot": continued_pre_snapshot,
+                **(
+                    {"task_id": origin["task_id"]}
+                    if origin.get("task_id") is not None else {}
+                ),
             }
             st.append_event(
                 self.state,
@@ -5048,6 +5124,9 @@ class Driver(object):
             cost_partial=bool(
                 getattr(result, "cost_partial", False)
                 or getattr(result, "cost", None) is None
+            ),
+            **self._worker_task_fields(
+                kind=kind, family=family, result=result
             ),
         )
 
@@ -5740,6 +5819,7 @@ class Driver(object):
                                     cost_partial=getattr(
                                         result, "cost_partial", False
                                     ),
+                                    task_id=getattr(result, "task_id", None),
                                     pre_tree=pre_tree, pre_head=pre_head,
                                     pre_sym=pre_sym, pre_refs=pre_refs,
                                     pre_stash=pre_stash)
@@ -5774,7 +5854,8 @@ class Driver(object):
                         cost_partial=bool(
                             getattr(result, "cost_partial", False)
                             or getattr(result, "cost", None) is None
-                        ))
+                        ),
+                        task_id=getattr(result, "task_id", None))
         if kind == contracts.KIND_IMPLEMENT and output.get("suite_command"):
             st.set_discovered_suite(self.state, output["suite_command"])
         if unit["kind"] == st.UNIT_SKELETON:
@@ -5897,7 +5978,7 @@ class Driver(object):
                     token_usage_partial=False, cost=None, cost_partial=False,
                     pre_tree=None,
                     pre_head=None, pre_sym=None, pre_refs=None, pre_stash=None,
-                    pre_worktree_tree=None, from_fixer=False):
+                    pre_worktree_tree=None, from_fixer=False, task_id=None):
         gaps = output.get("gaps", [])
         st.append_event(
             self.state, "gap_reported", unit=st.unit_key(unit),
@@ -5913,6 +5994,7 @@ class Driver(object):
             gaps=[{k: g.get(k)
                    for k in ("classification", "forced_decision", "plain")}
                   for g in gaps],
+            **self._task_id_fields(task_id),
         )
         # Persist the validated gap BEFORE any cleanup or routing. From the
         # moment the worker returns a gap, a crash must RE-ROUTE it on restart,
@@ -5934,6 +6016,7 @@ class Driver(object):
             # fix work, so the builder scratch-cleanup (restore to the
             # pre-CALL snapshot) misfires. _route_pending_gap branches on this.
             "from_fixer": from_fixer,
+            **self._task_id_fields(task_id),
         }
         self._save()
         return self._route_pending_gap()
@@ -7044,7 +7127,8 @@ class Driver(object):
 
     def _report_call(self, unit, family, prompt, kind, raw_name,
                      extensions=None, roots=None, validate_opts=None,
-                     model=None, effort=None, dispatch_resolver=None):
+                     model=None, effort=None, dispatch_resolver=None,
+                     task_id=None):
         """Run a report-only call.
 
         Report-only remains the CONTRACT — reviewers are told not to edit,
@@ -7058,6 +7142,7 @@ class Driver(object):
             family, prompt, kind, raw_name, model=model, effort=effort,
             extensions=extensions, roots=roots, validate_opts=validate_opts,
             dispatch_resolver=dispatch_resolver,
+            task_id=task_id,
         )
         return output, result, raw_path
 
@@ -7399,6 +7484,7 @@ class Driver(object):
                                     cost_partial=getattr(
                                         result, "cost_partial", False
                                     ),
+                                    task_id=getattr(result, "task_id", None),
                                     pre_tree=pre_tree, pre_head=pre_head,
                                     pre_sym=pre_sym, pre_refs=pre_refs,
                                     pre_stash=pre_stash,
@@ -7578,6 +7664,7 @@ class Driver(object):
                 getattr(result, "cost_partial", False)
                 or getattr(result, "cost", None) is None
             ),
+            task_id=getattr(result, "task_id", None),
             # `queued` preserves what the fixer was actually asked to triage
             # — including any contests links — in the immutable history;
             # state.adjudicated_rejections() derives overturned
@@ -8082,6 +8169,7 @@ class Driver(object):
                 or getattr(result, "cost", None) is None
             ),
             meta={"model": delta_model, "effort": delta_effort},
+            task_id=getattr(result, "task_id", None),
         )
         if provisional:
             verdict = output["design_correction_verdict"]
@@ -8965,6 +9053,7 @@ class Driver(object):
                 or getattr(result, "cost", None) is None
             ),
             meta=round_meta,
+            task_id=getattr(result, "task_id", None),
         )
         if deferred:
             st.record_debt(self.state, unit, deferred, "round", rec["id"])

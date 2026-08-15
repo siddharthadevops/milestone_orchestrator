@@ -2,6 +2,7 @@
 
 import copy
 from concurrent import futures
+import json
 import math
 import os
 import tempfile
@@ -9,7 +10,9 @@ import threading
 import unittest
 from unittest import mock
 
-from orchestrator import brainstorming
+from orchestrator import brainstorming, contracts
+from orchestrator import driver as drv
+from orchestrator import runners
 from orchestrator import state as st
 from orchestrator import tasks
 
@@ -720,6 +723,483 @@ class DurableTaskRecordsTest(unittest.TestCase):
             self.assert_request_error(
                 tasks.resolve_derived_path, admitted, "effect.txt"
             )
+
+    def test_worker_task_id_survives_marker_and_recovery_records(self):
+        with tempfile.TemporaryDirectory(prefix="orch-tasks-") as workspace:
+            state_path = persisted_state(workspace)
+            task = tasks.admit_persisted_task(
+                state_path, task_order(), {"seat": "worker"}, workspace
+            )
+            driver = drv.Driver(
+                state_path, runner=runners.MockRunner([])
+            )
+            self.assertTrue(driver._mark_busy(
+                "slice_doc-01-draft",
+                contracts.KIND_DRAFT_SLICE_NOTE,
+                "codex",
+                task_id=task["id"],
+            ))
+            with open(driver._busy_path(), "r", encoding="utf-8") as handle:
+                marker = json.load(handle)
+            self.assertEqual(marker["task_id"], task["id"])
+
+            self.assertTrue(driver._mark_busy(
+                "slice_doc-01-reclassify-codex-F1",
+                contracts.KIND_RECLASSIFY,
+                "claude",
+                nested=True,
+            ))
+            with open(driver._busy_path(), "r", encoding="utf-8") as handle:
+                reclassify = json.load(handle)
+            self.assertNotIn("task_id", reclassify)
+            self.assertEqual(
+                reclassify["pending_calls"][0]["task_id"], task["id"]
+            )
+            driver._clear_busy()
+            self.assertTrue(driver._mark_busy(
+                "slice_doc-01-draft",
+                contracts.KIND_DRAFT_SLICE_NOTE,
+                "codex",
+                task_id=task["id"],
+            ))
+
+            classifier = {
+                "family": "claude",
+                "model": "classifier-model",
+                "effort": "high",
+                "status": "ok",
+                "failure_type": "unknown",
+                "error": None,
+                "duration_s": 2.0,
+                "token_usage": token_usage(),
+                "token_usage_partial": False,
+                "cost_payloads": [],
+                "prompt_path": "raw/classifier.txt",
+            }
+            driver._classify_call_starter(
+                "slice_doc-01-draft", task["id"]
+            )(classifier)
+            with open(driver._busy_path(), "r", encoding="utf-8") as handle:
+                nested = json.load(handle)
+            self.assertEqual(nested["task_id"], task["id"])
+            self.assertEqual(
+                nested["pending_calls"][0]["task_id"], task["id"]
+            )
+            driver._classify_call_recorder(
+                "slice_doc-01-draft", task["id"]
+            )(classifier)
+            self.assertEqual(
+                driver.state["events"][-1]["task_id"], task["id"]
+            )
+
+            recovered = drv.Driver(
+                state_path, runner=runners.MockRunner([])
+            )
+            interrupted = [
+                event for event in recovered.state["events"]
+                if event["type"] == "worker_interrupted"
+            ]
+            self.assertEqual(len(interrupted), 2)
+            self.assertEqual(
+                {event["task_id"] for event in interrupted}, {task["id"]}
+            )
+            self.assertEqual(len(tasks.task_records(recovered.state)), 1)
+
+            seen = {}
+
+            def dispatched(*_args, **_kwargs):
+                with open(
+                    recovered._busy_path(), "r", encoding="utf-8"
+                ) as handle:
+                    seen.update(json.load(handle))
+                return {}, runners.RunnerResult(
+                    "{}", 0, 1.0, token_usage=token_usage()
+                )
+
+            with mock.patch.object(
+                runners, "call_worker", side_effect=dispatched
+            ), mock.patch.object(
+                recovered, "_save_raw", return_value="raw/result.json"
+            ):
+                _output, result, _raw_path = recovered._call(
+                    "codex",
+                    "KIND: draft_slice_note\n",
+                    contracts.KIND_DRAFT_SLICE_NOTE,
+                    "slice_doc-01-draft",
+                    task_id=task["id"],
+                )
+            self.assertEqual(seen["task_id"], task["id"])
+            self.assertEqual(result.task_id, task["id"])
+            recovered._clear_busy()
+
+    def test_classifier_and_cutoff_keep_known_task_id_without_marker(self):
+        with tempfile.TemporaryDirectory(prefix="orch-tasks-") as workspace:
+            state_path = persisted_state(workspace)
+            task = tasks.admit_persisted_task(
+                state_path, task_order(), {"seat": "worker"}, workspace
+            )
+            driver = drv.Driver(
+                state_path, runner=runners.MockRunner([])
+            )
+            raw_name = "slice_impl-01-draft"
+            self.assertTrue(driver._mark_busy(
+                raw_name,
+                contracts.KIND_IMPLEMENT,
+                "codex",
+                task_id=task["id"],
+            ))
+            classifier = {
+                "family": "claude",
+                "model": "classifier-model",
+                "effort": "high",
+                "status": "ok",
+                "failure_type": "unknown",
+                "error": None,
+                "duration_s": 2.0,
+                "token_usage": token_usage(),
+                "token_usage_partial": False,
+                "cost_payloads": [],
+                "prompt_path": "raw/classifier.txt",
+            }
+
+            def classify(_exc, **kwargs):
+                kwargs["on_llm_start"](classifier)
+                driver._clear_busy()
+                kwargs["on_llm_call"](classifier)
+                return "unknown", None, "test classification"
+
+            with mock.patch.object(
+                drv.errclass,
+                "classify_worker_failure",
+                side_effect=classify,
+            ):
+                driver._classify_failure(
+                    "codex", runners.RunnerError("mystery"), raw_name
+                )
+
+            self.assertEqual(
+                driver.state["events"][-1]["task_id"], task["id"]
+            )
+
+            with mock.patch.object(
+                drv.gitops, "enabled", return_value=True
+            ), mock.patch.object(
+                drv.gitops, "reviewable_line_count", return_value=0
+            ), mock.patch.object(
+                driver, "_matching_busy_call", return_value={}
+            ):
+                control, marker = driver._implementation_size_control(
+                    "base-tree", task_id=task["id"]
+                )
+                marker["interrupt_lines"] = 1600
+                control._bind(lambda _text: True, lambda _reason: True)
+                self.assertTrue(control.interrupt("hard size limit"))
+                control._close()
+            durable = st.current_unit(driver.state)[
+                "implementation_stabilization"
+            ]["implementation_size"]
+            self.assertEqual(durable["task_id"], task["id"])
+
+            driver._ensure_implementation_stabilization_events(
+                st.current_unit(driver.state), durable
+            )
+            interrupted = [
+                event for event in driver.state["events"]
+                if event["type"] == "implementation_size_interrupted"
+            ]
+            self.assertEqual(len(interrupted), 1)
+            self.assertEqual(interrupted[0]["task_id"], task["id"])
+
+    def test_worker_task_id_survives_marker_loss_fallback(self):
+        with tempfile.TemporaryDirectory(prefix="orch-tasks-") as workspace:
+            state_path = persisted_state(workspace)
+            task = tasks.admit_persisted_task(
+                state_path, task_order(), {"seat": "worker"}, workspace
+            )
+            driver = drv.Driver(
+                state_path, runner=runners.MockRunner([])
+            )
+            usage = token_usage()
+
+            def dispatched(*_args, **_kwargs):
+                driver._clear_busy()
+                return {}, runners.RunnerResult(
+                    "{}", 0, 7.0, token_usage=usage
+                )
+
+            with mock.patch.object(
+                runners, "call_worker", side_effect=dispatched
+            ), self.assertRaises(drv.StopStep):
+                driver._call(
+                    "codex",
+                    "KIND: draft_slice_note\n",
+                    contracts.KIND_DRAFT_SLICE_NOTE,
+                    "slice_doc-01-draft",
+                    task_id=task["id"],
+                )
+
+            persisted = st.load(state_path)
+            fallback = [
+                event for event in persisted["events"]
+                if event["type"] == "worker_unaccepted"
+            ]
+            self.assertEqual(len(fallback), 1)
+            self.assertEqual(fallback[0]["task_id"], task["id"])
+            self.assertEqual(fallback[0]["duration_s"], 7.0)
+            self.assertEqual(fallback[0]["token_usage"], usage)
+            accounting = tasks.task_accounting(persisted, task["id"])
+            self.assertEqual(accounting["duration_s"], 7.0)
+            self.assertEqual(accounting["token_usage"], usage)
+
+    def test_task_accounting_reuses_existing_homes_once(self):
+        def usage(amount):
+            return {
+                "input_tokens": amount,
+                "cached_input_tokens": 0,
+                "output_tokens": amount,
+                "reasoning_output_tokens": 0,
+                "total_tokens": amount * 2,
+            }
+
+        def cost(amount):
+            return {
+                "api_usd": amount / 100.0,
+                "real_usd": amount / 200.0,
+            }
+
+        with tempfile.TemporaryDirectory(prefix="orch-tasks-") as workspace:
+            state = st.new_state(
+                "Exercise task accounting.",
+                workspace,
+                {"families_order": ["codex", "claude"]},
+            )
+            task = tasks.admit_task(
+                state, task_order(), {"seat": "worker"}, workspace
+            )
+            task_id = task["id"]
+            unit = state["units"][0]
+
+            event_amounts = (
+                ("brainstorming_origin_recorded", 1),
+                ("brainstorming_origin_recorded", 2),
+                ("worker_malformed", 3),
+                ("implementation_size_interrupted", 5),
+                ("worker_interrupted", 6),
+                ("worker_unaccepted", 7),
+                ("error_classifier_call", 8),
+                ("gap_reported", 9),
+            )
+            for event_type, amount in event_amounts:
+                st.append_event(
+                    state,
+                    event_type,
+                    unit=st.unit_key(unit),
+                    task_id=task_id,
+                    fatal=(event_type == "worker_malformed"),
+                    duration_s=float(amount),
+                    token_usage=usage(amount),
+                    token_usage_partial=False,
+                    cost=cost(amount),
+                    cost_partial=False,
+                )
+            st.append_event(
+                state,
+                "worker_malformed",
+                unit=st.unit_key(unit),
+                task_id=task_id,
+                fatal=True,
+                duration_s=4.0,
+                token_usage=None,
+                token_usage_partial=True,
+                cost=None,
+                cost_partial=True,
+            )
+            st.record_draft(
+                state,
+                unit,
+                contracts.KIND_DRAFT_SKELETON,
+                {"artifact": "skeleton.md", "slices": []},
+                duration=10.0,
+                token_usage=usage(10),
+                cost=cost(10),
+                task_id=task_id,
+            )
+            round_task = tasks.admit_task(
+                state, task_order(), {"seat": "worker"}, workspace
+            )
+            unit["status"] = st.U_ROUNDS
+            st.record_round(
+                state,
+                unit,
+                "codex",
+                contracts.KIND_REVIEW_ROUND,
+                {"findings": []},
+                duration=11.0,
+                token_usage=usage(11),
+                cost=cost(11),
+                task_id=round_task["id"],
+            )
+
+            before = st.summary(state)
+            subtotal = tasks.task_accounting(state, task_id)
+            self.assertEqual(subtotal["duration_s"], 55.0)
+            self.assertEqual(subtotal["token_usage"], usage(51))
+            self.assertTrue(subtotal["token_usage_partial"])
+            self.assertAlmostEqual(subtotal["cost"]["api_usd"], 0.51)
+            self.assertAlmostEqual(subtotal["cost"]["real_usd"], 0.255)
+            self.assertTrue(subtotal["cost_partial"])
+            self.assertEqual(
+                tasks.task_accounting(state, round_task["id"]),
+                {
+                    "duration_s": 11.0,
+                    "token_usage": usage(11),
+                    "token_usage_partial": False,
+                    "cost": cost(11),
+                    "cost_partial": False,
+                },
+            )
+
+            tasks.record_task_result(
+                state,
+                task_id,
+                {
+                    "status": "success",
+                    **subtotal,
+                    "native_result": {"artifact": "skeleton.md"},
+                },
+            )
+            after = st.summary(state)
+            for field in (
+                "work_duration_s",
+                "work_token_usage",
+                "work_token_usage_partial",
+                "work_cost",
+                "work_cost_partial",
+            ):
+                self.assertEqual(after[field], before[field])
+
+    def test_pending_cutoff_marks_only_its_task_accounting_partial(self):
+        with tempfile.TemporaryDirectory(prefix="orch-tasks-") as workspace:
+            state = st.new_state(
+                "Project pending cutoff evidence.",
+                workspace,
+                {"families_order": ["codex", "claude"]},
+            )
+            pending_task = tasks.admit_task(
+                state, task_order(), {"seat": "worker"}, workspace
+            )
+            other_task = tasks.admit_task(
+                state, task_order(), {"seat": "worker"}, workspace
+            )
+            unit = state["units"][0]
+            complete = {
+                "duration_s": 3.0,
+                "token_usage": token_usage(),
+                "token_usage_partial": False,
+                "cost": {"api_usd": 0.2, "real_usd": 0.1},
+                "cost_partial": False,
+            }
+            for task in (pending_task, other_task):
+                st.append_event(
+                    state,
+                    "worker_unaccepted",
+                    unit=st.unit_key(unit),
+                    task_id=task["id"],
+                    **copy.deepcopy(complete),
+                )
+            unit["implementation_stabilization"] = {
+                "implementation_size": {
+                    "episode_id": "pending-cutoff",
+                    "task_id": pending_task["id"],
+                },
+            }
+
+            pending = tasks.task_accounting(state, pending_task["id"])
+            self.assertEqual(pending["duration_s"], 3.0)
+            self.assertEqual(pending["token_usage"], token_usage())
+            self.assertEqual(pending["cost"], complete["cost"])
+            self.assertTrue(pending["token_usage_partial"])
+            self.assertTrue(pending["cost_partial"])
+
+            other = tasks.task_accounting(state, other_task["id"])
+            self.assertFalse(other["token_usage_partial"])
+            self.assertFalse(other["cost_partial"])
+
+            st.append_event(
+                state,
+                "implementation_size_interrupted",
+                unit=st.unit_key(unit),
+                episode_id="pending-cutoff",
+                task_id=pending_task["id"],
+                **copy.deepcopy(complete),
+            )
+            resolved = tasks.task_accounting(state, pending_task["id"])
+            self.assertFalse(resolved["token_usage_partial"])
+            self.assertFalse(resolved["cost_partial"])
+
+    def test_legacy_and_non_task_activity_stay_unattributed(self):
+        with tempfile.TemporaryDirectory(prefix="orch-tasks-") as workspace:
+            state = st.new_state(
+                "Keep legacy activity separate.",
+                workspace,
+                {"families_order": ["codex", "claude"]},
+            )
+            task = tasks.admit_task(
+                state, task_order(), {"seat": "worker"}, workspace
+            )
+            unit = state["units"][0]
+            accounting = {
+                "duration_s": 3.0,
+                "token_usage": token_usage(),
+                "token_usage_partial": False,
+                "cost": {"api_usd": 0.2, "real_usd": 0.0},
+                "cost_partial": False,
+            }
+            st.append_event(
+                state,
+                "worker_malformed",
+                unit=st.unit_key(unit),
+                label="reused-label",
+                fatal=True,
+                **copy.deepcopy(accounting),
+            )
+            st.append_event(
+                state,
+                "brainstorming_work_recorded",
+                unit=st.unit_key(unit),
+                **copy.deepcopy(accounting),
+            )
+            st.append_event(
+                state,
+                "reclassify_recorded",
+                unit=st.unit_key(unit),
+                **copy.deepcopy(accounting),
+            )
+            unit["seals"].append({
+                "halves": {"codex": copy.deepcopy(accounting)}
+            })
+
+            work, _unassigned = st._work_durations(state)
+            self.assertEqual(work[st.unit_key(unit)], 12.0)
+            self.assertEqual(
+                tasks.task_accounting(state, task["id"]),
+                {
+                    "duration_s": 0.0,
+                    "token_usage": None,
+                    "token_usage_partial": True,
+                    "cost": None,
+                    "cost_partial": True,
+                },
+            )
+            for record in state["events"] + [unit["seals"][0]["halves"]["codex"]]:
+                self.assertNotIn("task_id", record)
+
+            old_state = st.new_state(
+                "Old run.", workspace, {"families_order": ["codex"]}
+            )
+            old_bytes = copy.deepcopy(old_state)
+            self.assertEqual(tasks.task_records(old_state), [])
+            self.assertEqual(old_state, old_bytes)
 
 
 if __name__ == "__main__":
