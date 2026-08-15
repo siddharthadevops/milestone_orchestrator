@@ -263,4 +263,5 @@ The goal is achieved when:
 | Unit | Status | Rounds | Review result | Gate commit |
 |---|---|---|---|---|
 | skeleton | reviewed | 30 | satisfied | fa4ea09 |
-| slice_doc-01 (Task contracts and catalogue) | reviewed | 6 | satisfied | - |
+| slice_doc-01 (Task contracts and catalogue) | reviewed | 6 | satisfied | 26e5650 |
+| slice_impl-01 (Task contracts and catalogue) | reviewed | 5 | satisfied | - |

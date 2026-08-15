@@ -85,3 +85,25 @@
 - `claude-claude-S1-OUTPUT-DIR-UNCHECKED-02` (raised claude, cleared codex): No named check in the Verification Contract covers `output_directory`, and row 3's pass condition leaves every value-level non-emptiness invariant the note pins without a proof. — The hard register explicitly pins optional omission and present-value non-emptiness, while the enforcement gate calls for invalid-value coverage, so a capable builder is unlikely to infer the wrong contract from the less-specific named check; if it nevertheless does, first downstream canonicalizatio
 - `claude-claude-S1-ERRCLASS-01` (raised claude, cleared codex): The note pins a two-way order-refusal vocabulary (`unknown_task_executor` vs `invalid_task_request`) as a strict, cross-slice contract, but no named check's pass condition proves the `unknown_task_executor` class: Verification row 2 attaches "the pinned classifications" only to configuration refusals (all of which are `invalid_task_request`), and row 3 requires merely that an unknown executor "is rejected" without naming its class. — The strict verification contract can silently accept the wrong error class despite the pinned behavior, but correction is a local assertion plus error-branch fix once detected.
 
+## slice_impl-01 (Task contracts and catalogue)
+
+- draft: kind `implement`, artifact `-` (raw: `implementation/milestones/tasks-2/.run/raw/slice_impl-01-draft.txt`)
+
+| Round | Kind | Family | Findings | Triage | Raw |
+|---|---|---|---|---|---|
+| slice_impl-01-codex-r1 | review_round | codex | 1 | 1 reported | `implementation/milestones/tasks-2/.run/raw/slice_impl-01-codex-r1.txt` |
+| slice_impl-01-codex-r2 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/tasks-2/.run/raw/slice_impl-01-fix1.txt` |
+| slice_impl-01-codex-r3 | delta_review | codex | 0 | clean | `implementation/milestones/tasks-2/.run/raw/slice_impl-01-delta1.txt` |
+| slice_impl-01-codex-r4 | review_round | codex | 1 | DEBT-CLEAN (reclassified) | `implementation/milestones/tasks-2/.run/raw/slice_impl-01-codex-r2.txt` |
+| slice_impl-01-claude-r1 | review_round | claude | 2 | DEBT-CLEAN (reclassified) | `implementation/milestones/tasks-2/.run/raw/slice_impl-01-claude-r1.txt` |
+
+### Review completion — SATISFIED
+
+- deterministic result: every configured family was clean or debt-clean on the same current bytes; full verification was not due at this boundary; no extra reviewer was called
+- cited reviews: `slice_impl-01-codex-r4`, `slice_impl-01-claude-r1`
+
+**Deferred debt (opposite-family verified):**
+- `codex-slice01-token-key-error-family` (raised codex, cleared codex): Malformed token-usage keys leak an uncontrolled TypeError — The validation-family defect is real, but non-string token keys cannot arise from parsed JSON and immediately produce a visible exception if directly supplied, while correction is a local key check plus one focused regression test.
+- `claude-claude-slice01-size-posture` (raised claude, cleared codex): The delivered slice is 724 changed lines while its reviewed note certifies it stays below the roughly 500 changed-code-line target and records no overrun reason. — The note falsely predicts under roughly 500 changed lines despite the actual 724-line delivery, so it could silently skew later sizing, but a capable builder inspecting the existing surface or diff will likely catch it and correction is a local sizing-rationale update rather than propagated implemen
+- `claude-claude-slice01-full-configuration-untested` (raised claude, cleared codex): The named configuration check never exercises a Brainstorming configuration with both members supplied, although its pass condition claims full legal input is accepted. — The false coverage claim may lead a capable builder to trust an untested two-key path, but the current resolver accepts both keys and any regression would surface on the first combined order and require only a small local test or fix.
+
