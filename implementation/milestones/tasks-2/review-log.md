@@ -60,3 +60,28 @@
 - `claude-claude-slice4-requires-slice6-milestone-note-recording` (raised claude, cleared codex): Slice 4 is required to prove the milestone records the Brainstorming-produced note path, but the milestone-side ordering/consumption that performs that recording is Slice 6's delivery and Slice 4 declares no dependency on it. — The real test-coverage and slice-boundary contradiction could make Slice 4 absorb or omit Slice 6’s recording work, but a capable builder should expose it when constructing the focused test, and correction only reassigns that recording proof between the adjacent slices.
 - `claude-claude-destination-rejection-has-no-pinned-error-code` (raised claude, cleared codex): The pinned public error vocabulary has no code for rejecting an `output_directory` outside the writable primary workspace, even though that rejection is a headline admission guarantee and a Slice 2 proof. — Because the skeleton centralizes destination rejection in one shared admission boundary and already exposes generic `invalid_task_request`, the capable builder will likely reuse it or stop on the ambiguity, while any silent mismatch is a small, immediately testable error-code alignment.
 
+## slice_doc-01 (Task contracts and catalogue)
+
+- draft: kind `draft_slice_note`, artifact `implementation/milestones/tasks-2/slices/slice-01.md` (raw: `implementation/milestones/tasks-2/.run/raw/slice_doc-01-draft.txt`)
+
+| Round | Kind | Family | Findings | Triage | Raw |
+|---|---|---|---|---|---|
+| slice_doc-01-codex-r1 | review_round | codex | 3 | DEBT-CLEAN (reclassified) | `implementation/milestones/tasks-2/.run/raw/slice_doc-01-codex-r1.txt` |
+| slice_doc-01-claude-r1 | review_round | claude | 2 | 2 reported | `implementation/milestones/tasks-2/.run/raw/slice_doc-01-claude-r1.txt` |
+| slice_doc-01-codex-r2 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/tasks-2/.run/raw/slice_doc-01-fix1.txt` |
+| slice_doc-01-codex-r3 | delta_review | codex | 0 | clean | `implementation/milestones/tasks-2/.run/raw/slice_doc-01-delta1.txt` |
+| slice_doc-01-codex-r4 | review_round | codex | 0 | clean | `implementation/milestones/tasks-2/.run/raw/slice_doc-01-codex-r2.txt` |
+| slice_doc-01-claude-r2 | review_round | claude | 1 | DEBT-CLEAN (reclassified) | `implementation/milestones/tasks-2/.run/raw/slice_doc-01-claude-r2.txt` |
+
+### Review completion — SATISFIED
+
+- deterministic result: every configured family was clean or debt-clean on the same current bytes; full verification was not due at this boundary; no extra reviewer was called
+- cited reviews: `slice_doc-01-codex-r4`, `slice_doc-01-claude-r2`
+
+**Deferred debt (opposite-family verified):**
+- `codex-S1-WORKAREA-01` (raised codex, cleared codex): The shared work-area value lacks an enforceable contract — The artifact explicitly accepts any non-empty object as resolved work_area, so a capable builder will likely encode the wrong shared contract without stopping, while the later Brainstorming rejection makes correction visible and bounded to tightening the contract, validator, and affected tests befor
+- `codex-S1-CATALOGUE-02` (raised codex, cleared codex): Catalogue self-description is not substantively pinned — The hard facts and named test permit vacuous catalogue entries and wrongly present Worker as one-call despite B2 continuation, so the builder could silently pin false user-facing behavior, while correction is a local repinning of built-in metadata and focused assertions.
+- `codex-S1-SCHEMA-03` (raised codex, cleared codex): The focused test does not prove one configuration authority — The note incorrectly claims its literal-equality cases prove schema authority, so a hard-coded resolver could silently satisfy the required test coverage, but correction is a small local resolver/test change that varies the catalogue schema and observes resolution.
+- `claude-claude-S1-OUTPUT-DIR-UNCHECKED-02` (raised claude, cleared codex): No named check in the Verification Contract covers `output_directory`, and row 3's pass condition leaves every value-level non-emptiness invariant the note pins without a proof. — The hard register explicitly pins optional omission and present-value non-emptiness, while the enforcement gate calls for invalid-value coverage, so a capable builder is unlikely to infer the wrong contract from the less-specific named check; if it nevertheless does, first downstream canonicalizatio
+- `claude-claude-S1-ERRCLASS-01` (raised claude, cleared codex): The note pins a two-way order-refusal vocabulary (`unknown_task_executor` vs `invalid_task_request`) as a strict, cross-slice contract, but no named check's pass condition proves the `unknown_task_executor` class: Verification row 2 attaches "the pinned classifications" only to configuration refusals (all of which are `invalid_task_request`), and row 3 requires merely that an unknown executor "is rejected" without naming its class. — The strict verification contract can silently accept the wrong error class despite the pinned behavior, but correction is a local assertion plus error-branch fix once detected.
+
