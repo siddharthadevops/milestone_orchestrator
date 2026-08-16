@@ -208,10 +208,12 @@ def _validate_finding_validity(
 
 
 def validate_slices(slices, ctx):
-    """Validate a slice-plan list: every entry is {"id": int, "title": str},
-    ids are true integers (bool is rejected: JSON true/false would alias
-    slice 1/0) and unique. Duplicate or aliased ids would silently collapse
-    the structural unit plan keyed on (kind, slice_id)."""
+    """Validate slice identity plus any prospective producer selections.
+
+    Producer omissions remain valid compatibility state and resolve only when
+    projected or ordered.  The lazy import keeps the shared TaskExecutor
+    catalogue as the sole configuration authority without a module cycle.
+    """
     seen = set()
     for i, sl in enumerate(slices):
         sctx = "%s[%d]" % (ctx, i)
@@ -223,6 +225,13 @@ def validate_slices(slices, ctx):
                 "%s: key 'id' must be an integer, not a boolean" % sctx
             )
         _require(sl, "title", str, sctx)
+        if "producer_task_executor" in sl:
+            from orchestrator import tasks
+
+            tasks.validate_producer_map(
+                sl["producer_task_executor"],
+                "%s.producer_task_executor" % sctx,
+            )
         if sid in seen:
             raise ContractError(
                 "%s: duplicate slice id %d (slice ids must be unique)"
@@ -1257,13 +1266,23 @@ copying it into the Brainstorming-owned work area.
 
 Kind draft_skeleton adds:
   "artifact": "<workspace-relative path of the skeleton document you wrote>"
-  "slices": [ {"id": 1, "title": "..."}, ... ]   (unique integer ids)
+  "slices": [ {"id": 1, "title": "...",
+                 "producer_task_executor": {
+                   "draft_slice_note": {"task_executor": "...",
+                                          "configuration": <optional object>},
+                   "implement": {"task_executor": "...",
+                                  "configuration": <optional object>}}}, ... ]
+  (unique integer ids; propose both producer choices independently)
 
 Kind draft_slice_note adds:
   "artifact": "<workspace-relative path of the slice note you wrote>"
+  When the prompt includes SLICE PRODUCER PLANNING, also return the complete
+  updated plan in "slices", using the same shape as draft_skeleton above.
 
 Kind implement adds:
   "files_changed": ["<workspace-relative paths you created or edited>", ...]
+  When the prompt includes SLICE PRODUCER PLANNING, also return the complete
+  updated plan in "slices", using the same shape as draft_skeleton above.
   "suite_command": "<the repo's official full-test-suite command, exactly
    as you would run it from the workspace root; it must
    be non-interactive and run the suite exactly ONCE and exit — never a
@@ -1353,7 +1372,13 @@ Kind fix_findings adds:
      "adjudication_ref": null | "<registry id of the prior rejection>"}
   ]
   "files_changed": ["...paths you edited...", ...]
-  "slices": [ {"id": 1, "title": "..."}, ... ]   (REQUIRED whenever your
+  "slices": [ {"id": 1, "title": "...",
+                 "producer_task_executor": {
+                   "draft_slice_note": {"task_executor": "...",
+                                          "configuration": <optional object>},
+                   "implement": {"task_executor": "...",
+                                  "configuration": <optional object>}}}, ... ]
+   (REQUIRED whenever your
    fix changed the milestone skeleton's slice TABLE — split, added,
    removed, or renumbered slices: return the FULL updated plan exactly
    as the table now reads. The orchestrator builds units from THIS

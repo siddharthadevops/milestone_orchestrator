@@ -157,8 +157,8 @@ legacy rewrite.
 
 ### Planning Material Disposition
 
-- **Adopt:** the reviewed skeleton's Slice 2 boundary and all four accepted
-  amendments.
+- **Adopt:** the reviewed skeleton's Slice 2 boundary and accepted amendments
+  B1, B2, B4, and B5.
 - **Revise:** no baseline decision; this note narrows the slice to admission,
   persistence, destination enforcement that is actually observable, and accounting
   linkage.

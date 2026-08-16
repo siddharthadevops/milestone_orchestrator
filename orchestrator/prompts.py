@@ -16,7 +16,7 @@ import json
 import re
 import shlex
 
-from . import contracts
+from . import contracts, tasks
 
 # Bounds for worker-authored text re-rendered into later prompts. The
 # adjudicated-rejections registry is injected into EVERY subsequent
@@ -1384,6 +1384,7 @@ def build_draft_skeleton(family, workspace, goal, amendments=None,
         + "GOAL: %s\n\n" % goal
         + _amendments_block(amendments)
         + _project_context_block(project_context)
+        + _producer_planning_block()
         + "Write a concise skeleton document at %s\n" % artifact_path
         + "inside the workspace: goal restatement, boundary/non-goals, and\n"
         "a short table of planned slices. Keep it thin: intent and\n"
@@ -1408,6 +1409,27 @@ def build_draft_skeleton(family, workspace, goal, amendments=None,
             )
             if gap_enabled else
             _modern_contract(contracts.KIND_DRAFT_SKELETON)
+        )
+    )
+
+
+def _producer_planning_block():
+    """Give slice planners the same catalogue later used at admission."""
+    return (
+        "SLICE PRODUCER PLANNING\n"
+        "For every planned slice, propose two independent prospective choices\n"
+        "in `producer_task_executor`: exactly `draft_slice_note` and `implement`.\n"
+        "In the skeleton document's slice table, visibly show both choices for\n"
+        "every slice; the structured result and the reviewed document must agree.\n"
+        "Each choice contains `task_executor` and may contain its executor's\n"
+        "`configuration`. Use only the shared catalogue below; do not infer a\n"
+        "choice from its staffing description.\n"
+        "TASKEXECUTOR CATALOGUE:\n%s\n\n"
+        % json.dumps(
+            tasks.task_executor_catalogue(),
+            ensure_ascii=False,
+            sort_keys=True,
+            indent=2,
         )
     )
 
@@ -1444,6 +1466,7 @@ def build_draft_slice_note(family, workspace, goal, slice_info, skeleton_path,
         + PLANNING_CONTEXT_LINE
         + "\n"
         + _editable_design_block(editable_design_paths)
+        + (_producer_planning_block() if editable_design_paths else "")
         + _access_block(edit_allowed=True)
         + "\n"
         + (
@@ -1559,6 +1582,7 @@ def build_implement(family, workspace, goal, slice_info, note_path, verification
         "  are cheap or directly relevant.\n"
         + "\n"
         + _editable_design_block(editable_design_paths)
+        + (_producer_planning_block() if editable_design_paths else "")
         + _access_block(edit_allowed=True)
         + "\n"
         + (
@@ -1592,6 +1616,7 @@ def build_rethink_continuation(
     gap_enabled=False,
     original_request=None,
     episode_authority=None,
+    producer_planning=False,
 ):
     authority = {
         "session_id": handoff["session_id"],
@@ -1687,6 +1712,7 @@ def build_rethink_continuation(
         )
         + "\n\n"
         + _editable_design_block(editable_design_paths)
+        + (_producer_planning_block() if producer_planning else "")
         + (
             "Finish the original task now under the exact frozen request and\n"
             "OUTPUT CONTRACT above. Only that ordinary envelope may advance\n"
@@ -1763,17 +1789,38 @@ def _wave_full_review_block(wave_docs):
     )
 
 
+def _producer_review_block(context):
+    if context is None:
+        return ""
+    return (
+        "OPERATIVE SLICE PRODUCER PLAN\n"
+        "The JSON below is the structured plan that later task admission\n"
+        "consumes. For every skeleton covered by this review, verify that\n"
+        "every slice visibly contains both producer choices and that each\n"
+        "choice is structurally well-formed. A missing or malformed choice\n"
+        "is always a finding. Then compare each visible choice's value with\n"
+        "this plan. A value mismatch is not a finding only when that exact\n"
+        "slice/task-kind appears in explicit_operator_overrides; its operator\n"
+        "value supersedes the document without requiring a rewrite. An\n"
+        "override never excuses missing or malformed structure.\n"
+        + json.dumps(context, ensure_ascii=False, sort_keys=True, indent=2)
+        + "\n\n"
+    )
+
+
 def build_review_round(family, workspace, goal, unit_desc, artifact, registry,
                        unit_kind=None, governing=None, amendments=None,
                        project_context=None, battery=None, debt=None,
                        gap_enabled=False, wave_docs=None,
-                       editable_design_paths=None, implementation_scope=None):
+                       editable_design_paths=None, implementation_scope=None,
+                       producer_review_context=None):
     return (
         _header(contracts.KIND_REVIEW_ROUND, family, workspace)
         + "\nTASK: full review round of %s. REPORT ONLY.\n" % unit_desc
         + "GOAL: %s\n" % goal
         + "TARGET: %s (plus any code/tests it governs)\n\n" % artifact
         + (_wave_full_review_block(wave_docs) if gap_enabled else "")
+        + _producer_review_block(producer_review_context)
         + _amendment_review_scope(editable_design_paths)
         + _implementation_scope_block(implementation_scope)
         + _amendments_block(amendments)
@@ -1805,7 +1852,8 @@ def build_delta_review(family, workspace, goal, unit_desc, registry,
                        unit_kind=None, governing=None, amendments=None,
                        project_context=None, debt=None, wave_docs=None,
                        gap_enabled=False, design_correction=None,
-                       editable_design_paths=None, implementation_scope=None):
+                       editable_design_paths=None, implementation_scope=None,
+                       producer_review_context=None):
     # During a re-documentation wave the fixer legitimately edits SEVERAL
     # milestone documents at once (they are co-reopened, not sealed); the
     # delta reviewer must judge the multi-document diff as one coherent
@@ -1892,6 +1940,7 @@ def build_delta_review(family, workspace, goal, unit_desc, registry,
         + "GOAL: %s\n\n" % goal
         + wave_block
         + correction_block
+        + _producer_review_block(producer_review_context)
         + _amendment_review_scope(editable_design_paths, delta=True)
         + _implementation_scope_block(implementation_scope)
         + _amendments_block(amendments)
@@ -2101,6 +2150,7 @@ def build_fix_findings(
     verification_repair=False,
     verification_commands=None,
     implementation_scope=None,
+    producer_planning=False,
 ):
     # `gap_enabled` answers only whether THIS fixer may emit a new gap.  A
     # legacy repair fixer deliberately cannot open a nested gap, but it still
@@ -2338,6 +2388,9 @@ def build_fix_findings(
             "  table exactly — the orchestrator builds the milestone's\n"
             "  units from that field, never by parsing the document.\n\n"
         )
+        slice_table_block += _producer_planning_block()
+    elif producer_planning:
+        slice_table_block = _producer_planning_block()
     rethink_block = (
         (_fix_gap_block() if gap_enabled else "")
         if legacy_design_process else _design_rethink_block(fixer=True)

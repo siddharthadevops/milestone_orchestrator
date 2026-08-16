@@ -97,6 +97,7 @@ class DesignUpdateRethinkTest(unittest.TestCase):
         driver.config = self._config(modern=modern, git=git)
         driver.workspace = self.workspace
         driver.state_path = os.path.join(self.workspace, "state.json")
+        driver._allow_producer_handoff = False
         return driver
 
     @staticmethod
@@ -591,6 +592,8 @@ class DesignUpdateRethinkTest(unittest.TestCase):
         with self.assertRaises(_Captured):
             fixer._do_fix()
         prompts_seen.append(fix_capture["args"][1])
+        self.assertIn("SLICE PRODUCER PLANNING", prompts_seen[0])
+        self.assertIn("TASKEXECUTOR CATALOGUE", prompts_seen[0])
 
         delta, delta_unit = self._prepare_prompt_driver(st.U_DELTA_REVIEW)
         delta_unit["fix_source"] = {

@@ -272,4 +272,5 @@ The goal is achieved when:
 | slice_impl-03 (Worker executor and default milestone cutover) | reviewed | 51 | satisfied | 713bb1a |
 | slice_doc-04 (Brainstorming executor adapter) | reviewed | 2 | satisfied | 1963fb0 |
 | slice_impl-04 (Brainstorming executor adapter) | reviewed | 32 | satisfied | 38ec5e7 |
-| slice_doc-05 (Slice producer planning and override) | reviewed | 2 | satisfied | - |
+| slice_doc-05 (Slice producer planning and override) | reviewed | 2 | satisfied | 950da8a |
+| slice_impl-05 (Slice producer planning and override) | reviewed | 37 | satisfied | - |

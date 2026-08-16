@@ -16,6 +16,13 @@ from orchestrator import state as st
 UNKNOWN_TASK_EXECUTOR = "unknown_task_executor"
 INVALID_TASK_REQUEST = "invalid_task_request"
 TASK_UNAVAILABLE = "task_unavailable"
+TASK_SELECTION_FROZEN = "task_selection_frozen"
+TASK_UPDATE_BUSY = "task_update_busy"
+
+PRODUCER_TASK_KINDS = (
+    contracts.KIND_DRAFT_SLICE_NOTE,
+    contracts.KIND_IMPLEMENT,
+)
 
 _MISSING = object()
 _RESULT_STATUSES = ("success", "failure")
@@ -221,6 +228,222 @@ def resolve_configuration(task_executor, configuration=_MISSING):
         return _resolve_configuration(task_executor, configuration)
     except (ContractError, TypeError, ValueError) as exc:
         _request_error(exc)
+
+
+def _validate_producer_selection(value, context):
+    _exact_keys(value, ("task_executor",), ("configuration",), context)
+    task_executor = value["task_executor"]
+    configuration = value.get("configuration", _MISSING)
+    # Resolve only as a validation probe.  Prospective state preserves an
+    # omitted configuration; catalogue defaults freeze when a task is admitted.
+    _resolve_configuration(task_executor, configuration)
+    checked = {"task_executor": task_executor}
+    if configuration is not _MISSING:
+        checked["configuration"] = _json_copy(
+            configuration, "%s.configuration" % context
+        )
+    return _json_copy(checked, context)
+
+
+def validate_producer_selection(value, context="producer selection"):
+    """Validate one prospective TaskExecutor choice without freezing defaults."""
+    try:
+        return _validate_producer_selection(value, context)
+    except (ContractError, TypeError, ValueError) as exc:
+        _request_error(exc)
+
+
+def validate_producer_map(value, context="producer_task_executor"):
+    """Validate a partial/raw producer map; omissions retain Worker defaults."""
+    try:
+        _exact_keys(value, (), PRODUCER_TASK_KINDS, context)
+        checked = {}
+        for task_kind in PRODUCER_TASK_KINDS:
+            if task_kind in value:
+                checked[task_kind] = _validate_producer_selection(
+                    value[task_kind], "%s.%s" % (context, task_kind)
+                )
+        return _json_copy(checked, context)
+    except (ContractError, TypeError, ValueError) as exc:
+        _request_error(exc)
+
+
+def effective_slice_producers(slice_plan):
+    """Project both effective choices without rewriting the stored slice plan."""
+    if not isinstance(slice_plan, dict):
+        raise TaskRequestError(INVALID_TASK_REQUEST, "slice plan must be an object")
+    raw = slice_plan.get("producer_task_executor", _MISSING)
+    checked = {} if raw is _MISSING else validate_producer_map(raw)
+    return {
+        task_kind: _json_copy(
+            checked.get(task_kind, {"task_executor": "worker"}),
+            "effective producer selection",
+        )
+        for task_kind in PRODUCER_TASK_KINDS
+    }
+
+
+def effective_slice_plan(slices):
+    """Return a detached plan whose every slice exposes both effective choices."""
+    checked = _json_copy(slices, "slice plan")
+    contracts.validate_slices(checked, "slice plan")
+    for slice_plan in checked:
+        slice_plan["producer_task_executor"] = effective_slice_producers(
+            slice_plan
+        )
+    return checked
+
+
+def operator_producer_overrides(state):
+    """Project current-plan operator choices from append-only history."""
+    events = state.get("events", [])
+    latest_plan_update = max(
+        (
+            index
+            for index, event in enumerate(events)
+            if isinstance(event, dict) and event.get("type") == "slices_updated"
+        ),
+        default=-1,
+    )
+    overrides = {}
+    for index, event in enumerate(events):
+        if index <= latest_plan_update:
+            continue
+        if not isinstance(event, dict) or event.get("type") != (
+            "slice_producer_updated"
+        ):
+            continue
+        slice_id = event.get("slice_id")
+        task_kind = event.get("task_kind")
+        if type(slice_id) is not int or task_kind not in PRODUCER_TASK_KINDS:
+            raise TaskRequestError(
+                INVALID_TASK_REQUEST,
+                "slice producer event %d has invalid identity" % index,
+            )
+        overrides[(slice_id, task_kind)] = validate_producer_selection(
+            event.get("selection"),
+            "slice producer event %d.selection" % index,
+        )
+    return [
+        {
+            "slice_id": slice_id,
+            "task_kind": task_kind,
+            "selection": _json_copy(selection, "operator producer override"),
+        }
+        for (slice_id, task_kind), selection in sorted(overrides.items())
+    ]
+
+
+def producer_order(slice_plan, task_kind, request):
+    """Build one prospective production order from the current slice choice."""
+    if task_kind not in PRODUCER_TASK_KINDS:
+        raise TaskRequestError(
+            INVALID_TASK_REQUEST,
+            "task_kind must be one of %s" % (list(PRODUCER_TASK_KINDS),),
+        )
+    selection = effective_slice_producers(slice_plan)[task_kind]
+    order = {
+        "task_executor": selection["task_executor"],
+        "request": _json_copy(request, "task request"),
+    }
+    if "configuration" in selection:
+        order["configuration"] = _json_copy(
+            selection["configuration"], "producer configuration"
+        )
+    return order
+
+
+def validate_producer_override(value):
+    """Validate the closed slice-producer write body."""
+    try:
+        _exact_keys(
+            value,
+            ("task_kind", "task_executor"),
+            ("configuration",),
+            "producer override",
+        )
+        task_kind = value["task_kind"]
+        if task_kind not in PRODUCER_TASK_KINDS:
+            raise ContractError(
+                "task_kind must be one of %s" % (list(PRODUCER_TASK_KINDS),)
+            )
+        selection = _validate_producer_selection(
+            {
+                key: value[key]
+                for key in ("task_executor", "configuration")
+                if key in value
+            },
+            "producer override",
+        )
+        return {"task_kind": task_kind, **selection}
+    except (ContractError, TypeError, ValueError) as exc:
+        _request_error(exc)
+
+
+def _producer_selection_frozen(state, slice_id, task_kind):
+    unit_kind = {
+        contracts.KIND_DRAFT_SLICE_NOTE: st.UNIT_SLICE_DOC,
+        contracts.KIND_IMPLEMENT: st.UNIT_SLICE_IMPL,
+    }[task_kind]
+    for unit in state.get("units", []):
+        if (
+            unit.get("kind") != unit_kind
+            or unit.get("slice_id") != slice_id
+        ):
+            continue
+        draft = unit.get("draft")
+        if isinstance(draft, dict) and draft.get("kind") == task_kind:
+            return True
+        reference = unit.get("active_task")
+        if not isinstance(reference, dict) or reference.get("kind") != task_kind:
+            continue
+        record = task_record(state, reference.get("id"))
+        result = record.get("result")
+        if result is None or result.get("status") == "success":
+            return True
+    return False
+
+
+def update_slice_producer(state, slice_id, value):
+    """Change one still-prospective selection in loaded milestone state."""
+    checked = validate_producer_override(value)
+    if type(slice_id) is not int:
+        raise TaskRequestError(INVALID_TASK_REQUEST, "slice id must be an integer")
+    slices = (state.get("milestone") or {}).get("slices")
+    if not isinstance(slices, list):
+        raise TaskRequestError(INVALID_TASK_REQUEST, "slice plan is unavailable")
+    slice_plan = next(
+        (candidate for candidate in slices if candidate.get("id") == slice_id),
+        None,
+    )
+    if slice_plan is None:
+        raise TaskRequestError(
+            INVALID_TASK_REQUEST, "unknown slice id %r" % slice_id
+        )
+    task_kind = checked["task_kind"]
+    if _producer_selection_frozen(state, slice_id, task_kind):
+        raise TaskRequestError(
+            TASK_SELECTION_FROZEN,
+            "%s producer selection is already frozen" % task_kind,
+        )
+
+    raw = slice_plan.get("producer_task_executor", _MISSING)
+    producer_map = {} if raw is _MISSING else validate_producer_map(raw)
+    selection = {
+        key: checked[key]
+        for key in ("task_executor", "configuration")
+        if key in checked
+    }
+    producer_map[task_kind] = selection
+    slice_plan["producer_task_executor"] = producer_map
+    st.append_event(
+        state,
+        "slice_producer_updated",
+        slice_id=slice_id,
+        task_kind=task_kind,
+        selection=_json_copy(selection, "producer selection"),
+    )
+    return effective_slice_producers(slice_plan)
 
 
 def validate_order(order):

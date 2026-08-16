@@ -45,6 +45,11 @@ from . import state as st
 
 IMPLEMENTATION_SIZE_ACK = "IMPLEMENTATION_SIZE_CUTOFF_ACK"
 FULL_VERIFICATION_SLICE_INTERVAL = 4
+# A producer write owns only a local state-file critical section.  Give that
+# handoff enough time to finish without turning unrelated driver contention
+# into a queued invocation.
+PRODUCER_HANDOFF_GRACE_S = 1.0
+PRODUCER_HANDOFF_POLL_S = 0.01
 
 
 class _NoIndependentReclassifier(runners.RunnerError):
@@ -722,6 +727,7 @@ class Driver(object):
         self._validate_billing()
         self.workspace = self.state["workspace"]
         self._busy_lock = threading.RLock()
+        self._allow_producer_handoff = False
         self.runner = runner or runners.SubprocessRunner(
             self.config["commands"], self.config.get("timeouts", {}),
             stall_window_s=self.config.get("worker_stall_window_s"),
@@ -1210,33 +1216,118 @@ class Driver(object):
         return runners.snapshot_changes(before_entries, after_entries)
 
     @contextlib.contextmanager
-    def _exclusive(self):
+    def _exclusive(self, adopt_producer_handoff=None):
         """Advisory inter-process lock on <state>.lock for one step. Two
         concurrent invocations on the same state would each run
         side-effectful worker calls; without this, the divergence would be
-        detected only afterwards, at save time, as HistoryRewriteError."""
-        try:
-            with st.exclusive_mutation(self.state_path):
-                yield
-        except st.ConcurrentStateMutation as exc:
-            raise ConcurrentRunError(
+        detected only afterwards, at save time, as HistoryRewriteError.
+
+        A continuous driver may briefly lose the between-step handoff to a
+        producer write.  It retries only long enough for that local write to
+        finish and proceeds only if the resulting state is unchanged or exactly
+        an adoptable producer-only delta.  Direct steps and every unrelated
+        durable change retain the ordinary non-blocking refusal."""
+        if adopt_producer_handoff is None:
+            adopt_producer_handoff = self._allow_producer_handoff
+
+        def collision_error():
+            return ConcurrentRunError(
                 "another orchestrator invocation is active on %s "
                 "(advisory lock %s is held)"
                 % (self.state_path, self.state_path + ".lock")
-            ) from exc
+            )
+
+        collision = None
+        deadline = None
+        lock = None
+        while lock is None:
+            candidate = contextlib.ExitStack()
+            try:
+                candidate.enter_context(st.exclusive_mutation(self.state_path))
+            except st.ConcurrentStateMutation as exc:
+                candidate.close()
+                if not adopt_producer_handoff:
+                    raise collision_error() from exc
+                if collision is None:
+                    collision = collision_error()
+                    deadline = time.monotonic() + PRODUCER_HANDOFF_GRACE_S
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise collision from exc
+                time.sleep(min(PRODUCER_HANDOFF_POLL_S, remaining))
+            else:
+                lock = candidate
+
+        try:
+            if collision is not None:
+                disk = st.load(self.state_path)
+                if disk != self.state and not self._adopt_live_producer_updates(
+                    disk
+                ):
+                    raise collision
+            yield
+        finally:
+            lock.close()
 
     def _assert_not_stale(self):
-        """Refuse to act on in-memory state that another invocation has
-        advanced on disk — before any worker call, not after it."""
+        """Adopt authorized producer writes; refuse every other stale state."""
         if not os.path.exists(self.state_path):
             return
         disk = st.load(self.state_path)
         if disk.get("events") != self.state.get("events"):
+            if self._adopt_live_producer_updates(disk):
+                return
             raise ConcurrentRunError(
                 "state file %s changed on disk since this driver loaded it "
                 "(another invocation ran); start a new driver to continue"
                 % self.state_path
             )
+
+    def _adopt_live_producer_updates(self, disk):
+        """Refresh only when disk is exactly this state plus producer writes."""
+        current_events = self.state.get("events")
+        disk_events = disk.get("events")
+        if not isinstance(current_events, list) or not isinstance(
+            disk_events, list
+        ):
+            return False
+        if (
+            len(disk_events) <= len(current_events)
+            or disk_events[:len(current_events)] != current_events
+        ):
+            return False
+        candidate = copy.deepcopy(self.state)
+        for index, event in enumerate(
+            disk_events[len(current_events):], start=len(current_events)
+        ):
+            if (
+                not isinstance(event, dict)
+                or event.get("type") != "slice_producer_updated"
+                or event.get("seq") != index
+            ):
+                return False
+            selection = event.get("selection")
+            if not isinstance(selection, dict):
+                return False
+            try:
+                checked = tasks.validate_producer_selection(
+                    selection, "live producer update"
+                )
+                tasks.update_slice_producer(
+                    candidate,
+                    event.get("slice_id"),
+                    {
+                        "task_kind": event.get("task_kind"),
+                        **checked,
+                    },
+                )
+            except tasks.TaskRequestError:
+                return False
+            candidate["events"][-1] = copy.deepcopy(event)
+        if candidate != disk:
+            return False
+        self.state = disk
+        return True
 
     def _fix_family(self):
         return self.config.get("fix_family") or self.config["families_order"][0]
@@ -2638,13 +2729,29 @@ class Driver(object):
         }
         if output_directory is not None:
             request["output_directory"] = output_directory
+        order = {
+            "task_executor": "worker",
+            "configuration": {},
+            "request": request,
+        }
+        if kind in tasks.PRODUCER_TASK_KINDS:
+            order = tasks.producer_order(
+                self._slice_info(unit["slice_id"]), kind, request
+            )
+            if order["task_executor"] != "worker":
+                # Slice 5 reads selection at the common order seam but does
+                # not pull Slice 6's Brainstorming production lifecycle into
+                # the Worker adapter.
+                reason = (
+                    "selected %s TaskExecutor requires the slice-production "
+                    "adapter" % order["task_executor"]
+                )
+                st.fail_run(self.state, reason, unit=unit)
+                self._save()
+                raise StopStep(reason)
         record = tasks.admit_task(
             self.state,
-            {
-                "task_executor": "worker",
-                "configuration": {},
-                "request": request,
-            },
+            order,
             {
                 "worker": {
                     "agent": staffing_family,
@@ -4148,6 +4255,8 @@ class Driver(object):
             and not unit.get("design_update")
         ):
             return
+        slices = copy.deepcopy(slices)
+        contracts.validate_slices(slices, "replacement slice plan")
         if unit["kind"] != st.UNIT_SKELETON:
             before = list(self.state["milestone"]["slices"])
             old_ids = [item["id"] for item in before]
@@ -4190,7 +4299,7 @@ class Driver(object):
                 self.state,
                 "slices_updated",
                 unit=st.unit_key(unit),
-                slices=self.state["milestone"]["slices"],
+                slices=copy.deepcopy(self.state["milestone"]["slices"]),
             )
 
     def _brainstorming_references(self, unit, signal):
@@ -5418,6 +5527,11 @@ class Driver(object):
                 ),
                 original_request=original_request,
                 episode_authority=episode_authority,
+                producer_planning=(
+                    amendment_mode
+                    and self._skeleton_artifact()
+                    in self._editable_design_paths(unit)
+                ),
             )
             durable_stabilization_size = None
             if kind == contracts.KIND_IMPLEMENT:
@@ -5895,17 +6009,22 @@ class Driver(object):
             waiting = bool(unit and unit.get("brainstorming_wait"))
             waiting_session = self._brainstorming_wait_session()
             if steps >= max_steps and not waiting:
-                with self._exclusive():
+                with self._exclusive(adopt_producer_handoff=True):
                     self._assert_not_stale()
                     action, _note = self._decide_at_strategy_boundary()
                 if action.type not in (A_DONE, A_FAILED):
                     return 3
             else:
                 sealed_before = self._sealed_keys()
-                action, _note = self.step()
+                previous_handoff = self._allow_producer_handoff
+                self._allow_producer_handoff = True
+                try:
+                    action, _note = self.step()
+                finally:
+                    self._allow_producer_handoff = previous_handoff
             if action.type == A_DONE:
                 if st.current_unit(self.state) is None:
-                    with self._exclusive():
+                    with self._exclusive(adopt_producer_handoff=True):
                         self._assert_not_stale()
                         st.maybe_close_milestone(self.state)
                         self._save()
@@ -5926,7 +6045,7 @@ class Driver(object):
                 # so stopping here leaves the repo committed and clean for
                 # an out-of-band build. One-shot: the flag clears on
                 # honoring; a plain start resumes exactly where paused.
-                with self._exclusive():
+                with self._exclusive(adopt_producer_handoff=True):
                     self._assert_not_stale()
                     st.append_event(
                         self.state, "paused_after_seal",
@@ -5987,6 +6106,37 @@ class Driver(object):
             % (ledgers.skeleton_path(self.state),
                ledgers.goal_path(self.state))
         )
+
+    def _producer_review_context(self, unit):
+        """Expose the producer plan when a review must judge its visibility."""
+        skeleton = next(
+            (
+                candidate for candidate in self.state.get("units", [])
+                if candidate.get("kind") == st.UNIT_SKELETON
+            ),
+            None,
+        )
+        skeleton_path = (
+            (skeleton or {}).get("artifact")
+            or ledgers.skeleton_path(self.state)
+        )
+        if (
+            unit["kind"] != st.UNIT_SKELETON
+            and skeleton_path not in self._design_review_paths(unit)
+            # An active design update may replace the structured slice plan
+            # without changing a design-document path. Reuse that durable
+            # authority so already-open updates need no marker or migration.
+            and not unit.get("design_update")
+        ):
+            return None
+        return {
+            "producer_task_executor_by_slice": tasks.effective_slice_plan(
+                self.state["milestone"]["slices"]
+            ),
+            "explicit_operator_overrides": (
+                tasks.operator_producer_overrides(self.state)
+            ),
+        }
 
     def _ensure_goal_ledger(self):
         """Idempotent write of the goal.md snapshot ledger, for prompts
@@ -6528,10 +6678,21 @@ class Driver(object):
         self._terminalize_worker_task(unit, output, result=result)
         if kind == contracts.KIND_IMPLEMENT and output.get("suite_command"):
             st.set_discovered_suite(self.state, output["suite_command"])
-        if unit["kind"] == st.UNIT_SKELETON:
-            self.state["milestone"]["slices"] = output["slices"]
-        elif output.get("slices"):
-            self._maybe_update_slices(unit, output)
+        if output.get("slices"):
+            if (
+                unit["kind"] == st.UNIT_SKELETON
+                and kind == contracts.KIND_DRAFT_SKELETON
+                and not self.state["milestone"]["slices"]
+            ):
+                # The initial plan predates every possible producer write and
+                # needs no installation marker.  Every later changed plan is
+                # installed through _maybe_update_slices, which cuts off older
+                # override authority with its existing slices_updated event.
+                initial = copy.deepcopy(output["slices"])
+                contracts.validate_slices(initial, "initial slice plan")
+                self.state["milestone"]["slices"] = initial
+            else:
+                self._maybe_update_slices(unit, output)
         if (
             unit["kind"] == st.UNIT_SKELETON
             and self._guarantee_calibration_config() is not None
@@ -7978,6 +8139,7 @@ class Driver(object):
         elif has_validated_carrier:
             prompt = ""
         else:
+            editable_design_paths = self._editable_design_paths(unit)
             prompt = prompts.build_fix_findings(
             family,
             self.workspace,
@@ -8022,10 +8184,14 @@ class Driver(object):
             ),
             legacy_design_process=legacy_design_process,
             design_correction=design_context,
-            editable_design_paths=self._editable_design_paths(unit),
+            editable_design_paths=editable_design_paths,
             verification_repair=verification_repair,
             verification_commands=verification_commands,
             implementation_scope=self._implementation_scope(unit),
+            producer_planning=(
+                unit["kind"] != st.UNIT_SKELETON
+                and self._skeleton_artifact() in editable_design_paths
+            ),
             )
         n_fix = 1 + len(
             [r for r in unit["rounds"] if r["kind"] == contracts.KIND_FIX_FINDINGS]
@@ -8899,6 +9065,7 @@ class Driver(object):
         project_context = authority["project_context"]
         extensions = authority["extensions"]
         roots = authority["roots"]
+        producer_review_context = self._producer_review_context(unit)
         if active_task is None:
             prompt = prompts.build_delta_review(
                 family,
@@ -8916,6 +9083,7 @@ class Driver(object):
                 design_correction=review_correction,
                 editable_design_paths=self._design_review_paths(unit),
                 implementation_scope=self._implementation_scope(unit),
+                producer_review_context=producer_review_context,
             )
         else:
             prompt = self._worker_episode_prompt(
@@ -9812,6 +9980,7 @@ class Driver(object):
         # finding hard-requires its plain/example lay mirror.
         reform = interpreter.reform_active(self.state)
         review_model, review_effort = self._review_profile(family)
+        producer_review_context = self._producer_review_context(unit)
         prompt = prompts.build_review_round(
             family,
             self.workspace,
@@ -9829,6 +9998,7 @@ class Driver(object):
             wave_docs=self._wave_doc_paths(unit),
             editable_design_paths=self._design_review_paths(unit),
             implementation_scope=self._implementation_scope(unit),
+            producer_review_context=producer_review_context,
         )
         if active_review is not None:
             prompt = self._worker_episode_prompt(

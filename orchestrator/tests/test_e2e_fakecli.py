@@ -210,7 +210,15 @@ class TestCalculatorE2E(unittest.TestCase):
             ],
         )
         self.assertEqual(
-            summ["slices"], [{"id": 1, "title": "Calculator core"}]
+            summ["slices"],
+            [{
+                "id": 1,
+                "title": "Calculator core",
+                "producer_task_executor": {
+                    "draft_slice_note": {"task_executor": "worker"},
+                    "implement": {"task_executor": "worker"},
+                },
+            }],
         )
 
     def test_status_json_matches_summary_shape(self):

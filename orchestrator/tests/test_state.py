@@ -2294,7 +2294,19 @@ class TestSummary(TempWorkspaceCase):
         self.assertEqual(summ["goal"], "Build X")
         self.assertEqual(summ["workspace"], self.workspace)
         self.assertEqual(summ["milestone_status"], st.M_FAILED)
-        self.assertEqual(summ["slices"], [{"id": 1, "title": "slice 1"}])
+        self.assertEqual(
+            summ["slices"],
+            [
+                {
+                    "id": 1,
+                    "title": "slice 1",
+                    "producer_task_executor": {
+                        "draft_slice_note": {"task_executor": "worker"},
+                        "implement": {"task_executor": "worker"},
+                    },
+                }
+            ],
+        )
         self.assertEqual(summ["current_unit"], "slice_doc-01")
         self.assertEqual(summ["display_current_unit"], "slice_doc-01")
         self.assertEqual(summ["current_unit_status"], st.U_FAILED)

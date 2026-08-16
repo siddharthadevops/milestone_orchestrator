@@ -364,3 +364,58 @@
 - `claude-claude-S5-NOTE-004` (raised claude, cleared codex): The note pins no preservation contract for producer members when a later legitimate slice-table update re-emits the plan, so an accepted, still-prospective operator override can be silently replaced by a worker's proposal. — This is a real silent behavior and test-coverage gap, but a max-effort builder must confront the existing whole-table replacement against the note’s accepted-write guarantee and should stop or preserve it; if missed, correction is a local merge rule plus regression test and re-pinning of the prospec
 - `claude-claude-S5-NOTE-005` (raised claude, cleared codex): The pinned producer route has no error contract for a slice-id path segment that is unknown or not an integer, even though the note otherwise pins the route's complete error vocabulary. — The note omits rather than misstates this path-validation edge, so a max-effort builder should expose it through mandatory stop-report or endpoint testing, and any missed behavior is self-revealing and corrected locally by pinning one response contract and adding focused tests.
 
+## slice_impl-05 (Slice producer planning and override)
+
+- draft: kind `implement`, artifact `-` (raw: `implementation/milestones/tasks-2/.run/raw/slice_impl-05-draft.txt`)
+
+| Round | Kind | Family | Findings | Triage | Raw |
+|---|---|---|---|---|---|
+| slice_impl-05-codex-r1 | review_round | codex | 3 | 3 reported | `implementation/milestones/tasks-2/.run/raw/slice_impl-05-codex-r1.txt` |
+| slice_impl-05-codex-r2 | fix_findings | codex | 3 | 3 fixed | `implementation/milestones/tasks-2/.run/raw/slice_impl-05-fix1.txt` |
+| slice_impl-05-codex-r3 | delta_review | codex | 0 | clean | `implementation/milestones/tasks-2/.run/raw/slice_impl-05-delta1.txt` |
+| slice_impl-05-codex-r4 | review_round | codex | 2 | 2 reported | `implementation/milestones/tasks-2/.run/raw/slice_impl-05-codex-r2.txt` |
+| slice_impl-05-codex-r5 | fix_findings | codex | 2 | 2 fixed | `implementation/milestones/tasks-2/.run/raw/slice_impl-05-fix2.txt` |
+| slice_impl-05-codex-r6 | delta_review | codex | 2 | 2 reported | `implementation/milestones/tasks-2/.run/raw/slice_impl-05-delta2.txt` |
+| slice_impl-05-codex-r7 | fix_findings | codex | 2 | 2 fixed | `implementation/milestones/tasks-2/.run/raw/slice_impl-05-fix3.txt` |
+| slice_impl-05-codex-r8 | delta_review | codex | 0 | clean | `implementation/milestones/tasks-2/.run/raw/slice_impl-05-delta3.txt` |
+| slice_impl-05-codex-r9 | review_round | codex | 1 | 1 reported | `implementation/milestones/tasks-2/.run/raw/slice_impl-05-codex-r3.txt` |
+| slice_impl-05-codex-r10 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/tasks-2/.run/raw/slice_impl-05-fix4.txt` |
+| slice_impl-05-codex-r11 | delta_review | codex | 1 | 1 reported | `implementation/milestones/tasks-2/.run/raw/slice_impl-05-delta4.txt` |
+| slice_impl-05-codex-r12 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/tasks-2/.run/raw/slice_impl-05-fix5.txt` |
+| slice_impl-05-codex-r13 | delta_review | codex | 1 | 1 reported | `implementation/milestones/tasks-2/.run/raw/slice_impl-05-delta5.txt` |
+| slice_impl-05-codex-r14 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/tasks-2/.run/raw/slice_impl-05-fix6.txt` |
+| slice_impl-05-codex-r15 | delta_review | codex | 0 | clean | `implementation/milestones/tasks-2/.run/raw/slice_impl-05-delta6.txt` |
+| slice_impl-05-codex-r16 | review_round | codex | 2 | 2 reported | `implementation/milestones/tasks-2/.run/raw/slice_impl-05-codex-r4.txt` |
+| slice_impl-05-codex-r17 | fix_findings | codex | 2 | 2 fixed | `implementation/milestones/tasks-2/.run/raw/slice_impl-05-fix7.txt` |
+| slice_impl-05-codex-r18 | delta_review | codex | 0 | clean | `implementation/milestones/tasks-2/.run/raw/slice_impl-05-delta7.txt` |
+| slice_impl-05-codex-r19 | review_round | codex | 0 | clean | `implementation/milestones/tasks-2/.run/raw/slice_impl-05-codex-r5.txt` |
+| slice_impl-05-claude-r1 | review_round | claude | 5 | 5 reported | `implementation/milestones/tasks-2/.run/raw/slice_impl-05-claude-r1.txt` |
+| slice_impl-05-codex-r20 | fix_findings | codex | 4 | 4 fixed | `implementation/milestones/tasks-2/.run/raw/slice_impl-05-fix8-rethink-return.txt` |
+| slice_impl-05-codex-r21 | delta_review | codex | 0 | clean | `implementation/milestones/tasks-2/.run/raw/slice_impl-05-delta8.txt` |
+| slice_impl-05-codex-r22 | review_round | codex | 3 | 3 reported | `implementation/milestones/tasks-2/.run/raw/slice_impl-05-codex-r6.txt` |
+| slice_impl-05-codex-r23 | fix_findings | codex | 3 | 3 fixed | `implementation/milestones/tasks-2/.run/raw/slice_impl-05-fix9.txt` |
+| slice_impl-05-codex-r24 | delta_review | codex | 0 | clean | `implementation/milestones/tasks-2/.run/raw/slice_impl-05-delta9.txt` |
+| slice_impl-05-codex-r25 | review_round | codex | 2 | 2 reported | `implementation/milestones/tasks-2/.run/raw/slice_impl-05-codex-r7.txt` |
+| slice_impl-05-codex-r26 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/tasks-2/.run/raw/slice_impl-05-fix10.txt` |
+| slice_impl-05-codex-r27 | delta_review | codex | 0 | clean | `implementation/milestones/tasks-2/.run/raw/slice_impl-05-delta10.txt` |
+| slice_impl-05-codex-r28 | review_round | codex | 1 | 1 reported | `implementation/milestones/tasks-2/.run/raw/slice_impl-05-codex-r8.txt` |
+| slice_impl-05-codex-r29 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/tasks-2/.run/raw/slice_impl-05-fix11.txt` |
+| slice_impl-05-codex-r30 | delta_review | codex | 0 | clean | `implementation/milestones/tasks-2/.run/raw/slice_impl-05-delta11.txt` |
+| slice_impl-05-codex-r31 | review_round | codex | 0 | clean | `implementation/milestones/tasks-2/.run/raw/slice_impl-05-codex-r9.txt` |
+| slice_impl-05-claude-r2 | review_round | claude | 2 | 2 reported | `implementation/milestones/tasks-2/.run/raw/slice_impl-05-claude-r2.txt` |
+| slice_impl-05-codex-r32 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/tasks-2/.run/raw/slice_impl-05-fix12.txt` |
+| slice_impl-05-codex-r33 | delta_review | codex | 0 | clean | `implementation/milestones/tasks-2/.run/raw/slice_impl-05-delta12.txt` |
+| slice_impl-05-codex-r34 | review_round | codex | 0 | clean | `implementation/milestones/tasks-2/.run/raw/slice_impl-05-codex-r10.txt` |
+| slice_impl-05-claude-r3 | review_round | claude | 1 | DEBT-CLEAN (reclassified) | `implementation/milestones/tasks-2/.run/raw/slice_impl-05-claude-r3.txt` |
+
+### Review completion — SATISFIED
+
+- deterministic result: every configured family was clean or debt-clean on the same current bytes; full verification was not due at this boundary; no extra reviewer was called
+- cited reviews: `slice_impl-05-codex-r34`, `slice_impl-05-claude-r3`
+
+**Deferred debt (opposite-family verified):**
+- `claude-claude-S5-005` (raised claude, cleared codex): The new review block makes any skeleton document without visible producer columns a mandatory finding, so re-reviewing a pre-existing skeleton forces a document backfill the design says needs no migration. — The unconditional “always a finding” instruction directly contradicts the pinned no-migration Worker default and will likely trigger the unnecessary backfill, but correction is a local review-rule/test adjustment and at worst removes one spurious document-fix cycle.
+- `codex-codex-S5-002` (raised codex, cleared codex): Focused tests omit three B8-mandated replacement compatibility paths — The three omitted behavioral regressions can silently pass the focused gate, but the B8 contract remains explicit for a capable builder and correction is limited to adding focused history tests plus any small replacement-state fix they expose.
+- `claude-claude-S5-IMPL-002` (raised claude, cleared codex): The skeleton's hard-register edits stripped every `file:line` citation from five pinned-fact rows and six Question-Battery rows, including rows B8 does not touch, leaving a column headed `authority (file:line)` with no file or line at all. — The exact route and behavioral rules remain explicit and amendment-backed, so missing file-line anchors create traceability friction rather than plausible silent misdirection, and restoring the citations is a small local documentation fix.
+- `claude-claude-S5-IMPL-R2-001` (raised claude, cleared codex): The same commit that added ~20 lines to skeleton.md left slice-05.md's skeleton `authority (file:line)` citations unshifted, so every pinned-fact and Question-Battery citation past skeleton line ~200 now resolves to unrelated rows or blank lines. — The citations visibly land on unrelated or blank skeleton lines while the intended named rows remain nearby and the contract prose is explicit, so silent misdirection is unlikely and correction is only a local citation re-pin.
+

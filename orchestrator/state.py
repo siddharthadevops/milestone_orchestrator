@@ -2650,11 +2650,19 @@ def summary(state, acts_overlay=None, current_review_model=None):
     total_cost = unassigned_cost
     for unit_cost in cost_by_unit.values():
         total_cost = _add_cost(total_cost, unit_cost)
+    # Producer defaults are a read-time compatibility rule.  Keep old and
+    # partial durable plans byte-stable while every current projection exposes
+    # the complete pair.
+    from orchestrator import tasks
+
+    effective_slices = tasks.effective_slice_plan(
+        state["milestone"]["slices"]
+    )
     out = {
         "goal": state["goal"],
         "workspace": state["workspace"],
         "milestone_status": state["milestone"]["status"],
-        "slices": state["milestone"]["slices"],
+        "slices": effective_slices,
         "current_unit": unit_key(unit) if unit else None,
         "display_current_unit": display_unit_key(unit) if unit else None,
         "current_unit_status": unit["status"] if unit else None,

@@ -24,6 +24,8 @@ run's live state) and a JSON API:
                                    current {name, rigor} model-profile choice
     POST   /api/runs/<id>/model-profile
                                    wholly replace that current choice
+    POST   /api/runs/<id>/slices/<slice-id>/producer
+                                   replace one still-prospective slice producer
     GET    /api/runs/<id>/artifact ?unit=<unit_key> — the unit's recorded
                                    markdown artifact (skeleton/slice doc),
                                    served for the panel's doc viewer
@@ -200,7 +202,7 @@ from . import brainstorming, brainstorming_lifecycle
 from . import brainstorming_tasks
 from . import driver, errclass, gitops, gitsync, interpreter, kvstore, model_profiles
 from . import profiles
-from . import projects, registry
+from . import projects, registry, tasks
 from . import reuse_audit
 from . import state as st
 from . import workareas
@@ -2716,6 +2718,33 @@ def set_model_profile_selection(home, run_id, body):
     return selected
 
 
+def set_slice_producer(home, run_id, slice_id, body):
+    """Serialize one prospective producer write against task admission."""
+    entry = registry.get(registry.load(home), run_id)
+    if entry is None:
+        raise ApiError(404, "unknown run %r" % run_id)
+    try:
+        checked = tasks.validate_producer_override(body)
+    except tasks.TaskRequestError as exc:
+        raise ApiError(400, exc.code) from exc
+    try:
+        # Producer choice is best-effort bookkeeping.  Refuse a busy run
+        # instead of queuing ahead of its next non-blocking driver step.
+        with st.exclusive_mutation(entry["state_path"]):
+            state = st.load(entry["state_path"])
+            producer_map = tasks.update_slice_producer(
+                state, slice_id, checked
+            )
+            st.save(entry["state_path"], state)
+    except st.ConcurrentStateMutation as exc:
+        raise ApiError(409, tasks.TASK_UPDATE_BUSY) from exc
+    except tasks.TaskRequestError as exc:
+        status = 409 if exc.code == tasks.TASK_SELECTION_FROZEN else 400
+        raise ApiError(status, exc.code) from exc
+    _evict_summary(entry["state_path"])
+    return producer_map
+
+
 def set_profile_swap(home, run_id, body):
     """Repoint a run at another strategy profile at RUNTIME. Swap != edit:
     the profile is never mutated in place. Resolve one complete retained
@@ -4181,7 +4210,26 @@ def make_handler(home):
                     parts = route.rstrip("/").split("/")
                     if len(parts) >= 4:
                         require_run_access(home, who, parts[3])
-                    if len(parts) == 5 and parts[4] == "start":
+                    if (
+                        len(parts) == 7
+                        and parts[4] == "slices"
+                        and parts[6] == "producer"
+                    ):
+                        try:
+                            slice_id = int(parts[5])
+                        except (TypeError, ValueError):
+                            raise ApiError(400, tasks.INVALID_TASK_REQUEST)
+                        producer_map = set_slice_producer(
+                            home, parts[3], slice_id, self._body()
+                        )
+                        self._json(
+                            200,
+                            {
+                                "ok": True,
+                                "producer_task_executor": producer_map,
+                            },
+                        )
+                    elif len(parts) == 5 and parts[4] == "start":
                         entry = start_run(home, parts[3])
                         self._json(200, {"ok": True, "run": run_status(entry, home=home)})
                     elif len(parts) == 5 and parts[4] == "stop":
