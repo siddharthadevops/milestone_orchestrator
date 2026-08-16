@@ -262,15 +262,16 @@ The goal is achieved when:
 
 | Unit | Status | Rounds | Review result | Gate commit |
 |---|---|---|---|---|
-| skeleton | reviewed | 30 | satisfied | 713bb1a |
-| slice_doc-01 (Task contracts and catalogue) | reviewed | 6 | satisfied | 713bb1a |
+| skeleton | reviewed | 30 | satisfied | 15762ac |
+| slice_doc-01 (Task contracts and catalogue) | reviewed | 6 | satisfied | 15762ac |
 | slice_impl-01 (Task contracts and catalogue) | reviewed | 5 | satisfied | 5260b8b |
-| slice_doc-02 (Durable task orders and accounting) | reviewed | 5 | satisfied | 713bb1a |
+| slice_doc-02 (Durable task orders and accounting) | reviewed | 5 | satisfied | 15762ac |
 | slice_impl-02-a (Durable task orders and accounting) | reviewed | 5 | satisfied | 8cbaafa |
 | slice_impl-02-b (Durable task orders and accounting) | reviewed | 8 | satisfied | 2a33c65 |
-| slice_doc-03 (Worker executor and default milestone cutover) | reviewed | 2 | satisfied | 713bb1a |
+| slice_doc-03 (Worker executor and default milestone cutover) | reviewed | 2 | satisfied | 15762ac |
 | slice_impl-03 (Worker executor and default milestone cutover) | reviewed | 51 | satisfied | 713bb1a |
-| slice_doc-04 (Brainstorming executor adapter) | reviewed | 2 | satisfied | 1963fb0 |
+| slice_doc-04 (Brainstorming executor adapter) | reviewed | 2 | satisfied | 15762ac |
 | slice_impl-04 (Brainstorming executor adapter) | reviewed | 32 | satisfied | 38ec5e7 |
-| slice_doc-05 (Slice producer planning and override) | reviewed | 2 | satisfied | 950da8a |
-| slice_impl-05 (Slice producer planning and override) | reviewed | 37 | satisfied | - |
+| slice_doc-05 (Slice producer planning and override) | reviewed | 2 | satisfied | 15762ac |
+| slice_impl-05 (Slice producer planning and override) | reviewed | 37 | satisfied | 15762ac |
+| slice_doc-06 (Brainstorming slice production) | reviewed | 8 | satisfied | - |

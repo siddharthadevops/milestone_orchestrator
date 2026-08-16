@@ -419,3 +419,31 @@
 - `claude-claude-S5-IMPL-002` (raised claude, cleared codex): The skeleton's hard-register edits stripped every `file:line` citation from five pinned-fact rows and six Question-Battery rows, including rows B8 does not touch, leaving a column headed `authority (file:line)` with no file or line at all. — The exact route and behavioral rules remain explicit and amendment-backed, so missing file-line anchors create traceability friction rather than plausible silent misdirection, and restoring the citations is a small local documentation fix.
 - `claude-claude-S5-IMPL-R2-001` (raised claude, cleared codex): The same commit that added ~20 lines to skeleton.md left slice-05.md's skeleton `authority (file:line)` citations unshifted, so every pinned-fact and Question-Battery citation past skeleton line ~200 now resolves to unrelated rows or blank lines. — The citations visibly land on unrelated or blank skeleton lines while the intended named rows remain nearby and the contract prose is explicit, so silent misdirection is unlikely and correction is only a local citation re-pin.
 
+## slice_doc-06 (Brainstorming slice production)
+
+- draft: kind `draft_slice_note`, artifact `implementation/milestones/tasks-2/slices/slice-06.md` (raw: `implementation/milestones/tasks-2/.run/raw/slice_doc-06-draft.txt`)
+
+| Round | Kind | Family | Findings | Triage | Raw |
+|---|---|---|---|---|---|
+| slice_doc-06-codex-r1 | review_round | codex | 1 | 1 reported | `implementation/milestones/tasks-2/.run/raw/slice_doc-06-codex-r1.txt` |
+| slice_doc-06-codex-r2 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/tasks-2/.run/raw/slice_doc-06-fix1.txt` |
+| slice_doc-06-codex-r3 | delta_review | codex | 0 | clean | `implementation/milestones/tasks-2/.run/raw/slice_doc-06-delta1.txt` |
+| slice_doc-06-codex-r4 | review_round | codex | 2 | 2 reported | `implementation/milestones/tasks-2/.run/raw/slice_doc-06-codex-r2.txt` |
+| slice_doc-06-codex-r5 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/tasks-2/.run/raw/slice_doc-06-fix2.txt` |
+| slice_doc-06-codex-r6 | delta_review | codex | 0 | clean | `implementation/milestones/tasks-2/.run/raw/slice_doc-06-delta2.txt` |
+| slice_doc-06-codex-r7 | review_round | codex | 2 | DEBT-CLEAN (reclassified) | `implementation/milestones/tasks-2/.run/raw/slice_doc-06-codex-r3.txt` |
+| slice_doc-06-claude-r1 | review_round | claude | 3 | DEBT-CLEAN (reclassified) | `implementation/milestones/tasks-2/.run/raw/slice_doc-06-claude-r1.txt` |
+
+### Review completion — SATISFIED
+
+- deterministic result: every configured family was clean or debt-clean on the same current bytes; full verification was not due at this boundary; no extra reviewer was called
+- cited reviews: `slice_doc-06-codex-r7`, `slice_doc-06-claude-r1`
+
+**Deferred debt (opposite-family verified):**
+- `codex-codex-S6-002` (raised codex, cleared codex): The full-suite handoff invents producer-specific verification behavior — The slice repeatedly pins and tests a producer-specific verification rule that contradicts the protected producer-neutral baseline, so the builder would likely implement it without stopping, while correction is bounded to removing that Slice 6 behavior and its focused tests.
+- `codex-codex-S6-003` (raised codex, cleared codex): Profile-loss fallback is not covered by the staffing verification — This is a real negative-path coverage gap, but the artifact explicitly forbids snapshot fallback, so a capable builder is unlikely to drift silently and correction would be a local fallback removal plus regression test.
+- `codex-codex-S6-004` (raised codex, cleared codex): The focused suite duplicates compatibility proof assigned elsewhere — The explicit focused-test requirement can silently make the builder duplicate four Worker-ownership assertions already assigned to compatibility coverage, but correction is a small local removal from the Slice 6 test module.
+- `claude-claude-S6-101` (raised claude, cleared codex): The note pins a staffing-evidence success gate that no authorized mechanism can enforce: it asserts a model-backed Brainstorming production "cannot succeed with only a null-staffed aggregate effect event", but task success is decided solely by the adapter's production-effect completion result, which by contract carries no staffing. — The hard verification requirement can plausibly steer the builder into a forbidden post-result staffing gate despite adjacent contrary language, while correction would remain bounded to removing that gate and its focused test within this unit.
+- `claude-claude-S6-102` (raised claude, cleared codex): The note makes Brainstorming a full slice-implementation producer without declaring any posture for the milestone's implementation size control, so the only run-failing guard on implementation size silently disappears for that path — or invites an unauthorized supervisor for a Brainstorming session. — The note omits a required size-control posture and corresponding proof, so a capable builder should stop on the visible policy gap but could silently bypass the Worker guard; correction would require a bounded Slice 6 contract decision plus implementation and tests, without external or irreversible 
+- `claude-claude-S6-103` (raised claude, cleared codex): The full-suite handoff is labelled a Strict guarantee although its promised outcome is produced only by a review model's judgment, and its absolute claim that a repository with a suite 'cannot seal from an empty verification list' does not hold at the driver's seal boundary. This challenges the posture label only, not the legitimacy of the handoff itself. — The note repeatedly pins reviewer-mediated empty-command correction as a strict no-seal guarantee even though non-checkpoint units seal directly from clean reviews, so a capable builder may silently encode the wrong contract or test expectation, but correction is a local posture/expectation edit bec
+

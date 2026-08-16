@@ -21,11 +21,3 @@ genuinely new evidence (`contests`).
 - rationale: Claude verified the artifacts and implementation and agreed that B7 makes the claimed review repetition permitted baseline behavior with no violated guarantee or incremental harm.
 - prevention: implementation/milestones/tasks-2/skeleton.md (B7 now explicitly records ordinary pre-B6 mismatch handling and the narrow unbound advanced-family recovery guard.)
 
-## [slice_impl-04-codex-r11/codex-S4-IMPL-002]
-
-- unit: slice_impl-04
-- severity: P2
-- finding: Production effects bypass staffing authority and per-call evidence
-- rationale: Claude independently agreed that no current consumer, observable damage, or violated guarantee exists; adding a staffing protocol would be unsupported machinery.
-- prevention: orchestrator/brainstorming_tasks.py (Clarified that the callback reports one non-participant effect operation while physical participant calls retain lifecycle staffing evidence.)
-
