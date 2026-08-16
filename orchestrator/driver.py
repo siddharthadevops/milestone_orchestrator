@@ -2038,6 +2038,23 @@ class Driver(object):
             return [discovered]
         return []
 
+    def _review_verification_commands(self, unit):
+        """Expose an empty-suite handoff only for Brainstorming production.
+
+        Older drafts without a task link are Worker-produced.  A linked draft
+        uses its frozen task order rather than the current prospective slice
+        choice, which may govern only a later successor.
+        """
+        if unit.get("kind") != st.UNIT_SLICE_IMPL:
+            return None
+        task_id = (unit.get("draft") or {}).get("task_id")
+        if task_id is None:
+            return None
+        record = tasks.task_record(self.state, task_id)
+        if record["order"]["task_executor"] != "brainstorming":
+            return None
+        return self._verification_commands(unit)
+
     def _corrected_suite_command(self):
         """A fix_findings output with suite_command is allowed to correct
         a wrong verification gate. Without this, stale explicit config keeps
@@ -2668,6 +2685,39 @@ class Driver(object):
             raise st.IllegalTransition("the active Worker task is terminal")
         return record
 
+    def _active_brainstorming_task(self, unit, kind):
+        reference = unit.get("active_task")
+        if reference is None:
+            return None
+        if (
+            not isinstance(reference, dict)
+            or set(reference) != {"id", "kind"}
+            or reference.get("kind") != kind
+        ):
+            raise st.IllegalTransition(
+                "unit %s has an incompatible active task" % st.unit_key(unit)
+            )
+        record = tasks.task_record(self.state, reference.get("id"))
+        if record["order"]["task_executor"] != "brainstorming":
+            raise st.IllegalTransition(
+                "the active task is not a Brainstorming task"
+            )
+        if record["result"] is not None:
+            raise st.IllegalTransition(
+                "the active Brainstorming task is terminal"
+            )
+        return record
+
+    def _brainstorming_producer_selected(self, unit, kind):
+        reference = unit.get("active_task")
+        if reference is not None:
+            record = tasks.task_record(self.state, reference.get("id"))
+            return record["order"]["task_executor"] == "brainstorming"
+        selection = tasks.effective_slice_producers(
+            self._slice_info(unit["slice_id"])
+        )[kind]
+        return selection["task_executor"] == "brainstorming"
+
     def _admit_worker_task(
         self,
         unit,
@@ -2739,16 +2789,9 @@ class Driver(object):
                 self._slice_info(unit["slice_id"]), kind, request
             )
             if order["task_executor"] != "worker":
-                # Slice 5 reads selection at the common order seam but does
-                # not pull Slice 6's Brainstorming production lifecycle into
-                # the Worker adapter.
-                reason = (
-                    "selected %s TaskExecutor requires the slice-production "
-                    "adapter" % order["task_executor"]
+                raise st.IllegalTransition(
+                    "selected production task is not a Worker task"
                 )
-                st.fail_run(self.state, reason, unit=unit)
-                self._save()
-                raise StopStep(reason)
         record = tasks.admit_task(
             self.state,
             order,
@@ -5035,6 +5078,297 @@ class Driver(object):
         unit.pop("implementation_attempt_snapshot", None)
         return "drafted %s" % (unit["artifact"] or "(implementation)")
 
+    def _brainstorming_production_request(self, unit, kind):
+        """Freeze one target-free milestone brief for the selected producer."""
+        from orchestrator import brainstorming_tasks
+
+        slice_info = self._slice_info(unit["slice_id"])
+        project_context, _extensions, _roots = self._project_prompt_inputs(
+            unit, kind
+        )
+        governing = (
+            self._skeleton_artifact()
+            if kind == contracts.KIND_DRAFT_SLICE_NOTE
+            else self._slice_note_artifact(unit["slice_id"])
+        )
+        skeleton_path = self._skeleton_artifact()
+        remodeled = (
+            kind == contracts.KIND_IMPLEMENT
+            and (
+                bool(unit.get("has_gap_remodel"))
+                or self._note_predates_skeleton(unit["slice_id"])
+            )
+        )
+        prompt = prompts.build_brainstorming_production(
+            kind,
+            self.workspace,
+            self._goal_for(unit),
+            slice_info,
+            governing,
+            amendments=self._amendments(),
+            project_context=project_context,
+            implementation_scope=(
+                self._implementation_scope(unit)
+                if kind == contracts.KIND_IMPLEMENT else None
+            ),
+            skeleton_path=skeleton_path,
+            remodeled=remodeled,
+            two_register=(
+                kind == contracts.KIND_DRAFT_SLICE_NOTE
+                and interpreter.doc_register(self.state) == "lay+hard-table"
+            ),
+            battery=(
+                interpreter.battery_questions(self.state, unit["kind"])
+                if kind == contracts.KIND_DRAFT_SLICE_NOTE else None
+            ),
+        )
+        context = {
+            "task_kind": kind,
+            "unit": st.unit_key(unit),
+        }
+        if project_context is not None:
+            context["project_context"] = copy.deepcopy(project_context)
+        references = [governing]
+        if remodeled and skeleton_path not in references:
+            references.append(skeleton_path)
+        request = {
+            "work_area": self._task_work_area(),
+            "request": prompt,
+            "context": context,
+            "reference_documents": references,
+        }
+        planned_path = None
+        if kind == contracts.KIND_DRAFT_SLICE_NOTE:
+            planned_path = ledgers.slice_note_path(
+                self.state, unit["slice_id"]
+            )
+            request["context"]["planned_slice_note_path"] = planned_path
+            request = brainstorming_tasks.prepare_slice_note_request(
+                request, planned_path
+            )
+        return request, planned_path
+
+    def _admit_brainstorming_production(self, unit, kind):
+        """Reuse or admit the one Brainstorming task owned by this unit."""
+        from orchestrator import brainstorming_tasks
+
+        active = self._active_brainstorming_task(unit, kind)
+        if active is not None:
+            planned = active["order"]["request"].get("context", {}).get(
+                "planned_slice_note_path"
+            )
+            return active, planned
+        request, planned = self._brainstorming_production_request(unit, kind)
+        order = tasks.producer_order(
+            self._slice_info(unit["slice_id"]), kind, request
+        )
+        if order["task_executor"] != "brainstorming":
+            raise st.IllegalTransition(
+                "selected production task is not a Brainstorming task"
+            )
+        try:
+            record = brainstorming_tasks.admit_task(
+                self.state,
+                order,
+                self.config,
+                self.workspace,
+                model_profile_runtime=self._brainstorming_profile_runtime(),
+            )
+        except tasks.TaskRequestError as exc:
+            reason = "Brainstorming producer admission failed: %s" % exc.code
+            st.fail_run(
+                self.state,
+                reason,
+                unit=unit,
+                type_="brainstorming_production",
+            )
+            self._save()
+            raise StopStep(reason)
+        unit["active_task"] = {"id": record["id"], "kind": kind}
+        self._save()
+        return record, planned
+
+    def _fail_brainstorming_production(self, unit, record, session_id=None):
+        result = record.get("result") or {}
+        wait = unit.get("brainstorming_wait") or {}
+        self._record_brainstorming_work(
+            unit,
+            session_id or wait.get("session_id"),
+            result.get("duration_s"),
+            result.get("token_usage"),
+            result.get("token_usage_partial", False),
+            cost=result.get("cost"),
+            cost_partial=result.get("cost_partial", False),
+            task_id=record.get("id"),
+        )
+        self._enforce_sealed_artifacts(
+            "%s-brainstorming-production" % st.unit_key(unit)
+        )
+        unit.pop("brainstorming_wait", None)
+        reference = unit.get("active_task") or {}
+        if reference.get("id") == record.get("id"):
+            unit.pop("active_task", None)
+        reason = result.get("reason") or "Brainstorming production failed"
+        st.fail_run(
+            self.state,
+            reason,
+            unit=unit,
+            type_="brainstorming_production",
+        )
+        self._save()
+        raise StopStep(reason)
+
+    def _start_brainstorming_production(self, unit, kind):
+        from orchestrator import brainstorming_tasks
+
+        record, planned = self._admit_brainstorming_production(unit, kind)
+        home = brainstorming_milestone.service_home(
+            self.state, active_home=self.model_profiles_home
+        )
+        try:
+            projection = brainstorming_tasks.start_task(
+                self.state,
+                record["id"],
+                self.config,
+                home,
+                model_profile_runtime=self._brainstorming_profile_runtime(),
+            )
+        except brainstorming_lifecycle.PublicLifecycleError as exc:
+            if exc.code == brainstorming_lifecycle.STOP_INCOMPLETE:
+                return "waiting for Brainstorming producer recovery"
+            st.fail_run(
+                self.state,
+                "Brainstorming producer could not be started: %s" % exc.code,
+                unit=unit,
+                type_="brainstorming_operational",
+            )
+            self._save()
+            raise StopStep("Brainstorming producer start failed")
+        record = tasks.task_record(self.state, record["id"])
+        if record["result"] is not None:
+            return self._fail_brainstorming_production(
+                unit, record, session_id=(projection or {}).get("id")
+            )
+        session_id = (projection or {}).get("id")
+        if not isinstance(session_id, str) or not session_id:
+            st.fail_run(
+                self.state,
+                "Brainstorming producer exposed no session identity",
+                unit=unit,
+                type_="brainstorming_operational",
+            )
+            self._save()
+            raise StopStep("Brainstorming producer start failed")
+        unit["brainstorming_wait"] = {
+            "session_id": session_id,
+            "origin": {
+                "unit": st.unit_key(unit),
+                "kind": kind,
+                "task_executor": "brainstorming",
+                "task_id": record["id"],
+                **(
+                    {"planned_slice_note_path": planned}
+                    if planned is not None else {}
+                ),
+            },
+        }
+        st.append_event(
+            self.state,
+            "brainstorming_wait_started",
+            unit=st.unit_key(unit),
+            kind=kind,
+            session_id=session_id,
+            task_id=record["id"],
+        )
+        return "waiting for Brainstorming producer %s" % session_id
+
+    def _do_brainstorming_production_wait(self, unit, wait):
+        from orchestrator import brainstorming_tasks
+
+        origin = wait.get("origin") or {}
+        kind = origin.get("kind")
+        task_id = origin.get("task_id")
+        active = self._active_brainstorming_task(unit, kind)
+        if active is None or active["id"] != task_id:
+            raise st.IllegalTransition(
+                "Brainstorming production wait has no matching open task"
+            )
+        home = brainstorming_milestone.service_home(
+            self.state, active_home=self.model_profiles_home
+        )
+        profile_runtime = (
+            self._brainstorming_profile_runtime()
+            if (active.get("resolved_staffing") or {}).get(
+                "dispatch_authority"
+            ) == "current_profile"
+            else None
+        )
+        dispatch_authority = (active.get("resolved_staffing") or {}).get(
+            "dispatch_authority"
+        )
+        try:
+            terminal = brainstorming_tasks.finish_task(
+                self.state,
+                task_id,
+                home,
+                wait["session_id"],
+                lambda effect_request: brainstorming_tasks.apply_agreed_effects(
+                    home,
+                    wait["session_id"],
+                    task_id,
+                    effect_request,
+                    dispatch_authority=dispatch_authority,
+                    model_profile_runtime=profile_runtime,
+                ),
+            )
+        except Exception as exc:
+            # Inspection and recoverable service faults leave the task and its
+            # wait intact. Explicit Resume re-enters this same identity.
+            self._enforce_sealed_artifacts(
+                "%s-brainstorming-production" % st.unit_key(unit)
+            )
+            st.fail_run(
+                self.state,
+                "Brainstorming producer could not be inspected: %s" % exc,
+                unit=unit,
+                type_="brainstorming_operational",
+            )
+            self._save()
+            raise StopStep("Brainstorming producer inspection failed")
+        if terminal is None:
+            return "waiting for Brainstorming producer %s" % wait["session_id"]
+        if terminal["result"]["status"] != "success":
+            return self._fail_brainstorming_production(unit, terminal)
+
+        self._enforce_sealed_artifacts(
+            "%s-brainstorming-production" % st.unit_key(unit)
+        )
+        result = terminal["result"]
+        native = copy.deepcopy(result.get("native_result"))
+        if not isinstance(native, dict):
+            raise st.IllegalTransition("Brainstorming result is unavailable")
+        st.record_draft(
+            self.state,
+            unit,
+            kind,
+            native,
+            family=None,
+            duration=result["duration_s"],
+            token_usage=result.get("token_usage"),
+            token_usage_partial=result.get("token_usage_partial", False),
+            cost=result.get("cost"),
+            cost_partial=result.get("cost_partial", False),
+            task_id=task_id,
+        )
+        if kind == contracts.KIND_DRAFT_SLICE_NOTE:
+            planned = origin.get("planned_slice_note_path")
+            brainstorming_tasks.record_slice_note_handoff(
+                unit, terminal, planned
+            )
+        unit.pop("brainstorming_wait", None)
+        unit.pop("active_task", None)
+        return self._finish_draft(unit, "Brainstorming production completed")
+
     def _complete_pending_wip(self, unit):
         """Create or adopt exactly one durable WIP before reviews open."""
         pending = unit.get("pending_wip")
@@ -5083,13 +5417,18 @@ class Driver(object):
     def _record_brainstorming_work(self, unit, session_id, duration_s,
                                    token_usage=None,
                                    token_usage_partial=False,
-                                   cost=None, cost_partial=False):
+                                   cost=None, cost_partial=False,
+                                   task_id=None):
         """Attach one independent session's consumed LLM work exactly once."""
         if duration_s is None and token_usage is None and cost is None:
             return
         if any(
             event.get("type") == "brainstorming_work_recorded"
-            and event.get("session_id") == session_id
+            and (
+                event.get("task_id") == task_id
+                if task_id is not None
+                else event.get("session_id") == session_id
+            )
             for event in self.state.get("events", [])
         ):
             return
@@ -5103,6 +5442,7 @@ class Driver(object):
             token_usage_partial=bool(token_usage_partial),
             cost=copy.deepcopy(cost),
             cost_partial=bool(cost_partial),
+            **({"task_id": task_id} if task_id is not None else {}),
         )
 
     def _do_brainstorming_wait(self):
@@ -5117,6 +5457,8 @@ class Driver(object):
             raise st.IllegalTransition(
                 "brainstorming wait origin does not match its attached unit"
             )
+        if (wait.get("origin") or {}).get("task_executor") == "brainstorming":
+            return self._do_brainstorming_production_wait(unit, wait)
         try:
             handoff = brainstorming_milestone.terminal_handoff(
                 self.state,
@@ -6294,6 +6636,11 @@ class Driver(object):
             st.UNIT_SLICE_DOC: contracts.KIND_DRAFT_SLICE_NOTE,
             st.UNIT_SLICE_IMPL: contracts.KIND_IMPLEMENT,
         }[unit["kind"]]
+        if (
+            kind in tasks.PRODUCER_TASK_KINDS
+            and self._brainstorming_producer_selected(unit, kind)
+        ):
+            return self._start_brainstorming_production(unit, kind)
         active_task = self._active_worker_task(unit, kind)
         carrier = unit.get("brainstorming_resume") or {}
         has_validated_carrier = bool(carrier)
@@ -9999,6 +10346,7 @@ class Driver(object):
             editable_design_paths=self._design_review_paths(unit),
             implementation_scope=self._implementation_scope(unit),
             producer_review_context=producer_review_context,
+            verification_commands=self._review_verification_commands(unit),
         )
         if active_review is not None:
             prompt = self._worker_episode_prompt(

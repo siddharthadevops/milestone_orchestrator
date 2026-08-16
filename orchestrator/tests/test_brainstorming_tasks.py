@@ -393,12 +393,19 @@ class BrainstormingTaskAdapterTest(unittest.TestCase):
             "create_resolved_session",
             return_value={"id": "bs-static", "state": {"status": "running"}},
         ) as create:
-            adapter.start_task(state, record["id"], changed, self.home)
+            adapter.start_task(
+                state,
+                record["id"],
+                changed,
+                self.home,
+                model_profile_runtime={"new": "ambient profile attachment"},
+            )
         self.assertEqual(
             create.call_args.args[1]["participants"], staffing["participants"]
         )
         self.assertEqual(create.call_args.args[2], "task:" + record["id"])
         self.assertTrue(create.call_args.kwargs["static_binding"])
+        self.assertNotIn("model_profile_runtime", create.call_args.kwargs)
 
         unavailable_state = {}
         unavailable = copy.deepcopy(self.config)
@@ -427,6 +434,206 @@ class BrainstormingTaskAdapterTest(unittest.TestCase):
         terminal = tasks.task_record(late_state, late["id"])
         self.assertEqual(terminal["result"]["status"], "failure")
         self.assertIn(lifecycle.UNAVAILABLE, terminal["result"]["reason"])
+
+    def test_profile_authority_loss_before_session_durably_fails_task(self):
+        state = {}
+        locator = {
+            "state_path": os.path.join(self.tmp.name, "state.json"),
+            "home": os.path.join(self.tmp.name, "profiles"),
+        }
+        staffing = (
+            {"agent": "codex", "model": "lead", "effort": "high"},
+            {"agent": "claude", "model": "critic", "effort": "medium"},
+        )
+        with mock.patch.object(
+            adapter.driver,
+            "resolve_current_brainstorming_profiles",
+            return_value=staffing,
+        ):
+            record = adapter.admit_task(
+                state,
+                self.order(),
+                self.config,
+                self.workspace,
+                model_profile_runtime=locator,
+            )
+
+        with mock.patch.object(
+            adapter.lifecycle,
+            "create_resolved_session",
+        ) as create:
+            self.assertIsNone(
+                adapter.start_task(
+                    state, record["id"], self.config, self.home
+                )
+            )
+
+        create.assert_not_called()
+        result = tasks.task_record(state, record["id"])["result"]
+        self.assertEqual(result["status"], "failure")
+        self.assertIn("current-profile staffing authority", result["reason"])
+
+    def test_profile_authority_loss_returns_running_owned_session(self):
+        state = {}
+        locator = {
+            "state_path": os.path.join(self.tmp.name, "state.json"),
+            "home": os.path.join(self.tmp.name, "profiles"),
+        }
+        staffing = (
+            {"agent": "codex", "model": "lead", "effort": "high"},
+            {"agent": "claude", "model": "critic", "effort": "medium"},
+        )
+        with mock.patch.object(
+            adapter.driver,
+            "resolve_current_brainstorming_profiles",
+            return_value=staffing,
+        ):
+            record = adapter.admit_task(
+                state,
+                self.order(),
+                self.config,
+                self.workspace,
+                model_profile_runtime=locator,
+            )
+        projection = self.projection(record["id"], status="running")
+        projection["state"]["result"] = None
+        projection["process"] = "running"
+        caller = lifecycle.CURRENT_PROFILE_TASK_CALLER_PREFIX + record["id"]
+        projection["caller"] = caller
+
+        def inspect(_home, _session_id, authorize):
+            authorize({"caller": caller})
+            return projection
+
+        with mock.patch.object(
+            adapter.lifecycle,
+            "list_sessions",
+            return_value=[{"id": "bs-profile-owned"}],
+        ), mock.patch.object(
+            adapter.lifecycle, "inspect_session", side_effect=inspect
+        ), mock.patch.object(
+            adapter.lifecycle, "start_session"
+        ) as start:
+            self.assertIs(
+                adapter.start_task(
+                    state, record["id"], self.config, self.home
+                ),
+                projection,
+            )
+
+        start.assert_not_called()
+        self.assertIsNone(tasks.task_record(state, record["id"])["result"])
+
+    def test_profile_authority_loss_fails_stopped_owned_session(self):
+        state = {}
+        locator = {
+            "state_path": os.path.join(self.tmp.name, "state.json"),
+            "home": os.path.join(self.tmp.name, "profiles"),
+        }
+        staffing = (
+            {"agent": "codex", "model": "lead", "effort": "high"},
+            {"agent": "claude", "model": "critic", "effort": "medium"},
+        )
+        with mock.patch.object(
+            adapter.driver,
+            "resolve_current_brainstorming_profiles",
+            return_value=staffing,
+        ):
+            record = adapter.admit_task(
+                state,
+                self.order(),
+                self.config,
+                self.workspace,
+                model_profile_runtime=locator,
+            )
+        projection = self.projection(record["id"], status="running")
+        projection["state"]["result"] = None
+        caller = lifecycle.CURRENT_PROFILE_TASK_CALLER_PREFIX + record["id"]
+        projection["caller"] = caller
+
+        with mock.patch.object(
+            adapter.lifecycle,
+            "list_sessions",
+            return_value=[{"id": "bs-profile-owned"}],
+        ), mock.patch.object(
+            adapter.lifecycle, "inspect_session", return_value=projection
+        ), mock.patch.object(
+            adapter.lifecycle, "start_session"
+        ) as start:
+            self.assertIsNone(
+                adapter.start_task(
+                    state, record["id"], self.config, self.home
+                )
+            )
+
+        start.assert_not_called()
+        result = tasks.task_record(state, record["id"])["result"]
+        self.assertEqual(result["status"], "failure")
+        self.assertIn("current-profile staffing authority", result["reason"])
+        self.assertEqual(result["duration_s"], 2.0)
+
+    def test_profile_authority_loss_preserves_terminal_native_failure(self):
+        state = {}
+        locator = {
+            "state_path": os.path.join(self.tmp.name, "state.json"),
+            "home": os.path.join(self.tmp.name, "profiles"),
+        }
+        staffing = (
+            {"agent": "codex", "model": "lead", "effort": "high"},
+            {"agent": "claude", "model": "critic", "effort": "medium"},
+        )
+        with mock.patch.object(
+            adapter.driver,
+            "resolve_current_brainstorming_profiles",
+            return_value=staffing,
+        ):
+            record = adapter.admit_task(
+                state,
+                self.order(),
+                self.config,
+                self.workspace,
+                model_profile_runtime=locator,
+            )
+        projection = self.projection(
+            record["id"], status="failure", duration=6, token_amount=6
+        )
+        caller = lifecycle.CURRENT_PROFILE_TASK_CALLER_PREFIX + record["id"]
+        projection["caller"] = caller
+
+        def inspect(_home, _session_id, authorize):
+            authorize({"caller": caller})
+            return projection
+
+        with mock.patch.object(
+            adapter.lifecycle,
+            "list_sessions",
+            return_value=[{"id": "bs-profile-owned"}],
+        ), mock.patch.object(
+            adapter.lifecycle, "inspect_session", side_effect=inspect
+        ), mock.patch.object(
+            adapter.lifecycle, "start_session"
+        ) as start:
+            recovered = adapter.start_task(
+                state, record["id"], self.config, self.home
+            )
+            terminal = adapter.finish_task(
+                state,
+                record["id"],
+                self.home,
+                "bs-profile-owned",
+                None,
+                effect_store=self.effect_store,
+            )
+
+        self.assertIs(recovered, projection)
+        start.assert_not_called()
+        result = terminal["result"]
+        self.assertEqual(result["status"], "failure")
+        self.assertEqual(result["reason"], "No bounded agreement was reached.")
+        self.assertEqual(result["duration_s"], 6.0)
+        self.assertEqual(result["token_usage"], usage(6))
+        self.assertEqual(result["cost"], {"api_usd": 0.6, "real_usd": 0.0})
+        self.assertEqual(result["native_result"], projection["state"]["result"])
 
     def test_effect_completion_preserves_native_result_and_complete_accounting(self):
         state = {}
@@ -483,6 +690,88 @@ class BrainstormingTaskAdapterTest(unittest.TestCase):
         self.assertEqual(result["cost"], {"api_usd": 1.0, "real_usd": 0.0})
         self.assertFalse(result["token_usage_partial"])
         self.assertFalse(result["cost_partial"])
+
+    def test_profile_loss_after_agreement_records_authority_failure(self):
+        state = {}
+        locator = {
+            "state_path": os.path.join(self.tmp.name, "state.json"),
+            "home": os.path.join(self.tmp.name, "profiles"),
+        }
+        staffing = (
+            {"agent": "codex", "model": "lead", "effort": "high"},
+            {"agent": "claude", "model": "critic", "effort": "medium"},
+        )
+        with mock.patch.object(
+            adapter.driver,
+            "resolve_current_brainstorming_profiles",
+            return_value=staffing,
+        ):
+            record = adapter.admit_task(
+                state,
+                self.order(),
+                self.config,
+                self.workspace,
+                model_profile_runtime=locator,
+            )
+        projection = self.projection(record["id"])
+        caller = lifecycle.CURRENT_PROFILE_TASK_CALLER_PREFIX + record["id"]
+        projection["caller"] = caller
+
+        def unavailable(
+            _home,
+            _session_id,
+            authorize,
+            *_args,
+            **_kwargs,
+        ):
+            authorize({"caller": caller})
+            raise lifecycle.PublicLifecycleError(503, lifecycle.UNAVAILABLE)
+
+        def apply(effect_request):
+            with mock.patch.object(
+                adapter.brainstorming,
+                "SessionStore",
+                return_value=self.effect_store,
+            ), mock.patch.object(
+                adapter.lifecycle,
+                "apply_production_effect",
+                side_effect=unavailable,
+            ):
+                return adapter.apply_agreed_effects(
+                    self.home,
+                    "bs-profile-effect",
+                    record["id"],
+                    effect_request,
+                    dispatch_authority="current_profile",
+                    model_profile_runtime=None,
+                )
+
+        with mock.patch.object(
+            adapter.lifecycle, "inspect_session", return_value=projection
+        ), mock.patch.object(
+            adapter,
+            "_retained_agreement",
+            return_value={"exists": True, "encoding": "utf-8", "content": "plan"},
+        ):
+            terminal = adapter.finish_task(
+                state,
+                record["id"],
+                self.home,
+                "bs-profile-effect",
+                apply,
+                effect_store=self.effect_store,
+            )
+
+        result = terminal["result"]
+        self.assertEqual(result["status"], "failure")
+        self.assertEqual(
+            result["reason"],
+            "production lead failed: current-profile staffing authority "
+            "is unavailable",
+        )
+        self.assertEqual(result["native_result"], projection["state"]["result"])
+        self.assertEqual(result["token_usage"], usage(2))
+        self.assertTrue(result["token_usage_partial"])
 
     def test_effect_failure_is_terminal_and_keeps_native_and_partial_effects(self):
         state = {}
@@ -769,6 +1058,49 @@ class BrainstormingTaskAdapterTest(unittest.TestCase):
         self.assertIn(lifecycle.UNAVAILABLE, result["reason"])
         self.assertEqual(result["duration_s"], 4.0)
         self.assertEqual(result["token_usage"], usage(4))
+
+    def test_recovery_lock_failure_keeps_task_open_for_owned_session(self):
+        state = {}
+        record = adapter.admit_task(
+            state, self.order(), self.config, self.workspace
+        )
+        projection = self.projection(record["id"], status="running")
+        projection["id"] = "bs-owned"
+        projection["process"] = "running"
+        projection["state"]["result"] = None
+        refused_lock = mock.MagicMock()
+        refused_lock.__enter__.side_effect = OSError("lock store unavailable")
+        available_lock = mock.MagicMock()
+
+        with mock.patch.object(
+            adapter.brainstorming,
+            "_exclusive_transcript",
+            side_effect=[refused_lock, available_lock],
+        ), mock.patch.object(
+            adapter.lifecycle,
+            "list_sessions",
+            return_value=[{"id": "bs-implicitly-owned"}],
+        ) as discover, mock.patch.object(
+            adapter.lifecycle, "inspect_session", return_value=projection
+        ), mock.patch.object(
+            adapter.lifecycle,
+            "create_resolved_session",
+            side_effect=AssertionError("owned session must not be replaced"),
+        ):
+            with self.assertRaises(lifecycle.PublicLifecycleError) as raised:
+                adapter.start_task(
+                    state, record["id"], self.config, self.home
+                )
+            self.assertEqual(raised.exception.code, lifecycle.UNAVAILABLE)
+            self.assertIsNone(tasks.task_record(state, record["id"])["result"])
+            discover.assert_not_called()
+            resumed = adapter.start_task(
+                state, record["id"], self.config, self.home
+            )
+
+        self.assertIs(resumed, projection)
+        self.assertIsNone(tasks.task_record(state, record["id"])["result"])
+        discover.assert_called_once()
 
     def test_forgotten_session_fails_task_with_retained_accounting(self):
         state = {}

@@ -447,3 +447,69 @@
 - `claude-claude-S6-102` (raised claude, cleared codex): The note makes Brainstorming a full slice-implementation producer without declaring any posture for the milestone's implementation size control, so the only run-failing guard on implementation size silently disappears for that path — or invites an unauthorized supervisor for a Brainstorming session. — The note omits a required size-control posture and corresponding proof, so a capable builder should stop on the visible policy gap but could silently bypass the Worker guard; correction would require a bounded Slice 6 contract decision plus implementation and tests, without external or irreversible 
 - `claude-claude-S6-103` (raised claude, cleared codex): The full-suite handoff is labelled a Strict guarantee although its promised outcome is produced only by a review model's judgment, and its absolute claim that a repository with a suite 'cannot seal from an empty verification list' does not hold at the driver's seal boundary. This challenges the posture label only, not the legitimacy of the handoff itself. — The note repeatedly pins reviewer-mediated empty-command correction as a strict no-seal guarantee even though non-checkpoint units seal directly from clean reviews, so a capable builder may silently encode the wrong contract or test expectation, but correction is a local posture/expectation edit bec
 
+## slice_impl-06-a (Brainstorming slice production)
+
+- draft: kind `implement`, artifact `-` (raw: `implementation/milestones/tasks-2/.run/raw/slice_impl-06-draft.txt`)
+
+| Round | Kind | Family | Findings | Triage | Raw |
+|---|---|---|---|---|---|
+| slice_impl-06-codex-r1 | review_round | codex | 0 | clean | `implementation/milestones/tasks-2/.run/raw/slice_impl-06-codex-r1.txt` |
+| slice_impl-06-claude-r1 | review_round | claude | 5 | 5 reported | `implementation/milestones/tasks-2/.run/raw/slice_impl-06-claude-r1.txt` |
+| slice_impl-06-codex-r2 | fix_findings | codex | 3 | 3 fixed | `implementation/milestones/tasks-2/.run/raw/slice_impl-06-fix1.txt` |
+| slice_impl-06-codex-r3 | delta_review | codex | 0 | clean | `implementation/milestones/tasks-2/.run/raw/slice_impl-06-delta1.txt` |
+| slice_impl-06-codex-r4 | review_round | codex | 2 | 2 reported | `implementation/milestones/tasks-2/.run/raw/slice_impl-06-codex-r2.txt` |
+| slice_impl-06-codex-r5 | fix_findings | codex | 2 | 2 fixed | `implementation/milestones/tasks-2/.run/raw/slice_impl-06-fix2.txt` |
+| slice_impl-06-codex-r6 | delta_review | codex | 1 | 1 reported | `implementation/milestones/tasks-2/.run/raw/slice_impl-06-delta2.txt` |
+| slice_impl-06-codex-r7 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/tasks-2/.run/raw/slice_impl-06-fix3.txt` |
+| slice_impl-06-codex-r8 | delta_review | codex | 1 | 1 reported | `implementation/milestones/tasks-2/.run/raw/slice_impl-06-delta3.txt` |
+| slice_impl-06-codex-r9 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/tasks-2/.run/raw/slice_impl-06-fix4.txt` |
+| slice_impl-06-codex-r10 | delta_review | codex | 2 | 2 reported | `implementation/milestones/tasks-2/.run/raw/slice_impl-06-delta4.txt` |
+| slice_impl-06-codex-r11 | fix_findings | codex | 2 | 2 fixed | `implementation/milestones/tasks-2/.run/raw/slice_impl-06-fix5.txt` |
+| slice_impl-06-codex-r12 | delta_review | codex | 0 | clean | `implementation/milestones/tasks-2/.run/raw/slice_impl-06-delta5.txt` |
+| slice_impl-06-codex-r13 | review_round | codex | 1 | 1 reported | `implementation/milestones/tasks-2/.run/raw/slice_impl-06-codex-r3.txt` |
+| slice_impl-06-codex-r14 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/tasks-2/.run/raw/slice_impl-06-fix6.txt` |
+| slice_impl-06-codex-r15 | delta_review | codex | 0 | clean | `implementation/milestones/tasks-2/.run/raw/slice_impl-06-delta6.txt` |
+| slice_impl-06-codex-r16 | review_round | codex | 2 | 2 reported | `implementation/milestones/tasks-2/.run/raw/slice_impl-06-codex-r4.txt` |
+| slice_impl-06-codex-r17 | fix_findings | codex | 2 | 2 fixed | `implementation/milestones/tasks-2/.run/raw/slice_impl-06-fix7.txt` |
+| slice_impl-06-codex-r18 | delta_review | codex | 1 | 1 reported | `implementation/milestones/tasks-2/.run/raw/slice_impl-06-delta7.txt` |
+| slice_impl-06-codex-r19 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/tasks-2/.run/raw/slice_impl-06-fix8.txt` |
+| slice_impl-06-codex-r20 | delta_review | codex | 1 | 1 reported | `implementation/milestones/tasks-2/.run/raw/slice_impl-06-delta8.txt` |
+| slice_impl-06-codex-r21 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/tasks-2/.run/raw/slice_impl-06-fix9.txt` |
+| slice_impl-06-codex-r22 | delta_review | codex | 1 | 1 reported | `implementation/milestones/tasks-2/.run/raw/slice_impl-06-delta9.txt` |
+| slice_impl-06-codex-r23 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/tasks-2/.run/raw/slice_impl-06-fix10.txt` |
+| slice_impl-06-codex-r24 | delta_review | codex | 1 | 1 reported | `implementation/milestones/tasks-2/.run/raw/slice_impl-06-delta10.txt` |
+| slice_impl-06-codex-r25 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/tasks-2/.run/raw/slice_impl-06-fix11.txt` |
+| slice_impl-06-codex-r26 | review_round | codex | 0 | clean | `implementation/milestones/tasks-2/.run/raw/slice_impl-06-codex-r5.txt` |
+| slice_impl-06-claude-r2 | review_round | claude | 2 | 2 reported | `implementation/milestones/tasks-2/.run/raw/slice_impl-06-claude-r2.txt` |
+| slice_impl-06-codex-r27 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/tasks-2/.run/raw/slice_impl-06-fix12.txt` |
+| slice_impl-06-codex-r28 | delta_review | codex | 0 | clean | `implementation/milestones/tasks-2/.run/raw/slice_impl-06-delta11.txt` |
+| slice_impl-06-codex-r29 | review_round | codex | 2 | 2 reported | `implementation/milestones/tasks-2/.run/raw/slice_impl-06-codex-r6.txt` |
+| slice_impl-06-codex-r30 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/tasks-2/.run/raw/slice_impl-06-fix13.txt` |
+| slice_impl-06-codex-r31 | delta_review | codex | 0 | clean | `implementation/milestones/tasks-2/.run/raw/slice_impl-06-delta12.txt` |
+| slice_impl-06-codex-r32 | review_round | codex | 0 | clean | `implementation/milestones/tasks-2/.run/raw/slice_impl-06-codex-r7.txt` |
+| slice_impl-06-claude-r3 | review_round | claude | 3 | 3 reported | `implementation/milestones/tasks-2/.run/raw/slice_impl-06-claude-r3.txt` |
+| slice_impl-06-codex-r33 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/tasks-2/.run/raw/slice_impl-06-fix14.txt` |
+| slice_impl-06-codex-r34 | delta_review | codex | 0 | clean | `implementation/milestones/tasks-2/.run/raw/slice_impl-06-delta13.txt` |
+| slice_impl-06-codex-r35 | review_round | codex | 0 | clean | `implementation/milestones/tasks-2/.run/raw/slice_impl-06-codex-r8.txt` |
+| slice_impl-06-claude-r4 | review_round | claude | 3 | 3 reported | `implementation/milestones/tasks-2/.run/raw/slice_impl-06-claude-r4.txt` |
+| slice_impl-06-codex-r36 | fix_findings | codex | 2 | 2 fixed | `implementation/milestones/tasks-2/.run/raw/slice_impl-06-fix15.txt` |
+| slice_impl-06-codex-r37 | delta_review | codex | 0 | clean | `implementation/milestones/tasks-2/.run/raw/slice_impl-06-delta14.txt` |
+| slice_impl-06-codex-r38 | review_round | codex | 0 | clean | `implementation/milestones/tasks-2/.run/raw/slice_impl-06-codex-r9.txt` |
+| slice_impl-06-claude-r5 | review_round | claude | 3 | DEBT-CLEAN (reclassified) | `implementation/milestones/tasks-2/.run/raw/slice_impl-06-claude-r5.txt` |
+
+### Review completion — SATISFIED
+
+- deterministic result: every configured family was clean or debt-clean on the same current bytes; full verification was not due at this boundary; no extra reviewer was called
+- cited reviews: `slice_impl-06-codex-r38`, `slice_impl-06-claude-r5`
+
+**Deferred debt (opposite-family verified):**
+- `claude-claude-S6a-004` (raised claude, cleared codex): The note-path replacement proof is vacuous: `orchestrator/tests/test_brainstorming_slice_production.py:138` asserts only `assertNotEqual(doc['artifact'], predecessor)`, and `st.record_draft` already sets `unit['artifact'] = None` (`orchestrator/state.py:859`) before the handoff runs, so the assertion passes even if `record_slice_note_handoff` never records the planned path. — The vacuous integration assertion could give a later builder false confidence if the driver handoff is disturbed, although the separate helper test and explicit contract reduce that probability, while correction is only an exact planned-path assertion plus restoration of one call and missing handoff
+- `claude-claude-S6a-006` (raised claude, cleared codex): The new Brainstorming production brief reuses MACHINERY_RESULT_LINE, which orders the producer to report its machinery-proportionality result 'in the ordinary `notes` response' — a Worker result member that the target-free Brainstorming contract does not have, so the reuse gate's reporting obligation has nowhere to land. — The live brief and focused tests preserve a Worker-only `notes` obligation that Brainstorming cannot return, so the required account is likely lost silently, but correction is a localized prompt-and-test change before external release.
+- `codex-codex-S6a-002` (raised codex, cleared codex): Mixed-flow proof bypasses the production-effect boundary — The mocked mixed-flow success leaves a genuine silent integration-coverage gap that could let a future callback regression pass, but the runtime boundary and lower-level effect tests remain explicit, and correction is a local test/connection repair exposed by the first real production attempt.
+- `claude-claude-S6a-102` (raised claude, cleared codex): The Verification Contract's requirement that production 'cannot succeed with only a null-staffed aggregate effect event' is unproven: the `staffed` guard in `apply_agreed_effects` has no test, so removing it leaves the whole focused suite green. — The artifact claims focused proof of null-staffed rejection, but the actual tests only verify staffed event recording and never exercise the guard, so a future edit could silently remove strict behavior, while correction is a local guard restoration plus one regression test.
+- `claude-claude-S6a-103` (raised claude, cleared codex): Brainstorming production emits the legacy `brainstorming_wait_started` event but never any matching outcome event, so the panel's per-unit Brainstorming trail shows that session as 'waiting' for the rest of the run even after the production task succeeded or failed. — This behavior-and-coverage defect deterministically presents terminal production as still waiting and could silently carry into later activity UI work, but first use exposes it and correction is a local terminal-outcome projection and test change.
+- `claude-claude-S6a-203` (raised claude, cleared codex): The Brainstorming production brief ends with `_access_block(edit_allowed=True)`'s "Apply the change; never merely describe it", and the whole brief is quoted verbatim into the shared discussion transcript, contradicting the same brief's "Only after agreement, the Initial Position lead applies every requested workspace effect." — The contradictory quoted imperative is real, but the live prompt bindingly forbids caller-path edits and explicitly bars Contrary Position from editing, so a capable builder is unlikely to preserve the ambiguity silently, and correction is a small local prompt fix with any stray workspace edits reve
+- `claude-claude-claude-S6a-301` (raised claude, cleared codex): The new `orchestrator/brainstorming_lifecycle.apply_production_effect` seam — the only code that decides whether a Brainstorming production dispatch resolves the then-current profile lead or the frozen static binding — is executed by no test, so the slice's strict 'profile-backed production resolves the lead from the current profile for that dispatch' guarantee (Verification Contract item 3, first clause) is unproven and unguarded. — The focused test bypasses the lifecycle authority seam, so the demonstrated profile-binding regression remains silently green despite claimed coverage, but correction is a local regression test plus a small authority-binding fix if needed.
+- `claude-claude-claude-S6a-302` (raised claude, cleared codex): The discriminator this unit added to `_terminal_effect_from_projection` (`participant_id == "production-lead"`), which keeps the lead's own per-call `production_effect` activity from being mistaken for the single aggregate effect completion on a recovery re-entry, is pinned by no test: reverting it to the pre-slice-6 form leaves 152 tests green. — The discriminator is the sole guard against silent false success after a crash and the old behavior passes all 152 focused tests, but correction is only a local predicate fix plus one regression test.
+- `claude-claude-claude-S6a-303` (raised claude, cleared codex): In the new empty-suite proof, `assertNotIn("Judge whether these commands", armed)` pins a string that exists nowhere in the repository except in that assertion, so it holds for every possible implementation and contributes no coverage. — The assertion is vacuous, but adjacent checks directly prove empty-suite guidance appears and an armed command stays out of the review prompt, so silent drift is unlikely and correcting the single assertion is a small local test edit.
+

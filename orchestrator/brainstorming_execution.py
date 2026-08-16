@@ -165,13 +165,18 @@ class ParticipantExecution:
         )
 
     @staticmethod
-    def _require_running(snapshot):
+    def _require_status(snapshot, required_status):
         if snapshot is None:
             raise brainstorming.SessionNotFound("brainstorming session")
-        if snapshot.state["status"] != "running":
+        if snapshot.state["status"] != required_status:
             raise ExecutionRejected(
-                "participant exchanges require a running session"
+                "participant exchanges require a %s session"
+                % required_status
             )
+
+    @classmethod
+    def _require_running(cls, snapshot):
+        cls._require_status(snapshot, "running")
 
     def _executor(self, participant):
         binding = self.executors.get(self._binding_ref(participant))
@@ -212,10 +217,11 @@ class ParticipantExecution:
         )
 
     def _require_current_binding(
-        self, session_id, participant, provider_ref
+        self, session_id, participant, provider_ref,
+        required_status="running",
     ):
         current = self.store.read(session_id)
-        self._require_running(current)
+        self._require_status(current, required_status)
         durable_ref = self._durable_provider_ref(current, participant)
         if durable_ref != provider_ref:
             raise ExecutionRejected(
@@ -305,24 +311,41 @@ class ParticipantExecution:
         error=None,
     ):
         attempt = self.store.read_turn_attempt(session_id)
+        production = None
         if attempt is None:
             intervention = self.store.read_external_intervention(session_id)
             if (
                 intervention is None
                 or intervention["participant_id"] != participant["id"]
             ):
-                # Low-level callers may exercise ParticipantExecution without
-                # either coordinator seam.
-                return None
-            action_id = intervention["token"]
-            provider_attempt = intervention["provider_attempt"]
-            completed = intervention["completed_turn_count"]
-            kind = (
-                "discussion_turn"
-                if intervention["action_kind"] == "discussion_turn"
-                else "closure"
-            )
-            stage = "discussion" if kind == "discussion_turn" else "vote"
+                production = self.store.read_task_effect_attempt(session_id)
+                if production is None:
+                    # Low-level callers may exercise ParticipantExecution
+                    # without any coordinator or production seam.
+                    return None
+                action_id = "task-production-effect:%s:lead" % production[
+                    "token"
+                ]
+                activity = self.store.read_activity(session_id) or {
+                    "events": []
+                }
+                provider_attempt = 1 + sum(
+                    event.get("action_id") == action_id
+                    for event in activity["events"]
+                )
+                completed = 0
+                kind = "production_effect"
+                stage = "production"
+            else:
+                action_id = intervention["token"]
+                provider_attempt = intervention["provider_attempt"]
+                completed = intervention["completed_turn_count"]
+                kind = (
+                    "discussion_turn"
+                    if intervention["action_kind"] == "discussion_turn"
+                    else "closure"
+                )
+                stage = "discussion" if kind == "discussion_turn" else "vote"
         else:
             action_id = attempt["token"]
             provider_attempt = attempt.get("provider_attempt", 1)
@@ -362,11 +385,17 @@ class ParticipantExecution:
         if state is None:
             raise brainstorming.SessionNotFound(session_id)
         participants = state.state["run_config"]["participants"]
-        round_number = (
-            completed // len(participants) + 1
-            if kind == "discussion_turn"
-            else max(1, completed // len(participants))
-        )
+        if production is not None:
+            native_result = state.state.get("result") or {}
+            round_number = native_result.get("rounds_used", 1)
+            if type(round_number) is not int or round_number <= 0:
+                round_number = 1
+        else:
+            round_number = (
+                completed // len(participants) + 1
+                if kind == "discussion_turn"
+                else max(1, completed // len(participants))
+            )
         event = {
             "id": event_id,
             "action_id": action_id,
@@ -529,6 +558,40 @@ class ParticipantExecution:
             after_validate=after_validate,
         )
 
+    def production_effect(
+        self,
+        session_id,
+        prompt,
+        execution_context,
+        validator,
+    ):
+        """Apply one accepted agreement through its resolved lead seat."""
+        if not callable(validator):
+            raise brainstorming.ContractError(
+                "production envelope validator must be callable"
+            )
+        snapshot = self.store.read(session_id)
+        self._require_status(snapshot, "success")
+        leads = [
+            participant
+            for participant in snapshot.state["run_config"]["participants"]
+            if participant.get("role") == "initial_position"
+            and participant.get("delivery") == "llm"
+        ]
+        if len(leads) != 1:
+            raise ExecutionRejected(
+                "production requires one resolved Initial Position lead"
+            )
+        return self._exchange(
+            session_id,
+            leads[0]["id"],
+            prompt,
+            execution_context,
+            require_quiescence=True,
+            validator=validator,
+            required_status="success",
+        )
+
     def _exchange(
         self,
         session_id,
@@ -539,6 +602,7 @@ class ParticipantExecution:
         validator,
         before_repair=None,
         after_validate=None,
+        required_status="running",
     ):
         if after_validate is not None and not callable(after_validate):
             raise brainstorming.ContractError(
@@ -556,6 +620,7 @@ class ParticipantExecution:
                 evidence,
                 before_repair,
                 after_validate,
+                required_status,
             )
         except BaseException as exc:
             if require_quiescence and evidence["quiescent"]:
@@ -600,11 +665,12 @@ class ParticipantExecution:
         evidence,
         before_repair,
         after_validate,
+        required_status,
     ):
         brainstorming._text(participant_id, "participant_id")
         brainstorming._text(prompt, "prompt")
         snapshot = self.store.read(session_id)
-        self._require_running(snapshot)
+        self._require_status(snapshot, required_status)
         participant = self._participant(snapshot, participant_id)
         executor = self._executor(participant)
         if require_quiescence and not callable(
@@ -679,10 +745,15 @@ class ParticipantExecution:
         try:
             envelope = self._parse(result, validator)
             if fresh_each_call:
-                self._require_running(self.store.read(session_id))
+                self._require_status(
+                    self.store.read(session_id), required_status
+                )
             else:
                 self._require_current_binding(
-                    session_id, participant, provider_ref
+                    session_id,
+                    participant,
+                    provider_ref,
+                    required_status=required_status,
                 )
         except (ValueError, brainstorming.ContractError) as exc:
             self._record_activity(
@@ -730,10 +801,13 @@ class ParticipantExecution:
                     exc.raw_texts = [result.text]
                 raise
         if fresh_each_call:
-            self._require_running(self.store.read(session_id))
+            self._require_status(self.store.read(session_id), required_status)
         else:
             self._require_current_binding(
-                session_id, participant, provider_ref
+                session_id,
+                participant,
+                provider_ref,
+                required_status=required_status,
             )
         repair_prompt = prompt + (runners.REPAIR_SUFFIX % first_error)
         result2, started_at2 = self._invoke_tracked(
@@ -769,10 +843,15 @@ class ParticipantExecution:
         try:
             envelope = self._parse(result2, validator)
             if fresh_each_call:
-                self._require_running(self.store.read(session_id))
+                self._require_status(
+                    self.store.read(session_id), required_status
+                )
             else:
                 self._require_current_binding(
-                    session_id, participant, provider_ref
+                    session_id,
+                    participant,
+                    provider_ref,
+                    required_status=required_status,
                 )
         except (ValueError, brainstorming.ContractError) as exc:
             self._record_activity(

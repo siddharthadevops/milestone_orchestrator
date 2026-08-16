@@ -2456,6 +2456,10 @@ def _participant_execution(
                 attempt["participant_id"],
                 ("-" + stage) if stage else "",
             )
+        else:
+            effect_attempt = store.read_task_effect_attempt(session_id)
+            if effect_attempt is not None:
+                label = "production-effect-%s" % effect_attempt["token"]
         return runners.save_prompt_trace(
             store.prompt_directory(session_id),
             family,
@@ -2582,6 +2586,39 @@ def _participant_execution(
     return execution.ParticipantExecution(
         store, bindings, failure_classifier=classify_failure,
         billing=(runtime.get("billing") or {}),
+    )
+
+
+def apply_production_effect(
+    home,
+    session_id,
+    authorize,
+    prompt,
+    validator,
+    model_profile_runtime=None,
+    participant_process_factory=None,
+):
+    """Dispatch post-agreement work through the session's resolved lead."""
+    record = _record_by_id(home, session_id)
+    _authorize_record(record, authorize)
+    current = _current_model_profile_runtime(model_profile_runtime)
+    if _uses_current_profile(record) != (current is not None):
+        raise PublicLifecycleError(503, UNAVAILABLE)
+    store = brainstorming.SessionStore(state_directory(home))
+    snapshot = store.read(session_id)
+    if snapshot is None or snapshot.state["status"] != "success":
+        raise PublicLifecycleError(409, STOP_INCOMPLETE)
+    participant_execution = _participant_execution(
+        store,
+        record,
+        participant_process_factory or _spawn_participant,
+        current_model_profile=current,
+    )
+    return participant_execution.production_effect(
+        session_id,
+        prompt,
+        record["execution_context"],
+        validator,
     )
 
 

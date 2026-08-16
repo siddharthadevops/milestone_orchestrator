@@ -870,12 +870,29 @@ def attach_worker_episode_authority(
     )
 
 
-def _review_verification_block():
+def _review_verification_block(verification_commands=None):
     """Keep review independent from another worker's suite choice."""
-    return (
+    block = (
         "VERIFICATION BOUNDARY\n"
         "- Do NOT run the repository's full suite during review.\n"
         "- Use focused checks only when necessary to verify a concrete claim.\n"
+    )
+    if verification_commands is None:
+        return block
+    commands = list(verification_commands)
+    if commands:
+        return block
+    return (
+        block
+        + "- Scheduled full-suite commands currently armed, in order:\n"
+        + "  (none)"
+        + "\n"
+        + "- This empty list is unknown, not proof that the repository has "
+        "no suite. Inspect the repository's official test entry points. "
+        "If an official non-interactive full-suite command exists, report "
+        "the missing command as a finding so the existing fixer correction "
+        "can arm it. An empty list is acceptable only when the repository "
+        "has no full suite.\n"
     )
 
 
@@ -1521,19 +1538,14 @@ def _implementation_scope_block(implementation_scope):
     return block + "\n"
 
 
-def build_implement(family, workspace, goal, slice_info, note_path, verification,
-                    amendments=None, project_context=None, gap_enabled=False,
-                    skeleton_path=None, remodeled=False,
-                    editable_design_paths=None, implementation_scope=None):
-    ver = "\n".join("  %s" % c for c in verification) or (
-        "  (none yet — your suite_command will arm scheduled checkpoints)"
-    )
+def _updated_design_assignment_block(
+    skeleton_path, remodeled, worker_rethink=True
+):
     # Compatibility hint for a run whose design baseline changed after this
     # slice note was written. Point it at the current skeleton, which carries
     # the updated assignment.
-    remodel_block = ""
     if remodeled and skeleton_path:
-        remodel_block = (
+        block = (
             "UPDATED DESIGN ASSIGNMENT\n"
             "- The skeleton was revised since this slice's note was written\n"
             "  (typically an accepted amendment assigned work here). Read the\n"
@@ -1548,11 +1560,29 @@ def build_implement(family, workspace, goal, slice_info, note_path, verification
             "  ownership: this assignment may require modifying code first\n"
             "  introduced by an earlier slice. That is THIS slice's new\n"
             "  change; the earlier unit's record is preserved and not rerun.\n"
-            "  Do the assigned work. If a remaining in-goal inconsistency\n"
-            "  requires another design edit, use `need_rethink`; only a GOAL\n"
-            "  contradiction or out-of-goal need requires the operator.\n\n"
+            "  Do the assigned work."
             % skeleton_path
         )
+        if worker_rethink:
+            block += (
+                " If a remaining in-goal inconsistency requires another design\n"
+                "  edit, use `need_rethink`; only a GOAL contradiction or\n"
+                "  out-of-goal need requires the operator."
+            )
+        return block + "\n\n"
+    return ""
+
+
+def build_implement(family, workspace, goal, slice_info, note_path, verification,
+                    amendments=None, project_context=None, gap_enabled=False,
+                    skeleton_path=None, remodeled=False,
+                    editable_design_paths=None, implementation_scope=None):
+    ver = "\n".join("  %s" % c for c in verification) or (
+        "  (none yet — your suite_command will arm scheduled checkpoints)"
+    )
+    remodel_block = _updated_design_assignment_block(
+        skeleton_path, remodeled
+    )
     return (
         _header(contracts.KIND_IMPLEMENT, family, workspace)
         + "\nTASK: implement slice %d (%s) against its current reviewed note.\n"
@@ -1595,6 +1625,74 @@ def build_implement(family, workspace, goal, slice_info, note_path, verification
             )
             if gap_enabled else _modern_contract(contracts.KIND_IMPLEMENT)
         )
+    )
+
+
+def build_brainstorming_production(
+    kind,
+    workspace,
+    goal,
+    slice_info,
+    governing_path,
+    amendments=None,
+    project_context=None,
+    implementation_scope=None,
+    skeleton_path=None,
+    remodeled=False,
+    two_register=False,
+    battery=None,
+):
+    """Build a target-free production brief, not a Worker result contract."""
+    if kind == contracts.KIND_DRAFT_SLICE_NOTE:
+        task = (
+            "Draft the slice note for slice %d (%s) against the current "
+            "reviewed skeleton at %s. The note must define observable scope, "
+            "acceptance, tests, dependencies, non-goals, risks, reuse posture, "
+            "and guarantee posture.\n"
+            % (slice_info["id"], slice_info["title"], governing_path)
+        )
+        scope = ""
+        drafting = (
+            (TWO_REGISTER_BLOCK if two_register else "")
+            + (_battery_block(battery, "slice_doc") if battery else "")
+            + SLICE_NOTE_CONTENT_BLOCK
+            + ALTITUDE_BLOCK
+        )
+        reuse_posture = REUSE_POSTURE_LINE
+    elif kind == contracts.KIND_IMPLEMENT:
+        task = (
+            "Implement slice %d (%s) against its current reviewed note at %s, "
+            "including focused tests. Run focused checks, but do not run the "
+            "repository's full suite; ordinary milestone review and scheduled "
+            "verification own that boundary.\n"
+            % (slice_info["id"], slice_info["title"], governing_path)
+        )
+        scope = _implementation_scope_block(implementation_scope)
+        drafting = _updated_design_assignment_block(
+            skeleton_path, remodeled, worker_rethink=False
+        )
+        reuse_posture = ""
+    else:
+        raise ValueError("Brainstorming production kind is invalid")
+    return (
+        _header(kind, "brainstorming", workspace)
+        + "\nTARGET-FREE PRODUCTION TASK\n"
+        + task
+        + "GOAL: %s\n\n" % goal
+        + scope
+        + _amendments_block(amendments)
+        + _project_context_block(project_context)
+        + drafting
+        + "Discuss a complete bounded approach first. Only after agreement, "
+        "the Initial Position lead applies every requested workspace effect. "
+        "The executor owns its private discussion target; it is not a caller "
+        "effect and completing it alone is not success.\n\n"
+        + REUSE_GATE_BLOCK
+        + reuse_posture
+        + MACHINERY_RESULT_LINE
+        + PLANNING_CONTEXT_LINE
+        + "\n"
+        + _access_block(edit_allowed=True)
     )
 
 
@@ -1813,7 +1911,8 @@ def build_review_round(family, workspace, goal, unit_desc, artifact, registry,
                        project_context=None, battery=None, debt=None,
                        gap_enabled=False, wave_docs=None,
                        editable_design_paths=None, implementation_scope=None,
-                       producer_review_context=None):
+                       producer_review_context=None,
+                       verification_commands=None):
     return (
         _header(contracts.KIND_REVIEW_ROUND, family, workspace)
         + "\nTASK: full review round of %s. REPORT ONLY.\n" % unit_desc
@@ -1830,7 +1929,7 @@ def build_review_round(family, workspace, goal, unit_desc, artifact, registry,
         + "You fix nothing and triage nothing — a separate fixer call\n"
         "will verify your findings against the real files and concede or\n"
         "dissent.\n\n"
-        + _review_verification_block()
+        + _review_verification_block(verification_commands)
         + _review_quality_block(unit_kind, reform=gap_enabled)
         + (_battery_review_block(battery) if battery else "")
         + _debt_block(debt)

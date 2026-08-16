@@ -686,7 +686,7 @@ class ProducerSelectionTest(unittest.TestCase):
             contracts.KIND_IMPLEMENT,
         )
 
-    def test_brainstorming_choice_fails_durably_until_slice_6_adapter(self):
+    def test_worker_adapter_does_not_claim_a_brainstorming_choice(self):
         initial = [{
             "id": 1,
             "title": "Independent producers",
@@ -695,7 +695,7 @@ class ProducerSelectionTest(unittest.TestCase):
             },
         }]
         _run_id, entry, _workspace = self._planned_run(
-            "brainstorming-not-yet-executable", initial
+            "brainstorming-owned-elsewhere", initial
         )
         driver = drv.Driver(entry["state_path"], runner=runners.MockRunner([]))
         unit = next(
@@ -703,7 +703,7 @@ class ProducerSelectionTest(unittest.TestCase):
             if candidate["kind"] == st.UNIT_SLICE_DOC
         )
         with self.assertRaisesRegex(
-            drv.StopStep, "requires the slice-production adapter"
+            st.IllegalTransition, "not a Worker task"
         ):
             driver._admit_worker_task(
                 unit,
@@ -712,16 +712,8 @@ class ProducerSelectionTest(unittest.TestCase):
                 "codex",
             )
         durable = st.load(entry["state_path"])
-        self.assertIn(
-            "requires the slice-production adapter",
-            durable["failure"]["reason"],
-        )
+        self.assertIsNone(durable["failure"])
         self.assertEqual(tasks.task_records(durable), [])
-        recovered = drv.Driver(
-            entry["state_path"], runner=runners.MockRunner([])
-        )
-        action, _note = recovered._decide_at_strategy_boundary()
-        self.assertEqual(action.type, drv.A_FAILED)
 
     def test_in_flight_design_update_is_reviewed_without_skeleton_edit(self):
         _run_id, entry, _workspace = self._planned_run("design-update-review")
