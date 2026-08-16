@@ -262,11 +262,12 @@ The goal is achieved when:
 
 | Unit | Status | Rounds | Review result | Gate commit |
 |---|---|---|---|---|
-| skeleton | reviewed | 30 | satisfied | fa4ea09 |
-| slice_doc-01 (Task contracts and catalogue) | reviewed | 6 | satisfied | 26e5650 |
+| skeleton | reviewed | 30 | satisfied | 713bb1a |
+| slice_doc-01 (Task contracts and catalogue) | reviewed | 6 | satisfied | 713bb1a |
 | slice_impl-01 (Task contracts and catalogue) | reviewed | 5 | satisfied | 5260b8b |
-| slice_doc-02 (Durable task orders and accounting) | reviewed | 5 | satisfied | 9d180e4 |
+| slice_doc-02 (Durable task orders and accounting) | reviewed | 5 | satisfied | 713bb1a |
 | slice_impl-02-a (Durable task orders and accounting) | reviewed | 5 | satisfied | 8cbaafa |
 | slice_impl-02-b (Durable task orders and accounting) | reviewed | 8 | satisfied | 2a33c65 |
-| slice_doc-03 (Worker executor and default milestone cutover) | reviewed | 2 | satisfied | 9c98d12 |
-| slice_impl-03 (Worker executor and default milestone cutover) | reviewed | 51 | satisfied | - |
+| slice_doc-03 (Worker executor and default milestone cutover) | reviewed | 2 | satisfied | 713bb1a |
+| slice_impl-03 (Worker executor and default milestone cutover) | reviewed | 51 | satisfied | 713bb1a |
+| slice_doc-04 (Brainstorming executor adapter) | reviewed | 2 | satisfied | - |
