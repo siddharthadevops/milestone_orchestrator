@@ -492,20 +492,8 @@ class TestReuseAuditDriverPlanning(ReuseAuditRunTestCase):
                     family="claude",
                     side_effect=bump_template,
                 ),
-                # The template bump happened during Claude's call. Both
-                # families must review again under v2 before sealing.
-                step(
-                    "review_round",
-                    report("review_round")
-                    | {"reuse_audit_review": self.review_audit()},
-                    family="codex",
-                ),
-                step(
-                    "review_round",
-                    report("review_round")
-                    | {"reuse_audit_review": self.review_audit()},
-                    family="claude",
-                ),
+                # The template bump happened mid-episode. It governs the next
+                # Worker episode but does not invalidate completed approvals.
                 self.note_step(audit=self.planning_audit(("chat",))),
                 self.note_step(audit=self.planning_audit()),
                 step(
@@ -522,26 +510,26 @@ class TestReuseAuditDriverPlanning(ReuseAuditRunTestCase):
                 ),
             ],
         )
-        self.drive_steps(driver, 13)
+        self.drive_steps(driver, 10)
 
         self.assertIsNone(driver.state["failure"])
-        final_review_prompt = normalized(driver.runner.calls[2][2])
+        final_review_prompt = normalized(driver.runner.calls[1][2])
         self.assertIn("SAFEGUARD reuse-audit-review v1", final_review_prompt)
-        note_prompt = normalized(driver.runner.calls[5][2])
+        note_prompt = normalized(driver.runner.calls[3][2])
         self.assertIn("KIND: draft_slice_note", note_prompt)
         self.assertIn("SAFEGUARD reuse-audit v2", note_prompt)
-        repair_prompt = normalized(driver.runner.calls[6][2])
+        repair_prompt = normalized(driver.runner.calls[4][2])
         self.assertIn("REPAIR", repair_prompt)
         self.assertIn("timeline", repair_prompt)
-        review_prompt = normalized(driver.runner.calls[7][2])
+        review_prompt = normalized(driver.runner.calls[5][2])
         self.assertIn("SAFEGUARD reuse-audit-review v2", review_prompt)
         self.assertEqual(
             self.seen_pairs(driver.state),
             [
                 ("reuse-audit", 1),
                 ("reuse-audit-review", 1),
-                ("reuse-audit-review", 2),
                 ("reuse-audit", 2),
+                ("reuse-audit-review", 2),
             ],
         )
 

@@ -15,6 +15,7 @@ from orchestrator import state as st
 
 UNKNOWN_TASK_EXECUTOR = "unknown_task_executor"
 INVALID_TASK_REQUEST = "invalid_task_request"
+TASK_UNAVAILABLE = "task_unavailable"
 
 _MISSING = object()
 _RESULT_STATUSES = ("success", "failure")

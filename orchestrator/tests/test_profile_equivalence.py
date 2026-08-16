@@ -83,6 +83,41 @@ def _strip(obj):
 # a field. Neutralized to a placeholder so the deterministic remainder still
 # compares byte-for-byte.
 _SUITE_TIMING_RE = re.compile(r"(Ran \d+ tests? in )\d+\.\d+s")
+_GENERATED_TASK_ID_RE = re.compile(
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+)
+
+
+def _normalize_task_ids(obj):
+    """Canonicalize generated task ids while preserving their linkage.
+
+    Separate equivalent runs allocate different UUIDs. Replacing each UUID by
+    its encounter-order alias keeps repeated and cross-record references
+    comparable instead of dropping the identity field from the gate.
+    """
+    aliases = {}
+
+    def normalize(value):
+        if isinstance(value, dict):
+            result = {}
+            for key, member in value.items():
+                if (
+                    key == "task_id"
+                    and isinstance(member, str)
+                    and _GENERATED_TASK_ID_RE.fullmatch(member)
+                ):
+                    alias = aliases.setdefault(
+                        member, "<TASK-%d>" % (len(aliases) + 1)
+                    )
+                    result[key] = alias
+                else:
+                    result[key] = normalize(member)
+            return result
+        if isinstance(value, list):
+            return [normalize(member) for member in value]
+        return value
+
+    return normalize(obj)
 
 
 def _normalize_ws(obj, ws):
@@ -188,8 +223,12 @@ class ProfileEquivalenceTest(unittest.TestCase):
 
     def _assert_equivalent(self, a, b, what):
         # `a` is always the plain run, `b` the legacy run (all call sites).
-        a = _strip(_normalize_ws(a, self.state_plain["workspace"]))
-        b = _strip(_normalize_ws(b, self.state_legacy["workspace"]))
+        a = _strip(_normalize_task_ids(
+            _normalize_ws(a, self.state_plain["workspace"])
+        ))
+        b = _strip(_normalize_task_ids(
+            _normalize_ws(b, self.state_legacy["workspace"])
+        ))
         diffs = _diffs(a, b)
         if diffs:
             lines = ["%s: %d divergence(s) after stripping nondeterministic "
@@ -259,6 +298,25 @@ class EquivalenceMachineryTest(unittest.TestCase):
         a = {"stage": "pre_review"}
         b = {"stage": "pre_seal"}
         self.assertTrue(_diffs(_strip(a), _strip(b)))
+
+    def test_generated_task_ids_are_canonicalized_without_losing_linkage(self):
+        first = "11111111-1111-4111-8111-111111111111"
+        second = "22222222-2222-4222-8222-222222222222"
+        third = "33333333-3333-4333-8333-333333333333"
+        linked = [{"task_id": first}, {"task_id": first}]
+        equivalent = [{"task_id": second}, {"task_id": second}]
+        broken = [{"task_id": second}, {"task_id": third}]
+        self.assertEqual(
+            _diffs(
+                _normalize_task_ids(linked),
+                _normalize_task_ids(equivalent),
+            ),
+            [],
+        )
+        self.assertTrue(_diffs(
+            _normalize_task_ids(linked),
+            _normalize_task_ids(broken),
+        ))
 
     def test_structural_mismatch_is_caught(self):
         self.assertTrue(_diffs({"a": 1}, {"a": 1, "b": 2}))

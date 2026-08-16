@@ -270,4 +270,5 @@ The goal is achieved when:
 | slice_impl-02-b (Durable task orders and accounting) | reviewed | 8 | satisfied | 2a33c65 |
 | slice_doc-03 (Worker executor and default milestone cutover) | reviewed | 2 | satisfied | 713bb1a |
 | slice_impl-03 (Worker executor and default milestone cutover) | reviewed | 51 | satisfied | 713bb1a |
-| slice_doc-04 (Brainstorming executor adapter) | reviewed | 2 | satisfied | - |
+| slice_doc-04 (Brainstorming executor adapter) | reviewed | 2 | satisfied | 1963fb0 |
+| slice_impl-04 (Brainstorming executor adapter) | reviewed | 32 | satisfied | - |

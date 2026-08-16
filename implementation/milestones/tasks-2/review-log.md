@@ -292,3 +292,53 @@
 - `claude-claude-S4-002` (raised claude, cleared codex): The production-effect gate is specified as the lead's self-reported completion, which is weaker than the skeleton's 'effects have landed' guarantee, and no acceptance criterion or test covers a claimed-but-absent named note effect. — The slice explicitly makes a valid lead completion sufficient despite the pinned materialization requirement, so the builder would likely implement and test the weaker gate without stopping, but a missing note fails visibly at the next review and needs only a local adapter-and-test correction.
 - `claude-claude-S4-003` (raised claude, cleared codex): The Guarantee posture section declares no consistency/delivery level for the accounting aggregation the note pins, even though that mechanism is demonstrably not strict. — The omission is unlikely to mislead because Acceptance and the hard Pinned-Facts table explicitly require known values once and missing evidence as partial, and any confusion is corrected by adding one local guarantee-posture bullet.
 
+## slice_impl-04 (Brainstorming executor adapter)
+
+- draft: kind `implement`, artifact `-` (raw: `implementation/milestones/tasks-2/.run/raw/slice_impl-04-draft.txt`)
+
+| Round | Kind | Family | Findings | Triage | Raw |
+|---|---|---|---|---|---|
+| slice_impl-04-codex-r1 | review_round | codex | 5 | 5 reported | `implementation/milestones/tasks-2/.run/raw/slice_impl-04-codex-r1.txt` |
+| slice_impl-04-codex-r2 | fix_findings | codex | 5 | 5 fixed | `implementation/milestones/tasks-2/.run/raw/slice_impl-04-fix1.txt` |
+| slice_impl-04-codex-r3 | delta_review | codex | 2 | 2 reported | `implementation/milestones/tasks-2/.run/raw/slice_impl-04-delta1.txt` |
+| slice_impl-04-codex-r4 | fix_findings | codex | 2 | 2 fixed | `implementation/milestones/tasks-2/.run/raw/slice_impl-04-fix2.txt` |
+| slice_impl-04-codex-r5 | delta_review | codex | 2 | 2 reported | `implementation/milestones/tasks-2/.run/raw/slice_impl-04-delta2.txt` |
+| slice_impl-04-codex-r6 | fix_findings | codex | 2 | 2 fixed | `implementation/milestones/tasks-2/.run/raw/slice_impl-04-fix3.txt` |
+| slice_impl-04-codex-r7 | delta_review | codex | 1 | 1 reported | `implementation/milestones/tasks-2/.run/raw/slice_impl-04-delta3.txt` |
+| slice_impl-04-codex-r8 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/tasks-2/.run/raw/slice_impl-04-fix4.txt` |
+| slice_impl-04-codex-r9 | delta_review | codex | 3 | 3 reported | `implementation/milestones/tasks-2/.run/raw/slice_impl-04-delta4.txt` |
+| slice_impl-04-codex-r10 | fix_findings | codex | 3 | 3 fixed | `implementation/milestones/tasks-2/.run/raw/slice_impl-04-fix5.txt` |
+| slice_impl-04-codex-r11 | review_round | codex | 3 | 3 reported | `implementation/milestones/tasks-2/.run/raw/slice_impl-04-codex-r2.txt` |
+| slice_impl-04-codex-r12 | fix_findings | codex | 3 | 2 fixed, 1 rejected (1 consulted) | `implementation/milestones/tasks-2/.run/raw/slice_impl-04-fix6.txt` |
+| slice_impl-04-codex-r13 | delta_review | codex | 0 | clean | `implementation/milestones/tasks-2/.run/raw/slice_impl-04-delta5.txt` |
+| slice_impl-04-codex-r14 | review_round | codex | 0 | clean | `implementation/milestones/tasks-2/.run/raw/slice_impl-04-codex-r3.txt` |
+| slice_impl-04-claude-r1 | review_round | claude | 2 | DEBT-CLEAN (reclassified) | `implementation/milestones/tasks-2/.run/raw/slice_impl-04-claude-r1.txt` |
+| slice_impl-04-codex-r15 | fix_findings | codex | 0 | clean | `implementation/milestones/tasks-2/.run/raw/slice_impl-04-fix7.txt` |
+| slice_impl-04-codex-r16 | delta_review | codex | 0 | clean | `implementation/milestones/tasks-2/.run/raw/slice_impl-04-delta6.txt` |
+| slice_impl-04-codex-r17 | review_round | codex | 2 | 2 reported | `implementation/milestones/tasks-2/.run/raw/slice_impl-04-codex-r4.txt` |
+| slice_impl-04-codex-r18 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/tasks-2/.run/raw/slice_impl-04-fix8.txt` |
+| slice_impl-04-codex-r19 | delta_review | codex | 0 | clean | `implementation/milestones/tasks-2/.run/raw/slice_impl-04-delta7.txt` |
+| slice_impl-04-codex-r20 | review_round | codex | 1 | 1 reported | `implementation/milestones/tasks-2/.run/raw/slice_impl-04-codex-r5.txt` |
+| slice_impl-04-codex-r21 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/tasks-2/.run/raw/slice_impl-04-fix9.txt` |
+| slice_impl-04-codex-r22 | delta_review | codex | 0 | clean | `implementation/milestones/tasks-2/.run/raw/slice_impl-04-delta8.txt` |
+| slice_impl-04-codex-r23 | review_round | codex | 2 | 2 reported | `implementation/milestones/tasks-2/.run/raw/slice_impl-04-codex-r6.txt` |
+| slice_impl-04-codex-r24 | fix_findings | codex | 2 | 2 fixed | `implementation/milestones/tasks-2/.run/raw/slice_impl-04-fix10.txt` |
+| slice_impl-04-codex-r25 | delta_review | codex | 1 | 1 reported | `implementation/milestones/tasks-2/.run/raw/slice_impl-04-delta9.txt` |
+| slice_impl-04-codex-r26 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/tasks-2/.run/raw/slice_impl-04-fix11.txt` |
+| slice_impl-04-codex-r27 | delta_review | codex | 2 | 2 reported | `implementation/milestones/tasks-2/.run/raw/slice_impl-04-delta10.txt` |
+| slice_impl-04-codex-r28 | fix_findings | codex | 2 | 2 fixed | `implementation/milestones/tasks-2/.run/raw/slice_impl-04-fix12.txt` |
+| slice_impl-04-codex-r29 | delta_review | codex | 0 | clean | `implementation/milestones/tasks-2/.run/raw/slice_impl-04-delta11.txt` |
+| slice_impl-04-codex-r30 | review_round | codex | 0 | clean | `implementation/milestones/tasks-2/.run/raw/slice_impl-04-codex-r7.txt` |
+| slice_impl-04-claude-r2 | review_round | claude | 0 | clean | `implementation/milestones/tasks-2/.run/raw/slice_impl-04-claude-r2.txt` |
+
+### Review completion — SATISFIED
+
+- deterministic result: every configured family was clean or debt-clean on the same current bytes; the scheduled full verification passed; no extra reviewer was called
+- cited reviews: `slice_impl-04-codex-r30`, `slice_impl-04-claude-r2`
+- scheduled verification event: `684`
+
+**Deferred debt (opposite-family verified):**
+- `claude-claude-S4-IMPL-R1-001` (raised claude, cleared codex): The focused matrix never exercises the adapter's admission-closure refusals or the catalogue-default configuration path that the slice note's Verification Contract item 1 and Acceptance both require. — The artifact falsely claims focused coverage that its 20 passing tests omit, so a later adapter refactor could silently regress admission or default forwarding, but the behavior and contract are currently correct and correction is only a couple of local guards and focused tests.
+- `claude-claude-S4-IMPL-R1-002` (raised claude, cleared codex): Every ordinary first launch reads and fully validates every retained session state in the service home, with no per-record fault isolation. — The workspace confirms a latent correctness and coverage defect that clean-home tests will silently carry forward, while correcting it requires bounded retained-session lookup and fault-isolation rework plus focused tests, without changing downstream contracts.
+- `codex-codex-S4-REVIEW-002` (raised codex, cleared codex): Static staffing faults escape the required unavailable classification — The artifact wrongly promises task_unavailable for every unresolvable static binding while malformed model defaults actually escape as AttributeError, so later API/tests could trust the false classification boundary, but correction is a local exception-normalization change plus one focused test.
+

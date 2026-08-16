@@ -1,0 +1,1053 @@
+"""Thin TaskExecutor adapter for the independent Brainstorming lifecycle."""
+
+from __future__ import annotations
+
+import base64
+import copy
+import hashlib
+import json
+import math
+import os
+import secrets
+import shutil
+import time
+
+from orchestrator import brainstorming
+from orchestrator import brainstorming_lifecycle as lifecycle
+from orchestrator import brainstorming_milestone as milestone
+from orchestrator import driver
+from orchestrator import kvstore
+from orchestrator import state as st
+from orchestrator import tasks
+
+
+_PROFILE_AUTHORITY = "current_profile"
+_STATIC_AUTHORITY = "static"
+_TASK_CALLER_PREFIX = "task:"
+_NOTE_EFFECT = "Required effect: create the slice note at %s."
+_RECOVERED_EFFECT_ERROR = (
+    "production effect ended without durable completion evidence"
+)
+_RECOVERED_EFFECT_PARTICIPANT = "task-effect-recovery"
+
+
+class AdapterError(RuntimeError):
+    """An admitted task cannot safely cross the Brainstorming boundary."""
+
+
+def _task_record(state, task_id):
+    record = tasks.task_record(state, task_id)
+    order = record.get("order") or {}
+    if order.get("task_executor") != "brainstorming":
+        raise AdapterError("Brainstorming execution requires a Brainstorming task")
+    if record.get("result") is not None:
+        raise AdapterError("a terminal Brainstorming task cannot execute")
+    return record
+
+
+def _workspace(request):
+    work_area = request.get("work_area") or {}
+    primary = work_area.get("primary")
+    primary_path = primary.get("path") if isinstance(primary, dict) else primary
+    workspace = work_area.get("workspace_path") or primary_path
+    if (
+        not isinstance(workspace, str)
+        or not workspace.strip()
+        or not os.path.isabs(workspace)
+        or not os.path.isdir(workspace)
+    ):
+        raise AdapterError("the task work area has no existing absolute workspace")
+    if primary_path is not None and (
+        not isinstance(primary_path, str)
+        or os.path.realpath(primary_path) != os.path.realpath(workspace)
+    ):
+        raise AdapterError("the task work area does not match its primary workspace")
+    return os.path.abspath(workspace)
+
+
+def _execution_context(request):
+    """Translate the frozen work area to the lifecycle's resolved context."""
+    work_area = copy.deepcopy(request["work_area"])
+    workspace = _workspace(request)
+    primary = work_area.get("primary")
+    if isinstance(primary, str):
+        primary = {"path": primary}
+    additional = []
+    for root in work_area.get("additional") or []:
+        additional.append({"path": root} if isinstance(root, str) else root)
+    project = work_area.get("project")
+    area = work_area.get("work_area")
+    if (project is None) != (area is None):
+        raise AdapterError("project and work_area authority must be supplied together")
+    return {
+        "workspace_path": workspace,
+        "project": project,
+        "work_area": area,
+        "primary": primary,
+        "additional": additional,
+    }
+
+
+def _profile_participants(model_profile_runtime):
+    try:
+        runtime = lifecycle._current_model_profile_runtime(model_profile_runtime)
+        lead, contrary = driver.resolve_current_brainstorming_profiles(
+            runtime["state_path"], runtime["home"]
+        )
+        return milestone._participants(lead, contrary)
+    except Exception as exc:
+        raise tasks.TaskRequestError(
+            tasks.TASK_UNAVAILABLE,
+            "current Brainstorming staffing is unavailable",
+        ) from exc
+
+
+def resolve_staffing(config, workspace, model_profile_runtime=None):
+    """Resolve the historical snapshot, including static dispatch pins."""
+    if model_profile_runtime is not None:
+        participants = _profile_participants(model_profile_runtime)
+        authority = _PROFILE_AUTHORITY
+    else:
+        try:
+            participants = lifecycle.resolve_static_participants(
+                config,
+                milestone._participants(),
+                "unanimity",
+                workspace,
+            )
+        except lifecycle.PublicLifecycleError as exc:
+            code = (
+                tasks.TASK_UNAVAILABLE
+                if exc.code == lifecycle.UNAVAILABLE
+                else tasks.INVALID_TASK_REQUEST
+            )
+            raise tasks.TaskRequestError(
+                code, "static Brainstorming staffing is unavailable"
+            ) from exc
+        authority = _STATIC_AUTHORITY
+    return brainstorming._json_copy(
+        {"dispatch_authority": authority, "participants": participants},
+        "Brainstorming resolved staffing",
+    )
+
+
+def admit_task(
+    state,
+    order,
+    config,
+    primary_workspace,
+    model_profile_runtime=None,
+):
+    """Resolve Brainstorming staffing before the common durable admission."""
+    checked = tasks._canonical_output_directory(
+        tasks.validate_order(order), primary_workspace
+    )
+    if checked["task_executor"] != "brainstorming":
+        raise tasks.TaskRequestError(
+            tasks.INVALID_TASK_REQUEST,
+            "the Brainstorming adapter requires task_executor brainstorming",
+        )
+    staffing = resolve_staffing(
+        config, os.path.realpath(primary_workspace), model_profile_runtime
+    )
+    return tasks.admit_task(
+        state, checked, staffing, primary_workspace=primary_workspace
+    )
+
+
+def _frozen_participants(record):
+    staffing = record.get("resolved_staffing")
+    try:
+        brainstorming._exact_keys(
+            staffing,
+            ("dispatch_authority", "participants"),
+            (),
+            "Brainstorming resolved staffing",
+        )
+        if staffing["dispatch_authority"] != _STATIC_AUTHORITY:
+            raise brainstorming.ContractError(
+                "static launch requires static staffing authority"
+            )
+        participants = staffing["participants"]
+        checked = lifecycle.validate_create_body({
+            "request": {
+                "workspace_path": "/workspace",
+                "target_path": "/private/agreement.md",
+                "request": "Validate frozen task seats.",
+                "context": {"brief": "Validate frozen task seats."},
+                "max_rounds": 1,
+            },
+            "participants": participants,
+            "closure_policy": "unanimity",
+        })["participants"]
+        for participant in checked:
+            for field in ("model_family", "model", "effort"):
+                brainstorming._text(
+                    participant.get(field), "frozen participant.%s" % field
+                )
+        return checked
+    except (TypeError, ValueError, brainstorming.ContractError) as exc:
+        raise AdapterError("the task has no complete static staffing binding") from exc
+
+
+def _private_target_paths(workspace, home, task_id):
+    root = milestone._owned_work_areas_root(
+        {"workspace": workspace}, active_home=home
+    )
+    try:
+        fragment = kvstore.validate_fragment(task_id, "task_id")
+    except ValueError as exc:
+        raise AdapterError("the task id cannot own a private target") from exc
+    work_area = os.path.join(root, "task-%s" % fragment)
+    target_parent = os.path.join(work_area, "private")
+    return work_area, target_parent, os.path.join(target_parent, "agreement.md")
+
+
+def _task_lifecycle_lock(workspace, home, task_id):
+    """Return a lock distinct from Brainstorming's transcript lock."""
+    work_area, _target_parent, _target = _private_target_paths(
+        workspace, home, task_id
+    )
+    return work_area + "-lifecycle"
+
+
+def _private_target(workspace, home, task_id):
+    work_area, target_parent, target = _private_target_paths(
+        workspace, home, task_id
+    )
+    os.makedirs(os.path.dirname(work_area), exist_ok=True)
+    os.makedirs(target_parent, exist_ok=True)
+    return work_area, target
+
+
+def _creation_body(record, participants, target, workspace):
+    order = record["order"]
+    request = order["request"]
+    configuration = order["configuration"]
+    return {
+        "request": {
+            "workspace_path": workspace,
+            "target_path": target,
+            "request": request["request"],
+            "context": {
+                "brief": (
+                    "Discuss the target-free task and write the complete agreed "
+                    "production approach to the private target. During discussion, "
+                    "do not treat that private target as a requested task effect. "
+                    "The lead applies every requested effect only after agreement.\n\n"
+                    "Caller-supplied task context (binding background):\n"
+                    + json.dumps(
+                        request["context"],
+                        ensure_ascii=False,
+                        indent=2,
+                        sort_keys=True,
+                    )
+                ),
+                "references": list(request["reference_documents"]),
+                "source_payload": {
+                    "task_context": copy.deepcopy(request["context"]),
+                    "work_area": copy.deepcopy(request["work_area"]),
+                    **(
+                        {"output_directory": request["output_directory"]}
+                        if "output_directory" in request else {}
+                    ),
+                },
+            },
+            "max_rounds": configuration["max_rounds"],
+        },
+        "participants": copy.deepcopy(participants),
+        "closure_policy": configuration["closure_policy"],
+    }
+
+
+def _zero_accounting():
+    return {
+        "duration_s": 0.0,
+        "token_usage": {
+            "input_tokens": 0,
+            "cached_input_tokens": 0,
+            "output_tokens": 0,
+            "reasoning_output_tokens": 0,
+            "total_tokens": 0,
+        },
+        "token_usage_partial": False,
+        "cost": {"api_usd": 0.0, "real_usd": 0.0},
+        "cost_partial": False,
+    }
+
+
+def _fail_before_session(state, task_id, reason):
+    result = {
+        "status": "failure",
+        "reason": reason,
+        **_zero_accounting(),
+        "native_result": None,
+    }
+    return tasks.record_task_result(state, task_id, result)
+
+
+def _fail_from_projection(state, task_id, projection, reason):
+    session_state = projection.get("state") or {}
+    result = {
+        "status": "failure",
+        "reason": reason,
+        **_projection_accounting(projection),
+        "native_result": copy.deepcopy(session_state.get("result")),
+    }
+    return tasks.record_task_result(state, task_id, result)
+
+
+def _authorize_caller(caller):
+    def authorize(record):
+        if record.get("caller") != caller:
+            raise AdapterError("session/task mismatch")
+    return authorize
+
+
+def _task_caller(record, task_id):
+    authority = (record.get("resolved_staffing") or {}).get(
+        "dispatch_authority"
+    )
+    if authority == _PROFILE_AUTHORITY:
+        return lifecycle.CURRENT_PROFILE_TASK_CALLER_PREFIX + task_id
+    if authority == _STATIC_AUTHORITY:
+        return _TASK_CALLER_PREFIX + task_id
+    raise AdapterError("the task has no recognized staffing authority")
+
+
+def _owned_projection(home, caller, target_path):
+    rows = lifecycle.list_sessions(
+        home, lambda record: record.get("caller") == caller
+    )
+    if len(rows) > 1:
+        raise AdapterError("one Brainstorming task owns multiple sessions")
+    if not rows:
+        return None
+    session_id = rows[0]["id"]
+    try:
+        projection = lifecycle.inspect_session(
+            home, session_id, _authorize_caller(caller)
+        )
+    except lifecycle.PublicLifecycleError as exc:
+        if exc.code != lifecycle.UNKNOWN_SESSION:
+            raise
+        return (
+            session_id,
+            _retained_projection(home, session_id, caller, target_path),
+            False,
+        )
+    return session_id, projection, True
+
+
+def _retained_projection(home, session_id, caller, target_path):
+    """Project evidence retained after the service record was forgotten."""
+    store = brainstorming.SessionStore(lifecycle.state_directory(home))
+    snapshot = store.read(session_id)
+    if snapshot is None:
+        return None
+    retained_target = os.path.abspath(snapshot.state["request"]["target_path"])
+    if retained_target != target_path:
+        raise AdapterError("retained Brainstorming session/task mismatch")
+    record = {
+        "id": session_id,
+        "caller": caller,
+        "pid": None,
+        "created_at": "1970-01-01T00:00:01+0000",
+    }
+    projection = {
+        "id": session_id,
+        "caller": caller,
+        "process": "stopped",
+        "revision": snapshot.revision,
+        "state": snapshot.state,
+    }
+    projection.update(
+        lifecycle._activity_projection(store, record, snapshot.state)
+    )
+    if store.read_task_effect_attempt(session_id) is not None:
+        projection["work_token_usage_partial"] = True
+        projection["work_cost_partial"] = True
+    return projection
+
+
+def _retained_owned_projection(home, caller, target_path):
+    store = brainstorming.SessionStore(lifecycle.state_directory(home))
+    session_ids = store.session_ids_for_target(target_path)
+    if len(session_ids) > 1:
+        raise AdapterError("one Brainstorming task owns multiple sessions")
+    if not session_ids:
+        return None
+    session_id = session_ids[0]
+    return session_id, _retained_projection(
+        home, session_id, caller, target_path
+    )
+
+
+def _fail_lost_session(state, task_id, projection=None):
+    reason = "Brainstorming session was deleted before task completion."
+    if projection is not None:
+        return _fail_from_projection(state, task_id, projection, reason)
+    return tasks.record_task_result(state, task_id, {
+        "status": "failure",
+        "reason": reason,
+        "duration_s": 0.0,
+        "token_usage": None,
+        "token_usage_partial": True,
+        "cost": None,
+        "cost_partial": True,
+        "native_result": None,
+    })
+
+
+def _resume_projection(
+    state,
+    task_id,
+    home,
+    session_id,
+    caller,
+    projection,
+    model_profile_runtime,
+):
+    if projection["state"]["status"] not in brainstorming.TERMINAL_STATUSES:
+        try:
+            return lifecycle.start_session(
+                home,
+                session_id,
+                _authorize_caller(caller),
+                validate_launch=(
+                    (lambda _record: model_profile_runtime)
+                    if model_profile_runtime is not None else None
+                ),
+            )
+        except lifecycle.PublicLifecycleError as exc:
+            if exc.code == lifecycle.STOP_INCOMPLETE:
+                raise
+            _fail_from_projection(
+                state,
+                task_id,
+                projection,
+                "Brainstorming session start failed: %s" % exc.code,
+            )
+            return None
+    return projection
+
+
+def _start_task_exclusive(
+    state,
+    task_id,
+    config,
+    home,
+    model_profile_runtime=None,
+    launcher=None,
+    session_id=None,
+):
+    """Launch, or resume, the one private session owned by an open task."""
+    record = _task_record(state, task_id)
+    staffing = record["resolved_staffing"]
+    authority = staffing.get("dispatch_authority")
+    if (authority == _PROFILE_AUTHORITY) != (model_profile_runtime is not None):
+        raise AdapterError("the launch authority does not match task admission")
+    caller = _task_caller(record, task_id)
+    request = record["order"]["request"]
+    context = _execution_context(request)
+    workspace = context["workspace_path"]
+    work_area, _target_parent, target = _private_target_paths(
+        workspace, home, task_id
+    )
+    if session_id is not None:
+        try:
+            projection = lifecycle.inspect_session(
+                home, session_id, _authorize_caller(caller)
+            )
+        except lifecycle.PublicLifecycleError as exc:
+            if exc.code != lifecycle.UNKNOWN_SESSION:
+                raise
+            retained = _retained_projection(
+                home, session_id, caller, target
+            )
+            _fail_lost_session(state, task_id, retained)
+            return None
+        return _resume_projection(
+            state,
+            task_id,
+            home,
+            session_id,
+            caller,
+            projection,
+            model_profile_runtime,
+        )
+
+    owned = _owned_projection(home, caller, target)
+    if owned is not None:
+        recovered_id, projection, registered = owned
+        if not registered:
+            _fail_lost_session(state, task_id, projection)
+            return None
+        return _resume_projection(
+            state,
+            task_id,
+            home,
+            recovered_id,
+            caller,
+            projection,
+            model_profile_runtime,
+        )
+
+    retained = _retained_owned_projection(home, caller, target)
+    if retained is not None:
+        _session_id, projection = retained
+        _fail_lost_session(state, task_id, projection)
+        return None
+
+    if os.path.lexists(work_area):
+        _fail_lost_session(state, task_id)
+        return None
+
+    created_work_area = None
+    try:
+        participants = (
+            _profile_participants(model_profile_runtime)
+            if model_profile_runtime is not None
+            else _frozen_participants(record)
+        )
+        created_work_area, target = _private_target(workspace, home, task_id)
+        body = _creation_body(record, participants, target, workspace)
+        if context["project"] is not None:
+            body["project"] = context["project"]
+            body["work_area"] = context["work_area"]
+        kwargs = {"owned_target_path": target}
+        if launcher is not None:
+            kwargs["launcher"] = launcher
+        if model_profile_runtime is not None:
+            kwargs["model_profile_runtime"] = model_profile_runtime
+        else:
+            kwargs["static_binding"] = True
+        return lifecycle.create_resolved_session(
+            home, body, caller, context, config, **kwargs
+        )
+    except (AdapterError, lifecycle.PublicLifecycleError, tasks.TaskRequestError) as exc:
+        code = getattr(exc, "code", lifecycle.UNAVAILABLE)
+        if code == lifecycle.TARGET_IN_USE:
+            owned = _owned_projection(home, caller, target)
+            if owned is not None:
+                recovered_id, projection, registered = owned
+                if not registered:
+                    _fail_lost_session(state, task_id, projection)
+                    return None
+                return _resume_projection(
+                    state,
+                    task_id,
+                    home,
+                    recovered_id,
+                    caller,
+                    projection,
+                    model_profile_runtime,
+                )
+        if created_work_area is not None and code != lifecycle.TARGET_IN_USE:
+            shutil.rmtree(created_work_area, ignore_errors=True)
+        _fail_before_session(
+            state,
+            task_id,
+            "Brainstorming session admission failed: %s" % code,
+        )
+        return None
+
+
+def start_task(
+    state,
+    task_id,
+    config,
+    home,
+    model_profile_runtime=None,
+    launcher=None,
+    session_id=None,
+):
+    """Launch or resume under the task's one lifecycle serialization lock."""
+    record = _task_record(state, task_id)
+    workspace = _workspace(record["order"]["request"])
+    lock = _task_lifecycle_lock(workspace, home, task_id)
+    with brainstorming._exclusive_transcript(lock):
+        return _start_task_exclusive(
+            state,
+            task_id,
+            config,
+            home,
+            model_profile_runtime=model_profile_runtime,
+            launcher=launcher,
+            session_id=session_id,
+        )
+
+
+def start_persisted_task(
+    state_path,
+    task_id,
+    config,
+    home,
+    model_profile_runtime=None,
+    launcher=None,
+    session_id=None,
+):
+    """Serialize a public restart with the owning durable task record."""
+    with st.exclusive_mutation(state_path):
+        state = st.load(state_path)
+        projection = start_task(
+            state,
+            task_id,
+            config,
+            home,
+            model_profile_runtime=model_profile_runtime,
+            launcher=launcher,
+            session_id=session_id,
+        )
+        record = tasks.task_record(state, task_id)
+        if record["result"] is not None:
+            st.save(state_path, state)
+        return projection, record
+
+
+def _projection_accounting(projection):
+    duration = projection.get("work_duration_s")
+    if isinstance(duration, bool) or not isinstance(duration, (int, float)):
+        duration = 0.0
+    token_usage = projection.get("work_token_usage")
+    cost = projection.get("work_cost")
+    return {
+        "duration_s": float(duration),
+        "token_usage": copy.deepcopy(token_usage),
+        "token_usage_partial": bool(
+            projection.get("work_token_usage_partial", False)
+            or token_usage is None
+        ),
+        "cost": copy.deepcopy(cost),
+        "cost_partial": bool(
+            projection.get("work_cost_partial", False) or cost is None
+        ),
+    }
+
+
+def validate_effect_result(value):
+    """Validate one non-participant effect operation and its aggregate evidence.
+
+    Physical participant calls retain the lifecycle's staffed per-call activity;
+    this adapter-private callback only reports whether their agreed effects landed.
+    """
+    try:
+        brainstorming._exact_keys(
+            value,
+            (
+                "completed",
+                "duration_s",
+                "token_usage",
+                "token_usage_partial",
+                "cost",
+                "cost_partial",
+            ),
+            ("reason",),
+            "production effect result",
+        )
+        if type(value["completed"]) is not bool:
+            raise brainstorming.ContractError(
+                "production effect result.completed must be boolean"
+            )
+        if value["completed"] and "reason" in value:
+            raise brainstorming.ContractError(
+                "completed production effects cannot carry a reason"
+            )
+        reason = value.get("reason")
+        if not value["completed"]:
+            reason = brainstorming._text(reason, "production effect result.reason")
+        checked = tasks.validate_result({
+            "status": "success" if value["completed"] else "failure",
+            **({"reason": reason} if not value["completed"] else {}),
+            "duration_s": value["duration_s"],
+            "token_usage": value["token_usage"],
+            "token_usage_partial": value["token_usage_partial"],
+            "cost": value["cost"],
+            "cost_partial": value["cost_partial"],
+            "native_result": None,
+        })
+        return {
+            "completed": value["completed"],
+            **({"reason": reason} if not value["completed"] else {}),
+            **{
+                key: checked[key]
+                for key in (
+                    "duration_s",
+                    "token_usage",
+                    "token_usage_partial",
+                    "cost",
+                    "cost_partial",
+                )
+            },
+        }
+    except (TypeError, ValueError, brainstorming.ContractError, tasks.ContractError) as exc:
+        raise AdapterError("production effect completion is invalid") from exc
+
+
+def _known_effect_accounting(value):
+    if not isinstance(value, dict):
+        return _unknown_effect("production effect completion is invalid")
+    duration = value.get("duration_s")
+    try:
+        normalized_duration = float(duration)
+    except (TypeError, ValueError, OverflowError):
+        normalized_duration = -1.0
+    if (
+        isinstance(duration, bool)
+        or not isinstance(duration, (int, float))
+        or not math.isfinite(normalized_duration)
+        or normalized_duration < 0
+    ):
+        duration = 0.0
+    else:
+        duration = normalized_duration
+    try:
+        token_usage = tasks._token_usage(value.get("token_usage"))
+    except (TypeError, ValueError, OverflowError, tasks.ContractError):
+        token_usage = None
+    token_partial = value.get("token_usage_partial")
+    if type(token_partial) is not bool:
+        token_partial = True
+    token_partial = bool(token_partial or token_usage is None)
+    try:
+        cost = tasks._cost(value.get("cost"))
+    except (TypeError, ValueError, OverflowError, tasks.ContractError):
+        cost = None
+    cost_partial = value.get("cost_partial")
+    if type(cost_partial) is not bool:
+        cost_partial = True
+    cost_partial = bool(cost_partial or cost is None)
+    reason = value.get("reason") if value.get("completed") is False else None
+    if not isinstance(reason, str) or not reason.strip():
+        reason = "production effect completion is invalid"
+    return {
+        "completed": False,
+        "reason": reason,
+        "duration_s": duration,
+        "token_usage": token_usage,
+        "token_usage_partial": token_partial,
+        "cost": cost,
+        "cost_partial": cost_partial,
+    }
+
+
+def _unknown_effect(reason):
+    return {
+        "completed": False,
+        "reason": reason,
+        "duration_s": 0.0,
+        "token_usage": None,
+        "token_usage_partial": True,
+        "cost": None,
+        "cost_partial": True,
+    }
+
+
+def _exception_effect(exc, started_at):
+    detail = str(exc).strip() or type(exc).__name__
+    effect = _unknown_effect("production effect failed: %s" % detail[:3960])
+    effect["duration_s"] = max(0.0, time.time() - started_at)
+    return effect
+
+
+def _effect_action_id(token):
+    return "task-production-effect:%s" % token
+
+
+def _effect_activity_event(
+    effect,
+    attempt,
+    projection,
+    failure_type,
+    participant_id="production-lead",
+):
+    action_id = _effect_action_id(attempt["token"])
+    digest = hashlib.sha256(action_id.encode("utf-8")).hexdigest()[:20]
+    native_result = ((projection.get("state") or {}).get("result") or {})
+    rounds = native_result.get("rounds_used", 1)
+    if type(rounds) is not int or rounds <= 0:
+        rounds = 1
+    event = {
+        "id": "activity-%s" % digest,
+        "action_id": action_id,
+        "provider_attempt": 1,
+        "at": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+        "started_at": attempt["started_at"],
+        "duration_s": effect["duration_s"],
+        "kind": "production_effect",
+        "stage": "production",
+        "round": rounds,
+        "participant_id": participant_id,
+        "model_family": None,
+        "model": None,
+        "effort": None,
+        "status": "completed" if effect["completed"] else "failed",
+    }
+    if effect["token_usage"] is not None:
+        event["token_usage"] = copy.deepcopy(effect["token_usage"])
+    if effect["token_usage_partial"]:
+        event["token_usage_partial"] = True
+    if effect["cost"] is not None:
+        event["cost"] = copy.deepcopy(effect["cost"])
+    if effect["cost_partial"]:
+        event["cost_partial"] = True
+    if not effect["completed"]:
+        event.update({
+            "failure_type": failure_type,
+            "error": effect["reason"],
+        })
+    return brainstorming.validate_activity_event(event)
+
+
+def _effect_event(events, token):
+    action_id = _effect_action_id(token)
+    return next(
+        (event for event in events if event.get("action_id") == action_id),
+        None,
+    )
+
+
+def _recover_effect_attempt(store, session_id, task_id, projection):
+    attempt = store.read_task_effect_attempt(session_id)
+    if attempt is None:
+        return None
+    if attempt["task_id"] != task_id:
+        raise AdapterError("production-effect session/task mismatch")
+    activity = store.read_activity(session_id) or {"events": []}
+    if _effect_event(activity["events"], attempt["token"]) is not None:
+        store.finish_task_effect_attempt(session_id, attempt["token"])
+        return None
+    recovered = _unknown_effect(_RECOVERED_EFFECT_ERROR)
+    store.append_activity(
+        session_id,
+        _effect_activity_event(
+            recovered,
+            attempt,
+            projection,
+            "execution",
+            participant_id=_RECOVERED_EFFECT_PARTICIPANT,
+        ),
+    )
+    store.finish_task_effect_attempt(session_id, attempt["token"])
+    return recovered
+
+
+def _terminal_effect_from_projection(projection):
+    terminal = [
+        event
+        for event in projection.get("activity") or []
+        if event.get("kind") == "production_effect"
+        and event.get("participant_id") != _RECOVERED_EFFECT_PARTICIPANT
+    ]
+    if not terminal:
+        return None
+    event = terminal[-1]
+    completed = event["status"] == "completed"
+    return {
+        "completed": completed,
+        **({"reason": event.get("error") or "production effects failed"}
+           if not completed else {}),
+    }
+
+
+def _begin_effect_attempt(store, session_id, task_id):
+    return store.begin_task_effect_attempt(session_id, {
+        "task_id": task_id,
+        "token": secrets.token_hex(16),
+        "started_at": time.time(),
+    })
+
+
+def _merge_accounting(first, second):
+    return {
+        "duration_s": first["duration_s"] + second["duration_s"],
+        "token_usage": st._add_token_usage(
+            first["token_usage"], second["token_usage"]
+        ),
+        "token_usage_partial": bool(
+            first["token_usage_partial"] or second["token_usage_partial"]
+        ),
+        "cost": st._add_cost(first["cost"], second["cost"]),
+        "cost_partial": bool(first["cost_partial"] or second["cost_partial"]),
+    }
+
+
+def _retained_agreement(home, session_id, session_state):
+    revision = session_state.get("accepted_target_revision")
+    if not isinstance(revision, str) or not revision:
+        raise AdapterError("a successful Brainstorming session has no agreement")
+    store = brainstorming.SessionStore(lifecycle.state_directory(home))
+    retained = store.read_target_revision(session_id, revision)
+    exists, content = brainstorming.target_revision_content(retained)
+    if not exists:
+        raise AdapterError("a successful Brainstorming agreement is absent")
+    try:
+        rendered = content.decode("utf-8")
+        encoding = "utf-8"
+    except UnicodeDecodeError:
+        rendered = base64.b64encode(content).decode("ascii")
+        encoding = "base64"
+    return {"exists": True, "encoding": encoding, "content": rendered}
+
+
+def _finish_task_exclusive(
+    state,
+    task_id,
+    home,
+    session_id,
+    apply_effects,
+    effect_store,
+):
+    """Finish one task while holding its adapter lifecycle lock."""
+    record = _task_record(state, task_id)
+    caller = _task_caller(record, task_id)
+    request = record["order"]["request"]
+    workspace = _workspace(request)
+    _work_area, _target_parent, target = _private_target_paths(
+        workspace, home, task_id
+    )
+    try:
+        projection = lifecycle.inspect_session(
+            home, session_id, _authorize_caller(caller)
+        )
+    except lifecycle.PublicLifecycleError as exc:
+        if exc.code != lifecycle.UNKNOWN_SESSION:
+            raise
+        retained = _retained_projection(home, session_id, caller, target)
+        return _fail_lost_session(state, task_id, retained)
+    session_state = projection["state"]
+    if session_state["status"] not in brainstorming.TERMINAL_STATUSES:
+        return None
+    native_result = copy.deepcopy(session_state["result"])
+    accounting = _projection_accounting(projection)
+    if session_state["status"] == "failure":
+        reason = native_result.get("reason") or "Brainstorming did not agree."
+        return tasks.record_task_result(state, task_id, {
+            "status": "failure",
+            "reason": reason,
+            **accounting,
+            "native_result": native_result,
+        })
+    store = effect_store
+    recovered = _recover_effect_attempt(
+        store, session_id, task_id, projection
+    )
+    if recovered is not None:
+        accounting = _merge_accounting(accounting, recovered)
+    prior_effect = _terminal_effect_from_projection(projection)
+    if prior_effect is not None:
+        result = {
+            "status": "success" if prior_effect["completed"] else "failure",
+            **accounting,
+            "native_result": native_result,
+        }
+        if not prior_effect["completed"]:
+            result["reason"] = prior_effect["reason"]
+        return tasks.record_task_result(state, task_id, result)
+    if not callable(apply_effects):
+        raise AdapterError("Brainstorming production requires an effect callback")
+    agreement = _retained_agreement(home, session_id, session_state)
+    attempt = _begin_effect_attempt(store, session_id, task_id)
+    try:
+        supplied_effect = apply_effects({
+            "request": copy.deepcopy(record["order"]["request"]),
+            "agreement": agreement,
+        })
+    except Exception as exc:
+        effect = _exception_effect(exc, attempt["started_at"])
+        failure_type = "execution"
+    else:
+        try:
+            effect = validate_effect_result(supplied_effect)
+            failure_type = "execution"
+        except AdapterError:
+            effect = _known_effect_accounting(supplied_effect)
+            failure_type = "protocol"
+    store.append_activity(
+        session_id,
+        _effect_activity_event(effect, attempt, projection, failure_type),
+    )
+    store.finish_task_effect_attempt(session_id, attempt["token"])
+    accounting = _merge_accounting(accounting, effect)
+    result = {
+        "status": "success" if effect["completed"] else "failure",
+        **accounting,
+        "native_result": native_result,
+    }
+    if not effect["completed"]:
+        result["reason"] = effect["reason"]
+    return tasks.record_task_result(state, task_id, result)
+
+
+def finish_task(
+    state,
+    task_id,
+    home,
+    session_id,
+    apply_effects,
+    effect_store=None,
+):
+    """Terminalize only after native closure and the lead's effect handoff."""
+    record = _task_record(state, task_id)
+    workspace = _workspace(record["order"]["request"])
+    durable_store = brainstorming.SessionStore(lifecycle.state_directory(home))
+    store = effect_store or durable_store
+    lock = _task_lifecycle_lock(workspace, home, task_id)
+    with brainstorming._exclusive_transcript(lock):
+        return _finish_task_exclusive(
+            state,
+            task_id,
+            home,
+            session_id,
+            apply_effects,
+            store,
+        )
+
+
+def prepare_slice_note_request(request, planned_path):
+    """Name the current run-layout path without adding an artifact result."""
+    checked = tasks.validate_request(request)
+    if not isinstance(planned_path, str) or not planned_path.strip():
+        raise tasks.TaskRequestError(
+            tasks.INVALID_TASK_REQUEST, "planned slice-note path is required"
+        )
+    workspace = _workspace(checked)
+    absolute = os.path.realpath(
+        planned_path
+        if os.path.isabs(planned_path)
+        else os.path.join(workspace, planned_path)
+    )
+    if not kvstore.path_is_inside_roots(absolute, [workspace]):
+        raise tasks.TaskRequestError(
+            tasks.INVALID_TASK_REQUEST,
+            "planned slice-note path must stay inside the primary workspace",
+        )
+    if "output_directory" in checked:
+        output_root = checked["output_directory"]
+        output_root = os.path.realpath(
+            output_root
+            if os.path.isabs(output_root)
+            else os.path.join(workspace, output_root)
+        )
+        tasks.resolve_derived_path(output_root, absolute)
+    checked["request"] = (
+        checked["request"].rstrip() + "\n\n" + (_NOTE_EFFECT % planned_path)
+    )
+    return tasks.validate_request(checked)
+
+
+def record_slice_note_handoff(unit, record, planned_path):
+    """Record the current task's planned path, replacing predecessor handoff."""
+    result = record.get("result") if isinstance(record, dict) else None
+    request = ((record.get("order") or {}).get("request") or {})
+    if (
+        (record.get("order") or {}).get("task_executor") != "brainstorming"
+        or not isinstance(result, dict)
+        or result.get("status") != "success"
+        or not request.get("request", "").rstrip().endswith(
+            _NOTE_EFFECT % planned_path
+        )
+    ):
+        raise AdapterError("slice-note handoff requires its successful current task")
+    unit["artifact"] = planned_path
+    return planned_path

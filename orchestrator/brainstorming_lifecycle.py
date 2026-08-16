@@ -40,6 +40,7 @@ except ImportError:  # pragma: no cover - the production service is POSIX
 
 
 SCHEMA_VERSION = 1
+CURRENT_PROFILE_TASK_CALLER_PREFIX = "task-profile:"
 SERVICE_DIRNAME = "brainstorming"
 REGISTRY_FILENAME = "sessions.json"
 STATE_DIRNAME = "state"
@@ -493,12 +494,23 @@ def _executable_available(argv, workspace):
     return shutil.which(executable, path=search_path) is not None
 
 
-def _runtime_and_roster(config, participants, closure_policy, workspace):
+def _runtime_and_roster(
+    config,
+    participants,
+    closure_policy,
+    workspace,
+    static_binding=False,
+):
     commands = config.get("commands")
     order = config.get("families_order")
-    if not isinstance(commands, dict) or not isinstance(order, list):
+    if (
+        not isinstance(commands, dict)
+        or (not static_binding and not isinstance(order, list))
+    ):
         raise PublicLifecycleError(503, UNAVAILABLE)
-    model_defaults = config.get("model_defaults") or {}
+    model_defaults = (
+        {} if static_binding else (config.get("model_defaults") or {})
+    )
     timeouts = config.get("timeouts") or {}
     probe = runners.SubprocessRunner(
         commands,
@@ -506,24 +518,69 @@ def _runtime_and_roster(config, participants, closure_policy, workspace):
         participant_process_factory=_spawn_participant,
     )
     families = []
-    for family in order:
-        if (
-            not isinstance(family, str)
-            or family in families
-            or not probe.supports_session_continuation(family)
-        ):
-            continue
-        defaults = model_defaults.get(family) or {}
-        model = defaults.get("model")
-        effort = defaults.get("effort")
-        try:
-            argv = runners.apply_model_effort(
-                commands[family], model, effort
-            )
-        except (TypeError, ValueError, runners.RunnerError):
-            continue
-        if _executable_available(argv, workspace):
+    if static_binding:
+        pinned_by_family = {}
+        for participant in participants:
+            if (
+                participant["delivery"] == "external"
+                and participant.get("external_provider") != "narrator"
+            ):
+                continue
+            try:
+                family = brainstorming._text(
+                    participant.get("model_family"),
+                    "static participant.model_family",
+                )
+                model = brainstorming._text(
+                    participant.get("model"), "static participant.model"
+                )
+                effort = brainstorming._text(
+                    participant.get("effort"), "static participant.effort"
+                )
+            except brainstorming.ContractError as exc:
+                raise PublicLifecycleError(503, UNAVAILABLE) from exc
+            pinned_by_family.setdefault(family, []).append((model, effort))
+        for family, pins in pinned_by_family.items():
+            if (
+                family not in commands
+                or not probe.supports_session_continuation(family)
+            ):
+                raise PublicLifecycleError(503, UNAVAILABLE)
+            for model, effort in pins:
+                try:
+                    argv = runners.apply_model_effort(
+                        commands[family], model, effort
+                    )
+                except (TypeError, ValueError, runners.RunnerError) as exc:
+                    raise PublicLifecycleError(503, UNAVAILABLE) from exc
+                if not _executable_available(argv, workspace):
+                    raise PublicLifecycleError(503, UNAVAILABLE)
+            if any(pin != pins[0] for pin in pins[1:]):
+                raise PublicLifecycleError(503, UNAVAILABLE)
+            model_defaults[family] = {
+                "model": pins[0][0],
+                "effort": pins[0][1],
+            }
             families.append(family)
+    else:
+        for family in order:
+            if (
+                not isinstance(family, str)
+                or family in families
+                or not probe.supports_session_continuation(family)
+            ):
+                continue
+            defaults = model_defaults.get(family) or {}
+            model = defaults.get("model")
+            effort = defaults.get("effort")
+            try:
+                argv = runners.apply_model_effort(
+                    commands[family], model, effort
+                )
+            except (TypeError, ValueError, runners.RunnerError):
+                continue
+            if _executable_available(argv, workspace):
+                families.append(family)
     if not families:
         raise PublicLifecycleError(503, UNAVAILABLE)
 
@@ -681,6 +738,54 @@ def _runtime_and_roster(config, participants, closure_policy, workspace):
     except brainstorming.ContractError as exc:
         raise PublicLifecycleError(503, UNAVAILABLE) from exc
     return runtime, run_config, eligible
+
+
+def resolve_static_participants(
+    config, participants, closure_policy, workspace
+):
+    """Resolve complete create-body pins with the lifecycle's roster rule.
+
+    Direct Brainstorming tasks have no profile authority to consult after
+    ordering.  This helper deliberately reuses the same executable-aware
+    family rotation and model defaults that session admission uses, then
+    projects the selected bindings back into the existing participant shape.
+    Passing the returned participants to session creation therefore validates
+    the frozen choice without selecting again.
+    """
+    runtime, run_config, _eligible = _runtime_and_roster(
+        config, participants, closure_policy, workspace
+    )
+    by_id = {participant["id"]: participant for participant in participants}
+    resolved = []
+    for seat in run_config["participants"]:
+        source = by_id.get(seat["id"])
+        if source is None:
+            raise PublicLifecycleError(503, UNAVAILABLE)
+        binding_ref = (
+            seat["executor_ref"]
+            if seat["delivery"] == "llm"
+            else seat["external_ref"]
+        )
+        binding = (runtime.get("executors") or {}).get(binding_ref)
+        if not isinstance(binding, dict):
+            raise PublicLifecycleError(503, UNAVAILABLE)
+        try:
+            pinned = copy.deepcopy(source)
+            pinned.update({
+                "model_family": brainstorming._text(
+                    binding.get("model_family"), "resolved participant family"
+                ),
+                "model": brainstorming._text(
+                    binding.get("model"), "resolved participant model"
+                ),
+                "effort": brainstorming._text(
+                    binding.get("effort"), "resolved participant effort"
+                ),
+            })
+        except brainstorming.ContractError as exc:
+            raise PublicLifecycleError(503, UNAVAILABLE) from exc
+        resolved.append(pinned)
+    return brainstorming._json_copy(resolved, "resolved participants")
 
 
 def _current_model_profile_runtime(value):
@@ -1089,6 +1194,14 @@ def _is_milestone_session(record):
     return isinstance(caller, str) and caller.startswith("milestone:")
 
 
+def _uses_current_profile(record):
+    caller = record.get("caller")
+    return _is_milestone_session(record) or (
+        isinstance(caller, str)
+        and caller.startswith(CURRENT_PROFILE_TASK_CALLER_PREFIX)
+    )
+
+
 def _activity_projection(store, record, state):
     activity = store.read_activity(record["id"])
     events = [] if activity is None else copy.deepcopy(activity["events"])
@@ -1156,8 +1269,8 @@ def _activity_projection(store, record, state):
     ):
         # Current profile state can change after dispatch. The turn attempt
         # does not retain call identity, so the creation roster is not proof
-        # of what an active milestone call is running.
-        if _is_milestone_session(record):
+        # of what an active current-profile call is running.
+        if _uses_current_profile(record):
             participant = {}
         else:
             participants = {
@@ -1335,6 +1448,7 @@ def create_resolved_session(
     launcher=None,
     owned_target_path=None,
     model_profile_runtime=None,
+    static_binding=False,
 ):
     """Create for an already-resolved milestone without resolving roots again."""
     try:
@@ -1397,6 +1511,7 @@ def create_resolved_session(
             launcher,
             owned_target_path=owned_target_path,
             model_profile_runtime=model_profile_runtime,
+            static_binding=static_binding,
         )
     except PublicLifecycleError:
         raise
@@ -1415,6 +1530,7 @@ def _create_session_with_context(
     launcher,
     owned_target_path=None,
     model_profile_runtime=None,
+    static_binding=False,
 ):
     model_profile_runtime = _current_model_profile_runtime(
         model_profile_runtime
@@ -1424,6 +1540,7 @@ def _create_session_with_context(
         checked["participants"],
         checked["closure_policy"],
         context["workspace_path"],
+        static_binding=static_binding,
     )
     store = brainstorming.SessionStore(state_directory(home))
     target_path = _resolved_target_path(
@@ -1859,7 +1976,7 @@ def _view_participants(record, state, current_staffing=None):
     executors = runtime.get("executors") or {}
     defaults = runtime.get("model_defaults") or {}
     external_providers = runtime.get("external_providers") or {}
-    milestone = _is_milestone_session(record)
+    current_profile = _uses_current_profile(record)
     projected = []
     for participant in state["run_config"]["participants"]:
         binding_ref = (
@@ -1876,7 +1993,7 @@ def _view_participants(record, state, current_staffing=None):
                 and provider.get("kind") == "narrator"
             )
         )
-        if milestone and profile_staffed:
+        if current_profile and profile_staffed:
             current = (current_staffing or {}).get(participant["id"]) or {}
             model_family = current.get("agent")
             model = current.get("model")
@@ -1952,7 +2069,7 @@ def view_session(
         turns = [] if progress is None else progress["completed_turns"]
         activity = _activity_projection(store, record, state)
         projected_staffing = None
-        if _is_milestone_session(record) and callable(current_staffing):
+        if _uses_current_profile(record) and callable(current_staffing):
             try:
                 projected_staffing = current_staffing(record, state)
             except Exception:

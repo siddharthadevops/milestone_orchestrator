@@ -23,7 +23,8 @@ from orchestrator import access
 from orchestrator import brainstorming as bs
 from orchestrator import brainstorming_coordination as coordination
 from orchestrator import brainstorming_lifecycle as lifecycle
-from orchestrator import registry, runners, service, workareas
+from orchestrator import brainstorming_tasks as task_adapter
+from orchestrator import registry, runners, service, state, tasks, workareas
 
 
 def closing_summary():
@@ -2113,6 +2114,204 @@ class StandaloneBrainstormingApiTest(unittest.TestCase):
         self.assertEqual(
             pathlib.Path(lifecycle.registry_path(self.home)).read_bytes(),
             registry_before,
+        )
+
+    def test_static_task_restart_preserves_terminal_noop_without_relaunch(self):
+        task_state = state.new_state(
+            "Static Brainstorming task restart proof.",
+            self.workspace,
+            self.config,
+            name="static-task-run",
+        )
+        record = task_adapter.admit_task(
+            task_state,
+            {
+                "task_executor": "brainstorming",
+                "request": {
+                    "work_area": {
+                        "workspace_path": self.workspace,
+                        "primary": self.workspace,
+                        "additional": [],
+                    },
+                    "request": "Produce the agreed workspace effects.",
+                    "context": {},
+                    "reference_documents": [],
+                },
+                "configuration": {},
+            },
+            self.config,
+            self.workspace,
+        )
+        session = task_adapter.start_task(
+            task_state,
+            record["id"],
+            self.config,
+            self.home,
+            launcher=self._sleeper_launcher,
+        )
+        session_id = session["id"]
+        self._stop_sleeper_record(session_id)
+        state_path = os.path.join(self.tmp.name, "task-state.json")
+        state.save(state_path, task_state)
+        registry.add(
+            self.home,
+            registry.new_entry(
+                "static-task-run",
+                "static task run",
+                self.workspace,
+                state_path,
+            ),
+        )
+
+        with mock.patch.object(
+            lifecycle,
+            "_launch_lifecycle_process",
+            side_effect=OSError("launch refused"),
+        ) as refused:
+            code, response = self._request(
+                "POST",
+                "/api/brainstorming/sessions/%s/start" % session_id,
+                {},
+            )
+        self.assertEqual(code, 503, response)
+        refused.assert_called_once()
+        failed = tasks.task_record(state.load(state_path), record["id"])
+        self.assertEqual(failed["result"]["status"], "failure")
+        self.assertIn(lifecycle.UNAVAILABLE, failed["result"]["reason"])
+
+        with mock.patch.object(
+            lifecycle,
+            "_launch_lifecycle_process",
+            side_effect=self._sleeper_launcher,
+        ) as relaunch:
+            code, response = self._request(
+                "POST",
+                "/api/brainstorming/sessions/%s/start" % session_id,
+                {},
+            )
+        self.assertEqual(code, 503, response)
+        relaunch.assert_not_called()
+
+        store = bs.SessionStore(lifecycle.state_directory(self.home))
+        snapshot = store.read(session_id)
+        reason = "The task-owned session reached a terminal result."
+        terminal_session = store.transition(
+            session_id,
+            snapshot.revision,
+            "failure",
+            lifecycle._failure_result(snapshot.state, reason),
+            lifecycle._closing_summary(
+                snapshot.state,
+                reason,
+                "The session terminality matches its durable task.",
+            ),
+        )
+        task_before = pathlib.Path(state_path).read_bytes()
+        with mock.patch.object(
+            lifecycle,
+            "_launch_lifecycle_process",
+            side_effect=AssertionError("a terminal session cannot relaunch"),
+        ) as relaunch:
+            code, response = self._request(
+                "POST",
+                "/api/brainstorming/sessions/%s/start" % session_id,
+                {},
+            )
+        self.assertEqual(code, 200, response)
+        self.assertEqual(
+            response["session"]["revision"], terminal_session.revision
+        )
+        self.assertEqual(response["session"]["state"]["status"], "failure")
+        relaunch.assert_not_called()
+        self.assertEqual(pathlib.Path(state_path).read_bytes(), task_before)
+
+        registry.remove(self.home, "static-task-run")
+        with mock.patch.object(
+            lifecycle,
+            "_launch_lifecycle_process",
+            side_effect=AssertionError("a terminal session cannot relaunch"),
+        ) as relaunch:
+            code, response = self._request(
+                "POST",
+                "/api/brainstorming/sessions/%s/start" % session_id,
+                {},
+            )
+        self.assertEqual(code, 200, response)
+        self.assertEqual(
+            response["session"]["revision"], terminal_session.revision
+        )
+        self.assertEqual(response["session"]["state"]["status"], "failure")
+        relaunch.assert_not_called()
+        self.assertEqual(pathlib.Path(state_path).read_bytes(), task_before)
+
+    def test_task_restart_refuses_a_stop_in_progress(self):
+        task_state = state.new_state(
+            "Static Brainstorming task stop proof.",
+            self.workspace,
+            self.config,
+            name="static-task-stop-run",
+        )
+        record = task_adapter.admit_task(
+            task_state,
+            {
+                "task_executor": "brainstorming",
+                "request": {
+                    "work_area": {
+                        "workspace_path": self.workspace,
+                        "primary": self.workspace,
+                        "additional": [],
+                    },
+                    "request": "Produce the agreed workspace effects.",
+                    "context": {},
+                    "reference_documents": [],
+                },
+                "configuration": {},
+            },
+            self.config,
+            self.workspace,
+        )
+        session = task_adapter.start_task(
+            task_state,
+            record["id"],
+            self.config,
+            self.home,
+            launcher=self._sleeper_launcher,
+        )
+        session_id = session["id"]
+        self._stop_sleeper_record(session_id)
+        state_path = os.path.join(self.tmp.name, "task-stop-state.json")
+        state.save(state_path, task_state)
+        registry.add(
+            self.home,
+            registry.new_entry(
+                "static-task-stop-run",
+                "static task stop run",
+                self.workspace,
+                state_path,
+            ),
+        )
+        token = (os.path.abspath(self.home), session_id)
+        with lifecycle._STOPS_GUARD:
+            lifecycle._STOPS_IN_FLIGHT.add(token)
+        try:
+            with mock.patch.object(
+                lifecycle,
+                "_launch_lifecycle_process",
+                side_effect=AssertionError("a concurrent stop cannot relaunch"),
+            ) as launch:
+                code, response = self._request(
+                    "POST",
+                    "/api/brainstorming/sessions/%s/start" % session_id,
+                    {},
+                )
+        finally:
+            with lifecycle._STOPS_GUARD:
+                lifecycle._STOPS_IN_FLIGHT.discard(token)
+        self.assertEqual(code, 409, response)
+        self.assertEqual(response["error"], lifecycle.STOP_INCOMPLETE)
+        launch.assert_not_called()
+        self.assertIsNone(
+            tasks.task_record(state.load(state_path), record["id"])["result"]
         )
 
     def test_stop_preserves_a_pending_external_turn_for_resume(self):

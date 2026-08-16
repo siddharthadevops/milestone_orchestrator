@@ -58,6 +58,7 @@ _TARGET_REVISION_KEY_PREFIX = "brainstorming/target_revision:"
 _TURN_ATTEMPT_KEY_PREFIX = "brainstorming/turn_attempt:"
 _EXTERNAL_INTERVENTION_KEY_PREFIX = "brainstorming/external_intervention:"
 _ACTIVITY_KEY_PREFIX = "brainstorming/activity:"
+_TASK_EFFECT_ATTEMPT_KEY_PREFIX = "brainstorming/task_effect_attempt:"
 _TARGET_REVISION_ID_PREFIX = "brainstorming-sha256:"
 _TARGET_REVISION_ID_RE = re.compile(
     r"^brainstorming-sha256:[0-9a-f]{64}$"
@@ -1011,9 +1012,7 @@ def validate_activity_event(event):
         "participant_id": _text(
             event["participant_id"], "activity_event.participant_id"
         ),
-        "model_family": _text(
-            event["model_family"], "activity_event.model_family"
-        ),
+        "model_family": event["model_family"],
         "model": event["model"],
         "effort": event["effort"],
         "status": event["status"],
@@ -1041,11 +1040,11 @@ def validate_activity_event(event):
             "activity_event.started_at must be a positive finite number"
         )
     if checked["kind"] not in (
-        "discussion_turn", "closure", "classifier"
+        "discussion_turn", "closure", "classifier", "production_effect"
     ):
         raise ContractError("activity_event.kind is invalid")
     if checked["stage"] not in (
-        "discussion", "proposal", "vote", "classification"
+        "discussion", "proposal", "vote", "classification", "production"
     ):
         raise ContractError("activity_event.stage is invalid")
     if checked["kind"] == "discussion_turn" \
@@ -1060,6 +1059,18 @@ def validate_activity_event(event):
             and checked["stage"] != "classification":
         raise ContractError(
             "classifier activity must use the classification stage"
+        )
+    if checked["kind"] == "production_effect" \
+            and checked["stage"] != "production":
+        raise ContractError(
+            "production-effect activity must use the production stage"
+        )
+    if (
+        checked["kind"] != "production_effect"
+        or checked["model_family"] is not None
+    ):
+        checked["model_family"] = _text(
+            checked["model_family"], "activity_event.model_family"
         )
     if type(checked["round"]) is not int or checked["round"] <= 0:
         raise ContractError(
@@ -1134,6 +1145,35 @@ def validate_activity_log(activity):
     return {
         "schema_version": ACTIVITY_SCHEMA_VERSION,
         "events": events,
+    }
+
+
+def validate_task_effect_attempt(attempt):
+    """Validate the single in-flight production-effect recovery marker."""
+    _exact_keys(
+        attempt,
+        ("task_id", "token", "started_at"),
+        (),
+        "task_effect_attempt",
+    )
+    started_at = attempt["started_at"]
+    try:
+        normalized_started_at = float(started_at)
+    except (TypeError, ValueError, OverflowError):
+        normalized_started_at = -1.0
+    if (
+        isinstance(started_at, bool)
+        or not isinstance(started_at, (int, float))
+        or not math.isfinite(normalized_started_at)
+        or normalized_started_at <= 0
+    ):
+        raise ContractError(
+            "task_effect_attempt.started_at must be a positive finite number"
+        )
+    return {
+        "task_id": _text(attempt["task_id"], "task_effect_attempt.task_id"),
+        "token": _text(attempt["token"], "task_effect_attempt.token"),
+        "started_at": normalized_started_at,
     }
 
 
@@ -2920,6 +2960,12 @@ def _activity_key(session_id):
     )
 
 
+def _task_effect_attempt_key(session_id):
+    return _TASK_EFFECT_ATTEMPT_KEY_PREFIX + kvstore.validate_fragment(
+        session_id, "session_id"
+    )
+
+
 class SessionStore:
     """CAS-backed authority for independent brainstorming session records."""
 
@@ -4195,6 +4241,69 @@ class SessionStore:
             return None
         return validate_activity_log(record["value"])
 
+    def session_ids_for_target(self, target_path):
+        """Find retained session authority for one exact private target."""
+        target_path = _text(target_path, "target_path")
+        if not os.path.isabs(target_path):
+            raise ContractError("target_path must be absolute")
+        matches = []
+        listing = self._store.list_entries(prefix=_SESSION_KEY_PREFIX)
+        for item in listing["items"]:
+            key = item["key"]
+            session_id = key[len(_SESSION_KEY_PREFIX):]
+            record = self._store.read(key)
+            if not record["exists?"]:
+                continue
+            state = validate_session_state(record["value"])
+            if os.path.abspath(state["request"]["target_path"]) == target_path:
+                matches.append(session_id)
+        return matches
+
+    def read_task_effect_attempt(self, session_id):
+        """Read the adapter's one in-flight effect marker, if present."""
+        record = self._store.read(_task_effect_attempt_key(session_id))
+        if not record["exists?"]:
+            return None
+        return validate_task_effect_attempt(record["value"])
+
+    def begin_task_effect_attempt(self, session_id, attempt):
+        """Durably mark an effect attempt before its callback can run."""
+        checked = validate_task_effect_attempt(attempt)
+        key = _task_effect_attempt_key(session_id)
+        current = self._store.read(key)
+        if current["exists?"]:
+            raise HistoryRewriteError(
+                "a production-effect attempt is already active"
+            )
+        result = self._store.cas(
+            key, current["revision"], checked
+        )
+        if not result.ok:
+            raise HistoryRewriteError(
+                "a production-effect attempt is already active"
+            )
+        return validate_task_effect_attempt(result.record["value"])
+
+    def finish_task_effect_attempt(self, session_id, token):
+        """Clear an effect marker only after its activity is durable."""
+        token = _text(token, "task_effect_attempt.token")
+        key = _task_effect_attempt_key(session_id)
+        current = self._store.read(key)
+        if not current["exists?"]:
+            return
+        attempt = validate_task_effect_attempt(current["value"])
+        if attempt["token"] != token:
+            raise HistoryRewriteError(
+                "the production-effect attempt token changed"
+            )
+        result = self._store.delete(
+            key, expected_revision=current["revision"]
+        )
+        if not result.ok:
+            raise HistoryRewriteError(
+                "the production-effect attempt changed before completion"
+            )
+
     def append_activity(self, session_id, event):
         """Append one provider call exactly once across crash recovery."""
         checked = validate_activity_event(event)
@@ -4256,6 +4365,7 @@ class SessionStore:
         """
         key = _session_key(session_id)
         activity_key = _activity_key(session_id)
+        task_effect_attempt_key = _task_effect_attempt_key(session_id)
         intervention_key = _external_intervention_key(session_id)
         supplied_baseline_key = None
         if recovery_revision is not None:
@@ -4268,6 +4378,7 @@ class SessionStore:
                 if supplied_baseline_key is not None:
                     document["entries"].pop(supplied_baseline_key, None)
                 document["entries"].pop(activity_key, None)
+                document["entries"].pop(task_effect_attempt_key, None)
                 document["entries"].pop(intervention_key, None)
                 return True, True
 
@@ -4324,6 +4435,7 @@ class SessionStore:
                     return False, False
                 del document["entries"][key]
                 document["entries"].pop(activity_key, None)
+                document["entries"].pop(task_effect_attempt_key, None)
                 document["entries"].pop(intervention_key, None)
                 if baseline_key is not None:
                     document["entries"].pop(baseline_key, None)
@@ -4355,6 +4467,7 @@ class SessionStore:
         attempt_key = _turn_attempt_key(session_id)
         intervention_key = _external_intervention_key(session_id)
         activity_key = _activity_key(session_id)
+        task_effect_attempt_key = _task_effect_attempt_key(session_id)
         revision_prefix = "%s%s:" % (
             _TARGET_REVISION_KEY_PREFIX, session_id
         )
@@ -4402,6 +4515,7 @@ class SessionStore:
                     or stored == attempt_key
                     or stored == intervention_key
                     or stored == activity_key
+                    or stored == task_effect_attempt_key
                     or stored.startswith(revision_prefix)
                 ]
                 for stored in doomed:

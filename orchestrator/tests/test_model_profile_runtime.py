@@ -18,7 +18,8 @@ from unittest import mock
 from orchestrator import contracts, current_model_call, driver, gitops
 from orchestrator import model_profiles
 from orchestrator import brainstorming_lifecycle
-from orchestrator import prompts, registry, runners, service, state, verifiers
+from orchestrator import prompts, registry, runners, service, state, tasks
+from orchestrator import verifiers
 
 
 def profile(name, medium):
@@ -996,6 +997,80 @@ class CurrentModelProfileRuntimeTest(unittest.TestCase):
                 ("codex", "current-counterpart", "low"),
             ],
         )
+
+        run_state = state.load(path)
+        task = tasks.admit_task(
+            run_state,
+            {
+                "task_executor": "brainstorming",
+                "request": {
+                    "work_area": {
+                        "workspace_path": self.workspace,
+                        "primary": self.workspace,
+                        "additional": [],
+                    },
+                    "request": "Use current task staffing.",
+                    "context": {},
+                    "reference_documents": [],
+                },
+            },
+            {"dispatch_authority": "current_profile", "participants": []},
+            primary_workspace=self.workspace,
+        )
+        state.save(path, run_state)
+        task_record = copy.deepcopy(record)
+        task_record.update({
+            "id": "task-current-view",
+            "caller": (
+                brainstorming_lifecycle.CURRENT_PROFILE_TASK_CALLER_PREFIX
+                + task["id"]
+            ),
+        })
+        self.assertEqual(
+            service._attached_brainstorming_model_profile_runtime(
+                self.home, task_record["id"], record=task_record
+            ),
+            {
+                "state_path": os.path.abspath(path),
+                "home": os.path.abspath(self.home),
+            },
+        )
+        task_current = service._current_brainstorming_staffing(
+            self.home, task_record, session_state
+        )
+        self.assertEqual(
+            brainstorming_lifecycle._view_participants(
+                task_record, session_state, current_staffing=task_current
+            ),
+            projected,
+        )
+        terminal = state.load(path)
+        tasks.record_task_result(terminal, task["id"], {
+            "status": "failure",
+            "reason": "Brainstorming session start failed: unavailable",
+            "duration_s": 0.0,
+            "token_usage": None,
+            "token_usage_partial": True,
+            "cost": None,
+            "cost_partial": True,
+            "native_result": None,
+        })
+        state.save(path, terminal)
+        with self.assertRaises(service.ApiError) as terminal_attachment:
+            service._attached_brainstorming_model_profile_runtime(
+                self.home, task_record["id"], record=task_record
+            )
+        self.assertEqual(terminal_attachment.exception.status, 503)
+
+        missing_task = copy.deepcopy(task_record)
+        missing_task["caller"] = (
+            brainstorming_lifecycle.CURRENT_PROFILE_TASK_CALLER_PREFIX
+            + "missing-task"
+        )
+        with self.assertRaises(service.ApiError):
+            service._attached_brainstorming_model_profile_runtime(
+                self.home, missing_task["id"], record=missing_task
+            )
 
         store = mock.Mock()
         store.read_activity.return_value = None

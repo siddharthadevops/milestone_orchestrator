@@ -196,7 +196,8 @@ import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from . import access as panel_access
-from . import brainstorming_lifecycle
+from . import brainstorming, brainstorming_lifecycle
+from . import brainstorming_tasks
 from . import driver, errclass, gitops, gitsync, interpreter, kvstore, model_profiles
 from . import profiles
 from . import projects, registry
@@ -3500,6 +3501,74 @@ def require_brainstorming_access(home, who, record):
     require_brainstorming_project_access(home, who, slug)
 
 
+def _brainstorming_task_attachment(home, record):
+    """Find the one registered durable task that owns a task session."""
+    caller = record.get("caller")
+    identities = (
+        (
+            brainstorming_lifecycle.CURRENT_PROFILE_TASK_CALLER_PREFIX,
+            "current_profile",
+        ),
+        ("task:", "static"),
+    )
+    identity = next(
+        (
+            (caller[len(prefix):], authority)
+            for prefix, authority in identities
+            if isinstance(caller, str) and caller.startswith(prefix)
+        ),
+        None,
+    )
+    if identity is None:
+        return None
+    task_id, authority = identity
+    if not task_id:
+        raise ApiError(503, brainstorming_lifecycle.UNAVAILABLE)
+    context = record.get("execution_context")
+    workspace = (
+        context.get("workspace_path") if isinstance(context, dict) else None
+    )
+    matches = []
+    try:
+        entries = registry.load(home).get("runs") or []
+    except Exception as exc:
+        raise ApiError(503, brainstorming_lifecycle.UNAVAILABLE) from exc
+    for entry in entries:
+        if (
+            isinstance(workspace, str)
+            and os.path.abspath(entry.get("workspace") or "")
+            != os.path.abspath(workspace)
+        ):
+            continue
+        try:
+            run_state = st.load(entry["state_path"])
+        except Exception:
+            continue
+        owned = [
+            task
+            for task in run_state.get("tasks") or []
+            if isinstance(task, dict)
+            and task.get("id") == task_id
+            and (task.get("order") or {}).get("task_executor")
+            == "brainstorming"
+            and (task.get("resolved_staffing") or {}).get(
+                "dispatch_authority"
+            ) == authority
+        ]
+        if len(owned) == 1:
+            matches.append({
+                "state_path": os.path.abspath(entry["state_path"]),
+                "task_id": task_id,
+                "dispatch_authority": authority,
+                "terminal": owned[0].get("result") is not None,
+            })
+        elif len(owned) > 1:
+            raise ApiError(503, brainstorming_lifecycle.UNAVAILABLE)
+    if len(matches) != 1:
+        raise ApiError(503, brainstorming_lifecycle.UNAVAILABLE)
+    return matches[0]
+
+
 def _attached_brainstorming_model_profile_runtime(
     home, session_id, record=None
 ):
@@ -3507,14 +3576,28 @@ def _attached_brainstorming_model_profile_runtime(
 
     The Brainstorming registry does not retain model-profile locators.  On an
     explicit restart the service can reattach a registered run through the
-    session id already held in ordinary milestone state.  A milestone session
-    without that generic attachment cannot resolve current staffing and must
-    refuse before launching; standalone sessions remain profile-independent.
+    session id held in ordinary milestone state or the immutable task id held
+    by a profile-backed task session.  A current-profile session without that
+    generic attachment cannot resolve current staffing and must refuse before
+    launching; standalone sessions remain profile-independent.
     """
     if record is None:
         record = brainstorming_lifecycle._record_by_id(home, session_id)
     caller = record.get("caller")
-    if not isinstance(caller, str) or not caller.startswith("milestone:"):
+    task_attachment = _brainstorming_task_attachment(home, record)
+    if task_attachment is not None:
+        if task_attachment["dispatch_authority"] != "current_profile":
+            return None
+        if task_attachment["terminal"]:
+            raise ApiError(503, brainstorming_lifecycle.UNAVAILABLE)
+        return {
+            "state_path": task_attachment["state_path"],
+            "home": os.path.abspath(home),
+        }
+    milestone_session = (
+        isinstance(caller, str) and caller.startswith("milestone:")
+    )
+    if not milestone_session:
         return None
     context = record.get("execution_context")
     workspace = (
@@ -3541,12 +3624,13 @@ def _attached_brainstorming_model_profile_runtime(
             # if none is readable below, the ordinary unattached refusal
             # still prevents launch with the lifecycle roster.
             continue
-        if any(
+        milestone_attached = milestone_session and any(
             ((unit.get("brainstorming_wait") or {}).get("session_id")
              == session_id)
             for unit in run_state.get("units") or []
             if isinstance(unit, dict)
-        ):
+        )
+        if milestone_attached:
             matches.append(os.path.abspath(entry["state_path"]))
     if len(matches) > 1:
         raise ApiError(503, brainstorming_lifecycle.UNAVAILABLE)
@@ -3558,8 +3642,75 @@ def _attached_brainstorming_model_profile_runtime(
     }
 
 
+def _start_brainstorming_session(home, who, session_id):
+    """Resume task-owned sessions through their durable adapter boundary."""
+    record = brainstorming_lifecycle._record_by_id(home, session_id)
+    require_brainstorming_access(home, who, record)
+    projection = brainstorming_lifecycle.inspect_session(
+        home,
+        session_id,
+        lambda current: require_brainstorming_access(home, who, current),
+    )
+    if projection["state"]["status"] in brainstorming.TERMINAL_STATUSES:
+        return brainstorming_lifecycle.start_session(
+            home,
+            session_id,
+            lambda current: require_brainstorming_access(home, who, current),
+        )
+    attachment = _brainstorming_task_attachment(home, record)
+    if attachment is None:
+        return brainstorming_lifecycle.start_session(
+            home,
+            session_id,
+            lambda current: require_brainstorming_access(home, who, current),
+            validate_launch=(
+                lambda current: (
+                    _attached_brainstorming_model_profile_runtime(
+                        home,
+                        session_id,
+                        record=current,
+                    )
+                )
+            ),
+        )
+    if attachment["terminal"]:
+        projection = brainstorming_lifecycle.inspect_session(
+            home,
+            session_id,
+            lambda current: require_brainstorming_access(home, who, current),
+        )
+        if projection["state"]["status"] in brainstorming.TERMINAL_STATUSES:
+            return projection
+        raise ApiError(503, brainstorming_lifecycle.UNAVAILABLE)
+    model_profile_runtime = (
+        {
+            "state_path": attachment["state_path"],
+            "home": os.path.abspath(home),
+        }
+        if attachment["dispatch_authority"] == "current_profile"
+        else None
+    )
+    try:
+        projection, task = brainstorming_tasks.start_persisted_task(
+            attachment["state_path"],
+            attachment["task_id"],
+            {},
+            home,
+            model_profile_runtime=model_profile_runtime,
+            session_id=session_id,
+        )
+    except st.ConcurrentStateMutation as exc:
+        raise ApiError(409, WORK_AREA_BUSY) from exc
+    except brainstorming_tasks.AdapterError as exc:
+        raise ApiError(503, brainstorming_lifecycle.UNAVAILABLE) from exc
+    if task["result"] is not None:
+        _evict_summary(attachment["state_path"])
+        raise ApiError(503, brainstorming_lifecycle.UNAVAILABLE)
+    return projection
+
+
 def _current_brainstorming_staffing(home, record, session_state):
-    """Best-effort current staffing for the read-only milestone view."""
+    """Best-effort current staffing for a read-only profile-backed view."""
     try:
         current = _attached_brainstorming_model_profile_runtime(
             home, record["id"], record=record
@@ -3987,21 +4138,8 @@ def make_handler(home):
                                 ),
                             )
                         else:
-                            session = brainstorming_lifecycle.start_session(
-                                home,
-                                parts[4],
-                                lambda record: require_brainstorming_access(
-                                    home, who, record
-                                ),
-                                validate_launch=(
-                                    lambda record: (
-                                        _attached_brainstorming_model_profile_runtime(
-                                            home,
-                                            parts[4],
-                                            record=record,
-                                        )
-                                    )
-                                ),
+                            session = _start_brainstorming_session(
+                                home, who, parts[4]
                             )
                         self._json(
                             200, {"ok": True, "session": session}
