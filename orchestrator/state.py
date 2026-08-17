@@ -2329,6 +2329,29 @@ def summary(state, acts_overlay=None, current_review_model=None):
         unassigned_cost, unassigned_cost_partial = _work_token_usage(state)
     repairs_by_unit = _repair_episodes(state)
 
+    # A task remains authoritative in the canonical durable history.  This
+    # is only the small, disposable association the panel needs: admission
+    # order plus the unit explicitly frozen by the milestone caller.  Never
+    # infer ownership from kinds, labels, sessions, or legacy activity.
+    from orchestrator import tasks
+    unit_keys = {unit_key(item) for item in state.get("units") or []}
+    task_ids_by_unit = {key: [] for key in unit_keys}
+    task_history = state.get("tasks", [])
+    if not isinstance(task_history, list):
+        raise ValueError("task history must be a list")
+    for record in task_history:
+        context = (
+            ((record.get("order") or {}).get("request") or {}).get("context")
+        )
+        linked_unit = context.get("unit") if isinstance(context, dict) else None
+        task_id = record.get("id")
+        if (
+            linked_unit in task_ids_by_unit
+            and isinstance(task_id, str)
+            and task_id
+        ):
+            task_ids_by_unit[linked_unit].append(task_id)
+
     def effective_setting(family, explicit, field):
         if explicit:
             return explicit
@@ -2362,6 +2385,11 @@ def summary(state, acts_overlay=None, current_review_model=None):
                 "token_usage_partial": False,
                 "cost": None,
                 "cost_partial": False,
+                **(
+                    {"task_id": e.get("task_id")}
+                    if isinstance(e.get("task_id"), str) and e.get("task_id")
+                    else {}
+                ),
             }
             brainstorming_by_unit.setdefault(uk, []).append(entry)
             brainstorming_index[(uk, e.get("session_id"))] = entry
@@ -2380,6 +2408,8 @@ def summary(state, acts_overlay=None, current_review_model=None):
                 )
                 entry["cost"] = copy.deepcopy(e.get("cost"))
                 entry["cost_partial"] = bool(e.get("cost_partial", False))
+                if isinstance(e.get("task_id"), str) and e.get("task_id"):
+                    entry["task_id"] = e.get("task_id")
         if e.get("type") == "unit_opened" and uk not in opened_at:
             opened_at[uk] = _epoch(e.get("at"))
         if e.get("type") == "unit_transition" and e.get("to_status") == U_SEALED:
@@ -2472,6 +2502,7 @@ def summary(state, acts_overlay=None, current_review_model=None):
                 "work_cost_partial": cost_partial_by_unit.get(
                     unit_key(u), False
                 ),
+                "task_ids": list(task_ids_by_unit.get(unit_key(u), [])),
                 "drafts": [
                     {
                         "kind": draft.get("kind"),
@@ -2493,6 +2524,12 @@ def summary(state, acts_overlay=None, current_review_model=None):
                         "cost_partial": bool(draft.get("cost_partial", False)),
                         "at": draft.get("at"),
                         "current": draft.get("current", False),
+                        **(
+                            {"task_id": draft.get("task_id")}
+                            if isinstance(draft.get("task_id"), str)
+                            and draft.get("task_id")
+                            else {}
+                        ),
                     }
                     for draft in draft_history
                 ],
@@ -2520,6 +2557,12 @@ def summary(state, acts_overlay=None, current_review_model=None):
                             u["draft"].get("cost_partial", False)
                         ),
                         "at": u["draft"]["at"],
+                        **(
+                            {"task_id": u["draft"].get("task_id")}
+                            if isinstance(u["draft"].get("task_id"), str)
+                            and u["draft"].get("task_id")
+                            else {}
+                        ),
                     }
                     if u.get("draft")
                     else None
@@ -2549,6 +2592,12 @@ def summary(state, acts_overlay=None, current_review_model=None):
                         "cost": copy.deepcopy(r.get("cost")),
                         "cost_partial": bool(r.get("cost_partial", False)),
                         "at": r["at"],
+                        **(
+                            {"task_id": r.get("task_id")}
+                            if isinstance(r.get("task_id"), str)
+                            and r.get("task_id")
+                            else {}
+                        ),
                     }
                     for r in u["rounds"]
                 ],
@@ -2653,8 +2702,6 @@ def summary(state, acts_overlay=None, current_review_model=None):
     # Producer defaults are a read-time compatibility rule.  Keep old and
     # partial durable plans byte-stable while every current projection exposes
     # the complete pair.
-    from orchestrator import tasks
-
     effective_slices = tasks.effective_slice_plan(
         state["milestone"]["slices"]
     )

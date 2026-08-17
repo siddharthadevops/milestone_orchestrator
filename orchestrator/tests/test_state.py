@@ -2325,8 +2325,10 @@ class TestSummary(TempWorkspaceCase):
              "rounds", "seals", "opened_epoch", "closed_epoch", "debt",
              "reclassify", "verifications", "repairs", "brainstormings",
              "work_duration_s", "work_token_usage",
-             "work_token_usage_partial", "work_cost", "work_cost_partial"},
+             "work_token_usage_partial", "work_cost", "work_cost_partial",
+             "task_ids"},
         )
+        self.assertEqual(skel_view["task_ids"], [])
         self.assertEqual(skel_view["display_unit"], "skeleton")
         self.assertIsNone(skel_view["slice_id"])
         self.assertIsNone(skel_view["part"])

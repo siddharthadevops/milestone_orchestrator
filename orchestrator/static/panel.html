@@ -206,6 +206,18 @@
   #incidentsdialog { width: min(900px, 92vw); }
   #incidentsBody { min-width: 0; max-width: none; max-height: 70vh;
     overflow-y: auto; }
+  #taskhistorydialog { width: min(780px, 92vw); }
+  #taskHistoryBody { min-width: 0; max-width: none; max-height: 70vh; }
+  .task-list { display: grid; gap: 7px; }
+  .task-row { width: 100%; border: 1px solid var(--line); border-radius: 8px;
+    padding: 8px 10px; background: #fff; color: var(--text); cursor: pointer;
+    text-align: left; font: inherit; }
+  .task-row:hover { border-color: #c3d4fb; background: var(--accent-soft); }
+  .task-row-head { display: flex; align-items: center; gap: 7px; }
+  .task-row-title { font-weight: 600; }
+  .task-row-id { margin-top: 3px; color: var(--dim); font-size: 10.5px;
+    overflow-wrap: anywhere; }
+  .task-row .story-meta, .task-row-id { display: block; margin-bottom: 0; }
   .bottom-tools { display: flex; justify-content: flex-end; gap: 8px;
     margin: 14px 0; }
   .danger-zone { border-color: #fecaca; background: #fffafa; }
@@ -604,8 +616,10 @@
   <aside>
     <!-- Launching is a PROJECT act: both "New milestone" and "New
          brainstorming" live in each project's ⋯ menu. The standing buttons
-         manage service-wide project, strategy, and model-profile catalogues. -->
+         expose task history and manage service-wide catalogues. -->
     <div class="actions" id="sidebarActions" style="display:none">
+      <button class="btn" id="taskHistoryBtn"
+        onclick="openTaskHistory()">Tasks</button>
       <button class="btn" id="newProjectBtn" style="display:none"
         onclick="openProjectCreate()" title="Declare a project">+ Project</button>
       <button class="btn" id="modelProfilesBtn" style="display:none"
@@ -908,6 +922,20 @@
     <button class="btn" id="task_close"
       onclick="document.getElementById('taskform').close()">Close</button>
     <button class="btn primary" id="task_submit" onclick="submitTaskForm()">Order task</button>
+  </div>
+</dialog>
+
+<dialog id="taskhistorydialog">
+  <h2 class="dlgtitle">
+    <button class="btn sm" id="taskHistoryBack" type="button"
+      style="display:none" onclick="showTaskHistoryList()">&#8592;</button>
+    <span id="taskHistoryTitle">Task history</span>
+  </h2>
+  <div id="taskHistoryError" class="failure" style="display:none"></div>
+  <div id="taskHistoryBody" class="storybody"></div>
+  <div class="formrow"><span></span>
+    <button class="btn"
+      onclick="document.getElementById('taskhistorydialog').close()">Close</button>
   </div>
 </dialog>
 
@@ -2810,6 +2838,7 @@ async function refreshRuns() {
 }
 function select(id) {
   selected = id; goalOpen = false; runView = "main";
+  resetSelectedTaskRecords(id);
   selectedSession = null; lastSessionView = null;
   document.body.classList.add("m-detail");  // mobile: swap to the detail page
   refreshRuns(); refreshDetail();
@@ -2877,6 +2906,7 @@ function mobileBack() {
   runView = "main";
   document.body.classList.remove("m-detail");
   selected = null;
+  resetSelectedTaskRecords(null);
   selectedSession = null;
   lastSessionView = null;
   document.getElementById("detail").innerHTML =
@@ -2902,7 +2932,11 @@ function draftChip(d, unitKey) {
   const current = d.current !== false;
   const click = current
     ? ` clicky" onclick="showStory('draft:${esc(unitKey)}')` : "";
-  const title = current ? "" : ' title="historical implementation"';
+  const titleText = [
+    current ? "" : "historical implementation",
+    d.task_id ? `task ${d.task_id}` : "",
+  ].filter(Boolean).join(" · ");
+  const title = titleText ? ` title="${esc(titleText)}"` : "";
   return `<span class="chip work${click}"${title}>${who}${esc(kind)}${fmtDur(d.duration_s)}</span>`;
 }
 const WORK_KINDS = {fix_findings: 1, verification: 1};
@@ -2914,13 +2948,14 @@ function roundChip(r) {
   const who = r.model ? modelEffort(r.model, r.effort) : "";
   const actor = who ? `${esc(who)} ` : "";
   const click = ` clicky" onclick="showStory('round:${esc(r.id)}')`;
+  const linked = r.task_id ? `task ${r.task_id}` : "";
   if (r.invalidated)
-    return `<span class="chip fail${click}" title="${esc(r.invalidated)}">${actor}${esc(kind)} · INVALID</span>`;
+    return `<span class="chip fail${click}" title="${esc([r.invalidated, linked].filter(Boolean).join(" · "))}">${actor}${esc(kind)} · INVALID</span>`;
   if (r.deferred_clean)
-    return `<span class="chip clean${click}" title="all findings were reclassified as non-blocking debt">${actor}${esc(kind)} · debt-clean · F${r.findings}${fmtDur(r.duration_s)}</span>`;
+    return `<span class="chip clean${click}" title="${esc(["all findings were reclassified as non-blocking debt", linked].filter(Boolean).join(" · "))}">${actor}${esc(kind)} · debt-clean · F${r.findings}${fmtDur(r.duration_s)}</span>`;
   const cls = WORK_KINDS[r.kind] ? "work"
     : r.findings === 0 ? "clean" : sevClass(r.severity);
-  return `<span class="chip ${cls}${click}">${actor}${esc(kind)} · F${r.findings}${fmtDur(r.duration_s)}</span>`;
+  return `<span class="chip ${cls}${click}"${linked ? ` title="${esc(linked)}"` : ""}>${actor}${esc(kind)} · F${r.findings}${fmtDur(r.duration_s)}</span>`;
 }
 function sealChip(s, unitKey) {
   const dur = fmtDur(s.duration_s);
@@ -3017,6 +3052,7 @@ function brainstormChip(b) {
   const bad = b.outcome === "failed" || b.outcome === "detached";
   const title = [
     `session ${b.session_id || "?"}`,
+    b.task_id ? `task ${b.task_id}` : "",
     b.target_path ? `target ${b.target_path}` : "",
     `raised by ${shortKind(b.kind) || "a worker"}`,
     "click to open the discussion",
@@ -3029,6 +3065,8 @@ function unitHistory(u, activity, running) {
     ? u.drafts : (u.draft ? [u.draft] : []);
   const lead = drafts.map(draft => draftChip(draft, u.unit))
     .concat([docChip(u)]).filter(Boolean);
+  const taskChips = (u.task_ids || [])
+    .map(taskRecordById).filter(Boolean).map(taskChip);
   const repairs = u.repairs || [];
   const repairRoundIds = new Set(repairs.flatMap(repair => repair.round_ids || []));
   const repairSealAttempts = new Set(repairs.flatMap(repair => repair.seal_attempts || []));
@@ -3161,6 +3199,7 @@ function unitHistory(u, activity, running) {
     }
     section.lines.push({label, chips});
   };
+  if (taskChips.length) addLine("Tasks", "", taskChips);
   if (lead.length) {
     const title = drafts.some(draft => draft.kind === "implement")
       ? "Implementation" : "Draft";
@@ -3743,6 +3782,9 @@ async function refreshDetail() {
   // Poll ticks and select() clicks race; a slow response must never
   // overwrite a newer render (stale run, vanished cards).
   const seq = ++detailSeq, runId = selected;
+  // Task chips are disposable bookkeeping.  Start their independent,
+  // coalesced refresh, but never make the milestone view wait for it.
+  refreshSelectedTaskRecords(runId);
   try {
     const d = await api("/api/runs/" + runId);
     let modelProfileSelection = null, modelProfileSelectionError = "";
@@ -3754,6 +3796,7 @@ async function refreshDetail() {
     }
     if (seq !== detailSeq || runId !== selected) return;
     const s = d.status, sum = d.summary;
+    refreshSelectedTaskRecords(runId, selectedRunTaskIds(sum));
     currentRunName = s.name || "";
     const running = s.process === "running";
     lastEvents = sum ? (sum.last_events || []).slice().reverse() : [];
@@ -5532,8 +5575,9 @@ function launchBinding() {
   return {project: launchProjects[+pi].slug, work_area: w.record.name};
 }
 
-/* ---- task ordering and slice producer selection (tasks-2 slice 8): one
-       catalogue-driven editor serves both writes. It owns only transient form
+/* ---- task ordering and slice producer selection (tasks-2 slice 8), plus
+       task activity (slice 9): one catalogue-driven editor serves both writes.
+       It owns only transient form
        state; the service owns admission, validation, freezing, and the latest
        effective producer map. ---- */
 let taskFormMode = "direct";
@@ -5548,6 +5592,85 @@ let taskDialogSeq = 0;
 let taskSubmitPending = false;
 let visibleSliceProducers = new Map();
 let visibleProducerRunId = null;
+// Canonical task responses are the only source for chips. A failed refresh
+// leaves this last good view alone; no task is inferred from milestone prose.
+let lastTaskRecords = [];
+let selectedTaskRecords = [];
+let selectedTaskRunId = null;
+let selectedTaskHistoryLoaded = false;
+let selectedTaskListRefresh = null;
+let selectedTaskDetailRefreshes = new Map();
+let selectedTaskIds = new Set();
+let taskHistoryMode = "list";
+let taskDetailSeq = 0;
+
+function resetSelectedTaskRecords(runId) {
+  if (selectedTaskRunId === runId) return;
+  selectedTaskRunId = runId;
+  selectedTaskRecords = [];
+  selectedTaskHistoryLoaded = false;
+  selectedTaskListRefresh = null;
+  selectedTaskDetailRefreshes = new Map();
+  selectedTaskIds = new Set();
+}
+
+function selectedRunTaskIds(summary) {
+  const ids = [];
+  const seen = new Set();
+  for (const unit of (summary && summary.units) || []) {
+    for (const id of unit.task_ids || []) {
+      if (typeof id === "string" && id && !seen.has(id)) {
+        seen.add(id);
+        ids.push(id);
+      }
+    }
+  }
+  return ids;
+}
+
+function rememberSelectedTaskRecord(record) {
+  if (!record || typeof record.id !== "string") return;
+  const index = selectedTaskRecords.findIndex(item => item.id === record.id);
+  if (index < 0) selectedTaskRecords.push(record);
+  else selectedTaskRecords[index] = record;
+}
+
+function refreshSelectedTaskRecords(runId, taskIds) {
+  resetSelectedTaskRecords(runId);
+  if (Array.isArray(taskIds)) selectedTaskIds = new Set(taskIds);
+  if (!selectedTaskHistoryLoaded) {
+    if (selectedTaskListRefresh) return selectedTaskListRefresh;
+    const request = api(
+      "/api/tasks?run_id=" + encodeURIComponent(runId)
+    ).then(data => {
+      if (selectedTaskRunId !== runId) return false;
+      if (Array.isArray(data.tasks)) selectedTaskRecords = data.tasks;
+      selectedTaskHistoryLoaded = true;
+      return true;
+    }).catch(() => false).finally(() => {
+      if (selectedTaskListRefresh === request) selectedTaskListRefresh = null;
+    });
+    selectedTaskListRefresh = request;
+    return request;
+  }
+  for (const taskId of selectedTaskIds) {
+    const record = selectedTaskRecords.find(item => item.id === taskId);
+    if (record && record.result !== null) continue;
+    if (selectedTaskDetailRefreshes.has(taskId)) continue;
+    const request = api(
+      "/api/tasks/" + encodeURIComponent(taskId) +
+      "?run_id=" + encodeURIComponent(runId)
+    ).then(data => {
+      if (selectedTaskRunId === runId) rememberSelectedTaskRecord(data.task);
+      return true;
+    }).catch(() => false).finally(() => {
+      if (selectedTaskDetailRefreshes.get(taskId) === request)
+        selectedTaskDetailRefreshes.delete(taskId);
+    });
+    selectedTaskDetailRefreshes.set(taskId, request);
+  }
+  return null;
+}
 
 function setTaskMessage(id, message) {
   const el = document.getElementById(id);
@@ -5907,6 +6030,150 @@ async function submitTaskForm() {
   } finally {
     taskSubmitPending = false;
     syncTaskSubmitDisabled();
+  }
+}
+
+function taskRecordById(taskId) {
+  return selectedTaskRecords.find(record => record.id === taskId) ||
+    lastTaskRecords.find(record => record.id === taskId) || null;
+}
+function taskContext(record) {
+  const context = record && record.order && record.order.request
+    ? record.order.request.context : null;
+  return context && typeof context === "object" && !Array.isArray(context)
+    ? context : {};
+}
+function taskState(record) {
+  if (!record || record.result === null) return "open";
+  return record.result && record.result.status === "success"
+    ? "success" : "failure";
+}
+function taskStateClass(record) {
+  const state = taskState(record);
+  return state === "success" ? "closed" : state === "failure" ? "failed" : "open";
+}
+function taskKind(record) {
+  return taskContext(record).task_kind || "direct";
+}
+function taskChip(record) {
+  const state = taskState(record);
+  const executor = (record.order || {}).task_executor || "?";
+  const kind = taskKind(record);
+  return `<span class="chip task ${taskStateClass(record)} clicky"
+    title="${esc(record.id)}" onclick="openTaskDetail('${esc(escJsSq(record.id))}')">Task · ${esc(executor)} · ${esc(shortKind(kind))} · ${esc(state)}</span>`;
+}
+function taskHistoryRow(record) {
+  const request = (record.order || {}).request || {};
+  const workArea = request.work_area || {};
+  const context = taskContext(record);
+  const scope = [
+    workArea.project ? `project ${workArea.project}` : "",
+    context.unit ? `unit ${context.unit}` : "",
+  ].filter(Boolean).join(" · ");
+  return `<button class="task-row" type="button"
+    onclick="openTaskDetail('${esc(escJsSq(record.id))}')">
+    <span class="task-row-head"><span class="chip ${taskStateClass(record)}">${esc(taskState(record))}</span>
+      <span class="task-row-title">${esc((record.order || {}).task_executor || "?")} · ${esc(shortKind(taskKind(record)))}</span></span>
+    ${scope ? `<span class="story-meta">${esc(scope)}</span>` : ""}
+    <span class="task-row-id mono">${esc(record.id)}</span>
+  </button>`;
+}
+function setTaskHistoryError(message) {
+  const error = document.getElementById("taskHistoryError");
+  error.textContent = message || "";
+  error.style.display = message ? "" : "none";
+}
+function renderTaskHistoryList() {
+  document.getElementById("taskHistoryTitle").textContent = "Task history";
+  document.getElementById("taskHistoryBack").style.display = "none";
+  document.getElementById("taskHistoryBody").innerHTML = lastTaskRecords.length
+    ? `<div class="task-list">${lastTaskRecords.map(taskHistoryRow).join("")}</div>`
+    : '<div class="empty">No accessible tasks.</div>';
+}
+function showTaskHistoryList() {
+  taskHistoryMode = "list";
+  taskDetailSeq += 1;
+  setTaskHistoryError("");
+  renderTaskHistoryList();
+}
+async function refreshTaskHistory() {
+  try {
+    const data = await api("/api/tasks");
+    if (Array.isArray(data.tasks)) lastTaskRecords = data.tasks;
+    if (document.getElementById("taskhistorydialog").open &&
+        taskHistoryMode === "list") {
+      setTaskHistoryError("");
+      renderTaskHistoryList();
+    }
+    return true;
+  } catch (e) {
+    if (document.getElementById("taskhistorydialog").open &&
+        taskHistoryMode === "list")
+      setTaskHistoryError(e.message);
+    return false;
+  }
+}
+async function openTaskHistory() {
+  taskHistoryMode = "list";
+  setTaskHistoryError("");
+  renderTaskHistoryList();
+  const dialog = document.getElementById("taskhistorydialog");
+  if (!dialog.open) dialog.showModal();
+  await refreshTaskHistory();
+}
+function taskDetailHtml(record) {
+  const context = taskContext(record);
+  const result = record.result;
+  const meta = [
+    record.id,
+    (record.order || {}).task_executor,
+    context.task_kind,
+    context.unit ? `unit ${context.unit}` : "",
+  ].filter(Boolean).join(" · ");
+  let html = `<div class="story-meta mono">${esc(meta)}</div>`;
+  html += `<div class="story-note"><b>${esc(taskState(record))}</b>${
+    result && result.reason ? ` · ${esc(result.reason)}` : ""}</div>`;
+  html += `<h3>Frozen order</h3><pre class="story-note mono">${
+    esc(JSON.stringify(record.order, null, 2))}</pre>`;
+  html += `<h3>Resolved staffing</h3>
+    <div class="amend-hint">Order-time snapshot; execution activity is the authority for staffing actually used.</div>
+    <pre class="story-note mono">${esc(JSON.stringify(record.resolved_staffing, null, 2))}</pre>`;
+  if (result) {
+    html += `<h3>Terminal accounting</h3>
+      <div class="story-meta">duration ${esc(fmtDHMS(result.duration_s))} · token usage partial: ${result.token_usage_partial ? "yes" : "no"} · cost partial: ${result.cost_partial ? "yes" : "no"}</div>` +
+      costHtml(result.cost, result.cost_partial) +
+      tokenUsageHtml(result.token_usage, result.token_usage_partial) +
+      `<h3>Native result</h3><div class="amend-hint">Opaque TaskExecutor result</div>
+       <pre class="story-note mono">${esc(JSON.stringify(result.native_result, null, 2))}</pre>`;
+  } else {
+    html += '<div class="story-note">No terminal result recorded.</div>';
+  }
+  return html;
+}
+async function openTaskDetail(taskId) {
+  const seq = ++taskDetailSeq;
+  taskHistoryMode = "detail";
+  setTaskHistoryError("");
+  document.getElementById("taskHistoryTitle").textContent = "Task";
+  document.getElementById("taskHistoryBack").style.display = "";
+  document.getElementById("taskHistoryBody").innerHTML =
+    '<div class="empty">Loading task…</div>';
+  const dialog = document.getElementById("taskhistorydialog");
+  if (!dialog.open) dialog.showModal();
+  try {
+    const data = await api("/api/tasks/" + encodeURIComponent(taskId));
+    if (seq !== taskDetailSeq || taskHistoryMode !== "detail") return;
+    const record = data.task;
+    const index = lastTaskRecords.findIndex(item => item.id === record.id);
+    if (index < 0) lastTaskRecords.push(record);
+    else lastTaskRecords[index] = record;
+    document.getElementById("taskHistoryTitle").textContent =
+      `Task · ${taskState(record)}`;
+    document.getElementById("taskHistoryBody").innerHTML =
+      taskDetailHtml(record);
+  } catch (e) {
+    if (seq === taskDetailSeq && taskHistoryMode === "detail")
+      setTaskHistoryError(e.message);
   }
 }
 

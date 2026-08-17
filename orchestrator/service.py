@@ -4101,7 +4101,42 @@ def visible_tasks(home, who):
     return direct + _registered_task_records(home, allowed)
 
 
-def read_task(home, who, task_id):
+def _visible_run_task_state(home, who, run_id):
+    entry = require_run_access(home, who, run_id)
+    try:
+        state = st.load(entry["state_path"])
+    except Exception as exc:
+        raise ApiError(500, "task storage unavailable") from exc
+    return state, _allowed_task_projects(home, who)
+
+
+def visible_run_tasks(home, who, run_id):
+    """Return canonical records from one authorized milestone only."""
+    state, allowed = _visible_run_task_state(home, who, run_id)
+    try:
+        records = tasks.task_records(state)
+    except tasks.TaskRecordError as exc:
+        raise ApiError(500, "task storage unavailable") from exc
+    if allowed is None:
+        return records
+    return [
+        record for record in records if _task_project(record) in allowed
+    ]
+
+
+def read_task(home, who, task_id, run_id=None):
+    if run_id is not None:
+        state, allowed = _visible_run_task_state(home, who, run_id)
+        try:
+            record = tasks.task_record(state, task_id)
+        except tasks.TaskRecordError as exc:
+            if str(exc).startswith("unknown task"):
+                raise ApiError(404, "not found") from exc
+            raise ApiError(500, "task storage unavailable") from exc
+        if allowed is not None and _task_project(record) not in allowed:
+            raise ApiError(403, FORBIDDEN)
+        return record
+
     allowed = _allowed_task_projects(home, who)
     direct = task_api.StandaloneTaskStore(home).records()
     record = next(
@@ -4215,15 +4250,27 @@ def make_handler(home, task_host=None):
                         "task_executors": tasks.task_executor_catalogue(),
                     })
                 elif route == "/api/tasks":
+                    run_id = query.get("run_id")
                     self._json(
-                        200, {"ok": True, "tasks": visible_tasks(home, who)}
+                        200,
+                        {
+                            "ok": True,
+                            "tasks": (
+                                visible_run_tasks(home, who, run_id)
+                                if run_id is not None
+                                else visible_tasks(home, who)
+                            ),
+                        },
                     )
                 elif route.startswith("/api/tasks/"):
                     parts = route.rstrip("/").split("/")
                     if len(parts) == 4 and parts[3]:
                         self._json(200, {
                             "ok": True,
-                            "task": read_task(home, who, parts[3]),
+                            "task": read_task(
+                                home, who, parts[3],
+                                run_id=query.get("run_id"),
+                            ),
                         })
                     else:
                         self._json(404, {"ok": False, "error": "not found"})

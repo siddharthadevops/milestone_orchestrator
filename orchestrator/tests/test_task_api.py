@@ -723,6 +723,34 @@ class TaskApiTest(unittest.TestCase):
         self.assertEqual({row["id"] for row in admin_tasks},
                          {mine["id"], foreign["id"], administrative["id"],
                           milestone["id"], foreign_bound["id"]})
+        selected_tasks = self.request(
+            "GET", "/api/tasks?run_id=registered", headers=member
+        )[1]["tasks"]
+        self.assertEqual(
+            {row["id"] for row in selected_tasks}, {milestone["id"]}
+        )
+        admin_selected = self.request(
+            "GET", "/api/tasks?run_id=registered"
+        )[1]["tasks"]
+        self.assertEqual(
+            {row["id"] for row in admin_selected},
+            {milestone["id"], foreign_bound["id"]},
+        )
+        self.assertEqual(
+            self.request(
+                "GET",
+                "/api/tasks/%s?run_id=registered" % milestone["id"],
+                headers=member,
+            )[1]["task"],
+            milestone,
+        )
+        self.assertEqual(
+            self.request(
+                "GET", "/api/tasks/%s?run_id=registered" % mine["id"],
+                headers=member,
+            )[0],
+            404,
+        )
         self.assertEqual(self.request("GET", "/api/tasks/unknown")[0], 404)
         registry.add(self.home, registry.new_entry(
             "broken-foreign", "broken-foreign", other,

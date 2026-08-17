@@ -1,4 +1,4 @@
-"""Focused static contract checks for the Slice 8 task panel."""
+"""Focused static contract checks for the Slice 8-9 task panel."""
 
 import re
 import unittest
@@ -117,12 +117,94 @@ class TaskPanelTests(unittest.TestCase):
             self.task_ui.rindex("taskSubmitPending = false"),
         )
 
-    def test_slice_stops_before_task_history(self):
+    def test_task_history_and_chips_use_only_canonical_records(self):
         self.assertIn('onclick="newTask(event,', self.panel)
         self.assertIn('id="taskform"', self.panel)
-        self.assertNotIn('"/api/tasks/"', self.task_ui)
-        for later_surface in ("task chip", "result polling", "accounting view"):
-            self.assertNotIn(later_surface, self.task_ui.lower())
+        self.assertIn('id="taskHistoryBtn"', self.panel)
+        self.assertIn('id="taskhistorydialog"', self.panel)
+        self.assertEqual(self.task_ui.count('api("/api/tasks")'), 1)
+        self.assertIn(
+            'api("/api/tasks/" + encodeURIComponent(taskId))', self.task_ui
+        )
+        self.assertIn("function taskRecordById", self.task_ui)
+        self.assertIn(
+            '"/api/tasks?run_id=" + encodeURIComponent(runId)',
+            self.task_ui,
+        )
+        self.assertIn(
+            '"?run_id=" + encodeURIComponent(runId)', self.task_ui
+        )
+        self.assertIn("(u.task_ids || [])", self.panel)
+        self.assertIn(".map(taskRecordById).filter(Boolean).map(taskChip)",
+                      self.panel)
+        self.assertNotIn("context.unit ===", self.task_ui)
+
+    def test_task_refresh_is_scoped_coalesced_and_never_blocks_run_detail(self):
+        detail = self.panel.split(
+            "async function refreshDetail() {", 1
+        )[1].split("async function showStory", 1)[0]
+        self.assertIn('const d = await api("/api/runs/" + runId)', detail)
+        self.assertIn("refreshSelectedTaskRecords(runId);", detail)
+        self.assertIn(
+            "refreshSelectedTaskRecords(runId, selectedRunTaskIds(sum))",
+            detail,
+        )
+        self.assertNotIn("refreshTaskHistory()", detail)
+        self.assertNotIn("await refreshSelectedTaskRecords", detail)
+        self.assertIn("if (selectedTaskListRefresh) return", self.task_ui)
+        self.assertIn(
+            "if (record && record.result !== null) continue", self.task_ui
+        )
+        self.assertIn(
+            "selectedTaskDetailRefreshes.has(taskId)", self.task_ui
+        )
+
+    def test_task_detail_preserves_native_result_and_accounting(self):
+        detail = re.search(
+            r"function taskDetailHtml\(record\) \{(.*?)\n\}",
+            self.task_ui,
+            re.S,
+        ).group(1)
+        for field in (
+            "record.order", "record.resolved_staffing", "result.reason",
+            "result.duration_s", "result.token_usage_partial",
+            "result.cost_partial", "result.native_result",
+        ):
+            self.assertIn(field, detail)
+        self.assertIn("Order-time snapshot", detail)
+        self.assertIn("execution activity is the authority", detail)
+        self.assertIn("costHtml(result.cost, result.cost_partial)", detail)
+        self.assertIn(
+            "tokenUsageHtml(result.token_usage, result.token_usage_partial)",
+            detail,
+        )
+        self.assertGreaterEqual(detail.count("esc(JSON.stringify("), 3)
+        self.assertNotIn("actual staffing", detail.lower())
+
+    def test_failed_and_successor_tasks_are_not_collapsed(self):
+        chip = re.search(
+            r"function taskChip\(record\) \{(.*?)\n\}",
+            self.task_ui,
+            re.S,
+        ).group(1)
+        self.assertIn("record.id", chip)
+        self.assertIn("taskState(record)", chip)
+        self.assertIn("taskKind(record)", chip)
+        self.assertIn("task_executor", chip)
+        for forbidden in ("predecessor", "successor", "review number"):
+            self.assertNotIn(forbidden, self.task_ui.lower())
+
+    def test_existing_execution_and_non_task_activity_stays_additive(self):
+        self.assertIn('d.task_id ? `task ${d.task_id}`', self.panel)
+        self.assertIn('r.task_id ? `task ${r.task_id}`', self.panel)
+        self.assertIn('b.task_id ? `task ${b.task_id}`', self.panel)
+        for existing in (
+            "verificationChip", "sealChip", "repairChip",
+            "reclassifyHistoryChips", "brainstormChip", "draftChip",
+            "roundChip",
+        ):
+            self.assertIn("function %s" % existing, self.panel)
+        self.assertIn('addLine("Tasks", "", taskChips)', self.panel)
 
 
 if __name__ == "__main__":

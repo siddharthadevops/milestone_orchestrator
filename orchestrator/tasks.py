@@ -568,9 +568,12 @@ def task_record(state, task_id):
     """Return one detached task record, or raise for an unknown identity."""
     if not isinstance(task_id, str) or not task_id:
         raise TaskRecordError("task id must be a non-empty string")
-    for record in task_records(state):
+    records = state.get("tasks", [])
+    if not isinstance(records, list):
+        raise TaskRecordError("task history must be a list")
+    for record in records:
         if record.get("id") == task_id:
-            return record
+            return _json_copy(record, "task record")
     raise TaskRecordError("unknown task %r" % task_id)
 
 
