@@ -699,3 +699,17 @@
 - `claude-claude-S9-impl-001` (raised claude, cleared codex): `showTaskHistoryList()` (orchestrator/static/panel.html:6093) renders `lastTaskRecords` and never calls `refreshTaskHistory()`, so pressing Back after opening a task from a milestone chip presents a dialog titled "Task history" whose list was never fetched — it contains only the records that happened to be cached by prior detail clicks (often exactly one), with no loading state, no error, and no indication of incompleteness. The same renderer is also the pre-fetch placeholder in `openTaskHistory()`, so a first open whose fetch fails leaves the body reading "No accessible tasks." underneath the error banner — the note's own listed risk of an empty view looking like erased work. — This is a real but isolated panel-behavior defect that the first Back-path use exposes, and correction is a local history refresh/loading-state change with one focused test.
 - `claude-claude-S9-impl-002` (raised claude, cleared codex): Two focused checks are materially narrower than the pass conditions the reviewed note pins for them. `test_task_chips_preserve_linked_calls_and_non_task_activity` (orchestrator/tests/test_task_activity.py:222-279) is pinned as **strict** attribution/exclusion over "legacy/unlinked calls, attached discussion, reclassification, verification, repair, seal, and retired seal evidence remain unstamped", but only exercises an unlinked brainstorming and one verification; no unlinked Worker draft or round is asserted, and reclassify/repair/seal/retired `seal_half` are absent entirely — so the new conditional `task_id` emission for `drafts`/`rounds` in orchestrator/state.py:2524-2599 has no focused proof that it omits the key for legacy records. Existing `assertNotIn("task_id", ...)` coverage in test_tasks/test_worker_tasks targets durable records, not this projection. Separately, `test_draft_and_implementation_tasks_render_separately` (line 200) is pinned to prove both ids "and details" independently "regardless of whether their TaskExecutors match", but reads no detail and only covers the differing-executor case. — The artifact falsely claims strict exclusion and independent-detail coverage is already proved, so later work could silently trust missing regression protection, but correction is limited to focused assertions and at most restoring one local conditional projection.
 
+## slice_doc-10 (Compatibility and cardinality conformance)
+
+- draft: kind `draft_slice_note`, artifact `implementation/milestones/tasks-2/slices/slice-10.md` (raw: `implementation/milestones/tasks-2/.run/raw/slice_doc-10-draft.txt`)
+
+| Round | Kind | Family | Findings | Triage | Raw |
+|---|---|---|---|---|---|
+| slice_doc-10-codex-r1 | review_round | codex | 0 | clean | `implementation/milestones/tasks-2/.run/raw/slice_doc-10-codex-r1.txt` |
+| slice_doc-10-claude-r1 | review_round | claude | 0 | clean | `implementation/milestones/tasks-2/.run/raw/slice_doc-10-claude-r1.txt` |
+
+### Review completion — SATISFIED
+
+- deterministic result: every configured family was clean or debt-clean on the same current bytes; full verification was not due at this boundary; no extra reviewer was called
+- cited reviews: `slice_doc-10-codex-r1`, `slice_doc-10-claude-r1`
+
