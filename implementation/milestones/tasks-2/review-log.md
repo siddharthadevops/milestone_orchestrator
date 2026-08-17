@@ -513,3 +513,20 @@
 - `claude-claude-claude-S6a-302` (raised claude, cleared codex): The discriminator this unit added to `_terminal_effect_from_projection` (`participant_id == "production-lead"`), which keeps the lead's own per-call `production_effect` activity from being mistaken for the single aggregate effect completion on a recovery re-entry, is pinned by no test: reverting it to the pre-slice-6 form leaves 152 tests green. — The discriminator is the sole guard against silent false success after a crash and the old behavior passes all 152 focused tests, but correction is only a local predicate fix plus one regression test.
 - `claude-claude-claude-S6a-303` (raised claude, cleared codex): In the new empty-suite proof, `assertNotIn("Judge whether these commands", armed)` pins a string that exists nowhere in the repository except in that assertion, so it holds for every possible implementation and contributes no coverage. — The assertion is vacuous, but adjacent checks directly prove empty-suite guidance appears and an armed command stays out of the review prompt, so silent drift is unlikely and correcting the single assertion is a small local test edit.
 
+## slice_impl-06-b (Brainstorming slice production)
+
+- draft: kind `implement`, artifact `-` (raw: `implementation/milestones/tasks-2/.run/raw/slice_impl-06-b-draft.txt`)
+
+| Round | Kind | Family | Findings | Triage | Raw |
+|---|---|---|---|---|---|
+| slice_impl-06-b-codex-r1 | review_round | codex | 0 | clean | `implementation/milestones/tasks-2/.run/raw/slice_impl-06-b-codex-r1.txt` |
+| slice_impl-06-b-claude-r1 | review_round | claude | 1 | DEBT-CLEAN (reclassified) | `implementation/milestones/tasks-2/.run/raw/slice_impl-06-b-claude-r1.txt` |
+
+### Review completion — SATISFIED
+
+- deterministic result: every configured family was clean or debt-clean on the same current bytes; full verification was not due at this boundary; no extra reviewer was called
+- cited reviews: `slice_impl-06-b-codex-r1`, `slice_impl-06-b-claude-r1`
+
+**Deferred debt (opposite-family verified):**
+- `claude-claude-S6b-001` (raised claude, cleared codex): test_ancillary_task_kinds_remain_worker_owned cannot fail: it exercises the Worker-only admission helper against the skeleton unit, so the seeded Brainstorming producer map is unreachable and the assertion is tautological. — The test creates a skeleton unit with no slice and calls a helper that consults producer choices only for the two production kinds, leaving misleading regression coverage, but any resulting spillover is corrected locally by exercising a slice-bound ancillary path and restoring the Worker-only guard.
+

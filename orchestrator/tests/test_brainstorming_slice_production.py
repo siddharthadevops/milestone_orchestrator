@@ -19,6 +19,13 @@ from orchestrator import prompts
 from orchestrator import runners
 from orchestrator import state as st
 from orchestrator import tasks
+from orchestrator.tests.test_driver_mock import (
+    finding,
+    fix_ok,
+    report,
+    step,
+    triaged,
+)
 
 
 def usage(n):
@@ -166,6 +173,54 @@ class BrainstormingSliceProductionTest(unittest.TestCase):
             subject.step()
         return subject, workspace, skeleton_path
 
+    def ready_brainstorming_implementation(self, runner=None):
+        self.planned("worker", "brainstorming")
+        state = st.load(self.path)
+        state["config"]["families_order"] = ["codex"]
+        state["config"]["p3_reclassify_debt"] = False
+        note = state["units"][1]
+        note.update({
+            "status": st.U_SEALED,
+            "artifact": "docs/slice-01.md",
+        })
+        with open(
+            os.path.join(self.workspace, note["artifact"]),
+            "w",
+            encoding="utf-8",
+        ) as handle:
+            handle.write("# Slice 01\n")
+        st.save(self.path, state)
+        return drv.Driver(
+            self.path,
+            runner=runner if runner is not None else runners.MockRunner([]),
+        )
+
+    def complete_brainstorming_implementation(self, subject, result=None):
+        result = copy.deepcopy(result or task_success())
+        with mock.patch.object(
+            adapter, "resolve_staffing", side_effect=self.staffing
+        ), mock.patch.object(
+            adapter, "start_task", return_value={"id": "session-impl"}
+        ):
+            subject.step()
+        task_id = st.current_unit(subject.state)["active_task"]["id"]
+
+        def finish(state, current_task_id, *_args, **_kwargs):
+            return tasks.record_task_result(
+                state, current_task_id, copy.deepcopy(result)
+            )
+
+        with mock.patch.object(adapter, "finish_task", side_effect=finish):
+            subject.step()
+        return task_id
+
+    def drive_until_closed(self, subject, max_steps=30):
+        for _index in range(max_steps):
+            if subject.state["milestone"]["status"] == st.M_CLOSED:
+                return
+            subject.step()
+        self.fail("milestone did not close within %d steps" % max_steps)
+
     def test_brainstorming_note_waits_replaces_path_then_worker_implements(self):
         self.planned("brainstorming", "worker")
         worker = {
@@ -311,7 +366,7 @@ class BrainstormingSliceProductionTest(unittest.TestCase):
             ["docs/resealed-note.md", "docs/skeleton.md"],
         )
 
-    def test_terminal_failure_resumes_with_a_distinct_task(self):
+    def test_native_failure_preserves_accounting_and_resumes_with_a_distinct_task(self):
         self.planned("brainstorming", "worker")
         subject = drv.Driver(self.path, runner=runners.MockRunner([]))
         with mock.patch.object(adapter, "resolve_staffing", side_effect=self.staffing), \
@@ -319,16 +374,28 @@ class BrainstormingSliceProductionTest(unittest.TestCase):
             subject.step()
         doc = st.current_unit(subject.state)
         failed_id = doc["active_task"]["id"]
+        native = {
+            "outcome": "failure",
+            "reason": "No bounded agreement was reached.",
+            "target_ref": "private/agreement.md",
+            "transcript_ref": "private/chat.md",
+            "rounds_used": 1,
+        }
 
         def fail(state, task_id, *_args, **_kwargs):
             result = task_success()
-            result.update({"status": "failure", "reason": "effect refused"})
+            result.update({
+                "status": "failure",
+                "reason": "No bounded agreement was reached.",
+                "native_result": native,
+            })
             return tasks.record_task_result(state, task_id, result)
 
         with mock.patch.object(adapter, "finish_task", side_effect=fail):
             subject.step()
         failed = tasks.task_record(subject.state, failed_id)
         self.assertIsNone(doc["draft"])
+        self.assertEqual(failed["result"]["native_result"], native)
         summary = st.summary(subject.state)
         self.assertEqual(summary["work_duration_s"], 2.0)
         self.assertEqual(summary["work_token_usage"], usage(2))
@@ -352,6 +419,100 @@ class BrainstormingSliceProductionTest(unittest.TestCase):
         successor = st.current_unit(subject.state)["active_task"]["id"]
         self.assertNotEqual(successor, failed_id)
         self.assertEqual(tasks.task_record(subject.state, failed_id), failed)
+
+    def test_effect_failure_keeps_partial_work_and_implementation_successor(self):
+        subject = self.ready_brainstorming_implementation()
+        plan = subject.state["milestone"]["slices"][0]
+        plan["producer_task_executor"]["implement"]["configuration"] = {
+            "max_rounds": 3,
+        }
+        subject._save()
+        with mock.patch.object(
+            adapter, "resolve_staffing", side_effect=self.staffing
+        ), mock.patch.object(
+            adapter, "start_task", return_value={"id": "failed-impl-session"}
+        ):
+            subject.step()
+        impl = st.current_unit(subject.state)
+        failed_id = impl["active_task"]["id"]
+        partial_path = os.path.join(self.workspace, "partial-effect.txt")
+        native = copy.deepcopy(task_success()["native_result"])
+
+        def fail_effect(state, task_id, *_args, **_kwargs):
+            with open(partial_path, "w", encoding="utf-8") as handle:
+                handle.write("survives terminal failure\n")
+            return tasks.record_task_result(state, task_id, {
+                "status": "failure",
+                "reason": "production effects were incomplete",
+                "duration_s": 3.0,
+                "token_usage": usage(2),
+                "token_usage_partial": True,
+                "cost": {"api_usd": 0.2, "real_usd": 0.0},
+                "cost_partial": True,
+                "native_result": native,
+            })
+
+        with mock.patch.object(adapter, "finish_task", side_effect=fail_effect):
+            subject.step()
+        predecessor = copy.deepcopy(tasks.task_record(subject.state, failed_id))
+        self.assertIsNone(impl["draft"])
+        self.assertTrue(os.path.isfile(partial_path))
+        self.assertEqual(predecessor["result"]["native_result"], native)
+        summary = st.summary(subject.state)
+        self.assertEqual(summary["work_duration_s"], 3.0)
+        self.assertEqual(summary["work_token_usage"], usage(2))
+        self.assertTrue(summary["work_token_usage_partial"])
+        self.assertEqual(
+            summary["work_cost"], {"api_usd": 0.2, "real_usd": 0.0}
+        )
+        self.assertTrue(summary["work_cost_partial"])
+        work = [
+            event for event in subject.state["events"]
+            if event.get("type") == "brainstorming_work_recorded"
+        ]
+        self.assertEqual(len(work), 1)
+        self.assertEqual(work[0]["task_id"], failed_id)
+
+        plan["producer_task_executor"]["implement"]["configuration"] = {
+            "max_rounds": 7,
+        }
+        st.resume_run(subject.state)
+        subject._save()
+        with mock.patch.object(
+            adapter, "resolve_staffing", side_effect=self.staffing
+        ), mock.patch.object(
+            adapter, "start_task", return_value={"id": "successor-session"}
+        ):
+            subject.step()
+        successor_id = st.current_unit(subject.state)["active_task"]["id"]
+        successor = tasks.task_record(subject.state, successor_id)
+        self.assertNotEqual(successor_id, failed_id)
+        self.assertEqual(successor["order"]["configuration"]["max_rounds"], 7)
+        self.assertEqual(tasks.task_record(subject.state, failed_id), predecessor)
+        self.assertEqual(st.summary(subject.state)["work_duration_s"], 3.0)
+
+    def test_success_accounting_has_one_existing_run_home(self):
+        subject = self.ready_brainstorming_implementation()
+        task_id = self.complete_brainstorming_implementation(
+            subject, task_success(5)
+        )
+        impl = st.current_unit(subject.state)
+        task = tasks.task_record(subject.state, task_id)
+        self.assertEqual(impl["draft"]["task_id"], task_id)
+        self.assertEqual(impl["draft"]["duration_s"], 5.0)
+        self.assertEqual(task["result"]["duration_s"], 5.0)
+        self.assertFalse([
+            event for event in subject.state["events"]
+            if event.get("type") == "brainstorming_work_recorded"
+        ])
+        summary = st.summary(subject.state)
+        self.assertEqual(summary["work_duration_s"], 5.0)
+        self.assertEqual(summary["work_token_usage"], usage(5))
+        self.assertFalse(summary["work_token_usage_partial"])
+        self.assertEqual(
+            summary["work_cost"], {"api_usd": 0.5, "real_usd": 0.0}
+        )
+        self.assertFalse(summary["work_cost_partial"])
 
     def test_terminal_failure_restores_sealed_artifact_before_stopping(self):
         subject, workspace, skeleton_path = self.guarded_production(
@@ -607,6 +768,156 @@ class BrainstormingSliceProductionTest(unittest.TestCase):
         )
         after = subject._review_evidence_fingerprint(unit)
         self.assertNotEqual(before, after)
+
+    def test_ancillary_task_kinds_remain_worker_owned(self):
+        kinds = (
+            contracts.KIND_DRAFT_SKELETON,
+            contracts.KIND_REVIEW_ROUND,
+            contracts.KIND_DELTA_REVIEW,
+            contracts.KIND_FIX_FINDINGS,
+        )
+        admitted = []
+        for kind in kinds:
+            with self.subTest(kind=kind):
+                workspace = os.path.join(self.tmp.name, "ancillary-" + kind)
+                path = drv.init_run(
+                    "Keep ancillary work on Worker.", workspace,
+                    config=copy.deepcopy(drv.DEFAULT_CONFIG),
+                )
+                state = st.load(path)
+                state["milestone"]["slices"] = [{
+                    "id": 1,
+                    "title": "Brainstorming producers",
+                    "producer_task_executor": {
+                        "draft_slice_note": {
+                            "task_executor": "brainstorming"
+                        },
+                        "implement": {"task_executor": "brainstorming"},
+                    },
+                }]
+                st.save(path, state)
+                subject = drv.Driver(path, runner=runners.MockRunner([]))
+                unit = st.current_unit(subject.state)
+                record = subject._admit_worker_task(
+                    unit, kind, "perform %s" % kind, "codex"
+                )
+                admitted.append(record["order"]["task_executor"])
+                self.assertEqual(record["order"]["task_executor"], "worker")
+                self.assertEqual(
+                    tasks.effective_slice_producers(
+                        subject.state["milestone"]["slices"][0]
+                    ),
+                    {
+                        "draft_slice_note": {
+                            "task_executor": "brainstorming"
+                        },
+                        "implement": {"task_executor": "brainstorming"},
+                    },
+                )
+        self.assertEqual(admitted, ["worker"] * len(kinds))
+
+    def test_empty_suite_finding_arms_and_runs_the_final_checkpoint_once(self):
+        command = "python3 -m unittest discover -s tests -t ."
+        summary = "official suite command is missing"
+        runner = runners.MockRunner([
+            step(
+                contracts.KIND_REVIEW_ROUND,
+                report(
+                    contracts.KIND_REVIEW_ROUND,
+                    [finding("F1", summary, severity="P1")],
+                ),
+                family="codex",
+            ),
+            step(
+                contracts.KIND_FIX_FINDINGS,
+                dict(
+                    fix_ok([
+                        triaged("F1", "fixed", summary, severity="P1")
+                    ]),
+                    suite_command=command,
+                    suite_command_finding_id="F1",
+                ),
+                family="codex",
+            ),
+            step(
+                contracts.KIND_REVIEW_ROUND,
+                report(contracts.KIND_REVIEW_ROUND),
+                family="codex",
+            ),
+        ])
+        subject = self.ready_brainstorming_implementation(runner)
+        task_id = self.complete_brainstorming_implementation(subject)
+        with mock.patch.object(
+            drv, "run_verification", return_value=(True, "suite passed")
+        ) as verify:
+            self.drive_until_closed(subject)
+
+        verify.assert_called_once_with(
+            [command], self.workspace, subject.config.get("verification_timeout")
+        )
+        self.assertEqual(subject.state["suite_command"], command)
+        implementation = subject.state["units"][-1]
+        reviews = [
+            round_info for round_info in implementation["rounds"]
+            if round_info["kind"] == contracts.KIND_REVIEW_ROUND
+        ]
+        self.assertEqual(len(reviews), 2)
+        self.assertNotEqual(
+            reviews[0]["evidence_fingerprint"],
+            reviews[1]["evidence_fingerprint"],
+        )
+        self.assertEqual(
+            reviews[1]["evidence_fingerprint"],
+            implementation["review_evidence_fingerprint"],
+        )
+        verifications = [
+            event for event in subject.state["events"]
+            if event.get("type") == "verification"
+        ]
+        self.assertEqual(len(verifications), 1)
+        self.assertEqual(verifications[0]["commands"], [command])
+        self.assertFalse(verifications[0].get("vacuous"))
+        self.assertEqual(verifications[0]["cadence"], "milestone_final")
+        records = tasks.task_records(subject.state)
+        self.assertEqual(records[0]["id"], task_id)
+        self.assertEqual(records[0]["order"]["task_executor"], "brainstorming")
+        self.assertEqual(
+            [record["order"]["task_executor"] for record in records[1:]],
+            ["worker", "worker", "worker"],
+        )
+        self.assertIn("empty list is unknown", runner.calls[0][2])
+        self.assertFalse(runner.script)
+
+    def test_confirmed_no_suite_seals_with_one_vacuous_final_checkpoint(self):
+        runner = runners.MockRunner([
+            step(
+                contracts.KIND_REVIEW_ROUND,
+                report(contracts.KIND_REVIEW_ROUND),
+                family="codex",
+            ),
+        ])
+        subject = self.ready_brainstorming_implementation(runner)
+        self.complete_brainstorming_implementation(subject)
+        with mock.patch.object(
+            drv, "run_verification", return_value=(True, "")
+        ) as verify:
+            self.drive_until_closed(subject)
+
+        verify.assert_called_once_with(
+            [], self.workspace, subject.config.get("verification_timeout")
+        )
+        self.assertIsNone(subject.state["suite_command"])
+        verifications = [
+            event for event in subject.state["events"]
+            if event.get("type") == "verification"
+        ]
+        self.assertEqual(len(verifications), 1)
+        self.assertEqual(verifications[0]["commands"], [])
+        self.assertTrue(verifications[0]["vacuous"])
+        self.assertEqual(verifications[0]["cadence"], "milestone_final")
+        self.assertEqual(subject.state["milestone"]["status"], st.M_CLOSED)
+        self.assertIn("empty list is unknown", runner.calls[0][2])
+        self.assertFalse(runner.script)
 
     def test_delta_review_does_not_rejudge_suite_handoff(self):
         prompt = prompts.build_delta_review(
