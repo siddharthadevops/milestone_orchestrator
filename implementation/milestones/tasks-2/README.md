@@ -283,4 +283,5 @@ The goal is achieved when:
 | slice_impl-08 (Task ordering and selection panel) | reviewed | 9 | satisfied | b1cb417 |
 | slice_doc-09 (Task activity projection and chips) | reviewed | 2 | satisfied | 4b2fd14 |
 | slice_impl-09 (Task activity projection and chips) | reviewed | 8 | satisfied | cb73197 |
-| slice_doc-10 (Compatibility and cardinality conformance) | reviewed | 2 | satisfied | - |
+| slice_doc-10 (Compatibility and cardinality conformance) | reviewed | 2 | satisfied | a138228 |
+| slice_impl-10 (Compatibility and cardinality conformance) | reviewed | 9 | satisfied | - |

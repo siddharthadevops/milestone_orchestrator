@@ -713,3 +713,29 @@
 - deterministic result: every configured family was clean or debt-clean on the same current bytes; full verification was not due at this boundary; no extra reviewer was called
 - cited reviews: `slice_doc-10-codex-r1`, `slice_doc-10-claude-r1`
 
+## slice_impl-10 (Compatibility and cardinality conformance)
+
+- draft: kind `implement`, artifact `-` (raw: `implementation/milestones/tasks-2/.run/raw/slice_impl-10-draft.txt`)
+
+| Round | Kind | Family | Findings | Triage | Raw |
+|---|---|---|---|---|---|
+| slice_impl-10-codex-r1 | review_round | codex | 4 | 4 reported | `implementation/milestones/tasks-2/.run/raw/slice_impl-10-codex-r1.txt` |
+| slice_impl-10-codex-r2 | fix_findings | codex | 4 | 4 fixed | `implementation/milestones/tasks-2/.run/raw/slice_impl-10-fix1.txt` |
+| slice_impl-10-codex-r3 | delta_review | codex | 1 | 1 reported | `implementation/milestones/tasks-2/.run/raw/slice_impl-10-delta1.txt` |
+| slice_impl-10-codex-r4 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/tasks-2/.run/raw/slice_impl-10-fix2.txt` |
+| slice_impl-10-codex-r5 | delta_review | codex | 1 | 1 reported | `implementation/milestones/tasks-2/.run/raw/slice_impl-10-delta2.txt` |
+| slice_impl-10-codex-r6 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/tasks-2/.run/raw/slice_impl-10-fix3.txt` |
+| slice_impl-10-codex-r7 | delta_review | codex | 0 | clean | `implementation/milestones/tasks-2/.run/raw/slice_impl-10-delta3.txt` |
+| slice_impl-10-codex-r8 | review_round | codex | 0 | clean | `implementation/milestones/tasks-2/.run/raw/slice_impl-10-codex-r2.txt` |
+| slice_impl-10-claude-r1 | review_round | claude | 2 | DEBT-CLEAN (reclassified) | `implementation/milestones/tasks-2/.run/raw/slice_impl-10-claude-r1.txt` |
+
+### Review completion — SATISFIED
+
+- deterministic result: every configured family was clean or debt-clean on the same current bytes; the scheduled full verification passed; no extra reviewer was called
+- cited reviews: `slice_impl-10-codex-r8`, `slice_impl-10-claude-r1`
+- scheduled verification event: `1405`
+
+**Deferred debt (opposite-family verified):**
+- `claude-S10-CLAUDE-001` (raised claude, cleared codex): The `test_mixed_producer_successors_freeze_independently_without_spillover` cell contains no assertion of its own: it only re-executes six already-owned test methods through the nested `_assert_existing_cases` runner, so the cell adds no cross-surface proof while the closure suite runs those cases twice. — The passing named cell can silently mislead a capable builder into trusting cross-surface coverage that its six duplicated lower-level cases do not provide, while correction is bounded to replacing this local wrapper with a genuine integrated proof.
+- `claude-S10-CLAUDE-002` (raised claude, cleared codex): The rethink/abandonment cell claims "All three continuable kinds keep one id through repeated rethink and recoverable waiting", but recoverable waiting is proved only for `implement`; `draft_slice_note` and `fix_findings` are never exercised on the still-open waiting path. — The conformance claim falsely presents all three continuable kinds as covered while recoverable waiting exercises only implementation, so later builders may trust a silent test-coverage gap, but correction is a small local expansion of that case plus any exposed kind-specific fix.
+
