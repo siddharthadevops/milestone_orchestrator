@@ -658,3 +658,20 @@
 - `claude-claude-S8-004` (raised claude, cleared codex): The project/work-area binding and reference-list logic is copied rather than reused, adding a third near-identical set of helpers to panel.html and already diverging from the pattern it copied. — The live task picker encodes and leaves untested the wrong admin scope, so a later builder could trust and extend that behavior silently, but correction is a small local helper-reuse fix exposed by the first admin picker check.
 - `codex-codex-S8-20260817-01` (raised codex, cleared codex): Reopening the direct-task form can expose an enabled stale project selection backed by an empty client model — The form clears its project model without clearing or disabling the rendered selection, causing a timing-dependent silent submit failure likely to survive ordinary checks, but correction is a local reset/guard plus one focused regression test.
 
+## slice_doc-09 (Task activity projection and chips)
+
+- draft: kind `draft_slice_note`, artifact `implementation/milestones/tasks-2/slices/slice-09.md` (raw: `implementation/milestones/tasks-2/.run/raw/slice_doc-09-draft.txt`)
+
+| Round | Kind | Family | Findings | Triage | Raw |
+|---|---|---|---|---|---|
+| slice_doc-09-codex-r1 | review_round | codex | 0 | clean | `implementation/milestones/tasks-2/.run/raw/slice_doc-09-codex-r1.txt` |
+| slice_doc-09-claude-r1 | review_round | claude | 1 | DEBT-CLEAN (reclassified) | `implementation/milestones/tasks-2/.run/raw/slice_doc-09-claude-r1.txt` |
+
+### Review completion — SATISFIED
+
+- deterministic result: every configured family was clean or debt-clean on the same current bytes; full verification was not due at this boundary; no extra reviewer was called
+- cited reviews: `slice_doc-09-codex-r1`, `slice_doc-09-claude-r1`
+
+**Deferred debt (opposite-family verified):**
+- `claude-claude-S9-001` (raised claude, cleared codex): The note pins what a task chip must display (TaskExecutor, milestone task kind, open/success/failure) but pins no source for that per-chip data: its only new unit-level index carries bare ids, copying records into the polling summary is forbidden, and the only other pinned source is the uncached whole-registry `GET /api/tasks` scan reached through the 2-second refresh loop the note says it reuses. — The fetch cadence is genuinely unspecified and the checks miss repeated global scans, but a max-effort builder should confront that choice and stop for repair, while any escaped implementation needs only a local decoupling of task-list loading from the two-second poll.
+
