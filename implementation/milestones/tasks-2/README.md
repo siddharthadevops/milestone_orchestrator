@@ -276,4 +276,5 @@ The goal is achieved when:
 | slice_impl-05 (Slice producer planning and override) | reviewed | 37 | satisfied | 15762ac |
 | slice_doc-06 (Brainstorming slice production) | reviewed | 8 | satisfied | 69ce2d4 |
 | slice_impl-06-a (Brainstorming slice production) | reviewed | 43 | satisfied | b0cace5 |
-| slice_impl-06-b (Brainstorming slice production) | reviewed | 2 | satisfied | - |
+| slice_impl-06-b (Brainstorming slice production) | reviewed | 2 | satisfied | ebfb733 |
+| slice_doc-07 (Standalone task API) | reviewed | 2 | satisfied | - |

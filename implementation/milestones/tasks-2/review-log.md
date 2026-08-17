@@ -530,3 +530,21 @@
 **Deferred debt (opposite-family verified):**
 - `claude-claude-S6b-001` (raised claude, cleared codex): test_ancillary_task_kinds_remain_worker_owned cannot fail: it exercises the Worker-only admission helper against the skeleton unit, so the seeded Brainstorming producer map is unreachable and the assertion is tautological. — The test creates a skeleton unit with no slice and calls a helper that consults producer choices only for the two production kinds, leaving misleading regression coverage, but any resulting spillover is corrected locally by exercising a slice-bound ancillary path and restoring the Worker-only guard.
 
+## slice_doc-07 (Standalone task API)
+
+- draft: kind `draft_slice_note`, artifact `implementation/milestones/tasks-2/slices/slice-07.md` (raw: `implementation/milestones/tasks-2/.run/raw/slice_doc-07-draft.txt`)
+
+| Round | Kind | Family | Findings | Triage | Raw |
+|---|---|---|---|---|---|
+| slice_doc-07-codex-r1 | review_round | codex | 0 | clean | `implementation/milestones/tasks-2/.run/raw/slice_doc-07-codex-r1.txt` |
+| slice_doc-07-claude-r1 | review_round | claude | 2 | DEBT-CLEAN (reclassified) | `implementation/milestones/tasks-2/.run/raw/slice_doc-07-claude-r1.txt` |
+
+### Review completion — SATISFIED
+
+- deterministic result: every configured family was clean or debt-clean on the same current bytes; full verification was not due at this boundary; no extra reviewer was called
+- cited reviews: `slice_doc-07-codex-r1`, `slice_doc-07-claude-r1`
+
+**Deferred debt (opposite-family verified):**
+- `claude-claude-S7-001` (raised claude, cleared codex): Direct Worker accounting and staffing are pinned to the run-scoped driver call marker and to `tasks.task_accounting`, neither of which can supply them for a standalone order; the note's own non-goals then forbid the only addition that could, so the 'complete duration, token, and two-reading cost evidence' acceptance criterion and its test 4 anchor on a seam that does not exist on this path. — The note repeatedly pins a nonexistent run-scoped marker/projection as standalone authority, plausibly steering implementation toward unauthorized machinery, while the first direct-Worker accounting test exposes it and correction remains bounded to Slice 7's Worker host and accounting handoff.
+- `claude-claude-S7-002` (raised claude, cleared codex): The note invents a declared-reference containment gate ('references may resolve only beneath the authorized primary/additional roots', proved by test 2) that no prior slice or the skeleton authorizes, whose cited authority is about `output_directory` only, that protects nothing under this slice's own design, and that converts ordinary non-path or out-of-root reference strings into `invalid_task_request` refusals. — The hard register and test 2 explicitly direct the builder to implement the unauthorized reference-containment refusal, making silent wrong code and tests likely, but correction is a small local removal of that gate and its assertions once a valid opaque reference is rejected.
+
