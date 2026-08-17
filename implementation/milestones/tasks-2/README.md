@@ -2,7 +2,7 @@
 
 # Milestone
 
-Status: **open**
+Status: **closed**
 
 ## Goal
 
@@ -284,4 +284,4 @@ The goal is achieved when:
 | slice_doc-09 (Task activity projection and chips) | reviewed | 2 | satisfied | 4b2fd14 |
 | slice_impl-09 (Task activity projection and chips) | reviewed | 8 | satisfied | cb73197 |
 | slice_doc-10 (Compatibility and cardinality conformance) | reviewed | 2 | satisfied | a138228 |
-| slice_impl-10 (Compatibility and cardinality conformance) | reviewed | 9 | satisfied | - |
+| slice_impl-10 (Compatibility and cardinality conformance) | reviewed | 9 | satisfied | 2ec07b8 |
