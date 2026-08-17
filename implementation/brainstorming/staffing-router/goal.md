@@ -1,0 +1,289 @@
+# Goal: Staffing Router — One Authority for Agent, Model, and Effort
+
+Status: **operator-directed draft, non-canonical implementation input**. This
+document states a desired product outcome and its boundaries as input for a
+Brainstorming review. It does not allocate phases, slices, participants, or
+workflow stages, and it does not authorize implementation by itself. The
+reviewed milestone skeleton is the implementation authority and may refine or
+reorganize this proposal.
+
+## Outcome
+
+Every call to an agent CLI — made by a milestone, by a Brainstorming session,
+by a standalone task, or by a calling product — obtains its agent, model, and
+effort from **one place**: a staffing router. The router is a small service
+inside the orchestrator, organised in sessions. The owner of a piece of work
+(a milestone run, the panel, a calling product such as Agent99) opens a
+session that points at a staffing document, and every executor working under
+that owner asks the session at each call. Nothing else decides staffing.
+
+Today seven mechanisms decide, each reading similar inputs at different moments
+under different freezing rules: milestone acts through the model profile at
+each dispatch; milestone-attached Brainstorming seats from the same profile;
+standalone worker tasks from the first configured family and its defaults;
+standalone Brainstorming from those same two keys, pinned at admission; review
+family rotation by round index; structurally fixed or derived families for
+reviews and consultation; and operator-ordered work-area alignment from the
+first configured family. None is wrong on its own; together they form no
+mental model. A standalone task cannot be staffed deliberately at all — the
+Brainstorming that reviewed the previous tasks goal ran below the operator's
+configured effort because it was standalone. This goal collapses all of that
+into one rule.
+
+## What already exists
+
+- **Model profiles**: named documents with three rigors, each mapping the
+  existing acts to agent, model, and effort; selected live per run and read at
+  every dispatch, so a change mid-run applies to the next call.
+- **One resolution seam** used by the milestone driver and by each supervised
+  Brainstorming dispatch; the standalone task host has a separate
+  defaults-only path.
+- **A self-describing task catalogue** with usage phrases, and a **slice
+  planner** that already proposes a producer per slice from that catalogue,
+  visibly in the skeleton table, overridable by the operator before the task is
+  ordered, prospective only.
+- **A per-call marker** written before dispatch with family, model, and
+  effort. Accounting already prices each call from the staffing that call
+  used; the marker is the record of what actually ran.
+
+## The router
+
+### Sessions
+
+The owner creates a session with: the work area, which family names are
+available on this machine, and a **reference** to a staffing document plus the
+chosen rigor and, optionally, a default material. The document owns the
+family slots and their ladders; the session only says which of those families
+exist here. The session holds the reference, not a copy. A session may also
+carry its own overrides on top of the document, in the document's own shape —
+that is where today's per-run act overrides live. Both the session and the
+document are edited live, exactly as model profiles are today: a change
+reaches the next call of every session that references it and never rewrites
+a call already made. There are no session snapshots and no freeze.
+
+Rigor selects **how hard** everyone works: it picks the tuning table. Families,
+roles, assignment, materials, and rules are rigor-independent — they say who
+does what, and that does not change with rigor.
+
+A session is inherited execution context, exactly like work area, access,
+liveness, and stop policy: a task ordered by a milestone uses the milestone's
+session; a standalone task uses a session the panel or the calling product
+opened with the operator's choices. No parallel channel carries staffing.
+
+### Request and response
+
+Request: `session`, `role`, `index`, `round`, optional `material`, optional
+`brief` (the free text of what the call will do). Response: `agent`, `model`,
+`effort` — concrete values ready for the command template. Nothing else. The
+caller passes the facts it already knows (the round number); the router keeps
+no history of its own beyond the session configuration.
+
+### Roles
+
+Roles are process steps, with no domain word: `plan`, `draft`, `implement`,
+`fix`, `classify`, `review`, `brainstorm`, `consult`, `sync` (the
+operator-ordered alignment of a work area, which also calls an agent CLI and
+today staffs itself). The same vocabulary serves code, legal prose, and
+architectural drawings, because it names the step, not the content. Any other
+agent call the service makes takes a role too; none staffs itself. Roles with
+several seats use an index — `review 1`, `review 2`, `brainstorm 1..N` — with
+no upper limit. The consumer decides
+*when* a seat is used — which review seat takes round three, which
+Brainstorming seat speaks — and passes the index; the router only says *who*
+sits in it. Each role may declare `distinct_families`: `review` requires its
+seats to be different families, because cross review is milestone law and a
+seat that cannot be honoured is surfaced; `brainstorm` does not, so a missing
+family simply collapses. Which seats share a family is a matter of assignment,
+not of this flag, and Brainstorming's own roster check yields to the router.
+
+### The staffing document
+
+This document replaces the model profile. Everything that selects is a number:
+
+- **families**: numbered slots. Each slot binds a family name, its models
+  ladder (weakest to strongest), and its efforts ladder in its own vocabulary
+  (a family with fewer effort levels simply has a shorter ladder).
+- **tuning**: per rigor, per family, per role, `[model rank, effort rank]` in
+  that family's own ladders. This is calibration — how hard each family works
+  at each step under each rigor — written once per family and reusable
+  everywhere. Rigor selects nothing else.
+- **assignment**: per role, per index, the family slot. This is who does what.
+- **materials**: a vocabulary the owner defines, each with a few usage phrases
+  so a planner can choose among them. Materials exist only as override keys;
+  the base assignment is the default and needs no flag.
+- **overrides**: per material, an assignment (the usual case) and, rarely, a
+  tuning delta. Only the rows that differ are written; everything else
+  inherits.
+- **rules**: a list of typed entries. This goal defines exactly one type,
+  `step_up`, with typed fields — the role it applies to and the minimum round
+  from which it fires. `step_up` is arithmetic on the resolved family's
+  ladders: effort + 1, then the next model at its first effort, saturating at
+  the top. There is no expression language and no rule engine; a future rule
+  type (for instance stepping down on a `brief` recognised as trivial) would be
+  a second typed entry in future work, not a platform.
+
+Illustration, translating today's `medium` for coding (the `low` and `high`
+tuning tables are further keys of `tuning`, omitted here):
+
+```json
+{
+  "name": "default",
+  "families": {
+    "1": {"name": "codex",
+          "models":  ["gpt-5.6-luna", "gpt-5.6-terra", "gpt-5.6-sol"],
+          "efforts": ["low", "medium", "high", "xhigh", "max"]},
+    "2": {"name": "claude",
+          "models":  ["claude-sonnet-5", "claude-opus-5", "claude-fable-5"],
+          "efforts": ["low", "medium", "high", "xhigh", "max"]}
+  },
+  "roles": {
+    "plan": {}, "draft": {}, "implement": {}, "fix": {}, "classify": {}, "consult": {},
+    "review":     {"distinct_families": true},
+    "brainstorm": {"distinct_families": false}
+  },
+  "materials": {
+    "prose": {"examples": ["contracts", "policy documents", "book chapters"]}
+  },
+  "tuning": {
+    "medium": {
+      "1": {"plan": [3,5], "draft": [3,5], "implement": [3,5], "fix": [3,4], "classify": [3,4],
+            "review": [3,4], "brainstorm": [3,4], "consult": [3,4]},
+      "2": {"plan": [3,5], "draft": [3,5], "implement": [2,5], "fix": [2,4], "classify": [2,4],
+            "review": [2,3], "brainstorm": [2,5], "consult": [2,4]}
+    }
+  },
+  "assignment": {
+    "plan": {"1": 1}, "draft": {"1": 1}, "implement": {"1": 1},
+    "fix": {"1": 1}, "classify": {"1": 1},
+    "review":     {"1": 1, "2": 2},
+    "brainstorm": {"1": 1, "2": 2, "3": 1},
+    "consult":    {"1": 2}
+  },
+  "overrides": {
+    "prose": {"assignment": {"plan": {"1": 2}, "draft": {"1": 2}}}
+  },
+  "rules": [
+    {"type": "step_up", "role": "review", "min_round": 3}
+  ]
+}
+```
+
+A third family is one more slot with its own ladders and one more tuning row;
+no other part of the document changes.
+
+### Resolution
+
+Resolving is the one strict thing: a request always comes back with a
+staffing. `(role, index, material, round)` resolves as: the material named in
+the request, else the session's default, else the base assignment gives the
+family; an unbound family collapses to the first available one; the tuning
+table for the session's rigor gives the ranks; a rank beyond the ladder
+saturates to that family's top; rules apply; the marker records what actually
+ran. Selection is a choice of model, not a transaction: nothing here fails for
+a missing family, an unknown material, a missing seat, or an out-of-range
+rank. Documents are validated when saved — loudly, as profiles are today — so
+that a stored document is always complete.
+
+**Mandatory — operator decision, not open to review.** The session record and
+the document are inputs to resolution, not guarantees. If either cannot be
+read at dispatch, the router resolves as it would for the default document
+with the available families, and the marker records that it did so. The
+dispatch is never failed, blocked, or retried on that account, and no design
+or review may reintroduce a failure, a freeze, or a validation gate for it:
+running one call on the default staffing harms nobody, and it is visible.
+
+Only two conditions are surfaced. First, no family available at all: there is
+nobody to call, so the request is unavailable. Second, a `distinct_families`
+role that cannot be honoured with the available families: checked when the
+session is created and again before each dispatch it affects — the same
+check, since the document may change live — because it is milestone law that
+cannot be served, not a router error.
+
+Resolution is live: a change of the session's selection, or of the referenced
+document, applies to the next call and never rewrites a call already made.
+There is no order-time staffing freeze acting as a guarantee: the
+`resolved_staffing` snapshot on task orders stops being validated dispatch
+input; it may remain as best-effort bookkeeping or be dropped. The marker is
+the record.
+
+## Where choices are made
+
+- **In a milestone**, the planner proposes a material per slice from the
+  session's material catalogue, reading the usage phrases; the proposal is
+  visible in the skeleton table, the operator may override it before the task
+  is ordered, and a later change is prospective. The material belongs to the
+  slice and covers both of its production tasks. This is the same channel that
+  already carries the producer choice. No LLM selects staffing at dispatch
+  inside a milestone: an LLM proposes, the operator disposes.
+- **Standalone**, the panel or the calling product opens the session with the
+  operator's chosen document, rigor, and material, and the panel exposes
+  exactly those choices — never seats. `brief` travels with the request so a
+  future rule can recognise trivial work; nothing requires such a rule now.
+
+## Rename
+
+The `worker` TaskExecutor is renamed to `agent_call`: one contracted call to an
+agent CLI, which is all it does. Executor id, catalogue entry, panel labels,
+API values, documentation. Old records that say `worker` still read.
+
+## Boundaries
+
+- The router lives in the orchestrator's own process with its own records and
+  routes. It has no daemon, lifecycle, recovery, liveness, ledger, or snapshot
+  validation: it is a table plus a handful of rules.
+- The router selects staffing only. Which family reviews which round, what
+  convergence requires, and sealing remain milestone law; the router's part is
+  to honour `distinct_families` when asked.
+- Roles carry no domain; materials are the owner's vocabulary, never an enum in
+  code.
+- Rules are typed entries; there is no expression language or rule engine.
+- No cost ceilings, budgets, or scheduler. No new permission system: session
+  and document routes reuse the caller identity and project access the service
+  already enforces.
+- No LLM chooses staffing at dispatch inside a milestone.
+- Agent99 adaptation is later work; the API must be product-neutral and
+  callable by an external product from the start.
+- Bookkeeping is best-effort, and deliberately simple. The session record, the
+  per-call marker, and any projection of them are convenience: a lost or stale
+  entry changes no acceptance, seal, or result, harms nobody, and needs no
+  test. No identity scheme, event stream, reconciliation, snapshot validation,
+  survival proof, or notification may be designed so that a staffing value
+  outlives every path. Whenever a design or review is about to add such
+  machinery, the smallest sufficient answer is to declare the value best-effort
+  and stop.
+
+## Compatibility
+
+- Existing and resumable runs continue. A run that has no session gets one
+  opened at resume from what the run already carries — its selected profile
+  and rigor, its live per-act overrides, its derived families — so its next
+  call staffs as it would have. Anything admitted before the cutover —
+  Brainstorming seats with their pins, standalone tasks with the staffing
+  recorded on them — keeps what it was admitted with. This is derivation at
+  launch, not migration of stored state.
+- Today's profiles must be expressible in the new document. Whether they are
+  converted once by tooling or read through an adapter is a skeleton decision;
+  the operator does not rewrite them by hand.
+
+## Completion
+
+The goal is achieved when:
+
+- the driver, every Brainstorming dispatch, every standalone task, and
+  work-area alignment resolve agent, model, and effort through a router
+  session, and no other path remains;
+- the panel and the API can create a session, resolve a request, and edit the
+  staffing document; a standalone task or Brainstorming ordered from the panel
+  runs with the operator's configured staffing;
+- the planner proposes a material per slice from the catalogue, the skeleton
+  shows it, and the operator can override it before ordering;
+- resolution collapses and saturates instead of failing, and an unsatisfiable
+  `distinct_families` role is surfaced at session creation and before the
+  dispatch it affects;
+- the `step_up` rule fires on the configured round and the marker shows the
+  escalated staffing; a document or rigor change mid-run applies to the next
+  call;
+- the public rename to `agent_call` is complete and old records stay readable;
+- focused tests prove the resolution matrix (unbound family, out-of-range rank,
+  material overrides, rules), each executor seam, standalone staffing, the
+  planner material channel, live change, and compatibility.

@@ -24,3 +24,8 @@ This directory may remain empty when there is no active planning material.
   task (worker call, general-purpose Brainstorming, future types),
   launchable from a milestone or standalone, typed at planning time under
   operator control.
+- [`staffing-router/goal.md`](staffing-router/goal.md) — one router service
+  decides agent, model, and effort for every call (milestone, Brainstorming,
+  standalone, calling product) from owner-opened sessions: numeric families,
+  per-family tuning, per-role assignment, materials as overrides, programmable
+  rules; `worker` renamed to `agent_call`.
