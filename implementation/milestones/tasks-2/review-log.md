@@ -548,3 +548,65 @@
 - `claude-claude-S7-001` (raised claude, cleared codex): Direct Worker accounting and staffing are pinned to the run-scoped driver call marker and to `tasks.task_accounting`, neither of which can supply them for a standalone order; the note's own non-goals then forbid the only addition that could, so the 'complete duration, token, and two-reading cost evidence' acceptance criterion and its test 4 anchor on a seam that does not exist on this path. — The note repeatedly pins a nonexistent run-scoped marker/projection as standalone authority, plausibly steering implementation toward unauthorized machinery, while the first direct-Worker accounting test exposes it and correction remains bounded to Slice 7's Worker host and accounting handoff.
 - `claude-claude-S7-002` (raised claude, cleared codex): The note invents a declared-reference containment gate ('references may resolve only beneath the authorized primary/additional roots', proved by test 2) that no prior slice or the skeleton authorizes, whose cited authority is about `output_directory` only, that protects nothing under this slice's own design, and that converts ordinary non-path or out-of-root reference strings into `invalid_task_request` refusals. — The hard register and test 2 explicitly direct the builder to implement the unauthorized reference-containment refusal, making silent wrong code and tests likely, but correction is a small local removal of that gate and its assertions once a valid opaque reference is rejected.
 
+## slice_impl-07 (Standalone task API)
+
+- draft: kind `implement`, artifact `-` (raw: `implementation/milestones/tasks-2/.run/raw/slice_impl-07-draft.txt`)
+
+| Round | Kind | Family | Findings | Triage | Raw |
+|---|---|---|---|---|---|
+| slice_impl-07-codex-r1 | review_round | codex | 6 | 6 reported | `implementation/milestones/tasks-2/.run/raw/slice_impl-07-codex-r1.txt` |
+| slice_impl-07-codex-r2 | fix_findings | codex | 4 | 4 fixed | `implementation/milestones/tasks-2/.run/raw/slice_impl-07-fix1.txt` |
+| slice_impl-07-codex-r3 | delta_review | codex | 1 | 1 reported | `implementation/milestones/tasks-2/.run/raw/slice_impl-07-delta1.txt` |
+| slice_impl-07-codex-r4 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/tasks-2/.run/raw/slice_impl-07-fix2.txt` |
+| slice_impl-07-codex-r5 | delta_review | codex | 1 | 1 reported | `implementation/milestones/tasks-2/.run/raw/slice_impl-07-delta2.txt` |
+| slice_impl-07-codex-r6 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/tasks-2/.run/raw/slice_impl-07-fix3.txt` |
+| slice_impl-07-codex-r7 | delta_review | codex | 0 | clean | `implementation/milestones/tasks-2/.run/raw/slice_impl-07-delta3.txt` |
+| slice_impl-07-codex-r8 | review_round | codex | 2 | DEBT-CLEAN (reclassified) | `implementation/milestones/tasks-2/.run/raw/slice_impl-07-codex-r2.txt` |
+| slice_impl-07-claude-r1 | review_round | claude | 4 | 4 reported | `implementation/milestones/tasks-2/.run/raw/slice_impl-07-claude-r1.txt` |
+| slice_impl-07-codex-r9 | fix_findings | codex | 3 | 3 fixed | `implementation/milestones/tasks-2/.run/raw/slice_impl-07-fix4.txt` |
+| slice_impl-07-codex-r10 | delta_review | codex | 1 | 1 reported | `implementation/milestones/tasks-2/.run/raw/slice_impl-07-delta4.txt` |
+| slice_impl-07-codex-r11 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/tasks-2/.run/raw/slice_impl-07-fix5.txt` |
+| slice_impl-07-codex-r12 | delta_review | codex | 0 | clean | `implementation/milestones/tasks-2/.run/raw/slice_impl-07-delta5.txt` |
+| slice_impl-07-codex-r13 | review_round | codex | 1 | 1 reported | `implementation/milestones/tasks-2/.run/raw/slice_impl-07-codex-r3.txt` |
+| slice_impl-07-codex-r14 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/tasks-2/.run/raw/slice_impl-07-fix6.txt` |
+| slice_impl-07-codex-r15 | delta_review | codex | 0 | clean | `implementation/milestones/tasks-2/.run/raw/slice_impl-07-delta6.txt` |
+| slice_impl-07-codex-r16 | review_round | codex | 2 | 2 reported | `implementation/milestones/tasks-2/.run/raw/slice_impl-07-codex-r4.txt` |
+| slice_impl-07-codex-r17 | fix_findings | codex | 2 | 2 fixed | `implementation/milestones/tasks-2/.run/raw/slice_impl-07-fix7.txt` |
+| slice_impl-07-codex-r18 | delta_review | codex | 0 | clean | `implementation/milestones/tasks-2/.run/raw/slice_impl-07-delta7.txt` |
+| slice_impl-07-codex-r19 | review_round | codex | 1 | DEBT-CLEAN (reclassified) | `implementation/milestones/tasks-2/.run/raw/slice_impl-07-codex-r5.txt` |
+| slice_impl-07-claude-r2 | review_round | claude | 3 | 3 reported | `implementation/milestones/tasks-2/.run/raw/slice_impl-07-claude-r2.txt` |
+| slice_impl-07-codex-r20 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/tasks-2/.run/raw/slice_impl-07-fix8.txt` |
+| slice_impl-07-codex-r21 | delta_review | codex | 0 | clean | `implementation/milestones/tasks-2/.run/raw/slice_impl-07-delta8.txt` |
+| slice_impl-07-codex-r22 | review_round | codex | 2 | 2 reported | `implementation/milestones/tasks-2/.run/raw/slice_impl-07-codex-r6.txt` |
+| slice_impl-07-codex-r23 | fix_findings | codex | 2 | 2 fixed | `implementation/milestones/tasks-2/.run/raw/slice_impl-07-fix9.txt` |
+| slice_impl-07-codex-r24 | delta_review | codex | 1 | 1 reported | `implementation/milestones/tasks-2/.run/raw/slice_impl-07-delta9.txt` |
+| slice_impl-07-codex-r25 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/tasks-2/.run/raw/slice_impl-07-fix10.txt` |
+| slice_impl-07-codex-r26 | delta_review | codex | 0 | clean | `implementation/milestones/tasks-2/.run/raw/slice_impl-07-delta10.txt` |
+| slice_impl-07-codex-r27 | review_round | codex | 1 | 1 reported | `implementation/milestones/tasks-2/.run/raw/slice_impl-07-codex-r7.txt` |
+| slice_impl-07-codex-r28 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/tasks-2/.run/raw/slice_impl-07-fix11.txt` |
+| slice_impl-07-codex-r29 | delta_review | codex | 0 | clean | `implementation/milestones/tasks-2/.run/raw/slice_impl-07-delta11.txt` |
+| slice_impl-07-codex-r30 | review_round | codex | 1 | 1 reported | `implementation/milestones/tasks-2/.run/raw/slice_impl-07-codex-r8.txt` |
+| slice_impl-07-codex-r31 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/tasks-2/.run/raw/slice_impl-07-fix12.txt` |
+| slice_impl-07-codex-r32 | delta_review | codex | 0 | clean | `implementation/milestones/tasks-2/.run/raw/slice_impl-07-delta12.txt` |
+| slice_impl-07-codex-r33 | review_round | codex | 1 | 1 reported | `implementation/milestones/tasks-2/.run/raw/slice_impl-07-codex-r9.txt` |
+| slice_impl-07-codex-r34 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/tasks-2/.run/raw/slice_impl-07-fix13.txt` |
+| slice_impl-07-codex-r35 | delta_review | codex | 0 | clean | `implementation/milestones/tasks-2/.run/raw/slice_impl-07-delta13.txt` |
+| slice_impl-07-codex-r36 | review_round | codex | 0 | clean | `implementation/milestones/tasks-2/.run/raw/slice_impl-07-codex-r10.txt` |
+| slice_impl-07-claude-r3 | review_round | claude | 2 | DEBT-CLEAN (reclassified) | `implementation/milestones/tasks-2/.run/raw/slice_impl-07-claude-r3.txt` |
+
+### Review completion — SATISFIED
+
+- deterministic result: every configured family was clean or debt-clean on the same current bytes; full verification was not due at this boundary; no extra reviewer was called
+- cited reviews: `slice_impl-07-codex-r36`, `slice_impl-07-claude-r3`
+
+**Deferred debt (opposite-family verified):**
+- `codex-codex-S7-005` (raised codex, cleared codex): Direct ordering canonicalizes output_directory twice — Both gates invoke the same canonicalizer and the second normally receives an already canonical absolute path, so downstream behavior is unchanged absent a narrow filesystem race, while correction is a local removal of the route-preparation call plus one focused assertion.
+- `codex-codex-S7-006` (raised codex, cleared codex): The focused Brainstorming integration proof is mocked away — The artifact explicitly claims same-id native recovery is proven while the focused test mocks the adapter and never restarts the service, so builders may silently trust a nonexistent guard, but correction is bounded to a real restart integration test and any local host/adapter fix it exposes.
+- `codex-codex-S7-009` (raised codex, cleared codex): Task storage failures expose raw operational errors — The generic task-list exception path violates the pinned no-raw-operational-errors behavior and lacks malformed-store coverage, so later API work could inherit the wrong public contract, but correction is a local error translation plus regression test and is exposed immediately by a corrupt-store re
+- `codex-codex-S7-010` (raised codex, cleared codex): Loaded standalone records are not schema-validated — The loader checks only that history is a list, so malformed rows can silently reach later panel consumers, but normal writes validate records and correction is a local load-time validator plus focused test.
+- `codex-codex-S7-013` (raised codex, cleared codex): A forbidden encoding rule governs output_directory — The shared validator and focused API test explicitly pin the forbidden UTF-8 rejection, plausibly misleading later conformance work, but correction is a small local validator/test change and the first escaped-surrogate order exposes it immediately.
+- `claude-claude-S7-002` (raised claude, cleared codex): The startup recovery scan reads and indexes the standalone task store outside the guard that is supposed to keep recovery task-local, so a single unreadable or malformed tasks.json prevents the entire service from starting. — The store-wide read occurs outside the task-local guard, so later builders can trust a false recovery guarantee and silently preserve the startup failure, but correction is a local guard plus one focused regression test with no downstream rework.
+- `claude-claude-S7-003` (raised claude, cleared codex): The focused Brainstorming order test never proves that omitted configuration freezes the catalogue defaults, and the launch inputs it captures are collected but never asserted, leaving two items of the note's Verification Contract unproved at the API layer. — The contract and implementation are correct and lower-level tests cover default resolution, but the focused API test’s unused launch capture leaves a plausible silent route-level regression whose correction is only a couple of local assertions.
+- `claude-claude-S7-101` (raised claude, cleared codex): The focused access/refusal test omits two cases the note's Verification Contract item 2 names: a malformed `configuration` refusal and an accepted reference inside the primary root. — The artifact falsely claims route-level coverage for two omitted cases, so later regressions could remain silently green, but both behaviors currently work and correction is only two local assertions.
+- `claude-claude-S7-102` (raised claude, cleared codex): The direct-Worker proof asserts only the cost reading on success, leaving 'complete' duration, token and marker accounting unpinned. — The slice falsely claims complete direct-Worker accounting test coverage while the focused success test asserts only cost and staffing-marker fields, so a capable builder could trust that stated proof and silently regress tokens, duration, partial flags, or marker copies, but correction is a small l
+

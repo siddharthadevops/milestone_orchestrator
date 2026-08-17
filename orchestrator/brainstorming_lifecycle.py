@@ -508,10 +508,12 @@ def _runtime_and_roster(
         or (not static_binding and not isinstance(order, list))
     ):
         raise PublicLifecycleError(503, UNAVAILABLE)
-    model_defaults = (
-        {} if static_binding else (config.get("model_defaults") or {})
-    )
+    model_defaults = {} if static_binding else (config.get("model_defaults") or {})
+    if not isinstance(model_defaults, dict):
+        raise PublicLifecycleError(503, UNAVAILABLE)
     timeouts = config.get("timeouts") or {}
+    if not isinstance(timeouts, dict):
+        raise PublicLifecycleError(503, UNAVAILABLE)
     probe = runners.SubprocessRunner(
         commands,
         timeouts,
@@ -571,6 +573,8 @@ def _runtime_and_roster(
             ):
                 continue
             defaults = model_defaults.get(family) or {}
+            if not isinstance(defaults, dict):
+                continue
             model = defaults.get("model")
             effort = defaults.get("effort")
             try:

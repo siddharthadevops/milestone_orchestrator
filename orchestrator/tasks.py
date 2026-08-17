@@ -5,6 +5,7 @@ Dispatch and executor lifecycle remain in their integration layers.
 
 from __future__ import annotations
 
+import json
 import math
 import os
 import uuid
@@ -126,6 +127,19 @@ def _text(value, context):
     return value
 
 
+def _path_text(value, context):
+    value = _text(value, context)
+    try:
+        value.encode("utf-8")
+    except UnicodeEncodeError as exc:
+        raise ContractError(
+            "%s contains an invalid path character" % context
+        ) from exc
+    if "\x00" in value:
+        raise ContractError("%s contains an invalid path character" % context)
+    return value
+
+
 def _json_copy(value, context):
     try:
         return kvstore.canonical_json_value(value)
@@ -165,14 +179,21 @@ def _validate_request(request):
             "task request.reference_documents must be a list"
         )
     checked["reference_documents"] = [
-        _text(reference, "task request.reference_documents[%d]" % index)
+        _path_text(reference, "task request.reference_documents[%d]" % index)
         for index, reference in enumerate(references)
     ]
     if "output_directory" in request:
-        checked["output_directory"] = _text(
+        checked["output_directory"] = _path_text(
             request["output_directory"], "task request.output_directory"
         )
-    return _json_copy(checked, "task request")
+    checked = _json_copy(checked, "task request")
+    try:
+        json.dumps(
+            checked, ensure_ascii=False, allow_nan=False
+        ).encode("utf-8")
+    except UnicodeEncodeError as exc:
+        raise ContractError("task request must contain only UTF-8 text") from exc
+    return checked
 
 
 def validate_request(request):

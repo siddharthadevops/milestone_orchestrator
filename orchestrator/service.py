@@ -205,6 +205,7 @@ from . import profiles
 from . import projects, registry, tasks
 from . import reuse_audit
 from . import state as st
+from . import task_api
 from . import workareas
 
 STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "static")
@@ -851,7 +852,7 @@ def project_route_segments(route):
     ]
 
 
-def projects_api(home, method, segments, body, query=None):
+def projects_api(home, method, segments, body, query=None, task_host=None):
     """Dispatch one /api/projects request. Returns (status, payload).
 
     `query` carries the decoded query parameters for the one route that
@@ -891,7 +892,9 @@ def projects_api(home, method, segments, body, query=None):
         if method == "POST":
             return 200, {
                 "ok": True,
-                **sync_project_git(home, segments[0], body),
+                **sync_project_git(
+                    home, segments[0], body, task_host=task_host
+                ),
             }
     elif n == 2 and segments[1] == "policies":
         if method == "POST":
@@ -3395,14 +3398,12 @@ def _git_sync_lease(home, workspace):
             _GIT_SYNC_LEASES.discard(key)
 
 
-def _require_unowned_workspace(home, workspace):
+def _require_unowned_workspace(home, workspace, task_host=None):
     """Refuse while any orchestrator work owns this worktree.
 
-    Two owners, not one: a milestone driver (wip commits, amends, gate
-    commits, the sealed-artifact guard) and a live Brainstorming session,
-    which owns its target document and restores the accepted revision after
-    every turn — a sync merging that file underneath would either lose its
-    own result or commit transient bytes.
+    A milestone driver, live Brainstorming session, or actively executing
+    standalone task can mutate the tree.  A sync merging underneath any of
+    them would either lose an accepted result or commit transient bytes.
     """
     reap_exited_drivers(home)
     runs = [
@@ -3411,6 +3412,9 @@ def _require_unowned_workspace(home, workspace):
         for entry in registry.load(home)["runs"]
     ]
     if gitsync.active_run_blocking(runs, workspace) is not None:
+        raise ApiError(409, WORK_AREA_BUSY)
+    owns_workspace = getattr(task_host, "owns_workspace", None)
+    if callable(owns_workspace) and owns_workspace(workspace):
         raise ApiError(409, WORK_AREA_BUSY)
     try:
         sessions = brainstorming_lifecycle.list_sessions(
@@ -3429,7 +3433,7 @@ def _require_unowned_workspace(home, workspace):
             raise ApiError(409, WORK_AREA_BUSY)
 
 
-def sync_project_git(home, slug, body):
+def sync_project_git(home, slug, body, task_host=None):
     """Hand one work area to the project's lead family to align with git.
 
     Authorization happened at the route. The refusal that stays here is
@@ -3473,7 +3477,7 @@ def sync_project_git(home, slug, body):
     # before either agent started, and a run could be launched into the
     # window between the check and the call.
     with _git_sync_lease(home, workspace):
-        _require_unowned_workspace(home, workspace)
+        _require_unowned_workspace(home, workspace, task_host=task_host)
         try:
             outcome = gitsync.run_sync(
                 config["commands"],
@@ -3530,7 +3534,7 @@ def require_brainstorming_access(home, who, record):
     require_brainstorming_project_access(home, who, slug)
 
 
-def _brainstorming_task_attachment(home, record):
+def _brainstorming_task_attachment(home, record, allow_missing=False):
     """Find the one registered durable task that owns a task session."""
     caller = record.get("caller")
     identities = (
@@ -3559,6 +3563,38 @@ def _brainstorming_task_attachment(home, record):
     )
     matches = []
     try:
+        direct = task_api.StandaloneTaskStore(home).records()
+    except Exception:
+        # A milestone attachment may still be authoritative.  If it is not,
+        # the ordinary no-unique-match refusal below remains conservative.
+        direct = []
+    for task in direct:
+        if (
+            task.get("id") == task_id
+            and (task.get("order") or {}).get("task_executor")
+            == "brainstorming"
+            and (task.get("resolved_staffing") or {}).get(
+                "dispatch_authority"
+            ) == authority
+        ):
+            try:
+                task_workspace = task_api._workspace(task)
+            except Exception:
+                continue
+            if (
+                isinstance(workspace, str)
+                and os.path.abspath(task_workspace)
+                != os.path.abspath(workspace)
+            ):
+                continue
+            matches.append({
+                "standalone": True,
+                "task_id": task_id,
+                "dispatch_authority": authority,
+                "terminal": task.get("result") is not None,
+                "record": task,
+            })
+    try:
         entries = registry.load(home).get("runs") or []
     except Exception as exc:
         raise ApiError(503, brainstorming_lifecycle.UNAVAILABLE) from exc
@@ -3586,6 +3622,7 @@ def _brainstorming_task_attachment(home, record):
         ]
         if len(owned) == 1:
             matches.append({
+                "standalone": False,
                 "state_path": os.path.abspath(entry["state_path"]),
                 "task_id": task_id,
                 "dispatch_authority": authority,
@@ -3593,6 +3630,8 @@ def _brainstorming_task_attachment(home, record):
             })
         elif len(owned) > 1:
             raise ApiError(503, brainstorming_lifecycle.UNAVAILABLE)
+    if not matches and allow_missing:
+        return None
     if len(matches) != 1:
         raise ApiError(503, brainstorming_lifecycle.UNAVAILABLE)
     return matches[0]
@@ -3671,7 +3710,7 @@ def _attached_brainstorming_model_profile_runtime(
     }
 
 
-def _start_brainstorming_session(home, who, session_id):
+def _start_brainstorming_session(home, who, session_id, task_host=None):
     """Resume task-owned sessions through their durable adapter boundary."""
     record = brainstorming_lifecycle._record_by_id(home, session_id)
     require_brainstorming_access(home, who, record)
@@ -3680,13 +3719,18 @@ def _start_brainstorming_session(home, who, session_id):
         session_id,
         lambda current: require_brainstorming_access(home, who, current),
     )
-    if projection["state"]["status"] in brainstorming.TERMINAL_STATUSES:
+    terminal = (
+        projection["state"]["status"] in brainstorming.TERMINAL_STATUSES
+    )
+    attachment = _brainstorming_task_attachment(
+        home, record, allow_missing=terminal
+    )
+    if terminal and attachment is None:
         return brainstorming_lifecycle.start_session(
             home,
             session_id,
             lambda current: require_brainstorming_access(home, who, current),
         )
-    attachment = _brainstorming_task_attachment(home, record)
     if attachment is None:
         return brainstorming_lifecycle.start_session(
             home,
@@ -3711,6 +3755,46 @@ def _start_brainstorming_session(home, who, session_id):
         if projection["state"]["status"] in brainstorming.TERMINAL_STATUSES:
             return projection
         raise ApiError(503, brainstorming_lifecycle.UNAVAILABLE)
+    if attachment["standalone"]:
+        # This is the recovery half of create_task's sync exclusion. Hold
+        # the same registry lock from lease inspection until the direct host
+        # has claimed the workspace, so a sync cannot begin in between.
+        with registry.locked(home):
+            store = task_api.StandaloneTaskStore(home)
+            state = {"tasks": store.records()}
+            task = tasks.task_record(state, attachment["task_id"])
+            if workspace_sync_in_flight(task_api._workspace(task)):
+                raise ApiError(409, WORK_AREA_BUSY)
+            try:
+                projection = brainstorming_tasks.start_task(
+                    state,
+                    attachment["task_id"],
+                    {},
+                    home,
+                    session_id=session_id,
+                )
+            except brainstorming_lifecycle.PublicLifecycleError:
+                raise
+            except brainstorming_tasks.AdapterError as exc:
+                raise ApiError(
+                    503, brainstorming_lifecycle.UNAVAILABLE
+                ) from exc
+            task = tasks.task_record(state, attachment["task_id"])
+            if task["result"] is not None:
+                try:
+                    store.record_result_locked(task["id"], task["result"])
+                except tasks.TaskRecordError:
+                    current = store.record(task["id"])
+                    if current["result"] is None:
+                        raise
+                raise ApiError(503, brainstorming_lifecycle.UNAVAILABLE)
+            if task_host is not None:
+                project = _task_project(task)
+                task_host.start(
+                    task,
+                    lambda: _direct_task_config(home, project),
+                )
+        return projection
     model_profile_runtime = (
         {
             "state_path": attachment["state_path"],
@@ -3818,10 +3902,267 @@ def visible_runs(home, who):
 
 
 # ---------------------------------------------------------------------------
+# Standalone tasks
+
+
+def _raise_task_request(exc):
+    status = 503 if exc.code == tasks.TASK_UNAVAILABLE else 400
+    raise ApiError(status, exc.code) from exc
+
+
+def _direct_task_config(home, project=None):
+    config = driver.load_config(None)
+    if project is None:
+        return config
+    record = registry.load_projects_record(home)
+    declared = registry.get_project(record, project)
+    if declared is None:
+        raise RuntimeError("project configuration is unavailable")
+    if declared.get("defaults"):
+        driver.merge_config(config, declared["defaults"])
+    return config
+
+
+def _projectless_task_work_area(who, value):
+    if not who.get("admin"):
+        raise ApiError(403, FORBIDDEN)
+    if set(value) != {"workspace_path", "primary", "additional"}:
+        raise tasks.TaskRequestError(
+            tasks.INVALID_TASK_REQUEST, "invalid project-less work area"
+        )
+    workspace = value["workspace_path"]
+    primary = value["primary"]
+    additional = value["additional"]
+    if (
+        not isinstance(workspace, str)
+        or not os.path.isabs(workspace)
+        or workspace != primary
+        or not os.path.isdir(workspace)
+        or not isinstance(additional, list)
+        or any(
+            not isinstance(root, str)
+            or not os.path.isabs(root)
+            or not os.path.isdir(root)
+            for root in additional
+        )
+    ):
+        raise tasks.TaskRequestError(
+            tasks.INVALID_TASK_REQUEST, "invalid project-less work area"
+        )
+    return copy.deepcopy(value)
+
+
+def _task_roots(work_area):
+    primary = work_area["primary"]
+    primary = primary.get("path") if isinstance(primary, dict) else primary
+    additional = []
+    for root in work_area.get("additional") or []:
+        additional.append(root.get("path") if isinstance(root, dict) else root)
+    return primary, [primary] + additional
+
+
+def _validate_task_references(order):
+    request = order["request"]
+    primary, roots = _task_roots(request["work_area"])
+    roots = [os.path.realpath(root) for root in roots]
+    for reference in request["reference_documents"]:
+        candidate = reference if os.path.isabs(reference) else os.path.join(
+            primary, reference
+        )
+        if not kvstore.path_is_inside_roots(os.path.realpath(candidate), roots):
+            raise tasks.TaskRequestError(
+                tasks.INVALID_TASK_REQUEST,
+                "task reference_documents must stay inside readable roots",
+            )
+    return primary
+
+
+def _resolve_direct_task_order(home, who, body):
+    try:
+        order = tasks.validate_order(body)
+        selector = order["request"]["work_area"]
+        if set(selector) == {"project", "work_area"}:
+            project = require_project_access(home, who, selector["project"])
+            binding = {
+                "directory": registry.projects_base(home),
+                "project": selector["project"],
+                "work_area": selector["work_area"],
+            }
+            if project.get("defaults"):
+                binding["defaults"] = project["defaults"]
+            try:
+                _workspace, work_area, config = driver._resolve_project_binding(
+                    binding, None, None
+                )
+            except driver.ProjectResolutionError as exc:
+                raise _work_area_error(exc.cause) from exc
+            project_slug = work_area["project"]
+        elif set(selector) == {"workspace_path", "primary", "additional"}:
+            work_area = _projectless_task_work_area(who, selector)
+            project_slug = None
+            config = _direct_task_config(home)
+        else:
+            raise tasks.TaskRequestError(
+                tasks.INVALID_TASK_REQUEST, "invalid task work area selector"
+            )
+        order["request"]["work_area"] = work_area
+        primary = _validate_task_references(order)
+        order = tasks._canonical_output_directory(order, primary)
+        if order["task_executor"] == "worker":
+            staffing = task_api.worker_staffing(config)
+        else:
+            staffing = brainstorming_tasks.resolve_staffing(
+                config, os.path.realpath(primary)
+            )
+        return order, staffing, primary, project_slug
+    except tasks.TaskRequestError as exc:
+        _raise_task_request(exc)
+
+
+def create_task(home, who, body, host):
+    order, staffing, primary, project = _resolve_direct_task_order(
+        home, who, body
+    )
+    store = task_api.StandaloneTaskStore(home)
+    resolver = lambda: _direct_task_config(home, project)
+    with registry.locked(home):
+        if workspace_sync_in_flight(primary):
+            raise ApiError(409, WORK_AREA_BUSY)
+        record = store.admit_locked(order, staffing, primary)
+        try:
+            host.start(record, resolver)
+        except Exception:
+            # Admission already succeeded. Preserve the acknowledged identity
+            # and make the observed handoff failure terminal when writable.
+            try:
+                store.record_result_locked(record["id"], {
+                    "status": "failure",
+                    "reason": "Task execution handoff failed",
+                    "duration_s": 0.0,
+                    "token_usage": None,
+                    "token_usage_partial": True,
+                    "cost": None,
+                    "cost_partial": True,
+                    "native_result": None,
+                })
+            except Exception:
+                pass
+    return record
+
+
+def _task_project(record):
+    work_area = ((record.get("order") or {}).get("request") or {}).get(
+        "work_area"
+    ) or {}
+    return work_area.get("project")
+
+
+def _allowed_task_projects(home, who):
+    if who.get("admin"):
+        return None
+    projects_record = registry.load_projects_record(home)
+    return {
+        project["slug"]
+        for project in projects_record.get("projects", [])
+        if panel_access.can_access_project(who, project)
+    }
+
+
+def _registered_task_records(home, allowed_projects=None):
+    records = []
+    for entry in registry.load(home)["runs"]:
+        if (
+            allowed_projects is not None
+            and _run_project(entry) not in allowed_projects
+        ):
+            continue
+        try:
+            state = st.load(entry["state_path"])
+            run_records = [
+                record for record in tasks.task_records(state)
+                if (
+                    allowed_projects is None
+                    or _task_project(record) in allowed_projects
+                )
+            ]
+        except Exception:
+            continue
+        records.extend(run_records)
+    return records
+
+
+def visible_tasks(home, who):
+    allowed = _allowed_task_projects(home, who)
+    direct = task_api.StandaloneTaskStore(home).records()
+    if allowed is not None:
+        direct = [
+            record for record in direct if _task_project(record) in allowed
+        ]
+    return direct + _registered_task_records(home, allowed)
+
+
+def read_task(home, who, task_id):
+    allowed = _allowed_task_projects(home, who)
+    direct = task_api.StandaloneTaskStore(home).records()
+    record = next(
+        (record for record in direct if record.get("id") == task_id), None
+    )
+    if record is not None:
+        if allowed is not None and _task_project(record) not in allowed:
+            raise ApiError(403, FORBIDDEN)
+        return record
+
+    entries = registry.load(home)["runs"]
+    if allowed is None:
+        accessible = entries
+        inaccessible = []
+    else:
+        accessible = [
+            entry for entry in entries if _run_project(entry) in allowed
+        ]
+        inaccessible = [
+            entry for entry in entries if _run_project(entry) not in allowed
+        ]
+
+    unreadable_accessible = False
+    for entry in accessible:
+        try:
+            state = st.load(entry["state_path"])
+            records = tasks.task_records(state)
+        except Exception:
+            unreadable_accessible = True
+            continue
+        record = next(
+            (row for row in records if row.get("id") == task_id), None
+        )
+        if record is not None:
+            if allowed is not None and _task_project(record) not in allowed:
+                raise ApiError(403, FORBIDDEN)
+            return record
+
+    # Preserve the public foreign-record classification without letting an
+    # unreadable, unauthorized run couple its faults to another inspection.
+    for entry in inaccessible:
+        try:
+            state = st.load(entry["state_path"])
+            records = tasks.task_records(state)
+        except Exception:
+            continue
+        if any(row.get("id") == task_id for row in records):
+            raise ApiError(403, FORBIDDEN)
+
+    if unreadable_accessible:
+        raise ApiError(500, "task storage unavailable")
+    raise ApiError(404, "not found")
+
+
+# ---------------------------------------------------------------------------
 # HTTP layer
 
 
-def make_handler(home):
+def make_handler(home, task_host=None):
+    task_host = task_host or task_api.DirectTaskHost(home)
+
     class Handler(BaseHTTPRequestHandler):
         def _route(self):
             """Split the request target into (path, query dict)."""
@@ -3868,6 +4209,24 @@ def make_handler(home):
                     self._static("panel.html", "text/html; charset=utf-8")
                 elif route == "/api/access":
                     self._json(200, {"ok": True, **access_view(who, home)})
+                elif route == "/api/task-executors":
+                    self._json(200, {
+                        "ok": True,
+                        "task_executors": tasks.task_executor_catalogue(),
+                    })
+                elif route == "/api/tasks":
+                    self._json(
+                        200, {"ok": True, "tasks": visible_tasks(home, who)}
+                    )
+                elif route.startswith("/api/tasks/"):
+                    parts = route.rstrip("/").split("/")
+                    if len(parts) == 4 and parts[3]:
+                        self._json(200, {
+                            "ok": True,
+                            "task": read_task(home, who, parts[3]),
+                        })
+                    else:
+                        self._json(404, {"ok": False, "error": "not found"})
                 elif route == "/api/runs":
                     self._json(200, {"ok": True, "runs": visible_runs(home, who)})
                 elif route == "/api/recents":
@@ -4066,7 +4425,10 @@ def make_handler(home):
                 brainstorming_lifecycle.reap_children(home)
                 route, _query = self._route()
                 who = self._who()
-                if route == "/api/brainstorming/sessions":
+                if route == "/api/tasks":
+                    task = create_task(home, who, self._task_body(), task_host)
+                    self._json(201, {"ok": True, "task": task})
+                elif route == "/api/brainstorming/sessions":
                     body = self._brainstorming_body()
                     checked = brainstorming_lifecycle.validate_create_body(
                         body
@@ -4168,7 +4530,7 @@ def make_handler(home):
                             )
                         else:
                             session = _start_brainstorming_session(
-                                home, who, parts[4]
+                                home, who, parts[4], task_host=task_host
                             )
                         self._json(
                             200, {"ok": True, "session": session}
@@ -4204,6 +4566,7 @@ def make_handler(home):
                     status, payload = projects_api(
                         home, "POST", segments,
                         self._body(),
+                        task_host=task_host,
                     )
                     self._json(status, payload)
                 elif route.startswith("/api/runs/"):
@@ -4378,6 +4741,14 @@ def make_handler(home):
                     raise ApiError(
                         400, brainstorming_lifecycle.INVALID_REQUEST
                     ) from exc
+                raise
+
+        def _task_body(self):
+            try:
+                return self._body()
+            except ApiError as exc:
+                if exc.status in (400, 413):
+                    raise ApiError(400, tasks.INVALID_TASK_REQUEST) from exc
                 raise
 
         def _json(self, status, payload):
@@ -4580,7 +4951,7 @@ def start_guard(home, interval=GUARD_INTERVAL_S):
     return t
 
 
-def make_server(home, port):
+def make_server(home, port, task_host=None):
     # Seed the two starter strategy profiles (strict, light) when missing,
     # so the panel's new-run selector always has something to offer.
     # Idempotent and best-effort: a seed-write fault must never stop the
@@ -4595,7 +4966,11 @@ def make_server(home, port):
     # rewritten), so a seed or validation failure here stops startup
     # visibly instead of serving without the guaranteed catalogue entry.
     model_profiles.ensure_default(home)
-    return ThreadingHTTPServer(("127.0.0.1", port), make_handler(home))
+    if task_host is None:
+        task_host = task_api.DirectTaskHost(home)
+    return ThreadingHTTPServer(
+        ("127.0.0.1", port), make_handler(home, task_host=task_host)
+    )
 
 
 def serve(home, port, open_browser=False):

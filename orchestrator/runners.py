@@ -1066,6 +1066,12 @@ def apply_model_effort(argv, model, effort):
     whose model/effort live in its own config) ignore the overrides. A
     placeholder left without a value is a config error — passing the
     literal brace-string to a CLI would fail cryptically."""
+    if (
+        not isinstance(argv, list)
+        or not argv
+        or any(not isinstance(argument, str) for argument in argv)
+    ):
+        raise RunnerError("command template must be a non-empty list of strings")
     out = list(argv)
     for name, value in (("{model}", model), ("{effort}", effort)):
         if any(name in a for a in out):

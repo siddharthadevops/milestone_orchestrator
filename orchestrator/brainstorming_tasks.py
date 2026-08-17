@@ -455,6 +455,7 @@ def _start_task_exclusive(
     model_profile_runtime=None,
     launcher=None,
     session_id=None,
+    pre_session_failure_reason=None,
 ):
     """Launch, or resume, the one private session owned by an open task."""
     record = _task_record(state, task_id)
@@ -534,6 +535,9 @@ def _start_task_exclusive(
     if authority_failure_reason is not None:
         _fail_before_session(state, task_id, authority_failure_reason)
         return None
+    if pre_session_failure_reason is not None:
+        _fail_before_session(state, task_id, pre_session_failure_reason)
+        return None
 
     created_work_area = None
     try:
@@ -598,6 +602,7 @@ def start_task(
     model_profile_runtime=None,
     launcher=None,
     session_id=None,
+    pre_session_failure_reason=None,
 ):
     """Launch or resume under the task's one lifecycle serialization lock."""
     record = _task_record(state, task_id)
@@ -620,6 +625,7 @@ def start_task(
             model_profile_runtime=model_profile_runtime,
             launcher=launcher,
             session_id=session_id,
+            pre_session_failure_reason=pre_session_failure_reason,
         )
 
 
