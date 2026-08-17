@@ -630,3 +630,31 @@
 - `claude-claude-S8-002` (raised claude, cleared codex): The direct-order form pins operator-entered `context` and ordered `reference_documents` (lines 76-78, 180, 194-196) without declaring what the selected executor actually receives. On the default Worker path only `request["request"]` is dispatched to the model (`orchestrator/task_api.py:311-317`); context and references are frozen in the record but never delivered. Brainstorming does deliver both (`orchestrator/brainstorming_tasks.py:234-256`). The note's acceptance criteria and guarantee posture are silent, so the form promises effect by presentation to the one audience that cannot read B5. — The note requires operator-facing context and reference inputs and tests only their serialization while Worker silently ignores them, so the builder can confidently lock in misleading behavior without triggering its stop path, but correction is a small local form, wording, and test adjustment once s
 - `claude-claude-S8-003` (raised claude, cleared codex): The Size posture (lines 157-162) asserts the slice should stay under about 500 non-mechanical changed lines and records no overrun reason, but the closest comparable in this repo — one catalogue-driven panel surface plus its focused checks, model-profiles slice 06 (commit 40eb3c1: `orchestrator/static/panel.html` +351, `orchestrator/tests/test_service_api.py` +348) — needed roughly 700. Slice 8 adds strictly more: a full direct-order form (work-area binding, executor presenter, request/context, ordered references, output directory, generated configuration controls), per-slice producer launch points, a producer dialog, and a new focused test module. — The ~500-line target is implausible against the 699-line smaller comparator, but the explicit acceptance and verification lists should make a capable builder stop rather than silently omit scope; if it nevertheless trims functionality or tests to fit, restoring them is bounded Slice 8 rework caught 
 
+## slice_impl-08 (Task ordering and selection panel)
+
+- draft: kind `implement`, artifact `-` (raw: `implementation/milestones/tasks-2/.run/raw/slice_impl-08-draft.txt`)
+
+| Round | Kind | Family | Findings | Triage | Raw |
+|---|---|---|---|---|---|
+| slice_impl-08-codex-r1 | review_round | codex | 1 | 1 reported | `implementation/milestones/tasks-2/.run/raw/slice_impl-08-codex-r1.txt` |
+| slice_impl-08-codex-r2 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/tasks-2/.run/raw/slice_impl-08-fix1.txt` |
+| slice_impl-08-codex-r3 | delta_review | codex | 0 | clean | `implementation/milestones/tasks-2/.run/raw/slice_impl-08-delta1.txt` |
+| slice_impl-08-codex-r4 | review_round | codex | 0 | clean | `implementation/milestones/tasks-2/.run/raw/slice_impl-08-codex-r2.txt` |
+| slice_impl-08-claude-r1 | review_round | claude | 4 | 4 reported | `implementation/milestones/tasks-2/.run/raw/slice_impl-08-claude-r1.txt` |
+| slice_impl-08-codex-r5 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/tasks-2/.run/raw/slice_impl-08-fix2.txt` |
+| slice_impl-08-codex-r6 | delta_review | codex | 0 | clean | `implementation/milestones/tasks-2/.run/raw/slice_impl-08-delta2.txt` |
+| slice_impl-08-codex-r7 | review_round | codex | 1 | DEBT-CLEAN (reclassified) | `implementation/milestones/tasks-2/.run/raw/slice_impl-08-codex-r3.txt` |
+| slice_impl-08-claude-r2 | review_round | claude | 0 | clean | `implementation/milestones/tasks-2/.run/raw/slice_impl-08-claude-r2.txt` |
+
+### Review completion — SATISFIED
+
+- deterministic result: every configured family was clean or debt-clean on the same current bytes; the scheduled full verification passed; no extra reviewer was called
+- cited reviews: `slice_impl-08-codex-r7`, `slice_impl-08-claude-r2`
+- scheduled verification event: `1291`
+
+**Deferred debt (opposite-family verified):**
+- `claude-claude-S8-002` (raised claude, cleared codex): The schema-derived integer control coerces a cleared field to 0 instead of blocking it, so the panel submits a configuration value the catalogue schema forbids. — The empty number control passes browser validity and becomes 0, but the server immediately refuses it before admission, making this behavior defect self-revealing and its correction a small local validation fix.
+- `claude-claude-S8-003` (raised claude, cleared codex): The focused panel checks do not prove Verification Contract case 4 — that a frozen/busy/invalid/unknown/unavailable response keeps the last confirmed view — so an optimistic-apply regression would pass all five tests. — The focused suite falsely appears to protect a pinned acknowledged-view behavior while never exercising refusal tokens or retained state, so a nearby panel refactor could silently regress it, but correction is only a local apply-after-success fix plus one focused refusal test.
+- `claude-claude-S8-004` (raised claude, cleared codex): The project/work-area binding and reference-list logic is copied rather than reused, adding a third near-identical set of helpers to panel.html and already diverging from the pattern it copied. — The live task picker encodes and leaves untested the wrong admin scope, so a later builder could trust and extend that behavior silently, but correction is a small local helper-reuse fix exposed by the first admin picker check.
+- `codex-codex-S8-20260817-01` (raised codex, cleared codex): Reopening the direct-task form can expose an enabled stale project selection backed by an empty client model — The form clears its project model without clearing or disabling the rendered selection, causing a timing-dependent silent submit failure likely to survive ordinary checks, but correction is a local reset/guard plus one focused regression test.
+

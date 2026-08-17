@@ -378,6 +378,28 @@
   #formError { color: var(--bad); font-size: 12px; margin-right: auto; }
   .pathrow { display: flex; gap: 6px; }
   .pathrow input { flex: 1; }
+  #taskform { width: min(680px, 92vw); max-height: 90vh; overflow-y: auto; }
+  #taskform .field > select { width: 100%; border: 1px solid var(--line);
+    border-radius: 8px; padding: 7px 10px; font: inherit; background: #fff; }
+  .executor-card { border: 1px solid var(--line); border-radius: 8px;
+    background: var(--panel); padding: 10px 12px; margin-bottom: 12px; }
+  .executor-card h3 { font-size: 14px; margin-bottom: 3px; }
+  .executor-meta { margin-top: 5px; color: var(--dim); font-size: 12px; }
+  .executor-examples { margin: 5px 0 0 18px; font-size: 12px; }
+  .executor-config { display: grid; grid-template-columns: minmax(120px, 1fr)
+    minmax(160px, 2fr); align-items: center; gap: 7px 10px; }
+  .executor-config label { color: var(--dim); font-size: 12px; }
+  .executor-config input, .executor-config select { min-width: 0; width: 100%;
+    border: 1px solid var(--line); border-radius: 8px; padding: 6px 8px;
+    font: inherit; background: #fff; }
+  .task-accepted { color: var(--ok); font-size: 12px; margin-bottom: 10px; }
+  .producer-choices { display: inline-flex; flex-wrap: wrap; gap: 5px;
+    margin-left: 10px; vertical-align: middle; }
+  .producer-choice { border: 1px solid var(--line); border-radius: 9px;
+    background: #fff; color: #52525b; padding: 2px 7px; font: inherit;
+    font-size: 10.5px; font-weight: 500; cursor: pointer; }
+  .producer-choice:hover { color: var(--accent); border-color: #c3d4fb;
+    background: var(--accent-soft); }
   #strategyprofilesdlg, #strategyprofileeditor {
     width: min(760px, 92vw); max-height: 90vh; overflow-y: auto; }
   .strategy-decisions { border: 1px solid var(--line); border-radius: 8px;
@@ -559,6 +581,7 @@
     .strategy-support { white-space: normal; }
     .storybody { min-width: 0; max-width: none; }
     .actgrid { grid-template-columns: 70px 1fr 1.45fr .95fr; }
+    .executor-config { grid-template-columns: 1fr; }
     .pathrow { flex-wrap: wrap; }
   }
   .cost-equivalent { opacity: .55; }
@@ -840,6 +863,51 @@
     <span id="bsError" style="color:var(--bad);font-size:12px;margin-right:auto"></span>
     <button class="btn" onclick="document.getElementById('bsform').close()">Cancel</button>
     <button class="btn primary" id="b_submit" onclick="submitBrainstorming()">Start session</button>
+  </div>
+</dialog>
+
+<dialog id="taskform"
+  oncancel="if (taskSubmitPending) event.preventDefault()">
+  <h2 id="task_title">Order task</h2>
+  <div id="task_direct_fields">
+    <div class="field"><label>Project *</label>
+      <div class="pathrow">
+        <select id="t_project" onchange="onTaskProject()"></select>
+        <select id="t_area" onchange="onTaskArea()" style="display:none"></select>
+      </div>
+      <div class="hint" id="t_resolved"></div></div>
+    <div class="field"><label>Request *</label>
+      <textarea id="t_request" placeholder="Describe the result or effect to produce…"></textarea></div>
+    <div class="field"><label>Context</label>
+      <textarea id="t_context" placeholder="Background the executor should use…"></textarea></div>
+    <div class="field"><label>Reference documents</label>
+      <div id="t_refs_list"></div>
+      <div class="pathrow">
+        <input id="t_ref_input" class="mono" placeholder="docs/reference.md">
+        <button class="btn" type="button" id="t_ref_browse"
+          onclick="browseTaskReference()">Browse…</button>
+        <button class="btn" type="button" onclick="addTaskReference()">Add</button>
+      </div>
+      <div class="hint">Added order is preserved in the task request.</div></div>
+    <div class="field"><label>Output directory (optional)</label>
+      <div class="pathrow">
+        <input id="t_output" class="mono" placeholder="artifacts/task-output">
+        <button class="btn" type="button" id="t_output_browse"
+          onclick="browseTaskOutputDirectory()">Browse…</button>
+      </div></div>
+  </div>
+  <div id="task_producer_context" class="executor-meta" style="display:none"></div>
+  <div class="field"><label>TaskExecutor *</label>
+    <select id="t_executor" onchange="onTaskExecutorChange()"></select></div>
+  <div id="task_executor_details"></div>
+  <div id="task_configuration"></div>
+  <div id="task_catalogue_error" class="failure" style="display:none"></div>
+  <div id="task_accepted" class="task-accepted" style="display:none"></div>
+  <div class="formrow">
+    <span id="task_error" style="color:var(--bad);font-size:12px;margin-right:auto"></span>
+    <button class="btn" id="task_close"
+      onclick="document.getElementById('taskform').close()">Close</button>
+    <button class="btn primary" id="task_submit" onclick="submitTaskForm()">Order task</button>
   </div>
 </dialog>
 
@@ -1274,6 +1342,7 @@ const ICONS = {
   // The two kinds of work a project holds. A flag marks the staged climb
   // of a milestone; a lamp marks a bounded discussion.
   milestone: `<svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V4s-1 1-4 1-5-2-8-2-4 1-4 1Z"/><path d="M4 22v-7"/></svg>`,
+  task: `<svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>`,
   brainstorm: `<svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 18h6"/><path d="M10 22h4"/><path d="M15.1 14a5 5 0 1 0-6.2 0c.6.5 1.1 1.2 1.1 2h4c0-.8.5-1.5 1.1-2Z"/></svg>`,
   sync: `<svg class="ui-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M21 2v6h-6"/><path d="M3 12a9 9 0 0 1 15-6.7L21 8"/><path d="M3 22v-6h6"/><path d="M21 12a9 9 0 0 1-15 6.7L3 16"/></svg>`,
 };
@@ -2261,6 +2330,8 @@ function groupHeader(key, label) {
            <button class="grpmenu-item" type="button" role="menuitem"
              onclick="newMilestone(event, '${safeKey}')">${ICONS.milestone}<span>New milestone</span></button>
            <button class="grpmenu-item" type="button" role="menuitem"
+             onclick="newTask(event, '${safeKey}')">${ICONS.task}<span>New task</span></button>
+           <button class="grpmenu-item" type="button" role="menuitem"
              onclick="newBrainstorming(event, '${safeKey}')">${ICONS.brainstorm}<span>New brainstorming</span></button>
            ${projectAdmin ? `<div class="grpmenu-sep"></div>
            <button class="grpmenu-item" type="button" role="menuitem"
@@ -2345,6 +2416,11 @@ function newMilestone(event, key) {
   event.stopPropagation();
   closeProjectMenu();
   openForm(key);
+}
+function newTask(event, key) {
+  event.stopPropagation();
+  closeProjectMenu();
+  openDirectTaskForm(key);
 }
 function newBrainstorming(event, key) {
   event.stopPropagation();
@@ -3832,9 +3908,14 @@ async function refreshDetail() {
       </div>`;
     }  // end of the settings page's cards
     if (runView !== "edit" && sum) {
+      visibleProducerRunId = runId;
+      visibleSliceProducers = new Map((sum.slices || []).map(slice => [
+        slice.id, slice.producer_task_executor || {},
+      ]));
       const sliceTitle = id => {
         const sl = (sum.slices || []).find(x => x.id === id);
-        return sl ? `<span class="unit-title">${esc(sl.title)}</span>` : "";
+        return sl ? `<span class="unit-title">${esc(sl.title)}</span>${
+          producerControls(sl.id, sl.producer_task_executor)}` : "";
       };
       const catRow = (label, title, stat, duration, tokens,
                       tokenPartial, cls = "", cost = null,
@@ -5449,6 +5530,384 @@ function launchBinding() {
   const w = boundArea();
   if (!w) return undefined;
   return {project: launchProjects[+pi].slug, work_area: w.record.name};
+}
+
+/* ---- task ordering and slice producer selection (tasks-2 slice 8): one
+       catalogue-driven editor serves both writes. It owns only transient form
+       state; the service owns admission, validation, freezing, and the latest
+       effective producer map. ---- */
+let taskFormMode = "direct";
+let taskProducerTarget = null;
+let taskProjects = [];
+let taskReferences = [];
+let taskExecutorCatalogue = [];
+let taskExecutorSelected = "";
+let taskExecutorDrafts = {};
+let taskCatalogueSeq = 0;
+let taskDialogSeq = 0;
+let taskSubmitPending = false;
+let visibleSliceProducers = new Map();
+let visibleProducerRunId = null;
+
+function setTaskMessage(id, message) {
+  const el = document.getElementById(id);
+  el.textContent = message || "";
+  el.style.display = message ? "" : "none";
+}
+function syncTaskSubmitDisabled() {
+  document.getElementById("task_submit").disabled =
+    taskSubmitPending || !taskExecutorSelected;
+  document.getElementById("task_close").disabled = taskSubmitPending;
+}
+function resetTaskDialog(mode) {
+  taskDialogSeq += 1;
+  taskFormMode = mode;
+  taskExecutorDrafts = {};
+  taskExecutorSelected = "";
+  document.getElementById("task_error").textContent = "";
+  document.getElementById("task_error").style.display = "";
+  setTaskMessage("task_accepted", "");
+  setTaskMessage("task_catalogue_error", "");
+  const direct = mode === "direct";
+  document.getElementById("task_direct_fields").style.display = direct ? "" : "none";
+  document.getElementById("task_producer_context").style.display = direct ? "none" : "";
+  document.getElementById("task_submit").textContent = direct ? "Order task" : "Save producer";
+  syncTaskSubmitDisabled();
+}
+function openDirectTaskForm(preselect) {
+  resetTaskDialog("direct");
+  taskProducerTarget = null;
+  taskReferences = [];
+  for (const id of ["t_request", "t_context", "t_ref_input", "t_output"])
+    document.getElementById(id).value = "";
+  document.getElementById("task_title").textContent = "Order task";
+  renderTaskReferences();
+  document.getElementById("taskform").showModal();
+  loadTaskProjects(preselect);
+  loadTaskExecutorCatalogue();
+}
+async function loadTaskProjects(preselect) {
+  const dialogSeq = taskDialogSeq;
+  taskProjects = [];
+  let projects = [];
+  let fault = "";
+  try {
+    const data = await api("/api/projects");
+    projects = data.projects || [];
+  } catch (e) { fault = "projects unavailable: " + e.message; }
+  if (dialogSeq !== taskDialogSeq || taskFormMode !== "direct") return;
+  taskProjects = projects;
+  const select = document.getElementById("t_project");
+  select.innerHTML = projectOptions(
+    taskProjects, "— no projects declared — use “+ Project” first —"
+  );
+  selectProjectSlug(select, taskProjects, preselect);
+  onTaskProject();
+  if (fault) document.getElementById("t_resolved").textContent = fault;
+}
+function onTaskProject() {
+  const index = document.getElementById("t_project").value;
+  const area = document.getElementById("t_area");
+  const project = index === "" ? null : taskProjects[+index];
+  const several = project && project.work_areas.length > 1;
+  area.innerHTML = !several ? "" :
+    `<option value="">— work area —</option>` +
+    project.work_areas.map((item, i) =>
+      `<option value="${i}">${esc(item.record.name)} — ${esc(item.record.status)} v${item.record.version}</option>`
+    ).join("");
+  area.style.display = several ? "" : "none";
+  area.value = "";
+  onTaskArea();
+}
+function taskBoundArea() {
+  const projectIndex = document.getElementById("t_project").value;
+  if (projectIndex === "") return null;
+  const project = taskProjects[+projectIndex];
+  if (project.work_areas.length === 1) return project.work_areas[0];
+  const areaIndex = document.getElementById("t_area").value;
+  return areaIndex === "" ? null : project.work_areas[+areaIndex];
+}
+function taskBinding() {
+  const projectIndex = document.getElementById("t_project").value;
+  const area = taskBoundArea();
+  if (projectIndex === "" || !area) return null;
+  return {
+    project: taskProjects[+projectIndex].slug,
+    work_area: area.record.name,
+  };
+}
+function taskPickerScope() {
+  return taskBinding();
+}
+function syncTaskPickers() {
+  const usable = appAccess.admin || !!taskPickerScope();
+  for (const id of ["t_ref_browse", "t_output_browse"])
+    document.getElementById(id).style.display = usable ? "" : "none";
+}
+function onTaskArea() {
+  const index = document.getElementById("t_project").value;
+  const out = document.getElementById("t_resolved");
+  syncTaskPickers();
+  if (index === "") { out.textContent = ""; return; }
+  const project = taskProjects[+index];
+  if (!project.work_areas.length) {
+    out.textContent = `project “${project.slug}” has no work area yet`;
+    return;
+  }
+  const area = taskBoundArea();
+  out.textContent = area
+    ? `will execute in ${area.record.primary.path} — project “${project.slug}” / work area “${area.record.name}” (${area.record.status})`
+    : "this project declares several work areas — pick the one to execute in";
+}
+function taskAreaRoot() {
+  const area = taskBoundArea();
+  return area ? area.record.primary.path : null;
+}
+function taskRelative(path) {
+  const root = taskAreaRoot();
+  return root && path.startsWith(root + "/") ? path.slice(root.length + 1) : path;
+}
+function browseTaskReference() {
+  openPicker("file", "t_ref_input", false, taskAreaRoot() || undefined,
+             taskRelative, taskPickerScope());
+}
+function browseTaskOutputDirectory() {
+  openPicker("dir", "t_output", false, taskAreaRoot() || undefined,
+             taskRelative, taskPickerScope());
+}
+function renderTaskReferences() {
+  document.getElementById("t_refs_list").innerHTML = taskReferences.map((ref, i) => `
+    <div class="refrow"><span class="refpath mono" title="${esc(ref)}">${esc(ref)}</span>
+      <button class="roster-x" type="button" title="Move up"
+        onclick="moveTaskReference(${i},-1)"${i === 0 ? " disabled" : ""}>↑</button>
+      <button class="roster-x" type="button" title="Move down"
+        onclick="moveTaskReference(${i},1)"${i === taskReferences.length - 1 ? " disabled" : ""}>↓</button>
+      <button class="roster-x" type="button" title="Remove reference"
+        onclick="removeTaskReference(${i})">×</button></div>`).join("");
+}
+function addTaskReference() {
+  const input = document.getElementById("t_ref_input");
+  const value = input.value.trim();
+  if (!value) return;
+  if (!taskReferences.includes(value)) taskReferences.push(value);
+  input.value = "";
+  renderTaskReferences();
+}
+function moveTaskReference(index, delta) {
+  const other = index + delta;
+  if (other < 0 || other >= taskReferences.length) return;
+  [taskReferences[index], taskReferences[other]] =
+    [taskReferences[other], taskReferences[index]];
+  renderTaskReferences();
+}
+function removeTaskReference(index) {
+  taskReferences.splice(index, 1);
+  renderTaskReferences();
+}
+function taskExecutorEntry(id) {
+  return taskExecutorCatalogue.find(entry => entry.id === id) || null;
+}
+function taskExecutorOptions(preferred) {
+  const select = document.getElementById("t_executor");
+  select.innerHTML = taskExecutorCatalogue.map(entry =>
+    `<option value="${esc(entry.id)}">${esc(entry.name)} · ${esc(entry.id)}</option>`
+  ).join("") || '<option value="">— catalogue unavailable —</option>';
+  const ids = taskExecutorCatalogue.map(entry => entry.id);
+  taskExecutorSelected = ids.includes(preferred) ? preferred
+    : ids.includes(taskExecutorSelected) ? taskExecutorSelected
+    : ids[0] || "";
+  select.value = taskExecutorSelected;
+  syncTaskSubmitDisabled();
+  renderTaskExecutorEditor();
+}
+async function loadTaskExecutorCatalogue(preferred) {
+  const seq = ++taskCatalogueSeq;
+  taskExecutorOptions(preferred);
+  try {
+    const data = await api("/api/task-executors");
+    if (seq !== taskCatalogueSeq) return;
+    snapshotTaskExecutorConfiguration(taskExecutorSelected);
+    preferred = taskExecutorSelected || preferred;
+    taskExecutorCatalogue = Array.isArray(data.task_executors)
+      ? data.task_executors : [];
+    setTaskMessage("task_catalogue_error", "");
+  } catch (e) {
+    if (seq !== taskCatalogueSeq) return;
+    snapshotTaskExecutorConfiguration(taskExecutorSelected);
+    preferred = taskExecutorSelected || preferred;
+    setTaskMessage("task_catalogue_error", e.message);
+  }
+  taskExecutorOptions(preferred);
+}
+function snapshotTaskExecutorConfiguration(id) {
+  if (!id) return;
+  const values = {};
+  document.querySelectorAll("#task_configuration [data-task-config]")
+    .forEach(control => { values[control.dataset.taskConfig] = control.value; });
+  taskExecutorDrafts[id] = values;
+}
+function onTaskExecutorChange() {
+  snapshotTaskExecutorConfiguration(taskExecutorSelected);
+  taskExecutorSelected = document.getElementById("t_executor").value;
+  renderTaskExecutorEditor();
+}
+function renderTaskExecutorEditor() {
+  const entry = taskExecutorEntry(taskExecutorSelected);
+  const details = document.getElementById("task_executor_details");
+  const controls = document.getElementById("task_configuration");
+  if (!entry) { details.innerHTML = ""; controls.innerHTML = ""; return; }
+  const examples = Array.isArray(entry.usage_examples)
+    ? entry.usage_examples : [];
+  details.innerHTML = `<div class="executor-card">
+    <h3>${esc(entry.name)} <span class="mono executor-meta">${esc(entry.id)}</span></h3>
+    <div>${esc(entry.description)}</div>
+    <div class="executor-meta"><b>Operating mode:</b> ${esc(entry.operating_mode)}</div>
+    ${examples.length ? `<ul class="executor-examples">${examples.map(item =>
+      `<li>${esc(item)}</li>`).join("")}</ul>` : ""}
+    <div class="executor-meta"><b>Available staffing:</b> ${esc(entry.available_agent_configurations)}</div>
+  </div>`;
+  const schema = entry.configuration_schema || {};
+  const draft = taskExecutorDrafts[entry.id] || {};
+  const rows = Object.entries(schema).map(([name, definition]) => {
+    const value = Object.prototype.hasOwnProperty.call(draft, name)
+      ? draft[name] : definition.default;
+    if (definition.type === "integer")
+      return `<label>${esc(name)}</label><input type="number" step="1"
+        min="${esc(definition.minimum)}" value="${esc(value)}"
+        data-task-config="${esc(name)}" data-task-config-type="integer">`;
+    if (definition.type === "choice")
+      return `<label>${esc(name)}</label><select data-task-config="${esc(name)}"
+        data-task-config-type="choice">${(definition.choices || []).map(choice =>
+          `<option value="${esc(choice)}"${choice === value ? " selected" : ""}>${esc(choice)}</option>`
+        ).join("")}</select>`;
+    return "";
+  }).join("");
+  controls.innerHTML = rows
+    ? `<div class="field"><label>Executor configuration</label><div class="executor-config">${rows}</div></div>`
+    : "";
+}
+function currentTaskConfiguration() {
+  const entry = taskExecutorEntry(taskExecutorSelected);
+  if (!entry) throw new Error("task executor catalogue is unavailable");
+  const schema = entry.configuration_schema || {};
+  const configuration = {};
+  for (const control of document.querySelectorAll(
+    "#task_configuration [data-task-config]")) {
+    if (!control.checkValidity())
+      throw new Error("executor configuration is incomplete");
+    configuration[control.dataset.taskConfig] =
+      control.dataset.taskConfigType === "integer"
+        ? Number(control.value) : control.value;
+  }
+  return {configuration, present: Object.keys(schema).length > 0};
+}
+function taskKindLabel(kind) {
+  return kind === "draft_slice_note" ? "Note drafting" : "Implementation";
+}
+function producerSelectionLabel(selection) {
+  if (!selection || !selection.task_executor) return "unavailable";
+  const values = selection.configuration
+    ? Object.entries(selection.configuration).map(([key, value]) =>
+        `${key}=${typeof value === "string" ? value : JSON.stringify(value)}`)
+    : [];
+  return selection.task_executor + (values.length ? ` · ${values.join(", ")}` : "");
+}
+function producerControls(sliceId, producerMap) {
+  const choices = producerMap || {};
+  return `<span class="producer-choices">
+    <button class="producer-choice" type="button"
+      onclick="openProducerTask(${sliceId},'draft_slice_note')">Note · <span id="producer-${sliceId}-draft_slice_note">${esc(producerSelectionLabel(choices.draft_slice_note))}</span></button>
+    <button class="producer-choice" type="button"
+      onclick="openProducerTask(${sliceId},'implement')">Implementation · <span id="producer-${sliceId}-implement">${esc(producerSelectionLabel(choices.implement))}</span></button>
+  </span>`;
+}
+function openProducerTask(sliceId, taskKind) {
+  if (!selected || visibleProducerRunId !== selected) {
+    refreshDetail();
+    return;
+  }
+  const producerMap = visibleSliceProducers.get(sliceId) || {};
+  const selection = producerMap[taskKind];
+  resetTaskDialog("producer");
+  taskProducerTarget = {runId: selected, sliceId, taskKind};
+  document.getElementById("task_title").textContent =
+    `Slice ${String(sliceId).padStart(2, "0")} · ${taskKindLabel(taskKind)} producer`;
+  document.getElementById("task_producer_context").textContent =
+    `Change only the ${taskKindLabel(taskKind).toLowerCase()} choice while it remains prospective.`;
+  if (selection && selection.task_executor) {
+    taskExecutorSelected = selection.task_executor;
+    taskExecutorDrafts[selection.task_executor] =
+      Object.assign({}, selection.configuration || {});
+  }
+  document.getElementById("taskform").showModal();
+  loadTaskExecutorCatalogue(taskExecutorSelected);
+}
+function applyConfirmedProducerMap(sliceId, producerMap) {
+  visibleSliceProducers.set(sliceId, producerMap);
+  for (const kind of ["draft_slice_note", "implement"]) {
+    const el = document.getElementById(`producer-${sliceId}-${kind}`);
+    if (el) el.textContent = producerSelectionLabel(producerMap[kind]);
+  }
+}
+async function submitTaskForm() {
+  const dialogSeq = taskDialogSeq;
+  const mode = taskFormMode;
+  const producerTarget = taskProducerTarget
+    ? Object.assign({}, taskProducerTarget) : null;
+  const producerViewSeq = detailSeq;
+  const error = document.getElementById("task_error");
+  error.textContent = "";
+  error.style.display = "";
+  setTaskMessage("task_accepted", "");
+  let resolved;
+  try { resolved = currentTaskConfiguration(); }
+  catch (e) { error.textContent = e.message; return; }
+  const payload = {task_executor: taskExecutorSelected};
+  if (resolved.present) payload.configuration = resolved.configuration;
+  let path;
+  if (mode === "producer") {
+    payload.task_kind = producerTarget.taskKind;
+    path = `/api/runs/${encodeURIComponent(producerTarget.runId)}/slices/${producerTarget.sliceId}/producer`;
+  } else {
+    const binding = taskBinding();
+    if (!binding) {
+      error.textContent = "choose a project and work area";
+      return;
+    }
+    const request = document.getElementById("t_request").value;
+    if (!request.trim()) { error.textContent = "request is required"; return; }
+    const requestDoc = {
+      work_area: binding,
+      request,
+      context: document.getElementById("t_context").value,
+      reference_documents: taskReferences.slice(),
+    };
+    const output = document.getElementById("t_output").value.trim();
+    if (output) requestDoc.output_directory = output;
+    payload.request = requestDoc;
+    path = "/api/tasks";
+  }
+  taskSubmitPending = true;
+  syncTaskSubmitDisabled();
+  try {
+    const data = await postJSON(path, payload);
+    if (mode === "producer") {
+      if (dialogSeq === taskDialogSeq && producerViewSeq === detailSeq)
+        applyConfirmedProducerMap(
+          producerTarget.sliceId, data.producer_task_executor
+        );
+      const dialog = document.getElementById("taskform");
+      if (dialogSeq === taskDialogSeq && dialog.open) dialog.close();
+      refreshDetail();
+    } else if (dialogSeq === taskDialogSeq) {
+      setTaskMessage("task_accepted", `Task accepted · ${data.task.id}`);
+    }
+  } catch (e) {
+    if (dialogSeq === taskDialogSeq) error.textContent = e.message;
+  } finally {
+    taskSubmitPending = false;
+    syncTaskSubmitDisabled();
+  }
 }
 
 /* ---- new brainstorming: the standalone session create body, assembled
