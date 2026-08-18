@@ -76,3 +76,30 @@
 - deterministic result: every configured family was clean or debt-clean on the same current bytes; full verification was not due at this boundary; no extra reviewer was called
 - cited reviews: `slice_impl-01-codex-r2`, `slice_impl-01-claude-r3`
 
+## slice_doc-02 (Staffing document store)
+
+- draft: kind `draft_slice_note`, artifact `implementation/milestones/staffing-router/slices/slice-02.md` (raw: `implementation/milestones/staffing-router/.run/raw/slice_doc-02-draft.txt`)
+
+| Round | Kind | Family | Findings | Triage | Raw |
+|---|---|---|---|---|---|
+| slice_doc-02-codex-r1 | review_round | codex | 4 | 4 reported | `implementation/milestones/staffing-router/.run/raw/slice_doc-02-codex-r1.txt` |
+| slice_doc-02-claude-r1 | fix_findings | claude | 1 | 1 fixed | `implementation/milestones/staffing-router/.run/raw/slice_doc-02-fix1.txt` |
+| slice_doc-02-claude-r2 | delta_review | claude | 1 | 1 reported | `implementation/milestones/staffing-router/.run/raw/slice_doc-02-delta1.txt` |
+| slice_doc-02-claude-r3 | fix_findings | claude | 1 | 1 fixed | `implementation/milestones/staffing-router/.run/raw/slice_doc-02-fix2.txt` |
+| slice_doc-02-claude-r4 | delta_review | claude | 0 | clean | `implementation/milestones/staffing-router/.run/raw/slice_doc-02-delta2.txt` |
+| slice_doc-02-codex-r2 | review_round | codex | 2 | DEBT-CLEAN (reclassified) | `implementation/milestones/staffing-router/.run/raw/slice_doc-02-codex-r2.txt` |
+| slice_doc-02-claude-r5 | review_round | claude | 2 | DEBT-CLEAN (reclassified) | `implementation/milestones/staffing-router/.run/raw/slice_doc-02-claude-r1.txt` |
+
+### Review completion — SATISFIED
+
+- deterministic result: every configured family was clean or debt-clean on the same current bytes; full verification was not due at this boundary; no extra reviewer was called
+- cited reviews: `slice_doc-02-codex-r2`, `slice_doc-02-claude-r5`
+
+**Deferred debt (opposite-family verified):**
+- `codex-SR-S2-R1-002` (raised codex, cleared codex): Unknown profile values make the ladder contract contradictory — The contradiction affects conversion behavior and its named ladder test, but a claude-opus-5/max builder must confront it within this unit and stop rather than drift silently, while correction only requires locally clarifying the test to allow appended unknown values after the fixed ordered vocabula
+- `codex-SR-S2-R1-003` (raised codex, cleared codex): Completeness does not pin assignment reference integrity — The artifact repeatedly defines completeness and its validator tests without requiring assignment slots to reference a declared family, so the builder could faithfully implement incorrect validation, but correction is a local reference check plus one focused test and would surface on first lookup.
+- `codex-codex-SR-S2-R2-001` (raised codex, cleared codex): The optimistic store mechanism cannot enforce the strict missing-only and case-insensitive-uniqueness guarantees during concurrent writes. — The artifact explicitly pins strict missing-only and case-insensitive uniqueness to a check-then-atomic-replace mechanism and only sequential tests, so the builder would likely implement the stated but unenforced contract, while correction remains bounded to the document store’s concurrency primitiv
+- `codex-codex-SR-S2-R2-002` (raised codex, cleared codex): The closed document schema does not pin or verify required nested field types. — The missing nested types are under-specification a capable builder should flag through the mandatory repair exit, making silent drift unlikely, and any miss would surface on first step_up use and require only a local validator-and-test correction.
+- `claude-SR-S2-CLAUDE-R1-001` (raised claude, cleared codex): The Conversion Reference's `classify 1` row cites a family-only legacy helper (`_resolve_act`) that yields no model or effort, and states no fill rule, so the converted classify seat's model and effort are unpinned and the seat-by-seat drift alarm built on that seam cannot detect a model or effort change. — The family-only pointer could make a hasty builder substitute defaults, but the artifact’s full-staffing guarantee and real-driver all-seat comparison should guide this capable builder correctly; if drift occurs, fixing the classify conversion/alarm and re-pinning affected documents is small local r
+- `claude-SR-S2-CLAUDE-R1-002` (raised claude, cleared codex): The note declares a strict guarantee that conversion reproduces a profile's staffing at every rigor, contradicting its own statement that a family differing from rigor to rigor cannot be held and exceeding the skeleton's normalization baseline; no acceptance test or warning covers the case. — The repeated strict parity claim and matching acceptance check can silently legitimize wrong cross-rigor expectations despite the nearby medium-normalization rule, while correction is bounded to clarifying the contract and adding a divergent-family test or warning within this unit.
+

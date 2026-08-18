@@ -317,4 +317,5 @@ The goal is achieved when:
 |---|---|---|---|---|
 | skeleton | reviewed | 12 | satisfied | 0b8caea |
 | slice_doc-01 (Rename `worker` to `agent_call`) | reviewed | 2 | satisfied | 544cd57 |
-| slice_impl-01 (Rename `worker` to `agent_call`) | reviewed | 5 | satisfied | - |
+| slice_impl-01 (Rename `worker` to `agent_call`) | reviewed | 5 | satisfied | f156bdd |
+| slice_doc-02 (Staffing document store) | reviewed | 7 | satisfied | - |
