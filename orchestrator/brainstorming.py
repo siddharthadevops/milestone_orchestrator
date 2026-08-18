@@ -4254,9 +4254,35 @@ class SessionStore:
             record = self._store.read(key)
             if not record["exists?"]:
                 continue
-            state = validate_session_state(record["value"])
-            if os.path.abspath(state["request"]["target_path"]) == target_path:
-                matches.append(session_id)
+            # This is a scan over EVERY stored session, most of which belong
+            # to other callers and other eras. Match on the raw request path
+            # first and validate only a candidate: a record that no longer
+            # satisfies the current contract (for instance a session written
+            # under an earlier participant-role vocabulary) can never be the
+            # retained authority for this private target, and it must not
+            # abort the dispatch that merely walked past it. A live crash of
+            # this kind killed a milestone driver at its first Brainstorming
+            # production start (2026-08-18).
+            raw = record["value"]
+            request = raw.get("request") if isinstance(raw, dict) else None
+            candidate = (
+                request.get("target_path") if isinstance(request, dict)
+                else None
+            )
+            if (
+                not isinstance(candidate, str)
+                or not candidate
+                or os.path.abspath(candidate) != target_path
+            ):
+                continue
+            try:
+                validate_session_state(raw)
+            except ContractError:
+                # A matching record that fails the current contract is not
+                # a usable authority either; skipping it lets the caller
+                # start afresh instead of failing the task on stale bytes.
+                continue
+            matches.append(session_id)
         return matches
 
     def read_task_effect_attempt(self, session_id):

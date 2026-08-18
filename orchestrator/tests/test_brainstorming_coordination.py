@@ -177,6 +177,50 @@ class BrainstormingCoordinationTest(unittest.TestCase):
         self.store.transition(session_id, created.revision, "running")
         return target
 
+    def test_target_lookup_skips_records_outside_the_current_contract(self):
+        # The retained-authority lookup walks EVERY stored session. A record
+        # written under an earlier vocabulary (pre-rename participant roles)
+        # must neither match nor abort the scan: a live milestone driver died
+        # at its first Brainstorming production start on exactly that record.
+        roster = participants()
+        workspace = os.path.join(self.root, "current")
+        os.makedirs(os.path.join(workspace, "docs"))
+        target = os.path.join(workspace, "docs", "decision.md")
+        with open(target, "wb") as handle:
+            handle.write(b"initial target")
+        request = {
+            "workspace_path": workspace,
+            "target_path": target,
+            "request": "Choose the compatible option to adopt.",
+            "context": {"brief": "Resolve one bounded design request."},
+            "max_rounds": 2,
+        }
+        created = self.store.create(
+            "bs-current", request, run_config(roster), roster
+        )
+        self.store.transition("bs-current", created.revision, "running")
+
+        raw = copy.deepcopy(
+            self.store._store.read(bs._session_key("bs-current"))["value"]
+        )
+        for participant in raw["run_config"]["participants"]:
+            participant["role"] = "lead"
+        with self.assertRaises(bs.ContractError):
+            bs.validate_session_state(raw)
+        elsewhere = os.path.join(self.root, "elsewhere", "decision.md")
+        legacy_other = copy.deepcopy(raw)
+        legacy_other["request"]["target_path"] = elsewhere
+        self.store._store.put(bs._session_key("bs-legacy-other"), legacy_other)
+        self.store._store.put(bs._session_key("bs-legacy-same"), raw)
+        self.store._store.put(
+            bs._session_key("bs-garbage"), {"not": "a session"}
+        )
+
+        self.assertEqual(
+            self.store.session_ids_for_target(target), ["bs-current"]
+        )
+        self.assertEqual(self.store.session_ids_for_target(elsewhere), [])
+
     def test_dante_never_receives_a_closure_vote(self):
         roster = participants() + [
             {
