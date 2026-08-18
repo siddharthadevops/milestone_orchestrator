@@ -151,3 +151,29 @@
 - deterministic result: every configured family was clean or debt-clean on the same current bytes; full verification was not due at this boundary; no extra reviewer was called
 - cited reviews: `slice_impl-02-b-codex-r3`, `slice_impl-02-b-claude-r13`
 
+## slice_doc-03 (Sessions and resolution)
+
+- draft: kind `draft_slice_note`, artifact `implementation/milestones/staffing-router/slices/slice-03.md` (raw: `implementation/milestones/staffing-router/.run/raw/slice_doc-03-draft.txt`)
+
+| Round | Kind | Family | Findings | Triage | Raw |
+|---|---|---|---|---|---|
+| slice_doc-03-codex-r1 | review_round | codex | 7 | DEBT-CLEAN (reclassified) | `implementation/milestones/staffing-router/.run/raw/slice_doc-03-codex-r1.txt` |
+| slice_doc-03-claude-r1 | review_round | claude | 3 | DEBT-CLEAN (reclassified) | `implementation/milestones/staffing-router/.run/raw/slice_doc-03-claude-r1.txt` |
+
+### Review completion — SATISFIED
+
+- deterministic result: every configured family was clean or debt-clean on the same current bytes; full verification was not due at this boundary; no extra reviewer was called
+- cited reviews: `slice_doc-03-codex-r1`, `slice_doc-03-claude-r1`
+
+**Deferred debt (opposite-family verified):**
+- `codex-codex-SR-S3-R1-001` (raised codex, cleared codex): The closed session schema is not fully pinned or verified — The exhaustive-looking refusal list could let a capable builder silently omit scalar and catalogue-name validation despite the closed-shape and reuse cues, but correction is a small local validator-and-test addition exposed by malformed writes or first resolution.
+- `codex-codex-SR-S3-R1-002` (raised codex, cleared codex): Session edit semantics do not pin how optional configuration is cleared — The artifact leaves omission semantics open, but a capable builder must confront that behavior choice and stop for repair, while correction is only one local clearing rule plus one focused test.
+- `codex-codex-SR-S3-R1-003` (raised codex, cleared codex): Unreadable-document fallback does not settle session-override precedence — The omission affects fallback correctness and test coverage, but a capable builder must confront the unresolved session-override layering while implementing that path and can stop for repair, while any drift is corrected locally by pinning precedence and adding one focused fallback assertion.
+- `codex-codex-SR-S3-R1-004` (raised codex, cleared codex): Unknown request material has two permitted resolutions — The behavior ambiguity must be confronted when pinning the unknown-material matrix row, so the capable builder should stop for repair; if it guesses wrong, correction is one local precedence choice and its expected test value.
+- `codex-codex-SR-S3-R1-005` (raised codex, cleared codex): The step_up verification omits its role boundary — Although the prose explicitly scopes step_up by matching role, the missing cross-role matrix row could let an unscoped implementation pass verification, while correction requires only one local negative test and, if needed, one role predicate.
+- `codex-codex-SR-S3-R1-006` (raised codex, cleared codex): The fallback-report carrier contradicts the exact three-field answer — The direct contradiction between an exact three-field answer and a fallback report should trigger the capable builder's mandatory stop, and any mistaken choice is immediately exposed by the focused tests and corrected by locally pinning one result/report carrier.
+- `codex-codex-SR-S3-R1-007` (raised codex, cleared codex): The note repeats contracts and pins internal layout above documentation altitude — The repeated step-up descriptions are consistent and the unnecessary session-directory pin changes no observable contract, so silent drift is unlikely and correction is only a local documentation compression or layout re-pin.
+- `claude-claude-SR-S3-CLAUDE-R1-001` (raised claude, cleared codex): The unqualified never-fails guarantees contradict the note's own two surfaced conditions on the collapse and document-fallback paths — A capable builder should reconcile the fallback promise with the explicit two-condition exception or stop, but the untested overlap still permits silent wrong precedence; correction is bounded to clarifying that precedence and adding the combined resolver test within this unit.
+- `claude-claude-SR-S3-CLAUDE-R1-002` (raised claude, cleared codex): The two seat/projection readers this slice owns have no declared behaviour for an unreadable session or document and no guarantee posture — The note specifies unreadable fallback only for resolution and tests both projection readers only on healthy data, but this visible under-specification should trigger the capable builder's mandatory stop, while any mistaken behavior is corrected locally in the two readers and their focused test.
+- `claude-claude-SR-S3-CLAUDE-R1-003` (raised claude, cleared codex): The enforceability row for session-override validation cites document-relative validators that refuse the write the same row requires to be accepted — The cited validators contradict the required shape-only behavior, but the explicit acceptance test for saving and collapsing an uncarried slot makes misuse immediately self-revealing, and correction is a small local validator fix.
+
