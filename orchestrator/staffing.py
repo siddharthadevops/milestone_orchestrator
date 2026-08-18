@@ -1,5 +1,5 @@
-"""Staffing documents: the numbered staffing catalogue that replaces the
-model profile.
+"""Staffing documents and sessions: the numbered staffing catalogue that
+replaces the model profile, and the live selection an owner opens over it.
 
 This module owns the staffing document — its closed schema, its loud
 save-time validation, and the store that keeps it. A staffing document is a
@@ -60,13 +60,22 @@ the profile's ``medium`` configuration and from the same seams today's
 resolution uses, and the converted document staffs each seat the way that
 profile staffs it today. Nothing here reads a document to staff a call: the
 documents appear beside the profiles and wait for their consumers.
+
+A SESSION is the owner's live selection over that catalogue — the work
+area, the families this machine actually has, a document REFERENCE, the
+rigor, and optionally a default material and an unconditional override in
+the document's own shape. Its store follows the document store for the same
+reason: the operator-facing semantics are the same. Sessions are the second
+half of this module and are documented at their own section below; nothing
+in this file staffs a call yet.
 """
 
 import json
 import os
+import secrets
 import tempfile
 
-from . import model_profiles
+from . import model_profiles, workareas
 
 STAFFING_DOCUMENTS_DIRNAME = "staffing_documents"
 
@@ -143,7 +152,16 @@ def _index_key(ctx, label, key):
         raise StaffingError(
             "%s: %s key %r must be a 1-based number written in decimal"
             % (ctx, label, key))
-    return int(key)
+    try:
+        return int(key)
+    except ValueError as exc:
+        # More digits than the interpreter converts (CPython's int/str
+        # conversion limit). A key no arithmetic can reach is damage like
+        # any other, and it leaves through the same loud class rather than
+        # as a raw conversion failure no caller of this module expects.
+        raise StaffingError(
+            "%s: %s key %r is too long to be a number" % (ctx, label, key)
+        ) from exc
 
 
 def _numbered_keys(ctx, label, mapping):
@@ -163,15 +181,40 @@ def _object(ctx, label, value):
     return value
 
 
-def _exact_keys(ctx, label, value, expected):
-    """A closed key set: anything missing or unknown is an input error."""
+def _exact_keys(ctx, label, value, expected, optional=()):
+    """A closed key set: anything missing or unknown is an input error.
+
+    Everything in *expected* is required; an *optional* key may be present
+    or absent; anything outside both is unknown.
+    """
     missing = [key for key in expected if key not in value]
-    unknown = sorted(set(value) - set(expected))
+    unknown = sorted(set(value) - set(expected) - set(optional))
     if missing or unknown:
+        shape = ", ".join(expected)
+        if optional:
+            shape += " (optional: %s)" % ", ".join(optional)
         raise StaffingError(
             "%s: %s must carry exactly %s (missing: %s; unknown: %s)"
-            % (ctx, label, ", ".join(expected),
+            % (ctx, label, shape,
                ", ".join(missing) or "none", ", ".join(unknown) or "none"))
+
+
+def _name_token(ctx, label, value):
+    """One path-safe catalogue identity: a non-empty alphanumeric/-/_ name.
+
+    The staffing document's own name rule, reused for the session id and for
+    a session's document reference. It satisfies the store's path-fragment
+    rule (:func:`kvstore.validate_fragment`) with room to spare — no
+    separator, no control character, never blank — so a stored name is a
+    filename and nothing else, and a reference cannot reach outside its
+    catalogue directory.
+    """
+    if not value or not isinstance(value, str):
+        raise StaffingError("%s: %s must be a non-empty name" % (ctx, label))
+    if not all(c.isalnum() or c in "-_" for c in value):
+        raise StaffingError(
+            "%s: %s must be alphanumeric/-/_ : %r" % (ctx, label, value))
+    return value
 
 
 # ---------------------------------------------------------------------------
@@ -308,7 +351,14 @@ def _validate_tuning(ctx, tuning, slots):
 
 
 def _validate_seats(ctx, label, seats, slots, require_first=True):
-    """One role's seats: index -> family slot."""
+    """One role's seats: index -> family slot.
+
+    *slots* are the family slots the document carries, or ``None`` where
+    there is no document to check against — a session override, whose
+    document is a live reference that may be edited or replaced between two
+    calls. A slot such an override names but the document does not carry is
+    answered by collapse at resolution, never by a refusal here.
+    """
     by_index = _object(ctx, label, seats)
     if not by_index:
         raise StaffingError(
@@ -317,7 +367,7 @@ def _validate_seats(ctx, label, seats, slots, require_first=True):
     for index in _numbered_keys(ctx, label, by_index):
         slot = by_index[index]
         _positive_int(ctx, "%s.%s" % (label, index), slot)
-        if str(slot) not in slots:
+        if slots is not None and str(slot) not in slots:
             raise StaffingError(
                 "%s: %s.%s names family slot %r, which the document does "
                 "not carry" % (ctx, label, index, slot))
@@ -341,7 +391,11 @@ def _validate_assignment(ctx, assignment, slots):
 
 
 def _validate_partial_tuning(ctx, label, tuning, slots):
-    """An override's tuning delta: only the cells that differ are written."""
+    """An override's tuning delta: only the cells that differ are written.
+
+    *slots* is ``None`` where there is no document to check against; see
+    :func:`_validate_seats`.
+    """
     by_rigor = _object(ctx, label, tuning)
     unknown = sorted(set(by_rigor) - set(RIGORS))
     if unknown or not by_rigor:
@@ -352,12 +406,13 @@ def _validate_partial_tuning(ctx, label, tuning, slots):
     for rigor in sorted(by_rigor):
         rigor_label = "%s.%s" % (label, rigor)
         by_slot = _object(ctx, rigor_label, by_rigor[rigor])
-        unknown = sorted(set(by_slot) - set(slots))
+        carried = "carried family slot" if slots is not None else "family slot"
+        unknown = ([] if slots is None
+                   else sorted(set(by_slot) - set(slots)))
         if unknown or not by_slot:
             raise StaffingError(
-                "%s: %s must name at least one carried family slot "
-                "(unknown: %s)"
-                % (ctx, rigor_label, ", ".join(unknown) or "none"))
+                "%s: %s must name at least one %s (unknown: %s)"
+                % (ctx, rigor_label, carried, ", ".join(unknown) or "none"))
         out[rigor] = {}
         for slot in _numbered_keys(ctx, rigor_label, by_slot):
             slot_label = "%s.%s" % (rigor_label, slot)
@@ -458,14 +513,7 @@ def _validate(doc, ctx):
         ctx, "a staffing document", doc,
         ("name", "families", "roles", "materials", "tuning", "assignment",
          "overrides", "rules"))
-    name = doc["name"]
-    if not name or not isinstance(name, str):
-        raise StaffingError(
-            "%s: staffing document needs a non-empty name" % ctx)
-    if not all(c.isalnum() or c in "-_" for c in name):
-        raise StaffingError(
-            "%s: staffing document name must be alphanumeric/-/_ : %r"
-            % (ctx, name))
+    name = _name_token(ctx, "staffing document name", doc["name"])
     families = _validate_families(ctx, doc["families"])
     slots = tuple(_numbered_keys(ctx, "families", families))
     materials = _validate_materials(ctx, doc["materials"])
@@ -612,6 +660,26 @@ def _case_variant(home, name):
     return None
 
 
+def _atomic_write(directory, path, prefix, payload):
+    """Write one record by atomic same-directory replacement.
+
+    Staging files share the target directory so the replacement is atomic,
+    but stay outside the ``*.json`` catalogue namespace, so a half-written
+    record is never a listable candidate. Validation has already happened
+    when a caller reaches here, which is what makes a refused write leave
+    the previous record byte-identical.
+    """
+    os.makedirs(directory, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(prefix=prefix, suffix=".tmp", dir=directory)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            json.dump(payload, fh, indent=1, sort_keys=True)
+        os.replace(tmp, path)
+    finally:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+
+
 def save(home, doc):
     """Create or WHOLLY replace one staffing document under its name.
 
@@ -631,21 +699,9 @@ def save(home, doc):
             "staffing document %r conflicts with existing catalogue name "
             "%r; names are case-insensitively unique"
             % (doc["name"], variant))
-    path = _path(home, doc["name"])
-    # Staging files share the target directory for atomic replacement, but
-    # stay outside the ``*.json`` catalogue namespace, so a half-written
-    # document is never a listable candidate.
-    fd, tmp = tempfile.mkstemp(
-        prefix=".staffing-document-", suffix=".tmp",
-        dir=staffing_documents_dir(home),
-    )
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as fh:
-            json.dump(doc, fh, indent=1, sort_keys=True)
-        os.replace(tmp, path)
-    finally:
-        if os.path.exists(tmp):
-            os.unlink(tmp)
+    _atomic_write(
+        staffing_documents_dir(home), _path(home, doc["name"]),
+        ".staffing-document-", doc)
     return doc
 
 
@@ -1089,3 +1145,342 @@ def ensure_documents(home, config=None):
         save(home, default_document_seed(config))
         written.append(DEFAULT_DOCUMENT_NAME)
     return written
+
+
+# ---------------------------------------------------------------------------
+# Sessions: what an owner opens for a piece of work
+#
+# A session is the OWNER'S half of staffing — which document to use, how hard
+# to work, which families this machine actually has, and, when the owner
+# wants one, an unconditional delta on top of that document. It holds a
+# REFERENCE to the document and never a copy, so editing either one reaches
+# the next call and rewrites no call already made. There is no snapshot and
+# no freeze, because a session is a live selection and not a transaction.
+#
+# The record is small and closed and the store is the document store's own
+# pattern again: validation before any byte changes, then an atomic
+# same-directory replacement, so a refused edit leaves the stored session
+# byte-identical. Exactly create, read and edit: no delete, no expiry, no
+# lease, no liveness, no version. Nothing here staffs a call — the resolver
+# is what reads a session, and every dispatch still reads model profiles
+# until its own slice cuts it over.
+
+STAFFING_SESSIONS_DIRNAME = "staffing_sessions"
+
+# The owner's existing handles for where the work happens, exactly as the
+# service and the Brainstorming adapter already carry them: the two
+# path-free ones as one authority, and/or the workspace path. Recorded
+# verbatim; nothing in this module reads them.
+WORK_AREA_HANDLES = ("project", "work_area", "workspace_path")
+
+# The store that already owns each path-free handle. Its rule is the whole
+# rule: a handle the owner's work-area store accepts opens a session, and
+# one it refuses does not.
+WORK_AREA_AUTHORITIES = {
+    "project": workareas.validate_project_slug,
+    "work_area": workareas.validate_name,
+}
+
+SESSION_FIELDS = ("id", "work_area", "families", "document", "rigor")
+SESSION_OPTIONAL_FIELDS = ("material", "overrides")
+
+# Exactly what the owner may change while work runs. `work_area` and
+# `families` are facts — where the work happens, and what this machine has —
+# rather than choices, and `id` is the record's identity; an edit that could
+# move them would quietly make a session somebody else's.
+SESSION_EDITABLE_FIELDS = ("document", "rigor", "material", "overrides")
+
+
+def staffing_sessions_dir(home):
+    """The session directory: beside the documents, never inside them.
+
+    Two catalogues with two lifetimes — documents are the operator's
+    library, sessions are open pieces of work — so a session file is never
+    a candidate the document store would try to load and validate.
+    """
+    return os.path.join(home, STAFFING_SESSIONS_DIRNAME)
+
+
+def _session_path(home, session_id):
+    return os.path.join(staffing_sessions_dir(home), "%s.json" % session_id)
+
+
+def _new_session_id():
+    """The opaque id the STORE assigns, never one a caller supplies.
+
+    An id is the store's identity for a record, so honouring a caller's
+    would let one owner name — and so overwrite — another owner's session.
+    The token is `brainstorming_lifecycle._new_session_id`'s, prefixed for
+    this catalogue.
+    """
+    return "stf-" + secrets.token_hex(16)
+
+
+def _path_string(ctx, label, value):
+    """One filesystem path, recorded verbatim.
+
+    Deliberately not `_short_string`: a real workspace path is longer than
+    a catalogue name and the filesystem's own limit is the only meaningful
+    one. A NUL is the single byte no path can carry, which is the check
+    `brainstorming` already makes on its own paths.
+    """
+    if not isinstance(value, str) or not value.strip():
+        raise StaffingError("%s: %s must be a non-empty path" % (ctx, label))
+    if "\x00" in value:
+        raise StaffingError(
+            "%s: %s is not a valid filesystem path" % (ctx, label))
+    return value
+
+
+def _handle_string(ctx, label, value, authority):
+    """One path-free handle, checked by its own store and recorded as given.
+
+    `workareas` already owns what a project slug and a work-area name may
+    be — non-blank, no separator, no control character, and the work-area
+    name's byte cap — and both of its validators return their input
+    UNCHANGED. Reusing them is what makes "verbatim" true: a catalogue rule
+    of this module's own would trim a handle into a DIFFERENT work area or
+    refuse a name the owner's store accepts, and either one puts a session
+    somewhere its owner never named.
+    """
+    try:
+        return authority(value)
+    except ValueError as exc:
+        raise StaffingError(
+            "%s: %s is not a valid handle (%s)" % (ctx, label, exc)) from exc
+
+
+def _validate_work_area(ctx, work_area):
+    """The owner's handles for where the work happens, recorded verbatim.
+
+    `project` and `work_area` are one authority and are supplied together —
+    the rule `brainstorming_tasks._execution_context` already enforces — and
+    a `workspace_path` may stand alone or beside them. Nothing in this
+    module reads any of them; they are refused only for a shape no consumer
+    could use, which is why the pair is checked, each handle is left to the
+    store that owns it, and nothing else is.
+    """
+    entry = _object(ctx, "work_area", work_area)
+    unknown = sorted(set(entry) - set(WORK_AREA_HANDLES))
+    if unknown:
+        raise StaffingError(
+            "%s: work_area carries unknown handle %r (allowed: %s)"
+            % (ctx, unknown[0], ", ".join(WORK_AREA_HANDLES)))
+    out = {}
+    for handle in WORK_AREA_HANDLES:
+        if handle not in entry:
+            continue
+        label = "work_area.%s" % handle
+        out[handle] = (
+            _path_string(ctx, label, entry[handle])
+            if handle == "workspace_path"
+            else _handle_string(ctx, label, entry[handle],
+                                WORK_AREA_AUTHORITIES[handle]))
+    if ("project" in out) != ("work_area" in out):
+        raise StaffingError(
+            "%s: work_area names a project without its work area, or the "
+            "reverse — the two are one authority and are supplied together"
+            % ctx)
+    if not out:
+        raise StaffingError(
+            "%s: work_area must carry a project with its work area, a "
+            "workspace_path, or both" % ctx)
+    return out
+
+
+def _validate_available_families(ctx, families):
+    """The family names this machine has, in the owner's order.
+
+    A machine FACT rather than a choice, so it is recorded as given and an
+    empty list is stored as the fact it is. Having nobody to call surfaces
+    at resolution as `staffing_unavailable` — the request is the moment
+    that matters — and refusing the save instead would make a session
+    unopenable on a machine whose families are configured afterwards.
+    """
+    if not isinstance(families, list):
+        raise StaffingError(
+            "%s: families must be an array of family names" % ctx)
+    return [_short_string(ctx, "families entry", name) for name in families]
+
+
+def _validate_session_overrides(ctx, overrides):
+    """The session's own delta on the document, in the document's own inner
+    shape: an `assignment`, a `tuning`, at least one of the two written.
+
+    Unconditional — never keyed by material — because it sits ABOVE the
+    material layer: "for this run, the fixer runs on the other family" is
+    the whole of it. Validated for shape only, never against the referenced
+    document, which is a live reference that may be edited, replaced or
+    absent between two calls; a slot it does not carry collapses at
+    resolution. It is explicit configuration, written by any authorized
+    session owner — the operator or a calling product — through the store,
+    the API or the panel, under the caller identity and project access the
+    service already enforces.
+    """
+    entry = _object(ctx, "overrides", overrides)
+    unknown = sorted(set(entry) - {"assignment", "tuning"})
+    if unknown:
+        raise StaffingError(
+            "%s: overrides carries unknown key %r — a session override "
+            "carries an assignment and a tuning" % (ctx, unknown[0]))
+    if not entry:
+        raise StaffingError(
+            "%s: overrides must change an assignment or a tuning" % ctx)
+    written = {}
+    if "assignment" in entry:
+        by_role = _object(ctx, "overrides.assignment", entry["assignment"])
+        unknown = sorted(set(by_role) - set(ROLES))
+        if unknown or not by_role:
+            raise StaffingError(
+                "%s: overrides.assignment must name at least one role "
+                "(unknown: %s)" % (ctx, ", ".join(unknown) or "none"))
+        written["assignment"] = {
+            role: _validate_seats(
+                ctx, "overrides.assignment.%s" % role, by_role[role],
+                None, require_first=False)
+            for role in sorted(by_role)
+        }
+    if "tuning" in entry:
+        written["tuning"] = _validate_partial_tuning(
+            ctx, "overrides.tuning", entry["tuning"], None)
+    return written
+
+
+def _session_ctx(session_id):
+    return "staffing session %r" % (session_id,)
+
+
+def validate_session(record, ctx=None):
+    """Validate one whole session record; returns the normalized copy.
+
+    The shape is closed exactly as a document's is: the five facts an owner
+    supplies plus the two optional selections. `document` is validated as a
+    NAME and not against the catalogue — a session may reference a document
+    that does not exist yet, or no longer does, and the mandatory fallback
+    is what answers that at resolution.
+    """
+    if not isinstance(record, dict):
+        raise StaffingError(
+            "%s: staffing session must be an object"
+            % (ctx or "staffing session"))
+    ctx = ctx or _session_ctx(record.get("id"))
+    _exact_keys(ctx, "a staffing session", record, SESSION_FIELDS,
+                SESSION_OPTIONAL_FIELDS)
+    rigor = record["rigor"]
+    if rigor not in RIGORS:
+        raise StaffingError(
+            "%s: rigor %r is not one of %s"
+            % (ctx, rigor, ", ".join(RIGORS)))
+    out = {
+        "id": _name_token(ctx, "staffing session id", record["id"]),
+        "work_area": _validate_work_area(ctx, record["work_area"]),
+        "families": _validate_available_families(ctx, record["families"]),
+        "document": _name_token(ctx, "document", record["document"]),
+        "rigor": rigor,
+    }
+    if "material" in record:
+        out["material"] = _short_string(ctx, "material", record["material"])
+    if "overrides" in record:
+        out["overrides"] = _validate_session_overrides(
+            ctx, record["overrides"])
+    return out
+
+
+def create_session(home, body):
+    """Open one session and return the stored record.
+
+    The body carries everything but the id, which the store assigns; a
+    supplied one is refused rather than honoured. Validation happens before
+    any byte changes, so a refused create writes nothing at all.
+    """
+    entry = _object("staffing session", "the create body", body)
+    if "id" in entry:
+        raise StaffingError(
+            "staffing session: id is assigned by the store and is never "
+            "supplied by a caller")
+    record = validate_session(dict(entry, id=_new_session_id()))
+    _atomic_write(
+        staffing_sessions_dir(home), _session_path(home, record["id"]),
+        ".staffing-session-", record)
+    return record
+
+
+def read_session(home, session_id):
+    """Load and validate one session by id. Loud on corruption.
+
+    Every failure — unknown, unreadable, malformed, damaged — is one
+    :class:`StaffingError`, because the resolver's mandatory fallback treats
+    "cannot be read" as one condition and answers it the same way.
+    """
+    ctx = _session_ctx(session_id)
+    path = _session_path(home, _name_token(ctx, "id", session_id))
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            record = json.load(fh)
+    except FileNotFoundError as exc:
+        if os.path.lexists(path):
+            raise StaffingError(
+                "staffing session %r is unavailable: %s" % (session_id, exc)
+            ) from exc
+        raise StaffingError("unknown staffing session %r" % session_id)
+    except OSError as exc:
+        raise StaffingError(
+            "staffing session %r is unreadable: %s" % (session_id, exc)
+        ) from exc
+    except ValueError as exc:
+        raise StaffingError(
+            "staffing session %r is not valid JSON: %s" % (session_id, exc))
+    except RecursionError as exc:
+        # Deeper nesting than the interpreter decodes (CPython's recursion
+        # limit). A record no reader can reach is damage like any other, and
+        # it leaves through the same loud class rather than as a raw
+        # recursion failure the mandatory fallback would not recognize.
+        raise StaffingError(
+            "staffing session %r is nested too deeply to be read"
+            % session_id) from exc
+    record = validate_session(record, ctx)
+    if record["id"] != session_id:
+        raise StaffingError(
+            "staffing session file %r names %r — the stored record is "
+            "damaged" % (session_id, record["id"]))
+    return record
+
+
+def edit_session(home, session_id, changes):
+    """Change a live session's selection: `document`, `rigor`, `material`,
+    `overrides`, and nothing else.
+
+    A field absent from *changes* is left alone; an explicit ``None`` clears
+    an optional one, which is how a default material or an override is
+    withdrawn. The work area, the families this machine has and the id are
+    refused, so an edit cannot quietly move a session somewhere else.
+
+    Optimistic, exactly as the document and profile stores are: no
+    compare-and-set and no version, so two saves of one session each land
+    atomically and the last completed one governs the next call.
+    """
+    ctx = _session_ctx(session_id)
+    record = read_session(home, session_id)
+    entry = _object(ctx, "an edit", changes)
+    unknown = sorted(set(entry) - set(SESSION_EDITABLE_FIELDS))
+    if unknown:
+        raise StaffingError(
+            "%s: %r is not editable (editable: %s)"
+            % (ctx, unknown[0], ", ".join(SESSION_EDITABLE_FIELDS)))
+    for field in SESSION_EDITABLE_FIELDS:
+        if field not in entry:
+            continue
+        value = entry[field]
+        if value is None:
+            if field not in SESSION_OPTIONAL_FIELDS:
+                raise StaffingError(
+                    "%s: %s is part of the selection and cannot be cleared"
+                    % (ctx, field))
+            record.pop(field, None)
+        else:
+            record[field] = value
+    record = validate_session(record, ctx)
+    _atomic_write(
+        staffing_sessions_dir(home), _session_path(home, session_id),
+        ".staffing-session-", record)
+    return record

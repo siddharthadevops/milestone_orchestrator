@@ -177,3 +177,27 @@
 - `claude-claude-SR-S3-CLAUDE-R1-002` (raised claude, cleared codex): The two seat/projection readers this slice owns have no declared behaviour for an unreadable session or document and no guarantee posture — The note specifies unreadable fallback only for resolution and tests both projection readers only on healthy data, but this visible under-specification should trigger the capable builder's mandatory stop, while any mistaken behavior is corrected locally in the two readers and their focused test.
 - `claude-claude-SR-S3-CLAUDE-R1-003` (raised claude, cleared codex): The enforceability row for session-override validation cites document-relative validators that refuse the write the same row requires to be accepted — The cited validators contradict the required shape-only behavior, but the explicit acceptance test for saving and collapsing an uncarried slot makes misuse immediately self-revealing, and correction is a small local validator fix.
 
+## slice_impl-03-a (Sessions and resolution)
+
+- draft: kind `implement`, artifact `-` (raw: `implementation/milestones/staffing-router/.run/raw/slice_impl-03-draft.txt`)
+
+| Round | Kind | Family | Findings | Triage | Raw |
+|---|---|---|---|---|---|
+| slice_impl-03-codex-r1 | review_round | codex | 2 | 2 reported | `implementation/milestones/staffing-router/.run/raw/slice_impl-03-codex-r1.txt` |
+| slice_impl-03-claude-r1 | fix_findings | claude | 2 | 2 fixed | `implementation/milestones/staffing-router/.run/raw/slice_impl-03-fix1.txt` |
+| slice_impl-03-claude-r2 | delta_review | claude | 0 | clean | `implementation/milestones/staffing-router/.run/raw/slice_impl-03-delta1.txt` |
+| slice_impl-03-codex-r2 | review_round | codex | 1 | 1 reported | `implementation/milestones/staffing-router/.run/raw/slice_impl-03-codex-r2.txt` |
+| slice_impl-03-claude-r3 | fix_findings | claude | 1 | 1 fixed | `implementation/milestones/staffing-router/.run/raw/slice_impl-03-fix2.txt` |
+| slice_impl-03-claude-r4 | delta_review | claude | 0 | clean | `implementation/milestones/staffing-router/.run/raw/slice_impl-03-delta2.txt` |
+| slice_impl-03-codex-r3 | review_round | codex | 0 | clean | `implementation/milestones/staffing-router/.run/raw/slice_impl-03-codex-r3.txt` |
+| slice_impl-03-claude-r5 | review_round | claude | 2 | DEBT-CLEAN (reclassified) | `implementation/milestones/staffing-router/.run/raw/slice_impl-03-claude-r1.txt` |
+
+### Review completion — SATISFIED
+
+- deterministic result: every configured family was clean or debt-clean on the same current bytes; full verification was not due at this boundary; no extra reviewer was called
+- cited reviews: `slice_impl-03-codex-r3`, `slice_impl-03-claude-r5`
+
+**Deferred debt (opposite-family verified):**
+- `claude-slice03a-r1-F1` (raised claude, cleared codex): The unit hardens the session reader against interpreter-level damage (RecursionError, over-long index keys) but leaves the sibling document reader `load` raising a raw RecursionError, so the same corruption class does not leave this module through one error class as the unit's own code comments assert. — The document loader lets RecursionError escape while the next resolver is pinned to catch unreadable documents, so the builder could silently trust StaffingError and miss this path, but correction requires only local exception normalization and one test.
+- `claude-slice03a-r1-F2` (raised claude, cleared codex): `_validate_available_families`'s docstring says the machine's family list is 'recorded as given', but the code runs each entry through `_short_string`, which strips surrounding whitespace and refuses any name over 100 characters — the opposite of the verbatim recording the adjacent `work_area` handles deliberately guarantee and test. — The false docstring could mislead behavior or test expectations, but a capable builder should notice the explicit _short_string call and its stripping contract, while any resulting drift is exposed by one minimal whitespace test and corrected locally.
+
