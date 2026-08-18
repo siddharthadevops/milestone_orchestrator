@@ -215,11 +215,22 @@ class BrainstormingCoordinationTest(unittest.TestCase):
         self.store._store.put(
             bs._session_key("bs-garbage"), {"not": "a session"}
         )
+        self.store._store.put(
+            bs._session_key("bs-garbage-list"), ["not", "a", "session"]
+        )
 
         self.assertEqual(
             self.store.session_ids_for_target(target), ["bs-current"]
         )
+        # A sole matching-but-stale record yields nothing, not an error.
         self.assertEqual(self.store.session_ids_for_target(elsewhere), [])
+        # And a target no record ever named yields nothing either.
+        self.assertEqual(
+            self.store.session_ids_for_target(
+                os.path.join(self.root, "nowhere", "decision.md")
+            ),
+            [],
+        )
 
     def test_dante_never_receives_a_closure_vote(self):
         roster = participants() + [
