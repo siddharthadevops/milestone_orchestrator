@@ -65,11 +65,21 @@ A SESSION is the owner's live selection over that catalogue — the work
 area, the families this machine actually has, a document REFERENCE, the
 rigor, and optionally a default material and an unconditional override in
 the document's own shape. Its store follows the document store for the same
-reason: the operator-facing semantics are the same. Sessions are the second
-half of this module and are documented at their own section below; nothing
-in this file staffs a call yet.
+reason: the operator-facing semantics are the same.
+
+:func:`resolve` is the one question and the one answer. It reads the stored
+session and the stored document on every call, layers base, material
+override and session override, collapses a family this machine does not
+have, saturates a rank past the end of a ladder, applies ``step_up``, and
+answers EXACTLY ``{"agent": ..., "model": ..., "effort": ...}``. Only two
+conditions are surfaced — nobody to call at all, and a `distinct_families`
+role that cannot be split — and an input it cannot read resolves on the
+default document and says so. It writes nothing. Sessions and the resolver
+are documented at their own sections below; no dispatch reads any of this
+yet, because every consumer is cut over in its own later slice.
 """
 
+import collections
 import json
 import os
 import secrets
@@ -90,7 +100,8 @@ ROLES = (
 
 # Typed rules. The goal defines exactly one type; a second one would be a
 # further typed entry in future work, never an expression language.
-RULE_TYPES = ("step_up",)
+RULE_STEP_UP = "step_up"
+RULE_TYPES = (RULE_STEP_UP,)
 
 DEFAULT_DOCUMENT_NAME = "default"
 
@@ -117,6 +128,40 @@ def _path(home, name):
 # Scalar helpers
 
 
+def _shown(value):
+    """One REJECTED value as an error message can carry it.
+
+    `%r` is not total: past CPython's int/str conversion limit an integer
+    cannot be formatted at all, and the attempt raises while the refusal is
+    still being built — replacing a declared :class:`StaffingError` with a
+    raw conversion failure no caller of this module expects. A number that
+    long is a number no seat, round, rank or stored id could ever be, so
+    the message names its size instead of its digits and THAT refusal
+    leaves through its own class.
+
+    That conversion limit is the one limit handled here, because it is a
+    property of the value alone: the same integer fails to format in any
+    caller at any depth. The interpreter's RECURSION limit is not — it is
+    a property of the value AND the stack left when formatting starts, so
+    no single depth is the deep one. A value nested deeply enough exhausts
+    the stack from any caller, however shallow; and a caller near the
+    limit raises `RecursionError` out of `open`, `json.load` or validation
+    on an ordinary request carrying no deep value at all. Catching it here
+    would normalize one frame of many without making this module's
+    operations total against recursion exhaustion, so it is deliberately
+    left alone.
+    STORED bytes nested past that limit are a different matter — damage in
+    an artifact this module owns — and :func:`load` and
+    :func:`read_session` do normalize those.
+    """
+    try:
+        return "%r" % (value,)
+    except ValueError:
+        if isinstance(value, int):
+            return "<integer of %d bits>" % value.bit_length()
+        return "<unprintable %s>" % type(value).__name__
+
+
 def _short_string(ctx, label, value):
     """One catalogue string: non-empty and short, stripped."""
     if not isinstance(value, str) or len(value) > _MAX_FIELD_LEN:
@@ -133,7 +178,8 @@ def _positive_int(ctx, label, value):
     """A 1-based number. ``True`` is not 1: booleans are an input error."""
     if isinstance(value, bool) or not isinstance(value, int) or value < 1:
         raise StaffingError(
-            "%s: %s must be a positive integer, got %r" % (ctx, label, value))
+            "%s: %s must be a positive integer, got %s"
+            % (ctx, label, _shown(value)))
     return value
 
 
@@ -618,6 +664,15 @@ def load(home, name):
     except ValueError as exc:
         raise StaffingError(
             "staffing document %r is not valid JSON: %s" % (name, exc))
+    except RecursionError as exc:
+        # Deeper nesting than the interpreter decodes (CPython's recursion
+        # limit). A document no reader can reach is damage like any other,
+        # and it leaves through the same loud class rather than as a raw
+        # recursion failure the resolver's mandatory fallback would not
+        # recognize.
+        raise StaffingError(
+            "staffing document %r is nested too deeply to be read"
+            % name) from exc
     doc = _validate(doc, "staffing document %r" % name)
     if doc["name"] != name:
         raise StaffingError(
@@ -1347,7 +1402,15 @@ def _validate_session_overrides(ctx, overrides):
 
 
 def _session_ctx(session_id):
-    return "staffing session %r" % (session_id,)
+    """The context prefix for one session id, whatever a caller passed.
+
+    Built BEFORE :func:`_name_token` gets to refuse the id, so it renders
+    through :func:`_shown` rather than `%r`: an id past CPython's int/str
+    conversion limit would otherwise raise while the refusal was still
+    being built, and the mandatory fallback would see a raw conversion
+    failure where it expects the one declared class.
+    """
+    return "staffing session %s" % (_shown(session_id),)
 
 
 def validate_session(record, ctx=None):
@@ -1484,3 +1547,541 @@ def edit_session(home, session_id, changes):
         staffing_sessions_dir(home), _session_path(home, session_id),
         ".staffing-session-", record)
     return record
+
+
+# ---------------------------------------------------------------------------
+# Resolution: one request, one answer
+#
+# This is the strict half of the milestone. Every request the resolver ADMITS
+# comes back with a staffing except the two surfaced conditions; everything
+# a caller could get wrong in the other direction is ANSWERED rather than
+# refused — a family this machine does not have collapses, a rank past the
+# end of a ladder saturates, a material nobody defined counts as none, a seat
+# nobody assigned falls back to the role's first, and a session or a document
+# that cannot be read at all resolves on the default document and says so.
+#
+# The order is fixed, and nothing in it can fail:
+#
+#   material  the request's, else the session's default, else none — a name
+#             the document does not carry is not a material at all
+#   slot      the layered assignment (base, then the material's override,
+#             then the session's) for `(role, index)`; an index no layer
+#             assigns is that role's index 1
+#   collapse  the lowest-numbered slot whose family this machine has,
+#             whenever the assigned slot's is not one of them
+#   ranks     the layered `tuning[rigor][slot][role]` for the slot that
+#             actually runs, saturating at each ladder's top
+#   step_up   one step per matching rule entry, after saturation
+#
+# Every call reads the stored session and the stored document; nothing is
+# kept between calls, which is the whole of "live" — the last completed write
+# governs the next call, and a call already made is never rewritten because
+# nothing rewrites it. Nothing is written either: what actually ran is the
+# consumer's marker, in the consumer's own slice.
+
+# The two SURFACED conditions, as their public tokens. Their HTTP statuses,
+# and what a consumer does with either, belong to slice 5 and after.
+STAFFING_UNAVAILABLE = "staffing_unavailable"
+DISTINCT_FAMILIES_UNSATISFIABLE = "distinct_families_unsatisfiable"
+
+# What the mandatory fallback reports beside the answer. The consumer's
+# marker carries it in its own slice; nothing here stores it.
+STAFFING_FALLBACK_DEFAULT_DOCUMENT = "default_document"
+
+# The rigor an unreadable session resolves at. Rigor is chosen ON the
+# session, so when there is no session to read there is no choice to honour
+# and the middle of the three is the one the goal names.
+FALLBACK_RIGOR = "medium"
+
+_REQUEST_CTX = "staffing request"
+
+
+class StaffingConditionError(StaffingError):
+    """One of the two SURFACED conditions, carrying its public token.
+
+    The established `(code, detail)` shape (`tasks.TaskRequestError`): the
+    token is the classification a route or a consumer switches on, the
+    message is for a human reading a log. It stays INSIDE
+    :class:`StaffingError` because this module has one error family — a
+    caller that only wants "this request did not answer" needs no second
+    except clause, and one that wants the token asks for it.
+    """
+
+    def __init__(self, code, detail):
+        StaffingError.__init__(self, detail)
+        self.code = code
+
+
+#: One resolution: the answer, and the fallback note when it was resolved on
+#: the default document because an input could not be read. ``answer`` is
+#: EXACTLY ``{"agent", "model", "effort"}`` — the dict the Brainstorming seat
+#: seam already consumes — so the note travels BESIDE it rather than as a
+#: fourth key every consumer would have to strip before dispatching.
+#: ``staffing_fallback`` is ``None`` on an ordinary answer.
+Resolution = collections.namedtuple(
+    "Resolution", ("answer", "staffing_fallback"))
+
+# What resolution needs from a session: the families this machine has, the
+# rigor, the default material, the session's own override, and the name of
+# the document it references (``None`` when there was no session to read).
+_Selection = collections.namedtuple(
+    "_Selection", ("families", "rigor", "material", "overrides", "document"))
+
+# One read of a session and its document, as resolution sees them: the
+# selection, the document actually in force, the delta stack weakest-first,
+# the slots whose family this machine has in numbered order, and the fallback
+# note. Both readers below and the resolver share it, so a seat reader and a
+# dispatch can never disagree about which document is in force.
+_Effective = collections.namedtuple(
+    "_Effective",
+    ("selection", "document", "layers", "available", "staffing_fallback"))
+
+
+# ---------------------------------------------------------------------------
+# Admitting a request
+
+
+def _request_index(label, value):
+    """One 1-based seat index or round number.
+
+    A non-positive one is an INPUT error and not a collapse: seats and
+    rounds are counted from 1 by every consumer that passes them, so a zero
+    or a negative is a caller bug, and answering it would hide the bug
+    behind a plausible staffing forever.
+    """
+    return _positive_int(_REQUEST_CTX, label, value)
+
+
+def _request_material(material):
+    """The request's material: a string, or nothing.
+
+    A NAME is all the request carries. Whether the document carries a
+    material of that name is resolution's business — an unknown one counts
+    as absent — so nothing here checks it against a catalogue.
+    """
+    if material is None:
+        return None
+    if not isinstance(material, str):
+        raise StaffingError(
+            "%s: material must be a string or absent, got %s"
+            % (_REQUEST_CTX, _shown(material)))
+    return material
+
+
+def _admit(role, index, round_number, material):
+    """Refuse a request nothing could answer, BEFORE resolution.
+
+    Exactly three things are input errors: an unknown role, a non-positive
+    index or round, and a non-string material. None of them is a surfaced
+    condition and none of them reaches the mandatory fallback, which exists
+    for inputs that cannot be READ and not for a request that says something
+    no vocabulary contains.
+
+    `brief` is not here on purpose: it is accepted, read by no rule and
+    never stored, so there is nothing about it to refuse.
+    """
+    if role not in ROLES:
+        raise StaffingError(
+            "%s: unknown role %s (allowed: %s)"
+            % (_REQUEST_CTX, _shown(role), ", ".join(ROLES)))
+    return (role,
+            _request_index("index", index),
+            _request_index("round", round_number),
+            _request_material(material))
+
+
+# ---------------------------------------------------------------------------
+# The mandatory fallback: what resolution reads when an input cannot be read
+
+
+def _selection_for(home, session, families):
+    """The owner's selection, or the fallback selection when there is none.
+
+    "Cannot be read" is ONE condition — unknown, unreadable, malformed,
+    damaged alike — which is exactly why :func:`read_session` raises one
+    class for all of them: the fallback answers them the same way and has
+    nothing to tell apart. The fallback selection is the `default` document
+    at `medium` with the families the CALLER passed, because families and
+    rigor live on the session and there is no session to read them from.
+    """
+    try:
+        record = read_session(home, session)
+    except StaffingError:
+        return _Selection(tuple(families or ()), FALLBACK_RIGOR,
+                          None, None, None), True
+    return _Selection(tuple(record["families"]), record["rigor"],
+                      record.get("material"), record.get("overrides"),
+                      record["document"]), False
+
+
+def _document_for(home, name):
+    """The document actually in force, and whether it is the fallback.
+
+    Three levels, and the last one cannot fail: the session's own document;
+    else the stored `default`; else the in-code seed. The caller's families
+    and rigor are not touched here — an unreadable DOCUMENT loses only the
+    document, so the session's own rigor, families, material and override
+    all still govern; it is an unreadable SESSION that loses those, and
+    :func:`_selection_for` has already answered that.
+
+    A damaged stored `default` is answered, never repaired: healing it would
+    revert whatever an operator wrote, and slice 2's loud initialization is
+    a different moment which stays exactly as loud as it is.
+    """
+    if name is not None:
+        try:
+            return load(home, name), False
+        except StaffingError:
+            pass
+    try:
+        return load(home, DEFAULT_DOCUMENT_NAME), True
+    except StaffingError:
+        return default_document_seed(), True
+
+
+# ---------------------------------------------------------------------------
+# The layers, and the seat they give
+
+
+def _material_in_force(document, requested, session_material):
+    """The material this call resolves under, or ``None``.
+
+    The request's, else the session's default, else none — and a name the
+    document does not carry counts as ABSENT, so the chain simply moves on
+    to the next one rather than dropping to base. That is one rule applied
+    to every mention: a material the document has no entry for is not a
+    material, wherever it was named, so renaming one in the document
+    degrades a stale request onto the session's standing choice instead of
+    off the material layer altogether.
+    """
+    for candidate in (requested, session_material):
+        if candidate and candidate in document["materials"]:
+            return candidate
+    return None
+
+
+def _layers(document, selection, material):
+    """The delta stack, WEAKEST FIRST: base, material override, session
+    override.
+
+    Each layer carries an `assignment`, a `tuning`, or both, in the
+    document's own inner shape, and each is read CELL BY CELL: a layer
+    silent about one seat or one tuning cell inherits the layer below rather
+    than replacing a whole role. Layer 0 is always the document itself,
+    which save-time completeness makes total.
+    """
+    stack = [document]
+    override = document["overrides"].get(material) if material else None
+    if override:
+        stack.append(override)
+    if selection.overrides:
+        stack.append(selection.overrides)
+    return stack
+
+
+def _assigned_seats(layers, role):
+    """Every index any layer assigns for *role*, in index order.
+
+    The union rather than the topmost layer's set: an override adds a seat
+    without restating the ones below it, and a role's seats are what the
+    layered document says altogether. Index keys are validated decimals, so
+    the ordering is arithmetic and not lexicographic.
+    """
+    indices = set()
+    for layer in layers:
+        indices.update(
+            int(key) for key in (layer.get("assignment") or {}).get(role, {}))
+    return sorted(indices)
+
+
+def _slot_for(layers, role, index):
+    """The family slot the layered assignment gives `(role, index)`.
+
+    Strongest layer first, then the role's index 1 the same way: a seat no
+    layer assigns is that role's FIRST seat, layered like any other, so a
+    session override that moves index 1 moves the fallback with it. The base
+    document always assigns index 1 for every role — that is exactly what
+    save-time completeness buys — so this lookup is total over any document
+    resolution can reach.
+    """
+    try:
+        keys = (str(index), "1")
+    except ValueError:
+        # More digits than the interpreter converts (CPython's int/str
+        # conversion limit), which `_index_key` already refuses to store as
+        # a key: no layer can be spelling this seat, so it is unassigned by
+        # construction and takes the role's index 1 like any other rather
+        # than escaping as a raw conversion failure.
+        keys = ("1",)
+    for key in keys:
+        for layer in reversed(layers):
+            slot = (layer.get("assignment") or {}).get(role, {}).get(key)
+            if slot is not None:
+                return slot
+    return layers[0]["assignment"][role]["1"]
+
+
+def _ranks(layers, rigor, slot, role):
+    """The layered `[model_rank, effort_rank]` for one cell.
+
+    Strongest layer first again, ending at the base document, whose tuning
+    completeness covers every rigor x slot x role it carries — and the slot
+    asked for here is always one it carries, because collapse only ever
+    lands on a slot of this document.
+    """
+    for layer in reversed(layers[1:]):
+        cell = (((layer.get("tuning") or {}).get(rigor) or {})
+                .get(slot) or {}).get(role)
+        if cell is not None:
+            return cell
+    return layers[0]["tuning"][rigor][slot][role]
+
+
+# ---------------------------------------------------------------------------
+# Collapse, saturation and the one rule
+
+
+def _available_slots(document, families):
+    """The document's slots whose family this machine has, lowest first.
+
+    An empty result is the whole of `staffing_unavailable`: there is nobody
+    to call. An empty *families* list reaches here as the machine fact it
+    is, which is why the session store stores one rather than refusing it.
+    """
+    present = set(families)
+    return [slot for slot in sorted(document["families"], key=int)
+            if document["families"][slot]["name"] in present]
+
+
+def _running_slot(slot, available):
+    """The slot that actually runs.
+
+    A slot whose family this machine does not have collapses to the
+    lowest-numbered slot whose family it does — INCLUDING a slot the
+    document does not carry at all, which a session override written against
+    a document since edited may well name. One rule answers both, because
+    from the machine's side they are the same fact: no such family here.
+    """
+    key = str(slot)
+    return key if key in available else available[0]
+
+
+def _step_up_steps(document, role, round_number):
+    """How many steps `step_up` takes for this request.
+
+    One step per matching ENTRY — a rule whose role is this one and whose
+    `min_round` the request has reached — and not one per round beyond it,
+    so a role stuck at round nine climbs no further than at round three
+    unless the operator wrote a second entry. Progression is data.
+    """
+    return sum(1 for rule in document["rules"]
+               if rule["type"] == RULE_STEP_UP and rule["role"] == role
+               and rule["min_round"] <= round_number)
+
+
+def _rungs(family, model_rank, effort_rank, steps):
+    """The model and effort a seat actually runs at.
+
+    Saturation first: a rank past the end of its ladder is that ladder's
+    top, which is how an out-of-range rank answers instead of failing. Then
+    `step_up`, one step at a time, on the SATURATED position: effort + 1;
+    when effort already stands at the top, the next model at its first
+    effort; when both stand at the top, nothing moves. It climbs the ladders
+    the operator ordered by capability, so it adds intelligence and never
+    cost.
+    """
+    models, efforts = family["models"], family["efforts"]
+    model_at = min(model_rank, len(models)) - 1
+    effort_at = min(effort_rank, len(efforts)) - 1
+    for _step in range(steps):
+        if effort_at + 1 < len(efforts):
+            effort_at += 1
+        elif model_at + 1 < len(models):
+            model_at += 1
+            effort_at = 0
+        else:
+            break
+    return models[model_at], efforts[effort_at]
+
+
+# ---------------------------------------------------------------------------
+# The two surfaced conditions
+
+
+def _seat_families(effective, role, seats):
+    """The family each of *seats* actually runs on, collapse included."""
+    return [
+        effective.document["families"][
+            _running_slot(_slot_for(effective.layers, role, index),
+                          effective.available)]["name"]
+        for index in seats
+    ]
+
+
+def _honours_distinct_families(effective, role):
+    """Whether *role*'s own assigned seats can be pairwise-distinct families.
+
+    Judged on the role's OWN seats and on nothing else: a role that declares
+    nothing is honoured by definition, one assigned seat is trivially
+    honoured — a single-family machine reviews with one family today — and
+    no relationship between two different roles is ever checked. Collapse
+    happens first, because two seats that collapse onto one slot are one
+    family however the document numbered them.
+    """
+    if not (effective.document["roles"].get(role) or {}).get(
+            "distinct_families"):
+        return True
+    seats = _assigned_seats(effective.layers, role)
+    if len(seats) < 2:
+        return True
+    if not effective.available:
+        # Nobody to call at all, so two seats cannot be two families. The
+        # resolver never reaches this — `staffing_unavailable` is raised
+        # before any seat is resolved — but the projection is a read that
+        # answers rather than refuses.
+        return False
+    families = _seat_families(effective, role, seats)
+    return len(set(families)) == len(seats)
+
+
+def _unavailable(effective):
+    return StaffingConditionError(
+        STAFFING_UNAVAILABLE,
+        "staffing document %r names families %s; this machine has %s"
+        % (effective.document["name"],
+           ", ".join(sorted({slot["name"]
+                             for slot in effective.document["families"]
+                             .values()})),
+           ", ".join(effective.selection.families) or "none"))
+
+
+def _unsatisfiable(effective, role):
+    seats = _assigned_seats(effective.layers, role)
+    return StaffingConditionError(
+        DISTINCT_FAMILIES_UNSATISFIABLE,
+        "staffing document %r declares distinct_families for %r, whose "
+        "seats %s run on %s with the families this machine has (%s)"
+        % (effective.document["name"], role,
+           ", ".join(str(index) for index in seats),
+           ", ".join(_seat_families(effective, role, seats))
+           if effective.available else "nothing",
+           ", ".join(effective.selection.families) or "none"))
+
+
+# ---------------------------------------------------------------------------
+# One read of a session, shared by the resolver and the two readers
+
+
+def _effective(home, session, material, families):
+    """Read the session and its document once, and layer them.
+
+    The resolver and both document readers go through here, so a seat
+    reader and the dispatch that follows it can never disagree about which
+    document is in force — including when it is the fallback's.
+    """
+    selection, fell_back = _selection_for(home, session, families)
+    document, document_fell_back = _document_for(home, selection.document)
+    fell_back = fell_back or document_fell_back
+    return _Effective(
+        selection=selection,
+        document=document,
+        layers=_layers(
+            document, selection,
+            _material_in_force(document, material, selection.material)),
+        available=_available_slots(document, selection.families),
+        staffing_fallback=(
+            STAFFING_FALLBACK_DEFAULT_DOCUMENT if fell_back else None))
+
+
+# ---------------------------------------------------------------------------
+# The question and the answer
+
+
+def resolve(home, session, role, index=1, round=1, material=None, brief=None,
+            families=()):
+    """Staff one call: who runs it, on which model, at which effort.
+
+    *session* is a stored session id, *role* one of :data:`ROLES`, *index*
+    the 1-based seat of that role and *round* the 1-based round the consumer
+    is on — both consumer facts the router keeps no history of. *material*
+    and *brief* are optional; *families* are the CALLER'S own configured
+    families and are used only when the session cannot be read, since that
+    is the one case where the machine's families cannot be read either.
+
+    Returns a :data:`Resolution`: an answer of exactly ``agent``, ``model``
+    and ``effort``, plus ``staffing_fallback`` when an input could not be
+    read and the default document answered instead.
+
+    It refuses in exactly three ways and no others. An unknown role, a
+    non-positive index or round, and a non-string material are INPUT errors
+    (:class:`StaffingError`), refused before resolution. `staffing_unavailable`
+    and `distinct_families_unsatisfiable` are the two surfaced conditions
+    (:class:`StaffingConditionError`, carrying the token). Everything else
+    answers: collapse, saturation, an unknown material, an unassigned seat,
+    a slot the document does not carry, and an unreadable session or
+    document all have an answer rather than a failure.
+
+    `brief` is accepted, read by no rule and never stored. Resolving writes
+    nothing at all — no record, no history, no repair of a damaged file.
+    """
+    role, index, round_number, material = _admit(role, index, round, material)
+    effective = _effective(home, session, material, families)
+    if not effective.available:
+        raise _unavailable(effective)
+    if not _honours_distinct_families(effective, role):
+        raise _unsatisfiable(effective, role)
+    slot = _running_slot(
+        _slot_for(effective.layers, role, index), effective.available)
+    family = effective.document["families"][slot]
+    model_rank, effort_rank = _ranks(
+        effective.layers, effective.selection.rigor, slot, role)
+    model, effort = _rungs(
+        family, model_rank, effort_rank,
+        _step_up_steps(effective.document, role, round_number))
+    return Resolution(
+        answer={"agent": family["name"], "model": model, "effort": effort},
+        staffing_fallback=effective.staffing_fallback)
+
+
+# ---------------------------------------------------------------------------
+# Two live document reads over a session
+#
+# Milestone law decides WHICH seat runs — the review cycle iterates the seats
+# the document assigns, and surfaces a `distinct_families` role it cannot
+# honour — so it needs to read those two facts without dispatching. They are
+# document reads over a session, never part of an answer: no seat and no
+# projection ever appears in a `resolve` response.
+
+
+def session_seats(home, session, role, material=None, families=()):
+    """A role's assigned seat indices over this session, in index order.
+
+    The layered assignment's own index set — base, the material's override
+    and the session's override together — so a seat an override adds is a
+    seat the consumer iterates. Reads the same effective document
+    :func:`resolve` would, fallback included, so the seats a consumer
+    iterates are the seats its dispatches will actually staff.
+    """
+    if role not in ROLES:
+        raise StaffingError(
+            "%s: unknown role %s (allowed: %s)"
+            % (_REQUEST_CTX, _shown(role), ", ".join(ROLES)))
+    effective = _effective(
+        home, session, _request_material(material), families)
+    return _assigned_seats(effective.layers, role)
+
+
+def distinct_families_projection(home, session, material=None, families=()):
+    """The roles whose declared `distinct_families` this session cannot
+    honour, in the role vocabulary's order.
+
+    The same judgement :func:`resolve` refuses each affected dispatch with,
+    read ahead of any dispatch — the same check, because the document may
+    change live between the two. A read ANSWERS rather than refuses, so a
+    machine with no family at all comes back with every declaring role of
+    two seats or more rather than with `staffing_unavailable`.
+    """
+    effective = _effective(
+        home, session, _request_material(material), families)
+    return [role for role in ROLES
+            if not _honours_distinct_families(effective, role)]

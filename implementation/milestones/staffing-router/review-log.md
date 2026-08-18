@@ -201,3 +201,30 @@
 - `claude-slice03a-r1-F1` (raised claude, cleared codex): The unit hardens the session reader against interpreter-level damage (RecursionError, over-long index keys) but leaves the sibling document reader `load` raising a raw RecursionError, so the same corruption class does not leave this module through one error class as the unit's own code comments assert. — The document loader lets RecursionError escape while the next resolver is pinned to catch unreadable documents, so the builder could silently trust StaffingError and miss this path, but correction requires only local exception normalization and one test.
 - `claude-slice03a-r1-F2` (raised claude, cleared codex): `_validate_available_families`'s docstring says the machine's family list is 'recorded as given', but the code runs each entry through `_short_string`, which strips surrounding whitespace and refuses any name over 100 characters — the opposite of the verbatim recording the adjacent `work_area` handles deliberately guarantee and test. — The false docstring could mislead behavior or test expectations, but a capable builder should notice the explicit _short_string call and its stripping contract, while any resulting drift is exposed by one minimal whitespace test and corrected locally.
 
+## slice_impl-03-b (Sessions and resolution)
+
+- draft: kind `implement`, artifact `-` (raw: `implementation/milestones/staffing-router/.run/raw/slice_impl-03-b-draft.txt`)
+
+| Round | Kind | Family | Findings | Triage | Raw |
+|---|---|---|---|---|---|
+| slice_impl-03-b-codex-r1 | review_round | codex | 2 | 2 reported | `implementation/milestones/staffing-router/.run/raw/slice_impl-03-b-codex-r1.txt` |
+| slice_impl-03-b-claude-r1 | fix_findings | claude | 2 | 2 fixed | `implementation/milestones/staffing-router/.run/raw/slice_impl-03-b-fix1.txt` |
+| slice_impl-03-b-claude-r2 | delta_review | claude | 1 | 1 reported | `implementation/milestones/staffing-router/.run/raw/slice_impl-03-b-delta1.txt` |
+| slice_impl-03-b-claude-r3 | fix_findings | claude | 1 | 1 fixed | `implementation/milestones/staffing-router/.run/raw/slice_impl-03-b-fix2.txt` |
+| slice_impl-03-b-claude-r4 | delta_review | claude | 1 | 1 reported | `implementation/milestones/staffing-router/.run/raw/slice_impl-03-b-delta2.txt` |
+| slice_impl-03-b-claude-r5 | fix_findings | claude | 1 | 1 fixed | `implementation/milestones/staffing-router/.run/raw/slice_impl-03-b-fix3.txt` |
+| slice_impl-03-b-claude-r6 | delta_review | claude | 1 | 1 reported | `implementation/milestones/staffing-router/.run/raw/slice_impl-03-b-delta3.txt` |
+| slice_impl-03-b-claude-r7 | fix_findings | claude | 1 | 1 rejected (1 consulted) | `implementation/milestones/staffing-router/.run/raw/slice_impl-03-b-fix4.txt` |
+| slice_impl-03-b-claude-r8 | delta_review | claude | 1 | 1 reported | `implementation/milestones/staffing-router/.run/raw/slice_impl-03-b-delta4.txt` |
+| slice_impl-03-b-claude-r9 | fix_findings | claude | 1 | 1 fixed | `implementation/milestones/staffing-router/.run/raw/slice_impl-03-b-fix5.txt` |
+| slice_impl-03-b-codex-r2 | review_round | codex | 0 | clean | `implementation/milestones/staffing-router/.run/raw/slice_impl-03-b-codex-r2.txt` |
+| slice_impl-03-b-claude-r10 | review_round | claude | 1 | DEBT-CLEAN (reclassified) | `implementation/milestones/staffing-router/.run/raw/slice_impl-03-b-claude-r1.txt` |
+
+### Review completion — SATISFIED
+
+- deterministic result: every configured family was clean or debt-clean on the same current bytes; full verification was not due at this boundary; no extra reviewer was called
+- cited reviews: `slice_impl-03-b-codex-r2`, `slice_impl-03-b-claude-r10`
+
+**Deferred debt (opposite-family verified):**
+- `claude-slice-03b-claude-r7/S3B-VER-TUNING-LAYER-UNPINNED` (raised claude, cleared codex): The resolution matrix pins "session override over material override over base" for the assignment only; the same precedence over a tuning cell is unverified, so inverting the two override layers in `_ranks` passes the whole focused command — The claimed strict verification still passes 72/72 with tuning precedence inverted, creating a silent correctness gap, but correction requires only one conflicting-cell test and at most a local precedence fix.
+
