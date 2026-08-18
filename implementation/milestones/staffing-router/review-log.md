@@ -38,3 +38,24 @@
 - `claude-claude-SR-SKEL-104` (raised claude, cleared codex): Slice 4 is specified to make the panel's launch selector list staffing documents, but the route that lists documents is delivered by slice 5, which the declared order places after slice 4. — The ordering mismatch affects behavior, but a capable Slice 4 builder must immediately hit the missing listing route and stop for repair, while any silent implementation would be exposed by the first selector test or use and corrected by a small local scope/order change.
 - `claude-claude-SR-SKEL-105` (raised claude, cleared codex): Slice 8 bundles four independent panel surfaces plus the retirement of three service route families into one slice, with no acknowledgement of the narrowness aim the skeleton makes for slice 4. — Slice 8’s breadth and unresolved split are explicit enough that the capable builder should stop at note drafting rather than drift silently, while a miss would require bounded repartitioning of that unit and its review work without changing the contract or downstream consumers.
 
+## slice_doc-01 (Rename `worker` to `agent_call`)
+
+- draft: kind `draft_slice_note`, artifact `implementation/milestones/staffing-router/slices/slice-01.md` (raw: `implementation/milestones/staffing-router/.run/raw/slice_doc-01-draft.txt`)
+
+| Round | Kind | Family | Findings | Triage | Raw |
+|---|---|---|---|---|---|
+| slice_doc-01-codex-r1 | review_round | codex | 4 | DEBT-CLEAN (reclassified) | `implementation/milestones/staffing-router/.run/raw/slice_doc-01-codex-r1.txt` |
+| slice_doc-01-claude-r1 | review_round | claude | 2 | DEBT-CLEAN (reclassified) | `implementation/milestones/staffing-router/.run/raw/slice_doc-01-claude-r1.txt` |
+
+### Review completion — SATISFIED
+
+- deterministic result: every configured family was clean or debt-clean on the same current bytes; full verification was not due at this boundary; no extra reviewer was called
+- cited reviews: `slice_doc-01-codex-r1`, `slice_doc-01-claude-r1`
+
+**Deferred debt (opposite-family verified):**
+- `codex-SR-S1-R1-001` (raised codex, cleared codex): Old-order verification omits public projection and stored-id preservation — Drift risk is high because the verification plan can pass while public projection or stored-id preservation is wrong, silently leaving correctness and test coverage incomplete; damage is low because correction is a bounded local assertion and compatibility fix.
+- `codex-SR-S1-R1-002` (raised codex, cleared codex): Agent-returned legacy plans are promised but untested — The returned-plan contract is explicit enough for a capable builder, but the missing direct check could let pre-storage validation still reject `worker` while all named tests pass; if missed, the first legacy planner response fails visibly and correction is a local normalization plus one targeted te
+- `codex-SR-S1-R1-003` (raised codex, cleared codex): Dynamic run census contradicts the stated no-census boundary — The stale 107/31 census cannot alter the shape-based compatibility rule or representative tests, so a capable builder should either ignore it or stop on the explicit no-census contradiction, and any silent reliance requires only removing a local count assumption.
+- `codex-SR-S1-R1-004` (raised codex, cleared codex): Mechanism prose pins a nonexistent single normalization seam — The false single-catalogue-seam claim could misdirect implementation placement, but a capable builder should notice that stored task records bypass it, while the old-order and new-write tests expose any mistake immediately and correction is a small local relocation of normalization.
+- `claude-SR-S1-CLAUDE-R2-001` (raised claude, cleared codex): The Read compatibility fact enumerates only two stored shapes (durable task orders and durable producer maps); a third durable shape — the `slice_producer_updated` event's `selection.task_executor` — also carries the retired id, is validated by a different function (`tasks.validate_producer_selection` at tasks.py:344 and driver.py:1313) that appears in none of the note's pinned read seams, and would raise `unknown_task_executor` after the rename. — The note falsely declares two durable shapes exhaustive, so the builder would likely omit the live producer-update event path, but the existing run exposes the error on the next review-context build and correction is a small local normalization plus regression test.
+
