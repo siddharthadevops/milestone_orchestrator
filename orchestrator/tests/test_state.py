@@ -2301,8 +2301,8 @@ class TestSummary(TempWorkspaceCase):
                     "id": 1,
                     "title": "slice 1",
                     "producer_task_executor": {
-                        "draft_slice_note": {"task_executor": "worker"},
-                        "implement": {"task_executor": "worker"},
+                        "draft_slice_note": {"task_executor": "agent_call"},
+                        "implement": {"task_executor": "agent_call"},
                     },
                 }
             ],

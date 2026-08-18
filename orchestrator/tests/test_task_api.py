@@ -73,7 +73,7 @@ class TaskApiTest(unittest.TestCase):
             with exc:
                 return exc.code, json.loads(exc.read().decode("utf-8"))
 
-    def order(self, executor="worker", work_area=None, **request_changes):
+    def order(self, executor="agent_call", work_area=None, **request_changes):
         request = {
             "work_area": work_area or {
                 "workspace_path": self.primary,
@@ -265,8 +265,10 @@ class TaskApiTest(unittest.TestCase):
 
         with mock.patch.object(service, "_direct_task_config", side_effect=config):
             body = self.request("POST", "/api/tasks", self.order())[1]
-            self.assertEqual(body["task"]["resolved_staffing"]["worker"]["agent"],
-                             "codex")
+            self.assertEqual(
+                body["task"]["resolved_staffing"]["agent_call"]["agent"],
+                "codex",
+            )
             release.set()
             record = self.wait_record(body["task"]["id"])
         self.assertEqual(len(seen), 1)
@@ -284,6 +286,111 @@ class TaskApiTest(unittest.TestCase):
                          ("failure", "partial evidence"))
         self.assertTrue(failure["token_usage_partial"])
         self.assertTrue(failure["cost_partial"])
+
+    def test_retired_executor_is_refused_on_write_and_read_from_storage(self):
+        """The rename is one-way: refused as new input, still run from disk."""
+        store = task_api.StandaloneTaskStore(self.home)
+        status, refused = self.request(
+            "POST", "/api/tasks", self.order("worker")
+        )
+        self.assertEqual(
+            (status, refused["error"]), (400, tasks.UNKNOWN_TASK_EXECUTOR)
+        )
+        self.assertEqual(store.records(), [])
+
+        admitted = self.request("POST", "/api/tasks", self.order())[1]["task"]
+        self.assertEqual(admitted["order"]["task_executor"], "agent_call")
+
+        # Age the stored record into the shape every pre-rename order has.
+        aged = store.records()
+        aged[0]["order"]["task_executor"] = "worker"
+        aged[0]["resolved_staffing"] = {
+            "worker": aged[0]["resolved_staffing"]["agent_call"]
+        }
+        store._save(aged)
+
+        prompts = []
+
+        class Runner:
+            def call(_self, _family, prompt, _workspace, model=None, effort=None):
+                prompts.append(prompt)
+                return runners.RunnerResult("native text", 0, 1.0)
+
+        host = task_api.DirectTaskHost(
+            self.home, runner_factory=lambda _config, _workspace: Runner()
+        )
+        host.start(
+            store.record(admitted["id"]),
+            lambda: service.driver.load_config(None),
+        )
+        record = self.wait_record(admitted["id"])
+        self.assertEqual(record["result"]["status"], "success", record["result"])
+        self.assertEqual(record["result"]["native_result"], "native text")
+        self.assertEqual(prompts, ["Do exactly the caller-authored work."])
+        # Routing the retired order neither raised nor rewrote its bytes.
+        self.assertEqual(record["order"]["task_executor"], "worker")
+        self.assertEqual(list(record["resolved_staffing"]), ["worker"])
+
+    def test_task_reads_name_a_stored_retired_executor_as_agent_call(self):
+        """Every task read projects the current id; stored bytes keep theirs."""
+        direct = self.request("POST", "/api/tasks", self.order())[1]["task"]
+        store = task_api.StandaloneTaskStore(self.home)
+        aged = store.records()
+        aged[0]["order"]["task_executor"] = "worker"
+        store._save(aged)
+
+        state_path = os.path.join(self.tmp.name, "aged-state.json")
+        state = st.new_state("aged", self.primary, {})
+        milestone = tasks.admit_task(
+            state,
+            direct["order"],
+            {"agent_call": {"agent": "codex"}},
+            self.primary,
+        )
+        state["tasks"][0]["order"]["task_executor"] = "worker"
+        st.save_new(state_path, state)
+        registry.add(self.home, registry.new_entry(
+            "aged", "aged", self.primary, state_path,
+        ))
+        with open(state_path, "rb") as handle:
+            state_before = handle.read()
+        with open(task_api.records_path(self.home), "rb") as handle:
+            records_before = handle.read()
+
+        listed = {
+            row["id"]: row["order"]["task_executor"]
+            for row in self.request("GET", "/api/tasks")[1]["tasks"]
+        }
+        self.assertEqual(listed, {
+            direct["id"]: "agent_call", milestone["id"]: "agent_call",
+        })
+        self.assertEqual(
+            [
+                row["order"]["task_executor"]
+                for row in self.request(
+                    "GET", "/api/tasks?run_id=aged"
+                )[1]["tasks"]
+            ],
+            ["agent_call"],
+        )
+        for path in (
+            "/api/tasks/%s" % direct["id"],
+            "/api/tasks/%s" % milestone["id"],
+            "/api/tasks/%s?run_id=aged" % milestone["id"],
+        ):
+            self.assertEqual(
+                self.request("GET", path)[1]["task"]["order"]["task_executor"],
+                "agent_call",
+                path,
+            )
+
+        with open(state_path, "rb") as handle:
+            self.assertEqual(handle.read(), state_before)
+        with open(task_api.records_path(self.home), "rb") as handle:
+            self.assertEqual(handle.read(), records_before)
+        self.assertEqual(
+            store.records()[0]["order"]["task_executor"], "worker"
+        )
 
     def test_worker_marker_completion_failure_keeps_native_success(self):
         class Runner:
@@ -408,10 +515,10 @@ class TaskApiTest(unittest.TestCase):
         before = len(task_api.StandaloneTaskStore(self.home).records())
 
         for executor, config in (
-            ("worker", malformed_defaults),
+            ("agent_call", malformed_defaults),
             ("brainstorming", malformed_defaults),
-            ("worker", malformed_families),
-            ("worker", malformed_command),
+            ("agent_call", malformed_families),
+            ("agent_call", malformed_command),
             ("brainstorming", malformed_command),
             ("brainstorming", malformed_timeouts),
         ):
@@ -704,10 +811,10 @@ class TaskApiTest(unittest.TestCase):
         state_path = os.path.join(self.tmp.name, "registered-state.json")
         state = st.new_state("registered", self.primary, {})
         milestone = tasks.admit_task(
-            state, mine["order"], {"worker": {"agent": "codex"}}, self.primary
+            state, mine["order"], {"agent_call": {"agent": "codex"}}, self.primary
         )
         foreign_bound = tasks.admit_task(
-            state, foreign["order"], {"worker": {"agent": "codex"}}, other
+            state, foreign["order"], {"agent_call": {"agent": "codex"}}, other
         )
         st.save_new(state_path, state)
         registry.add(self.home, registry.new_entry(

@@ -153,7 +153,7 @@ class ProducerSelectionTest(unittest.TestCase):
                     "id": 1,
                     "title": "one",
                     "producer_task_executor": {
-                        "draft_slice_note": {"task_executor": "worker"},
+                        "draft_slice_note": {"task_executor": "agent_call"},
                         "implement": {
                             "task_executor": "brainstorming",
                             "configuration": {"max_rounds": 4},
@@ -172,8 +172,8 @@ class ProducerSelectionTest(unittest.TestCase):
         )
 
         invalid_maps = (
-            {"review_round": {"task_executor": "worker"}},
-            {"implement": {"task_executor": "worker", "extra": True}},
+            {"review_round": {"task_executor": "agent_call"}},
+            {"implement": {"task_executor": "agent_call", "extra": True}},
             {
                 "implement": {
                     "task_executor": "brainstorming",
@@ -316,13 +316,14 @@ class ProducerSelectionTest(unittest.TestCase):
         self.assertEqual(source, before)
         self.assertEqual([item["id"] for item in effective], [1, 2])
         self.assertEqual([item["title"] for item in effective], ["absent", "partial"])
-        worker = {"task_executor": "worker"}
+        agent_call = {"task_executor": "agent_call"}
         self.assertEqual(
             effective[0]["producer_task_executor"],
-            {"draft_slice_note": worker, "implement": worker},
+            {"draft_slice_note": agent_call, "implement": agent_call},
         )
         self.assertEqual(
-            effective[1]["producer_task_executor"]["draft_slice_note"], worker
+            effective[1]["producer_task_executor"]["draft_slice_note"],
+            agent_call,
         )
         self.assertEqual(
             effective[1]["producer_task_executor"]["implement"]["configuration"],
@@ -349,7 +350,7 @@ class ProducerSelectionTest(unittest.TestCase):
         self.assertEqual(status, 200, first)
         self.assertEqual(
             first["producer_task_executor"]["implement"],
-            {"task_executor": "worker"},
+            {"task_executor": "agent_call"},
         )
         status, second = self._json(
             "POST",
@@ -385,7 +386,7 @@ class ProducerSelectionTest(unittest.TestCase):
             status, response = self._json(
                 "POST",
                 self._route(run_id),
-                {"task_kind": "implement", "task_executor": "worker"},
+                {"task_kind": "implement", "task_executor": "agent_call"},
             )
         self.assertEqual((status, response["error"]), (409, tasks.TASK_UPDATE_BUSY))
         self.assertEqual(st.load(entry["state_path"]), before)
@@ -497,7 +498,7 @@ class ProducerSelectionTest(unittest.TestCase):
         status, response = self._json(
             "POST",
             self._route(run_id),
-            {"task_kind": "implement", "task_executor": "worker"},
+            {"task_kind": "implement", "task_executor": "agent_call"},
         )
         self.assertEqual(status, 200, response)
         with loaded._exclusive():
@@ -509,7 +510,7 @@ class ProducerSelectionTest(unittest.TestCase):
             contracts.KIND_IMPLEMENT,
             _request(workspace, contracts.KIND_IMPLEMENT, "slice_impl-01"),
         )
-        self.assertEqual(selected["task_executor"], "worker")
+        self.assertEqual(selected["task_executor"], "agent_call")
 
     def test_loaded_driver_adopts_override_after_changed_plan_installation(self):
         run_id, entry, _workspace = self._planned_run("replacement-live-override")
@@ -639,7 +640,7 @@ class ProducerSelectionTest(unittest.TestCase):
                                 "task_executor": "brainstorming",
                                 "configuration": {"closure_policy": "majority"},
                             },
-                            "implement": {"task_executor": "worker"},
+                            "implement": {"task_executor": "agent_call"},
                         },
                     },
                     {"id": 2, "title": "New planned slice"},
@@ -655,7 +656,7 @@ class ProducerSelectionTest(unittest.TestCase):
         )
         self.assertEqual(
             repaired[0]["producer_task_executor"]["implement"],
-            {"task_executor": "worker"},
+            {"task_executor": "agent_call"},
         )
         self.assertNotIn("producer_task_executor", repaired[1])
         self.assertEqual(tasks.operator_producer_overrides(driver.state), [])
@@ -703,7 +704,7 @@ class ProducerSelectionTest(unittest.TestCase):
             if candidate["kind"] == st.UNIT_SLICE_DOC
         )
         with self.assertRaisesRegex(
-            st.IllegalTransition, "not a Worker task"
+            st.IllegalTransition, "not an agent-call task"
         ):
             driver._admit_worker_task(
                 unit,
@@ -737,7 +738,7 @@ class ProducerSelectionTest(unittest.TestCase):
                     "id": 1,
                     "title": "Independent producers",
                     "producer_task_executor": {
-                        "draft_slice_note": {"task_executor": "worker"},
+                        "draft_slice_note": {"task_executor": "agent_call"},
                         "implement": {"task_executor": "brainstorming"},
                     },
                 }],
@@ -808,7 +809,7 @@ class ProducerSelectionTest(unittest.TestCase):
                             "title": "Independent producers",
                             "producer_task_executor": {
                                 "draft_slice_note": {
-                                    "task_executor": "worker"
+                                    "task_executor": "agent_call"
                                 },
                                 "implement": {
                                     "task_executor": "brainstorming"
@@ -886,18 +887,92 @@ class ProducerSelectionTest(unittest.TestCase):
                     frozen_prompt,
                 )
 
+    def test_retired_producer_id_projects_without_rewriting_its_plan(self):
+        """A plan written before the rename projects, overrides, and keeps."""
+        stored = [{
+            "id": 1,
+            "title": "Planned before the rename",
+            "producer_task_executor": {
+                "draft_slice_note": {"task_executor": "worker"},
+                "implement": {"task_executor": "worker"},
+            },
+        }]
+        run_id, entry, _workspace = self._planned_run("retired-plan", stored)
+        agent_call = {"task_executor": "agent_call"}
+
+        status, detail = self._json("GET", "/api/runs/%s" % run_id)
+        self.assertEqual(status, 200, detail)
+        self.assertEqual(
+            detail["summary"]["slices"][0]["producer_task_executor"],
+            {"draft_slice_note": agent_call, "implement": agent_call},
+        )
+        self.assertEqual(
+            st.load(entry["state_path"])["milestone"]["slices"], stored
+        )
+
+        status, written = self._json(
+            "POST",
+            self._route(run_id),
+            {"task_kind": "implement", "task_executor": "brainstorming"},
+        )
+        self.assertEqual(status, 200, written)
+        self.assertEqual(
+            written["producer_task_executor"]["draft_slice_note"], agent_call
+        )
+        # The override touched its own kind only: the sibling keeps the bytes
+        # it was stored with and goes on reading as the current id.
+        durable = st.load(entry["state_path"])["milestone"]["slices"][0]
+        self.assertEqual(
+            durable["producer_task_executor"]["draft_slice_note"],
+            {"task_executor": "worker"},
+        )
+        self.assertEqual(
+            tasks.effective_slice_producers(durable)["draft_slice_note"],
+            agent_call,
+        )
+
+    def test_retired_producer_event_projects_as_an_operator_override(self):
+        """The planner's override block reads pre-rename history unchanged."""
+        state = st.new_state("goal", "/workspace", {"families_order": ["codex"]})
+        state["milestone"]["slices"] = [{"id": 1, "title": "one"}]
+        st.append_event(
+            state,
+            "slice_producer_updated",
+            slice_id=1,
+            task_kind="implement",
+            selection={"task_executor": "worker"},
+        )
+        self.assertEqual(
+            tasks.operator_producer_overrides(state),
+            [{
+                "slice_id": 1,
+                "task_kind": "implement",
+                "selection": {"task_executor": "agent_call"},
+            }],
+        )
+        self.assertEqual(
+            state["events"][-1]["selection"], {"task_executor": "worker"}
+        )
+
     def test_rejected_route_bodies_leave_state_unchanged(self):
         run_id, entry, _workspace = self._planned_run("rejected")
         route = self._route(run_id)
         cases = (
-            ({"task_executor": "worker"}, 400, tasks.INVALID_TASK_REQUEST),
+            ({"task_executor": "agent_call"}, 400, tasks.INVALID_TASK_REQUEST),
             (
-                {"task_kind": "review_round", "task_executor": "worker"},
+                {"task_kind": "review_round", "task_executor": "agent_call"},
                 400,
                 tasks.INVALID_TASK_REQUEST,
             ),
             (
                 {"task_kind": "implement", "task_executor": "missing"},
+                400,
+                tasks.UNKNOWN_TASK_EXECUTOR,
+            ),
+            (
+                # The retired spelling reads from storage but never enters
+                # through the front door.
+                {"task_kind": "implement", "task_executor": "worker"},
                 400,
                 tasks.UNKNOWN_TASK_EXECUTOR,
             ),
@@ -911,7 +986,11 @@ class ProducerSelectionTest(unittest.TestCase):
                 tasks.INVALID_TASK_REQUEST,
             ),
             (
-                {"task_kind": "implement", "task_executor": "worker", "extra": 1},
+                {
+                    "task_kind": "implement",
+                    "task_executor": "agent_call",
+                    "extra": 1,
+                },
                 400,
                 tasks.INVALID_TASK_REQUEST,
             ),
@@ -956,7 +1035,7 @@ class ProducerSelectionTest(unittest.TestCase):
         status, frozen = self._json(
             "POST",
             route,
-            {"task_kind": "draft_slice_note", "task_executor": "worker"},
+            {"task_kind": "draft_slice_note", "task_executor": "agent_call"},
         )
         self.assertEqual((status, frozen["error"]), (409, tasks.TASK_SELECTION_FROZEN))
         status, sibling = self._json(
@@ -988,7 +1067,7 @@ class ProducerSelectionTest(unittest.TestCase):
                 contracts.KIND_DRAFT_SLICE_NOTE,
                 _request(workspace, contracts.KIND_DRAFT_SLICE_NOTE, st.unit_key(doc)),
             ),
-            {"worker": {"agent": "codex"}},
+            {"agent_call": {"agent": "codex"}},
             workspace,
         )
         doc["active_task"] = {
@@ -1062,7 +1141,7 @@ class ProducerSelectionTest(unittest.TestCase):
             "KIND: review_round\n",
             "codex",
         )
-        self.assertEqual(review["order"]["task_executor"], "worker")
+        self.assertEqual(review["order"]["task_executor"], "agent_call")
 
 
 if __name__ == "__main__":

@@ -40,16 +40,16 @@ _WORKER_ACCOUNTING_EVENTS = frozenset({
 
 _TASK_EXECUTORS = (
     {
-        "id": "worker",
-        "name": "Worker",
-        "description": "Runs one contracted Worker call for focused work.",
-        "operating_mode": "One contracted Worker call.",
+        "id": "agent_call",
+        "name": "Agent call",
+        "description": "Runs one contracted agent call for focused work.",
+        "operating_mode": "One contracted agent call.",
         "usage_examples": [
             "drafting documents",
             "programming small chunks of code",
         ],
         "available_agent_configurations": (
-            "One Worker seat; agent, model, and effort resolve from the "
+            "One agent-call seat; agent, model, and effort resolve from the "
             "current profile or call-time defaults."
         ),
         "configuration_schema": {},
@@ -86,6 +86,37 @@ _TASK_EXECUTORS = (
 _TASK_EXECUTOR_BY_ID = {
     entry["id"]: entry for entry in _TASK_EXECUTORS
 }
+# One retired spelling per renamed executor.  Durable orders, durable producer
+# maps, stored producer events, and plans an agent echoes back keep the bytes
+# they were written with; reading names them under the current id.  The
+# catalogue itself never gains the retired key, so a new write still meets the
+# ordinary unknown-executor refusal.
+_RETIRED_TASK_EXECUTORS = {"worker": "agent_call"}
+
+
+def stored_task_executor(value):
+    """Read a stored or agent-returned executor id under its current name."""
+    if isinstance(value, str):
+        return _RETIRED_TASK_EXECUTORS.get(value, value)
+    return value
+
+
+def projected_task_record(record):
+    """Read one durable task record under the current executor name.
+
+    Applied where a record is projected outward rather than inside
+    `task_records`: the standalone store loads through that reader before
+    saving, so normalizing there would rewrite durable bytes the rename
+    forbids touching.
+    """
+    order = record.get("order") if isinstance(record, dict) else None
+    if not isinstance(order, dict):
+        return record
+    stored = order.get("task_executor")
+    current = stored_task_executor(stored)
+    if current == stored:
+        return record
+    return dict(record, order=dict(order, task_executor=current))
 
 
 class ContractError(contracts.ContractError):
@@ -251,9 +282,11 @@ def resolve_configuration(task_executor, configuration=_MISSING):
         _request_error(exc)
 
 
-def _validate_producer_selection(value, context):
+def _validate_producer_selection(value, context, stored=False):
     _exact_keys(value, ("task_executor",), ("configuration",), context)
     task_executor = value["task_executor"]
+    if stored:
+        task_executor = stored_task_executor(task_executor)
     configuration = value.get("configuration", _MISSING)
     # Resolve only as a validation probe.  Prospective state preserves an
     # omitted configuration; catalogue defaults freeze when a task is admitted.
@@ -267,22 +300,29 @@ def _validate_producer_selection(value, context):
 
 
 def validate_producer_selection(value, context="producer selection"):
-    """Validate one prospective TaskExecutor choice without freezing defaults."""
+    """Read one recorded prospective choice without freezing defaults.
+
+    Both callers project an already-stored `slice_producer_updated` event, so a
+    retired id reads under its current name.  The write body has its own
+    validator and keeps refusing it.
+    """
     try:
-        return _validate_producer_selection(value, context)
+        return _validate_producer_selection(value, context, stored=True)
     except (ContractError, TypeError, ValueError) as exc:
         _request_error(exc)
 
 
 def validate_producer_map(value, context="producer_task_executor"):
-    """Validate a partial/raw producer map; omissions retain Worker defaults."""
+    """Read a partial/raw producer map; omissions retain agent-call defaults."""
     try:
         _exact_keys(value, (), PRODUCER_TASK_KINDS, context)
         checked = {}
         for task_kind in PRODUCER_TASK_KINDS:
             if task_kind in value:
                 checked[task_kind] = _validate_producer_selection(
-                    value[task_kind], "%s.%s" % (context, task_kind)
+                    value[task_kind],
+                    "%s.%s" % (context, task_kind),
+                    stored=True,
                 )
         return _json_copy(checked, context)
     except (ContractError, TypeError, ValueError) as exc:
@@ -297,7 +337,7 @@ def effective_slice_producers(slice_plan):
     checked = {} if raw is _MISSING else validate_producer_map(raw)
     return {
         task_kind: _json_copy(
-            checked.get(task_kind, {"task_executor": "worker"}),
+            checked.get(task_kind, {"task_executor": "agent_call"}),
             "effective producer selection",
         )
         for task_kind in PRODUCER_TASK_KINDS
@@ -449,7 +489,14 @@ def update_slice_producer(state, slice_id, value):
         )
 
     raw = slice_plan.get("producer_task_executor", _MISSING)
-    producer_map = {} if raw is _MISSING else validate_producer_map(raw)
+    if raw is _MISSING:
+        producer_map = {}
+    else:
+        # Check the stored map, then carry its own bytes forward: a retired id
+        # recorded on the sibling kind keeps reading as its current name and is
+        # not rewritten by an override of the other kind.
+        validate_producer_map(raw)
+        producer_map = _json_copy(raw, "producer_task_executor")
     selection = {
         key: checked[key]
         for key in ("task_executor", "configuration")
@@ -587,8 +634,10 @@ def execute_worker(record, dispatch):
     if not isinstance(record, dict):
         raise TaskRecordError("Worker execution requires a task record")
     order = record.get("order")
-    if not isinstance(order, dict) or order.get("task_executor") != "worker":
-        raise TaskRecordError("Worker execution requires a Worker task")
+    if not isinstance(order, dict) or stored_task_executor(
+        order.get("task_executor")
+    ) != "agent_call":
+        raise TaskRecordError("Worker execution requires an agent-call task")
     if record.get("result") is not None:
         raise TaskRecordError("a terminal Worker task cannot execute")
     if not callable(dispatch):

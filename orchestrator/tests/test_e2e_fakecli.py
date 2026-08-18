@@ -215,8 +215,8 @@ class TestCalculatorE2E(unittest.TestCase):
                 "id": 1,
                 "title": "Calculator core",
                 "producer_task_executor": {
-                    "draft_slice_note": {"task_executor": "worker"},
-                    "implement": {"task_executor": "worker"},
+                    "draft_slice_note": {"task_executor": "agent_call"},
+                    "implement": {"task_executor": "agent_call"},
                 },
             }],
         )

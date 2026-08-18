@@ -58,7 +58,7 @@ def task_result(**changes):
     return value
 
 
-def task_order(task_executor="worker", **request_changes):
+def task_order(task_executor="agent_call", **request_changes):
     return {
         "task_executor": task_executor,
         "request": task_request(**request_changes),
@@ -87,7 +87,7 @@ class TaskContractsTest(unittest.TestCase):
         self.assertIsInstance(catalogue, list)
         self.assertEqual(
             [entry["id"] for entry in catalogue],
-            ["worker", "brainstorming"],
+            ["agent_call", "brainstorming"],
         )
         fields = {
             "id",
@@ -113,6 +113,12 @@ class TaskContractsTest(unittest.TestCase):
             self.assertTrue(entry["available_agent_configurations"].strip())
 
         self.assertEqual(catalogue[0]["configuration_schema"], {})
+        self.assertEqual(catalogue[0]["name"], "Agent call")
+        # The retired spelling survives only in stored bytes, never in the
+        # catalogue an operator, a product, or a planner reads.
+        for entry in catalogue:
+            text = json.dumps(entry, sort_keys=True).lower()
+            self.assertNotIn("worker", text)
         self.assertEqual(
             catalogue[1]["configuration_schema"],
             {
@@ -142,8 +148,8 @@ class TaskContractsTest(unittest.TestCase):
         )
 
     def test_configuration_schema_and_resolution(self):
-        self.assertEqual(tasks.resolve_configuration("worker"), {})
-        self.assertEqual(tasks.resolve_configuration("worker", {}), {})
+        self.assertEqual(tasks.resolve_configuration("agent_call"), {})
+        self.assertEqual(tasks.resolve_configuration("agent_call", {}), {})
         self.assertEqual(
             tasks.resolve_configuration("brainstorming"),
             {"max_rounds": 20, "closure_policy": "unanimity"},
@@ -162,8 +168,8 @@ class TaskContractsTest(unittest.TestCase):
         )
 
         invalid = [
-            ("worker", {"max_rounds": 1}),
-            ("worker", None),
+            ("agent_call", {"max_rounds": 1}),
+            ("agent_call", None),
             ("brainstorming", {"max_rounds": True}),
             ("brainstorming", {"max_rounds": 1.0}),
             ("brainstorming", {"max_rounds": 0}),
@@ -233,7 +239,7 @@ class TaskContractsTest(unittest.TestCase):
         )
 
         order = tasks.validate_order(
-            {"task_executor": "worker", "request": task_request()}
+            {"task_executor": "agent_call", "request": task_request()}
         )
         self.assertEqual(order["configuration"], {})
         self.assertEqual(order["request"], task_request())
@@ -286,17 +292,17 @@ class TaskContractsTest(unittest.TestCase):
 
         invalid_orders = [
             {},
-            {"task_executor": "worker"},
+            {"task_executor": "agent_call"},
             {"request": task_request()},
             {
-                "task_executor": "worker",
+                "task_executor": "agent_call",
                 "request": task_request(),
                 "extra": True,
             },
             {"task_executor": 1, "request": task_request()},
-            {"task_executor": "worker", "request": []},
+            {"task_executor": "agent_call", "request": []},
             {
-                "task_executor": "worker",
+                "task_executor": "agent_call",
                 "request": task_request(),
                 "configuration": None,
             },
@@ -625,7 +631,7 @@ class DurableTaskRecordsTest(unittest.TestCase):
             os.makedirs(outside)
             os.symlink(outside, os.path.join(primary, "linked-outside"))
 
-            for executor in ("worker", "brainstorming"):
+            for executor in ("agent_call", "brainstorming"):
                 with self.subTest(executor=executor):
                     state = st.new_state("goal", primary, {})
                     omitted = tasks.admit_task(

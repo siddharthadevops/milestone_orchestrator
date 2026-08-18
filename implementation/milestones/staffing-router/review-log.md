@@ -59,3 +59,20 @@
 - `codex-SR-S1-R1-004` (raised codex, cleared codex): Mechanism prose pins a nonexistent single normalization seam — The false single-catalogue-seam claim could misdirect implementation placement, but a capable builder should notice that stored task records bypass it, while the old-order and new-write tests expose any mistake immediately and correction is a small local relocation of normalization.
 - `claude-SR-S1-CLAUDE-R2-001` (raised claude, cleared codex): The Read compatibility fact enumerates only two stored shapes (durable task orders and durable producer maps); a third durable shape — the `slice_producer_updated` event's `selection.task_executor` — also carries the retired id, is validated by a different function (`tasks.validate_producer_selection` at tasks.py:344 and driver.py:1313) that appears in none of the note's pinned read seams, and would raise `unknown_task_executor` after the rename. — The note falsely declares two durable shapes exhaustive, so the builder would likely omit the live producer-update event path, but the existing run exposes the error on the next review-context build and correction is a small local normalization plus regression test.
 
+## slice_impl-01 (Rename `worker` to `agent_call`)
+
+- draft: kind `implement`, artifact `-` (raw: `implementation/milestones/staffing-router/.run/raw/slice_impl-01-draft.txt`)
+
+| Round | Kind | Family | Findings | Triage | Raw |
+|---|---|---|---|---|---|
+| slice_impl-01-codex-r1 | review_round | codex | 1 | 1 reported | `implementation/milestones/staffing-router/.run/raw/slice_impl-01-codex-r1.txt` |
+| slice_impl-01-claude-r1 | fix_findings | claude | 1 | 1 fixed | `implementation/milestones/staffing-router/.run/raw/slice_impl-01-fix1.txt` |
+| slice_impl-01-claude-r2 | delta_review | claude | 0 | clean | `implementation/milestones/staffing-router/.run/raw/slice_impl-01-delta1.txt` |
+| slice_impl-01-codex-r2 | review_round | codex | 0 | clean | `implementation/milestones/staffing-router/.run/raw/slice_impl-01-codex-r2.txt` |
+| slice_impl-01-claude-r3 | review_round | claude | 0 | clean | `implementation/milestones/staffing-router/.run/raw/slice_impl-01-claude-r1.txt` |
+
+### Review completion — SATISFIED
+
+- deterministic result: every configured family was clean or debt-clean on the same current bytes; full verification was not due at this boundary; no extra reviewer was called
+- cited reviews: `slice_impl-01-codex-r2`, `slice_impl-01-claude-r3`
+

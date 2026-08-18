@@ -30,7 +30,7 @@ class TaskPanelTests(unittest.TestCase):
         self.assertIn('definition.type === "choice"', self.task_ui)
         self.assertIn("definition.choices || []", self.task_ui)
         for copied_constant in (
-            '"worker"', '"brainstorming"', "max_rounds", "closure_policy",
+            '"agent_call"', '"brainstorming"', "max_rounds", "closure_policy",
         ):
             self.assertNotIn(copied_constant, self.task_ui)
 

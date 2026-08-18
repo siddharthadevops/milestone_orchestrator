@@ -539,7 +539,7 @@ class WorkerTaskCutoverTest(unittest.TestCase):
                 state = st.load(path)
                 task = self._task(state)
                 self.assertEqual(len(tasks.task_records(state)), 1)
-                self.assertEqual(task["order"]["task_executor"], "worker")
+                self.assertEqual(task["order"]["task_executor"], "agent_call")
                 self.assertEqual(task["order"]["configuration"], {})
                 self.assertEqual(task["order"]["request"]["context"]["task_kind"], kind)
                 self.assertEqual(task["result"]["status"], "success")
@@ -636,7 +636,7 @@ class WorkerTaskCutoverTest(unittest.TestCase):
                 task_id=task["id"],
             ),
         )
-        self.assertEqual(frozen["worker"]["model"], "model-a")
+        self.assertEqual(frozen["agent_call"]["model"], "model-a")
         self.assertEqual(task["resolved_staffing"], frozen)
         self.assertEqual([call["model"] for call in runner.call_meta],
                          ["model-b", "model-b"])

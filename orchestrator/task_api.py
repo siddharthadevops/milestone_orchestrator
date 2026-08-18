@@ -92,7 +92,7 @@ class StandaloneTaskStore:
 
 
 def worker_staffing(config):
-    """Resolve the profile-less Worker snapshot used at direct admission."""
+    """Resolve the profile-less agent-call snapshot used at direct admission."""
     try:
         if not isinstance(config, dict):
             raise ValueError("config")
@@ -124,7 +124,7 @@ def worker_staffing(config):
             tasks.TASK_UNAVAILABLE, "Worker staffing is unavailable"
         ) from exc
     return {
-        "worker": {"agent": family, "model": model, "effort": effort}
+        "agent_call": {"agent": family, "model": model, "effort": effort}
     }
 
 
@@ -167,7 +167,7 @@ def _write_worker_marker(home, task_id, marker):
 
 
 def _dispatch(config):
-    snapshot = worker_staffing(config)["worker"]
+    snapshot = worker_staffing(config)["agent_call"]
     return snapshot["agent"], snapshot["model"], snapshot["effort"]
 
 
@@ -278,7 +278,9 @@ class DirectTaskHost:
             record = self.store.record(task_id)
             if record["result"] is not None:
                 return
-            if record["order"]["task_executor"] == "worker":
+            if tasks.stored_task_executor(
+                record["order"]["task_executor"]
+            ) == "agent_call":
                 self._run_worker(record, config_resolver)
             else:
                 self._run_brainstorming(record, config_resolver)

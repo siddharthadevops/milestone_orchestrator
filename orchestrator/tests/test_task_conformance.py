@@ -96,13 +96,16 @@ class TaskConformanceTest(unittest.TestCase):
         st.save(path, state)
         return path
 
-    def test_old_plan_defaults_to_worker_without_migration(self):
+    def test_old_plan_defaults_to_agent_call_without_migration(self):
+        agent_call = {"task_executor": "agent_call"}
+        brainstorming = {"task_executor": "brainstorming"}
         cases = (
             (
                 "absent-map",
                 {"id": 1, "title": "old plan"},
                 contracts.KIND_DRAFT_SLICE_NOTE,
                 ok(contracts.KIND_DRAFT_SLICE_NOTE, artifact="docs/note.md"),
+                {"draft_slice_note": agent_call, "implement": agent_call},
             ),
             (
                 "partial-map",
@@ -115,9 +118,25 @@ class TaskConformanceTest(unittest.TestCase):
                 },
                 contracts.KIND_IMPLEMENT,
                 ok(contracts.KIND_IMPLEMENT, files_changed=[]),
+                {"draft_slice_note": brainstorming, "implement": agent_call},
+            ),
+            (
+                # The shape every run planned before the rename stores.
+                "retired-id",
+                {
+                    "id": 1,
+                    "title": "plan naming the retired executor",
+                    "producer_task_executor": {
+                        "draft_slice_note": {"task_executor": "worker"},
+                        "implement": {"task_executor": "worker"},
+                    },
+                },
+                contracts.KIND_DRAFT_SLICE_NOTE,
+                ok(contracts.KIND_DRAFT_SLICE_NOTE, artifact="docs/note.md"),
+                {"draft_slice_note": agent_call, "implement": agent_call},
             ),
         )
-        for label, plan, kind, native in cases:
+        for label, plan, kind, native, projected in cases:
             with self.subTest(label=label):
                 path = self._milestone(label, plan, kind)
                 before = json.dumps(
@@ -145,13 +164,16 @@ class TaskConformanceTest(unittest.TestCase):
                 )
 
                 self.assertEqual(after, before)
-                self.assertEqual(record["order"]["task_executor"], "worker")
+                self.assertEqual(record["order"]["task_executor"], "agent_call")
                 self.assertEqual(record["order"]["request"]["request"],
                                  runner.calls[0][2])
                 self.assertEqual(record["result"]["native_result"], native)
                 self.assertEqual(unit["draft"]["task_id"], record["id"])
                 self.assertEqual(unit["status"], st.U_PRE_REVIEW_VERIFY)
                 summary = st.summary(state)
+                self.assertEqual(
+                    summary["slices"][0]["producer_task_executor"], projected
+                )
                 self.assertEqual(summary["work_duration_s"],
                                  record["result"]["duration_s"])
                 self.assertTrue(summary["work_token_usage_partial"])
@@ -443,7 +465,7 @@ class TaskConformanceTest(unittest.TestCase):
                 reference_documents=[],
                 output_directory=output,
             ),
-            {"worker": {"agent": "codex"}},
+            {"agent_call": {"agent": "codex"}},
             workspace,
         )
 

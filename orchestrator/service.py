@@ -4008,7 +4008,7 @@ def _resolve_direct_task_order(home, who, body):
         order["request"]["work_area"] = work_area
         primary = _validate_task_references(order)
         order = tasks._canonical_output_directory(order, primary)
-        if order["task_executor"] == "worker":
+        if order["task_executor"] == "agent_call":
             staffing = task_api.worker_staffing(config)
         else:
             staffing = brainstorming_tasks.resolve_staffing(
@@ -4098,7 +4098,10 @@ def visible_tasks(home, who):
         direct = [
             record for record in direct if _task_project(record) in allowed
         ]
-    return direct + _registered_task_records(home, allowed)
+    return [
+        tasks.projected_task_record(record)
+        for record in direct + _registered_task_records(home, allowed)
+    ]
 
 
 def _visible_run_task_state(home, who, run_id):
@@ -4117,11 +4120,11 @@ def visible_run_tasks(home, who, run_id):
         records = tasks.task_records(state)
     except tasks.TaskRecordError as exc:
         raise ApiError(500, "task storage unavailable") from exc
-    if allowed is None:
-        return records
-    return [
-        record for record in records if _task_project(record) in allowed
-    ]
+    if allowed is not None:
+        records = [
+            record for record in records if _task_project(record) in allowed
+        ]
+    return [tasks.projected_task_record(record) for record in records]
 
 
 def read_task(home, who, task_id, run_id=None):
@@ -4135,7 +4138,7 @@ def read_task(home, who, task_id, run_id=None):
             raise ApiError(500, "task storage unavailable") from exc
         if allowed is not None and _task_project(record) not in allowed:
             raise ApiError(403, FORBIDDEN)
-        return record
+        return tasks.projected_task_record(record)
 
     allowed = _allowed_task_projects(home, who)
     direct = task_api.StandaloneTaskStore(home).records()
@@ -4145,7 +4148,7 @@ def read_task(home, who, task_id, run_id=None):
     if record is not None:
         if allowed is not None and _task_project(record) not in allowed:
             raise ApiError(403, FORBIDDEN)
-        return record
+        return tasks.projected_task_record(record)
 
     entries = registry.load(home)["runs"]
     if allowed is None:
@@ -4173,7 +4176,7 @@ def read_task(home, who, task_id, run_id=None):
         if record is not None:
             if allowed is not None and _task_project(record) not in allowed:
                 raise ApiError(403, FORBIDDEN)
-            return record
+            return tasks.projected_task_record(record)
 
     # Preserve the public foreign-record classification without letting an
     # unreadable, unauthorized run couple its faults to another inspection.

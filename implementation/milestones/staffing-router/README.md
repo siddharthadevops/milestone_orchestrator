@@ -316,4 +316,5 @@ The goal is achieved when:
 | Unit | Status | Rounds | Review result | Gate commit |
 |---|---|---|---|---|
 | skeleton | reviewed | 12 | satisfied | 0b8caea |
-| slice_doc-01 (Rename `worker` to `agent_call`) | reviewed | 2 | satisfied | - |
+| slice_doc-01 (Rename `worker` to `agent_call`) | reviewed | 2 | satisfied | 544cd57 |
+| slice_impl-01 (Rename `worker` to `agent_call`) | reviewed | 5 | satisfied | - |

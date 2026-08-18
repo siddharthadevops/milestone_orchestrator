@@ -2679,10 +2679,14 @@ class Driver(object):
                 "unit %s has an incompatible active task" % st.unit_key(unit)
             )
         record = tasks.task_record(self.state, reference.get("id"))
-        if record["order"]["task_executor"] != "worker":
-            raise st.IllegalTransition("the active task is not a Worker task")
+        if tasks.stored_task_executor(
+            record["order"]["task_executor"]
+        ) != "agent_call":
+            raise st.IllegalTransition(
+                "the active task is not an agent-call task"
+            )
         if record["result"] is not None:
-            raise st.IllegalTransition("the active Worker task is terminal")
+            raise st.IllegalTransition("the active agent-call task is terminal")
         return record
 
     def _active_brainstorming_task(self, unit, kind):
@@ -2780,7 +2784,7 @@ class Driver(object):
         if output_directory is not None:
             request["output_directory"] = output_directory
         order = {
-            "task_executor": "worker",
+            "task_executor": "agent_call",
             "configuration": {},
             "request": request,
         }
@@ -2788,15 +2792,15 @@ class Driver(object):
             order = tasks.producer_order(
                 self._slice_info(unit["slice_id"]), kind, request
             )
-            if order["task_executor"] != "worker":
+            if order["task_executor"] != "agent_call":
                 raise st.IllegalTransition(
-                    "selected production task is not a Worker task"
+                    "selected production task is not an agent-call task"
                 )
         record = tasks.admit_task(
             self.state,
             order,
             {
-                "worker": {
+                "agent_call": {
                     "agent": staffing_family,
                     "model": staffing_model,
                     "effort": staffing_effort,

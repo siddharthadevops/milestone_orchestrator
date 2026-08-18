@@ -149,7 +149,7 @@ class BrainstormingSliceProductionTest(unittest.TestCase):
             "title": "Guarded producer",
             "producer_task_executor": {
                 "draft_slice_note": {"task_executor": "brainstorming"},
-                "implement": {"task_executor": "worker"},
+                "implement": {"task_executor": "agent_call"},
             },
         }]
         state["units"][0].update({
@@ -174,7 +174,7 @@ class BrainstormingSliceProductionTest(unittest.TestCase):
         return subject, workspace, skeleton_path
 
     def ready_brainstorming_implementation(self, runner=None):
-        self.planned("worker", "brainstorming")
+        self.planned("agent_call", "brainstorming")
         state = st.load(self.path)
         state["config"]["families_order"] = ["codex"]
         state["config"]["p3_reclassify_debt"] = False
@@ -222,7 +222,7 @@ class BrainstormingSliceProductionTest(unittest.TestCase):
         self.fail("milestone did not close within %d steps" % max_steps)
 
     def test_brainstorming_note_waits_replaces_path_then_worker_implements(self):
-        self.planned("brainstorming", "worker")
+        self.planned("brainstorming", "agent_call")
         worker = {
             "status": "ok", "kind": contracts.KIND_IMPLEMENT,
             "files_changed": [], "suite_command": "python3 -m unittest focused",
@@ -249,11 +249,11 @@ class BrainstormingSliceProductionTest(unittest.TestCase):
         impl = st.current_unit(subject.state)
         records = tasks.task_records(subject.state)
         self.assertEqual([row["order"]["task_executor"] for row in records],
-                         ["brainstorming", "worker"])
+                         ["brainstorming", "agent_call"])
         self.assertNotEqual(impl["draft"]["task_id"], first_id)
 
     def test_worker_note_then_target_free_brainstorming_implementation(self):
-        self.planned("worker", "brainstorming")
+        self.planned("agent_call", "brainstorming")
         note = {
             "status": "ok", "kind": contracts.KIND_DRAFT_SLICE_NOTE,
             "artifact": "docs/custom-note.md",
@@ -276,10 +276,10 @@ class BrainstormingSliceProductionTest(unittest.TestCase):
             subject.step()
         self.assertEqual(impl["status"], st.U_PRE_REVIEW_VERIFY)
         self.assertEqual([row["order"]["task_executor"] for row in tasks.task_records(subject.state)],
-                         ["worker", "brainstorming"])
+                         ["agent_call", "brainstorming"])
 
     def test_brainstorming_implementation_reads_later_skeleton_assignment(self):
-        self.planned("worker", "brainstorming")
+        self.planned("agent_call", "brainstorming")
         note = {
             "status": "ok", "kind": contracts.KIND_DRAFT_SLICE_NOTE,
             "artifact": "docs/older-note.md",
@@ -321,7 +321,7 @@ class BrainstormingSliceProductionTest(unittest.TestCase):
         )
 
     def test_brainstorming_remodel_successor_uses_durable_assignment(self):
-        self.planned("worker", "brainstorming")
+        self.planned("agent_call", "brainstorming")
         note = {
             "status": "ok", "kind": contracts.KIND_DRAFT_SLICE_NOTE,
             "artifact": "docs/resealed-note.md",
@@ -367,7 +367,7 @@ class BrainstormingSliceProductionTest(unittest.TestCase):
         )
 
     def test_native_failure_preserves_accounting_and_resumes_with_a_distinct_task(self):
-        self.planned("brainstorming", "worker")
+        self.planned("brainstorming", "agent_call")
         subject = drv.Driver(self.path, runner=runners.MockRunner([]))
         with mock.patch.object(adapter, "resolve_staffing", side_effect=self.staffing), \
                 mock.patch.object(adapter, "start_task", return_value={"id": "failed-session"}):
@@ -585,7 +585,7 @@ class BrainstormingSliceProductionTest(unittest.TestCase):
         self.assertIsNone(tasks.task_record(subject.state, task_id)["result"])
 
     def test_pre_session_io_failure_terminalizes_admitted_task(self):
-        self.planned("brainstorming", "worker")
+        self.planned("brainstorming", "agent_call")
         subject = drv.Driver(self.path, runner=runners.MockRunner([]))
         home = os.path.join(self.tmp.name, "pre-session-home")
         with mock.patch.object(
@@ -611,7 +611,7 @@ class BrainstormingSliceProductionTest(unittest.TestCase):
         self.assertIsNotNone(subject.state["failure"])
 
     def test_lifecycle_lock_io_failure_keeps_admitted_task_recoverable(self):
-        self.planned("brainstorming", "worker")
+        self.planned("brainstorming", "agent_call")
         subject = drv.Driver(self.path, runner=runners.MockRunner([]))
         refused_lock = mock.MagicMock()
         refused_lock.__enter__.side_effect = OSError("read-only lock store")
@@ -694,7 +694,7 @@ class BrainstormingSliceProductionTest(unittest.TestCase):
         self.assertNotIn("python3 -m unittest discover -s tests", armed)
         self.assertNotIn("Judge whether these commands", armed)
 
-        self.planned("worker", "worker")
+        self.planned("agent_call", "agent_call")
         worker = {
             "status": "ok", "kind": contracts.KIND_IMPLEMENT,
             "files_changed": [],
@@ -720,7 +720,7 @@ class BrainstormingSliceProductionTest(unittest.TestCase):
             "id": 1,
             "title": "Brainstorming implementation",
             "producer_task_executor": {
-                "draft_slice_note": {"task_executor": "worker"},
+                "draft_slice_note": {"task_executor": "agent_call"},
                 "implement": {"task_executor": "brainstorming"},
             },
         }]
@@ -802,7 +802,7 @@ class BrainstormingSliceProductionTest(unittest.TestCase):
                     unit, kind, "perform %s" % kind, "codex"
                 )
                 admitted.append(record["order"]["task_executor"])
-                self.assertEqual(record["order"]["task_executor"], "worker")
+                self.assertEqual(record["order"]["task_executor"], "agent_call")
                 self.assertEqual(
                     tasks.effective_slice_producers(
                         subject.state["milestone"]["slices"][0]
@@ -814,7 +814,7 @@ class BrainstormingSliceProductionTest(unittest.TestCase):
                         "implement": {"task_executor": "brainstorming"},
                     },
                 )
-        self.assertEqual(admitted, ["worker"] * len(kinds))
+        self.assertEqual(admitted, ["agent_call"] * len(kinds))
 
     def test_empty_suite_finding_arms_and_runs_the_final_checkpoint_once(self):
         command = "python3 -m unittest discover -s tests -t ."
@@ -883,7 +883,7 @@ class BrainstormingSliceProductionTest(unittest.TestCase):
         self.assertEqual(records[0]["order"]["task_executor"], "brainstorming")
         self.assertEqual(
             [record["order"]["task_executor"] for record in records[1:]],
-            ["worker", "worker", "worker"],
+            ["agent_call", "agent_call", "agent_call"],
         )
         self.assertIn("empty list is unknown", runner.calls[0][2])
         self.assertFalse(runner.script)
@@ -928,7 +928,7 @@ class BrainstormingSliceProductionTest(unittest.TestCase):
         self.assertNotIn("empty list is unknown", prompt)
 
     def test_brainstorming_note_inherits_document_obligations(self):
-        self.planned("brainstorming", "worker")
+        self.planned("brainstorming", "agent_call")
         subject = drv.Driver(self.path, runner=runners.MockRunner([]))
         subject.state["config"]["profile"] = copy.deepcopy(
             profiles.SEEDS["light"]["profile"]
