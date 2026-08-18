@@ -73,7 +73,7 @@ _TASK_EXECUTORS = (
             "max_rounds": {
                 "type": "integer",
                 "minimum": 1,
-                "default": 10,
+                "default": contracts.MILESTONE_BRAINSTORMING_ROUNDS,
             },
             "closure_policy": {
                 "type": "choice",

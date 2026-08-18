@@ -46,7 +46,7 @@ def _rethink(kind, source=None, result_mode="proposal"):
         "request": "Resolve the one bounded design question.",
         "finding": copy.deepcopy(source or {"id": "BUILD", "summary": "choice"}),
         "target_path": "proposals/rethink.md",
-        "max_rounds": 10,
+        "max_rounds": 20,
         "result_mode": result_mode,
     }
     if kind in contracts.RETHINK_CONTINUATION_KINDS:

@@ -119,7 +119,7 @@ class TaskContractsTest(unittest.TestCase):
                 "max_rounds": {
                     "type": "integer",
                     "minimum": 1,
-                    "default": 10,
+                    "default": 20,
                 },
                 "closure_policy": {
                     "type": "choice",
@@ -138,7 +138,7 @@ class TaskContractsTest(unittest.TestCase):
         self.assertEqual(
             tasks.task_executor_catalogue()[1]["configuration_schema"]
             ["max_rounds"]["default"],
-            10,
+            20,
         )
 
     def test_configuration_schema_and_resolution(self):
@@ -146,7 +146,7 @@ class TaskContractsTest(unittest.TestCase):
         self.assertEqual(tasks.resolve_configuration("worker", {}), {})
         self.assertEqual(
             tasks.resolve_configuration("brainstorming"),
-            {"max_rounds": 10, "closure_policy": "unanimity"},
+            {"max_rounds": 20, "closure_policy": "unanimity"},
         )
         self.assertEqual(
             tasks.resolve_configuration(
@@ -158,7 +158,7 @@ class TaskContractsTest(unittest.TestCase):
             tasks.resolve_configuration(
                 "brainstorming", {"closure_policy": "majority"}
             ),
-            {"max_rounds": 10, "closure_policy": "majority"},
+            {"max_rounds": 20, "closure_policy": "majority"},
         )
 
         invalid = [

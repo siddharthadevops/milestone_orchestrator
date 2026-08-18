@@ -207,7 +207,7 @@ DEFAULT_CONFIG = {
     # continue without inserting a new stage into their chronology.
     "guarantee_calibration": {
         "enabled": True,
-        "max_rounds": 10,
+        "max_rounds": contracts.MILESTONE_BRAINSTORMING_ROUNDS,
     },
     # A delta stops being meaningfully incremental after enough cumulative
     # fixes.  After this many fixes in one episode born from a review round

@@ -199,7 +199,10 @@ class GuaranteeCalibrationDriverTest(unittest.TestCase):
                 "effort": "max",
             },
         )
-        self.assertEqual(captured["kwargs"]["max_rounds"], 10)
+        self.assertEqual(
+            captured["kwargs"]["max_rounds"],
+            contracts.MILESTONE_BRAINSTORMING_ROUNDS,
+        )
 
     def test_counterpart_never_lands_on_the_leads_family(self):
         # A milestone discussion is two families arguing. A counterpart

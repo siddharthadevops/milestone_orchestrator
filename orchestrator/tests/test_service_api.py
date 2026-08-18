@@ -160,7 +160,7 @@ class ServiceApiTest(unittest.TestCase):
         self.assertIn("<span>New milestone</span>", text)
         self.assertIn("<span>New brainstorming</span>", text)
         self.assertIn(
-            'id="b_rounds" type="number" min="1" step="1" value="10"',
+            'id="b_rounds" type="number" min="1" step="1" value="20"',
             text,
         )
         self.assertIn("function openForm(preselect)", text)
