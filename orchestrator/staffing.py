@@ -48,11 +48,25 @@ prior definition untouched; listing loads AND validates every candidate and
 raises on the first damaged one, so a damaged catalogue never looks merely
 shorter; and names are case-insensitively unique, so the same API semantics
 hold on case-sensitive and case-insensitive filesystems alike.
+
+Nobody rewrites a profile by hand. :func:`ensure_documents` runs at
+catalogue initialization — the moment ``model_profiles.ensure_default``
+already runs — and converts every readable, valid stored profile into a
+document of the SAME NAME, missing-only. Conversion is a normalization, not
+a copy: a profile can say things a document has no way to hold ("the family
+opposite whoever is calling", "the caller's own effort", a family that
+differs from rigor to rigor), so those become explicit numbers, taken from
+the profile's ``medium`` configuration and from the same seams today's
+resolution uses, and the converted document staffs each seat the way that
+profile staffs it today. Nothing here reads a document to staff a call: the
+documents appear beside the profiles and wait for their consumers.
 """
 
 import json
 import os
 import tempfile
+
+from . import model_profiles
 
 STAFFING_DOCUMENTS_DIRNAME = "staffing_documents"
 
@@ -633,3 +647,445 @@ def save(home, doc):
         if os.path.exists(tmp):
             os.unlink(tmp)
     return doc
+
+
+# ---------------------------------------------------------------------------
+# Conversion: one stored model profile -> one staffing document
+#
+# A profile says what to do in the acts vocabulary, where several answers are
+# STRUCTURAL rather than written down: "the family opposite whoever is
+# calling", "the caller's own effort", "whatever this family defaults to".
+# A document has no way to hold those, so conversion resolves each seat of the
+# design's Conversion Reference through the DRIVER'S OWN act-resolution seam —
+# the same function every dispatch uses — and writes the numbers it produces.
+# Today's answer is therefore MEASURED, not restated here; the seat-by-seat
+# drift alarm re-measures it through a real Driver.
+#
+# Two normalizations the shape forces, both settled by the design: assignment
+# is one table for all rigors, so it is taken from the profile's `medium`
+# configuration; and where today's answer turns on who was calling, the
+# document holds one of those answers — `classify 1` is shared with the
+# failure classifier, and `consult 1` is resolved with the converted `fix 1`
+# family as origin rather than with the no-origin fallback.
+
+# Each family's whole model and effort vocabulary. It lives here because
+# today that vocabulary exists ONLY in the panel's JavaScript
+# (static/panel.html MODEL_OPTS / EFFORT_OPTS), which lists models
+# strongest-first for DISPLAY. Amendment A1 fixes the ladder order instead:
+# least -> most capable as the OPERATOR judges it, never by price, because
+# `step_up` exists to add intelligence when work is stuck and never to change
+# cost. What is written here is the seed of operator DATA inside each
+# converted document — nothing in this module or any later one consults it to
+# resolve a call, and only a document save reorders a stored ladder.
+# A converted slot carries the WHOLE vocabulary, not only the values its
+# profile used, so `step_up` has rungs above today's choice to climb into.
+# test_ladders_are_whole_vocabulary_in_operator_order guards this copy against
+# the panel's until the panel slice retires that one.
+FAMILY_MODELS = {
+    "codex": ("gpt-5.6-luna", "gpt-5.6-terra", "gpt-5.6-sol"),
+    "claude": ("claude-sonnet-5", "claude-opus-5", "claude-fable-5"),
+}
+FAMILY_EFFORTS = {
+    "codex": ("low", "medium", "high", "xhigh", "max"),
+    "claude": ("low", "medium", "high", "xhigh", "max"),
+}
+
+
+def _shipped_config(config):
+    """The configuration conversion reads today's staffing from.
+
+    The SHIPPED configuration, not a run's: documents are a home-wide
+    catalogue, so a profile must convert to the same document whichever run
+    happens to initialize first. The parameter exists for tests and for a
+    caller that already holds the shipped copy.
+
+    Imported lazily because the driver imports this module to initialize the
+    catalogue; the cycle is only in the import graph, never at call time.
+    """
+    if config is not None:
+        return config
+    from . import driver
+    return driver.load_config(None)
+
+
+def _resolve_act(config, act_map, act, origin_family=None,
+                 default_family=None):
+    """One act, resolved by the driver's own act-resolution seam.
+
+    The profile's rigor configuration is the current-state layer and the live
+    overlay is empty: a run's `acts.json` is a live per-run override, never
+    profile content, so it converts nothing. Using this seam rather than a
+    second copy of its rules is what makes the conversion reproduce today
+    instead of agreeing with a restatement of today.
+    """
+    from . import driver
+    return driver._resolve_act_from_layers(
+        config, True, {}, act_map, act,
+        origin_family=origin_family, default_family=default_family)
+
+
+def _family_defaults(config, family):
+    """That family's ordinary model and effort — what a call on it resolves
+    to when nothing is pinned (driver._family_defaults)."""
+    entry = (config.get("model_defaults") or {}).get(family) or {}
+    return entry.get("model"), entry.get("effort")
+
+
+def _opposite_family(config, family):
+    families = config["families_order"]
+    return next((f for f in families if f != family), family)
+
+
+def _slot_family(config, family):
+    """The family of the SLOT this seat converts onto.
+
+    Every configured family has its own slot; a seat naming a family the
+    configuration has no slot for — a profile that cannot run today either —
+    converts onto slot 1, whose family is the first configured one. This is
+    the one definition `convert_profile`'s slot map and every DERIVED seat
+    both read, so a seat derived from another seat is derived from the
+    family that seat actually converts onto, never from one the document has
+    no way to hold. For a configured family it is the identity, so every
+    profile that can run today converts exactly as before.
+    """
+    families = config["families_order"]
+    return family if family in families else families[0]
+
+
+def _conversion_seats(config, act_map):
+    """Every Conversion Reference seat for ONE rigor configuration.
+
+    Returns ``{(role, index): (family, model, effort)}`` with model and
+    effort filled exactly as each dispatch fills them: from the seat's own
+    resolved family defaults, except where the dispatch itself takes a half
+    from another seat — `consult 1` carries the FIXER'S effort and
+    `brainstorm 2` the lead's. A half stays `None` when the family it falls
+    back to carries no defaults, whatever family the seat itself lands on,
+    exactly as that dispatch would carry nothing for it; `convert_profile`
+    resolves what is left against the slot the seat lands on.
+    """
+    from . import driver
+
+    families = config["families_order"]
+
+    def resolve(act, origin_family=None, default_family=None):
+        return _resolve_act(
+            config, act_map, act, origin_family=origin_family,
+            default_family=default_family)
+
+    def filled(family, model, effort):
+        default_model, default_effort = _family_defaults(config, family)
+        return (family, model or default_model, effort or default_effort)
+
+    seats = {}
+
+    # plan 1 <- the `skeletoner` act as a SKELETON dispatch resolves it:
+    # _skeletoner_profile re-asserts the skeleton's own family and effort
+    # (a partial override replaces the whole act entry), and the dispatch
+    # then fills the model from the RESOLVED family's defaults.
+    skeleton = driver.DEFAULT_CONFIG["acts"]["skeletoner"]
+    family, model, effort = resolve(
+        "skeletoner", default_family=skeleton.get("agent"))
+    seats[("plan", 1)] = filled(
+        family, model, effort or skeleton.get("effort"))
+
+    # draft 1 / implement 1 <- the `drafter` / `implementer` acts, model and
+    # effort filled from the resolved family's defaults.
+    seats[("draft", 1)] = filled(*resolve("drafter"))
+    lead = filled(*resolve("implementer"))
+    seats[("implement", 1)] = lead
+
+    # fix 1 <- the `fixer` act with `codex` as its default family and no
+    # origin. Its family is also `consult 1`'s origin below.
+    fix_family, fix_model, fix_effort = resolve(
+        "fixer", default_family="codex")
+    seats[("fix", 1)] = filled(fix_family, fix_model, fix_effort)
+
+    # classify 1 <- the `reclassifier` act with no origin, so `self` resolves
+    # to the first family and `opposite` to the second. The failure
+    # classifier has no profile act and takes the family opposite the call
+    # that failed; it shares this seat and so reproduces one of its two
+    # answers.
+    seats[("classify", 1)] = filled(*resolve("reclassifier"))
+
+    # review i <- the fixed review families in configured order. The family
+    # is structural (review leadership stays family-rotated); only
+    # `review_<family>`'s model and effort are operator-tunable.
+    for index, family in enumerate(families, start=1):
+        _fixed, model, effort = resolve(
+            "review_%s" % family, origin_family=family, default_family=family)
+        seats[("review", index)] = filled(family, model, effort)
+
+    # brainstorm 1/2/3 <- Initial Position / Contrary Position / Dante.
+    # The lead IS the implementer seat, and Dante is pinned from the lead
+    # profile, so seats 1 and 3 carry the same staffing.
+    seats[("brainstorm", 1)] = lead
+    seats[("brainstorm", 3)] = lead
+    # The counterpart is derived from the lead's CONVERTED slot family, not
+    # from the raw resolved one: the policy is applied to that converted
+    # seat. Where the lead names a family the configuration has no slot for
+    # the two differ, and deriving from the raw family would put the
+    # Contrary Position on the very slot the lead itself collapses onto —
+    # one voice arguing with itself. For every family that has a slot this
+    # is the identity.
+    lead_family = _slot_family(config, lead[0])
+    opposite = _opposite_family(config, lead_family)
+    pinned_family, model, effort = resolve(
+        "brainstorming_counterpart", origin_family=lead_family,
+        default_family=opposite)
+    if pinned_family != opposite:
+        # A same-family pin cannot move the second voice back onto the
+        # lead's family, and a model pinned for that other family goes with
+        # it; the effort survives.
+        model = None
+    counterpart_model, _counterpart_effort = _family_defaults(config, opposite)
+    seats[("brainstorm", 2)] = (
+        opposite, model or counterpart_model, effort or lead[2])
+
+    # consult 1 <- the consultation the fixer runs: the `consultation`
+    # policy resolved with the converted `fix 1` family as ORIGIN (never the
+    # no-origin fallback), the CONSULTED family's default model, and the
+    # FIXER'S effort — a rejection is never argued by a lighter opponent
+    # than the one rejecting.
+    # ORIGIN is the converted `fix 1` family, the same normalization the
+    # counterpart takes: a fixer on a family with no slot converts onto
+    # slot 1, so its consultant is slot 1's opposite and not the opposite of
+    # a family the document cannot hold — which would seat the consultation
+    # on the fixer's own slot. Its effort likewise falls back to the family
+    # the fix seat converts onto, since that is the fixer the document
+    # holds. Identity for every configured family.
+    fix_seat_family = _slot_family(config, fix_family)
+    consulted, _model, _effort = resolve(
+        "consultation", origin_family=fix_seat_family)
+    consulted_model, _consulted_effort = _family_defaults(config, consulted)
+    _fix_default_model, fix_default_effort = _family_defaults(
+        config, fix_seat_family)
+    seats[("consult", 1)] = (
+        consulted, consulted_model, fix_effort or fix_default_effort)
+
+    # sync 1 <- work-area git alignment: the first configured family with
+    # that family's defaults. It reads no profile act today.
+    seats[("sync", 1)] = (families[0],) + _family_defaults(
+        config, families[0])
+
+    return seats
+
+
+def _append_rung(ladder, value):
+    """Add one value a profile named that the family's vocabulary does not
+    carry, AFTER its known rungs.
+
+    Appending keeps A1's order of the named models untouched and keeps the
+    converted staffing exact: the value is neither dropped nor silently
+    replaced by a different model. A value already on the ladder is a
+    no-op."""
+    if isinstance(value, str) and value and value not in ladder:
+        ladder.append(value)
+
+
+def _rank(ladder, value):
+    """The 1-based rung of *value*, which conversion has already put on the
+    ladder — its own vocabulary, its family's defaults, and anything a
+    profile named beyond them. Rung 1 is the floor for a value nothing put
+    there at all, which needs a family the configuration carries no defaults
+    for; an absent value is resolved against the slot's defaults before it
+    gets here, never written as the weakest rung."""
+    try:
+        return ladder.index(value) + 1
+    except ValueError:
+        return 1
+
+
+def convert_profile(profile, config=None):
+    """Convert one validated model profile into a staffing document.
+
+    Deterministic and total for a valid profile: it never fails and never
+    invents. Every configured family becomes a numbered slot in configured
+    order, carrying its whole vocabulary in amendment A1's capability order
+    plus — appended after those known rungs — any model or effort the
+    profile names that the vocabulary does not carry. Assignment comes from
+    the profile's `medium` configuration; each rigor's tuning comes from
+    that rigor's. A rigor x slot x role cell no seat staffs carries that
+    family's ordinary defaults today, which is what a call on that family
+    resolves to when nothing is pinned. A seat whose act names a family the
+    configuration has no slot for — a profile that cannot run today either —
+    seats on slot 1, and whichever of model and effort it does not name
+    takes slot 1's ordinary defaults by the same rule; a half it does name
+    is still its own. A seat derived from another seat — `brainstorm 2` from
+    the lead, `consult 1` from the fixer — is derived from the slot that
+    origin converts onto, so the derivation lands beside the converted
+    origin rather than on top of it.
+
+    No materials, no overrides, no rules: a profile carries nothing that maps
+    to them, and inventing an owner's vocabulary is not conversion.
+    """
+    config = _shipped_config(config)
+    families = list(config["families_order"])
+    slot_of = {family: str(index)
+               for index, family in enumerate(families, start=1)}
+    per_rigor = {
+        rigor: _conversion_seats(config, profile["configurations"][rigor])
+        for rigor in RIGORS
+    }
+
+    def slot_for(family):
+        # One definition of where a family lands, shared with the derived
+        # seats: `_slot_family` already sends a family with no slot to the
+        # first configured one, so this lookup never misses.
+        return slot_of[_slot_family(config, family)]
+
+    # Ladders first: every rank below is a position on one of these.
+    ladders = {}
+    for family in families:
+        slot = slot_of[family]
+        ladders[slot] = {
+            "models": list(FAMILY_MODELS.get(family, ())),
+            "efforts": list(FAMILY_EFFORTS.get(family, ())),
+        }
+        default_model, default_effort = _family_defaults(config, family)
+        _append_rung(ladders[slot]["models"], default_model)
+        _append_rung(ladders[slot]["efforts"], default_effort)
+    for rigor in RIGORS:
+        for _seat, (family, model, effort) in sorted(per_rigor[rigor].items()):
+            slot = slot_for(family)
+            _append_rung(ladders[slot]["models"], model)
+            _append_rung(ladders[slot]["efforts"], effort)
+
+    # That slot family's ordinary defaults today — what a call on it resolves
+    # to when nothing is pinned. It fills every cell no seat staffs, and the
+    # halves a seat leaves unsaid.
+    slot_defaults = {slot_of[family]: _family_defaults(config, family)
+                     for family in families}
+
+    tuning = {}
+    for rigor in RIGORS:
+        tuning[rigor] = {}
+        for slot, (default_model, default_effort) in slot_defaults.items():
+            unstaffed = [_rank(ladders[slot]["models"], default_model),
+                         _rank(ladders[slot]["efforts"], default_effort)]
+            tuning[rigor][slot] = {role: list(unstaffed) for role in ROLES}
+        # One cell per rigor x slot x role, so where two seats of one role
+        # share a slot the LOWEST seat index writes it — the primary seat,
+        # and a deterministic choice rather than whichever came last. In a
+        # two-family configuration the seats that share a slot (`brainstorm`
+        # 1 and 3) carry the same staffing anyway: Dante is pinned from the
+        # lead profile.
+        staffed = set()
+        for (role, _index), (family, model, effort) in sorted(
+                per_rigor[rigor].items()):
+            slot = slot_for(family)
+            if (slot, role) in staffed:
+                continue
+            staffed.add((slot, role))
+            # A seat on a family the configuration has no slot for keeps
+            # any model or effort it names, but the configuration holds no
+            # defaults for a family it does not have — so once it seats on
+            # slot 1 the half it leaves unsaid takes THAT slot family's
+            # ordinary defaults, the same fill a cell no seat staffs takes.
+            # Rung 1 would pin the weakest model and the lowest effort,
+            # which A1 makes an explicit choice and no profile made.
+            default_model, default_effort = slot_defaults[slot]
+            tuning[rigor][slot][role] = [
+                _rank(ladders[slot]["models"], model or default_model),
+                _rank(ladders[slot]["efforts"], effort or default_effort),
+            ]
+
+    assignment = {role: {} for role in ROLES}
+    for (role, index), (family, _model, _effort) in sorted(
+            per_rigor["medium"].items()):
+        assignment[role][str(index)] = int(slot_for(family))
+
+    return validate_document({
+        "name": profile["name"],
+        "families": {
+            slot_of[family]: {
+                "name": family,
+                "models": ladders[slot_of[family]]["models"],
+                "efforts": ladders[slot_of[family]]["efforts"],
+            }
+            for family in families
+        },
+        # Cross-family review is the standing law; no second role declares
+        # distinct families.
+        "roles": {
+            role: ({"distinct_families": True} if role == "review" else {})
+            for role in ROLES
+        },
+        "materials": {},
+        "tuning": tuning,
+        "assignment": assignment,
+        "overrides": {},
+        "rules": [],
+    })
+
+
+def default_document_seed(config=None):
+    """The in-code `default` document: the conversion of the model-profile
+    store's own `default` seed.
+
+    Expressed as that conversion rather than as a second literal so the two
+    cannot drift apart: the seed IS what an unconfigured run's
+    `default@medium` staffs today, and one definition of that cannot
+    disagree with itself.
+    """
+    return convert_profile(model_profiles.DEFAULT_SEED, config)
+
+
+def ensure_documents(home, config=None):
+    """Convert every stored model profile into a document of the same name.
+
+    Missing-only and one-time: a document that already exists — a converted
+    one the operator has since edited, or one written by hand — is never
+    rewritten, so nothing an operator changed is reverted and a profile
+    created later is converted at the next initialization. Profile files are
+    only READ: never edited, moved, or deleted.
+
+    A profile that cannot be read or validated is SKIPPED — it produces no
+    document and does not fail initialization — so reading the whole
+    catalogue at start-up never turns a damaged non-`default` profile into a
+    start-up failure that does not exist today.
+
+    "Already exists" is read on the catalogue's own identity, which is
+    case-insensitive, so conversion neither rewrites a document an operator
+    owns under a different spelling nor trips over the store's
+    case-collision refusal.
+
+    After it RETURNS, a valid `default` document always exists: converted
+    from the stored `default` profile when there is one, which is never
+    seeded over, and otherwise from the in-code seed. A stored `default`
+    that cannot be loaded is therefore neither counted as that guarantee by
+    its filename nor healed — healing would revert an operator's own
+    document and conversion is no repair step — so it makes initialization
+    fail loudly here, exactly as an invalid stored `default` profile makes
+    `model_profiles.ensure_default` fail at the same moment. Returns the
+    names written, newest catalogue entries only; the guarantee is the
+    floor, not the return value.
+    """
+    config = _shipped_config(config)
+    held = {name.casefold() for name in document_names(home)}
+    written = []
+    # Names only: list_model_profiles deliberately raises on the first
+    # damaged candidate, and initialization must skip that one and continue.
+    for name in model_profiles.model_profile_names(home):
+        if name.casefold() in held:
+            continue
+        try:
+            profile = model_profiles.load(home, name)
+        except model_profiles.ModelProfileError:
+            continue
+        save(home, convert_profile(profile, config))
+        held.add(name.casefold())
+        written.append(name)
+    # The floor is the one entry initialization must leave USABLE, so a
+    # stored `default` is READ rather than counted: a name in the directory
+    # is what the missing-only rule needs, and not what a consumer of
+    # `default` gets. Same guard as `model_profiles.ensure_default`'s
+    # stored-`default` branch — lexists, then load — so the two catalogues
+    # answer a damaged floor the same way at the same moment. Named rather
+    # than numbered: that function has already moved once.
+    if os.path.lexists(_path(home, DEFAULT_DOCUMENT_NAME)):
+        load(home, DEFAULT_DOCUMENT_NAME)
+    else:
+        save(home, default_document_seed(config))
+        written.append(DEFAULT_DOCUMENT_NAME)
+    return written

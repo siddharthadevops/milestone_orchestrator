@@ -123,3 +123,31 @@
 - deterministic result: every configured family was clean or debt-clean on the same current bytes; full verification was not due at this boundary; no extra reviewer was called
 - cited reviews: `slice_impl-02-codex-r3`, `slice_impl-02-claude-r5`
 
+## slice_impl-02-b (Staffing document store)
+
+- draft: kind `implement`, artifact `-` (raw: `implementation/milestones/staffing-router/.run/raw/slice_impl-02-b-draft.txt`)
+
+| Round | Kind | Family | Findings | Triage | Raw |
+|---|---|---|---|---|---|
+| slice_impl-02-b-codex-r1 | review_round | codex | 2 | 2 reported | `implementation/milestones/staffing-router/.run/raw/slice_impl-02-b-codex-r1.txt` |
+| slice_impl-02-b-claude-r1 | fix_findings | claude | 2 | 2 fixed (1 consulted) | `implementation/milestones/staffing-router/.run/raw/slice_impl-02-b-fix1.txt` |
+| slice_impl-02-b-claude-r2 | delta_review | claude | 3 | 3 reported | `implementation/milestones/staffing-router/.run/raw/slice_impl-02-b-delta1.txt` |
+| slice_impl-02-b-claude-r3 | fix_findings | claude | 3 | 3 fixed | `implementation/milestones/staffing-router/.run/raw/slice_impl-02-b-fix2.txt` |
+| slice_impl-02-b-claude-r4 | delta_review | claude | 1 | 1 reported | `implementation/milestones/staffing-router/.run/raw/slice_impl-02-b-delta2.txt` |
+| slice_impl-02-b-claude-r5 | fix_findings | claude | 1 | 1 fixed | `implementation/milestones/staffing-router/.run/raw/slice_impl-02-b-fix3.txt` |
+| slice_impl-02-b-claude-r6 | delta_review | claude | 1 | 1 reported | `implementation/milestones/staffing-router/.run/raw/slice_impl-02-b-delta3.txt` |
+| slice_impl-02-b-claude-r7 | fix_findings | claude | 1 | 1 fixed | `implementation/milestones/staffing-router/.run/raw/slice_impl-02-b-fix4.txt` |
+| slice_impl-02-b-claude-r8 | delta_review | claude | 0 | clean | `implementation/milestones/staffing-router/.run/raw/slice_impl-02-b-delta4.txt` |
+| slice_impl-02-b-codex-r2 | review_round | codex | 1 | 1 reported | `implementation/milestones/staffing-router/.run/raw/slice_impl-02-b-codex-r2.txt` |
+| slice_impl-02-b-claude-r9 | fix_findings | claude | 1 | 1 fixed (1 consulted) | `implementation/milestones/staffing-router/.run/raw/slice_impl-02-b-fix5.txt` |
+| slice_impl-02-b-claude-r10 | delta_review | claude | 1 | 1 reported | `implementation/milestones/staffing-router/.run/raw/slice_impl-02-b-delta5.txt` |
+| slice_impl-02-b-claude-r11 | fix_findings | claude | 1 | 1 fixed | `implementation/milestones/staffing-router/.run/raw/slice_impl-02-b-fix6.txt` |
+| slice_impl-02-b-claude-r12 | delta_review | claude | 0 | clean | `implementation/milestones/staffing-router/.run/raw/slice_impl-02-b-delta6.txt` |
+| slice_impl-02-b-codex-r3 | review_round | codex | 0 | clean | `implementation/milestones/staffing-router/.run/raw/slice_impl-02-b-codex-r3.txt` |
+| slice_impl-02-b-claude-r13 | review_round | claude | 0 | clean | `implementation/milestones/staffing-router/.run/raw/slice_impl-02-b-claude-r1.txt` |
+
+### Review completion — SATISFIED
+
+- deterministic result: every configured family was clean or debt-clean on the same current bytes; full verification was not due at this boundary; no extra reviewer was called
+- cited reviews: `slice_impl-02-b-codex-r3`, `slice_impl-02-b-claude-r13`
+

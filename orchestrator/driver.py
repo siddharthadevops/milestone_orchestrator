@@ -39,6 +39,7 @@ except ImportError:  # pragma: no cover - non-POSIX: flock degrades to the
 from . import brainstorming, brainstorming_lifecycle, brainstorming_milestone
 from . import contracts, errclass, gitops, interpreter, kvstore, ledgers
 from . import model_profiles, pricing, profiles, projects, prompts, registry, runners
+from . import staffing
 from . import tasks
 from . import verifiers, workareas
 from . import state as st
@@ -755,6 +756,25 @@ class Driver(object):
                     st.save(self.state_path, self.state)
                 raise RuntimeError(
                     "model-profile catalogue unavailable: %s" % exc
+                ) from exc
+            try:
+                # Beside the profile seed, and for the same reason: a
+                # started driver must hold the guaranteed `default`
+                # staffing document. Missing-only, so this is a no-op on
+                # every start after the first; a damaged profile is skipped
+                # inside rather than making start-up louder than today.
+                staffing.ensure_documents(self.model_profiles_home)
+            except staffing.StaffingError as exc:
+                if self.state.get("failure") is None:
+                    st.fail_run(
+                        self.state,
+                        "staffing catalogue unavailable: %s" % exc,
+                        unit=st.current_unit(self.state),
+                        type_="orchestrator",
+                    )
+                    st.save(self.state_path, self.state)
+                raise RuntimeError(
+                    "staffing catalogue unavailable: %s" % exc
                 ) from exc
         # Before repo validation: if a pending gap's cleanup never ran (a crash
         # between recording the gap and cleaning up), worker junk such as a
@@ -11130,6 +11150,7 @@ def init_run(goal, workspace=None, config=None, state_path=None, name=None,
     if model_profiles_home is not None:
         creation_overrides = _creation_act_overrides(creation_act_layers)
         model_profiles.ensure_default(model_profiles_home)
+        staffing.ensure_documents(model_profiles_home)
         _restrict_config_acts_to_shipped(config)
     template = (config or {}).get("docs_dir") or "docs"
     slug = None

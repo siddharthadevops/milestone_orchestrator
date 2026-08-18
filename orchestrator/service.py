@@ -204,6 +204,7 @@ from . import driver, errclass, gitops, gitsync, interpreter, kvstore, model_pro
 from . import profiles
 from . import projects, registry, tasks
 from . import reuse_audit
+from . import staffing
 from . import state as st
 from . import task_api
 from . import workareas
@@ -5016,6 +5017,11 @@ def make_server(home, port, task_host=None):
     # rewritten), so a seed or validation failure here stops startup
     # visibly instead of serving without the guaranteed catalogue entry.
     model_profiles.ensure_default(home)
+    # The staffing catalogue initializes beside it, with the same posture:
+    # every readable, valid profile gains a document of its own name once,
+    # and a served home always holds a valid `default` document. Conversion
+    # is missing-only, so an operator's edited document is never reverted.
+    staffing.ensure_documents(home)
     if task_host is None:
         task_host = task_api.DirectTaskHost(home)
     return ThreadingHTTPServer(
