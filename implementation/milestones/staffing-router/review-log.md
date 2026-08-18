@@ -103,3 +103,23 @@
 - `claude-SR-S2-CLAUDE-R1-001` (raised claude, cleared codex): The Conversion Reference's `classify 1` row cites a family-only legacy helper (`_resolve_act`) that yields no model or effort, and states no fill rule, so the converted classify seat's model and effort are unpinned and the seat-by-seat drift alarm built on that seam cannot detect a model or effort change. — The family-only pointer could make a hasty builder substitute defaults, but the artifact’s full-staffing guarantee and real-driver all-seat comparison should guide this capable builder correctly; if drift occurs, fixing the classify conversion/alarm and re-pinning affected documents is small local r
 - `claude-SR-S2-CLAUDE-R1-002` (raised claude, cleared codex): The note declares a strict guarantee that conversion reproduces a profile's staffing at every rigor, contradicting its own statement that a family differing from rigor to rigor cannot be held and exceeding the skeleton's normalization baseline; no acceptance test or warning covers the case. — The repeated strict parity claim and matching acceptance check can silently legitimize wrong cross-rigor expectations despite the nearby medium-normalization rule, while correction is bounded to clarifying the contract and adding a divergent-family test or warning within this unit.
 
+## slice_impl-02-a (Staffing document store)
+
+- draft: kind `implement`, artifact `-` (raw: `implementation/milestones/staffing-router/.run/raw/slice_impl-02-draft.txt`)
+
+| Round | Kind | Family | Findings | Triage | Raw |
+|---|---|---|---|---|---|
+| slice_impl-02-codex-r1 | review_round | codex | 1 | 1 reported | `implementation/milestones/staffing-router/.run/raw/slice_impl-02-codex-r1.txt` |
+| slice_impl-02-claude-r1 | fix_findings | claude | 1 | 1 fixed | `implementation/milestones/staffing-router/.run/raw/slice_impl-02-fix1.txt` |
+| slice_impl-02-claude-r2 | delta_review | claude | 0 | clean | `implementation/milestones/staffing-router/.run/raw/slice_impl-02-delta1.txt` |
+| slice_impl-02-codex-r2 | review_round | codex | 1 | 1 reported | `implementation/milestones/staffing-router/.run/raw/slice_impl-02-codex-r2.txt` |
+| slice_impl-02-claude-r3 | fix_findings | claude | 1 | 1 rejected (1 consulted) | `implementation/milestones/staffing-router/.run/raw/slice_impl-02-fix2.txt` |
+| slice_impl-02-claude-r4 | delta_review | claude | 0 | clean | `implementation/milestones/staffing-router/.run/raw/slice_impl-02-delta2.txt` |
+| slice_impl-02-codex-r3 | review_round | codex | 0 | clean | `implementation/milestones/staffing-router/.run/raw/slice_impl-02-codex-r3.txt` |
+| slice_impl-02-claude-r5 | review_round | claude | 0 | clean | `implementation/milestones/staffing-router/.run/raw/slice_impl-02-claude-r1.txt` |
+
+### Review completion — SATISFIED
+
+- deterministic result: every configured family was clean or debt-clean on the same current bytes; full verification was not due at this boundary; no extra reviewer was called
+- cited reviews: `slice_impl-02-codex-r3`, `slice_impl-02-claude-r5`
+
