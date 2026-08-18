@@ -3273,26 +3273,31 @@ class ModelProfileSurfacesApiTest(ServiceApiTest):
         with open(path, "rb") as fh:
             self.assertEqual(fh.read(), before)
 
-    def test_launch_selection_precedes_autostart_and_omission_stays_default(self):
+    def test_launch_refuses_model_profile_and_writes_no_selection(self):
+        """`model_profile` decides no call after the driver cutover, so the
+        launch refuses it before creating anything and writes no sidecar."""
         model_profiles.save(self.home, self.catalogue_doc("launch"))
-        observed = []
 
-        def fake_start(home, run_id):
-            entry = registry.get(registry.load(home), run_id)
-            observed.append(driver.read_current_model_profile_selection(
-                entry["state_path"]
-            ))
-            return entry
-
-        ws = self.workspace("ws-selection-launch")
-        with mock.patch("orchestrator.service.start_run", side_effect=fake_start):
-            status, body = self.request_json("POST", "/api/runs", {
-                "workspace": ws, "goal": "launch", "autostart": True,
-                "config": {"docs_dir": "docs"},
-                "model_profile": {"name": "launch", "rigor": "low"},
-            })
-        self.assertEqual(status, 201, body)
-        self.assertEqual(observed, [{"name": "launch", "rigor": "low"}])
+        for label, selection in (
+            ("named", {"name": "launch", "rigor": "low"}),
+            ("unknown", {"name": "missing", "rigor": "medium"}),
+            ("null", None),
+        ):
+            with self.subTest(case=label):
+                ws = self.workspace("ws-selection-launch-%s" % label)
+                with mock.patch(
+                    "orchestrator.service.start_run"
+                ) as mocked_start:
+                    status, body = self.request_json("POST", "/api/runs", {
+                        "workspace": ws, "goal": "launch", "autostart": True,
+                        "config": {"docs_dir": "docs"},
+                        "model_profile": selection,
+                    })
+                self.assertEqual(status, 400, body)
+                self.assertIn("staffing", body["error"])
+                self.assertFalse(
+                    os.path.exists(driver.default_state_path(ws)))
+                mocked_start.assert_not_called()
 
         plain_ws = self.workspace("ws-selection-launch-default")
         status, plain = self.create_run(plain_ws)
@@ -3301,44 +3306,17 @@ class ModelProfileSurfacesApiTest(ServiceApiTest):
             self.selection_path(plain["run"]["id"])
         ))
 
-        bad_ws = self.workspace("ws-selection-launch-bad")
-        status, _body = self.request_json("POST", "/api/runs", {
-            "workspace": bad_ws, "goal": "bad", "autostart": False,
-            "config": {"docs_dir": "docs"},
-            "model_profile": {"name": "missing", "rigor": "medium"},
-        })
-        self.assertEqual(status, 400)
-        self.assertFalse(os.path.exists(driver.default_state_path(bad_ws)))
-
-        null_ws = self.workspace("ws-selection-launch-null")
-        with mock.patch("orchestrator.service.start_run") as mocked_start:
-            status, body = self.request_json("POST", "/api/runs", {
-                "workspace": null_ws, "goal": "null", "autostart": True,
-                "config": {"docs_dir": "docs"},
-                "model_profile": None,
-            })
-        self.assertEqual(status, 400, body)
-        self.assertTrue(body["error"])
-        self.assertFalse(os.path.exists(driver.default_state_path(null_ws)))
-        mocked_start.assert_not_called()
-
         attach_ws = self.workspace("ws-selection-launch-attach")
         driver.init_run(
             "attach", attach_ws, state_path=driver.default_state_path(attach_ws)
         )
-        status, body = self.request_json("POST", "/api/runs", {
-            "workspace": attach_ws, "attach": True, "autostart": False,
-            "model_profile": {"name": "launch", "rigor": "medium"},
-        })
-        self.assertEqual(status, 400, body)
-        self.assertIn("attach", body["error"])
-
-        status, body = self.request_json("POST", "/api/runs", {
-            "workspace": attach_ws, "attach": True, "autostart": False,
-            "model_profile": None,
-        })
-        self.assertEqual(status, 400, body)
-        self.assertIn("attach", body["error"])
+        for selection in ({"name": "launch", "rigor": "medium"}, None):
+            status, body = self.request_json("POST", "/api/runs", {
+                "workspace": attach_ws, "attach": True, "autostart": False,
+                "model_profile": selection,
+            })
+            self.assertEqual(status, 400, body)
+            self.assertIn("staffing", body["error"])
 
     def test_current_selection_access_and_strategy_route_separation(self):
         model_profiles.save(self.home, self.catalogue_doc("member-work"))
@@ -3459,15 +3437,17 @@ class ModelProfileSurfacesApiTest(ServiceApiTest):
         self.assertEqual(status, 200)
         panel = body.decode("utf-8")
         self.assertIn('id="modelprofilesdlg"', panel)
-        self.assertIn('id="f_model_profile"', panel)
         self.assertIn('id="modelprofileselectiondlg"', panel)
         self.assertIn('api("/api/model-profiles")', panel)
         self.assertIn('profile.configurations[rigor]', panel)
-        self.assertIn('payload.model_profile = {', panel)
         self.assertIn('api(`/api/runs/${runId}/model-profile`)', panel)
         self.assertIn('postJSON(`/api/runs/${selected}/model-profile`', panel)
-        self.assertIn("default@medium — no saved selection", panel)
         self.assertIn("current profile", panel)
+        # The LAUNCH form names a staffing document instead: the per-run
+        # dialogs stay until slice 8 retires them.
+        self.assertIn('id="f_staffing_document"', panel)
+        self.assertIn('payload.staffing = {', panel)
+        self.assertNotIn('id="f_model_profile"', panel)
 
         model_surface = panel[
             panel.index("/* ---- model-profile catalogue"):

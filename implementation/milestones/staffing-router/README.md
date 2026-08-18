@@ -324,4 +324,5 @@ The goal is achieved when:
 | slice_doc-03 (Sessions and resolution) | reviewed | 2 | satisfied | b2a1952 |
 | slice_impl-03-a (Sessions and resolution) | reviewed | 8 | satisfied | e069b5f |
 | slice_impl-03-b (Sessions and resolution) | reviewed | 12 | satisfied | 4d8c6cb |
-| slice_doc-04 (Milestone driver cutover and run binding) | reviewed | 28 | satisfied | - |
+| slice_doc-04 (Milestone driver cutover and run binding) | reviewed | 28 | satisfied | 24a1cf8 |
+| slice_impl-04-a (Milestone driver cutover and run binding) | reviewed | 14 | satisfied | - |

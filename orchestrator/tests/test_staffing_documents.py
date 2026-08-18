@@ -18,7 +18,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from orchestrator import brainstorming_milestone, current_model_call, driver
+from orchestrator import brainstorming_milestone, driver
 from orchestrator import model_profiles as mp
 from orchestrator import runners, staffing as stf, state as st
 
@@ -583,15 +583,20 @@ class StaffingConversionTest(unittest.TestCase):
             }
             self.assertEqual(assigned, set(expected))
             # End to end for the one derived command line: the consultation
-            # the fixer actually runs is built from the consulted family's
-            # template, so this pins the family as well as the two values.
+            # is a COMMAND and not just a triple, so the document's seat is
+            # compared as the line it produces. The reference is the same
+            # profile-side one every other seat above uses — the command the
+            # fixer runs is router-backed after slice 4, and measuring the
+            # document against it would compare the document with itself.
             family, model, effort = stf.base_staffing(
                 document, rigor, "consult")
+            reference = expected[("consult", 1)]
             self.assertEqual(
                 runners.apply_model_effort(
                     d.config["commands"][family], model, effort),
-                current_model_call.consultation_command(
-                    d.state_path, self.home, "fixer"))
+                runners.apply_model_effort(
+                    d.config["commands"][reference[0]],
+                    reference[1], reference[2]))
 
     # -- the drift alarm ---------------------------------------------------
 

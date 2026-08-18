@@ -290,3 +290,32 @@
 - `claude-S4-CLAUDE-R3-003` (raised claude, cleared codex): Refusing `model_profile` at launch and converting the launch selector to a document selector removes the only launch-time input to Brainstorming staffing, so every newly launched run's Brainstorming seats silently fall back to `default@medium` — contradicting the note's own pin that Brainstorming is 'still staffed as today'. — The pinned launch refusal and profile-backed Brainstorming boundary would likely make the builder implement and test a silent default@medium regression, while correction remains bounded to reconciling the launch handoff and focused tests within this unit.
 - `claude-S4-CLAUDE-R3-004` (raised claude, cleared codex): The 'Retired as dispatch inputs' fact enumerates the surviving readers of the two sidecars as exhaustive — `model_profile.json` 'read once at resume ... and for nothing else', `acts.json` 'read only by the run summary and run detail' — but two routes the note's own Non-goals explicitly retain also read them. — The false exhaustive reader claim can plausibly make the builder remove reads required by explicitly retained routes, but the focused service API suite exercises the acts PATCH merge and correction is a small local restoration.
 
+## slice_impl-04-a (Milestone driver cutover and run binding)
+
+- draft: kind `implement`, artifact `-` (raw: `implementation/milestones/staffing-router/.run/raw/slice_impl-04-draft-stabilize.txt`)
+
+| Round | Kind | Family | Findings | Triage | Raw |
+|---|---|---|---|---|---|
+| slice_impl-04-codex-r1 | review_round | codex | 6 | 6 reported | `implementation/milestones/staffing-router/.run/raw/slice_impl-04-codex-r1.txt` |
+| slice_impl-04-claude-r1 | fix_findings | claude | 6 | 3 fixed, 3 rejected (3 consulted) | `implementation/milestones/staffing-router/.run/raw/slice_impl-04-fix1.txt` |
+| slice_impl-04-claude-r2 | delta_review | claude | 0 | clean | `implementation/milestones/staffing-router/.run/raw/slice_impl-04-delta1.txt` |
+| slice_impl-04-codex-r2 | review_round | codex | 1 | 1 reported | `implementation/milestones/staffing-router/.run/raw/slice_impl-04-codex-r2.txt` |
+| slice_impl-04-claude-r3 | fix_findings | claude | 1 | 1 fixed | `implementation/milestones/staffing-router/.run/raw/slice_impl-04-fix2.txt` |
+| slice_impl-04-claude-r4 | delta_review | claude | 0 | clean | `implementation/milestones/staffing-router/.run/raw/slice_impl-04-delta2.txt` |
+| slice_impl-04-codex-r3 | review_round | codex | 2 | 2 reported | `implementation/milestones/staffing-router/.run/raw/slice_impl-04-codex-r3.txt` |
+| slice_impl-04-claude-r5 | fix_findings | claude | 2 | 2 fixed | `implementation/milestones/staffing-router/.run/raw/slice_impl-04-fix3.txt` |
+| slice_impl-04-claude-r6 | delta_review | claude | 0 | clean | `implementation/milestones/staffing-router/.run/raw/slice_impl-04-delta3.txt` |
+| slice_impl-04-codex-r4 | review_round | codex | 2 | 2 reported | `implementation/milestones/staffing-router/.run/raw/slice_impl-04-codex-r4.txt` |
+| slice_impl-04-claude-r7 | fix_findings | claude | 2 | 1 fixed, 1 rejected (1 consulted) | `implementation/milestones/staffing-router/.run/raw/slice_impl-04-fix4.txt` |
+| slice_impl-04-claude-r8 | delta_review | claude | 0 | clean | `implementation/milestones/staffing-router/.run/raw/slice_impl-04-delta4.txt` |
+| slice_impl-04-codex-r5 | review_round | codex | 0 | clean | `implementation/milestones/staffing-router/.run/raw/slice_impl-04-codex-r5.txt` |
+| slice_impl-04-claude-r9 | review_round | claude | 1 | DEBT-CLEAN (reclassified) | `implementation/milestones/staffing-router/.run/raw/slice_impl-04-claude-r1.txt` |
+
+### Review completion — SATISFIED
+
+- deterministic result: every configured family was clean or debt-clean on the same current bytes; full verification was not due at this boundary; no extra reviewer was called
+- cited reviews: `slice_impl-04-codex-r5`, `slice_impl-04-claude-r9`
+
+**Deferred debt (opposite-family verified):**
+- `claude-S4A-CLAUDE-R1-COLLAPSE-RATER-UNTESTED` (raised claude, cleared codex): The note's classify-seat acceptance names three strict cases; the case 'a homed run that supplies two families whose document offers it one is rated at the seat that runs' has no test, leaving the collapse half of the re-keyed independence gate unpinned. — The rule and implementation are currently correct and explicit, but the strict two-family/one-family-document collapse case lacks a regression test, so a later refactor could silently conflate run-supplied families with document families, while correction would require only one focused test and a sm
+

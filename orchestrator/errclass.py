@@ -425,7 +425,12 @@ def classify_failure(raw_texts, runner=None, opposite_family=None,
                 parse_resume_at(text) if etype == "quota" else None
             )
             return etype, resume_at, "pattern match"
-    if use_llm and runner is not None and opposite_family:
+    if use_llm and runner is not None and (
+        opposite_family or resolve_dispatch is not None
+    ):
+        # A resolver names the classifier at DISPATCH time, so a caller that
+        # has one owes no family up front — and must not resolve one merely
+        # to reach this line.
         return llm_classify(runner, opposite_family, raw_texts, workspace,
                             on_raw=on_llm_raw,
                             model=classifier_model, effort=classifier_effort,

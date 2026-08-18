@@ -15,7 +15,7 @@ import types
 import unittest
 from unittest import mock
 
-from orchestrator import contracts, current_model_call, driver, gitops
+from orchestrator import contracts, driver, gitops
 from orchestrator import model_profiles
 from orchestrator import brainstorming_lifecycle
 from orchestrator import prompts, registry, runners, service, state, tasks
@@ -573,11 +573,13 @@ class CurrentModelProfileRuntimeTest(unittest.TestCase):
             subject._delta_review_profile("codex"),
             ("codex", "review-live", "medium"),
         )
-        consultation = current_model_call.consultation_command(
-            path, self.home, "fixer"
-        )
-        self.assertIn("gpt-5.6-sol", consultation)
-        self.assertIn("model_reasoning_effort=high", consultation)
+        # `consultation` remains an ACT the profile layer resolves; the
+        # command line the fixer runs is the router's `consult` seat after
+        # slice 4 and is pinned there, not here.
+        self.assertEqual(subject._resolve_act("consultation", "claude"),
+                         "codex")
+        self.assertEqual(subject._act_profile("fixer"),
+                         ("claude", None, "high"))
 
         # The actual hot endpoint refuses unknown acts and attempts to cross a
         # structural authority ceiling before its atomic writer can run.
@@ -645,15 +647,9 @@ class CurrentModelProfileRuntimeTest(unittest.TestCase):
                     ),
                 model_profiles.ModelProfileError,
             ),
-            (
-                "consultation", "consultation",
-                {"model": "illegal", "effort": "low"},
-                lambda _current, current_path:
-                    current_model_call.consultation_command(
-                        current_path, self.home, "fixer"
-                    ),
-                model_profiles.ModelProfileError,
-            ),
+            # `consultation` is deliberately absent: after slice 4 the
+            # command line the fixer runs resolves through the run's
+            # staffing session, so no profile act can make it raise.
         )
         for source in ("profile", "override"):
             for index, (seat, act, entry, resolve, error) in enumerate(
@@ -1271,20 +1267,6 @@ class CurrentModelProfileRuntimeTest(unittest.TestCase):
         )
         self.assertIn("\nFAMILY: claude\n", continuation.calls[0][2])
 
-        # The separately launched consultation resolves after the fixer has
-        # started, from the same current-state source used by normal calls.
-        current = model_profiles.load(self.home, "default")
-        current["configurations"]["medium"].update({
-            "fixer": {"agent": "claude", "effort": "high"},
-            "consultation": "opposite",
-        })
-        model_profiles.save(self.home, current)
-        command = current_model_call.consultation_command(
-            path, self.home, "fixer"
-        )
-        self.assertIn("gpt-5.6-sol", command)
-        self.assertIn("model_reasoning_effort=high", command)
-
     def test_consultation_command_round_trips_spaced_paths(self):
         spaced_home = os.path.join(self.tmp.name, "profile home")
         spaced_workspace = os.path.join(self.tmp.name, "run workspace")
@@ -1300,53 +1282,12 @@ class CurrentModelProfileRuntimeTest(unittest.TestCase):
             runner=runners.MockRunner([]),
             model_profiles_home=spaced_home,
         )
-        argv = subject._consultation_command(
-            "claude", "high", caller_act="fixer"
-        )
+        argv = subject._consultation_command("claude", "high")
         block = prompts._consultation_block("claude", argv)
         rendered = block.split("Command (prompt on stdin):\n  ", 1)[1].split(
             "\n", 1
         )[0]
         self.assertEqual(shlex.split(rendered), argv)
-
-    def test_consultation_resolution_keeps_caller_structural_origin(self):
-        model_profiles.ensure_default(self.home)
-        current = model_profiles.load(self.home, "default")
-        current["configurations"]["medium"].update({
-            "fixer": "self",
-            "skeletoner": "self",
-            "consultation": "opposite",
-        })
-        model_profiles.save(self.home, current)
-        path = self.init()
-
-        fixer_command = current_model_call.consultation_command(
-            path, self.home, "fixer", caller_origin="claude"
-        )
-        skeletoner_command = current_model_call.consultation_command(
-            path, self.home, "skeletoner", caller_origin="codex"
-        )
-
-        self.assertIn("gpt-5.6-sol", fixer_command)
-        self.assertIn("claude-opus-5", skeletoner_command)
-
-    def test_consultation_uses_the_fixers_structural_default(self):
-        config = copy.deepcopy(driver.DEFAULT_CONFIG)
-        config["fix_family"] = "claude"
-        path = self.init(config=config)
-        self.write_runtime(path, "acts.json", {"fixer": None})
-
-        subject = self.resolver(path)
-        self.assertEqual(
-            subject._act_profile("fixer", default_family="codex"),
-            ("codex", None, None),
-        )
-        consultation_command = current_model_call.consultation_command(
-            path, self.home, "fixer", caller_origin="claude"
-        )
-
-        self.assertIn("claude-opus-5", consultation_command)
-        self.assertNotIn("gpt-5.6-sol", consultation_command)
 
     def test_infrastructure_retry_reresolves_current_staffing(self):
         model_profiles.ensure_default(self.home)
@@ -1478,6 +1419,10 @@ class CurrentModelProfileRuntimeTest(unittest.TestCase):
             subject._classify_failure(
                 "codex", runners.RunnerError("mystery"), "classifier-test"
             )
+        # The driver's classifier is the router's `classify` seat after
+        # slice 4; only the Brainstorming half still derives an opposite.
+        self.assertEqual(resolutions.pop(0),
+                         ("driver", subject._staff("classify")))
 
         participant = {
             "id": "lead",
@@ -1549,10 +1494,7 @@ class CurrentModelProfileRuntimeTest(unittest.TestCase):
             driver.DEFAULT_CONFIG["model_defaults"]["claude"]["model"],
             driver.DEFAULT_CONFIG["model_defaults"]["claude"]["effort"],
         )
-        self.assertEqual(resolutions, [
-            ("driver", expected),
-            ("brainstorming", expected),
-        ])
+        self.assertEqual(resolutions, [("brainstorming", expected)])
 
     def test_predispatch_failure_preserves_completed_malformed_attempt(self):
         usage = {
@@ -1991,7 +1933,14 @@ class CurrentModelProfileRuntimeTest(unittest.TestCase):
         d = self.resolver(path)
         self.assertEqual(d._act_profile("fixer")[0], "codex")
         after = state.load(path)
-        self.assertEqual(after["events"], before_events)
+        # The resume derivation appends its own binding event (amendment A2)
+        # and nothing else: no event is written for the stale binding data,
+        # and no recorded event is rewritten.
+        self.assertEqual(after["events"][:len(before_events)], before_events)
+        self.assertEqual(
+            [event["type"] for event in after["events"][len(before_events):]],
+            ["staffing_session_bound"],
+        )
         self.assertEqual(after["model_profile"]["name"], "missing")
 
     def test_summary_choice_equals_next_call_without_intervening_change(self):

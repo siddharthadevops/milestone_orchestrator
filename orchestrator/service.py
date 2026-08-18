@@ -1977,6 +1977,77 @@ def _snapshot_profile(state_path, ref, content):
     st.save(state_path, state)
 
 
+#: Exactly what a launch may say about staffing: which document, how hard,
+#: and (optionally) the session's default material. Seats are never named
+#: here — they are the document's business.
+STAFFING_LAUNCH_FIELDS = ("document", "rigor", "material")
+
+
+def _validated_launch_staffing(value, supplied=True):
+    """The launch's staffing selection, refused before any state exists.
+
+    OMITTING `staffing` binds the `default` document at `medium`, which is
+    what an unconfigured run staffs today; that is the only launch this
+    fills in for. A `staffing` that IS supplied must carry the document and
+    the rigor it names — the binding is written once and this slice offers
+    no route to change it, so a blank or half-filled selection quietly
+    running the whole run on `default@medium` is exactly the misstaffing
+    the router exists to end. The shape is then validated by the session
+    store's own validator over a probe record, so the launch and the store
+    cannot disagree about what a document name or a rigor is; the work area
+    and families the real session carries are the run's own and are known
+    only once the run exists.
+    """
+    if not supplied:
+        return {
+            "document": staffing.DEFAULT_DOCUMENT_NAME,
+            "rigor": staffing.FALLBACK_RIGOR,
+        }
+    if not isinstance(value, dict):
+        raise ApiError(
+            400,
+            "staffing must be an object of {document, rigor, material?}",
+        )
+    unknown = sorted(set(value) - set(STAFFING_LAUNCH_FIELDS))
+    if unknown:
+        raise ApiError(
+            400,
+            "staffing carries unknown key %r (allowed: %s)"
+            % (unknown[0], ", ".join(STAFFING_LAUNCH_FIELDS)),
+        )
+    missing = [key for key in ("document", "rigor") if key not in value]
+    if missing:
+        raise ApiError(
+            400,
+            "staffing must name %s (omit 'staffing' entirely for %s at %s)"
+            % (" and ".join(missing), staffing.DEFAULT_DOCUMENT_NAME,
+               staffing.FALLBACK_RIGOR),
+        )
+    selection = {"document": value["document"], "rigor": value["rigor"]}
+    if value.get("material") is not None:
+        selection["material"] = value["material"]
+    try:
+        staffing.validate_session(dict(
+            selection,
+            id="probe",
+            work_area={"workspace_path": "/"},
+            families=[],
+        ))
+    except staffing.StaffingError as exc:
+        raise ApiError(400, str(exc))
+    return selection
+
+
+def staffing_documents_list(home):
+    """Every stored staffing document, sorted by name.
+
+    Read-only, and loud on a damaged store exactly as the model-profile
+    catalogue is: a shorter list would silently hide the document an
+    operator is about to launch on.
+    """
+    return staffing.list_staffing_documents(home)
+
+
 def create_run(home, payload):
     attach = bool(payload.get("attach"))
     bound = (
@@ -2010,29 +2081,25 @@ def create_run(home, payload):
         except profiles.ProfileError as exc:
             raise ApiError(400, str(exc))
 
-    # Model profiles are current settings, not creation snapshots.  Validate
-    # an optional first selection before creating any run state; once written
-    # below it is the same sidecar the live replacement route owns.
-    model_profile_supplied = "model_profile" in payload
-    model_profile_selection = payload.get("model_profile")
-    if attach and model_profile_supplied:
+    # The run's staffing: one session, opened from `staffing` and bound
+    # below. Validated here, before any run state is created, so a launch
+    # that cannot be honoured leaves nothing behind.
+    if "model_profile" in payload:
         raise ApiError(
             400,
-            "attach adopts the existing state as-is; 'model_profile' cannot "
-            "be combined with it",
+            "'model_profile' no longer decides any call of a run: launch "
+            "with 'staffing' {document, rigor, material?} instead",
         )
-    if model_profile_supplied:
-        try:
-            model_profile_selection = model_profiles.validate_selection(
-                model_profile_selection
-            )
-            model_profile_selection, _configuration = (
-                model_profiles.resolve_selection(
-                    home, model_profile_selection
-                )
-            )
-        except model_profiles.ModelProfileError as exc:
-            raise ApiError(400, str(exc))
+    staffing_supplied = "staffing" in payload
+    if attach and staffing_supplied:
+        raise ApiError(
+            400,
+            "attach adopts the existing state as-is; 'staffing' cannot be "
+            "combined with it",
+        )
+    staffing_selection = _validated_launch_staffing(
+        payload.get("staffing"), supplied=staffing_supplied
+    )
 
     goal_doc = None
     if attach:
@@ -2043,7 +2110,7 @@ def create_run(home, payload):
         # legacy workspace-root state, or an explicit `state_path` for a
         # per-milestone run.
         for key in ("goal", "goal_doc", "config", "project", "work_area",
-                    "profile", "model_profile"):
+                    "profile", "staffing"):
             if payload.get(key) is not None:
                 raise ApiError(
                     400,
@@ -2142,9 +2209,15 @@ def create_run(home, payload):
         except FileExistsError as exc:
             raise ApiError(409, str(exc) + ' (use "attach": true to adopt it)')
 
-    if model_profile_supplied:
-        _write_model_profile_selection(
-            state_path, model_profile_selection
+    if not attach:
+        # Exactly one session per run, written once. An attached run adopts
+        # the state as it is; its first resume derives one (amendment A2).
+        driver.open_run_staffing_session(
+            state_path,
+            home,
+            staffing_selection["document"],
+            staffing_selection["rigor"],
+            material=staffing_selection.get("material"),
         )
 
     if profile_name is not None:
@@ -4295,6 +4368,14 @@ def make_handler(home, task_host=None):
                     self._json(
                         200,
                         {"ok": True, "profiles": model_profiles_list(home)},
+                    )
+                elif route == "/api/staffing/documents":
+                    self._json(
+                        200,
+                        {
+                            "ok": True,
+                            "documents": staffing_documents_list(home),
+                        },
                     )
                 elif route == "/api/fs":
                     # Unscoped browsing spans the whole host and stays

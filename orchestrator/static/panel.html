@@ -686,15 +686,15 @@
     <select id="f_profile" onchange="onProfileChange()">
       <option value="" disabled selected>— choose: strict / light / legacy —</option></select>
     <div class="hint" id="f_profile_hint"></div></div>
-  <div class="field"><label>Model profile</label>
+  <div class="field"><label>Staffing document</label>
     <div class="pathrow">
-      <select id="f_model_profile" onchange="onLaunchModelProfileChange()">
-        <option value="">default@medium — no saved selection</option></select>
-      <select id="f_model_rigor" disabled onchange="onLaunchModelProfileChange()">
+      <select id="f_staffing_document" onchange="onLaunchStaffingChange()">
+        <option value="default">default</option></select>
+      <select id="f_staffing_rigor" onchange="onLaunchStaffingChange()">
         <option>low</option><option selected>medium</option><option>high</option>
       </select>
     </div>
-    <div class="hint" id="f_model_profile_hint"></div></div>
+    <div class="hint" id="f_staffing_hint"></div></div>
   <div class="field"><label>Agents, models and effort</label>
     <div class="actgrid">
       <span></span><span class="acthead">agent</span>
@@ -4539,6 +4539,7 @@ function openForm(preselect) {
   loadLaunchProjects(preselect);
   loadProfiles();
   loadModelProfileCatalogue();
+  loadStaffingDocuments();
   for (const act of ACT_NAMES) onAgentChange("a_", act);
   document.getElementById("form").showModal();
 }
@@ -4554,30 +4555,38 @@ async function loadModelProfileCatalogue() {
     const data = await api("/api/model-profiles");
     modelProfileCatalogue = data.profiles || [];
   } catch (e) { modelProfileCatalogueError = e.message; }
-  syncLaunchModelProfiles();
   if (document.getElementById("modelprofilesdlg").open)
     renderModelProfiles();
 }
-function syncLaunchModelProfiles() {
-  const select = document.getElementById("f_model_profile");
+
+/* ---- staffing documents: the launch form's own catalogue. The run's
+       staffing comes from the document it names and the rigor beside it;
+       the server stays the one semantic validator. ---- */
+let staffingDocuments = [];
+let staffingDocumentsError = "";
+async function loadStaffingDocuments() {
+  staffingDocuments = [];
+  staffingDocumentsError = "";
+  try {
+    const data = await api("/api/staffing/documents");
+    staffingDocuments = data.documents || [];
+  } catch (e) { staffingDocumentsError = e.message; }
+  const select = document.getElementById("f_staffing_document");
   const keep = select.value;
-  select.innerHTML =
-    `<option value="">default@medium — no saved selection</option>` +
-    modelProfileCatalogue.map(p =>
-      `<option value="${esc(p.name)}">${esc(p.name)}</option>`
-    ).join("");
-  select.value = modelProfileCatalogue.some(p => p.name === keep) ? keep : "";
-  onLaunchModelProfileChange();
+  select.innerHTML = (staffingDocuments.length
+    ? staffingDocuments
+    : [{name: "default"}]
+  ).map(d => `<option value="${esc(d.name)}">${esc(d.name)}</option>`).join("");
+  select.value =
+    staffingDocuments.some(d => d.name === keep) ? keep : "default";
+  onLaunchStaffingChange();
 }
-function onLaunchModelProfileChange() {
-  const name = document.getElementById("f_model_profile").value;
-  const rigor = document.getElementById("f_model_rigor");
-  rigor.disabled = !name;
-  if (!name) rigor.value = "medium";
-  const profile = modelProfileCatalogue.find(p => p.name === name);
-  document.getElementById("f_model_profile_hint").textContent =
-    modelProfileCatalogueError || (profile ? profile.examples.join(" · ") :
-      "No saved choice uses the current default at medium.");
+function onLaunchStaffingChange() {
+  const name = document.getElementById("f_staffing_document").value;
+  const rigor = document.getElementById("f_staffing_rigor").value;
+  document.getElementById("f_staffing_hint").textContent =
+    staffingDocumentsError ||
+    `Every call of this run is staffed by ${name} at ${rigor}.`;
 }
 async function openModelProfiles() {
   document.getElementById("modelprofilesdlg").showModal();
@@ -5467,10 +5476,9 @@ async function submitForm() {
     return;
   }
   payload.profile = profile;
-  const modelProfile = document.getElementById("f_model_profile").value;
-  if (modelProfile) payload.model_profile = {
-    name: modelProfile,
-    rigor: document.getElementById("f_model_rigor").value,
+  payload.staffing = {
+    document: document.getElementById("f_staffing_document").value || "default",
+    rigor: document.getElementById("f_staffing_rigor").value,
   };
   try {
     const data = await api("/api/runs", {

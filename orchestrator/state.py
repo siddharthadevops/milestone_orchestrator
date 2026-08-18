@@ -462,6 +462,33 @@ def append_event(state, etype, **data):
 
 
 # ---------------------------------------------------------------------------
+# The run's one staffing session
+
+#: The staffing session a milestone run is bound to. ABSENT on a run that has
+#: none — never present-null, exactly as `project` is — so a pre-router state
+#: document gains nothing and "is this run bound?" is one key test.
+STAFFING_SESSION_KEY = "staffing_session"
+
+
+def staffing_session(state):
+    """The run's bound staffing session id, or None."""
+    return state.get(STAFFING_SESSION_KEY) or None
+
+
+def bind_staffing_session(state, session_id):
+    """Write the run's ONE session id, once.
+
+    Write-once by construction: a run that already carries an id keeps it,
+    so neither writer — the launch nor the first resume without one — can
+    rebind a run mid-flight. Changing a run's staffing means editing that
+    session, never binding a second one. Returns the id now in force.
+    """
+    if not staffing_session(state):
+        state[STAFFING_SESSION_KEY] = session_id
+    return state[STAFFING_SESSION_KEY]
+
+
+# ---------------------------------------------------------------------------
 # Unit navigation and transitions
 
 
