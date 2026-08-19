@@ -390,3 +390,23 @@
 - `claude-S5-UNKNOWN-SESSION-404-UNCHECKED-ON-READ-AND-EDIT` (raised claude, cleared codex): `404 unknown_staffing_session` is pinned for the session GET and edit routes but only the resolve row names a check for it, and the store raises one exception class for 'unknown session' and 'invalid edit', so an edit against a nonexistent id will ship as 400 with nothing in the slice's gate able to see it. — The contract clearly pins 404, so a capable builder should honor it, but the shared exception and missing edit-route assertion plausibly let a 400 mapping pass silently; correction is one local classification plus a focused test, exposed on first use.
 - `claude-S5-SIZE-AIM-UNSUPPORTED` (raised claude, cleared codex): The note asserts the implementation stays below the ~500 changed-line aim and records no reason for exceeding it, while itself mandating five new HTTP routes with authorization and error mapping plus seven new multi-condition test methods in a new module — work whose every comparable precedent in this milestone exceeded the aim. — The implausible size estimate cannot override the explicitly pinned five-route and seven-test contract, becomes self-evident when the diff grows, and is corrected by locally revising the size sentence and recording the structural rationale.
 
+## slice_impl-05 (Staffing API)
+
+- draft: kind `implement`, artifact `-` (raw: `implementation/milestones/staffing-router/.run/raw/slice_impl-05-draft.txt`)
+
+| Round | Kind | Family | Findings | Triage | Raw |
+|---|---|---|---|---|---|
+| slice_impl-05-codex-r1 | review_round | codex | 3 | 3 reported | `implementation/milestones/staffing-router/.run/raw/slice_impl-05-codex-r1.txt` |
+| slice_impl-05-claude-r1 | fix_findings | claude | 2 | 2 fixed | `implementation/milestones/staffing-router/.run/raw/slice_impl-05-fix1.txt` |
+| slice_impl-05-claude-r2 | delta_review | claude | 0 | clean | `implementation/milestones/staffing-router/.run/raw/slice_impl-05-delta1.txt` |
+| slice_impl-05-codex-r2 | review_round | codex | 0 | clean | `implementation/milestones/staffing-router/.run/raw/slice_impl-05-codex-r2.txt` |
+| slice_impl-05-claude-r3 | review_round | claude | 0 | clean | `implementation/milestones/staffing-router/.run/raw/slice_impl-05-claude-r1.txt` |
+
+### Review completion — SATISFIED
+
+- deterministic result: every configured family was clean or debt-clean on the same current bytes; full verification was not due at this boundary; no extra reviewer was called
+- cited reviews: `slice_impl-05-codex-r2`, `slice_impl-05-claude-r3`
+
+**Deferred debt (opposite-family verified):**
+- `codex-S5-API-003` (raised codex, cleared codex): Deep JSON bypasses fixed invalid-body classification — The route promises fixed 400 classification, but its parser lets a 10,000-level payload escape as an unnormalized RecursionError, so dependent tests can silently trust a false contract, while correction is one local exception mapping plus a regression test with no stored-state rework.
+

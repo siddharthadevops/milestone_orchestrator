@@ -254,9 +254,14 @@ class TestCalculatorE2E(unittest.TestCase):
                 "implementation_stabilization",
                 "acts_config",
                 "model_defaults",
+                # This run reached the driver, so it carries the staffing
+                # session the first start derives (amendment A2) — as the
+                # id alone, never a copy of the record.
+                "staffing_session",
             },
         )
         self.assertEqual(summ["goal"], GOAL)
+        self.assertIsInstance(summ["staffing_session"], str)
         self.assertEqual(summ["workspace"], self.work)
         self.assertIsInstance(summ["events_total"], int)
         self.assertGreater(summ["work_duration_s"], 0)

@@ -2827,4 +2827,12 @@ def summary(state, acts_overlay=None, current_review_model=None):
         # pre-project summaries stay key-identical.
         out["project"] = block["project"]
         out["work_area"] = block["work_area"]
+    bound = staffing_session(state)
+    if bound:
+        # The run's binding, as the ID and nothing else: a copied session
+        # would be a second authority going stale beside the live one, so a
+        # reader who wants the selection asks the session route for it.
+        # ABSENT on an unbound run, exactly like `project` above, so a
+        # pre-router run's summary gains no invented session.
+        out[STAFFING_SESSION_KEY] = bound
     return out

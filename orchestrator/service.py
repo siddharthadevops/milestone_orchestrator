@@ -2048,6 +2048,227 @@ def staffing_documents_list(home):
     return staffing.list_staffing_documents(home)
 
 
+# ---------------------------------------------------------------------------
+# The staffing API: documents, sessions, and one resolution
+#
+# Thin adapters over slice 2's document store, slice 3's session store and
+# the resolver. Nothing here staffs anything, keeps a record, or holds a
+# permission of its own: every route reuses the request identity and the
+# project access the service already enforces, and every refusal is one of
+# the fixed tokens below, riding verbatim as the error body.
+
+#: A document the store refuses. Validation happens before any byte changes,
+#: so the previously stored definition survives a refused save untouched.
+INVALID_STAFFING_DOCUMENT = "invalid_staffing_document"
+
+#: A create body or an edit the session store refuses, for the same reason.
+INVALID_STAFFING_SESSION = "invalid_staffing_session"
+
+#: A session id no stored record answers. "Cannot be read" is ONE condition
+#: in the store — unknown, unreadable, malformed, damaged alike — so it is
+#: one condition here too: from a caller's side, the session is not there.
+UNKNOWN_STAFFING_SESSION = "unknown_staffing_session"
+
+#: A resolve body the router will not admit: malformed, an unknown key, an
+#: unknown role, a non-positive index or round, a non-string material. This
+#: rejects a request BEFORE resolution and is not a surfaced condition.
+INVALID_STAFFING_REQUEST = "invalid_staffing_request"
+
+#: The two SURFACED conditions, as their HTTP statuses. The tokens are the
+#: router's own; this maps them and adds none.
+_STAFFING_CONDITION_STATUS = {
+    staffing.STAFFING_UNAVAILABLE: 503,
+    staffing.DISTINCT_FAMILIES_UNSATISFIABLE: 409,
+}
+
+#: Exactly what a resolve request admits. `index` and `round` default to 1
+#: when absent. `brief` travels with the request, is read by no rule and is
+#: never stored, so — as in the router itself — there is nothing about its
+#: value to refuse. `families` is deliberately absent: they are the
+#: session's own fact, never a caller's claim.
+STAFFING_RESOLVE_FIELDS = ("role", "index", "round", "material", "brief")
+
+
+def _require_encodable(body, token):
+    """Refuse a body no successful response could carry back.
+
+    JSON admits an escaped unpaired surrogate, and the stores record
+    strings verbatim — refusing only a shape no consumer could use — so one
+    is validated and stored happily. No UTF-8 response can carry it, so the
+    write would commit and then answer neither its stored record nor a
+    fixed token, and a document holding one makes the whole catalogue
+    unreadable until it is replaced. That is this route's own invalid
+    input: refused here, before any byte changes, by exactly the encoder
+    the response will use.
+    """
+    try:
+        json.dumps(body, ensure_ascii=False).encode("utf-8")
+    except UnicodeEncodeError as exc:
+        raise ApiError(400, token) from exc
+
+
+def save_staffing_document(home, body):
+    """Create or WHOLLY replace one staffing document — the catalogue's only
+    edit operation, and administrative like the model-profile catalogue.
+
+    Whole replacement, never a merge: a friendly merge would leave a removed
+    rule or seat alive in a document its author believes no longer carries
+    it. The store validates before any byte changes, so a refused write
+    leaves the prior document byte-identical.
+    """
+    _require_encodable(body, INVALID_STAFFING_DOCUMENT)
+    try:
+        return staffing.save(home, body)
+    except staffing.StaffingError as exc:
+        raise ApiError(400, INVALID_STAFFING_DOCUMENT) from exc
+
+
+def _staffing_session_project(work_area):
+    """The project slug a session's work area names, or None.
+
+    Read defensively because it is read on the CREATE body too, before the
+    store has looked at it: a body whose work area is missing or misshapen
+    names no project, and so takes the administrative path below rather
+    than being authorized from something a caller made up.
+    """
+    if not isinstance(work_area, dict):
+        return None
+    slug = work_area.get("project")
+    return slug if isinstance(slug, str) else None
+
+
+def require_staffing_session_access(home, who, work_area, stored=True):
+    """Authorize one session route from the work area the session names.
+
+    The whole session policy, and no rung of its own: a session bound to a
+    project needs the same live project access as the work it names, and a
+    session with no project handle stays on the existing local-administrator
+    path. Live, because it is re-derived per request — a member whose access
+    is withdrawn loses the session with it.
+
+    *stored* says where the handle came from, which is the whole difference
+    between the two. A handle the STORE holds was decided once already, so
+    the administrator reaches it as they reach every run and every
+    discussion (`require_run_access`, `require_brainstorming_access`), and
+    a project deleted afterwards leaves no session that nobody can read.
+    A handle the CALLER supplies is a claim, so the project gate decides it
+    for everyone — the sibling create at `/api/brainstorming/sessions`
+    authorizes exactly that way — and only a session naming NO project
+    takes the administrative path. Otherwise an undeclared project would
+    open a session bound to nothing the service declares, in a record whose
+    work area no edit can correct and no route deletes.
+
+    Nothing further is checked. Every caller who passes here may read the
+    session and write or clear its overrides: there is no creator check, no
+    owner field and no caller identity stored (amendment A3).
+    """
+    slug = _staffing_session_project(work_area)
+    if slug is None:
+        if not who.get("admin"):
+            raise ApiError(403, FORBIDDEN)
+        return None
+    if stored and who.get("admin"):
+        return None
+    return require_project_access(home, who, slug)
+
+
+def staffing_session_view(home, record):
+    """One successful session response: the stored record and, beside it,
+    the roles whose declared split this session cannot honour.
+
+    Read LIVE on every response — the document may change under the session
+    — and it gates nothing: a role listed here still reads and edits
+    normally, and only an actual resolution refuses on that condition.
+    """
+    return {
+        "session": record,
+        "distinct_families_unsatisfiable":
+            staffing.distinct_families_projection(home, record["id"]),
+    }
+
+
+def read_staffing_session(home, who, session_id):
+    """One stored session, authorized from its OWN work-area handle.
+
+    Authorization is derived from what the store holds and never from what
+    the request carries, so a caller cannot reach another project's session
+    by describing it differently.
+    """
+    try:
+        record = staffing.read_session(home, session_id)
+    except staffing.StaffingError as exc:
+        raise ApiError(404, UNKNOWN_STAFFING_SESSION) from exc
+    require_staffing_session_access(home, who, record["work_area"])
+    return record
+
+
+def create_staffing_session(home, who, body):
+    """Open one session for the work area the body names.
+
+    Authorization comes first, from that named work area — a caller who may
+    not open work there learns nothing about what else the body got wrong —
+    and the handle is the caller's own claim, so a named project is one the
+    service declares and this caller may work in, for every identity.
+    The id is the store's, never the caller's.
+    """
+    require_staffing_session_access(
+        home, who, body.get("work_area"), stored=False)
+    _require_encodable(body, INVALID_STAFFING_SESSION)
+    try:
+        return staffing.create_session(home, body)
+    except staffing.StaffingError as exc:
+        raise ApiError(400, INVALID_STAFFING_SESSION) from exc
+
+
+def edit_staffing_session(home, session_id, changes):
+    """Apply one partial edit to an already-authorized session.
+
+    The store owns the shape: exactly `document`, `rigor`, `material` and
+    `overrides`, an absent field left alone and an explicit null clearing
+    one of the two optional ones. Optimistic, as the stores are — no version
+    and no compare-and-set — and byte-stable on refusal.
+    """
+    _require_encodable(changes, INVALID_STAFFING_SESSION)
+    try:
+        return staffing.edit_session(home, session_id, changes)
+    except staffing.StaffingError as exc:
+        raise ApiError(400, INVALID_STAFFING_SESSION) from exc
+
+
+def resolve_staffing_request(home, record, body):
+    """Staff one call through a session the caller has already been
+    authorized to read.
+
+    Returns EXACTLY the router's answer — `agent`, `model`, `effort` — and
+    nothing beside it: no seat, no cycle, no history and no fallback note.
+    A referenced document that cannot be read is not a failure here either;
+    the router's mandatory fallback answers it on the default document and
+    the answer looks like any other.
+
+    It refuses in exactly three ways: an input the router will not admit,
+    and the two surfaced conditions under their own tokens.
+    """
+    unknown = sorted(set(body) - set(STAFFING_RESOLVE_FIELDS))
+    if unknown or "role" not in body:
+        raise ApiError(400, INVALID_STAFFING_REQUEST)
+    try:
+        resolution = staffing.resolve(
+            home,
+            record["id"],
+            body["role"],
+            index=body.get("index", 1),
+            round=body.get("round", 1),
+            material=body.get("material"),
+            brief=body.get("brief"),
+        )
+    except staffing.StaffingConditionError as exc:
+        raise ApiError(
+            _STAFFING_CONDITION_STATUS[exc.code], exc.code) from exc
+    except staffing.StaffingError as exc:
+        raise ApiError(400, INVALID_STAFFING_REQUEST) from exc
+    return resolution.answer
+
+
 def create_run(home, payload):
     attach = bool(payload.get("attach"))
     bound = (
@@ -4377,6 +4598,16 @@ def make_handler(home, task_host=None):
                             "documents": staffing_documents_list(home),
                         },
                     )
+                elif route.startswith("/api/staffing/sessions/"):
+                    parts = route.rstrip("/").split("/")
+                    if len(parts) == 5 and parts[4]:
+                        record = read_staffing_session(home, who, parts[4])
+                        self._json(200, {
+                            "ok": True,
+                            **staffing_session_view(home, record),
+                        })
+                    else:
+                        self._json(404, {"ok": False, "error": "not found"})
                 elif route == "/api/fs":
                     # Unscoped browsing spans the whole host and stays
                     # administrative. A project+work_area scope authorizes
@@ -4692,6 +4923,48 @@ def make_handler(home, task_host=None):
                     self._require_admin(who)
                     saved = save_model_profile(home, self._body())
                     self._json(200, {"ok": True, "profile": saved})
+                elif route == "/api/staffing/documents":
+                    self._require_admin(who)
+                    saved = save_staffing_document(
+                        home,
+                        self._staffing_body(INVALID_STAFFING_DOCUMENT),
+                    )
+                    self._json(200, {"ok": True, "document": saved})
+                elif route == "/api/staffing/sessions":
+                    session = create_staffing_session(
+                        home, who,
+                        self._staffing_body(INVALID_STAFFING_SESSION),
+                    )
+                    self._json(201, {
+                        "ok": True,
+                        **staffing_session_view(home, session),
+                    })
+                elif route.startswith("/api/staffing/sessions/"):
+                    parts = route.rstrip("/").split("/")
+                    # Both session writes authorize from the STORED record
+                    # before the body is read at all, so an unknown or
+                    # foreign session is answered as such rather than as
+                    # whatever the body got wrong.
+                    if len(parts) == 5 and parts[4]:
+                        record = read_staffing_session(home, who, parts[4])
+                        edited = edit_staffing_session(
+                            home, record["id"],
+                            self._staffing_body(INVALID_STAFFING_SESSION),
+                        )
+                        self._json(200, {
+                            "ok": True,
+                            **staffing_session_view(home, edited),
+                        })
+                    elif (len(parts) == 6 and parts[4]
+                            and parts[5] == "resolve"):
+                        record = read_staffing_session(home, who, parts[4])
+                        answer = resolve_staffing_request(
+                            home, record,
+                            self._staffing_body(INVALID_STAFFING_REQUEST),
+                        )
+                        self._json(200, {"ok": True, "staffing": answer})
+                    else:
+                        self._json(404, {"ok": False, "error": "not found"})
                 elif route == "/api/projects" or route.startswith("/api/projects/"):
                     segments = project_route_segments(route)
                     self._authorize_project_route(who, "POST", segments)
@@ -4881,6 +5154,20 @@ def make_handler(home, task_host=None):
             except ApiError as exc:
                 if exc.status in (400, 413):
                     raise ApiError(400, tasks.INVALID_TASK_REQUEST) from exc
+                raise
+
+        def _staffing_body(self, token):
+            """One staffing route's body under that route's fixed token.
+
+            The `_task_body` pattern: a body the service could not read at
+            all is that route's own invalid-input refusal, not a second
+            vocabulary a caller would have to string-match.
+            """
+            try:
+                return self._body()
+            except ApiError as exc:
+                if exc.status in (400, 413):
+                    raise ApiError(400, token) from exc
                 raise
 
         def _json(self, status, payload):
