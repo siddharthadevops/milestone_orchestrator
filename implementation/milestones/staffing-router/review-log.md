@@ -319,3 +319,52 @@
 **Deferred debt (opposite-family verified):**
 - `claude-S4A-CLAUDE-R1-COLLAPSE-RATER-UNTESTED` (raised claude, cleared codex): The note's classify-seat acceptance names three strict cases; the case 'a homed run that supplies two families whose document offers it one is rated at the seat that runs' has no test, leaving the collapse half of the re-keyed independence gate unpinned. — The rule and implementation are currently correct and explicit, but the strict two-family/one-family-document collapse case lacks a regression test, so a later refactor could silently conflate run-supplied families with document families, while correction would require only one focused test and a sm
 
+## slice_impl-04-b (Milestone driver cutover and run binding)
+
+- draft: kind `implement`, artifact `-` (raw: `implementation/milestones/staffing-router/.run/raw/slice_impl-04-b-draft.txt`)
+
+| Round | Kind | Family | Findings | Triage | Raw |
+|---|---|---|---|---|---|
+| slice_impl-04-b-codex-r1 | review_round | codex | 1 | 1 reported | `implementation/milestones/staffing-router/.run/raw/slice_impl-04-b-codex-r1.txt` |
+| slice_impl-04-b-claude-r1 | fix_findings | claude | 1 | 1 fixed (1 consulted) | `implementation/milestones/staffing-router/.run/raw/slice_impl-04-b-fix1.txt` |
+| slice_impl-04-b-claude-r2 | delta_review | claude | 0 | clean | `implementation/milestones/staffing-router/.run/raw/slice_impl-04-b-delta1.txt` |
+| slice_impl-04-b-codex-r2 | review_round | codex | 3 | 3 reported | `implementation/milestones/staffing-router/.run/raw/slice_impl-04-b-codex-r2.txt` |
+| slice_impl-04-b-claude-r3 | fix_findings | claude | 3 | 2 fixed, 1 rejected (3 consulted) | `implementation/milestones/staffing-router/.run/raw/slice_impl-04-b-fix2.txt` |
+| slice_impl-04-b-claude-r4 | delta_review | claude | 0 | clean | `implementation/milestones/staffing-router/.run/raw/slice_impl-04-b-delta2.txt` |
+| slice_impl-04-b-codex-r3 | review_round | codex | 1 | 1 reported | `implementation/milestones/staffing-router/.run/raw/slice_impl-04-b-codex-r3.txt` |
+| slice_impl-04-b-claude-r5 | fix_findings | claude | 1 | 1 rejected (1 consulted) | `implementation/milestones/staffing-router/.run/raw/slice_impl-04-b-fix3.txt` |
+| slice_impl-04-b-claude-r6 | delta_review | claude | 0 | clean | `implementation/milestones/staffing-router/.run/raw/slice_impl-04-b-delta3.txt` |
+| slice_impl-04-b-codex-r4 | review_round | codex | 2 | 2 reported | `implementation/milestones/staffing-router/.run/raw/slice_impl-04-b-codex-r4.txt` |
+| slice_impl-04-b-claude-r7 | fix_findings | claude | 1 | 1 fixed | `implementation/milestones/staffing-router/.run/raw/slice_impl-04-b-fix4.txt` |
+| slice_impl-04-b-claude-r8 | delta_review | claude | 0 | clean | `implementation/milestones/staffing-router/.run/raw/slice_impl-04-b-delta4.txt` |
+| slice_impl-04-b-codex-r5 | review_round | codex | 0 | clean | `implementation/milestones/staffing-router/.run/raw/slice_impl-04-b-codex-r5.txt` |
+| slice_impl-04-b-claude-r9 | review_round | claude | 2 | 2 reported | `implementation/milestones/staffing-router/.run/raw/slice_impl-04-b-claude-r1.txt` |
+| slice_impl-04-b-claude-r10 | fix_findings | claude | 1 | 1 fixed | `implementation/milestones/staffing-router/.run/raw/slice_impl-04-b-fix5.txt` |
+| slice_impl-04-b-claude-r11 | delta_review | claude | 0 | clean | `implementation/milestones/staffing-router/.run/raw/slice_impl-04-b-delta5.txt` |
+| slice_impl-04-b-codex-r6 | review_round | codex | 1 | 1 reported | `implementation/milestones/staffing-router/.run/raw/slice_impl-04-b-codex-r6.txt` |
+| slice_impl-04-b-claude-r12 | fix_findings | claude | 1 | 1 fixed (1 consulted) | `implementation/milestones/staffing-router/.run/raw/slice_impl-04-b-fix6-rethink-return.txt` |
+| slice_impl-04-b-claude-r13 | delta_review | claude | 3 | 3 reported | `implementation/milestones/staffing-router/.run/raw/slice_impl-04-b-delta6.txt` |
+| slice_impl-04-b-claude-r14 | fix_findings | claude | 3 | 3 fixed | `implementation/milestones/staffing-router/.run/raw/slice_impl-04-b-fix7.txt` |
+| slice_impl-04-b-claude-r15 | delta_review | claude | 2 | 2 reported | `implementation/milestones/staffing-router/.run/raw/slice_impl-04-b-delta7.txt` |
+| slice_impl-04-b-claude-r16 | fix_findings | claude | 2 | 2 fixed | `implementation/milestones/staffing-router/.run/raw/slice_impl-04-b-fix8.txt` |
+| slice_impl-04-b-claude-r17 | delta_review | claude | 2 | 2 reported | `implementation/milestones/staffing-router/.run/raw/slice_impl-04-b-delta8.txt` |
+| slice_impl-04-b-claude-r18 | fix_findings | claude | 2 | 2 fixed | `implementation/milestones/staffing-router/.run/raw/slice_impl-04-b-fix9.txt` |
+| slice_impl-04-b-claude-r19 | delta_review | claude | 0 | clean | `implementation/milestones/staffing-router/.run/raw/slice_impl-04-b-delta9.txt` |
+| slice_impl-04-b-codex-r7 | review_round | codex | 1 | 1 reported | `implementation/milestones/staffing-router/.run/raw/slice_impl-04-b-codex-r7.txt` |
+| slice_impl-04-b-claude-r20 | fix_findings | claude | 1 | 1 fixed | `implementation/milestones/staffing-router/.run/raw/slice_impl-04-b-fix10.txt` |
+| slice_impl-04-b-claude-r21 | delta_review | claude | 0 | clean | `implementation/milestones/staffing-router/.run/raw/slice_impl-04-b-delta10.txt` |
+| slice_impl-04-b-codex-r8 | review_round | codex | 0 | clean | `implementation/milestones/staffing-router/.run/raw/slice_impl-04-b-codex-r8.txt` |
+| slice_impl-04-b-claude-r22 | review_round | claude | 2 | DEBT-CLEAN (reclassified) | `implementation/milestones/staffing-router/.run/raw/slice_impl-04-b-claude-r2.txt` |
+
+### Review completion — SATISFIED
+
+- deterministic result: every configured family was clean or debt-clean on the same current bytes; the scheduled full verification passed; no extra reviewer was called
+- cited reviews: `slice_impl-04-b-codex-r8`, `slice_impl-04-b-claude-r22`
+- scheduled verification event: `664`
+
+**Deferred debt (opposite-family verified):**
+- `codex-S4B-005` (raised codex, cleared codex): Review dispatches resolve staffing repeatedly despite the once-per-dispatch guarantee — The artifact explicitly promises one resolution per physical dispatch while an ordinary stable review silently performs six and its focused test checks only presence, so later builders can trust a false behavioral invariant, but correction remains bounded to consolidating the review dispatch flow an
+- `claude-S4B-CLAUDE-R1-002` (raised claude, cleared codex): `decide()` still labels the review-round action with `families_order[family_index]`, so `orch next` and `orch status` name a family that will not review — a regression this part introduced, since before it the configured order really was the cycle. — `decide()` emits a concrete but false reviewer identity that downstream CLI consumers can silently trust, while actual dispatch resolves the document seat independently, but first use exposes the contradiction and correction is a local projection-and-test repair.
+- `claude-S4B-CLAUDE-R2-001` (raised claude, cleared codex): A review round whose seat re-staffs between the preparing read and the physical dispatch is recorded under the family that ran, but its raw transcript keeps the file name built from the family that was prepared, so the ledger round id and its raw file name name different families and different round numbers. — The narrow live-restaffing window silently misnames only the forensic file while preserving its contents, correct ledger identity, and path, so later work is unlikely to rely on the mismatch and correction is a local post-dispatch relabel plus one focused test.
+- `claude-S4B-CLAUDE-R2-002` (raised claude, cleared codex): In the delta review's no-pending-delta branch the fix episode's `fix_queue` and `fix_source` are cleared before the seal read, which this part made able to stop the run, so a `staffing_unavailable` stop persists a half-closed episode and the resumed run loses its recorded `return_to`. — The code contradicts the pinned recovery behavior by persisting cleared return_to state before a fallible seal read, a rare branch existing tests can silently miss, but correction is a local ordering fix plus one regression test and only avoids an extra verification/review cycle.
+

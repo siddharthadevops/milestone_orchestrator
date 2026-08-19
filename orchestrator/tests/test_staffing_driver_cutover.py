@@ -1,17 +1,19 @@
-"""Slice 4a: the milestone driver's single-seat calls, and the run binding.
+"""Slice 4: the milestone driver's cutover, and the run binding.
 
-After this cut every worker call the driver makes for a unit's own work —
-the skeleton draft, the slice-note draft, the implementation, the fixer, the
-failure classifier, the debt rater and the fixer's consultation — takes its
-family, model and effort from the run's staffing session and from nothing
-else. The run gets that session at launch, or at the first resume that finds
-none (amendment A2).
+Every worker call the driver makes takes its family, model and effort from
+the run's staffing session and from nothing else — the skeleton draft, the
+slice-note draft, the implementation, the fixer, the failure classifier, the
+debt rater, the fixer's consultation, every review round and every delta
+review. The run gets that session at launch, or at the first resume that
+finds none (amendment A2).
 
-Review rounds and delta reviews still rotate over the run's configured
-families here; the review seats, the split-family check before a review
-dispatch and the rounds-time projection are the second part of this slice.
+Part 4a built the single-seat calls and the binding. Part 4b is here too:
+the review cycle is the document's assigned `review` seats in index order,
+the split-family check runs before each review dispatch, and the run
+summary's rounds-time projection names the seat the next round would run on.
 """
 
+import copy
 import json
 import os
 import subprocess
@@ -31,6 +33,7 @@ from orchestrator import runners
 from orchestrator import service
 from orchestrator import staffing as stf
 from orchestrator import state as st
+from orchestrator import tasks
 
 from orchestrator.tests.test_driver_mock import (
     DriverTestCase,
@@ -48,8 +51,7 @@ from orchestrator.tests.test_driver_mock import (
 
 # ---------------------------------------------------------------------------
 # What the converted `default` document staffs, so a test says WHY it expects
-# a family rather than repeating a literal. Reviews are deliberately absent:
-# they are still family-rotated in this cut.
+# a family rather than repeating a literal.
 
 PLAN = ("claude", "claude-fable-5", "max")
 DRAFT = ("codex", "gpt-5.6-sol", "xhigh")
@@ -57,6 +59,9 @@ IMPLEMENT = ("claude", "claude-fable-5", "max")
 FIX = ("codex", "gpt-5.6-sol", "xhigh")
 CLASSIFY = ("codex", "gpt-5.6-sol", "xhigh")
 CONSULT = ("claude", "claude-opus-5", "xhigh")
+# The two `review` seats the converted `default` assigns, in index order.
+REVIEW_1 = ("codex", "gpt-5.6-sol", "xhigh")
+REVIEW_2 = ("claude", "claude-opus-5", "xhigh")
 
 
 def read_bytes(path):
@@ -87,6 +92,74 @@ def split_classify_document(name="split-classify"):
     document["name"] = name
     document["roles"]["classify"] = {"distinct_families": True}
     document["assignment"]["classify"] = {"1": 1, "2": 2}
+    return document
+
+
+def review_seats_document(name, families, distinct=False):
+    """A document whose `review` seats are *families*, in index order.
+
+    Built from the seed so it stays a complete document: one family slot
+    per distinct name with that name's ladder (or a ladder of its own for a
+    family the seed does not carry), one tuning column per slot, every
+    other role on the first slot, and `review` assigned one seat per entry
+    of *families* — so the same family may hold two seats. `distinct_families`
+    is declared only where a test asks for it.
+    """
+    document = stf.default_document_seed()
+    document["name"] = name
+    ladders = {slot["name"]: slot for slot in document["families"].values()}
+    order = []
+    for family in families:
+        if family not in order:
+            order.append(family)
+    document["families"] = {}
+    for position, family in enumerate(order, start=1):
+        document["families"][str(position)] = copy.deepcopy(
+            ladders.get(family)
+            or {"name": family,
+                "models": ["%s-lite" % family, "%s-mid" % family,
+                           "%s-pro" % family],
+                "efforts": ["low", "medium", "high", "xhigh", "max"]}
+        )
+        document["families"][str(position)]["name"] = family
+    for rigor, by_slot in list(document["tuning"].items()):
+        document["tuning"][rigor] = {
+            str(position): copy.deepcopy(by_slot["1"])
+            for position in range(1, len(order) + 1)
+        }
+    document["roles"]["review"] = (
+        {"distinct_families": True} if distinct else {}
+    )
+    slot_of = {family: position
+               for position, family in enumerate(order, start=1)}
+    document["assignment"] = {role: {"1": 1} for role in document["assignment"]}
+    document["assignment"]["review"] = {
+        str(index): slot_of[family]
+        for index, family in enumerate(families, start=1)
+    }
+    return document
+
+
+def capture_marker(into):
+    """Side effect factory: copy the in-flight marker as the call runs."""
+
+    def effect(workspace):
+        with open(
+            os.path.join(workspace, ".orchestrator", "current.json"),
+            encoding="utf-8",
+        ) as handle:
+            into.update(json.load(handle))
+
+    return effect
+
+
+def one_review_seat(document):
+    """The same document with `review` assigned a single seat.
+
+    One assigned seat honours any declared split trivially, which is how a
+    run whose available families are one reviews at all after this slice.
+    """
+    document["assignment"]["review"] = {"1": 1}
     return document
 
 
@@ -136,12 +209,6 @@ class StaffingCutoverTestCase(DriverTestCase):
             json.dump(value, handle)
         return target
 
-
-# ---------------------------------------------------------------------------
-# Every driver-made call asks the router
-
-
-class DriverCallsAskTheRouter(StaffingCutoverTestCase):
     def captured(self):
         """Record every request the driver makes of the router."""
         real = stf.resolve
@@ -159,6 +226,38 @@ class DriverCallsAskTheRouter(StaffingCutoverTestCase):
 
         return requests, mock.patch.object(stf, "resolve", side_effect=record)
 
+    def bound_to(self, document, families=("codex", "claude"), name="ws"):
+        """A homed run whose ONE session points at *document*."""
+        stf.save(self.home, document)
+        path = self.run_state(
+            name,
+            families_order=list(families),
+            commands={family: ["fake-%s" % family] for family in families},
+        )
+        drv.open_run_staffing_session(
+            path, self.home, document["name"], "medium"
+        )
+        return path
+
+    def review_families_that_ran(self, subject):
+        """The family each review round ran on, in call order."""
+        return [
+            call["family"] for call in subject.runner.call_meta
+            if call["kind"] == contracts.KIND_REVIEW_ROUND
+        ]
+
+    def review_requests(self, requests):
+        """(seat, round) of every `review` request, in request order."""
+        return [
+            (r["index"], r["round"]) for r in requests if r["role"] == "review"
+        ]
+
+
+# ---------------------------------------------------------------------------
+# Every driver-made call asks the router
+
+
+class DriverCallsAskTheRouter(StaffingCutoverTestCase):
     def test_every_driver_call_asks_the_router(self):
         path = self.run_state("ws-requests")
         script = [
@@ -177,8 +276,9 @@ class DriverCallsAskTheRouter(StaffingCutoverTestCase):
                  family=PLAN[0],
                  side_effect=write_file("docs/skeleton.md",
                                         "# Skeleton\n\n## Non-goals\n")),
-            # Delta review still follows the FIXER's family (unchanged law),
-            # and the skeleton's fixer is now the `plan` seat.
+            # The delta resolves the lowest-index `review` seat whose family
+            # is the fixer's; the skeleton's fixer is the `plan` seat, whose
+            # family the `default` document seats at review index 2.
             step("delta_review", report("delta_review"), family=PLAN[0]),
             step("review_round", report("review_round"), family="codex"),
             step("review_round", report("review_round"), family="claude"),
@@ -222,11 +322,15 @@ class DriverCallsAskTheRouter(StaffingCutoverTestCase):
         self.assertIn(("implement", 1, 1), seats)
         self.assertIn(("fix", 1, 1), seats)
         self.assertIn(("consult", 1, 1), seats)
+        # Reviews ask for the seats the document assigns, in index order,
+        # and a delta review asks at a review seat like any other review.
+        self.assertIn(("review", 1, 1), seats)
+        self.assertIn(("review", 2, 1), seats)
         # No role outside the driver's own worker calls, and no request
         # carries a material or a brief before slice 9.
         self.assertEqual(
             sorted({role for role, _index, _round in seats}),
-            ["consult", "draft", "fix", "implement", "plan"],
+            ["consult", "draft", "fix", "implement", "plan", "review"],
         )
         for request in requests:
             self.assertEqual(request["session"], session)
@@ -243,6 +347,9 @@ class DriverCallsAskTheRouter(StaffingCutoverTestCase):
         self.assertIn((contracts.KIND_DRAFT_SLICE_NOTE,) + DRAFT, ran)
         self.assertIn((contracts.KIND_IMPLEMENT,) + IMPLEMENT, ran)
         self.assertIn((contracts.KIND_FIX_FINDINGS,) + FIX, ran)
+        self.assertIn((contracts.KIND_REVIEW_ROUND,) + REVIEW_1, ran)
+        self.assertIn((contracts.KIND_REVIEW_ROUND,) + REVIEW_2, ran)
+        self.assertIn((contracts.KIND_DELTA_REVIEW,) + REVIEW_2, ran)
 
     def test_the_failure_classifier_asks_the_classify_seat(self):
         """The classifier is a `classify` seat, not the opposite of the
@@ -549,10 +656,1113 @@ class ResolutionIsLive(StaffingCutoverTestCase):
 
 
 # ---------------------------------------------------------------------------
+# The review cycle IS the document's `review` seats
+
+
+class ReviewCycleTestCase(StaffingCutoverTestCase):
+    """Shared drive helpers for the review-cycle tests. No tests of its own."""
+
+    THREE = ("codex", "claude", "gemini")
+
+    def draft(self, family="codex"):
+        return step(
+            "draft_skeleton",
+            ok("draft_skeleton", artifact="docs/skeleton.md",
+               slices=[{"id": 1, "title": "One"}]),
+            family=family,
+            side_effect=write_file("docs/skeleton.md", "# Skeleton\n"),
+        )
+
+    def clean_rounds(self, families):
+        return [
+            step("review_round", report("review_round"), family=family)
+            for family in families
+        ]
+
+    def sealed(self, state):
+        return state["units"][0]["status"] == st.U_SEALED
+
+    def in_rounds(self, state):
+        return state["units"][0]["status"] == st.U_ROUNDS
+
+
+class TheCycleReadAnswersWithoutDispatching(ReviewCycleTestCase):
+    """`session_seat_families` is the third live document read over a
+    session: the family each assigned seat of a role runs on, described
+    without dispatching anything.
+
+    It refuses nothing it can answer — a declared split this session cannot
+    honour is the very list that judgement is made ON — and keeps
+    `staffing_unavailable`, which is the one case leaving no answer to give.
+    """
+
+    def families_of(self, path, role="review", families=("codex", "claude")):
+        return stf.session_seat_families(
+            self.home, self.session_of(path), role, families=list(families)
+        )
+
+    def test_it_names_the_family_each_assigned_seat_runs_on(self):
+        path = self.bound_to(
+            review_seats_document("read-three", self.THREE),
+            families=self.THREE, name="ws-read-three",
+        )
+        self.assertEqual(
+            self.families_of(path, families=self.THREE), list(self.THREE)
+        )
+
+    def test_a_slot_this_machine_lacks_collapses_as_a_dispatch_would(self):
+        """The read applies the same collapse `resolve` does, so the cycle
+        a consumer walks is the one its dispatches would actually staff."""
+        path = self.bound_to(
+            review_seats_document("read-collapse", ("codex", "claude")),
+            families=("codex",), name="ws-read-collapse",
+        )
+        self.assertEqual(
+            self.families_of(path, families=("codex",)), ["codex", "codex"]
+        )
+
+    def test_a_split_it_cannot_honour_is_described_not_refused(self):
+        document = review_seats_document("read-split", ("codex", "claude"))
+        document["roles"]["review"] = {"distinct_families": True}
+        document["assignment"]["review"] = {"1": 1, "2": 1}
+        path = self.bound_to(
+            document, families=("codex", "claude"), name="ws-read-split"
+        )
+        self.assertEqual(self.families_of(path), ["codex", "codex"])
+
+        # The very same session refuses the DISPATCH the read describes.
+        with self.assertRaises(stf.StaffingConditionError) as caught:
+            stf.resolve(self.home, self.session_of(path), "review",
+                        index=1, families=["codex", "claude"])
+        self.assertEqual(
+            caught.exception.code, stf.DISTINCT_FAMILIES_UNSATISFIABLE
+        )
+
+    def test_an_unreadable_document_describes_the_fallback_cycle(self):
+        """The read falls back exactly as a dispatch does."""
+        path = self.bound_to(
+            review_seats_document("read-gone", ("codex", "claude")),
+            families=("codex", "claude"), name="ws-read-gone",
+        )
+        stf.edit_session(
+            self.home, self.session_of(path), {"document": "no-such-thing"}
+        )
+        seats = stf.session_seats(
+            self.home, self.session_of(path), "review",
+            families=["codex", "claude"],
+        )
+        families = self.families_of(path)
+        self.assertEqual(len(families), len(seats))
+        self.assertLessEqual(set(families), {"codex", "claude"})
+
+    def test_no_family_available_leaves_no_answer_to_give(self):
+        path = self.bound_to(
+            unstaffable_document("read-ghosts"),
+            families=("codex",), name="ws-read-ghosts",
+        )
+        with self.assertRaises(stf.StaffingConditionError) as caught:
+            self.families_of(path, families=("codex",))
+        self.assertEqual(caught.exception.code, stf.STAFFING_UNAVAILABLE)
+
+    def test_an_unknown_role_is_an_input_error(self):
+        path = self.bound_to(
+            review_seats_document("read-role", ("codex",)),
+            families=("codex",), name="ws-read-role",
+        )
+        with self.assertRaises(stf.StaffingError) as caught:
+            self.families_of(path, role="reviewer", families=("codex",))
+        self.assertNotIsInstance(
+            caught.exception, stf.StaffingConditionError
+        )
+
+
+class ReviewCycleFollowsTheSeats(ReviewCycleTestCase):
+    """Rotation, the cap, restarts and the seal predicate walk the seats the
+    document assigns to `review`, in index order — not the run's configured
+    family order."""
+
+    def test_review_cycle_follows_assigned_seats(self):
+        """Three assigned seats review in index order, and only then seal."""
+        path = self.bound_to(
+            review_seats_document("three-seats", self.THREE),
+            families=self.THREE,
+            name="ws-three",
+        )
+        requests, patched = self.captured()
+        subject = self.driver_for(
+            path, [self.draft()] + self.clean_rounds(self.THREE)
+        )
+        with patched:
+            self.step_until(subject, self.sealed, max_steps=40)
+
+        self.assertEqual(
+            self.review_families_that_ran(subject), list(self.THREE)
+        )
+        self.assertEqual(subject.runner.script, [])
+        # Every seat the document assigns was asked for, and no other.
+        self.assertEqual(
+            sorted({seat for seat, _round in self.review_requests(requests)}),
+            [1, 2, 3],
+        )
+
+    def test_one_review_seat_seals_after_one_clean_round(self):
+        path = self.bound_to(
+            review_seats_document("one-seat", ["claude"]),
+            name="ws-one-seat",
+        )
+        # One slot, so this document seats every other role on it too.
+        subject = self.driver_for(
+            path, [self.draft("claude")] + self.clean_rounds(["claude"])
+        )
+        self.step_until(subject, self.sealed, max_steps=40)
+        self.assertEqual(self.review_families_that_ran(subject), ["claude"])
+        self.assertEqual(subject.runner.script, [])
+
+    def test_a_family_slot_no_review_seat_uses_adds_no_seat(self):
+        """The cycle reads the ASSIGNMENT, not the family table.
+
+        The document below carries three family slots and assigns two of
+        them to `review`; the third stays a slot other roles could use and
+        adds no review seat.
+        """
+        document = review_seats_document("slot-unused", self.THREE)
+        document["assignment"]["review"] = {"1": 1, "2": 2}
+        path = self.bound_to(
+            document, families=self.THREE, name="ws-unused-slot"
+        )
+        self.assertEqual(len(document["families"]), 3)
+        subject = self.driver_for(
+            path, [self.draft()] + self.clean_rounds(["codex", "claude"])
+        )
+        self.step_until(subject, self.sealed, max_steps=40)
+        self.assertEqual(
+            self.review_families_that_ran(subject), ["codex", "claude"]
+        )
+        self.assertEqual(subject.runner.script, [])
+
+    def recorded_rounds(self, path, family, count=2):
+        """*count* clean review rounds for *family*, in the current cycle."""
+        state = st.load(path)
+        unit = state["units"][0]
+        for _ in range(count):
+            st.record_round(
+                state, unit, family, contracts.KIND_REVIEW_ROUND,
+                report("review_round"),
+            )
+        st.save(path, state)
+
+    def two_recorded_rounds(self, path):
+        """Two clean review rounds for the seat's family, in this cycle."""
+        self.recorded_rounds(path, "codex")
+
+    def test_a_seats_round_number_and_cap_count_its_familys_rounds(self):
+        """The `review` request carries the seat family's rounds plus one,
+        which is the very count the round cap takes."""
+        path = self.bound_to(
+            review_seats_document("counting", ["codex"]),
+            families=("codex",), name="ws-count",
+        )
+        subject = self.driver_for(path, [self.draft()])
+        self.step_until(subject, self.in_rounds, max_steps=20)
+        self.two_recorded_rounds(path)
+
+        requests, patched = self.captured()
+        subject = self.driver_for(path, self.clean_rounds(["codex"]))
+        with patched:
+            subject.step()
+        # Only the dispatch path ever asks beyond round 1: the cycle reads
+        # that describe the seats always ask at round 1.
+        self.assertIn((1, 3), self.review_requests(requests))
+
+        # The same count is the cap. A run whose cap is already spent stops
+        # before it dispatches, naming the family and the cap.
+        path = self.bound_to(
+            review_seats_document("capped", ["codex"]),
+            families=("codex",), name="ws-cap",
+        )
+        subject = self.driver_for(path, [self.draft()])
+        self.step_until(subject, self.in_rounds, max_steps=20)
+        self.two_recorded_rounds(path)
+        state = st.load(path)
+        state["config"]["max_rounds_per_family"] = 2
+        st.save(path, state)
+        subject = self.driver_for(path, [])
+        subject.step()
+        self.assertIn(
+            "max_rounds_per_family=2", st.load(path)["failure"]["reason"]
+        )
+        self.assertEqual(subject.runner.calls, [])
+
+    def restaffing_seat_one(self, document, slot):
+        """A document whose `review` seat 1 is *slot*, saved as a call runs.
+
+        The whole point of a live seat: the document a dispatch resolves is
+        the one on disk WHEN IT RESOLVES, not the one the cycle read while
+        preparing the round.
+        """
+        swapped = copy.deepcopy(document)
+        swapped["assignment"]["review"] = {"1": slot, "2": 3 - slot}
+        return lambda _workspace: stf.save(self.home, swapped)
+
+    def test_a_restaffed_seat_meets_the_cap_of_the_family_that_runs(self):
+        """A save landing mid-call buys a capped family no extra round.
+
+        A malformed answer makes the call resolve its seat again — the
+        repair retry — and by then the saved document seats it on the other
+        family. The round cap is the reviewing family's, so the dispatch
+        takes it for the family it just resolved and not for the one the
+        preparing read named, and this one has nothing left to spend.
+        """
+        document = review_seats_document("restaff-cap", ("codex", "claude"))
+        path = self.bound_to(document, name="ws-restaff-cap")
+        subject = self.driver_for(path, [self.draft()])
+        self.step_until(subject, self.in_rounds, max_steps=20)
+        # claude has spent this cycle's rounds; codex, the family seat 1
+        # resolves to, has spent none.
+        self.recorded_rounds(path, "claude", 2)
+        state = st.load(path)
+        state["config"]["max_rounds_per_family"] = 2
+        st.save(path, state)
+
+        subject = self.driver_for(path, [
+            step("review_round", "not contract json", family="codex",
+                 side_effect=self.restaffing_seat_one(document, 2)),
+        ])
+        subject.step()
+
+        failure = st.load(path)["failure"]
+        self.assertIn("family claude", failure["reason"])
+        self.assertIn("max_rounds_per_family=2", failure["reason"])
+        # The codex attempt ran; the claude one the save asked for did not.
+        self.assertEqual(
+            [call["family"] for call in subject.runner.call_meta], ["codex"]
+        )
+
+    def test_a_restaffed_seat_runs_at_its_own_familys_round(self):
+        """And the round it runs at is that family's count too.
+
+        `step_up` is what the round buys, so a dispatch that lands on
+        another family must climb on ITS rounds: here claude's two make the
+        retry round 3, which the document's rule steps up, where codex's
+        none would have left it at round 1.
+        """
+        document = review_seats_document("restaff-round", ("codex", "claude"))
+        document["rules"] = [
+            {"type": "step_up", "role": "review", "min_round": 3}
+        ]
+        path = self.bound_to(document, name="ws-restaff-round")
+        subject = self.driver_for(path, [self.draft()])
+        self.step_until(subject, self.in_rounds, max_steps=20)
+        self.recorded_rounds(path, "claude", 2)
+
+        requests, patched = self.captured()
+        subject = self.driver_for(path, [
+            step("review_round", "not contract json", family="codex",
+                 side_effect=self.restaffing_seat_one(document, 2)),
+            step("review_round", report("review_round"), family="claude"),
+        ])
+        with patched:
+            subject.step()
+
+        session = self.session_of(path)
+        swapped = stf.load(self.home, "restaff-round")
+        stepped_up = stf.resolve(
+            self.home, session, "review", index=1, round=3).answer
+        self.assertNotEqual(
+            stepped_up,
+            stf.resolve(self.home, session, "review", index=1, round=1).answer,
+        )
+        self.assertEqual(swapped["assignment"]["review"]["1"], 2)
+        self.assertEqual(
+            subject.runner.call_meta[1],
+            {"family": "claude", "kind": contracts.KIND_REVIEW_ROUND,
+             "model": stepped_up["model"], "effort": stepped_up["effort"]},
+        )
+        # The preparing read asked at codex's round; the dispatch that
+        # landed on claude asked again, at claude's.
+        self.assertIn((1, 1), self.review_requests(requests))
+        self.assertIn((1, 3), self.review_requests(requests))
+
+    def test_a_flapping_document_runs_the_round_it_reports(self):
+        """The staffing that runs is the answer FOR the round reported.
+
+        A seat settles by asking, deriving the round its family wants, and
+        asking again — so a document rewritten under consecutive asks can
+        spend that bound: codex wants round 3 here and claude round 1, and
+        the write moves the seat between them under every ask. What comes
+        back is then the last family's round beside the answer FOR it, and
+        never a rung resolved at a round already left behind: `step_up` at
+        `min_round` 3 is what round 3 buys, and it is what runs.
+        """
+        document = review_seats_document("flapping", ("codex", "claude"))
+        document["rules"] = [
+            {"type": "step_up", "role": "review", "min_round": 3}
+        ]
+        path = self.bound_to(document, name="ws-flapping")
+        subject = self.driver_for(path, [self.draft()])
+        self.step_until(subject, self.in_rounds, max_steps=20)
+        # codex wants round 3 and claude round 1, so the seat never settles
+        # while the write keeps moving it between them.
+        self.recorded_rounds(path, "codex", 2)
+
+        real = stf.resolve
+        reads = []
+
+        def flapping(home, session, role, index=1, round=1, material=None,
+                     brief=None, families=()):
+            answer = real(home, session, role, index=index, round=round,
+                          material=material, brief=brief, families=families)
+            if role == "review":
+                reads.append(round)
+                if len(reads) <= drv._REVIEW_SEAT_SETTLE_READS:
+                    moved = copy.deepcopy(document)
+                    moved["assignment"]["review"] = (
+                        {"1": 2, "2": 1} if len(reads) % 2
+                        else {"1": 1, "2": 2}
+                    )
+                    stf.save(self.home, moved)
+            return answer
+
+        subject = self.driver_for(path, [])
+        unit = subject.state["units"][0]
+        with mock.patch.object(stf, "resolve", side_effect=flapping):
+            round_number, resolution = subject._settled_review_seat(unit, 1)
+
+        # Three asks that never settle, then one made AT the round returned.
+        self.assertEqual(reads, [1, 3, 1, 3])
+        self.assertEqual(round_number, 3)
+        session = self.session_of(path)
+        self.assertEqual(
+            resolution.answer,
+            stf.resolve(self.home, session, "review", index=1, round=3).answer,
+        )
+        # And round 3 really is a different rung, so the pairing is what the
+        # provider runs on and not bookkeeping.
+        self.assertNotEqual(
+            resolution.answer,
+            stf.resolve(self.home, session, "review", index=1, round=1).answer,
+        )
+
+    def writing_document_read(self, document):
+        """Save *document* as the cycle's own document read answers.
+
+        The write a torn cycle would need: it completes strictly INSIDE
+        the read that describes the cycle, which is the only gap left.
+        """
+        real = stf._document_for
+        reads = []
+
+        def document_for(home, name):
+            answer = real(home, name)
+            reads.append(name)
+            stf.save(self.home, document)
+            return answer
+
+        return reads, mock.patch.object(
+            stf, "_document_for", side_effect=document_for
+        )
+
+    def test_the_cycle_is_read_from_one_document(self):
+        """A write landing inside the read still describes one document.
+
+        The cycle used to be read one seat at a time, so a save completing
+        between two of those reads handed back a list built from BOTH — a
+        seat-1 codex beside a seat-2 gemini, a pair NEITHER document
+        assigns. Codex and gemini are clean and claude is not, so that pair
+        would seal a unit the document before the write and the document
+        after it both keep in review. One live read answers every seat from
+        one document, so the torn pair is not constructible: what comes
+        back is a cycle some document assigns, and a stale one is exactly
+        what live seats mean — the write governs the next reading, whole.
+        """
+        before = review_seats_document("torn", ("codex", "claude"))
+        path = self.bound_to(before, families=self.THREE, name="ws-torn")
+        subject = self.driver_for(path, [self.draft()])
+        self.step_until(subject, self.in_rounds, max_steps=20)
+        self.recorded_rounds(path, "codex", 1)
+        self.recorded_rounds(path, "gemini", 1)
+
+        after = review_seats_document("torn", ("claude", "gemini"))
+        reads, patched = self.writing_document_read(after)
+        subject = self.driver_for(path, [])
+        with patched:
+            families = subject._review_families()
+        unit = subject.state["units"][0]
+
+        # One document read describes every seat, so the write has no gap
+        # between two of them to land in.
+        self.assertEqual(reads, ["torn"])
+        self.assertEqual(families, ["codex", "claude"])
+        self.assertIsNone(st.seal_predicate_reviews(unit, families))
+        # The pair the torn reading would have sealed on.
+        self.assertIsNotNone(
+            st.seal_predicate_reviews(unit, ["codex", "gemini"])
+        )
+        # The completed write governs the next reading, whole.
+        self.assertEqual(subject._review_families(), ["claude", "gemini"])
+
+    def test_one_family_on_two_seats_is_read_as_the_document_wrote_it(self):
+        """A document may seat one family twice, and that repeat is the
+        cycle — the read answers one family per assigned seat, in seat
+        order, and folds no repeat away."""
+        path = self.bound_to(
+            review_seats_document("twice", ("codex", "codex")),
+            name="ws-twice",
+        )
+        subject = self.driver_for(path, [])
+        self.assertEqual(subject._review_families(), ["codex", "codex"])
+
+    def test_changed_bytes_restart_the_cycle_at_the_first_seat(self):
+        """A fixer's accepted edit restarts the cycle at seat 1, and the
+        earlier seats' clean rounds no longer satisfy the predicate."""
+        path = self.bound_to(
+            review_seats_document("restarting", self.THREE),
+            families=self.THREE, name="ws-restart",
+        )
+        subject = self.driver_for(path, [
+            self.draft(),
+            step("review_round", report("review_round"), family="codex"),
+            step("review_round",
+                 report("review_round", [finding("F1", "no non-goals")]),
+                 family="claude"),
+            step("fix_findings",
+                 fix_ok([triaged("F1", "fixed", "no non-goals")],
+                        files_changed=["docs/skeleton.md"]),
+                 family="codex",
+                 side_effect=write_file("docs/skeleton.md",
+                                        "# Skeleton\n\n## Non-goals\n")),
+            step("delta_review", report("delta_review"), family="codex"),
+        ] + self.clean_rounds(self.THREE))
+        self.step_until(subject, self.sealed, max_steps=60)
+        # codex, claude, the fix and its delta, then a FULL fresh cycle.
+        self.assertEqual(
+            self.review_families_that_ran(subject),
+            ["codex", "claude"] + list(self.THREE),
+        )
+        self.assertEqual(subject.runner.script, [])
+        restarts = [
+            event for event in st.load(path)["events"]
+            if event["type"] == "review_cycle_restarted"
+        ]
+        self.assertTrue(restarts)
+
+    def test_resume_amnesty_still_forgives_rounds_before_the_retry(self):
+        """Amnesty is unchanged: it forgives rounds recorded before an
+        operator retry, so the seat's next request counts from zero again."""
+        path = self.bound_to(
+            review_seats_document("amnesty", ["codex"]),
+            families=("codex",), name="ws-amnesty",
+        )
+        subject = self.driver_for(path, [self.draft()])
+        self.step_until(subject, self.in_rounds, max_steps=20)
+        self.two_recorded_rounds(path)
+        state = st.load(path)
+        state["units"][0]["rounds_amnesty"] = len(state["units"][0]["rounds"])
+        st.save(path, state)
+
+        requests, patched = self.captured()
+        subject = self.driver_for(path, self.clean_rounds(["codex"]))
+        with patched:
+            subject.step()
+        self.assertEqual(
+            [r for r in self.review_requests(requests) if r[1] > 1], []
+        )
+        self.assertIn((1, 1), self.review_requests(requests))
+
+
+# ---------------------------------------------------------------------------
+# A seat list that shrinks beneath the cycle stops no run
+
+
+class AShrinkingSeatListStopsNoRun(ReviewCycleTestCase):
+    def standing_on_the_third_seat(self, name):
+        """A run whose first two of three review seats are clean."""
+        path = self.bound_to(
+            review_seats_document("shrinking", self.THREE),
+            families=self.THREE, name=name,
+        )
+        subject = self.driver_for(path, [
+            self.draft(),
+            step("review_round", report("review_round"), family="codex"),
+            step("review_round", report("review_round"), family="claude"),
+        ])
+        self.step_until(
+            subject,
+            lambda state: state["units"][0].get("family_index") == 2,
+            max_steps=30,
+        )
+        self.assertEqual(subject.runner.script, [])
+        return path
+
+    def test_review_cycle_survives_a_shrinking_seat_list(self):
+        """Two ways the list shrinks, both sealing on the seats that remain.
+
+        The cycle stands on seat 3; the seats it can still see are seat 1
+        and seat 2, and both are clean on the current bytes, so the run
+        continues through the ordinary pre-seal path and seals.
+        """
+        # (a) the document itself is edited down to two review seats.
+        path = self.standing_on_the_third_seat("ws-shrink-edit")
+        shrunk = review_seats_document("shrinking", self.THREE)
+        shrunk["assignment"]["review"] = {"1": 1, "2": 2}
+        stf.save(self.home, shrunk)
+        subject = self.driver_for(path, [])
+        self.step_until(subject, self.sealed, max_steps=20)
+        state = st.load(path)
+        self.assertIsNone(state["failure"])
+        self.assertEqual(subject.runner.calls, [])
+
+        # (b) the referenced document becomes unreadable, so the two-seat
+        # `default` answers instead — the same seats, and the same seal.
+        path = self.standing_on_the_third_seat("ws-shrink-unreadable")
+        with open(os.path.join(stf.staffing_documents_dir(self.home),
+                               "shrinking.json"), "w",
+                  encoding="utf-8") as handle:
+            handle.write("{not json")
+        subject = self.driver_for(path, [])
+        self.step_until(subject, self.sealed, max_steps=20)
+        state = st.load(path)
+        self.assertIsNone(state["failure"])
+        self.assertEqual(subject.runner.calls, [])
+
+    def test_a_shrunken_cycle_restarts_when_a_current_seat_is_not_clean(self):
+        """The other half of the same pre-seal path: a seat with no clean
+        round in this cycle restarts it instead of sealing."""
+        path = self.standing_on_the_third_seat("ws-shrink-restart")
+        shrunk = review_seats_document("shrinking", ["claude", "gemini"])
+        shrunk["name"] = "shrinking"
+        stf.save(self.home, shrunk)
+        subject = self.driver_for(path, self.clean_rounds(
+            ["claude", "gemini"]
+        ))
+        self.step_until(subject, self.sealed, max_steps=30)
+        state = st.load(path)
+        self.assertIsNone(state["failure"])
+        self.assertEqual(subject.runner.script, [])
+        self.assertTrue([
+            event for event in state["events"]
+            if event["type"] == "review_cycle_restarted"
+        ])
+
+    def test_the_vanished_seat_s_admitted_review_is_abandoned(self):
+        """A review admitted for the seat that shrinks away is failed.
+
+        Its frozen request can never be dispatched — `review_round` is not
+        continuable, and neither continuation runs it — so the exhausted
+        cycle records the abandonment instead of carrying an open task
+        reference onto a unit it is about to seal, where the supported
+        repair reopen would then find no kind of its own to admit.
+        """
+        path = self.standing_on_the_third_seat("ws-shrink-admitted")
+        # A crash after admission: the task is durable, the result is not.
+        crashed = self.driver_for(path, [])
+        admitted = crashed._admit_worker_task(
+            st.current_unit(crashed.state),
+            contracts.KIND_REVIEW_ROUND,
+            "the third seat's frozen review prompt",
+            "gemini",
+        )
+        shrunk = review_seats_document("shrinking", self.THREE)
+        shrunk["assignment"]["review"] = {"1": 1, "2": 2}
+        stf.save(self.home, shrunk)
+
+        subject = self.driver_for(path, [])
+        self.step_until(subject, self.sealed, max_steps=20)
+        state = st.load(path)
+        unit = state["units"][0]
+        self.assertIsNone(state["failure"])
+        self.assertEqual(subject.runner.calls, [])
+        self.assertNotIn("active_task", unit)
+        result = tasks.task_record(state, admitted["id"])["result"]
+        self.assertEqual(result["status"], "failure")
+        self.assertIsNone(result["native_result"])
+        self.assertIn("shrank below the seat", result["reason"])
+
+        # The sealed unit's supported repair admits its own successor.
+        later = self.driver_for(path, [])
+        sealed = later.state["units"][0]
+        st.reopen_for_repair(
+            later.state, sealed, {"classification": "gap"},
+            reason="downstream reported a gap",
+        )
+        st.enter_fix_episode(
+            later.state, sealed,
+            [{"id": "G1", "severity": "P2", "summary": "gap"}],
+            "repair", None, "%s-gap-repair" % st.unit_key(sealed),
+            st.U_PRE_SEAL_VERIFY,
+        )
+        successor = later._admit_worker_task(
+            sealed, contracts.KIND_FIX_FINDINGS, "repair the gap", "codex"
+        )
+        self.assertNotEqual(successor["id"], admitted["id"])
+
+
+class ASurfacedConditionStopsOnlyADispatch(ReviewCycleTestCase):
+    """Describing the review cycle is a read, and a read is not a call.
+
+    `distinct_families_unsatisfiable` stops the review dispatches it
+    affects and nothing else, so the cycle's own readers — the advance
+    behind a finished round, the pre-seal seal predicate, and the
+    checkpoint's current-family field — ANSWER under a declared split
+    this session cannot honour. Refusing there
+    failed a run that had dispatched nobody: it discarded a clean cycle
+    the condition has no authority over and made the repaired document buy
+    every round again.
+
+    `staffing_unavailable` is the one condition a read still raises,
+    because with no family available there is no cycle to describe. It
+    stops the run without rewriting the cycle on its way out, so the
+    repaired document seals on the rounds already earned.
+    """
+
+    TWO = ("codex", "claude")
+
+    def at_pre_seal(self, name):
+        """A run whose two assigned seats are both clean, awaiting its seal."""
+        path = self.bound_to(
+            review_seats_document("live", self.TWO),
+            families=self.TWO, name=name,
+        )
+        subject = self.driver_for(
+            path, [self.draft("codex")] + self.clean_rounds(list(self.TWO))
+        )
+        self.step_until(
+            subject,
+            lambda state: state["units"][0]["status"] == st.U_PRE_SEAL_VERIFY,
+            max_steps=40,
+        )
+        self.assertEqual(subject.runner.script, [])
+        return path
+
+    def unsatisfiable_split(self):
+        """The live document edited so `review`'s two seats collapse onto
+        one slot while declaring the split — refused however this machine
+        looks."""
+        document = review_seats_document("live", self.TWO)
+        document["roles"]["review"] = {"distinct_families": True}
+        document["assignment"]["review"] = {"1": 1, "2": 1}
+        return document
+
+    def stopped(self, path, token):
+        """The run stopped with *token*, and the cycle is where it was."""
+        subject = self.driver_for(path, [])
+        self.step_until(
+            subject, lambda state: state["failure"] is not None, max_steps=10
+        )
+        state = st.load(path)
+        unit = state["units"][0]
+        self.assertIn(token, state["failure"]["reason"])
+        self.assertEqual(subject.runner.calls, [])
+        self.assertEqual(unit.get("review_cycle_start"), 0)
+        self.assertEqual(unit.get("family_index"), 2)
+        self.assertEqual(
+            [event for event in state["events"]
+             if event["type"] == "review_cycle_restarted"],
+            [],
+        )
+        return unit
+
+    def test_a_refused_split_seals_on_the_current_seats(self):
+        """The seal read answers, so the earned rounds seal the unit.
+
+        Both seats collapse onto codex, whose clean round is already in the
+        ledger, so the currently assigned cycle is satisfied and the unit
+        seals — the same pre-seal path a shrunken seat list takes. Nothing
+        is dispatched, so nothing is refused.
+        """
+        path = self.at_pre_seal("ws-condition-split")
+        stf.save(self.home, self.unsatisfiable_split())
+
+        subject = self.driver_for(path, [])
+        self.step_until(subject, self.sealed, max_steps=20)
+        state = st.load(path)
+        unit = state["units"][0]
+        self.assertIsNone(state["failure"])
+        self.assertEqual(subject.runner.calls, [])
+        self.assertEqual(unit.get("review_cycle_start"), 0)
+        self.assertEqual(
+            [event for event in state["events"]
+             if event["type"] == "review_cycle_restarted"],
+            [],
+        )
+
+    def test_a_refused_split_lets_a_finished_round_advance_the_cycle(self):
+        """The advance answers too, so the round that just landed stands.
+
+        The document declares the split while the seat-1 reviewer is
+        running, so the advance behind that round is the first reader to
+        meet it. It moves the cycle to seat 2 instead of failing a run
+        whose clean round is already recorded.
+        """
+        path = self.bound_to(
+            review_seats_document("live", self.TWO),
+            families=self.TWO, name="ws-condition-advance",
+        )
+
+        def declare_split(_workspace):
+            stf.save(self.home, self.unsatisfiable_split())
+
+        subject = self.driver_for(path, [
+            self.draft("codex"),
+            step("review_round", report("review_round"), family="codex",
+                 side_effect=declare_split),
+        ])
+        self.step_until(
+            subject,
+            lambda state: state["units"][0].get("family_index") == 1,
+            max_steps=40,
+        )
+        state = st.load(path)
+        unit = state["units"][0]
+        self.assertIsNone(state["failure"])
+        self.assertEqual(self.review_families_that_ran(subject), ["codex"])
+        self.assertEqual(unit.get("review_cycle_start"), 0)
+        self.assertEqual(
+            [r["family"] for r in unit["rounds"]
+             if r["kind"] == contracts.KIND_REVIEW_ROUND],
+            ["codex"],
+        )
+
+        # The checkpoint's current-family field is the third reader, and
+        # `delta_checkpoint` has no other record of the seat a restarted
+        # cycle stood on: under the split it names the described family
+        # instead of the blank a refusing read used to leave behind.
+        self.assertEqual(subject._current_review_family(unit), "codex")
+
+        # (c) The condition appears once a review DISPATCH is attempted —
+        # here seat 2, which the advance moved the cycle onto.
+        self.step_until(
+            subject, lambda state: state["failure"] is not None, max_steps=10
+        )
+        state = st.load(path)
+        self.assertIn(
+            stf.DISTINCT_FAMILIES_UNSATISFIABLE, state["failure"]["reason"]
+        )
+        self.assertEqual(self.review_families_that_ran(subject), ["codex"])
+        self.assertEqual(state["units"][0].get("family_index"), 1)
+
+    def test_no_family_available_stops_the_run_and_keeps_the_cycle(self):
+        path = self.at_pre_seal("ws-condition-unavailable")
+        stf.save(self.home, unstaffable_document("live"))
+        self.stopped(path, stf.STAFFING_UNAVAILABLE)
+
+    def test_the_repaired_document_seals_on_the_rounds_already_earned(self):
+        """The whole point of keeping the cycle: no round is bought twice."""
+        path = self.at_pre_seal("ws-condition-repair")
+        stf.save(self.home, unstaffable_document("live"))
+        self.stopped(path, stf.STAFFING_UNAVAILABLE)
+
+        stf.save(self.home, review_seats_document("live", self.TWO))
+        resumed = self.driver_for(path, [])
+        st.resume_run(resumed.state)
+        resumed._save()
+
+        # Scripted rounds that must go unused: sealing may spend none.
+        subject = self.driver_for(path, self.clean_rounds(list(self.TWO)))
+        self.step_until(subject, self.sealed, max_steps=20)
+        self.assertIsNone(st.load(path)["failure"])
+        self.assertEqual(self.review_families_that_ran(subject), [])
+
+    def outage_at(self, name, before):
+        """A run stopped by an outage at the advance behind a clean round.
+
+        *before* are the seats already clean when the document becomes
+        unstaffable while the next seat's reviewer runs — so the first
+        reader to find nobody to describe is that round's own advance.
+        """
+        path = self.bound_to(
+            review_seats_document("live", self.TWO),
+            families=self.TWO, name=name,
+        )
+        running = list(self.TWO)[len(before)]
+
+        def go_unstaffable(_workspace):
+            stf.save(self.home, unstaffable_document("live"))
+
+        subject = self.driver_for(path, [self.draft("codex")]
+                                  + self.clean_rounds(list(before))
+                                  + [step("review_round",
+                                          report("review_round"),
+                                          family=running,
+                                          side_effect=go_unstaffable)])
+        self.step_until(
+            subject, lambda state: state["failure"] is not None, max_steps=40
+        )
+        state = st.load(path)
+        unit = state["units"][0]
+        self.assertIn(stf.STAFFING_UNAVAILABLE, state["failure"]["reason"])
+        self.assertEqual(subject.runner.script, [])
+        # Every round earned stands, and nothing restarted the cycle.
+        self.assertEqual(
+            [r["family"] for r in unit["rounds"]
+             if r["kind"] == contracts.KIND_REVIEW_ROUND],
+            list(before) + [running],
+        )
+        self.assertEqual(unit.get("review_cycle_start"), 0)
+        self.assertEqual(
+            [event for event in state["events"]
+             if event["type"] == "review_cycle_restarted"],
+            [],
+        )
+        # The move the clean round earned happened before the stop.
+        self.assertEqual(unit.get("family_index"), len(before) + 1)
+        return path
+
+    def repaired(self, path, script):
+        """The repaired run, resumed and driven to its seal."""
+        stf.save(self.home, review_seats_document("live", self.TWO))
+        resumed = self.driver_for(path, [])
+        st.resume_run(resumed.state)
+        resumed._save()
+        subject = self.driver_for(path, script)
+        self.step_until(subject, self.sealed, max_steps=20)
+        self.assertIsNone(st.load(path)["failure"])
+        return subject
+
+    def test_an_outage_at_the_advance_keeps_the_seat_it_earned(self):
+        """The stop is not paid for with the round that just landed.
+
+        The document goes unstaffable while the seat-1 reviewer runs, so
+        the advance behind its clean round is the first reader with nobody
+        to describe. It stops the run naming the token — after moving the
+        cycle off the seat that round earned, because nothing skips a seat
+        already clean and the repaired run would otherwise buy it again.
+        """
+        path = self.outage_at("ws-advance-outage", before=())
+
+        # Only seat 2 is scripted: a re-bought seat 1 asks for codex and
+        # the runner refuses the family it was not scripted for.
+        subject = self.repaired(path, self.clean_rounds(["claude"]))
+        self.assertEqual(self.review_families_that_ran(subject), ["claude"])
+        self.assertEqual(
+            [r["family"] for r in st.load(path)["units"][0]["rounds"]
+             if r["kind"] == contracts.KIND_REVIEW_ROUND],
+            ["codex", "claude"],
+        )
+
+    def test_an_outage_at_the_last_advance_reaches_pre_seal(self):
+        """Same outage one seat later, where the move is into pre-seal.
+
+        The cycle the last clean round exhausts is the cycle the repaired
+        document seals on: it dispatches nobody and re-buys neither round.
+        """
+        path = self.outage_at("ws-advance-outage-last", before=("codex",))
+        self.assertEqual(
+            st.load(path)["units"][0].get("failed_from"), st.U_PRE_SEAL_VERIFY
+        )
+
+        subject = self.repaired(path, self.clean_rounds(list(self.TWO)))
+        self.assertEqual(self.review_families_that_ran(subject), [])
+        self.assertEqual(
+            [r["family"] for r in st.load(path)["units"][0]["rounds"]
+             if r["kind"] == contracts.KIND_REVIEW_ROUND],
+            list(self.TWO),
+        )
+
+
+# ---------------------------------------------------------------------------
+# The delta review's seat
+
+
+class TheRoundsTimeProjectionIsBookkeeping(ReviewCycleTestCase):
+    """The run summary's rounds-time review projection names the seat the
+    next review round would run on — and never decides anything."""
+
+    def test_marker_and_projection_are_best_effort(self):
+        path = self.bound_to(
+            review_seats_document("projected", ["gemini", "claude"]),
+            families=self.THREE, name="ws-projection",
+        )
+        marker = {}
+        subject = self.driver_for(path, [
+            self.draft("gemini"),
+            step("review_round", report("review_round"), family="gemini",
+                 side_effect=capture_marker(marker)),
+        ])
+        self.step_until(subject, self.in_rounds, max_steps=20)
+
+        # Standing on seat 1: the projection names that seat's family and
+        # model, which the run's configured order (codex first) does not.
+        projection = drv.resolve_current_review_model(path, self.home)
+        self.assertEqual(projection[0], "gemini")
+        summary = service.load_summary(path, model_profiles_home=self.home)
+        self.assertEqual(
+            (summary["current_family"], summary["current_model"]), projection
+        )
+        self.assertNotEqual(summary["current_family"], "codex")
+
+        # And it is exactly what the next round runs on.
+        subject.step()
+        self.assertEqual(
+            (marker["family"], marker["model"]), projection
+        )
+
+        # Losing it changes nothing: the summary still loads, without a
+        # rounds-time projection, and the run is unaffected.
+        service._evict_summary(path)
+        with mock.patch.object(stf, "session_seats", side_effect=OSError):
+            self.assertIsNone(
+                drv.resolve_current_review_model(path, self.home)
+            )
+            summary = service.load_summary(path, model_profiles_home=self.home)
+        self.assertIsNotNone(summary)
+        self.assertIsNone(st.load(path)["failure"])
+
+
+class DeltaReviewChoosesAReviewSeat(ReviewCycleTestCase):
+    def dirty_then_fixed(self, plan_family, review_family):
+        """A draft, one dirty round at review seat 1, and its fix.
+
+        A fix on the SKELETON is the skeleton's own `plan` seat, so
+        *plan_family* is both the drafting and the fixing family here, and
+        *review_family* is what the document's review seat 1 resolves to.
+        """
+        return [
+            self.draft(plan_family),
+            step("review_round",
+                 report("review_round", [finding("F1", "no non-goals")]),
+                 family=review_family),
+            step("fix_findings",
+                 fix_ok([triaged("F1", "fixed", "no non-goals")],
+                        files_changed=["docs/skeleton.md"]),
+                 family=plan_family,
+                 side_effect=write_file("docs/skeleton.md",
+                                        "# Skeleton\n\n## Non-goals\n")),
+        ]
+
+    def test_delta_review_uses_the_fixers_review_seat(self):
+        """The lowest-index review seat whose family is the fixer's."""
+        document = review_seats_document(
+            "delta-match", ["claude", "codex", "codex"]
+        )
+        # `fix 1` is on the first slot, which this document seats on claude,
+        # so the fixer's family holds review seat 1 and codex holds 2 and 3.
+        path = self.bound_to(document, name="ws-delta-match")
+        marker = {}
+        subject = self.driver_for(
+            path,
+            self.dirty_then_fixed("claude", "claude") + [
+                step("delta_review", report("delta_review"), family="claude",
+                     side_effect=capture_marker(marker)),
+            ],
+        )
+        requests, patched = self.captured()
+        with patched:
+            self.step_until(
+                subject,
+                lambda state: any(
+                    r["kind"] == contracts.KIND_DELTA_REVIEW
+                    for r in state["units"][0]["rounds"]
+                ),
+                max_steps=40,
+            )
+        self.assertEqual(subject.runner.script, [])
+        # The delta asked at a `review` seat, and the marker names who ran.
+        self.assertEqual(marker["kind"], contracts.KIND_DELTA_REVIEW)
+        self.assertEqual(marker["family"], "claude")
+        self.assertIn(
+            "review", {r["role"] for r in requests}
+        )
+
+    def test_with_no_matching_seat_the_delta_takes_the_lowest_one(self):
+        document = review_seats_document(
+            "delta-nomatch", ["claude", "gemini"], distinct=True
+        )
+        # A fix on the skeleton is its `plan` seat, so move `plan` onto a
+        # third slot whose family no review seat holds.
+        document["families"]["3"] = {
+            "name": "codex",
+            "models": ["gpt-5.6-luna", "gpt-5.6-terra", "gpt-5.6-sol"],
+            "efforts": ["low", "medium", "high", "xhigh", "max"],
+        }
+        for by_slot in document["tuning"].values():
+            by_slot["3"] = copy.deepcopy(by_slot["1"])
+        document["assignment"]["plan"] = {"1": 3}
+        path = self.bound_to(
+            document, families=("codex", "claude", "gemini"),
+            name="ws-delta-nomatch",
+        )
+        marker = {}
+        subject = self.driver_for(
+            path,
+            self.dirty_then_fixed("codex", "claude") + [
+                step("delta_review", report("delta_review"), family="claude",
+                     side_effect=capture_marker(marker)),
+            ],
+        )
+        self.step_until(
+            subject,
+            lambda state: any(
+                r["kind"] == contracts.KIND_DELTA_REVIEW
+                for r in state["units"][0]["rounds"]
+            ),
+            max_steps=40,
+        )
+        self.assertEqual(subject.runner.script, [])
+        self.assertEqual(marker["family"], "claude")  # review seat 1
+
+
+# ---------------------------------------------------------------------------
 # The two conditions, and everything that is not one
 
 
 class StoppingConditions(StaffingCutoverTestCase):
+    def test_a_split_review_the_machine_cannot_honour_stops_the_run(self):
+        """The second condition, raised at the review dispatch and not before.
+
+        The converted `default` declares `review` split across its two
+        seats. A run whose available families are one collapses both onto
+        that family, so the split cannot be honoured — and the run stops
+        there, after its draft has already dispatched. A `review` role with
+        one assigned seat honours any split trivially and runs normally.
+        """
+        path = self.run_state(
+            "ws-split", families_order=["codex"], fix_family="codex",
+            commands={"codex": ["fake-codex"]},
+        )
+        subject = self.driver_for(path, [
+            step("draft_skeleton",
+                 ok("draft_skeleton", artifact="docs/skeleton.md",
+                    slices=[{"id": 1, "title": "One"}]),
+                 family="codex",
+                 side_effect=write_file("docs/skeleton.md", "# Skeleton\n")),
+        ])
+        self.step_until(
+            subject,
+            lambda state: state["failure"] is not None,
+            max_steps=20,
+        )
+        state = st.load(path)
+        self.assertIn(
+            stf.DISTINCT_FAMILIES_UNSATISFIABLE, state["failure"]["reason"]
+        )
+        # The draft ran: the condition stopped the review dispatch alone.
+        self.assertEqual(
+            [call[1] for call in subject.runner.calls],
+            [contracts.KIND_DRAFT_SKELETON],
+        )
+
+        # The same single-family run, under a `review` role with one seat.
+        path = self.bound_to(
+            one_review_seat(stf.default_document_seed()),
+            families=("codex",), name="ws-split-one-seat",
+        )
+        subject = self.driver_for(path, [
+            step("draft_skeleton",
+                 ok("draft_skeleton", artifact="docs/skeleton.md",
+                    slices=[{"id": 1, "title": "One"}]),
+                 family="codex",
+                 side_effect=write_file("docs/skeleton.md", "# Skeleton\n")),
+            step("review_round", report("review_round"), family="codex"),
+        ])
+        self.step_until(
+            subject,
+            lambda state: state["units"][0]["status"] == st.U_SEALED,
+            max_steps=30,
+        )
+        self.assertIsNone(st.load(path)["failure"])
+        self.assertEqual(subject.runner.script, [])
+
     def test_no_family_available_stops_the_call(self):
         path = self.run_state("ws-unavailable")
         subject = self.driver_for(path)

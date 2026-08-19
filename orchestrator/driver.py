@@ -665,36 +665,81 @@ def open_run_staffing_session(state_path, model_profiles_home, document,
     return record["id"]
 
 
-def resolve_current_review_model(state_path, model_profiles_home, run_state=None):
-    """Best-effort model projection for read-only rounds-time status.
+# How many times one review dispatch re-reads its seat to settle the round
+# its family wants. Two is the stable-document cost (ask, derive, confirm);
+# the third is the margin a save landing between two of those reads needs,
+# and stopping there keeps a document saved over and over from holding a
+# dispatch open.
+_REVIEW_SEAT_SETTLE_READS = 3
 
-    Dispatch resolution remains strict.  Status and the service guard are
-    generic diagnostic/recovery paths, so unavailable model-profile state
-    merely withholds this optional projection instead of hiding the run.
+
+def _review_rounds_done(unit, family):
+    """*family*'s review rounds already recorded in the current cycle.
+
+    The count the round cap takes, and the count a `review` request carries
+    plus one. Two independent boundaries grant a fresh budget: resume
+    amnesty forgives rounds from before an operator retry, a new review
+    cycle forgives rounds over obsolete candidate bytes — count only rounds
+    after whichever boundary is newer.
+    """
+    budget_start = max(
+        int(unit.get("rounds_amnesty") or 0),
+        int(unit.get("review_cycle_start") or 0),
+    )
+    return len([
+        r
+        for r in unit["rounds"][budget_start:]
+        if r["family"] == family and r["kind"] == contracts.KIND_REVIEW_ROUND
+    ])
+
+
+def resolve_current_review_model(state_path, model_profiles_home, run_state=None):
+    """The (family, model) the next review round would run on, or None.
+
+    Best-effort projection for read-only rounds-time status, read exactly
+    where the dispatch will read it: the run's session, its document's
+    `review` seats, and the seat the cycle stands on. It names the family
+    as well as the model because the review cycle is those seats and no
+    longer the run's configured family order.
+
+    Withheld — None — when nothing can be read, when the cycle stands past
+    its last assigned seat, and when the router refuses the role, since in
+    none of those cases is there a review round to project. Status and the
+    service guard are generic diagnostic paths: a withheld projection never
+    hides the run, and nothing here decides a dispatch.
     """
     run_state = run_state or st.load(state_path)
     unit = st.current_unit(run_state)
     if unit is None or unit.get("status") != st.U_ROUNDS:
         return None
     config = interpreter.effective_config(run_state)
-    families = config.get("families_order") or []
-    index = unit.get("family_index", 0)
-    if index >= len(families):
-        return None
-    family = families[index]
+    families = list(config.get("families_order") or [])
+    session = st.staffing_session(run_state)
     try:
-        _fixed_family, model, _effort = resolve_current_act(
-            state_path,
-            config,
-            model_profiles_home,
-            "review_%s" % family,
-            origin_family=family,
-            default_family=family,
+        seats = staffing.session_seats(
+            model_profiles_home, session, "review", families=families
         )
-    except model_profiles.ModelProfileError:
+        index = int(unit.get("family_index") or 0)
+        if index >= len(seats):
+            return None
+
+        def answer(round_number):
+            return staffing.resolve(
+                model_profiles_home,
+                session,
+                "review",
+                index=seats[index],
+                round=round_number,
+                families=families,
+            ).answer
+
+        projected = answer(1)
+        round_number = 1 + _review_rounds_done(unit, projected["agent"])
+        if round_number > 1:
+            projected = answer(round_number)
+    except (staffing.StaffingError, OSError):
         return None
-    defaults = (config.get("model_defaults") or {}).get(family) or {}
-    return model or defaults.get("model")
+    return projected["agent"], projected["model"]
 
 
 def resolve_current_structural_dispatch(
@@ -788,6 +833,36 @@ class _RoleDispatch(object):
         resolution = self._driver._staffing_resolution(
             self.role, self.index, self.round
         )
+        self.staffing_fallback = resolution.staffing_fallback
+        answer = resolution.answer
+        return answer["agent"], answer["model"], answer["effort"]
+
+
+class _ReviewSeatDispatch(_RoleDispatch):
+    """A review dispatch whose round — and cap — follow the family it
+    resolves.
+
+    The seat is this dispatch's and does not move, but the family behind it
+    is a live document read: a save completing between the driver's
+    pre-dispatch read and this one changes who runs. Review law is keyed to
+    that family — the round a `review` request carries is the count of its
+    review rounds in this cycle plus one, and the round cap takes the same
+    count — so both are derived HERE, from the family this dispatch
+    actually resolves, and neither is carried from the earlier read.
+    """
+
+    def __init__(self, driver, unit, index=1, capped=False):
+        _RoleDispatch.__init__(self, driver, "review", index=index)
+        self._unit = unit
+        self._capped = capped
+
+    def __call__(self):
+        self.round, resolution = self._driver._settled_review_seat(
+            self._unit, self.index
+        )
+        family = resolution.answer["agent"]
+        if self._capped:
+            self._driver._enforce_review_round_cap(self._unit, family)
         self.staffing_fallback = resolution.staffing_fallback
         answer = resolution.answer
         return answer["agent"], answer["model"], answer["effort"]
@@ -8317,6 +8392,220 @@ class Driver(object):
         """A fresh router resolution for every physical provider dispatch."""
         return _RoleDispatch(self, role, index=index, round=round)
 
+    # -- the review cycle IS the document's `review` seats ------------------
+    #
+    # Which families review a unit comes from the seats the run's session
+    # document assigns to `review`, in index order, read live — not from the
+    # run's configured family order. Rotation, the round cap, cycle
+    # restarts, resume amnesty and the seal predicate keep exactly their
+    # present shape; only the list they walk changes, so nothing about what
+    # a review round means, about convergence or about sealing moves here.
+    # A `Driver` with no catalogue home has no document to read and keeps
+    # reviewing in the configured order.
+
+    def _review_seats(self):
+        """The `review` seat indices this run's document assigns, live.
+
+        Never empty: every stored document assigns index 1 to every role
+        (`staffing._validate_seats`), a session override only ADDS seats,
+        and an unreadable session or document falls back to the default
+        document, which assigns two. A family slot the document carries but
+        assigns to no `review` seat adds no seat, because this reads the
+        assignment and not the family table.
+        """
+        return staffing.session_seats(
+            self.model_profiles_home,
+            st.staffing_session(self.state),
+            "review",
+            families=list(self.config["families_order"]),
+        )
+
+    def _review_families(self):
+        """The family each assigned `review` seat runs on, in seat order.
+
+        The run's review cycle, as the rotation, the cap and the seal
+        predicate read it. Describing the cycle DISPATCHES nothing, so it
+        is a read and not a call: the router answers it from one reading of
+        one document, and a `review` role whose declared split this session
+        cannot honour comes back described rather than refused.
+        `distinct_families_unsatisfiable` keeps the placement it is given —
+        an affected review dispatch, and nothing else — because a read that
+        stopped here would fail a run that called nobody, discard a clean
+        cycle it has no authority over, and then buy every one of its
+        rounds again after the repair.
+
+        `staffing_unavailable` still raises: with no family available there
+        is no cycle to describe, and an empty list is not the honest
+        substitute, since the seal predicate reads it as a cycle with no
+        seat left to review and would open a seal on no reviews at all.
+        """
+        if self.model_profiles_home is None:
+            return list(self.config["families_order"])
+        return staffing.session_seat_families(
+            self.model_profiles_home,
+            st.staffing_session(self.state),
+            "review",
+            families=list(self.config["families_order"]),
+        )
+
+    def _seal_reviews(self, unit, current_fingerprint=None):
+        """The seal predicate over the CURRENTLY assigned review seats.
+
+        Reading the cycle is not dispatching one, so a document whose
+        `review` role declares a split this session cannot honour still
+        seals here on the rounds its currently assigned seats have already
+        earned — the same pre-seal path a shrunken seat list takes, which
+        seals on the current seats or restarts because one is not clean.
+        `staffing_unavailable` leaves no cycle to describe and takes its
+        own declared route through ordinary recovery naming its token.
+        """
+        try:
+            families = self._review_families()
+        except staffing.StaffingConditionError as exc:
+            self._fail_staffing(exc)
+        return st.seal_predicate_reviews(
+            unit, families, current_fingerprint=current_fingerprint
+        )
+
+    def _current_review_family(self, unit):
+        """The family standing at the unit's review-cycle index, or None.
+
+        Its one consumer is a bookkeeping field on the `delta_checkpoint`
+        event, so a run with nobody to call leaves the field empty rather
+        than stopping a step that has already restarted the cycle and has
+        no other record of having done so.
+        """
+        try:
+            families = self._review_families()
+        except staffing.StaffingConditionError:
+            return None
+        return st.current_family(self.state, unit, families=families)
+
+    def _advance_review_cycle(self, unit, last_result=None, deferred=False):
+        """Move the cycle to the next assigned seat, or to pre-seal.
+
+        Advancing reads the cycle to know its length and to name the seat
+        the round that just finished ran on; it dispatches nothing, so a
+        declared split this session cannot honour is described here and the
+        clean round that just landed stands. `staffing_unavailable` stops
+        the run with its token — but the move itself happens first, because
+        it is bookkeeping over a round the ledger already holds. Nobody to
+        call leaves no family to NAME, and nothing else: the cycle still
+        has one entry per assigned seat, which the seat read answers on its
+        own, and the `family_clean` label is left empty exactly as the
+        checkpoint's current-family field is. Stopping before the move
+        would leave the cycle standing on a seat whose clean round is
+        already recorded, and nothing skips a seat already clean, so the
+        repaired run would buy that round a second time.
+        """
+        stopping = None
+        try:
+            families = self._review_families()
+        except staffing.StaffingConditionError as exc:
+            families = [None] * len(self._review_seats())
+            stopping = exc
+        if deferred:
+            st.advance_family_deferred(self.state, unit, families=families)
+        else:
+            st.advance_family_if_clean(
+                self.state, unit, last_result, families=families
+            )
+        if stopping is not None:
+            self._fail_staffing(stopping)
+
+    def _settled_review_seat(self, unit, seat):
+        """One coherent (round, resolution) for a `review` seat, read live.
+
+        A `review` request carries the count of review rounds that seat's
+        family already has in the current cycle, plus one — the count the
+        round cap itself takes — so the round needs the family, while the
+        family comes from a resolution the round is an input to. Ask,
+        derive, and ask again until a resolution's family still wants the
+        round it was asked at: then the answer, its round and the count the
+        cap takes are one reading of the document. A stable document
+        settles on the second ask, since `round` feeds `step_up` alone and
+        cannot itself move the family. Only a document rewritten under
+        consecutive asks spends the bound, and the last ask is then made at
+        the round this returns, so what RUNS is always the document's
+        answer FOR that round — a spent bound can leave the round itself
+        one reading behind the family that answers, never the `step_up`
+        rung behind the round beside it. Spending it takes three completed
+        writes, one in each gap between the four asks: one write always
+        settles by the third ask, and two leave the last two asks reading
+        the same document. That residual costs at most the rung this one
+        call runs on — the cap is taken at the dispatch on the family this
+        returns, and no round is recorded from here — and no finite retry
+        closes it, since one more ask only moves the gap the next write
+        lands in. Only freezing the document for the dispatch would, which
+        live uncached reads exclude. Resolving is also the split-family
+        check for this dispatch: the router's own refusal stops the run
+        with its own token.
+        """
+        round_number = 1
+        for _ in range(_REVIEW_SEAT_SETTLE_READS):
+            resolution = self._staffing_resolution("review", seat,
+                                                   round_number)
+            wanted = 1 + _review_rounds_done(unit, resolution.answer["agent"])
+            if wanted == round_number:
+                return round_number, resolution
+            round_number = wanted
+        return round_number, self._staffing_resolution(
+            "review", seat, round_number)
+
+    def _review_seat_staffing(self, unit, seat):
+        """(family, model, effort) a review at *seat* is prepared under.
+
+        What the prompt, the raw name and the round record start from; the
+        dispatch settles the seat again and is what actually runs.
+        """
+        _round, resolution = self._settled_review_seat(unit, seat)
+        answer = resolution.answer
+        return answer["agent"], answer["model"], answer["effort"]
+
+    def _enforce_review_round_cap(self, unit, family):
+        """Stop the run when *family* has spent this cycle's review rounds.
+
+        Taken twice for one round: once as the cycle prepares it, so a run
+        with nothing left to spend stops before building a prompt, and once
+        at each physical dispatch, which is where the family the cap must
+        bind is finally known — a dispatch resolves live and may land on a
+        different family than the preparing read named.
+        """
+        cap = self.config["max_rounds_per_family"]
+        if _review_rounds_done(unit, family) < cap:
+            return
+        st.fail_run(
+            self.state,
+            "family %s reached max_rounds_per_family=%d on %s without a "
+            "clean round" % (family, cap, st.unit_key(unit)),
+            unit=unit,
+        )
+        self._save()
+        raise StopStep("round cap")
+
+    def _review_dispatch(self, unit, index, capped=False):
+        """A review dispatch that re-derives its round when it resolves."""
+        return _ReviewSeatDispatch(self, unit, index=index, capped=capped)
+
+    def _delta_review_staffing(self, unit, fixer_family):
+        """(seat, family, model, effort) for one delta review.
+
+        A delta review is a review, so it chooses among the seats the
+        document assigns to `review` and nowhere else: the lowest-index
+        seat whose resolved family is the latest fixer's, and the lowest
+        assigned seat when none is. Walking the seats resolves them, which
+        is this dispatch's split-family check as well.
+        """
+        chosen = None
+        for seat in self._review_seats():
+            family, _model, _effort = self._staff("review", index=seat)
+            if chosen is None:
+                chosen = seat
+            if fixer_family and family == fixer_family:
+                chosen = seat
+                break
+        return (chosen,) + self._review_seat_staffing(unit, chosen)
+
     @staticmethod
     def _worker_role(unit, kind):
         """The (role, round) one worker call resolves under.
@@ -9464,9 +9753,8 @@ class Driver(object):
             target = source.get("return_to") or st.U_PRE_SEAL_VERIFY
             if (
                 target == st.U_PRE_SEAL_VERIFY
-                and st.seal_predicate_reviews(
+                and self._seal_reviews(
                     unit,
-                    self.config["families_order"],
                     current_fingerprint=self._review_evidence_fingerprint(unit),
                 ) is None
             ):
@@ -9502,9 +9790,8 @@ class Driver(object):
         elif suite_corrected and target == st.U_ROUNDS:
             target = st.U_PRE_REVIEW_VERIFY
         elif (target == st.U_PRE_SEAL_VERIFY
-              and st.seal_predicate_reviews(
+              and self._seal_reviews(
                   unit,
-                  self.config["families_order"],
                   current_fingerprint=self._review_evidence_fingerprint(unit),
               ) is None):
             target = st.U_PRE_REVIEW_VERIFY
@@ -9698,9 +9985,8 @@ class Driver(object):
             unit["fix_queue"] = []
             unit["fix_source"] = None
             if (return_to == st.U_PRE_SEAL_VERIFY
-                    and st.seal_predicate_reviews(
+                    and self._seal_reviews(
                         unit,
-                        self.config["families_order"],
                         current_fingerprint=(
                             self._review_evidence_fingerprint(unit)
                         ),
@@ -9761,7 +10047,7 @@ class Driver(object):
                 fixes=fix_number,
                 dirty_deltas=dirty_deltas,
                 return_to=return_to,
-                review_family=st.current_family(self.state, unit),
+                review_family=self._current_review_family(unit),
             )
             unit["fix_queue"] = []
             unit["fix_source"] = None
@@ -9782,9 +10068,18 @@ class Driver(object):
             if r["kind"] == contracts.KIND_FIX_FINDINGS:
                 fixer_family = r["family"]
                 break
-        family, delta_model, delta_effort = self._delta_review_profile(
-            fixer_family
-        )
+        delta_seat = None
+        if self.model_profiles_home is not None:
+            (
+                delta_seat,
+                family,
+                delta_model,
+                delta_effort,
+            ) = self._delta_review_staffing(unit, fixer_family)
+        else:
+            family, delta_model, delta_effort = self._delta_review_profile(
+                fixer_family
+            )
         active_task = self._active_worker_task(
             unit, contracts.KIND_DELTA_REVIEW
         )
@@ -9851,10 +10146,14 @@ class Driver(object):
             } or None,
             model=delta_model,
             effort=delta_effort,
-            dispatch_resolver=self._dispatch_for_act(
-                "review_%s" % family,
-                origin_family=family,
-                fixed_family=family,
+            dispatch_resolver=(
+                self._review_dispatch(unit, delta_seat)
+                if delta_seat is not None
+                else self._dispatch_for_act(
+                    "review_%s" % family,
+                    origin_family=family,
+                    fixed_family=family,
+                )
             ),
             task_id=(active_task or {}).get("id"),
             project_context=project_context,
@@ -10017,10 +10316,9 @@ class Driver(object):
 
     def _complete_seal_from_reviews(self, unit, verification_event=None):
         """Seal deterministically from current whole-artifact reviews."""
-        families = self.config["families_order"]
         current_fingerprint = self._review_evidence_fingerprint(unit)
-        cite = st.seal_predicate_reviews(
-            unit, families, current_fingerprint=current_fingerprint
+        cite = self._seal_reviews(
+            unit, current_fingerprint=current_fingerprint
         )
         if cite is None:
             st.restart_reviews_after_candidate_change(
@@ -10109,10 +10407,8 @@ class Driver(object):
 
         if stage == st.U_PRE_SEAL_VERIFY:
             current_fingerprint = self._review_evidence_fingerprint(unit)
-            if st.seal_predicate_reviews(
-                unit,
-                self.config["families_order"],
-                current_fingerprint=current_fingerprint,
+            if self._seal_reviews(
+                unit, current_fingerprint=current_fingerprint
             ) is None:
                 st.restart_reviews_after_candidate_change(
                     self.state,
@@ -10721,40 +11017,68 @@ class Driver(object):
             "extensions": extensions,
             "roots": roots,
         }
-        family = st.current_family(self.state, unit)
-        if family is None:
-            raise st.IllegalTransition("rounds status with no family left")
-        # Two independent boundaries grant a fresh budget.  Resume amnesty
-        # deliberately forgives rounds from before an operator retry; a new
-        # review cycle forgives rounds over obsolete candidate bytes.  Count
-        # only rounds after whichever boundary is newer.
-        budget_start = max(
-            int(unit.get("rounds_amnesty") or 0),
-            int(unit.get("review_cycle_start") or 0),
-        )
-        done = len(
-            [
-                r
-                for r in unit["rounds"][budget_start:]
-                if r["family"] == family
-                and r["kind"] == contracts.KIND_REVIEW_ROUND
-            ]
-        )
-        if done >= self.config["max_rounds_per_family"]:
-            st.fail_run(
-                self.state,
-                "family %s reached max_rounds_per_family=%d on %s without a "
-                "clean round"
-                % (family, self.config["max_rounds_per_family"], st.unit_key(unit)),
-                unit=unit,
+        seat = None
+        if self.model_profiles_home is not None:
+            seats = self._review_seats()
+            index = int(unit.get("family_index") or 0)
+            if index >= len(seats):
+                # Seats are read live, so the list can SHRINK below the seat
+                # this cycle already stands on — an edited document, a
+                # session repointed at a smaller one, or the default
+                # document answering for an unreadable one. That is not a
+                # stopping condition: with no seat left at this index the
+                # cycle is exhausted, exactly as it is when the last seat
+                # comes back clean, and the ordinary pre-seal path decides
+                # between sealing on the currently assigned seats and
+                # restarting the cycle because one of them is not clean.
+                if active_review is not None:
+                    # A review admitted for the seat that just vanished can
+                    # never be delivered: `review_round` is not continuable,
+                    # and neither continuation dispatches its frozen request
+                    # — sealing ends the cycle, and a restart re-opens it at
+                    # seat 1. That is an abandonment, so it records the
+                    # invocation's failure like every other one. Leaving the
+                    # task open would carry an active-task reference onto a
+                    # sealed unit, where the supported repair reopen could
+                    # admit no successor of its own kind.
+                    self._fail_worker_task_if_open(
+                        unit,
+                        None,
+                        task_id=active_review["id"],
+                        reason=(
+                            "the assigned review seats shrank below the "
+                            "seat this review was admitted for"
+                        ),
+                    )
+                st.transition_unit(
+                    self.state,
+                    unit,
+                    st.U_PRE_SEAL_VERIFY,
+                    reason=(
+                        "review cycle exhausted: the document assigns %d "
+                        "review seat(s) and the cycle stands at seat %d"
+                        % (len(seats), index + 1)
+                    ),
+                )
+                return (
+                    "%s review cycle exhausted at seat %d of %d; pre-seal "
+                    "decides" % (st.unit_key(unit), index + 1, len(seats))
+                )
+            seat = seats[index]
+            family, review_model, review_effort = (
+                self._review_seat_staffing(unit, seat)
             )
-            self._save()
-            raise StopStep("round cap")
+        else:
+            family = st.current_family(self.state, unit)
+            if family is None:
+                raise st.IllegalTransition("rounds status with no family left")
+        self._enforce_review_round_cap(unit, family)
         # Reform runs: reviewers of doc units check the question battery
         # (presence and substance, never prose — spec §4) and every
         # finding hard-requires its plain/example lay mirror.
         reform = interpreter.reform_active(self.state)
-        review_model, review_effort = self._review_profile(family)
+        if seat is None:
+            review_model, review_effort = self._review_profile(family)
         producer_review_context = self._producer_review_context(unit)
         prompt = prompts.build_review_round(
             family,
@@ -10809,10 +11133,14 @@ class Driver(object):
             validate_opts={"require_plain": True} if reform else None,
             model=review_model,
             effort=review_effort,
-            dispatch_resolver=self._dispatch_for_act(
-                "review_%s" % family,
-                origin_family=family,
-                fixed_family=family,
+            dispatch_resolver=(
+                self._review_dispatch(unit, seat, capped=True)
+                if seat is not None
+                else self._dispatch_for_act(
+                    "review_%s" % family,
+                    origin_family=family,
+                    fixed_family=family,
+                )
             ),
             task_id=(active_review or {}).get("id"),
             project_context=project_context,
@@ -10925,10 +11253,10 @@ class Driver(object):
         if deferred:
             st.record_debt(self.state, unit, deferred, "round", rec["id"])
         if not findings:
-            st.advance_family_if_clean(self.state, unit, output)
+            self._advance_review_cycle(unit, last_result=output)
             return "%s round: clean" % family
         if not fix_findings:
-            st.advance_family_deferred(self.state, unit)
+            self._advance_review_cycle(unit, deferred=True)
             return ("%s round: %d finding(s) deferred as debt (verified by %s)"
                     % (family, len(deferred), self._opposite(family)))
         st.enter_fix_episode(
@@ -10958,10 +11286,8 @@ class Driver(object):
         if self._migrate_retired_seal_review_handoff(unit):
             return "retired seal discussion migrated to ordinary reviews"
         current_fingerprint = self._review_evidence_fingerprint(unit)
-        cite = st.seal_predicate_reviews(
-            unit,
-            self.config["families_order"],
-            current_fingerprint=current_fingerprint,
+        cite = self._seal_reviews(
+            unit, current_fingerprint=current_fingerprint
         )
         if cite is None:
             st.restart_reviews_after_candidate_change(

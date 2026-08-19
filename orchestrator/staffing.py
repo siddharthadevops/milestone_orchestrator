@@ -1969,15 +1969,16 @@ def _unsatisfiable(effective, role):
 
 
 # ---------------------------------------------------------------------------
-# One read of a session, shared by the resolver and the two readers
+# One read of a session, shared by the resolver and the three readers
 
 
 def _effective(home, session, material, families):
     """Read the session and its document once, and layer them.
 
-    The resolver and both document readers go through here, so a seat
-    reader and the dispatch that follows it can never disagree about which
-    document is in force — including when it is the fallback's.
+    The resolver and all three document readers go through here, so a
+    seat reader and the dispatch that follows it can never disagree about
+    which document is in force — including when it is the fallback's — and
+    every seat one reader describes comes from a single reading.
     """
     selection, fell_back = _selection_for(home, session, families)
     document, document_fell_back = _document_for(home, selection.document)
@@ -2044,13 +2045,17 @@ def resolve(home, session, role, index=1, round=1, material=None, brief=None,
 
 
 # ---------------------------------------------------------------------------
-# Two live document reads over a session
+# Three live document reads over a session
 #
 # Milestone law decides WHICH seat runs — the review cycle iterates the seats
-# the document assigns, and surfaces a `distinct_families` role it cannot
-# honour — so it needs to read those two facts without dispatching. They are
-# document reads over a session, never part of an answer: no seat and no
-# projection ever appears in a `resolve` response.
+# the document assigns, walks the family each of them runs on, and surfaces a
+# `distinct_families` role it cannot honour — so it needs to read those three
+# facts without dispatching. They are document reads over a session, never
+# part of an answer: no seat, no cycle and no projection ever appears in a
+# `resolve` response.
+#
+# A read refuses nothing it can answer. `staffing_unavailable` is the one
+# exception, and only where it leaves nothing TO answer.
 
 
 def session_seats(home, session, role, material=None, families=()):
@@ -2069,6 +2074,36 @@ def session_seats(home, session, role, material=None, families=()):
     effective = _effective(
         home, session, _request_material(material), families)
     return _assigned_seats(effective.layers, role)
+
+
+def session_seat_families(home, session, role, material=None, families=()):
+    """The family each assigned seat of *role* runs on, in index order.
+
+    :func:`session_seats` with each seat's collapse already applied — the
+    cycle a consumer walks, described without dispatching anything. Reads
+    the same effective document :func:`resolve` would, fallback included,
+    and every seat comes from ONE reading of it, so what comes back is
+    always a cycle some document assigns and never a list built from two.
+
+    It refuses nothing it can answer. A role whose declared
+    `distinct_families` this session cannot honour still HAS a family per
+    seat — that list is the very thing the judgement is made on — so this
+    read hands it back and leaves `distinct_families_unsatisfiable` to the
+    dispatches it affects. `staffing_unavailable` remains, because with no
+    family available there is no answer to give: an empty list is not the
+    honest substitute, since a consumer reads it as a cycle with no seat
+    left rather than as a machine with nobody to call.
+    """
+    if role not in ROLES:
+        raise StaffingError(
+            "%s: unknown role %s (allowed: %s)"
+            % (_REQUEST_CTX, _shown(role), ", ".join(ROLES)))
+    effective = _effective(
+        home, session, _request_material(material), families)
+    if not effective.available:
+        raise _unavailable(effective)
+    return _seat_families(
+        effective, role, _assigned_seats(effective.layers, role))
 
 
 def distinct_families_projection(home, session, material=None, families=()):

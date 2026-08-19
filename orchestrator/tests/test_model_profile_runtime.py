@@ -1943,14 +1943,16 @@ class CurrentModelProfileRuntimeTest(unittest.TestCase):
         )
         self.assertEqual(after["model_profile"]["name"], "missing")
 
-    def test_summary_choice_equals_next_call_without_intervening_change(self):
+    def test_summary_projection_is_the_router_and_profiles_decide_nothing(self):
+        """The rounds-time projection names the NEXT review round's staffing.
+
+        It reads the same router that dispatch will read — the run's
+        session, its document's `review` seats and the seat the cycle
+        stands on — so the summary and the call agree without any
+        intervening change. The model profile and the acts sidecar that
+        used to decide this projection now decide nothing.
+        """
         model_profiles.ensure_default(self.home)
-        current = model_profiles.load(self.home, "default")
-        current["configurations"]["medium"]["review_codex"] = {
-            "model": "summary-v1",
-            "effort": "high",
-        }
-        model_profiles.save(self.home, current)
         model_profiles.save(self.home, profile("other", {
             "review_codex": {"model": "selection-model", "effort": "low"},
         }))
@@ -1961,37 +1963,52 @@ class CurrentModelProfileRuntimeTest(unittest.TestCase):
         unit["family_index"] = 0
         state.save(path, run_state)
 
+        # No session bound yet, so the resolver's default-document fallback
+        # answers here exactly as it would answer a dispatch.
+        seat_one = driver.resolve_current_review_model(path, self.home)
+        self.assertEqual(seat_one[0], "codex")  # `default` review seat 1
         summary = service.load_summary(path, model_profiles_home=self.home)
-        self.assertEqual(summary["current_model"], "summary-v1")
         self.assertEqual(
-            summary["current_model"],
-            driver.resolve_current_review_model(path, self.home),
+            (summary["current_family"], summary["current_model"]), seat_one
         )
 
-        current["configurations"]["medium"]["review_codex"]["model"] = (
-            "summary-v2"
-        )
-        model_profiles.save(self.home, current)
-        summary = service.load_summary(path, model_profiles_home=self.home)
-        self.assertEqual(summary["current_model"], "summary-v2")
-
+        # Neither the profile the run selects nor its acts sidecar moves it.
         self.write_runtime(
-            path,
-            "model_profile.json",
-            {"name": "other", "rigor": "medium"},
+            path, "model_profile.json", {"name": "other", "rigor": "medium"}
         )
-        summary = service.load_summary(path, model_profiles_home=self.home)
-        self.assertEqual(summary["current_model"], "selection-model")
-
         self.write_runtime(path, "acts.json", {
             "review_codex": {"model": "override-model", "effort": "medium"}
         })
         summary = service.load_summary(path, model_profiles_home=self.home)
-        self.assertEqual(summary["current_model"], "override-model")
         self.assertEqual(
-            summary["current_model"],
-            driver.resolve_current_review_model(path, self.home),
+            (summary["current_family"], summary["current_model"]), seat_one
         )
+        self.assertEqual(
+            driver.resolve_current_review_model(path, self.home), seat_one
+        )
+
+        # Standing on the second seat projects the second seat.
+        run_state = state.load(path)
+        state.current_unit(run_state)["family_index"] = 1
+        state.save(path, run_state)
+        seat_two = driver.resolve_current_review_model(path, self.home)
+        self.assertEqual(seat_two[0], "claude")  # `default` review seat 2
+        self.assertNotEqual(seat_two, seat_one)
+        summary = service.load_summary(path, model_profiles_home=self.home)
+        self.assertEqual(
+            (summary["current_family"], summary["current_model"]), seat_two
+        )
+
+        # Past the last assigned seat there is no round to project, and the
+        # summary keeps working without one.
+        run_state = state.load(path)
+        state.current_unit(run_state)["family_index"] = 7
+        state.save(path, run_state)
+        self.assertIsNone(
+            driver.resolve_current_review_model(path, self.home)
+        )
+        summary = service.load_summary(path, model_profiles_home=self.home)
+        self.assertIsNone(summary["current_family"])
 
 
 if __name__ == "__main__":

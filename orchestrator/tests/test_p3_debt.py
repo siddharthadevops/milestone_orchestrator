@@ -83,6 +83,21 @@ def split_classify_document(name="split-classify"):
     return document
 
 
+def one_review_seat(document):
+    """The same document with `review` assigned a SINGLE seat.
+
+    A run whose available families are one cannot honour the converted
+    `default`'s split `review` — its two seats both collapse onto that one
+    family — so it stops at its first review dispatch with
+    `distinct_families_unsatisfiable`. Such a run's single-family debt
+    behaviour is observable only where its reviews run at all: under a
+    `review` role with one assigned seat, which any declared split honours
+    trivially. Nothing else about the document changes.
+    """
+    document["assignment"]["review"] = {"1": 1}
+    return document
+
+
 def reform_draft_step():
     """draft_step() plus the answered question battery a reform profile
     hard-requires on doc drafts (legacy/profile-less drafts stay bare)."""
@@ -302,8 +317,15 @@ class TestP3Debt(DriverTestCase):
                 "total_tokens": 24,
             }
 
-            def unstaff_the_run():
-                """Leave the run's session with nobody to call at all."""
+            def unstaff_the_run(_workspace):
+                """Leave the run's session with nobody to call at all.
+
+                Run as the review round's own side effect, so it lands
+                AFTER that dispatch resolved and before the rating's: the
+                review itself is a `review` seat now, and unstaffing before
+                its physical dispatch would simply stop the review instead
+                of the rating this test is about.
+                """
                 stf.save(home, unstaffable_document())
                 stf.edit_session(
                     home,
@@ -325,6 +347,7 @@ class TestP3Debt(DriverTestCase):
                     "review_round",
                     report("review_round", [finding("F1", "stale word")]),
                     family="codex",
+                    side_effect=unstaff_the_run,
                 ),
             ])
             subject = drv.Driver(
@@ -334,33 +357,7 @@ class TestP3Debt(DriverTestCase):
                 subject,
                 lambda current: current["units"][0]["status"] == st.U_ROUNDS,
             )
-
-            original_mark = subject._mark_busy
-
-            def unstaff_after_review_admission(
-                label, kind, family, model=None, effort=None, nested=False,
-                task_id=None, staffing_fallback=None,
-            ):
-                admitted = original_mark(
-                    label,
-                    kind,
-                    family,
-                    model=model,
-                    effort=effort,
-                    nested=nested,
-                    task_id=task_id,
-                    staffing_fallback=staffing_fallback,
-                )
-                if admitted and kind == contracts.KIND_REVIEW_ROUND:
-                    unstaff_the_run()
-                return admitted
-
-            with mock.patch.object(
-                subject,
-                "_mark_busy",
-                side_effect=unstaff_after_review_admission,
-            ):
-                subject.step()
+            subject.step()
 
             current = st.load(path)
             parent = [
@@ -396,6 +393,7 @@ class TestP3Debt(DriverTestCase):
                 "reclassifier": {"agent": "codex"},
             })
             model_profiles.save(home, current_profile)
+            stf.save(home, one_review_seat(stf.default_document_seed()))
             config = make_config(p3_reclassify_debt=True)
             config["families_order"] = ["codex"]
             config["model_defaults"] = copy.deepcopy(
@@ -1084,6 +1082,7 @@ class TestP3Debt(DriverTestCase):
         with tempfile.TemporaryDirectory(prefix="orch-mock-") as ws:
             home = os.path.join(ws, "home")
             model_profiles.ensure_default(home)
+            stf.save(home, one_review_seat(stf.default_document_seed()))
             cfg = make_config(p3_reclassify_debt=True,
                               families_order=["codex"], fix_family="codex")
             path = init_state(ws, cfg)
@@ -1118,7 +1117,7 @@ class TestP3Debt(DriverTestCase):
         with tempfile.TemporaryDirectory(prefix="orch-mock-") as ws:
             home = os.path.join(ws, "home")
             model_profiles.ensure_default(home)
-            stf.save(home, split_classify_document())
+            stf.save(home, one_review_seat(split_classify_document()))
             cfg = make_config(p3_reclassify_debt=True,
                               families_order=["codex"], fix_family="codex")
             path = init_state(ws, cfg)
