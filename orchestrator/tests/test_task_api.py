@@ -456,8 +456,10 @@ class TaskApiTest(unittest.TestCase):
         pins = {"dispatch_authority": "static", "participants": [{"id": "lead"}]}
         captured = []
 
-        def start(state, task_id, config, home):
-            captured.append((tasks.task_record(state, task_id), config, home))
+        def start(state, task_id, config, home, **options):
+            captured.append(
+                (tasks.task_record(state, task_id), config, home, options)
+            )
             return {"id": "session-one"}
 
         def finish(state, task_id, _home, _session_id, apply_effects):
@@ -492,6 +494,13 @@ class TaskApiTest(unittest.TestCase):
             effect_release.set()
             self.assertEqual(self.wait_record(task_id)["result"]["native_result"],
                              {"agreement": "kept opaque"})
+        # The direct host carries a standalone order's staffing selection —
+        # the router holding no session of its own — into every launch. A
+        # stored static authority is unmoved by it and keeps its own pins.
+        self.assertEqual(
+            [options for _record, _config, _home, options in captured],
+            [{"staffing_selection": brainstorming_tasks.standalone_staffing()}],
+        )
         before = len(task_api.StandaloneTaskStore(self.home).records())
         unavailable = tasks.TaskRequestError(tasks.TASK_UNAVAILABLE, "no seats")
         with mock.patch.object(brainstorming_tasks, "resolve_staffing",
@@ -500,7 +509,7 @@ class TaskApiTest(unittest.TestCase):
         self.assertEqual((status, body["error"]), (503, tasks.TASK_UNAVAILABLE))
         self.assertEqual(len(task_api.StandaloneTaskStore(self.home).records()), before)
 
-    def test_malformed_standing_staffing_is_unavailable_before_admission(self):
+    def test_malformed_standing_config_refuses_only_the_agent_call_order(self):
         malformed_defaults = service.driver.load_config(None)
         malformed_defaults["model_defaults"] = True
         malformed_families = service.driver.load_config(None)
@@ -516,11 +525,8 @@ class TaskApiTest(unittest.TestCase):
 
         for executor, config in (
             ("agent_call", malformed_defaults),
-            ("brainstorming", malformed_defaults),
             ("agent_call", malformed_families),
             ("agent_call", malformed_command),
-            ("brainstorming", malformed_command),
-            ("brainstorming", malformed_timeouts),
         ):
             with self.subTest(executor=executor, config=config):
                 with mock.patch.object(
@@ -534,6 +540,35 @@ class TaskApiTest(unittest.TestCase):
                 )
                 self.assertEqual(
                     len(task_api.StandaloneTaskStore(self.home).records()), before
+                )
+
+        # A Brainstorming order reads none of this at admission any more.
+        # Its seats are staffed by the router immediately before every
+        # call, so the standing rotation, the runtime defaults and the
+        # command templates decide nothing here and cannot refuse the
+        # order; the record it admits names the router and freezes no seat.
+        for config in (
+            malformed_defaults, malformed_command, malformed_timeouts,
+        ):
+            with self.subTest(executor="brainstorming", config=config):
+                admitted = len(task_api.StandaloneTaskStore(self.home).records())
+                with mock.patch.object(
+                    service, "_direct_task_config", return_value=config
+                ):
+                    status, body = self.request(
+                        "POST", "/api/tasks", self.order("brainstorming")
+                    )
+                self.assertEqual(status, 201, body)
+                staffing = body["task"]["resolved_staffing"]
+                self.assertEqual(
+                    staffing["dispatch_authority"], "current_profile"
+                )
+                for seat in staffing["participants"]:
+                    for field in ("model_family", "model", "effort"):
+                        self.assertNotIn(field, seat)
+                self.assertEqual(
+                    len(task_api.StandaloneTaskStore(self.home).records()),
+                    admitted + 1,
                 )
 
     def test_static_recovery_inspects_owned_session_before_current_config(self):
@@ -680,8 +715,10 @@ class TaskApiTest(unittest.TestCase):
         }
         captured = []
 
-        def restart(state, task_id, config, home, session_id=None):
-            captured.append((state, task_id, config, home, session_id))
+        def restart(state, task_id, config, home, session_id=None, **options):
+            captured.append(
+                (state, task_id, config, home, session_id, options)
+            )
             return projection
 
         with mock.patch.object(
@@ -703,9 +740,14 @@ class TaskApiTest(unittest.TestCase):
 
         self.assertEqual((status, body["session"]), (200, projection))
         self.assertEqual(len(captured), 1)
-        state, task_id, config, home, attached_session = captured[0]
+        state, task_id, config, home, attached_session, options = captured[0]
         self.assertEqual(tasks.task_record(state, task_id), record)
         self.assertEqual((config, home, attached_session), ({}, self.home, session_id))
+        # A standalone restart carries the same selection its admission did.
+        self.assertEqual(
+            options,
+            {"staffing_selection": brainstorming_tasks.standalone_staffing()},
+        )
         self.assertEqual(host.started, [record["id"], record["id"]])
 
     def test_terminal_standalone_session_restart_completes_open_task(self):

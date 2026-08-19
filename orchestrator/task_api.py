@@ -362,7 +362,12 @@ class DirectTaskHost:
 
     def _run_brainstorming(self, record, config_resolver):
         task_id = record["id"]
-        start_options = {}
+        # A directly ordered task has no owner run: its discussion resolves
+        # every automatic call through the router holding no session of its
+        # own. A pre-cutover static record ignores this and keeps its pins.
+        start_options = {
+            "staffing_selection": brainstorming_tasks.standalone_staffing(),
+        }
         try:
             config = config_resolver()
         except Exception as exc:
@@ -395,6 +400,9 @@ class DirectTaskHost:
                             task_id,
                             effect_request,
                             dispatch_authority=authority,
+                            staffing_selection=(
+                                brainstorming_tasks.standalone_staffing()
+                            ),
                         )
                     ),
                 )

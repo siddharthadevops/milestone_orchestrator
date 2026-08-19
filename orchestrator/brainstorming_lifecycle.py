@@ -293,7 +293,15 @@ def validate_create_body(body):
         brainstorming._exact_keys(
             body,
             ("request", "participants", "closure_policy"),
-            ("project", "work_area", "create_target_parents"),
+            # One optional staffing session, at the top level, as inherited
+            # context: the discussion's automatic calls resolve through the
+            # session the caller names, and never through a document copied
+            # into this body or a second staffing value. Absent — like
+            # explicitly null — is the default document, not "no router".
+            # The caller's access to the named session is decided by the
+            # route, which is the only place that knows who is asking.
+            ("project", "work_area", "create_target_parents",
+             "staffing_session"),
             "brainstorming create body",
         )
         request = brainstorming.validate_request(body["request"])
@@ -428,6 +436,11 @@ def validate_create_body(body):
             raise brainstorming.ContractError(
                 "create_target_parents must be a boolean"
             )
+        staffing_session = body.get("staffing_session")
+        if staffing_session is not None:
+            staffing_session = brainstorming._text(
+                staffing_session, "staffing_session"
+            )
         return {
             "request": request,
             "participants": participants,
@@ -435,6 +448,7 @@ def validate_create_body(body):
             "project": project,
             "work_area": work_area,
             "create_target_parents": create_parents,
+            "staffing_session": staffing_session,
         }
     except (TypeError, ValueError, brainstorming.ContractError) as exc:
         raise PublicLifecycleError(400, INVALID_REQUEST) from exc
@@ -663,7 +677,18 @@ def _runtime_and_roster(
         or (not static_binding and not isinstance(order, list))
     ):
         raise PublicLifecycleError(503, UNAVAILABLE)
-    model_defaults = {} if static_binding else (config.get("model_defaults") or {})
+    # A router-backed session reads no configured default, so it does not
+    # read one to judge it either: the model and the effort come from the
+    # session's document before every call, discovery below skips these
+    # entries, and the runtime is built from an empty map. A retired input
+    # that decides nothing must not be able to refuse a create either — a
+    # non-object left in this key by a generic settings editor would take
+    # down every discussion in the project over a value none of them uses.
+    model_defaults = (
+        {}
+        if static_binding or staffing_binding is not None
+        else (config.get("model_defaults") or {})
+    )
     if not isinstance(model_defaults, dict):
         raise PublicLifecycleError(503, UNAVAILABLE)
     timeouts = config.get("timeouts") or {}
@@ -1723,7 +1748,15 @@ def _create_session(
     project_record=None,
     launcher=None,
 ):
-    """Validate, bind, durably create, and launch one standalone session."""
+    """Validate, bind, durably create, and launch one standalone session.
+
+    Every standalone discussion opened here is router-backed. The body's
+    optional `staffing_session` says WHICH session its automatic calls ask;
+    omitting it does not opt out of the router, it takes the default
+    document at `medium` with this machine's configured families — and the
+    durable mark records that, so a restart of a session created today can
+    never be read as a pre-cutover record whose seats carry static pins.
+    """
     checked = validate_create_body(body)
     try:
         caller = brainstorming._text(caller, "caller")
@@ -1734,7 +1767,13 @@ def _create_session(
     )
     checked["request"]["workspace_path"] = context["workspace_path"]
     return _create_session_with_context(
-        home, checked, caller, context, config, launcher
+        home,
+        checked,
+        caller,
+        context,
+        config,
+        launcher,
+        staffing_selection={"session": checked["staffing_session"]},
     )
 
 
@@ -1752,6 +1791,16 @@ def create_resolved_session(
     """Create for an already-resolved milestone without resolving roots again."""
     try:
         checked = validate_create_body(body)
+        if checked["staffing_session"] is not None:
+            # An owner that resolved its own roots supplies its session as
+            # the argument beside them, so the body's caller-owned field
+            # stays the standalone route's alone. Refusing here keeps one
+            # channel: two could disagree, and the argument would win
+            # silently.
+            raise brainstorming.ContractError(
+                "a resolved create carries its staffing session as an "
+                "argument, not in the request body"
+            )
         caller = brainstorming._text(caller, "caller")
         context = brainstorming._json_copy(
             execution_context, "execution_context"
@@ -2644,7 +2693,9 @@ def start_session(
     and answers the staffing session its calls resolve through. It is the
     only source a PRE-CUTOVER attached record has — its registry entry
     predates the durable mark and this restart does not add one — and it is
-    ignored for a record that carries the mark, which is its own authority.
+    ignored both for a record that carries the mark, which is its own
+    authority, and for a pre-cutover explicit static binding, which the
+    router does not staff at all.
     """
     record = _record_by_id(home, session_id)
     _authorize_record(record, authorize)
@@ -2672,13 +2723,16 @@ def start_session(
             if (
                 resolve_staffing_session is not None
                 and "staffing_session" not in current
+                and _router_staffed(current)
             ):
-                # Asked ONLY when the record cannot answer. A marked record
-                # is its own authority, so reaching outside it for a session
-                # it already holds would also hand that outside lookup a
+                # Asked ONLY when the record cannot answer AND the answer
+                # would decide something. A marked record is its own
+                # authority, and a stored explicit static binding is staffed
+                # by its own pins; reaching outside either for a session
+                # neither of them asks would also hand that outside lookup a
                 # veto: its failure — an owning run deregistered, moved or
                 # no longer exposing the wait attachment — would refuse a
-                # restart the record itself can fully staff.
+                # restart the record can fully staff on its own.
                 supplied = _validate_staffing_session(
                     resolve_staffing_session(current)
                 )

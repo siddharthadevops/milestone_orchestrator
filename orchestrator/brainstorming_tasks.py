@@ -89,14 +89,32 @@ def _execution_context(request):
     }
 
 
+def standalone_staffing():
+    """The selection a directly ordered Brainstorming task carries.
+
+    A standalone order names no owner session yet — the order body gains
+    that field in the standalone-task slice — so its discussion is bound to
+    the router holding none of its own: the `default` document at `medium`
+    with the host's configured families, which is the same answer an
+    unbound run gives the discussions it owns. That is a selection, not an
+    absent one; absence is reserved for a caller with no document store to
+    resolve against at all.
+    """
+    return {"session": None}
+
+
 def resolve_staffing(config, workspace, staffing_selection=None):
     """Resolve the order's staffing authority before durable admission.
 
-    A task whose owner supplies a staffing session is ATTACHED: it records
-    no seat pins at all, because every one of its calls resolves through
-    that session immediately before it is made. Only a task with no owner
-    session freezes an explicit static binding here, which is what a
-    pre-cutover record holds and keeps.
+    A task carrying a staffing selection is ROUTER-BACKED: it records no
+    seat pins at all, because every one of its calls resolves through that
+    selection immediately before it is made. The selection may name no
+    session — a standalone order, or an owner run that holds none — and the
+    default document answers for it.
+
+    Only a caller with no staffing document store to read — a `Driver`
+    built without a catalogue home — freezes an explicit static binding
+    here, which is also the shape a pre-cutover record holds and keeps.
     """
     if staffing_selection is not None:
         participants = milestone._participants()

@@ -469,3 +469,42 @@
 - `claude-S6A-CLAUDE-R1-002` (raised claude, cleared codex): _record_staffing_binding cannot distinguish 'this record's staffing session is unknown' from 'this record has no staffing session', so the read-only participant view of a pre-cutover attached discussion whose owning run cannot be reached now asserts default-document staffing instead of leaving the seat blank. — The unreachable-owner path silently presents plausible default staffing as fact, so later work can trust false monitoring data without triggering the stop path, while correction is a small local distinction plus one regression test.
 - `claude-S6A-CLAUDE-R1-003` (raised claude, cleared codex): No test exercises the round the dispatch seam actually derives and hands to the router; every new test feeds prepare_dispatch a round by hand, and the one seam test that goes through _invoke_tracked hits the no-action branch that hardcodes 1. — The focused suite still passes 161/161 with round derivation replaced by provider attempt, confirming a silent correctness and coverage gap across retries, closure, and production, while correction remains bounded to this unit's integration tests and local derivation seam.
 
+## slice_impl-06-b (Brainstorming cutover)
+
+- draft: kind `implement`, artifact `-` (raw: `implementation/milestones/staffing-router/.run/raw/slice_impl-06-b-draft.txt`)
+
+| Round | Kind | Family | Findings | Triage | Raw |
+|---|---|---|---|---|---|
+| slice_impl-06-b-codex-r1 | review_round | codex | 2 | 2 reported | `implementation/milestones/staffing-router/.run/raw/slice_impl-06-b-codex-r1.txt` |
+| slice_impl-06-b-claude-r1 | fix_findings | claude | 2 | 2 fixed | `implementation/milestones/staffing-router/.run/raw/slice_impl-06-b-fix1.txt` |
+| slice_impl-06-b-claude-r2 | delta_review | claude | 1 | 1 reported | `implementation/milestones/staffing-router/.run/raw/slice_impl-06-b-delta1.txt` |
+| slice_impl-06-b-claude-r3 | fix_findings | claude | 1 | 1 fixed | `implementation/milestones/staffing-router/.run/raw/slice_impl-06-b-fix2.txt` |
+| slice_impl-06-b-claude-r4 | delta_review | claude | 1 | 1 reported | `implementation/milestones/staffing-router/.run/raw/slice_impl-06-b-delta2.txt` |
+| slice_impl-06-b-claude-r5 | fix_findings | claude | 1 | 1 fixed | `implementation/milestones/staffing-router/.run/raw/slice_impl-06-b-fix3.txt` |
+| slice_impl-06-b-claude-r6 | delta_review | claude | 0 | clean | `implementation/milestones/staffing-router/.run/raw/slice_impl-06-b-delta3.txt` |
+| slice_impl-06-b-codex-r2 | review_round | codex | 0 | clean | `implementation/milestones/staffing-router/.run/raw/slice_impl-06-b-codex-r2.txt` |
+| slice_impl-06-b-claude-r7 | review_round | claude | 1 | 1 reported | `implementation/milestones/staffing-router/.run/raw/slice_impl-06-b-claude-r1.txt` |
+| slice_impl-06-b-claude-r8 | fix_findings | claude | 1 | 1 fixed | `implementation/milestones/staffing-router/.run/raw/slice_impl-06-b-fix4.txt` |
+| slice_impl-06-b-claude-r9 | delta_review | claude | 2 | 2 reported | `implementation/milestones/staffing-router/.run/raw/slice_impl-06-b-delta4.txt` |
+| slice_impl-06-b-claude-r10 | fix_findings | claude | 2 | 2 fixed | `implementation/milestones/staffing-router/.run/raw/slice_impl-06-b-fix5.txt` |
+| slice_impl-06-b-claude-r11 | delta_review | claude | 0 | clean | `implementation/milestones/staffing-router/.run/raw/slice_impl-06-b-delta5.txt` |
+| slice_impl-06-b-codex-r3 | review_round | codex | 0 | clean | `implementation/milestones/staffing-router/.run/raw/slice_impl-06-b-codex-r3.txt` |
+| slice_impl-06-b-claude-r12 | review_round | claude | 2 | 2 reported | `implementation/milestones/staffing-router/.run/raw/slice_impl-06-b-claude-r2.txt` |
+| slice_impl-06-b-claude-r13 | fix_findings | claude | 1 | 1 fixed | `implementation/milestones/staffing-router/.run/raw/slice_impl-06-b-fix6.txt` |
+| slice_impl-06-b-claude-r14 | delta_review | claude | 0 | clean | `implementation/milestones/staffing-router/.run/raw/slice_impl-06-b-delta6.txt` |
+| slice_impl-06-b-codex-r4 | review_round | codex | 1 | 1 reported | `implementation/milestones/staffing-router/.run/raw/slice_impl-06-b-codex-r4.txt` |
+| slice_impl-06-b-claude-r15 | fix_findings | claude | 1 | 1 fixed (1 consulted) | `implementation/milestones/staffing-router/.run/raw/slice_impl-06-b-fix7.txt` |
+| slice_impl-06-b-claude-r16 | delta_review | claude | 1 | 1 reported | `implementation/milestones/staffing-router/.run/raw/slice_impl-06-b-delta7.txt` |
+| slice_impl-06-b-claude-r17 | fix_findings | claude | 1 | 1 fixed | `implementation/milestones/staffing-router/.run/raw/slice_impl-06-b-fix8.txt` |
+| slice_impl-06-b-claude-r18 | delta_review | claude | 0 | clean | `implementation/milestones/staffing-router/.run/raw/slice_impl-06-b-delta8.txt` |
+| slice_impl-06-b-codex-r5 | review_round | codex | 0 | clean | `implementation/milestones/staffing-router/.run/raw/slice_impl-06-b-codex-r5.txt` |
+| slice_impl-06-b-claude-r19 | review_round | claude | 0 | clean | `implementation/milestones/staffing-router/.run/raw/slice_impl-06-b-claude-r3.txt` |
+
+### Review completion — SATISFIED
+
+- deterministic result: every configured family was clean or debt-clean on the same current bytes; full verification was not due at this boundary; no extra reviewer was called
+- cited reviews: `slice_impl-06-b-codex-r5`, `slice_impl-06-b-claude-r19`
+
+**Deferred debt (opposite-family verified):**
+- `claude-S6B-CLAUDE-R1-002` (raised claude, cleared codex): The activity acceptance row pins that 'an absent or later unreadable staffing session/document dispatches on the default and adds the exact fallback field', but only the later-unreadable half is asserted. The single staffing_fallback assertion in the Brainstorming cutover suite (orchestrator/tests/test_staffing_brainstorming_cutover.py:788-814) creates a session and then unlinks its file. The absent case — the mark-present/session-None binding this part introduces at orchestrator/brainstorming_lifecycle.py:1765 — is checked only for its seats and record shape (test lines 1706-1721); no test in the repository asserts staffing_fallback on an activity entry produced by a session-None binding (grep over orchestrator/tests). — The acceptance row overstates coverage and could let a future session-None regression pass silently, but the current shared resolver emits the required marker and correction is one focused assertion or local binding fix.
+

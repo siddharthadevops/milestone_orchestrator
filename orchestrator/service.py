@@ -4069,6 +4069,9 @@ def _start_brainstorming_session(home, who, session_id, task_host=None):
                     attachment["task_id"],
                     {},
                     home,
+                    staffing_selection=(
+                        brainstorming_tasks.standalone_staffing()
+                    ),
                     session_id=session_id,
                 )
             except brainstorming_lifecycle.PublicLifecycleError:
@@ -4284,7 +4287,9 @@ def _resolve_direct_task_order(home, who, body):
             staffing = task_api.worker_staffing(config)
         else:
             staffing = brainstorming_tasks.resolve_staffing(
-                config, os.path.realpath(primary)
+                config,
+                os.path.realpath(primary),
+                brainstorming_tasks.standalone_staffing(),
             )
         return order, staffing, primary, project_slug
     except tasks.TaskRequestError as exc:
@@ -4779,6 +4784,19 @@ def make_handler(home, task_host=None):
                     else:
                         project = require_brainstorming_project_access(
                             home, who, checked["project"]
+                        )
+                    if checked["staffing_session"] is not None:
+                        # A named session must be one this caller could
+                        # already read: the same authorization the session's
+                        # own route applies, so a discussion cannot become a
+                        # side door onto another project's staffing. Unknown
+                        # is 404 `unknown_staffing_session` and inaccessible
+                        # is 403, exactly as `GET /api/staffing/sessions/<id>`
+                        # answers them. Omitted names no session at all and
+                        # asks nothing here: those calls take the default
+                        # document, and their activity says so.
+                        read_staffing_session(
+                            home, who, checked["staffing_session"]
                         )
                     # A discussion started into a tree a sync is merging
                     # would fight it, the same way a run would — and the

@@ -216,7 +216,11 @@ Standalone Brainstorming uses a separate service record and state store under
 `~/.impl_roadmap/brainstorming/`; it never creates a milestone run or registry
 entry. `POST /api/brainstorming/sessions` accepts the exact generic request,
 ordered participants with independent `role` and `delivery`, and closure policy, with an optional
-`project`/`work_area` pair. `GET /api/brainstorming/sessions/<id>` is the
+`project`/`work_area` pair and an optional `staffing_session`. That session
+must be one the caller may already read (`unknown_staffing_session` when it
+does not exist, `forbidden` when it belongs elsewhere); omitting it staffs the
+discussion from the `default` document at `medium`, which its activity
+records. `GET /api/brainstorming/sessions/<id>` is the
 polling/follow surface, and `POST /api/brainstorming/sessions/<id>/stop` and
 `/start` accept no fields. These successes return
 `{"ok": true, "session": ...}`. Stop halts the lifecycle without closing or
@@ -274,11 +278,13 @@ concurrent create adopted is never removed). Absent or false keeps the
 historical refusal for a missing parent. Panel pickers open at the bound
 work area's directory when one is chosen and fall back to
 `~/Development/source` (walked up to the nearest existing ancestor on
-other hosts). The default roster is a Codex Initial Position, a Claude
-Contrary Position, and Dante on Codex as an external narrator. Dante asks
-anti-drift questions in the language used by the request and discussion, and
-never votes. AI seats keep the ordinary family, model
-and effort controls; Dante's turn enters through the durable external contract.
+other hosts). The default roster is an Initial Position, a Contrary
+Position, and Dante as an external narrator: roles and delivery, not
+families — which family runs each of those seats is the discussion's
+staffing session's answer (below). Dante asks anti-drift questions in the
+language used by the request and discussion, and never votes. AI seats still
+carry the dialog's family, model and effort controls until that control
+retires; Dante's turn enters through the durable external contract.
 Unanimity requires every position to accept the exact proposal. Majority
 requires a strict majority; ties and round-limit disagreement end as an
 irreducible gap. The coordinator records that result mechanically and never
@@ -286,21 +292,26 @@ chooses a side.
 Participant prompts use the Markdown chat as shared memory, point to the target
 and reference documents, and carry only the applicable amendments instead of
 duplicating the full transcript and caller payload on every turn.
-Every dial left at default is resolved by the service: family by rotation over what this host offers, model/effort from
-the family's defaults — and when pins would herd every seat onto one
-family while another is available, the last default seat takes the other
-family instead, so a partially pinned roster is never refused for a shape
-the service's own rotation produced. A pin travels in the create body (`model_family` /
-`model` / `effort`, all optional per participant): a pinned family narrows
-that seat's eligibility — so a roster pinned entirely to one family is a
-deliberate choice, not an invalid same-family fallback — an unavailable
-family refuses with `invalid_brainstorming_request`, and each seat's
-resolved model/effort is recorded once in the service record's
-`runtime.executors` (keyed by per-seat `executor_ref`), which the
-lifecycle child replays without re-deriving; the session's **Info** view
-shows the resolved family, model, and effort for every seat without exposing
-runtime commands. Refusal tokens surface verbatim; the panel validates only
-form completeness.
+Every automatic seat is staffed by the discussion's staffing session, not by
+the create body: the seat's 1-based roster position resolves `brainstorm`
+against that session — or against the `default` document at `medium` when the
+create named none — immediately before every physical call, so a completed
+session or document edit reaches the next turn, closure vote, classifier or
+production effect. Two seats sharing one family is an ordinary answer; the
+only split rule left is a `distinct_families` the document itself declares.
+A pin still travels in the create body (`model_family` / `model` / `effort`,
+all optional per participant) because the panel keeps sending one until its
+own control retires, and it decides nothing — not even a pinned family this
+host cannot run, which is no longer a request fault. A document that answers
+with a family this host cannot run leaves nothing to bind and refuses with
+`brainstorming_unavailable`. Each seat's answer at creation is recorded once
+in the service record's `runtime.executors` (keyed by per-seat
+`executor_ref`) as that seat's binding key and the child's initial binding,
+and is never replayed: every dispatch overwrites it by resolving again. No
+read-only surface shows it either — the session's **Info** view is that same
+live read, what each seat would run on if it were dispatched now, without
+exposing runtime commands. Refusal tokens surface verbatim; the panel
+validates only form completeness.
 
 A milestone that opens a session remains alive, observes it until terminal,
 and then routes the result without a manual restart. It chips the discussion

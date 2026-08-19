@@ -24,7 +24,8 @@ from orchestrator import brainstorming as bs
 from orchestrator import brainstorming_coordination as coordination
 from orchestrator import brainstorming_lifecycle as lifecycle
 from orchestrator import brainstorming_tasks as task_adapter
-from orchestrator import registry, runners, service, state, tasks, workareas
+from orchestrator import registry, runners, service, staffing, state, tasks
+from orchestrator import workareas
 
 
 def closing_summary():
@@ -269,6 +270,21 @@ class StandaloneBrainstormingApiTest(unittest.TestCase):
             handle.write(textwrap.dedent(source))
         os.chmod(path, 0o755)
         return path
+
+    def _seat_answer(self, position, session=None):
+        """What the router answers one `brainstorm` seat of this home.
+
+        The seeded `default` document at `medium` is operator data, so the
+        expectations below name the seat and read the answer rather than
+        restating families and models the operator may reorder.
+        """
+        return staffing.resolve(
+            self.home,
+            session,
+            "brainstorm",
+            index=position,
+            families=list(self.config["families_order"]),
+        ).answer
 
     def _target(self, name, content=b"initial target"):
         path = os.path.join(self.workspace, "docs", name)
@@ -560,8 +576,13 @@ class StandaloneBrainstormingApiTest(unittest.TestCase):
         self.assertFalse(os.path.exists(registry.registry_path(self.home)))
         self.assertFalse(os.path.exists(os.path.join(self.workspace, ".git")))
 
-    def test_create_honors_pinned_seats_and_records_per_seat_executors(self):
-        """Panel-configured seats: pinned family/model/effort per seat."""
+    def test_seat_pins_are_inert_and_the_document_staffs_every_seat(self):
+        """Router law: each seat runs what the staffing document assigns it.
+
+        A caller-supplied `model_family`/`model`/`effort` is still accepted
+        — the panel keeps sending them until its own slice retires the
+        control — and decides nothing.
+        """
         self._target("pinned.md")
         self._target("mono.md")
         payload = self._payload("pinned.md")
@@ -570,11 +591,12 @@ class StandaloneBrainstormingApiTest(unittest.TestCase):
                 "id": "lead",
                 "role": "initial_position",
                 "delivery": "llm",
-                "model_family": "claude",
-                # Deliberately NOT the claude family default (opus-5), so
-                # the pinned seat stays distinguishable from a default one.
-                "model": "claude-fable-5",
-                "effort": "max",
+                # Deliberately the OPPOSITE of every answer the document
+                # gives seat 1, so an inert pin cannot be mistaken for a
+                # coincidence.
+                "model_family": "codex",
+                "model": "gpt-5.6-luna",
+                "effort": "low",
             },
             {
                 "id": "critic-1",
@@ -599,14 +621,17 @@ class StandaloneBrainstormingApiTest(unittest.TestCase):
             self.assertEqual(status, 201, body)
             roster = body["session"]["state"]["run_config"]["participants"]
             by_id = {item["id"]: item for item in roster}
-            self.assertEqual(by_id["lead"]["model_family"], "claude")
-            self.assertEqual(by_id["critic-1"]["model_family"], "claude")
-            # The unpinned seat keeps the historical rotation: it is the
-            # first unpinned seat, so it takes the first available family.
-            self.assertEqual(by_id["critic-2"]["model_family"], "codex")
-            # Executor refs are per SEAT so two same-family seats can run
+            seats = [
+                self._seat_answer(position) for position in (1, 2, 3)
+            ]
+            self.assertEqual(
+                [by_id[item]["model_family"]
+                 for item in ("lead", "critic-1", "critic-2")],
+                [answer["agent"] for answer in seats],
+            )
+            # Executor refs stay per SEAT so two same-family seats can run
             # different models; the recorded runtime carries each seat's
-            # resolved model/effort (pin wins, family default otherwise).
+            # resolved model/effort — the document's, never the pin's.
             record = lifecycle._record_by_id(
                 self.home, body["session"]["id"]
             )
@@ -615,21 +640,21 @@ class StandaloneBrainstormingApiTest(unittest.TestCase):
                 set(executors),
                 {item["executor_ref"] for item in roster},
             )
-            lead_seat = executors[by_id["lead"]["executor_ref"]]
             self.assertEqual(
-                lead_seat,
-                {
-                    "model_family": "claude",
-                    "model": "claude-fable-5",
-                    "effort": "max",
-                },
+                [executors[by_id[item]["executor_ref"]]
+                 for item in ("lead", "critic-1", "critic-2")],
+                [
+                    {
+                        "model_family": answer["agent"],
+                        "model": answer["model"],
+                        "effort": answer["effort"],
+                    }
+                    for answer in seats
+                ],
             )
-            critic1 = executors[by_id["critic-1"]["executor_ref"]]
-            self.assertEqual(critic1["model"], "claude-opus-5")
-            self.assertEqual(critic1["effort"], "xhigh")
 
-            # Every seat pinned to ONE family while another is available
-            # is a deliberate roster, not an invalid fallback.
+            # Pinning every seat to ONE family no longer collapses the
+            # roster either: the document still answers seat by seat.
             mono = self._payload("mono.md")
             mono["participants"] = [
                 {
@@ -649,43 +674,52 @@ class StandaloneBrainstormingApiTest(unittest.TestCase):
                 "POST", "/api/brainstorming/sessions", mono
             )
             self.assertEqual(status, 201, mono_body)
-            self.assertTrue(
+            self.assertEqual(
                 mono_body["session"]["state"]["run_config"][
                     "same_family_fallback"
-                ]
+                ],
+                seats[0]["agent"] == seats[1]["agent"],
             )
 
-        # A family this host cannot staff is a request fault — typed and
-        # side-effect free.
-        bad = self._payload("pinned.md")
-        bad["participants"] = [
-            {
-                "id": "lead",
-                "role": "initial_position",
-                "delivery": "llm",
-                "model_family": "gemini",
-            },
-            {
-                "id": "critic",
-                "role": "contrary_position",
-                "delivery": "llm",
-            },
-        ]
-        status, refusal = self._request(
-            "POST", "/api/brainstorming/sessions", bad
+            # A pin naming a family this host cannot run is inert like every
+            # other pin: it is not a request fault, because nothing reads it.
+            self._target("unrunnable-pin.md")
+            unrunnable = self._payload("unrunnable-pin.md")
+            unrunnable["participants"] = [
+                {
+                    "id": "lead",
+                    "role": "initial_position",
+                    "delivery": "llm",
+                    "model_family": "gemini",
+                },
+                {
+                    "id": "critic",
+                    "role": "contrary_position",
+                    "delivery": "llm",
+                },
+            ]
+            status, accepted = self._request(
+                "POST", "/api/brainstorming/sessions", unrunnable
+            )
+        self.assertEqual(status, 201, accepted)
+        self.assertEqual(
+            [
+                item["model_family"]
+                for item in accepted["session"]["state"]["run_config"][
+                    "participants"
+                ]
+            ],
+            [seats[0]["agent"], seats[1]["agent"]],
         )
-        self.assertEqual(status, 400, refusal)
-        self.assertEqual(refusal["error"], lifecycle.INVALID_REQUEST)
 
-    def test_pinning_the_rotation_family_never_herds_default_seats(self):
-        """A pin on families[0] must not drag a default seat onto it.
+    def test_a_pinned_seat_never_moves_the_seat_the_document_staffs(self):
+        """A pin decides nothing, in either seat order.
 
-        The pin-blind rotation would staff both seats codex and the
-        sealed cross-family rule would refuse a fully satisfiable
-        request; the default seat has to diversify instead — in either
-        seat order.
+        The retired rotation read the pins to place the free seat; the
+        document reads neither, so both seats answer identically whichever
+        one the caller pinned.
         """
-        for index, (name, roster) in enumerate((
+        for name, roster in (
             ("codex-lead.md", [
                 {
                     "id": "lead",
@@ -704,7 +738,7 @@ class StandaloneBrainstormingApiTest(unittest.TestCase):
                 {"id": "critic", "role": "contrary_position", "delivery": "llm",
                  "model_family": "codex"},
             ]),
-        )):
+        ):
             self._target(name)
             payload = self._payload(name)
             payload["participants"] = roster
@@ -717,20 +751,21 @@ class StandaloneBrainstormingApiTest(unittest.TestCase):
                     "POST", "/api/brainstorming/sessions", payload
                 )
             self.assertEqual(status, 201, body)
-            resolved = {
-                item["id"]: item["model_family"]
+            resolved = [
+                item["model_family"]
                 for item in body["session"]["state"]["run_config"][
                     "participants"
                 ]
-            }
-            pinned_id = "lead" if index == 0 else "critic"
-            free_id = "critic" if index == 0 else "lead"
-            self.assertEqual(resolved[pinned_id], "codex")
-            self.assertEqual(resolved[free_id], "claude")
-            self.assertFalse(
+            ]
+            seats = [self._seat_answer(position) for position in (1, 2)]
+            self.assertEqual(
+                resolved, [answer["agent"] for answer in seats]
+            )
+            self.assertEqual(
                 body["session"]["state"]["run_config"][
                     "same_family_fallback"
-                ]
+                ],
+                seats[0]["agent"] == seats[1]["agent"],
             )
 
     def test_discard_created_dirs_spares_any_adopting_sibling(self):
@@ -1798,8 +1833,16 @@ class StandaloneBrainstormingApiTest(unittest.TestCase):
             lifecycle.LOGS_DIRNAME,
             "%s.log" % sessions["error.md"],
         )
+        # Which family runs the contrary seat is the staffing document's
+        # answer now, so the log is read for the SEAT that failed rather
+        # than for a family name the operator may reassign.
+        critic_ref = next(
+            item["executor_ref"]
+            for item in operational["state"]["run_config"]["participants"]
+            if item["id"] == "critic"
+        )
         with open(operational_log, "r", encoding="utf-8") as handle:
-            self.assertIn("family claude exited 7", handle.read())
+            self.assertIn(critic_ref, handle.read())
         for session in (success, rejected, operational):
             self.assertEqual(
                 session["state"]["result"]["target_ref"],
@@ -2093,6 +2136,9 @@ class StandaloneBrainstormingApiTest(unittest.TestCase):
             document = lifecycle._load_registry(self.home)
             record = lifecycle._find_record(document, session_id)
             record["caller"] = "milestone:current:slice_impl-02-b"
+            # A PRE-CUTOVER attached record: it carries no staffing mark, so
+            # the owning run's session is the only source its restart has.
+            record.pop("staffing_session", None)
             lifecycle._save_registry(self.home, document)
         registry_before = pathlib.Path(
             lifecycle.registry_path(self.home)
