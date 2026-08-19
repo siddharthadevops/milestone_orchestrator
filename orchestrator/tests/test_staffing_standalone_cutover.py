@@ -14,15 +14,18 @@ and that absence keeps it running exactly the staffing frozen on it.
 import copy
 import json
 import os
+import subprocess
 import tempfile
 import threading
 import time
 import unittest
 import urllib.error
+import urllib.parse
 import urllib.request
 from unittest import mock
 
-from orchestrator import access, contracts, runners, service
+from orchestrator import access, contracts, gitsync, runners, service
+from orchestrator import brainstorming_tasks as bs_tasks
 from orchestrator import staffing as stf
 from orchestrator import state as st
 from orchestrator import task_api, tasks
@@ -612,3 +615,790 @@ class DirectCallStaffingTest(StandaloneCutoverTestCase):
              self.calls[0]["effort"]),
             LUNA,
         )
+
+
+class DirectFallbackAndMarkerTest(StandaloneCutoverTestCase):
+    """What an unreadable input costs, what a refused one prevents, and
+    what a lost marker may never take away.
+
+    Three claims, and they pull in different directions on purpose. An
+    input nobody can read must not stop a call — the default document
+    answers and the marker says it did. A SURFACED condition must stop it,
+    before any provider and leaving no marker to correct. And the marker
+    itself is evidence: losing either of its two writes cannot reach back
+    and replace what the call actually produced.
+    """
+
+    def test_direct_fallback_conditions_and_marker_posture(self):
+        self._unreadable_inputs_still_call_on_the_default_document()
+        self._each_surfaced_condition_refuses_before_the_provider()
+        self._losing_either_marker_write_keeps_the_native_result()
+
+    # -- the mandatory fallback ------------------------------------------
+
+    def _unreadable_inputs_still_call_on_the_default_document(self):
+        # The default answers something no other document here does, so
+        # every assertion below says WHICH document staffed the call
+        # rather than repeating one seat's arithmetic.
+        self.save(role_document(stf.DEFAULT_DOCUMENT_NAME, *LUNA))
+        self.save(role_document("owner-document", *FABLE))
+        deleted = self.session("owner-document")
+        damaged = self.session("owner-document")
+        readable = self.session("owner-document")
+
+        cases = (
+            # Omitted: no session was ever named, so there is none to read.
+            ("omitted", self.admit()),
+            # Absent: the record this id names is gone.
+            ("absent session", self.admit(staffing_session=deleted)),
+            # Unreadable: the session reads, the document it names does not.
+            ("damaged document", self.admit(staffing_session=damaged)),
+        )
+        control = self.admit(staffing_session=readable)
+
+        # A control first, while every input still reads: the session's own
+        # document governs and NOTHING marks a fallback. That is what makes
+        # the field below evidence rather than decoration.
+        self.assertEqual(self.resolved(readable), FABLE)
+        self.assertEqual(self.run_task(control["id"])["result"]["status"],
+                         "success")
+        marker = self.marker(control["id"])
+        self.assertEqual(
+            (marker["family"], marker["model"], marker["effort"]), FABLE
+        )
+        self.assertNotIn("staffing_fallback", marker)
+
+        os.unlink(os.path.join(
+            stf.staffing_sessions_dir(self.home), "%s.json" % deleted
+        ))
+        with open(stf._path(self.home, "owner-document"), "w",
+                  encoding="utf-8") as handle:
+            handle.write("{ this is not a document")
+
+        for label, task in cases:
+            with self.subTest(input=label):
+                del self.calls[:]
+                record = self.run_task(task["id"])
+                self.assertEqual(record["result"]["status"], "success",
+                                 record["result"])
+                self.assertEqual(record["result"]["native_result"],
+                                 "native text")
+                # One call, made on the DEFAULT document's answer.
+                self.assertEqual(len(self.calls), 1)
+                self.assertEqual(
+                    (self.calls[0]["family"], self.calls[0]["model"],
+                     self.calls[0]["effort"]),
+                    LUNA,
+                )
+                marker = self.marker(task["id"])
+                self.assertEqual(
+                    (marker["family"], marker["model"], marker["effort"]),
+                    LUNA,
+                )
+                # The exact field, with the router's own token as value.
+                self.assertEqual(
+                    marker["staffing_fallback"],
+                    stf.STAFFING_FALLBACK_DEFAULT_DOCUMENT,
+                )
+                self.assertEqual(marker["staffing_fallback"],
+                                 "default_document")
+
+    # -- the two surfaced conditions -------------------------------------
+
+    def _each_surfaced_condition_refuses_before_the_provider(self):
+        # No slot this machine can run: the document names one family and
+        # the session has the other, so there is no answer to give.
+        self.save(role_document("claude-only", *FABLE))
+        nobody = self.session("claude-only", families=("codex",))
+        # A declared split one family cannot honour, on the role a direct
+        # order defaults to.
+        self.save(split_document("split-implement", "implement"))
+        collapsed = self.session("split-implement")
+
+        for token, session in (
+            (stf.STAFFING_UNAVAILABLE, nobody),
+            (stf.DISTINCT_FAMILIES_UNSATISFIABLE, collapsed),
+        ):
+            with self.subTest(condition=token):
+                del self.calls[:]
+                task = self.admit(staffing_session=session)
+                record = self.run_task(task["id"])
+                result = record["result"]
+                self.assertEqual(result["status"], "failure", result)
+                # The public token, named in the task's own reason.
+                self.assertIn(token, result["reason"])
+                self.assertIsNone(result["native_result"])
+                # Nothing was dispatched and nothing was marked: the marker
+                # is written only once a call is actually staffed, so there
+                # is no evidence of a call to have to correct.
+                self.assertEqual(self.calls, [])
+                self.assertIsNone(self.marker(task["id"]))
+
+    # -- best-effort evidence --------------------------------------------
+
+    def _losing_either_marker_write_keeps_the_native_result(self):
+        session = self.session(stf.DEFAULT_DOCUMENT_NAME)
+        cases = (
+            # The write attempted BEFORE the provider call, so a call in
+            # flight is visible. Losing it must not gate the call.
+            ("the pre-provider write", 1, True),
+            # The terminal write, which carries the accounting.
+            ("the terminal write", 2, False),
+        )
+        for label, failing, completed in cases:
+            with self.subTest(marker=label):
+                del self.calls[:]
+                task = self.admit(staffing_session=session)
+                attempts = []
+                real = task_api._write_worker_marker
+
+                def write(home, task_id, marker, _real=real, _fail=failing):
+                    attempts.append(copy.deepcopy(marker))
+                    if len(attempts) == _fail:
+                        raise OSError("the marker store is unwritable")
+                    return _real(home, task_id, marker)
+
+                with mock.patch.object(
+                    task_api, "_write_worker_marker", side_effect=write
+                ):
+                    record = self.run_task(task["id"])
+
+                # Both phases were attempted, one of them lost.
+                self.assertEqual(len(attempts), 2)
+                self.assertEqual(record["result"]["status"], "success",
+                                 record["result"])
+                self.assertEqual(record["result"]["native_result"],
+                                 "native text")
+                self.assertEqual(len(self.calls), 1)
+                # The surviving phase is exactly the one that did not fail,
+                # and the loss stops there: the result is untouched.
+                surviving = self.marker(task["id"])
+                self.assertEqual(surviving["task_id"], task["id"])
+                if completed:
+                    self.assertTrue(surviving["completed"])
+                    self.assertIn("duration_s", surviving)
+                else:
+                    self.assertNotIn("completed", surviving)
+
+
+class GitAlignmentStaffingTest(StandaloneCutoverTestCase):
+    """The operator's alignment asks the router only for a call it makes.
+
+    Everything the work area already refuses it still refuses, unchanged
+    and first: a session the caller may not read, a worktree somebody owns,
+    a directory that is not a repository root. Only once one physical call
+    is actually eligible does `sync` get staffed — live, at seat 1 — and
+    what ran comes back on the `sync` object beside the verdict the agent's
+    own report decides.
+    """
+
+    SLUG = "aligned prod"
+    AREA = "main area"
+
+    def setUp(self):
+        super().setUp()
+        self.repo = self.git_repository("repo")
+        self.sync_calls = []
+        self.report = "merged both sides\nRESULT: aligned"
+        self.exit_code = 0
+        self.declare(self.SLUG, self.repo,
+                     users=[self.MEMBER], admins=[self.MEMBER])
+
+    # -- harness ---------------------------------------------------------
+
+    def git_repository(self, name):
+        path = self.directory(name)
+        subprocess.run(["git", "init", "-q", path], check=True)
+        return path
+
+    def declare(self, slug, primary, users=None, admins=None):
+        """One declared, confirmed work area on a project this home serves."""
+        service.create_project(self.home, {"slug": slug})
+        if users is not None:
+            service.update_project_users(self.home, slug, {
+                "users": list(users), "admins": list(admins or []),
+            })
+        record = service.declare_work_area(self.home, slug, {
+            "name": self.AREA,
+            "primary_path": primary,
+            "additional_paths": [],
+        })["record"]
+        self.assertTrue(service._work_area_store(self.home, slug).confirm(
+            self.AREA,
+            record["primary"],
+            record["additional"],
+            service._executor_id(self.home),
+        ).ok)
+
+    def sync(self, slug=None, area=None, headers=None, **body):
+        path = "/api/projects/%s/git-sync" % urllib.parse.quote(
+            slug or self.SLUG, safe=""
+        )
+        payload = {"work_area": self.AREA if area is None else area}
+        payload.update(body)
+        return self.request("POST", path, payload, headers=headers)
+
+    def aligning(self):
+        """The real `run_sync`, over a runner that records its staffing.
+
+        Only the provider process is stood in for: the mandate, the exit
+        code, the verdict reader and the outcome shape are the operation's
+        own, so a test can hold them equal while the staffing changes.
+        """
+        outer = self
+        real = gitsync.run_sync
+
+        class Result:
+            text = property(lambda _self: outer.report)
+            exit_code = property(lambda _self: outer.exit_code)
+            duration_s = 1.0
+            token_usage = None
+
+        class Runner:
+            def call(_self, family, prompt, workspace, model=None,
+                     effort=None):
+                outer.sync_calls.append({
+                    "family": family, "prompt": prompt,
+                    "workspace": workspace, "model": model, "effort": effort,
+                })
+                return Result()
+
+        def aligned(commands, timeouts, family, workspace, **kwargs):
+            return real(commands, timeouts, family, workspace,
+                        runner=Runner(), **kwargs)
+
+        return mock.patch.object(gitsync, "run_sync", side_effect=aligned)
+
+    def refusing_to_staff(self):
+        """A router that fails the test if this request reaches it."""
+        return mock.patch.object(
+            stf, "resolve",
+            side_effect=AssertionError(
+                "a refused alignment asked the router to staff it"
+            ),
+        )
+
+    def recording_resolutions(self, requests):
+        real = stf.resolve
+
+        def record(home, session, role, index=1, round=1, material=None,
+                   brief=None, families=()):
+            requests.append({
+                "session": session, "role": role, "index": index,
+                "round": round, "material": material, "brief": brief,
+            })
+            return real(home, session, role, index=index, round=round,
+                        material=material, brief=brief, families=families)
+
+        return mock.patch.object(stf, "resolve", side_effect=record)
+
+    # -- the acceptance row ----------------------------------------------
+
+    def test_git_sync_resolves_live_after_ownership_checks(self):
+        self._named_sessions_keep_the_existing_access_classifications()
+        self._an_ineligible_work_area_asks_for_no_staffing()
+        self._an_eligible_call_is_staffed_live_at_sync_seat_one()
+        self._each_surfaced_condition_runs_no_agent()
+        self._the_verdict_law_is_unchanged()
+
+    # -- access ----------------------------------------------------------
+
+    def _named_sessions_keep_the_existing_access_classifications(self):
+        # A control first: this caller IS this project's admin, which is
+        # the rung git alignment needs, so every refusal below is the
+        # SESSION's classification and not the route's.
+        with self.aligning():
+            status, allowed = self.sync(headers=self.member_headers())
+        self.assertEqual(status, 200, allowed)
+        self.assertEqual(len(self.sync_calls), 1)
+        del self.sync_calls[:]
+
+        with self.refusing_to_staff(), self.aligning() as never:
+            status, unknown = self.sync(
+                staffing_session="stf-" + "0" * 32
+            )
+            self.assertEqual(
+                (status, unknown["error"]),
+                (404, service.UNKNOWN_STAFFING_SESSION),
+                unknown,
+            )
+
+            # A session bound to a project this caller cannot reach.
+            service.create_project(self.home, {"slug": "beta"})
+            foreign = self.session(
+                stf.DEFAULT_DOCUMENT_NAME,
+                work_area={"project": "beta", "work_area": "main"},
+            )
+            status, refused = self.sync(
+                staffing_session=foreign, headers=self.member_headers()
+            )
+            self.assertEqual(
+                (status, refused["error"]), (403, service.FORBIDDEN), refused
+            )
+        never.assert_not_called()
+        self.assertEqual(self.sync_calls, [])
+
+    # -- eligibility first -----------------------------------------------
+
+    def _an_ineligible_work_area_asks_for_no_staffing(self):
+        session = self.session(self.save(role_document("sync-doc", *FABLE)))
+        unusable = self.directory("plain")
+        self.declare("nested prod", unusable)
+
+        with self.refusing_to_staff(), self.aligning() as never:
+            # Busy: a live milestone driver owns this worktree.
+            with mock.patch.object(
+                service, "driver_alive", return_value=True
+            ), mock.patch.object(
+                service.registry, "load",
+                return_value={"runs": [{
+                    "id": "r1", "name": "live", "workspace": self.repo,
+                }]},
+            ):
+                status, busy = self.sync(staffing_session=session)
+            self.assertEqual(
+                (status, busy["error"]), (409, service.WORK_AREA_BUSY), busy
+            )
+
+            # Unusable: the area is a directory, not a repository root.
+            status, nested = self.sync(slug="nested prod",
+                                       staffing_session=session)
+            self.assertEqual(
+                (status, nested["error"]),
+                (400, service.PRIMARY_NOT_REPO_ROOT),
+                nested,
+            )
+
+            # And an area this project never declared.
+            status, unknown = self.sync(area="no such area",
+                                        staffing_session=session)
+            self.assertEqual(
+                (status, unknown["error"]), (404, service.workareas.UNKNOWN),
+                unknown,
+            )
+        never.assert_not_called()
+        self.assertEqual(self.sync_calls, [])
+
+    # -- the one physical call -------------------------------------------
+
+    def _an_eligible_call_is_staffed_live_at_sync_seat_one(self):
+        self.save(role_document(stf.DEFAULT_DOCUMENT_NAME, *LUNA))
+        session = self.session("sync-doc")
+        requests = []
+
+        with self.recording_resolutions(requests), self.aligning():
+            status, body = self.sync(staffing_session=session)
+        self.assertEqual(status, 200, body)
+        # Exactly one router request, and exactly the alignment's own seat:
+        # `sync`, its first, its first round, with no material or brief.
+        self.assertEqual(requests, [{
+            "session": session, "role": "sync", "index": 1, "round": 1,
+            "material": None, "brief": None,
+        }])
+        self.assertEqual(len(self.sync_calls), 1)
+        self.assertEqual(
+            (self.sync_calls[0]["family"], self.sync_calls[0]["model"],
+             self.sync_calls[0]["effort"]),
+            FABLE,
+        )
+        # What ran, on the response's own `sync` object.
+        self.assertEqual(
+            (body["sync"]["family"], body["sync"]["model"],
+             body["sync"]["effort"]),
+            FABLE,
+        )
+        self.assertNotIn("staffing_fallback", body["sync"])
+        self.assertEqual(
+            os.path.realpath(self.sync_calls[0]["workspace"]),
+            os.path.realpath(self.repo),
+        )
+
+        # An edit completed after the last alignment reaches the next one.
+        del self.sync_calls[:]
+        stf.edit_session(self.home, session,
+                         {"document": stf.DEFAULT_DOCUMENT_NAME})
+        with self.aligning():
+            status, body = self.sync(staffing_session=session)
+        self.assertEqual(status, 200, body)
+        self.assertEqual(
+            (self.sync_calls[0]["family"], self.sync_calls[0]["model"],
+             self.sync_calls[0]["effort"]),
+            LUNA,
+        )
+
+        # Naming no session takes the default document, and says so.
+        for label, payload in (("omitted", {}),
+                               ("explicit null", {"staffing_session": None})):
+            with self.subTest(session=label):
+                del self.sync_calls[:]
+                with self.aligning():
+                    status, body = self.sync(**payload)
+                self.assertEqual(status, 200, body)
+                self.assertEqual(
+                    (self.sync_calls[0]["family"], self.sync_calls[0]["model"],
+                     self.sync_calls[0]["effort"]),
+                    LUNA,
+                )
+                self.assertEqual(
+                    body["sync"]["staffing_fallback"],
+                    stf.STAFFING_FALLBACK_DEFAULT_DOCUMENT,
+                )
+
+        # So does one whose document stopped being readable after it was
+        # named: the alignment still runs, and the field says which
+        # document actually staffed it.
+        del self.sync_calls[:]
+        with open(stf._path(self.home, "sync-doc"), "w",
+                  encoding="utf-8") as handle:
+            handle.write("{ this is not a document")
+        damaged = self.session("sync-doc")
+        with self.aligning():
+            status, body = self.sync(staffing_session=damaged)
+        self.assertEqual(status, 200, body)
+        self.assertEqual(
+            (self.sync_calls[0]["family"], self.sync_calls[0]["model"],
+             self.sync_calls[0]["effort"]),
+            LUNA,
+        )
+        self.assertEqual(body["sync"]["staffing_fallback"], "default_document")
+
+    # -- the two surfaced conditions -------------------------------------
+
+    def _each_surfaced_condition_runs_no_agent(self):
+        self.save(role_document("claude-only", *FABLE))
+        nobody = self.session("claude-only", families=("codex",))
+        self.save(split_document("split-sync", "sync"))
+        collapsed = self.session("split-sync")
+
+        del self.sync_calls[:]
+        for status_code, token, session in (
+            (503, stf.STAFFING_UNAVAILABLE, nobody),
+            (409, stf.DISTINCT_FAMILIES_UNSATISFIABLE, collapsed),
+        ):
+            with self.subTest(condition=token):
+                with self.aligning() as never:
+                    status, body = self.sync(staffing_session=session)
+                self.assertEqual((status, body["error"]),
+                                 (status_code, token), body)
+                never.assert_not_called()
+        self.assertEqual(self.sync_calls, [])
+
+    # -- the outcome law -------------------------------------------------
+
+    def _the_verdict_law_is_unchanged(self):
+        cases = (
+            ("aligned", "merged both sides\nRESULT: aligned", 0),
+            ("stopped", "the remote refused me\nRESULT: stopped", 0),
+            ("unknown", "I merged everything", 0),
+            # A failing process is stopped whatever it printed.
+            ("stopped", "RESULT: aligned", 3),
+        )
+        for verdict, report, code in cases:
+            with self.subTest(report=report, exit_code=code):
+                self.report, self.exit_code = report, code
+                with self.aligning():
+                    status, body = self.sync()
+                self.assertEqual(status, 200, body)
+                outcome = body["sync"]
+                self.assertEqual(outcome["outcome"], verdict)
+                self.assertEqual(
+                    outcome["outcome"], gitsync.read_outcome(report, code)
+                )
+                self.assertEqual(outcome["report"], report.strip())
+                self.assertEqual(outcome["exit_code"], code)
+                self.assertEqual(outcome["clean_exit"], code == 0)
+                # The alignment's own envelope is unchanged beside it.
+                self.assertEqual(body["work_area"], self.AREA)
+                self.assertEqual(os.path.realpath(body["workspace"]),
+                                 os.path.realpath(self.repo))
+
+
+class TaskCompatibilityBoundaryTest(StandaloneCutoverTestCase):
+    """One key's PRESENCE is the whole boundary between old work and new.
+
+    An order admitted since the cutover always carries `staffing_session`
+    — an id, or the explicit null that deliberately chooses the default
+    document — and that selection follows the work everywhere it is
+    launched again. An order admitted BEFORE it carries no such key, and
+    that absence keeps it on the dispatch authority already frozen on it,
+    under either executor name. Nothing migrates either shape: the stored
+    bytes below are compared whole.
+    """
+
+    STATIC_PINS = {
+        "dispatch_authority": "static",
+        "participants": [
+            {"id": "initial-position", "role": "initial_position",
+             "delivery": "llm", "model_family": "codex",
+             "model": "gpt-5.6-luna", "effort": "low"},
+            {"id": "contrary-position", "role": "contrary_position",
+             "delivery": "llm", "model_family": "claude",
+             "model": "claude-sonnet-5", "effort": "medium"},
+        ],
+    }
+    FROZEN_CALL = {
+        "agent": "claude", "model": "claude-sonnet-5", "effort": "medium",
+    }
+
+    def test_direct_task_compatibility_boundary_is_field_presence(self):
+        self._new_brainstorming_orders_carry_their_one_selection()
+        self._a_missing_field_static_task_keeps_its_pins()
+        self._missing_field_agent_calls_run_their_frozen_snapshot()
+
+    # -- harness ---------------------------------------------------------
+
+    def age_record(self, task_id, **changes):
+        """Rewrite one stored record into the shape a pre-cutover order has.
+
+        The key is REMOVED, not nulled: an explicit null is today's
+        deliberate default and a missing key is yesterday's silence, and
+        separating them is the entire compatibility rule.
+        """
+        records = self.records()
+        for entry in records:
+            if entry["id"] != task_id:
+                continue
+            entry["order"].pop("staffing_session", None)
+            entry["order"].update(changes.pop("order", {}))
+            entry.update(changes)
+        self.store()._save(records)
+        stored = self.store().record(task_id)
+        self.assertEqual(tasks.order_staffing_session(stored["order"]),
+                         (False, None))
+        return stored
+
+    @staticmethod
+    def bytes_of(record):
+        """One record's stored bytes, with only its result factored out.
+
+        A task record's sole legal mutation is null-to-terminal, so the
+        result is the one thing executing a fixture is allowed to add;
+        everything else — the order, its executor name, the staffing
+        frozen beside it — is compared whole.
+        """
+        return json.dumps(dict(record, result=None), sort_keys=True)
+
+    def terminal_result(self):
+        return {
+            "status": "success", "duration_s": 1.0, "token_usage": None,
+            "token_usage_partial": True, "cost": None, "cost_partial": True,
+            "native_result": {"agreement": "kept opaque"},
+        }
+
+    def run_discussion(self, record, session_id):
+        """Drive the host's Brainstorming branch through start and effect.
+
+        Only the two boundaries this row is about are stood in for: the
+        session the launch creates, and the agreed production effect. What
+        reaches each of them is the host's own wiring.
+        """
+        created, effects = [], []
+
+        def create(_home, body, _caller, _context, _config, **kwargs):
+            created.append((body, kwargs))
+            return {"id": session_id, "state": {"status": "running"}}
+
+        def finish(state, task_id, _home, _session, apply_effects):
+            self.assertTrue(apply_effects({
+                "request": {"request": "Produce the agreed effects."},
+                "agreement": {},
+            })["completed"])
+            return tasks.record_task_result(
+                state, task_id, self.terminal_result()
+            )
+
+        def effect(_home, _session, _task_id, _request, **kwargs):
+            effects.append(kwargs)
+            return {"completed": True}
+
+        with mock.patch.object(
+            bs_tasks.lifecycle, "create_resolved_session", side_effect=create
+        ), mock.patch.object(
+            bs_tasks, "finish_task", side_effect=finish
+        ), mock.patch.object(
+            bs_tasks, "apply_agreed_effects", side_effect=effect
+        ):
+            self.host._run_brainstorming(
+                record, lambda: copy.deepcopy(self.config)
+            )
+        self.assertEqual(len(created), 1)
+        self.assertEqual(len(effects), 1)
+        return created[0], effects[0]
+
+    def restart_session(self, task_id, session_id, caller_prefix):
+        """Explicitly restart the discussion one open task owns."""
+        session_record = {
+            "id": session_id,
+            "caller": caller_prefix + task_id,
+            "project": None,
+            "execution_context": {"workspace_path": self.workspace},
+        }
+        restarted = []
+
+        def restart(state, task, _config, _home, session_id=None, **options):
+            restarted.append((task, session_id, options))
+            return {"id": session_record["id"], "state": {"status": "running"}}
+
+        with mock.patch.object(
+            service.brainstorming_lifecycle, "_record_by_id",
+            return_value=session_record,
+        ), mock.patch.object(
+            service.brainstorming_lifecycle, "inspect_session",
+            return_value={"state": {"status": "running"},
+                          "process": "stopped"},
+        ), mock.patch.object(
+            bs_tasks, "start_task", side_effect=restart
+        ), mock.patch.object(self.host, "start", return_value=None):
+            status, body = self.request(
+                "POST",
+                "/api/brainstorming/sessions/%s/start" % session_id,
+                {},
+            )
+        self.assertEqual(status, 200, body)
+        self.assertEqual(len(restarted), 1)
+        task, attached, options = restarted[0]
+        self.assertEqual((task, attached), (task_id, session_id))
+        return options
+
+    # -- today's orders --------------------------------------------------
+
+    def _new_brainstorming_orders_carry_their_one_selection(self):
+        named = self.session(self.save(role_document("owner-document",
+                                                     *FABLE)))
+        for label, changes, expected in (
+            ("supplied", {"staffing_session": named}, named),
+            ("explicit null", {"staffing_session": None}, None),
+        ):
+            with self.subTest(session=label):
+                # Admission: the order records the selection, and records
+                # NO seat — the router answers every call this discussion
+                # makes, immediately before it makes it.
+                task = self.admit(executor="brainstorming", **changes)
+                stored = self.store().record(task["id"])
+                self.assertEqual(
+                    tasks.order_staffing_session(stored["order"]),
+                    (True, expected),
+                )
+                self.assertEqual(
+                    stored["resolved_staffing"]["dispatch_authority"],
+                    "current_profile",
+                )
+                for seat in stored["resolved_staffing"]["participants"]:
+                    for pin in ("model_family", "model", "effort"):
+                        self.assertNotIn(pin, seat)
+
+                # Explicit restart, while the task is still open: the same
+                # reference, read back off the order rather than re-derived.
+                self.assertEqual(
+                    self.restart_session(
+                        task["id"],
+                        "restart-%s" % label.replace(" ", "-"),
+                        bs_tasks.lifecycle.
+                        CURRENT_PROFILE_TASK_CALLER_PREFIX,
+                    ),
+                    {"staffing_selection": {"session": expected}},
+                )
+
+                # Initial start, and the agreed production effect.
+                (_body, launch), effect = self.run_discussion(
+                    stored, "session-%s" % label.replace(" ", "-")
+                )
+                self.assertEqual(launch["staffing_selection"],
+                                 {"session": expected})
+                self.assertNotIn("static_binding", launch)
+                self.assertEqual(effect["staffing_selection"],
+                                 {"session": expected})
+                self.assertEqual(effect["dispatch_authority"],
+                                 "current_profile")
+                self.assertEqual(
+                    self.store().record(task["id"])["result"]["native_result"],
+                    {"agreement": "kept opaque"},
+                )
+
+    # -- yesterday's records ---------------------------------------------
+
+    def _a_missing_field_static_task_keeps_its_pins(self):
+        state = {"tasks": self.records()}
+        with mock.patch.object(
+            bs_tasks, "resolve_staffing",
+            return_value=copy.deepcopy(self.STATIC_PINS),
+        ):
+            admitted = bs_tasks.admit_task(
+                state, self.order("brainstorming"), self.config,
+                self.workspace,
+            )
+        self.store()._save(state["tasks"])
+        record = self.age_record(admitted["id"])
+        before = self.bytes_of(record)
+
+        (body, launch), effect = self.run_discussion(record, "static-session")
+        # The pins are the launch: no selection reaches it, and the seats
+        # are the ones frozen on the record itself.
+        self.assertNotIn("staffing_selection", launch)
+        self.assertTrue(launch["static_binding"])
+        self.assertEqual(body["participants"],
+                         self.STATIC_PINS["participants"])
+        # The effect runs under the authority frozen on the record. There
+        # is no session on the order to forward, so the selection beside it
+        # names none — and the stored `static` authority is what decides.
+        self.assertEqual(effect["dispatch_authority"], "static")
+        self.assertEqual(effect["staffing_selection"], {"session": None})
+
+        after = self.store().record(admitted["id"])
+        self.assertEqual(self.bytes_of(after), before)
+        self.assertNotIn("staffing_session", after["order"])
+
+    def _missing_field_agent_calls_run_their_frozen_snapshot(self):
+        # The default document answers something else entirely, so a call
+        # that took the router's answer instead of its own snapshot would
+        # be visible rather than coincidentally equal.
+        self.save(role_document(stf.DEFAULT_DOCUMENT_NAME, *LUNA))
+        cases = (
+            ("agent_call", "agent_call", "agent_call"),
+            # The retired name, still run from disk exactly as stored.
+            ("retired worker", "worker", "worker"),
+        )
+        for label, executor, snapshot_key in cases:
+            with self.subTest(record=label):
+                task = self.admit()
+                record = self.age_record(
+                    task["id"],
+                    order={"task_executor": executor},
+                    resolved_staffing={
+                        snapshot_key: dict(self.FROZEN_CALL)
+                    },
+                )
+                before = self.bytes_of(record)
+
+                del self.calls[:]
+                with mock.patch.object(
+                    stf, "resolve",
+                    side_effect=AssertionError(
+                        "a pre-cutover record asked the router"
+                    ),
+                ):
+                    executed = self.run_task(task["id"])
+
+                self.assertEqual(executed["result"]["status"], "success",
+                                 executed["result"])
+                self.assertEqual(len(self.calls), 1)
+                self.assertEqual(
+                    (self.calls[0]["family"], self.calls[0]["model"],
+                     self.calls[0]["effort"]),
+                    (self.FROZEN_CALL["agent"], self.FROZEN_CALL["model"],
+                     self.FROZEN_CALL["effort"]),
+                )
+                # The marker still names what actually ran, and nothing
+                # here fell back on anything.
+                marker = self.marker(task["id"])
+                self.assertEqual(
+                    (marker["family"], marker["model"], marker["effort"]),
+                    (self.FROZEN_CALL["agent"], self.FROZEN_CALL["model"],
+                     self.FROZEN_CALL["effort"]),
+                )
+                self.assertNotIn("staffing_fallback", marker)
+                # And the record itself is untouched but for its result.
+                self.assertEqual(self.bytes_of(executed), before)
+                self.assertEqual(executed["order"]["task_executor"], executor)
+                self.assertEqual(list(executed["resolved_staffing"]),
+                                 [snapshot_key])

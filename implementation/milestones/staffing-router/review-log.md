@@ -550,3 +550,17 @@
 **Deferred debt (opposite-family verified):**
 - `claude-slice_impl-07-a-claude-r1/S7A-DISPATCH-FAMILIES` (raised claude, cleared codex): The dispatch-time `families` argument re-imposes the standing-configuration veto the slice removed from admission: `task_api._dispatch` eagerly evaluates `list((config or {}).get("families_order") or [])` before calling `staffing.resolve`, so a non-iterable `families_order` (a project `defaults` value, which `projects.py` stores as free JSON and `driver.merge_config` copies without type checks) raises TypeError inside `_run_worker` and the task fails as "Worker execution failed: 'bool' object is not iterable" with zero provider calls and no router request — even when the order names a fully readable session whose resolution never consults caller families at all. This is a different seam from the settled S7A-001 rejection (which concerned `worker_staffing` refusing at ADMISSION, and is correctly fixed here): the order is admitted, and the veto reappears at the physical call. — The physical-call implementation contradicts the live-session contract and its malformed-config test covers admission only, so a builder could preserve this correctness gap, but the first affected task fails visibly before any provider call and correction is a local dispatch-and-regression-test chan
 
+## slice_impl-07-b (Standalone tasks and work-area alignment)
+
+- draft: kind `implement`, artifact `-` (raw: `implementation/milestones/staffing-router/.run/raw/slice_impl-07-b-draft.txt`)
+
+| Round | Kind | Family | Findings | Triage | Raw |
+|---|---|---|---|---|---|
+| slice_impl-07-b-codex-r1 | review_round | codex | 0 | clean | `implementation/milestones/staffing-router/.run/raw/slice_impl-07-b-codex-r1.txt` |
+| slice_impl-07-b-claude-r1 | review_round | claude | 0 | clean | `implementation/milestones/staffing-router/.run/raw/slice_impl-07-b-claude-r1.txt` |
+
+### Review completion — SATISFIED
+
+- deterministic result: every configured family was clean or debt-clean on the same current bytes; full verification was not due at this boundary; no extra reviewer was called
+- cited reviews: `slice_impl-07-b-codex-r1`, `slice_impl-07-b-claude-r1`
+
