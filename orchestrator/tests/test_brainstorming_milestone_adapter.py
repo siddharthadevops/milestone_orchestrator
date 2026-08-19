@@ -926,16 +926,13 @@ class BrainstormingMilestoneAdapterTest(unittest.TestCase):
             ],
         )
 
-    def test_projectless_adapter_uses_active_home_for_launch_only_profile_input(self):
+    def test_projectless_adapter_uses_active_home_for_the_owner_session(self):
         state = {
             "name": "run",
             "workspace": self.workspace,
             "docs_dir": "docs",
         }
-        runtime = {
-            "state_path": os.path.join(self.home, "run", "state.json"),
-            "home": self.home,
-        }
+        selection = {"session": "staffing-session-1"}
         captured = {}
 
         def capture(
@@ -945,12 +942,12 @@ class BrainstormingMilestoneAdapterTest(unittest.TestCase):
             context,
             config,
             owned_target_path=None,
-            model_profile_runtime=None,
+            staffing_selection=None,
         ):
             captured["home"] = home
             captured["participants"] = copy.deepcopy(body["participants"])
             captured["config"] = config
-            captured["model_profile_runtime"] = model_profile_runtime
+            captured["staffing_selection"] = staffing_selection
             return {"id": "session", "state": {"status": "created"}}
 
         with mock.patch.object(
@@ -962,27 +959,23 @@ class BrainstormingMilestoneAdapterTest(unittest.TestCase):
                 "slice_impl-08",
                 rethink(contracts.KIND_IMPLEMENT),
                 [],
-                model_profile_runtime=runtime,
+                staffing_selection=selection,
+                active_home=self.home,
             )
 
         self.assertEqual(captured["home"], os.path.abspath(self.home))
         self.assertEqual(
             captured["participants"], adapter._participants()
         )
-        self.assertEqual(captured["model_profile_runtime"], runtime)
+        self.assertEqual(captured["staffing_selection"], selection)
         self.assertIs(captured["config"], self.config)
-        self.assertNotIn("_current_model_profile_runtime", self.config)
 
-    def test_current_profile_launch_input_is_not_persisted(self):
+    def test_owner_session_is_recorded_and_needs_no_launch_argument(self):
         target = os.path.join(self.workspace, "docs", "ephemeral.md")
-        runtime = {
-            "state_path": os.path.join(self.home, "run", "state.json"),
-            "home": self.home,
-        }
         captured = {}
 
-        def launch(home, session_id, model_profile_runtime=None):
-            captured["runtime"] = copy.deepcopy(model_profile_runtime)
+        def launch(home, session_id, staffing_session=None):
+            captured["staffing_session"] = staffing_session
             process = _FakeProcess(710001)
             return lifecycle.GatedLaunch(
                 process,
@@ -997,12 +990,14 @@ class BrainstormingMilestoneAdapterTest(unittest.TestCase):
             self.context,
             self.config,
             launcher=launch,
-            model_profile_runtime=runtime,
+            staffing_selection={"session": "staffing-session-1"},
         )
 
-        self.assertEqual(captured["runtime"], runtime)
+        # The child reads the durable record, which is written before it is
+        # released, so creation passes no launch argument at all.
+        self.assertIsNone(captured["staffing_session"])
         record = lifecycle._record_by_id(self.home, created["id"])
-        self.assertNotIn("current_model_profile", record["runtime"])
+        self.assertEqual(record["staffing_session"], "staffing-session-1")
 
     def test_adapter_rejects_incomplete_participant_profile_before_materializing(self):
         state = {

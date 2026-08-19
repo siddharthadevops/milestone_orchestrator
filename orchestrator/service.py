@@ -3932,17 +3932,18 @@ def _brainstorming_task_attachment(home, record, allow_missing=False):
     return matches[0]
 
 
-def _attached_brainstorming_model_profile_runtime(
+def _attached_brainstorming_staffing_session(
     home, session_id, record=None
 ):
-    """Resolve launch-only current staffing from the generic run attachment.
+    """Find the staffing session an ATTACHED discussion resolves through.
 
-    The Brainstorming registry does not retain model-profile locators.  On an
-    explicit restart the service can reattach a registered run through the
-    session id held in ordinary milestone state or the immutable task id held
-    by a profile-backed task session.  A current-profile session without that
-    generic attachment cannot resolve current staffing and must refuse before
-    launching; standalone sessions remain profile-independent.
+    A discussion created since the staffing cutover names its own session in
+    its registry entry and never needs this. One created BEFORE it does not,
+    and its entry is never rewritten to add one, so an explicit restart
+    reattaches it to the run that owns it — through the session id held in
+    ordinary milestone state, or the immutable task id held by an attached
+    task session — and reads that run's one bound staffing session.
+    Standalone sessions stay unattached and answer nothing.
     """
     if record is None:
         record = brainstorming_lifecycle._record_by_id(home, session_id)
@@ -3953,10 +3954,7 @@ def _attached_brainstorming_model_profile_runtime(
             return None
         if task_attachment["terminal"]:
             raise ApiError(503, brainstorming_lifecycle.UNAVAILABLE)
-        return {
-            "state_path": task_attachment["state_path"],
-            "home": os.path.abspath(home),
-        }
+        return _run_staffing_session(task_attachment["state_path"])
     milestone_session = (
         isinstance(caller, str) and caller.startswith("milestone:")
     )
@@ -3999,10 +3997,15 @@ def _attached_brainstorming_model_profile_runtime(
         raise ApiError(503, brainstorming_lifecycle.UNAVAILABLE)
     if not matches:
         raise ApiError(503, brainstorming_lifecycle.UNAVAILABLE)
-    return {
-        "state_path": matches[0],
-        "home": os.path.abspath(home),
-    }
+    return _run_staffing_session(matches[0])
+
+
+def _run_staffing_session(state_path):
+    """The one staffing session a registered run binds, or None."""
+    try:
+        return st.staffing_session(st.load(state_path))
+    except Exception as exc:
+        raise ApiError(503, brainstorming_lifecycle.UNAVAILABLE) from exc
 
 
 def _start_brainstorming_session(home, who, session_id, task_host=None):
@@ -4031,9 +4034,9 @@ def _start_brainstorming_session(home, who, session_id, task_host=None):
             home,
             session_id,
             lambda current: require_brainstorming_access(home, who, current),
-            validate_launch=(
+            resolve_staffing_session=(
                 lambda current: (
-                    _attached_brainstorming_model_profile_runtime(
+                    _attached_brainstorming_staffing_session(
                         home,
                         session_id,
                         record=current,
@@ -4090,11 +4093,8 @@ def _start_brainstorming_session(home, who, session_id, task_host=None):
                     lambda: _direct_task_config(home, project),
                 )
         return projection
-    model_profile_runtime = (
-        {
-            "state_path": attachment["state_path"],
-            "home": os.path.abspath(home),
-        }
+    staffing_selection = (
+        {"session": _run_staffing_session(attachment["state_path"])}
         if attachment["dispatch_authority"] == "current_profile"
         else None
     )
@@ -4104,7 +4104,7 @@ def _start_brainstorming_session(home, who, session_id, task_host=None):
             attachment["task_id"],
             {},
             home,
-            model_profile_runtime=model_profile_runtime,
+            staffing_selection=staffing_selection,
             session_id=session_id,
         )
     except st.ConcurrentStateMutation as exc:
@@ -4115,29 +4115,6 @@ def _start_brainstorming_session(home, who, session_id, task_host=None):
         _evict_summary(attachment["state_path"])
         raise ApiError(503, brainstorming_lifecycle.UNAVAILABLE)
     return projection
-
-
-def _current_brainstorming_staffing(home, record, session_state):
-    """Best-effort current staffing for a read-only profile-backed view."""
-    try:
-        current = _attached_brainstorming_model_profile_runtime(
-            home, record["id"], record=record
-        )
-        lead, counterpart = driver.resolve_current_brainstorming_profiles(
-            current["state_path"], current["home"]
-        )
-    except Exception:
-        return {}
-    return {
-        participant["id"]: copy.deepcopy(
-            counterpart
-            if participant.get("role") == "contrary_position"
-            else lead
-        )
-        for participant in session_state["run_config"]["participants"]
-        if participant.get("delivery") != "external"
-        or participant.get("role") == "common_sense"
-    }
 
 
 def brainstorming_visibility(home, who):
@@ -4714,9 +4691,9 @@ def make_handler(home, task_host=None):
                                 home, who, record
                             ),
                             ARTIFACT_MAX,
-                            current_staffing=lambda record, state: (
-                                _current_brainstorming_staffing(
-                                    home, record, state
+                            resolve_staffing_session=lambda record: (
+                                _attached_brainstorming_staffing_session(
+                                    home, record["id"], record=record
                                 )
                             ),
                         )

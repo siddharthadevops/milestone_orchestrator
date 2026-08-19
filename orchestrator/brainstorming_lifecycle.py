@@ -31,7 +31,7 @@ from orchestrator import brainstorming
 from orchestrator import brainstorming_coordination as coordination
 from orchestrator import brainstorming_execution as execution
 from orchestrator import driver, errclass, kvstore, pricing, registry
-from orchestrator import runners
+from orchestrator import runners, staffing
 
 try:
     import fcntl
@@ -165,7 +165,14 @@ def _validate_record(record):
             "runtime",
             "execution_context",
         ),
-        (),
+        # The staffing router's one durable mark on this registry. Its
+        # PRESENCE says the session's automatic calls are staffed by the
+        # router; its value is the staffing session they resolve through, or
+        # `None` for the default document. A record written before the
+        # cutover simply has no such key, which is exactly how a new
+        # session that named no staffing session stays distinguishable from
+        # an old one whose seats carry explicit static pins.
+        ("staffing_session",),
         "service_record",
     )
     try:
@@ -194,6 +201,12 @@ def _validate_record(record):
     pid = record["pid"]
     if pid is not None and (type(pid) is not int or pid <= 0):
         raise RuntimeError("invalid Brainstorming service registry")
+    if "staffing_session" in record:
+        session = record["staffing_session"]
+        if session is not None and (
+            not isinstance(session, str) or not session.strip()
+        ):
+            raise RuntimeError("invalid Brainstorming service registry")
     _validate_target_identity(record["target_identity"])
     try:
         brainstorming._json_copy(record["runtime"], "service_record.runtime")
@@ -494,12 +507,154 @@ def _executable_available(argv, workspace):
     return shutil.which(executable, path=search_path) is not None
 
 
+# ---------------------------------------------------------------------------
+# Staffing: the owner's session decides every automatic call
+#
+# Brainstorming chooses its people, their order, their rounds and its
+# agreement rule. It no longer chooses the intelligence behind an automatic
+# seat: a router-backed discussion inherits ONE staffing session from its
+# owner and asks it immediately before every physical provider call, so a
+# completed edit to that session or to the document it names reaches the
+# next call — a later turn, a closure vote, the failure classifier, or the
+# agreed production effect — and never rewrites a call already made.
+#
+# Nothing here is a snapshot. The roster still records a family per seat
+# because the durable run config has always carried one, and that entry is
+# the router's answer at creation, kept for the read-only view and for the
+# binding key. It decides nothing: every dispatch resolves again.
+
+
+class _SeatStaffing:
+    """One seat's live staffing, resolved afresh at every physical call.
+
+    Callable, so the execution seam uses it exactly as it uses any other
+    current-participant resolver, and it carries the LAST answer's fallback
+    note beside itself — the milestone driver's own dispatch-resolver shape
+    — so the activity entry for that call can say the default document
+    answered without the answer growing a fourth key.
+    """
+
+    def __init__(self, home, session, role, index, families, round_number=None):
+        self.home = home
+        self.session = session
+        self.role = role
+        self.index = index
+        self.families = tuple(families or ())
+        # Fixed for a seat whose action has no discussion round of its own
+        # (the failure classifier); otherwise the caller supplies it.
+        self.round_number = round_number
+        self.staffing_fallback = None
+
+    def __call__(self, round_number=1):
+        resolution = staffing.resolve(
+            self.home,
+            self.session,
+            self.role,
+            index=self.index,
+            round=(
+                self.round_number if self.round_number is not None
+                else round_number
+            ),
+            families=list(self.families),
+        )
+        self.staffing_fallback = resolution.staffing_fallback
+        return dict(resolution.answer)
+
+    def as_dispatch(self):
+        """The same live answer as ``(family, model, effort)``.
+
+        The shape the shared failure classifier's dispatch hook already
+        takes from the milestone driver, so the classifier seam needs no
+        second resolver of its own.
+        """
+        def dispatch():
+            answer = self()
+            return answer["agent"], answer["model"], answer["effort"]
+
+        return dispatch
+
+
+def _seat_positions(participants):
+    """Each participant's 1-based position in the persisted roster.
+
+    The seat index the router is asked for: `brainstorm 1` is the roster's
+    first seat, `2` the second, `3` the third. The standard milestone
+    roster is therefore Initial Position, Contrary Position, Dante.
+    """
+    return {
+        participant["id"]: index
+        for index, participant in enumerate(participants, start=1)
+    }
+
+
+def _router_seat(staffing_binding, index, families):
+    """Resolve one roster seat now, for the durable run config.
+
+    Creation needs a family per seat to bind an executor and to record the
+    run config the store validates. This is that answer and nothing more:
+    it is re-resolved before every dispatch, and a surfaced condition here
+    refuses the create in the lifecycle's own vocabulary rather than
+    leaving a session that could never dispatch.
+    """
+    resolver = _SeatStaffing(
+        staffing_binding["home"],
+        staffing_binding["session"],
+        "brainstorm",
+        index,
+        families,
+    )
+    try:
+        return resolver(1)
+    except staffing.StaffingError as exc:
+        raise PublicLifecycleError(503, UNAVAILABLE) from exc
+
+
+def _runtime_document(
+    config, families, commands, timeouts, model_defaults,
+    executors, external_providers,
+):
+    """The runtime the lifecycle child rebuilds its bindings from.
+
+    One assembly for both selection rules — the roster's own pins and
+    rotation, and the router's per-seat answer — so the two can only differ
+    in WHO fills a seat, never in what the child is handed.
+    """
+    runtime = {
+        "families_order": families,
+        "commands": {
+            family: copy.deepcopy(commands[family]) for family in families
+        },
+        "timeouts": {
+            family: copy.deepcopy(timeouts.get(family))
+            for family in families
+            if family in timeouts
+        },
+        "model_defaults": {
+            family: copy.deepcopy(model_defaults.get(family) or {})
+            for family in families
+        },
+        "executors": executors,
+        "external_providers": external_providers,
+        "worker_stall_window_s": config.get("worker_stall_window_s"),
+        "worker_stall_min_cpu_s": config.get("worker_stall_min_cpu_s"),
+        "error_classifier": bool(config.get("error_classifier", True)),
+        # How each family is paid for, so a discussion turn's price carries
+        # the same two readings the milestone side records.
+        "billing": copy.deepcopy(config.get("billing") or {}),
+    }
+    try:
+        return brainstorming._json_copy(runtime, "runtime")
+    except brainstorming.ContractError as exc:
+        raise PublicLifecycleError(503, UNAVAILABLE) from exc
+
+
 def _runtime_and_roster(
     config,
     participants,
     closure_policy,
     workspace,
     static_binding=False,
+    staffing_binding=None,
 ):
     commands = config.get("commands")
     order = config.get("families_order")
@@ -572,17 +727,33 @@ def _runtime_and_roster(
                 or not probe.supports_session_continuation(family)
             ):
                 continue
-            defaults = model_defaults.get(family) or {}
-            if not isinstance(defaults, dict):
-                continue
-            model = defaults.get("model")
-            effort = defaults.get("effort")
-            try:
-                argv = runners.apply_model_effort(
-                    commands[family], model, effort
-                )
-            except (TypeError, ValueError, runners.RunnerError):
-                continue
+            if staffing_binding is not None:
+                # Router law reaches discovery too. What makes a family
+                # runnable for a router-backed session is its command
+                # template, not a configured default: the model and the
+                # effort come from the session's document immediately
+                # before every call. Filling the template here would let a
+                # retired input decide which families the document may
+                # assign — a family without defaults would silently vanish
+                # from the set the seats resolve against, and the runtime
+                # below drops those same defaults precisely so no second
+                # answer survives. Only the shape apply_model_effort itself
+                # requires is checked.
+                argv = commands[family]
+                if any(not isinstance(item, str) for item in argv):
+                    continue
+            else:
+                defaults = model_defaults.get(family) or {}
+                if not isinstance(defaults, dict):
+                    continue
+                model = defaults.get("model")
+                effort = defaults.get("effort")
+                try:
+                    argv = runners.apply_model_effort(
+                        commands[family], model, effort
+                    )
+                except (TypeError, ValueError, runners.RunnerError):
+                    continue
             if _executable_available(argv, workspace):
                 families.append(family)
     if not families:
@@ -594,6 +765,18 @@ def _runtime_and_roster(
     # binding up by.
     def seat_ref(family, participant_id):
         return "brainstorming-%s-%s" % (family, participant_id)
+
+    if staffing_binding is not None:
+        return _router_runtime_and_roster(
+            config,
+            participants,
+            closure_policy,
+            staffing_binding,
+            families,
+            commands,
+            timeouts,
+            seat_ref,
+        )
 
     # Delivery and role are independent. LLM seats are resolved against the
     # installed families; external seats receive one stable connector ref.
@@ -714,33 +897,104 @@ def _runtime_and_roster(
                 "kind": "narrator",
                 "model_family": family,
             }
-    runtime = {
-        "families_order": families,
-        "commands": {
-            family: copy.deepcopy(commands[family]) for family in families
-        },
-        "timeouts": {
-            family: copy.deepcopy(timeouts.get(family))
-            for family in families
-            if family in timeouts
-        },
-        "model_defaults": {
-            family: copy.deepcopy(model_defaults.get(family) or {})
-            for family in families
-        },
-        "executors": executors,
-        "external_providers": external_providers,
-        "worker_stall_window_s": config.get("worker_stall_window_s"),
-        "worker_stall_min_cpu_s": config.get("worker_stall_min_cpu_s"),
-        "error_classifier": bool(config.get("error_classifier", True)),
-        # How each family is paid for, so a discussion turn's price carries
-        # the same two readings the milestone side records.
-        "billing": copy.deepcopy(config.get("billing") or {}),
-    }
+    runtime = _runtime_document(
+        config, families, commands, timeouts, model_defaults,
+        executors, external_providers,
+    )
+    return runtime, run_config, eligible
+
+
+def _router_runtime_and_roster(
+    config,
+    participants,
+    closure_policy,
+    staffing_binding,
+    families,
+    commands,
+    timeouts,
+    seat_ref,
+):
+    """Build the durable roster and runtime from the owner's session.
+
+    Router law replaces roster law here. Family rotation, the same-family
+    diversification flip and any `model_family`/`model`/`effort` a caller
+    pinned in the create body decide nothing: each automatic seat takes the
+    family the session's document assigns it, at that document's model and
+    effort. Two seats sharing one family is therefore an ordinary answer —
+    the ONLY split rule left is a `distinct_families` the document itself
+    declares, which the router enforces at each dispatch it affects — so
+    the eligible roster is exactly the selected one and the sealed
+    cross-family refusal has no alternative to prefer.
+    """
+    positions = _seat_positions(participants)
+    selected = []
+    executors = {}
+    external_providers = {}
+    for participant in participants:
+        external = participant["delivery"] == "external"
+        if external and participant["external_provider"] != "narrator":
+            # A manual external participant makes no agent call, so it asks
+            # the router nothing.
+            external_ref = "brainstorming-external-%s" % participant["id"]
+            selected.append({
+                "id": participant["id"],
+                "role": participant["role"],
+                "delivery": "external",
+                "external_ref": external_ref,
+            })
+            external_providers[external_ref] = {"kind": "manual"}
+            continue
+        answer = _router_seat(
+            staffing_binding, positions[participant["id"]], families
+        )
+        family = answer["agent"]
+        if family not in families:
+            # The document answers with a family this machine cannot run.
+            # There is nothing to bind, and the lifecycle says so the way it
+            # says every other unusable roster.
+            raise PublicLifecycleError(503, UNAVAILABLE)
+        if external:
+            binding_ref = "brainstorming-external-%s" % participant["id"]
+            selected.append({
+                "id": participant["id"],
+                "role": participant["role"],
+                "delivery": "external",
+                "external_ref": binding_ref,
+            })
+            external_providers[binding_ref] = {
+                "kind": "narrator",
+                "model_family": family,
+            }
+        else:
+            binding_ref = seat_ref(family, participant["id"])
+            selected.append({
+                "id": participant["id"],
+                "role": participant["role"],
+                "delivery": "llm",
+                "executor_ref": binding_ref,
+                "model_family": family,
+            })
+        executors[binding_ref] = {
+            "model_family": family,
+            "model": answer["model"],
+            "effort": answer["effort"],
+        }
+    eligible = copy.deepcopy(selected)
     try:
-        runtime = brainstorming._json_copy(runtime, "runtime")
+        run_config = brainstorming.resolve_run_config(
+            selected, closure_policy, eligible
+        )
     except brainstorming.ContractError as exc:
         raise PublicLifecycleError(503, UNAVAILABLE) from exc
+    # Every family this machine has keeps its command and its timeout, so a
+    # live edit that moves a seat onto another one still finds something to
+    # run it with. Configured model defaults are dropped: the router
+    # supplies the model and the effort per call, and a default left here
+    # would be a second, silent answer.
+    runtime = _runtime_document(
+        config, families, commands, timeouts, {},
+        executors, external_providers,
+    )
     return runtime, run_config, eligible
 
 
@@ -792,22 +1046,37 @@ def resolve_static_participants(
     return brainstorming._json_copy(resolved, "resolved participants")
 
 
-def _current_model_profile_runtime(value):
-    """Validate one launch-only locator for per-dispatch profile reads."""
+def _staffing_binding(home, session):
+    """Where this session's automatic calls ask, and which session they ask.
+
+    ``home`` is the service home the router's documents and sessions live
+    under — the same home this service already runs from — and ``session``
+    is the staffing session id, or ``None`` for the default document. Kept
+    as one small mapping so the roster builder, the dispatch resolvers and
+    the read-only view all read the same two facts.
+    """
+    return {"home": os.path.abspath(home), "session": session}
+
+
+def _validate_staffing_session(value):
+    """Accept one staffing session reference: an id, or nothing."""
     if value is None:
         return None
-    if (
-        not isinstance(value, dict)
-        or set(value) != {"state_path", "home"}
-        or not all(
-            isinstance(value.get(key), str)
-            and value[key].strip()
-            and os.path.isabs(value[key])
-            for key in ("state_path", "home")
-        )
-    ):
-        raise PublicLifecycleError(503, UNAVAILABLE)
-    return copy.deepcopy(value)
+    if not isinstance(value, str) or not value.strip():
+        raise PublicLifecycleError(400, INVALID_REQUEST)
+    return value
+
+
+def _record_staffing_binding(home, record, supplied=None):
+    """Where one stored record's automatic calls ask, or ``None``.
+
+    ``None`` is the pre-cutover answer and the whole of compatibility: a
+    stored explicit static binding keeps its own pins, and nothing here
+    rewrites its record to say otherwise.
+    """
+    if not _router_staffed(record):
+        return None
+    return _staffing_binding(home, record_staffing_session(record, supplied))
 
 
 def _resolved_target_path(request, execution_context, owned_target_path=None):
@@ -1013,7 +1282,7 @@ def _spawn_participant(execution_context, argv, popen_kwargs):
 
 
 def _launch_lifecycle_process(
-    home, session_id, model_profile_runtime=None
+    home, session_id, staffing_session=None
 ):
     """Spawn one child blocked until its binding and session are durable."""
     logs = os.path.join(service_directory(home), LOGS_DIRNAME)
@@ -1035,13 +1304,10 @@ def _launch_lifecycle_process(
                 "--start-fd",
                 str(read_fd),
             ]
-        current = _current_model_profile_runtime(model_profile_runtime)
-        if current is not None:
+        if staffing_session is not None:
             argv.extend([
-                "--model-profile-state",
-                current["state_path"],
-                "--model-profiles-home",
-                current["home"],
+                "--staffing-session",
+                _validate_staffing_session(staffing_session),
             ])
         process = subprocess.Popen(
             argv,
@@ -1198,12 +1464,38 @@ def _is_milestone_session(record):
     return isinstance(caller, str) and caller.startswith("milestone:")
 
 
-def _uses_current_profile(record):
+def _router_staffed(record):
+    """True when this record's automatic calls are staffed by the router.
+
+    Two ways in, and no third. A record written since the cutover carries
+    the `staffing_session` mark, whatever its value. A record written
+    BEFORE it carries no mark, so its caller decides: an attached one — a
+    milestone unit, or a task admitted under the profile authority — was
+    already staffed per dispatch rather than by explicit seat pins, and its
+    next call resolves through the session its owning run binds, which the
+    launcher supplies. Everything else is a stored explicit static binding
+    and keeps exactly the pins it was admitted with.
+    """
+    if "staffing_session" in record:
+        return True
     caller = record.get("caller")
     return _is_milestone_session(record) or (
         isinstance(caller, str)
         and caller.startswith(CURRENT_PROFILE_TASK_CALLER_PREFIX)
     )
+
+
+def record_staffing_session(record, supplied=None):
+    """The staffing session one record's calls resolve through.
+
+    *supplied* is the launcher's own answer — the only source a
+    pre-cutover attached record has, since its registry entry predates the
+    mark and is never rewritten to add one. A record that carries the mark
+    is its own authority.
+    """
+    if "staffing_session" in record:
+        return record["staffing_session"]
+    return supplied
 
 
 def _activity_projection(store, record, state):
@@ -1258,6 +1550,9 @@ def _activity_projection(store, record, state):
         or (
             intervention is not None
             and intervention["provider_attempt"] > 0
+            # A claim refused before its provider started is not an
+            # unrecorded call: the absent activity is the truth about it.
+            and not intervention.get("dispatch_refused", False)
             and not external_call_recorded
             and (
                 intervention["provider_quiescent"] or not process_alive
@@ -1271,10 +1566,10 @@ def _activity_projection(store, record, state):
         and not attempt["quiescent"]
         and not attempt_call_recorded
     ):
-        # Current profile state can change after dispatch. The turn attempt
-        # does not retain call identity, so the creation roster is not proof
-        # of what an active current-profile call is running.
-        if _uses_current_profile(record):
+        # Live staffing can change after dispatch. The turn attempt does
+        # not retain call identity, so the creation roster is not proof of
+        # what an active router-staffed call is running.
+        if _router_staffed(record):
             participant = {}
         else:
             participants = {
@@ -1451,7 +1746,7 @@ def create_resolved_session(
     config,
     launcher=None,
     owned_target_path=None,
-    model_profile_runtime=None,
+    staffing_selection=None,
     static_binding=False,
 ):
     """Create for an already-resolved milestone without resolving roots again."""
@@ -1514,7 +1809,7 @@ def create_resolved_session(
             config,
             launcher,
             owned_target_path=owned_target_path,
-            model_profile_runtime=model_profile_runtime,
+            staffing_selection=staffing_selection,
             static_binding=static_binding,
         )
     except PublicLifecycleError:
@@ -1533,11 +1828,19 @@ def _create_session_with_context(
     config,
     launcher,
     owned_target_path=None,
-    model_profile_runtime=None,
+    staffing_selection=None,
     static_binding=False,
 ):
-    model_profile_runtime = _current_model_profile_runtime(
-        model_profile_runtime
+    # `staffing_selection` present — even carrying no session — is what
+    # makes this a router-backed session: its automatic calls resolve
+    # through the router, and the durable record says so for every later
+    # restart. Absent, nothing changes: the roster's own pins and rotation
+    # stay the authority they were.
+    staffing_binding = (
+        None if staffing_selection is None
+        else _staffing_binding(
+            home, _validate_staffing_session(staffing_selection.get("session"))
+        )
     )
     runtime, run_config, eligible = _runtime_and_roster(
         config,
@@ -1545,6 +1848,7 @@ def _create_session_with_context(
         checked["closure_policy"],
         context["workspace_path"],
         static_binding=static_binding,
+        staffing_binding=staffing_binding,
     )
     store = brainstorming.SessionStore(state_directory(home))
     target_path = _resolved_target_path(
@@ -1586,14 +1890,11 @@ def _create_session_with_context(
             ):
                 session_id = _new_session_id()
             try:
-                if model_profile_runtime is None:
-                    launch = launcher(home, session_id)
-                else:
-                    launch = launcher(
-                        home,
-                        session_id,
-                        model_profile_runtime=model_profile_runtime,
-                    )
+                # The child is released only after the record below is
+                # durable, so a router-backed session needs no launch
+                # argument at creation: its own record already names the
+                # staffing session it resolves through.
+                launch = launcher(home, session_id)
             except Exception as exc:
                 raise PublicLifecycleError(503, UNAVAILABLE) from exc
             if (
@@ -1631,6 +1932,8 @@ def _create_session_with_context(
                 "runtime": runtime,
                 "execution_context": context,
             }
+            if staffing_binding is not None:
+                record["staffing_session"] = staffing_binding["session"]
             document["sessions"].append(record)
             _save_registry(home, document)
         projected = _projection(home, record)
@@ -1974,13 +2277,43 @@ def delete_session(home, session_id, authorize, purge=False):
     return {"deleted": session_id, "purged": bool(purge)}
 
 
-def _view_participants(record, state, current_staffing=None):
-    """Expose current or standalone seat settings without runtime commands."""
+def _projected_seat_staffing(staffing_binding, index, families):
+    """One seat's live answer for the read-only view, or nothing.
+
+    Best-effort: a surfaced condition or an unreadable input leaves the
+    seat blank rather than showing a creation roster the next dispatch
+    would contradict.
+    """
+    resolver = _SeatStaffing(
+        staffing_binding["home"],
+        staffing_binding["session"],
+        "brainstorm",
+        index,
+        families,
+    )
+    try:
+        return resolver(1)
+    except staffing.StaffingError:
+        return {}
+
+
+def _view_participants(record, state, staffing_binding=None):
+    """Expose current or standalone seat settings without runtime commands.
+
+    For a router-backed session this is a LIVE read, not the creation
+    roster: what a seat would run on if it were dispatched now. It is
+    best-effort bookkeeping — an unreadable answer is omitted rather than
+    replaced by the roster it would contradict — and it staffs nothing.
+    """
     runtime = record.get("runtime") or {}
     executors = runtime.get("executors") or {}
     defaults = runtime.get("model_defaults") or {}
     external_providers = runtime.get("external_providers") or {}
-    current_profile = _uses_current_profile(record)
+    positions = _seat_positions(state["run_config"]["participants"])
+    # A record staffed per dispatch never falls back to its creation roster:
+    # that roster is not proof of what the next call would run, so with
+    # nothing to resolve through the seat is simply blank.
+    router_record = _router_staffed(record)
     projected = []
     for participant in state["run_config"]["participants"]:
         binding_ref = (
@@ -1990,15 +2323,22 @@ def _view_participants(record, state, current_staffing=None):
         )
         binding = executors.get(binding_ref) or {}
         provider = external_providers.get(participant.get("external_ref"))
-        profile_staffed = (
+        router_seat = router_record and (
             participant["delivery"] == "llm"
             or (
                 isinstance(provider, dict)
                 and provider.get("kind") == "narrator"
             )
         )
-        if current_profile and profile_staffed:
-            current = (current_staffing or {}).get(participant["id"]) or {}
+        if router_seat:
+            current = (
+                {} if staffing_binding is None
+                else _projected_seat_staffing(
+                    staffing_binding,
+                    positions[participant["id"]],
+                    runtime.get("families_order") or [],
+                )
+            )
             model_family = current.get("agent")
             model = current.get("model")
             effort = current.get("effort")
@@ -2026,7 +2366,8 @@ def _view_participants(record, state, current_staffing=None):
 
 
 def view_session(
-    home, session_id, authorize, preview_limit, current_staffing=None
+    home, session_id, authorize, preview_limit,
+    resolve_staffing_session=None,
 ):
     """Project one authorized durable revision for the dedicated view."""
     record = _record_by_id(home, session_id)
@@ -2072,15 +2413,16 @@ def view_session(
                     target["truncated"] = len(text) > preview_limit
         turns = [] if progress is None else progress["completed_turns"]
         activity = _activity_projection(store, record, state)
-        projected_staffing = None
-        if _uses_current_profile(record) and callable(current_staffing):
+        supplied = None
+        if callable(resolve_staffing_session):
             try:
-                projected_staffing = current_staffing(record, state)
+                supplied = resolve_staffing_session(record)
             except Exception:
-                # Monitoring remains available when current profile state is
-                # unavailable; omitted staffing is safer than an ignored
-                # creation roster.
-                projected_staffing = {}
+                # Monitoring stays available when the owning run cannot be
+                # reached; the record's own mark still decides whether this
+                # session is router-backed at all.
+                supplied = None
+        staffing_binding = _record_staffing_binding(home, record, supplied)
         closing_summary = state.get("closing_summary")
         final_agreement = None
         if state["status"] == "success" and closing_summary is not None:
@@ -2102,7 +2444,7 @@ def view_session(
             "revision": snapshot.revision,
             "target": target,
             "participants": _view_participants(
-                record, state, current_staffing=projected_staffing
+                record, state, staffing_binding=staffing_binding
             ),
             "same_family_fallback": state["run_config"][
                 "same_family_fallback"
@@ -2294,9 +2636,16 @@ def start_session(
     home,
     session_id,
     authorize,
-    validate_launch=None,
+    resolve_staffing_session=None,
 ):
-    """Resume one stopped non-terminal session under its existing identity."""
+    """Resume one stopped non-terminal session under its existing identity.
+
+    *resolve_staffing_session*, when given, is called with the stored record
+    and answers the staffing session its calls resolve through. It is the
+    only source a PRE-CUTOVER attached record has — its registry entry
+    predates the durable mark and this restart does not add one — and it is
+    ignored for a record that carries the mark, which is its own authority.
+    """
     record = _record_by_id(home, session_id)
     _authorize_record(record, authorize)
     token = (os.path.abspath(home), session_id)
@@ -2319,19 +2668,25 @@ def start_session(
                 or _process_alive(current)
             ):
                 return _projection(home, current)
-            model_profile_runtime = None
-            if validate_launch is not None:
-                model_profile_runtime = _current_model_profile_runtime(
-                    validate_launch(current)
+            supplied = None
+            if (
+                resolve_staffing_session is not None
+                and "staffing_session" not in current
+            ):
+                # Asked ONLY when the record cannot answer. A marked record
+                # is its own authority, so reaching outside it for a session
+                # it already holds would also hand that outside lookup a
+                # veto: its failure — an owning run deregistered, moved or
+                # no longer exposing the wait attachment — would refuse a
+                # restart the record itself can fully staff.
+                supplied = _validate_staffing_session(
+                    resolve_staffing_session(current)
                 )
-            if model_profile_runtime is None:
-                launch = _launch_lifecycle_process(home, session_id)
-            else:
-                launch = _launch_lifecycle_process(
-                    home,
-                    session_id,
-                    model_profile_runtime=model_profile_runtime,
-                )
+            launch = _launch_lifecycle_process(
+                home,
+                session_id,
+                staffing_session=record_staffing_session(current, supplied),
+            )
             current["pid"] = launch.process.pid
             _save_registry(home, document)
             resumed = copy.deepcopy(current)
@@ -2350,7 +2705,9 @@ def start_session(
         raise PublicLifecycleError(503, UNAVAILABLE) from exc
 
 
-def _record_classifier_activity(store, session_id, call, billing=None):
+def _record_classifier_activity(
+    store, session_id, call, billing=None, staffing_fallback=None
+):
     """Record the classifier's physical LLM call without making it a turn."""
     attempt = store.read_turn_attempt(session_id)
     snapshot = store.read(session_id)
@@ -2392,6 +2749,8 @@ def _record_classifier_activity(store, session_id, call, billing=None):
         "effort": call.get("effort"),
         "status": call["status"],
     }
+    if staffing_fallback:
+        event["staffing_fallback"] = staffing_fallback
     if raw_ref is not None:
         event["raw_ref"] = raw_ref
     prompt_path = call.get("prompt_path")
@@ -2444,7 +2803,7 @@ def _participant_execution(
     store,
     record,
     participant_process_factory,
-    current_model_profile=None,
+    staffing_binding=None,
 ):
     runtime = record["runtime"]
     session_id = record["id"]
@@ -2484,9 +2843,8 @@ def _participant_execution(
         raise brainstorming.SessionNotFound(record["id"])
     activity = store.read_activity(session_id)
     activity_events = (activity or {}).get("events") or []
-    current_model_profile = _current_model_profile_runtime(
-        current_model_profile
-    )
+    positions = _seat_positions(snapshot.state["run_config"]["participants"])
+    available = list(runtime.get("families_order") or [])
     bindings = {}
     for participant in snapshot.state["run_config"]["participants"]:
         binding_ref = (
@@ -2510,7 +2868,7 @@ def _participant_execution(
             if event.get("participant_id") == participant["id"]
         ]
         if (
-            current_model_profile is None
+            staffing_binding is None
             and family == "codex"
             and participant_session is not None
             and prior_calls
@@ -2526,18 +2884,18 @@ def _participant_execution(
                 ),
             )
         current_resolver = None
-        if current_model_profile is not None:
-            counterpart = participant["role"] == "contrary_position"
-
-            def current_resolver(
-                spec=current_model_profile,
-                counterpart=counterpart,
-            ):
-                return driver.resolve_current_brainstorming_profile(
-                    spec["state_path"],
-                    spec["home"],
-                    counterpart=counterpart,
-                )
+        if staffing_binding is not None:
+            # One resolver per SEAT: the role and the roster position are
+            # fixed by the persisted roster, and only the discussion round
+            # moves — the execution seam supplies it immediately before the
+            # physical call.
+            current_resolver = _SeatStaffing(
+                staffing_binding["home"],
+                staffing_binding["session"],
+                "brainstorm",
+                positions[participant["id"]],
+                available,
+            )
 
         bindings[binding_ref] = execution.RunnerParticipantExecutor(
             family,
@@ -2549,37 +2907,62 @@ def _participant_execution(
         )
 
     def classify_failure(session_id, participant, _executor, exc):
-        failed_family = _executor.model_family
-        families = runtime.get("families_order") or [failed_family]
-        opposite = next(
-            (family for family in families if family != failed_family),
-            failed_family,
-        )
-        defaults = (runtime.get("model_defaults") or {}).get(opposite) or {}
         classifier_resolver = None
-        if current_model_profile is not None:
-            classifier_resolver = lambda: (
-                driver.resolve_current_structural_dispatch(
-                    current_model_profile["state_path"],
-                    current_model_profile["home"],
-                    opposite,
-                )
+        if staffing_binding is None:
+            failed_family = _executor.model_family
+            families = runtime.get("families_order") or [failed_family]
+            opposite = next(
+                (family for family in families if family != failed_family),
+                failed_family,
             )
+            defaults = (
+                (runtime.get("model_defaults") or {}).get(opposite) or {}
+            )
+            classifier = opposite
+            cls_model = defaults.get("model")
+            cls_effort = defaults.get("effort")
+        else:
+            # Which family types a failure is the document's own `classify`
+            # seat, not the family opposite the call that failed. Resolved
+            # by the dispatch hook and NOWHERE else: the LLM stage sits
+            # behind the deterministic patterns and behind
+            # `error_classifier`, so most failures never make a classifier
+            # call at all — and asking here would let a surfaced condition
+            # stop a call nobody was going to make, and bury the failure the
+            # discussion actually has under it.
+            classifier_resolver = _SeatStaffing(
+                staffing_binding["home"],
+                staffing_binding["session"],
+                "classify",
+                1,
+                available,
+                round_number=1,
+            )
+            classifier = cls_model = cls_effort = None
         error_type, resume_at, evidence = errclass.classify_worker_failure(
             exc,
             runner=provider,
-            opposite_family=opposite,
+            opposite_family=classifier,
             workspace=snapshot.state["request"]["workspace_path"],
             use_llm=bool(runtime.get("error_classifier", True)),
-            classifier_model=defaults.get("model"),
-            classifier_effort=defaults.get("effort"),
+            classifier_model=cls_model,
+            classifier_effort=cls_effort,
             on_llm_start=lambda call: store.begin_turn_classifier_call(
                 session_id, call
             ),
             on_llm_call=lambda call: _record_classifier_activity(
-                store, session_id, call, runtime.get("billing"),
+                store,
+                session_id,
+                call,
+                runtime.get("billing"),
+                staffing_fallback=getattr(
+                    classifier_resolver, "staffing_fallback", None
+                ),
             ),
-            resolve_dispatch=classifier_resolver,
+            resolve_dispatch=(
+                None if classifier_resolver is None
+                else classifier_resolver.as_dispatch()
+            ),
         )
         return {
             "error_type": error_type,
@@ -2599,15 +2982,17 @@ def apply_production_effect(
     authorize,
     prompt,
     validator,
-    model_profile_runtime=None,
+    staffing_session=None,
     participant_process_factory=None,
 ):
-    """Dispatch post-agreement work through the session's resolved lead."""
+    """Dispatch post-agreement work through the session's resolved lead.
+
+    The agreed production call is an automatic call like any other: a
+    router-backed discussion resolves it afresh here, so a session or
+    document edit made after the discussion closed reaches it.
+    """
     record = _record_by_id(home, session_id)
     _authorize_record(record, authorize)
-    current = _current_model_profile_runtime(model_profile_runtime)
-    if _uses_current_profile(record) != (current is not None):
-        raise PublicLifecycleError(503, UNAVAILABLE)
     store = brainstorming.SessionStore(state_directory(home))
     snapshot = store.read(session_id)
     if snapshot is None or snapshot.state["status"] != "success":
@@ -2616,7 +3001,9 @@ def apply_production_effect(
         store,
         record,
         participant_process_factory or _spawn_participant,
-        current_model_profile=current,
+        staffing_binding=_record_staffing_binding(
+            home, record, _validate_staffing_session(staffing_session)
+        ),
     )
     return participant_execution.production_effect(
         session_id,
@@ -2778,8 +3165,14 @@ def _wait_for_external_response(
             if latest is not None and latest["response"] is not None:
                 return
             if getattr(exc, "worker_quiescent", None) is True:
+                # A refusal before the provider started leaves no call to
+                # account for; the preservation below then writes nothing.
                 store.mark_external_provider_quiescent(
-                    record["id"], token
+                    record["id"],
+                    token,
+                    dispatch_refused=getattr(
+                        exc, "brainstorming_dispatch_refused", False
+                    ) is True,
                 )
             classification = getattr(
                 exc, "brainstorming_failure_classification", None
@@ -2807,7 +3200,7 @@ def run_lifecycle(
     session_id,
     participant_process_factory=None,
     require_pid_claim=True,
-    model_profile_runtime=None,
+    staffing_session=None,
 ):
     """Drive complete ordered rounds and closure until one terminal result."""
     try:
@@ -2823,7 +3216,9 @@ def run_lifecycle(
             store,
             record,
             participant_process_factory or _spawn_participant,
-            current_model_profile=model_profile_runtime,
+            staffing_binding=_record_staffing_binding(
+                home, record, staffing_session
+            ),
         )
         coordinator = coordination.BrainstormingCoordinator(
             store, participant_execution
@@ -2965,23 +3360,20 @@ def main(argv=None):
     run.add_argument("--home", required=True)
     run.add_argument("--session", required=True)
     run.add_argument("--start-fd", required=True, type=int)
-    run.add_argument("--model-profile-state")
-    run.add_argument("--model-profiles-home")
+    # The staffing session a PRE-CUTOVER attached record resolves through:
+    # its registry entry predates the durable mark and is never rewritten to
+    # add one, so its launcher — the run that owns it — supplies the
+    # reference here. A record that carries the mark is its own authority
+    # and needs no argument.
+    run.add_argument("--staffing-session")
     args = parser.parse_args(argv)
     if args.command != "run" or not _wait_for_start(args.start_fd):
         return 2
     _install_stop_handler()
-    model_profile_runtime = None
-    if args.model_profile_state is not None \
-            or args.model_profiles_home is not None:
-        model_profile_runtime = {
-            "state_path": args.model_profile_state,
-            "home": args.model_profiles_home,
-        }
     return run_lifecycle(
         args.home,
         args.session,
-        model_profile_runtime=model_profile_runtime,
+        staffing_session=args.staffing_session,
     )
 
 

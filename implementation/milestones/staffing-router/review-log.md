@@ -430,3 +430,42 @@
 - `claude-S6-VERIF-001` (raised claude, cleared codex): Verification Contract row 7 ('No adjacent consumer moved') names as its check 'existing Brainstorming and staffing-session suites in the focused command' and as its pass condition 'Existing discussion, recovery, production-effect, API access and session-resolution contracts pass; the accepted review-family reader and router answer shape are unchanged' — but the focused command lists only test_staffing_brainstorming_cutover, test_brainstorming_execution, test_brainstorming_tasks, test_brainstorming_milestone_adapter, test_brainstorming_api and test_staffing_sessions, none of which contains the discussion, closure, production-effect execution, activity-schema, roster/run-config or session_seat_families contracts it claims to prove. The same gap sits in the Question Battery's `verification` answer ('unchanged adjacent suites'). — The focused command omits dedicated adjacent-contract suites and any session_seat_families coverage while row 7 falsely records those contracts as proved, so the exact instruction can silently license regressions despite the stop path, but the repository-wide closure suite should expose them before 
 - `claude-S6-ROSTER-VIEW-001` (raised claude, cleared codex): The note pins the live participant projection but never says what the durable roster's mandatory per-seat `model_family` — and the `same_family_fallback` flag derived from it and surfaced on the session view — records once the router decides each call. Verification row 4 requires a new multi-family session whose router seats share one family to create and dispatch, which is only possible if the stored roster keeps a non-router family (rotation), because brainstorming.resolve_run_config refuses a same-family roster while a cross-family one is eligible. The view then asserts one thing and the seats show another. — The note omits rather than misstates the roster/view relationship, so a capable builder touching the adjacent live participant projection should stop on the conflicting durable flag, while any missed drift is immediately visible in the info view and corrected locally by aligning the flag’s projectio
 
+## slice_impl-06-a (Brainstorming cutover)
+
+- draft: kind `implement`, artifact `-` (raw: `implementation/milestones/staffing-router/.run/raw/slice_impl-06-draft-stabilize.txt`)
+
+| Round | Kind | Family | Findings | Triage | Raw |
+|---|---|---|---|---|---|
+| slice_impl-06-codex-r1 | review_round | codex | 4 | 4 reported | `implementation/milestones/staffing-router/.run/raw/slice_impl-06-codex-r1.txt` |
+| slice_impl-06-claude-r1 | fix_findings | claude | 4 | 3 fixed, 1 rejected (1 consulted) | `implementation/milestones/staffing-router/.run/raw/slice_impl-06-fix1.txt` |
+| slice_impl-06-claude-r2 | delta_review | claude | 2 | 2 reported | `implementation/milestones/staffing-router/.run/raw/slice_impl-06-delta1.txt` |
+| slice_impl-06-claude-r3 | fix_findings | claude | 2 | 2 fixed | `implementation/milestones/staffing-router/.run/raw/slice_impl-06-fix2.txt` |
+| slice_impl-06-claude-r4 | delta_review | claude | 0 | clean | `implementation/milestones/staffing-router/.run/raw/slice_impl-06-delta2.txt` |
+| slice_impl-06-codex-r2 | review_round | codex | 1 | 1 reported | `implementation/milestones/staffing-router/.run/raw/slice_impl-06-codex-r2.txt` |
+| slice_impl-06-claude-r5 | fix_findings | claude | 1 | 1 rejected (1 consulted) | `implementation/milestones/staffing-router/.run/raw/slice_impl-06-fix3.txt` |
+| slice_impl-06-claude-r6 | delta_review | claude | 1 | 1 reported | `implementation/milestones/staffing-router/.run/raw/slice_impl-06-delta3.txt` |
+| slice_impl-06-claude-r7 | fix_findings | claude | 1 | 1 fixed | `implementation/milestones/staffing-router/.run/raw/slice_impl-06-fix4.txt` |
+| slice_impl-06-claude-r8 | delta_review | claude | 0 | clean | `implementation/milestones/staffing-router/.run/raw/slice_impl-06-delta4.txt` |
+| slice_impl-06-codex-r3 | review_round | codex | 0 | clean | `implementation/milestones/staffing-router/.run/raw/slice_impl-06-codex-r3.txt` |
+| slice_impl-06-claude-r9 | review_round | claude | 3 | 3 reported | `implementation/milestones/staffing-router/.run/raw/slice_impl-06-claude-r1.txt` |
+| slice_impl-06-claude-r10 | fix_findings | claude | 1 | 1 fixed | `implementation/milestones/staffing-router/.run/raw/slice_impl-06-fix5.txt` |
+| slice_impl-06-claude-r11 | delta_review | claude | 1 | 1 reported | `implementation/milestones/staffing-router/.run/raw/slice_impl-06-delta5.txt` |
+| slice_impl-06-claude-r12 | fix_findings | claude | 1 | 1 fixed | `implementation/milestones/staffing-router/.run/raw/slice_impl-06-fix6.txt` |
+| slice_impl-06-claude-r13 | delta_review | claude | 0 | clean | `implementation/milestones/staffing-router/.run/raw/slice_impl-06-delta6.txt` |
+| slice_impl-06-codex-r4 | review_round | codex | 1 | 1 reported | `implementation/milestones/staffing-router/.run/raw/slice_impl-06-codex-r4.txt` |
+| slice_impl-06-claude-r14 | fix_findings | claude | 1 | 1 rejected (1 consulted) | `implementation/milestones/staffing-router/.run/raw/slice_impl-06-fix7.txt` |
+| slice_impl-06-claude-r15 | delta_review | claude | 1 | 1 reported | `implementation/milestones/staffing-router/.run/raw/slice_impl-06-delta7.txt` |
+| slice_impl-06-claude-r16 | fix_findings | claude | 1 | 1 fixed | `implementation/milestones/staffing-router/.run/raw/slice_impl-06-fix8.txt` |
+| slice_impl-06-claude-r17 | delta_review | claude | 0 | clean | `implementation/milestones/staffing-router/.run/raw/slice_impl-06-delta8.txt` |
+| slice_impl-06-codex-r5 | review_round | codex | 0 | clean | `implementation/milestones/staffing-router/.run/raw/slice_impl-06-codex-r5.txt` |
+| slice_impl-06-claude-r18 | review_round | claude | 0 | clean | `implementation/milestones/staffing-router/.run/raw/slice_impl-06-claude-r2.txt` |
+
+### Review completion — SATISFIED
+
+- deterministic result: every configured family was clean or debt-clean on the same current bytes; full verification was not due at this boundary; no extra reviewer was called
+- cited reviews: `slice_impl-06-codex-r5`, `slice_impl-06-claude-r18`
+
+**Deferred debt (opposite-family verified):**
+- `claude-S6A-CLAUDE-R1-002` (raised claude, cleared codex): _record_staffing_binding cannot distinguish 'this record's staffing session is unknown' from 'this record has no staffing session', so the read-only participant view of a pre-cutover attached discussion whose owning run cannot be reached now asserts default-document staffing instead of leaving the seat blank. — The unreachable-owner path silently presents plausible default staffing as fact, so later work can trust false monitoring data without triggering the stop path, while correction is a small local distinction plus one regression test.
+- `claude-S6A-CLAUDE-R1-003` (raised claude, cleared codex): No test exercises the round the dispatch seam actually derives and hands to the router; every new test feeds prepare_dispatch a round by hand, and the one seam test that goes through _invoke_tracked hits the no-action branch that hardcodes 1. — The focused suite still passes 161/161 with round derivation replaced by provider attempt, confirming a silent correctness and coverage gap across retries, closure, and production, while correction remains bounded to this unit's integration tests and local derivation seam.
+

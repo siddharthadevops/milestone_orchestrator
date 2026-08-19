@@ -21,7 +21,7 @@ import time
 import unicodedata
 from dataclasses import dataclass
 
-from orchestrator import contracts, errclass, kvstore
+from orchestrator import contracts, errclass, kvstore, staffing
 
 try:
     import fcntl
@@ -75,6 +75,10 @@ _TRANSCRIPT_LOCKS_GUARD = threading.Lock()
 ACTIVITY_SCHEMA_VERSION = 1
 ACTIVITY_STATUSES = ("completed", "failed")
 ACTIVITY_FAILURE_TYPES = ("protocol", "execution")
+# The router's own token for "an input could not be read, so the default
+# document answered". Taken from the resolver rather than restated, so the
+# ledger and the marker can never drift apart.
+STAFFING_FALLBACK_DEFAULT_DOCUMENT = staffing.STAFFING_FALLBACK_DEFAULT_DOCUMENT
 
 
 def _cost(value, ctx="cost"):
@@ -537,7 +541,7 @@ def validate_external_intervention(intervention):
             "provider_quiescent",
             "response",
         ),
-        ("closure_context",),
+        ("closure_context", "dispatch_refused"),
         "external_intervention",
     )
     checked = {
@@ -583,6 +587,20 @@ def validate_external_intervention(intervention):
         raise ContractError(
             "an unclaimed external provider must be quiescent"
         )
+    dispatch_refused = intervention.get("dispatch_refused", False)
+    if type(dispatch_refused) is not bool:
+        raise ContractError(
+            "external_intervention.dispatch_refused must be a boolean"
+        )
+    if dispatch_refused and (
+        checked["provider_attempt"] == 0
+        or not checked["provider_quiescent"]
+    ):
+        raise ContractError(
+            "a refused external dispatch leaves its claimed provider quiescent"
+        )
+    if "dispatch_refused" in intervention:
+        checked["dispatch_refused"] = dispatch_refused
     if type(checked["round"]) is not int or checked["round"] <= 0:
         raise ContractError(
             "external_intervention.round must be a positive integer"
@@ -739,6 +757,7 @@ def validate_turn_attempt(turn_attempt):
             "provider_attempt",
             "target_mutation_corrections",
             "envelope_repair_used",
+            "dispatch_refused",
             "retry_pending",
             "operational_retry",
             "target_mutation_failure_pending",
@@ -905,6 +924,15 @@ def validate_turn_attempt(turn_attempt):
         )
     if "envelope_repair_used" in turn_attempt:
         checked["envelope_repair_used"] = envelope_repair_used
+    dispatch_refused = turn_attempt.get("dispatch_refused", False)
+    if type(dispatch_refused) is not bool:
+        raise ContractError("turn_attempt.dispatch_refused must be a boolean")
+    if dispatch_refused and not checked["quiescent"]:
+        raise ContractError(
+            "a refused dispatch leaves its turn attempt quiescent"
+        )
+    if "dispatch_refused" in turn_attempt:
+        checked["dispatch_refused"] = dispatch_refused
     if "retry_pending" in turn_attempt:
         checked["retry_pending"] = retry_pending
     if "target_mutation_failure_pending" in turn_attempt:
@@ -988,6 +1016,12 @@ def validate_activity_event(event):
             "token_usage_partial",
             "cost",
             "cost_partial",
+            # Says the staffing behind this call came from the default
+            # document because the router could not read the session or the
+            # document it names. Optional and additive: an event written
+            # before the staffing cutover simply has no such note, and one
+            # written on an ordinary answer has none either.
+            "staffing_fallback",
             # Withdrawn model-profile attribution may remain in ledgers
             # written by the superseded runtime. It has no authority, but
             # generic Brainstorming execution and recovery must still read
@@ -1121,6 +1155,14 @@ def validate_activity_event(event):
         )
     if cost_partial:
         checked["cost_partial"] = True
+    fallback = event.get("staffing_fallback")
+    if fallback is not None:
+        if fallback != STAFFING_FALLBACK_DEFAULT_DOCUMENT:
+            raise ContractError(
+                "activity_event.staffing_fallback must be %r"
+                % STAFFING_FALLBACK_DEFAULT_DOCUMENT
+            )
+        checked["staffing_fallback"] = fallback
     return checked
 
 
@@ -3401,6 +3443,9 @@ class SessionStore:
         self._preserve_external_call_accounting(session_id, intervention)
         intervention["provider_attempt"] += 1
         intervention["provider_quiescent"] = False
+        # The mark describes the attempt it was written for; this new claim
+        # is not refused until its own dispatch says so.
+        intervention.pop("dispatch_refused", None)
         result = self._store.cas(key, current["revision"], intervention)
         if not result.ok:
             raise HistoryRewriteError(
@@ -3408,8 +3453,15 @@ class SessionStore:
             )
         return validate_external_intervention(result.record["value"])
 
-    def mark_external_provider_quiescent(self, session_id, token):
-        """Record that one claimed automatic provider can no longer act."""
+    def mark_external_provider_quiescent(
+        self, session_id, token, dispatch_refused=False
+    ):
+        """Record that one claimed automatic provider can no longer act.
+
+        *dispatch_refused* says this claimed attempt was refused before any
+        provider was started — nothing ran, so retiring the attempt owes it
+        no call accounting.
+        """
         token = _text(token, "external_intervention.token")
         key = _external_intervention_key(session_id)
         current = self._store.read(key)
@@ -3422,6 +3474,8 @@ class SessionStore:
             raise HistoryRewriteError("external intervention is already answered")
         if intervention["provider_quiescent"]:
             return intervention
+        if dispatch_refused:
+            intervention["dispatch_refused"] = True
         self._preserve_external_call_accounting(session_id, intervention)
         intervention["provider_quiescent"] = True
         result = self._store.cas(key, current["revision"], intervention)
@@ -3449,6 +3503,8 @@ class SessionStore:
             )
         self._preserve_external_call_accounting(session_id, intervention)
         intervention["provider_attempt"] += 1
+        # As in `claim_external_intervention`: the repair is its own attempt.
+        intervention.pop("dispatch_refused", None)
         result = self._store.cas(key, current["revision"], intervention)
         if not result.ok:
             raise HistoryRewriteError(
@@ -3532,6 +3588,11 @@ class SessionStore:
         attempt = intervention["provider_attempt"]
         if attempt <= 0:
             return
+        if intervention.get("dispatch_refused", False):
+            # This claimed attempt was refused before it started: there is
+            # no call whose tokens or cost could be uncertain, so there is
+            # nothing to preserve and no activity to write for it.
+            return
         activity = self.read_activity(session_id)
         if any(
             event["action_id"] == intervention["token"]
@@ -3591,6 +3652,11 @@ class SessionStore:
             raise HistoryRewriteError(
                 "only a quiescent turn attempt can preserve accounting"
             )
+        if attempt.get("dispatch_refused", False):
+            # This provider attempt was refused before it started: there is
+            # no call whose tokens or cost could be uncertain, so there is
+            # nothing to preserve and no activity to write for it.
+            return
         provider_attempt = attempt.get("provider_attempt", 1)
         activity = self.read_activity(session_id)
         events = (activity or {}).get("events") or []
@@ -3925,8 +3991,15 @@ class SessionStore:
             )
         return checked
 
-    def mark_turn_attempt_quiescent(self, session_id, token):
-        """Durably record that the admitted worker can no longer mutate."""
+    def mark_turn_attempt_quiescent(
+        self, session_id, token, dispatch_refused=False
+    ):
+        """Durably record that the admitted worker can no longer mutate.
+
+        *dispatch_refused* says this attempt's current provider call was
+        refused before any provider was started — nothing ran, so retiring
+        the attempt owes it no call accounting.
+        """
         token = _text(token, "turn_attempt.token")
         key = _turn_attempt_key(session_id)
         current = self._store.read(key)
@@ -3938,6 +4011,8 @@ class SessionStore:
         if attempt["quiescent"]:
             return attempt
         attempt["quiescent"] = True
+        if dispatch_refused:
+            attempt["dispatch_refused"] = True
         result = self._store.cas(key, current["revision"], attempt)
         if not result.ok:
             raise HistoryRewriteError(

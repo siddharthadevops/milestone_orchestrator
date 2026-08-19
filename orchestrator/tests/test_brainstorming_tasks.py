@@ -198,57 +198,45 @@ class BrainstormingTaskAdapterTest(unittest.TestCase):
         })
         return store, work_area
 
-    def test_profile_launch_refreshes_seats_and_preserves_locator(self):
+    def test_attached_launch_carries_the_owner_session_and_pins_no_seat(self):
         state = {}
-        locator = {
-            "state_path": os.path.join(self.tmp.name, "state.json"),
-            "home": os.path.join(self.tmp.name, "profiles"),
-        }
-        historical = (
-            {"agent": "codex", "model": "old-lead", "effort": "low"},
-            {"agent": "claude", "model": "old-critic", "effort": "low"},
-        )
-        current = (
-            {"agent": "claude", "model": "new-lead", "effort": "high"},
-            {"agent": "codex", "model": "new-critic", "effort": "medium"},
-        )
+        selection = {"session": "staffing-session-1"}
         request = self.request(output_directory="out")
+        record = adapter.admit_task(
+            state,
+            self.order(request, max_rounds=4, closure_policy="majority"),
+            self.config,
+            self.workspace,
+            staffing_selection=selection,
+        )
         with mock.patch.object(
-            adapter.driver,
-            "resolve_current_brainstorming_profiles",
-            side_effect=[historical, current],
-        ):
-            record = adapter.admit_task(
+            adapter.lifecycle,
+            "create_resolved_session",
+            return_value={"id": "bs-profile", "state": {"status": "running"}},
+        ) as create:
+            created = adapter.start_task(
                 state,
-                self.order(request, max_rounds=4, closure_policy="majority"),
+                record["id"],
                 self.config,
-                self.workspace,
-                model_profile_runtime=locator,
+                self.home,
+                staffing_selection=selection,
             )
-            with mock.patch.object(
-                adapter.lifecycle,
-                "create_resolved_session",
-                return_value={"id": "bs-profile", "state": {"status": "running"}},
-            ) as create:
-                created = adapter.start_task(
-                    state,
-                    record["id"],
-                    self.config,
-                    self.home,
-                    model_profile_runtime=locator,
-                )
 
         self.assertEqual(created["id"], "bs-profile")
         body = create.call_args.args[1]
         self.assertEqual(body["request"]["max_rounds"], 4)
         self.assertEqual(body["closure_policy"], "majority")
+        # Nothing about the intelligence is frozen here: every seat resolves
+        # through the owner's session immediately before its own call.
+        for seat in body["participants"]:
+            for field in ("model_family", "model", "effort"):
+                self.assertNotIn(field, seat)
         self.assertEqual(
-            [seat.get("model") for seat in body["participants"]],
-            ["new-lead", "new-critic", "new-lead"],
+            record["resolved_staffing"]["participants"],
+            adapter.milestone._participants(),
         )
-        self.assertNotIn("old-lead", repr(body["participants"]))
         self.assertEqual(
-            create.call_args.kwargs["model_profile_runtime"], locator
+            create.call_args.kwargs["staffing_selection"], selection
         )
         self.assertEqual(
             create.call_args.args[2],
@@ -398,14 +386,14 @@ class BrainstormingTaskAdapterTest(unittest.TestCase):
                 record["id"],
                 changed,
                 self.home,
-                model_profile_runtime={"new": "ambient profile attachment"},
+                staffing_selection={"session": "ambient-owner-session"},
             )
         self.assertEqual(
             create.call_args.args[1]["participants"], staffing["participants"]
         )
         self.assertEqual(create.call_args.args[2], "task:" + record["id"])
         self.assertTrue(create.call_args.kwargs["static_binding"])
-        self.assertNotIn("model_profile_runtime", create.call_args.kwargs)
+        self.assertNotIn("staffing_selection", create.call_args.kwargs)
 
         unavailable_state = {}
         unavailable = copy.deepcopy(self.config)
@@ -437,26 +425,14 @@ class BrainstormingTaskAdapterTest(unittest.TestCase):
 
     def test_profile_authority_loss_before_session_durably_fails_task(self):
         state = {}
-        locator = {
-            "state_path": os.path.join(self.tmp.name, "state.json"),
-            "home": os.path.join(self.tmp.name, "profiles"),
-        }
-        staffing = (
-            {"agent": "codex", "model": "lead", "effort": "high"},
-            {"agent": "claude", "model": "critic", "effort": "medium"},
+        selection = {"session": "staffing-session-1"}
+        record = adapter.admit_task(
+            state,
+            self.order(),
+            self.config,
+            self.workspace,
+            staffing_selection=selection,
         )
-        with mock.patch.object(
-            adapter.driver,
-            "resolve_current_brainstorming_profiles",
-            return_value=staffing,
-        ):
-            record = adapter.admit_task(
-                state,
-                self.order(),
-                self.config,
-                self.workspace,
-                model_profile_runtime=locator,
-            )
 
         with mock.patch.object(
             adapter.lifecycle,
@@ -471,30 +447,18 @@ class BrainstormingTaskAdapterTest(unittest.TestCase):
         create.assert_not_called()
         result = tasks.task_record(state, record["id"])["result"]
         self.assertEqual(result["status"], "failure")
-        self.assertIn("current-profile staffing authority", result["reason"])
+        self.assertIn("owner's staffing session", result["reason"])
 
     def test_profile_authority_loss_returns_running_owned_session(self):
         state = {}
-        locator = {
-            "state_path": os.path.join(self.tmp.name, "state.json"),
-            "home": os.path.join(self.tmp.name, "profiles"),
-        }
-        staffing = (
-            {"agent": "codex", "model": "lead", "effort": "high"},
-            {"agent": "claude", "model": "critic", "effort": "medium"},
+        selection = {"session": "staffing-session-1"}
+        record = adapter.admit_task(
+            state,
+            self.order(),
+            self.config,
+            self.workspace,
+            staffing_selection=selection,
         )
-        with mock.patch.object(
-            adapter.driver,
-            "resolve_current_brainstorming_profiles",
-            return_value=staffing,
-        ):
-            record = adapter.admit_task(
-                state,
-                self.order(),
-                self.config,
-                self.workspace,
-                model_profile_runtime=locator,
-            )
         projection = self.projection(record["id"], status="running")
         projection["state"]["result"] = None
         projection["process"] = "running"
@@ -526,26 +490,14 @@ class BrainstormingTaskAdapterTest(unittest.TestCase):
 
     def test_profile_authority_loss_fails_stopped_owned_session(self):
         state = {}
-        locator = {
-            "state_path": os.path.join(self.tmp.name, "state.json"),
-            "home": os.path.join(self.tmp.name, "profiles"),
-        }
-        staffing = (
-            {"agent": "codex", "model": "lead", "effort": "high"},
-            {"agent": "claude", "model": "critic", "effort": "medium"},
+        selection = {"session": "staffing-session-1"}
+        record = adapter.admit_task(
+            state,
+            self.order(),
+            self.config,
+            self.workspace,
+            staffing_selection=selection,
         )
-        with mock.patch.object(
-            adapter.driver,
-            "resolve_current_brainstorming_profiles",
-            return_value=staffing,
-        ):
-            record = adapter.admit_task(
-                state,
-                self.order(),
-                self.config,
-                self.workspace,
-                model_profile_runtime=locator,
-            )
         projection = self.projection(record["id"], status="running")
         projection["state"]["result"] = None
         caller = lifecycle.CURRENT_PROFILE_TASK_CALLER_PREFIX + record["id"]
@@ -569,31 +521,19 @@ class BrainstormingTaskAdapterTest(unittest.TestCase):
         start.assert_not_called()
         result = tasks.task_record(state, record["id"])["result"]
         self.assertEqual(result["status"], "failure")
-        self.assertIn("current-profile staffing authority", result["reason"])
+        self.assertIn("owner's staffing session", result["reason"])
         self.assertEqual(result["duration_s"], 2.0)
 
     def test_profile_authority_loss_preserves_terminal_native_failure(self):
         state = {}
-        locator = {
-            "state_path": os.path.join(self.tmp.name, "state.json"),
-            "home": os.path.join(self.tmp.name, "profiles"),
-        }
-        staffing = (
-            {"agent": "codex", "model": "lead", "effort": "high"},
-            {"agent": "claude", "model": "critic", "effort": "medium"},
+        selection = {"session": "staffing-session-1"}
+        record = adapter.admit_task(
+            state,
+            self.order(),
+            self.config,
+            self.workspace,
+            staffing_selection=selection,
         )
-        with mock.patch.object(
-            adapter.driver,
-            "resolve_current_brainstorming_profiles",
-            return_value=staffing,
-        ):
-            record = adapter.admit_task(
-                state,
-                self.order(),
-                self.config,
-                self.workspace,
-                model_profile_runtime=locator,
-            )
         projection = self.projection(
             record["id"], status="failure", duration=6, token_amount=6
         )
@@ -693,26 +633,14 @@ class BrainstormingTaskAdapterTest(unittest.TestCase):
 
     def test_profile_loss_after_agreement_records_authority_failure(self):
         state = {}
-        locator = {
-            "state_path": os.path.join(self.tmp.name, "state.json"),
-            "home": os.path.join(self.tmp.name, "profiles"),
-        }
-        staffing = (
-            {"agent": "codex", "model": "lead", "effort": "high"},
-            {"agent": "claude", "model": "critic", "effort": "medium"},
+        selection = {"session": "staffing-session-1"}
+        record = adapter.admit_task(
+            state,
+            self.order(),
+            self.config,
+            self.workspace,
+            staffing_selection=selection,
         )
-        with mock.patch.object(
-            adapter.driver,
-            "resolve_current_brainstorming_profiles",
-            return_value=staffing,
-        ):
-            record = adapter.admit_task(
-                state,
-                self.order(),
-                self.config,
-                self.workspace,
-                model_profile_runtime=locator,
-            )
         projection = self.projection(record["id"])
         caller = lifecycle.CURRENT_PROFILE_TASK_CALLER_PREFIX + record["id"]
         projection["caller"] = caller
@@ -743,7 +671,7 @@ class BrainstormingTaskAdapterTest(unittest.TestCase):
                     record["id"],
                     effect_request,
                     dispatch_authority="current_profile",
-                    model_profile_runtime=None,
+                    staffing_selection=None,
                 )
 
         with mock.patch.object(
@@ -766,7 +694,7 @@ class BrainstormingTaskAdapterTest(unittest.TestCase):
         self.assertEqual(result["status"], "failure")
         self.assertEqual(
             result["reason"],
-            "production lead failed: current-profile staffing authority "
+            "production lead failed: the owner's staffing session "
             "is unavailable",
         )
         self.assertEqual(result["native_result"], projection["state"]["result"])

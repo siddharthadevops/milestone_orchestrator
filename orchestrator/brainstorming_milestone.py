@@ -343,7 +343,7 @@ def _launch_owned_session(
     target,
     body,
     caller_suffix=None,
-    model_profile_runtime=None,
+    staffing_selection=None,
     active_home=None,
 ):
     """Launch one session whose isolated target belongs to this adapter."""
@@ -359,8 +359,8 @@ def _launch_owned_session(
         caller += ":%s" % caller_suffix
     try:
         kwargs = {"owned_target_path": target}
-        if model_profile_runtime is not None:
-            kwargs["model_profile_runtime"] = model_profile_runtime
+        if staffing_selection is not None:
+            kwargs["staffing_selection"] = staffing_selection
         return brainstorming_lifecycle.create_resolved_session(
             service_home(state, active_home),
             body,
@@ -383,18 +383,10 @@ def create_session(
     authority_context=None,
     lead_profile=None,
     counterpart_profile=None,
-    model_profile_runtime=None,
+    staffing_selection=None,
+    active_home=None,
 ):
     """Translate one valid signal into the existing standalone lifecycle."""
-    model_profile_runtime = (
-        brainstorming_lifecycle._current_model_profile_runtime(
-            model_profile_runtime
-        )
-    )
-    active_home = (
-        model_profile_runtime["home"]
-        if model_profile_runtime is not None else None
-    )
     participants = _participants(lead_profile, counterpart_profile)
     work_area, target = _materialize_target(
         state, signal, references, active_home=active_home
@@ -452,7 +444,7 @@ def create_session(
         work_area,
         target,
         body,
-        model_profile_runtime=model_profile_runtime,
+        staffing_selection=staffing_selection,
         active_home=active_home,
     )
 
@@ -467,21 +459,13 @@ def create_guarantee_calibration_session(
     references=None,
     authority_context=None,
     max_rounds=GUARANTEE_CALIBRATION_MAX_ROUNDS,
-    model_profile_runtime=None,
+    staffing_selection=None,
+    active_home=None,
 ):
     """Open a bounded discussion over an isolated full-skeleton copy."""
     if isinstance(max_rounds, bool) or not isinstance(max_rounds, int) \
             or max_rounds <= 0:
         raise AdapterError("guarantee calibration max_rounds must be positive")
-    model_profile_runtime = (
-        brainstorming_lifecycle._current_model_profile_runtime(
-            model_profile_runtime
-        )
-    )
-    active_home = (
-        model_profile_runtime["home"]
-        if model_profile_runtime is not None else None
-    )
     participants = _participants(lead_profile, counterpart_profile)
     references = list(references or [])
     source = {
@@ -530,7 +514,7 @@ def create_guarantee_calibration_session(
         target,
         body,
         caller_suffix="guarantee-calibration",
-        model_profile_runtime=model_profile_runtime,
+        staffing_selection=staffing_selection,
         active_home=active_home,
     )
 

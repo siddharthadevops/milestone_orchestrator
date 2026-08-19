@@ -898,61 +898,77 @@ class Driver(object):
         # append a different state transition and obscure the stale call.
         self._consume_stale_marker()
         if self.model_profiles_home is not None:
+            # Whether the profile catalogue's floor could be read at all.
+            # The conversion below is the one thing that must NOT run when
+            # it could not: see the two comments that follow.
+            profile_floor_readable = True
             try:
-                # Startup readiness only: seed absence, validate presence.
-                # Generic crash accounting above must remain independent of
-                # this optional catalogue; per-call resolution never repairs
-                # or falls back.
-                # This gate survives the staffing cutover ON PURPOSE. The
-                # cutover retires profiles as DISPATCH INPUTS for the
-                # driver's own worker calls; it does not retire the
-                # catalogue, which this same driver's Brainstorming seats
-                # still resolve through (`_brainstorming_profiles` ->
-                # `_act_profile` -> `model_profiles.resolve_selection`,
-                # which reads the stored `default` whenever a run has no
-                # selection sidecar). A damaged `default` profile therefore
-                # still breaks a live consumer, and the check stays as loud
-                # as it was until slices 6 and 8 move that consumer.
+                # Startup readiness only: seed absence, never repair or
+                # rewrite what the catalogue already holds. Generic crash
+                # accounting above must remain independent of this optional
+                # catalogue.
                 model_profiles.ensure_default(self.model_profiles_home)
-            except model_profiles.ModelProfileError as exc:
-                if self.state.get("failure") is None:
-                    st.fail_run(
-                        self.state,
-                        "model-profile catalogue unavailable: %s" % exc,
-                        unit=st.current_unit(self.state),
-                        type_="orchestrator",
-                    )
-                    st.save(self.state_path, self.state)
-                raise RuntimeError(
-                    "model-profile catalogue unavailable: %s" % exc
-                ) from exc
-            try:
-                # Beside the profile seed: a started driver converts what
-                # the profile catalogue holds and seeds the `default`
-                # staffing document. Missing-only, so this is a no-op on
-                # every start after the first; a damaged profile is skipped
-                # inside rather than making start-up louder than today.
-                staffing.ensure_documents(self.model_profiles_home)
-            except (staffing.StaffingError, OSError):
-                # And UNLIKE the profile seed in what a failure means here:
-                # a damaged staffing catalogue never stops a run. The
-                # initialization itself stays exactly as loud as it is —
-                # it raises, repairs nothing, and leaves the operator's own
-                # bytes untouched — but every resolution below has the
-                # mandatory fallback that cannot fail (an unreadable stored
-                # `default` answers from the in-code seed), so the run
-                # dispatches on the default document and the marker's
-                # `staffing_fallback` note records what answered. Failing
-                # the run here would be a start-up validation gate for an
-                # unreadable input, which is what this milestone retires,
-                # and it would block a resume this cut promises never to
-                # block.
-                pass
+            except model_profiles.ModelProfileError:
+                # A damaged catalogue no longer stops a HOMED run. This gate
+                # was loud because the driver's own calls resolved through a
+                # profile; slice 6 moved the last of them — the Brainstorming
+                # seats — onto the router, so every seat of a homed run is
+                # now staffed by the run's staffing session
+                # (`_worker_staffing`, `_staff`, `_dispatch_for_role`,
+                # `_brainstorming_staffing`) and every remaining
+                # `_act_profile` reader is reached only when there is no
+                # catalogue home at all. Failing here would gate a
+                # router-backed call — an attached discussion's included —
+                # on an input nothing dispatches from, which this slice
+                # forbids. The file is left exactly as the operator's bytes
+                # are: the catalogue stays an operator surface until slice 8
+                # retires it, and the service's own start-up and its profile
+                # routes still report a damaged one there.
+                profile_floor_readable = False
+            if profile_floor_readable:
+                try:
+                    # Beside the profile seed: a started driver converts what
+                    # the profile catalogue holds and seeds the `default`
+                    # staffing document. Missing-only, so this is a no-op on
+                    # every start after the first; a damaged profile is skipped
+                    # inside rather than making start-up louder than today.
+                    staffing.ensure_documents(self.model_profiles_home)
+                except (staffing.StaffingError, OSError):
+                    # And UNLIKE the profile seed in what a failure means
+                    # here: a damaged staffing catalogue never stops a run.
+                    # The initialization itself stays exactly as loud as it
+                    # is — it raises, repairs nothing, and leaves the
+                    # operator's own bytes untouched — but every resolution
+                    # below has the mandatory fallback that cannot fail (an
+                    # unreadable stored `default` answers from the in-code
+                    # seed), so the run dispatches on the default document
+                    # and the marker's `staffing_fallback` note records what
+                    # answered. Failing the run here would be a start-up
+                    # validation gate for an unreadable input, which is what
+                    # this milestone retires, and it would block a resume
+                    # this cut promises never to block.
+                    pass
+            # Not gating the CALL on a damaged profile is this slice's
+            # licence; writing a durable document from that fault is not.
+            # `ensure_documents` skips the profile it cannot read and then
+            # finds no `default` document to read, so it would seed the
+            # in-code `default` OVER a stored `default` profile that exists
+            # and is merely unreadable — the seeding-over the skeleton names
+            # a conversion defect rather than a compatibility exception, and
+            # conversion is missing-only, so repairing the profile afterwards
+            # would never convert it. Deferring the whole conversion to a
+            # later start costs nothing it does not already promise: it is
+            # missing-only and runs at every service and driver start, so it
+            # converts once the profile is readable again, and until then the
+            # resolver's mandatory fallback answers with the same in-code
+            # seed WITH the marker's `staffing_fallback` note — the same
+            # reasoning `_derive_staffing_session` gives for refusing to
+            # write a once-only binding derived from a fault, silently.
             # A run opened before the cutover has no session; this is the
             # first resume that finds none, so it gets one here — before any
             # dispatch can ask for one, and whether or not the conversion
-            # above completed: the session names a document, it does not
-            # need one to exist.
+            # above ran or completed: the session names a document, it does
+            # not need one to exist.
             self._derive_staffing_session()
         # Before repo validation: if a pending gap's cleanup never ran (a crash
         # between recording the gap and cleaning up), worker junk such as a
@@ -4918,9 +4934,9 @@ class Driver(object):
                     "goal": self.state.get("goal"),
                     "project_context": project_context,
                 })
-            profile_runtime = self._brainstorming_profile_runtime()
+            staffing_selection = self._brainstorming_staffing()
             lead_profile = counterpart_profile = None
-            if profile_runtime is None:
+            if staffing_selection is None:
                 lead_profile, counterpart_profile = (
                     self._brainstorming_profiles()
                 )
@@ -4933,7 +4949,8 @@ class Driver(object):
                 authority_context=authority_context,
                 lead_profile=lead_profile,
                 counterpart_profile=counterpart_profile,
-                model_profile_runtime=profile_runtime,
+                staffing_selection=staffing_selection,
+                active_home=self.model_profiles_home,
             )
             progress = brainstorming.coordination_projection(created["state"])
             if (
@@ -5204,9 +5221,9 @@ class Driver(object):
         if settings is None:
             return self._finish_draft(unit, "drafted")
         skeleton_path = unit.get("artifact") or self._skeleton_artifact()
-        profile_runtime = self._brainstorming_profile_runtime()
+        staffing_selection = self._brainstorming_staffing()
         lead_profile = counterpart_profile = None
-        if profile_runtime is None:
+        if staffing_selection is None:
             lead_profile, counterpart_profile = self._brainstorming_profiles()
         project_context, _extensions, _roots = self._project_prompt_inputs(
             unit, contracts.KIND_DRAFT_SKELETON, record_seen=False
@@ -5231,7 +5248,8 @@ class Driver(object):
                         "project_context": project_context,
                     },
                     max_rounds=settings["max_rounds"],
-                    model_profile_runtime=profile_runtime,
+                    staffing_selection=staffing_selection,
+                    active_home=self.model_profiles_home,
                 )
             )
         except Exception as exc:
@@ -5452,7 +5470,7 @@ class Driver(object):
                 order,
                 self.config,
                 self.workspace,
-                model_profile_runtime=self._brainstorming_profile_runtime(),
+                staffing_selection=self._brainstorming_staffing(),
             )
         except tasks.TaskRequestError as exc:
             reason = "Brainstorming producer admission failed: %s" % exc.code
@@ -5511,7 +5529,7 @@ class Driver(object):
                 record["id"],
                 self.config,
                 home,
-                model_profile_runtime=self._brainstorming_profile_runtime(),
+                staffing_selection=self._brainstorming_staffing(),
             )
         except brainstorming_lifecycle.PublicLifecycleError as exc:
             if exc.code == brainstorming_lifecycle.STOP_INCOMPLETE:
@@ -5576,15 +5594,13 @@ class Driver(object):
         home = brainstorming_milestone.service_home(
             self.state, active_home=self.model_profiles_home
         )
-        profile_runtime = (
-            self._brainstorming_profile_runtime()
-            if (active.get("resolved_staffing") or {}).get(
-                "dispatch_authority"
-            ) == "current_profile"
-            else None
-        )
         dispatch_authority = (active.get("resolved_staffing") or {}).get(
             "dispatch_authority"
+        )
+        staffing_selection = (
+            self._brainstorming_staffing()
+            if dispatch_authority == "current_profile"
+            else None
         )
         try:
             terminal = brainstorming_tasks.finish_task(
@@ -5598,7 +5614,7 @@ class Driver(object):
                     task_id,
                     effect_request,
                     dispatch_authority=dispatch_authority,
-                    model_profile_runtime=profile_runtime,
+                    staffing_selection=staffing_selection,
                 ),
             )
         except Exception as exc:
@@ -8837,14 +8853,30 @@ class Driver(object):
         }
         return lead, counterpart
 
-    def _brainstorming_profile_runtime(self):
-        """Return locators for independent per-dispatch current resolution."""
+    def _brainstorming_staffing(self):
+        """The run's one staffing session, for a discussion it owns.
+
+        A discussion the milestone starts is staffed by the same session
+        every other call of this run is staffed by: the reference travels as
+        inherited context, never as a copied document or a second staffing
+        value, and each of the discussion's own calls resolves it afresh.
+
+        A selection carrying no session is that same answer for a run that
+        holds none — the A2 derivation faulted and left it unbound — and it
+        is not a missing one: every call this run makes meanwhile resolves
+        through the visible default-document fallback, so the discussion is
+        staffed exactly as its owner is. Inheritance happens once, at
+        creation: the record it writes is its own authority, and this run
+        binding a session at a later resume does not reach back into a
+        discussion already created.
+
+        `None` — no selection at all — only for a `Driver` built without a
+        catalogue home, which has no document store to read and keeps
+        today's configuration-act seats.
+        """
         if self.model_profiles_home is None:
             return None
-        return {
-            "state_path": os.path.abspath(self.state_path),
-            "home": os.path.abspath(self.model_profiles_home),
-        }
+        return {"session": st.staffing_session(self.state)}
 
     def _modern_design_updates(self):
         # Compatibility must never restore retired redocumentation machinery.

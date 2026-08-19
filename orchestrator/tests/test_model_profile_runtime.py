@@ -18,7 +18,8 @@ from unittest import mock
 from orchestrator import contracts, driver, gitops
 from orchestrator import model_profiles
 from orchestrator import brainstorming_lifecycle
-from orchestrator import prompts, registry, runners, service, state, tasks
+from orchestrator import prompts, registry, runners, service, staffing
+from orchestrator import state, tasks
 from orchestrator import verifiers
 
 
@@ -59,6 +60,22 @@ class CurrentModelProfileRuntimeTest(unittest.TestCase):
         with open(tmp, "w", encoding="utf-8") as fh:
             json.dump(value, fh)
         os.replace(tmp, path)
+
+    def bind_owner_session(self, state_path):
+        """Bind one staffing session to a run, as a launch or resume does."""
+        run_state = state.load(state_path)
+        bound = state.staffing_session(run_state)
+        if bound:
+            return bound
+        record = staffing.create_session(self.home, {
+            "work_area": {"workspace_path": self.workspace},
+            "families": list(driver.DEFAULT_CONFIG["families_order"]),
+            "document": staffing.DEFAULT_DOCUMENT_NAME,
+            "rigor": "medium",
+        })
+        state.bind_staffing_session(run_state, record["id"])
+        state.save(state_path, run_state)
+        return record["id"]
 
     def resolver(self, state_path, runner=None):
         return driver.Driver(
@@ -349,10 +366,20 @@ class CurrentModelProfileRuntimeTest(unittest.TestCase):
         with open(default_path, "w", encoding="utf-8") as fh:
             fh.write("{broken")
 
-        with self.assertRaisesRegex(
-            RuntimeError, "model-profile catalogue unavailable"
-        ):
-            self.resolver(path)
+        # A damaged catalogue no longer stops a homed run: nothing this
+        # driver dispatches resolves through a profile any more, so the
+        # start does its generic recovery and the run keeps staffing every
+        # seat from its own staffing session.
+        restarted = self.resolver(path)
+        self.assertEqual(
+            restarted._staff("implement")[0],
+            staffing.resolve(
+                self.home,
+                state.staffing_session(restarted.state),
+                "implement",
+                families=list(driver.DEFAULT_CONFIG["families_order"]),
+            ).answer["agent"],
+        )
 
         recovered = state.load(path)
         incidents = [
@@ -364,10 +391,10 @@ class CurrentModelProfileRuntimeTest(unittest.TestCase):
         self.assertEqual(incidents[0]["duration_s"], 2.5)
         self.assertEqual(incidents[0]["token_usage"], usage)
         self.assertIsNotNone(incidents[0]["cost"])
-        self.assertIn(
-            "model-profile catalogue unavailable",
-            recovered["failure"]["reason"],
-        )
+        self.assertIsNone(recovered["failure"])
+        # The operator's bytes are left exactly as they are.
+        with open(default_path, "r", encoding="utf-8") as fh:
+            self.assertEqual(fh.read(), "{broken")
         self.assertFalse(os.path.exists(worker_junk))
         self.assertTrue(any(
             event.get("type") == "unclean_stop_restored"
@@ -376,6 +403,66 @@ class CurrentModelProfileRuntimeTest(unittest.TestCase):
         self.assertFalse(os.path.exists(
             self.runtime_path(path, "current.json")
         ))
+
+    def test_damaged_default_profile_seeds_no_durable_default_document(self):
+        """A fault never becomes the operator's converted `default`.
+
+        Not gating the call on a damaged profile is this slice's licence;
+        writing a durable document from that fault is not. `ensure_documents`
+        skips the profile it cannot read, so with no `default` document to
+        find it would seed the in-code `default` over a stored `default`
+        profile that merely cannot be read — and conversion is missing-only,
+        so repairing the profile afterwards would never convert it. The
+        resolver's mandatory fallback answers the same seat from the same
+        seed meanwhile, and says so.
+        """
+        path = self.init()
+        # Today's stored `default` is what conversion must not lose: it
+        # differs from the in-code seed on the seat asserted below.
+        stored = model_profiles.load(self.home, "default")
+        stored["configurations"]["medium"]["implementer"] = {
+            "agent": "claude", "model": "claude-sonnet-5", "effort": "low",
+        }
+        model_profiles.save(self.home, stored)
+        converted = staffing.convert_profile(stored)
+
+        # A home that has not converted yet — the pre-cutover state the
+        # conversion rule governs — whose `default` profile is unreadable.
+        for name in staffing.document_names(self.home):
+            os.remove(os.path.join(
+                staffing.staffing_documents_dir(self.home), "%s.json" % name
+            ))
+        default_path = os.path.join(
+            self.home, "model_profiles", "default.json"
+        )
+        with open(default_path, "w", encoding="utf-8") as fh:
+            fh.write("{broken")
+
+        restarted = self.resolver(path)
+        # Nothing durable was written from the fault, so the operator's own
+        # `default` still converts once the profile is readable again.
+        self.assertEqual(staffing.document_names(self.home), [])
+        answered = staffing.resolve(
+            self.home,
+            state.staffing_session(restarted.state),
+            "implement",
+            families=list(driver.DEFAULT_CONFIG["families_order"]),
+        )
+        self.assertEqual(
+            answered.staffing_fallback,
+            staffing.STAFFING_FALLBACK_DEFAULT_DOCUMENT,
+        )
+        self.assertEqual(
+            restarted._staff("implement")[0], answered.answer["agent"]
+        )
+        self.assertIsNone(state.load(path)["failure"])
+
+        # Repair, restart: the conversion the fault deferred now happens,
+        # and it is the operator's profile that sources `default`.
+        model_profiles.save(self.home, stored)
+        self.resolver(path)
+        self.assertEqual(staffing.load(self.home, "default"), converted)
+        self.assertNotEqual(converted, staffing.default_document_seed())
 
     def test_purged_legacy_run_does_not_supply_next_run_current_settings(self):
         model_profiles.ensure_default(self.home)
@@ -787,7 +874,7 @@ class CurrentModelProfileRuntimeTest(unittest.TestCase):
         service_home = os.path.join(self.tmp.name, "service-home")
         self.assertEqual(registry.load(service_home)["runs"], [])
         with self.assertRaises(service.ApiError) as raised:
-            service._attached_brainstorming_model_profile_runtime(
+            service._attached_brainstorming_staffing_session(
                 service_home, "legacy-session", record=legacy_record
             )
         self.assertEqual(raised.exception.status, 503)
@@ -809,7 +896,7 @@ class CurrentModelProfileRuntimeTest(unittest.TestCase):
             side_effect=OSError("registered run state is unreadable"),
         ):
             with self.assertRaises(service.ApiError) as raised:
-                service._attached_brainstorming_model_profile_runtime(
+                service._attached_brainstorming_staffing_session(
                     service_home, "legacy-session", record=legacy_record
                 )
         self.assertEqual(raised.exception.status, 503)
@@ -835,18 +922,17 @@ class CurrentModelProfileRuntimeTest(unittest.TestCase):
                 raise OSError("unrelated registered state is unreadable")
             return real_load(state_path)
 
-        current = {
-            "state_path": os.path.abspath(path),
-            "home": os.path.abspath(service_home),
-        }
+        # The attached session resolves through the run's OWN staffing
+        # session, read live from the state the attachment finds.
+        owner_session = self.bind_owner_session(path)
         with mock.patch.object(
             service.st, "load", side_effect=load_readable_attachment
         ):
             self.assertEqual(
-                service._attached_brainstorming_model_profile_runtime(
+                service._attached_brainstorming_staffing_session(
                     service_home, "legacy-session", record=legacy_record
                 ),
-                current,
+                owner_session,
             )
 
         lifecycle_record = {
@@ -862,7 +948,7 @@ class CurrentModelProfileRuntimeTest(unittest.TestCase):
         launch.process.pid = 12345
         validate_launch = mock.Mock(
             side_effect=lambda record: (
-                service._attached_brainstorming_model_profile_runtime(
+                service._attached_brainstorming_staffing_session(
                     service_home, "legacy-session", record=record
                 )
             )
@@ -907,13 +993,13 @@ class CurrentModelProfileRuntimeTest(unittest.TestCase):
                 service_home,
                 "legacy-session",
                 lambda _record: None,
-                validate_launch=validate_launch,
+                resolve_staffing_session=validate_launch,
             )
         validate_launch.assert_called_once_with(lifecycle_record)
         launch_process.assert_called_once_with(
             service_home,
             "legacy-session",
-            model_profile_runtime=current,
+            staffing_session=owner_session,
         )
 
     def test_brainstorming_monitoring_uses_current_or_actual_staffing(self):
@@ -932,17 +1018,6 @@ class CurrentModelProfileRuntimeTest(unittest.TestCase):
                 path,
             ),
         )
-        edited = model_profiles.load(self.home, "default")
-        edited["configurations"]["medium"].update({
-            "implementer": {
-                "agent": "claude", "model": "current-lead",
-                "effort": "high",
-            },
-            "brainstorming_counterpart": {
-                "model": "current-counterpart", "effort": "low",
-            },
-        })
-        model_profiles.save(self.home, edited)
         participants = [
             {
                 "id": "lead", "role": "initial_position",
@@ -977,20 +1052,29 @@ class CurrentModelProfileRuntimeTest(unittest.TestCase):
                 ),
             },
         }
-        current = service._current_brainstorming_staffing(
-            self.home, record, session_state
+        self.bind_owner_session(path)
+        owner_session = service._attached_brainstorming_staffing_session(
+            self.home, record["id"], record=record
         )
+        binding = {"home": self.home, "session": owner_session}
         projected = brainstorming_lifecycle._view_participants(
-            record, session_state, current_staffing=current
+            record, session_state, staffing_binding=binding
         )
+        # The view is the LIVE router answer for each roster seat, never the
+        # creation roster the record still carries.
         self.assertEqual(
             [
                 (item["model_family"], item["model"], item["effort"])
                 for item in projected
             ],
             [
-                ("claude", "current-lead", "high"),
-                ("codex", "current-counterpart", "low"),
+                tuple(
+                    staffing.resolve(
+                        self.home, owner_session, "brainstorm", index=index
+                    ).answer[key]
+                    for key in ("agent", "model", "effort")
+                )
+                for index in (1, 2)
             ],
         )
 
@@ -1023,20 +1107,14 @@ class CurrentModelProfileRuntimeTest(unittest.TestCase):
             ),
         })
         self.assertEqual(
-            service._attached_brainstorming_model_profile_runtime(
+            service._attached_brainstorming_staffing_session(
                 self.home, task_record["id"], record=task_record
             ),
-            {
-                "state_path": os.path.abspath(path),
-                "home": os.path.abspath(self.home),
-            },
-        )
-        task_current = service._current_brainstorming_staffing(
-            self.home, task_record, session_state
+            owner_session,
         )
         self.assertEqual(
             brainstorming_lifecycle._view_participants(
-                task_record, session_state, current_staffing=task_current
+                task_record, session_state, staffing_binding=binding
             ),
             projected,
         )
@@ -1053,7 +1131,7 @@ class CurrentModelProfileRuntimeTest(unittest.TestCase):
         })
         state.save(path, terminal)
         with self.assertRaises(service.ApiError) as terminal_attachment:
-            service._attached_brainstorming_model_profile_runtime(
+            service._attached_brainstorming_staffing_session(
                 self.home, task_record["id"], record=task_record
             )
         self.assertEqual(terminal_attachment.exception.status, 503)
@@ -1064,7 +1142,7 @@ class CurrentModelProfileRuntimeTest(unittest.TestCase):
             + "missing-task"
         )
         with self.assertRaises(service.ApiError):
-            service._attached_brainstorming_model_profile_runtime(
+            service._attached_brainstorming_staffing_session(
                 self.home, missing_task["id"], record=missing_task
             )
 
@@ -1090,14 +1168,11 @@ class CurrentModelProfileRuntimeTest(unittest.TestCase):
         self.assertIsNone(active["model"])
         self.assertIsNone(active["effort"])
 
+        # With no binding at all — an unattached record, or an owning run
+        # the lookup cannot reach — the view omits staffing rather than
+        # showing the creation roster the next dispatch would contradict.
         without_attachment = copy.deepcopy(record)
         without_attachment["id"] = "unattached"
-        self.assertEqual(
-            service._current_brainstorming_staffing(
-                self.home, without_attachment, session_state
-            ),
-            {},
-        )
         omitted = brainstorming_lifecycle._view_participants(
             without_attachment, session_state
         )
@@ -1159,7 +1234,7 @@ class CurrentModelProfileRuntimeTest(unittest.TestCase):
                         self.home,
                         "legacy-session",
                         lambda _record: None,
-                        validate_launch=validate_launch,
+                        resolve_staffing_session=validate_launch,
                     )
                 self.assertEqual(projected, {"process": "unchanged"})
                 validate_launch.assert_not_called()
@@ -1419,8 +1494,9 @@ class CurrentModelProfileRuntimeTest(unittest.TestCase):
             subject._classify_failure(
                 "codex", runners.RunnerError("mystery"), "classifier-test"
             )
-        # The driver's classifier is the router's `classify` seat after
-        # slice 4; only the Brainstorming half still derives an opposite.
+        # Both classifiers are the router's `classify` seat: which family
+        # types a failure is the document's choice, not the family opposite
+        # the call that failed.
         self.assertEqual(resolutions.pop(0),
                          ("driver", subject._staff("classify")))
 
@@ -1465,9 +1541,9 @@ class CurrentModelProfileRuntimeTest(unittest.TestCase):
             Store(),
             record,
             None,
-            current_model_profile={
-                "state_path": path,
+            staffing_binding={
                 "home": self.home,
+                "session": state.staffing_session(state.load(path)),
             },
         )
 
@@ -1489,12 +1565,9 @@ class CurrentModelProfileRuntimeTest(unittest.TestCase):
                 runners.RunnerError("mystery"),
             )
 
-        expected = (
-            "claude",
-            driver.DEFAULT_CONFIG["model_defaults"]["claude"]["model"],
-            driver.DEFAULT_CONFIG["model_defaults"]["claude"]["effort"],
+        self.assertEqual(
+            resolutions, [("brainstorming", subject._staff("classify"))]
         )
-        self.assertEqual(resolutions, [("brainstorming", expected)])
 
     def test_predispatch_failure_preserves_completed_malformed_attempt(self):
         usage = {

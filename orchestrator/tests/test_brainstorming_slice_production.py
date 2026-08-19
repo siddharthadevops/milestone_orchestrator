@@ -653,7 +653,8 @@ class BrainstormingSliceProductionTest(unittest.TestCase):
         cases = (
             (False, "codex", "static-model", "high", None),
             (True, "claude", "current-model", "max",
-             lambda: {"agent": "claude", "model": "current-model", "effort": "max"}),
+             lambda _round: {"agent": "claude", "model": "current-model",
+                             "effort": "max"}),
         )
         for fresh, family, model, effort, resolver in cases:
             with self.subTest(fresh=fresh):

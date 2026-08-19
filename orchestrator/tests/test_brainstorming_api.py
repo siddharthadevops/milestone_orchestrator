@@ -2039,7 +2039,7 @@ class StandaloneBrainstormingApiTest(unittest.TestCase):
         mark_legacy_milestone(running["id"])
         with mock.patch.object(
             service,
-            "_attached_brainstorming_model_profile_runtime",
+            "_attached_brainstorming_staffing_session",
             side_effect=AssertionError("attachment lookup is not due"),
         ) as attachment:
             code, response = self._request(
@@ -2064,7 +2064,7 @@ class StandaloneBrainstormingApiTest(unittest.TestCase):
         mark_legacy_milestone(session_id)
         with mock.patch.object(
             service,
-            "_attached_brainstorming_model_profile_runtime",
+            "_attached_brainstorming_staffing_session",
             side_effect=AssertionError("attachment lookup is not due"),
         ) as attachment:
             code, response = self._request(
