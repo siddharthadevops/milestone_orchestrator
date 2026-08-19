@@ -853,13 +853,16 @@ def project_route_segments(route):
     ]
 
 
-def projects_api(home, method, segments, body, query=None, task_host=None):
+def projects_api(
+    home, method, segments, body, query=None, task_host=None, who=None
+):
     """Dispatch one /api/projects request. Returns (status, payload).
 
     `query` carries the decoded query parameters for the one route that
     uses them: the policy delete's `id` (a query parameter by amendment
     A2, so ids the sealed grammar allows but browsers would normalize
-    away as path segments still round-trip)."""
+    away as path segments still round-trip). `who` is the request identity
+    the one route that inherits a staffing session authorizes it with."""
     n = len(segments)
     if n == 0:
         if method == "GET":
@@ -894,7 +897,7 @@ def projects_api(home, method, segments, body, query=None, task_host=None):
             return 200, {
                 "ok": True,
                 **sync_project_git(
-                    home, segments[0], body, task_host=task_host
+                    home, segments[0], body, task_host=task_host, who=who
                 ),
             }
     elif n == 2 and segments[1] == "policies":
@@ -3728,15 +3731,27 @@ def _require_unowned_workspace(home, workspace, task_host=None):
             raise ApiError(409, WORK_AREA_BUSY)
 
 
-def sync_project_git(home, slug, body, task_host=None):
-    """Hand one work area to the project's lead family to align with git.
+def sync_project_git(home, slug, body, task_host=None, who=None):
+    """Hand one work area to the router's `sync` seat to align with git.
 
     Authorization happened at the route. The refusal that stays here is
     the deterministic one: a work area with a live milestone driver is
     never handed over, because the driver owns that worktree.
+
+    Staffing is the caller's own session, or the default document when the
+    request names none, resolved as `sync` at seat 1 — and resolved only
+    once the alignment is actually eligible to run, so a busy or unusable
+    work area is still refused as a busy or unusable work area rather than
+    reported as a staffing condition for a call nobody was going to make.
     """
     slug, rec = _require_declared(home, slug)
     project = registry.get_project(rec, slug)
+    session = (body or {}).get("staffing_session")
+    if session is not None:
+        # A caller's claim, authorized exactly as the session's own route
+        # authorizes it: 404 for one no record answers, 403 for one this
+        # caller may not read. Omitted or null names none and asks nothing.
+        read_staffing_session(home, who or {}, session)
     area = (body or {}).get("work_area")
     if not isinstance(area, str) or not area.strip():
         raise ApiError(400, workareas.INVALID_NAME)
@@ -3763,9 +3778,6 @@ def sync_project_git(home, slug, body, task_host=None):
     config = driver.load_config(None)
     if project.get("defaults"):
         driver.merge_config(config, project["defaults"])
-    families = config.get("families_order") or ["codex"]
-    family = families[0]
-    seat = (config.get("model_defaults") or {}).get(family) or {}
 
     # One sync per work area at a time, with the ownership checks re-run
     # under the lease: without it two POSTs both passed a check taken
@@ -3773,19 +3785,39 @@ def sync_project_git(home, slug, body, task_host=None):
     # window between the check and the call.
     with _git_sync_lease(home, workspace):
         _require_unowned_workspace(home, workspace, task_host=task_host)
+        # Live, immediately before the one physical call: an edit to the
+        # session or to the document it names reaches this alignment.
+        try:
+            resolution = staffing.resolve(
+                home,
+                session,
+                "sync",
+                index=1,
+                round=1,
+                families=list(config.get("families_order") or []),
+            )
+        except staffing.StaffingConditionError as exc:
+            raise ApiError(
+                _STAFFING_CONDITION_STATUS[exc.code], exc.code
+            ) from exc
+        answer = resolution.answer
         try:
             outcome = gitsync.run_sync(
                 config["commands"],
                 config.get("timeouts"),
-                family,
+                answer["agent"],
                 workspace,
-                model=seat.get("model"),
-                effort=seat.get("effort"),
+                model=answer["model"],
+                effort=answer["effort"],
                 stall_window_s=config.get("worker_stall_window_s"),
                 stall_min_cpu_s=config.get("worker_stall_min_cpu_s"),
             )
         except runners.RunnerError as exc:
             raise ApiError(502, str(exc)) from exc
+    if resolution.staffing_fallback is not None:
+        # The alignment ran, staffed by the default document because an
+        # input could not be read. The outcome says so.
+        outcome["staffing_fallback"] = resolution.staffing_fallback
     return {
         "work_area": area,
         "workspace": workspace,
@@ -4063,6 +4095,10 @@ def _start_brainstorming_session(home, who, session_id, task_host=None):
             task = tasks.task_record(state, attachment["task_id"])
             if workspace_sync_in_flight(task_api._workspace(task)):
                 raise ApiError(409, WORK_AREA_BUSY)
+            # The restart carries the SAME reference the order was admitted
+            # with, read from the order itself: a pre-cutover record has no
+            # such key and keeps its static pins.
+            _supplied, inherited = tasks.order_staffing_session(task["order"])
             try:
                 projection = brainstorming_tasks.start_task(
                     state,
@@ -4070,7 +4106,7 @@ def _start_brainstorming_session(home, who, session_id, task_host=None):
                     {},
                     home,
                     staffing_selection=(
-                        brainstorming_tasks.standalone_staffing()
+                        brainstorming_tasks.standalone_staffing(inherited)
                     ),
                     session_id=session_id,
                 )
@@ -4281,6 +4317,16 @@ def _resolve_direct_task_order(home, who, body):
                 tasks.INVALID_TASK_REQUEST, "invalid task work area selector"
             )
         order["request"]["work_area"] = work_area
+        if order["staffing_session"] is not None:
+            # A named session must be one this caller could already read:
+            # the same authorization its own route applies, so an order
+            # cannot become a side door onto another project's staffing.
+            # Unknown is 404 `unknown_staffing_session` and inaccessible is
+            # 403, exactly as `GET /api/staffing/sessions/<id>` answers
+            # them, and neither admits a task. Omitting it names no session
+            # at all and asks nothing here: those calls take the default
+            # document, and their marker says so.
+            read_staffing_session(home, who, order["staffing_session"])
         primary = _validate_task_references(order)
         order = tasks._canonical_output_directory(order, primary)
         if order["task_executor"] == "agent_call":
@@ -4289,7 +4335,9 @@ def _resolve_direct_task_order(home, who, body):
             staffing = brainstorming_tasks.resolve_staffing(
                 config,
                 os.path.realpath(primary),
-                brainstorming_tasks.standalone_staffing(),
+                brainstorming_tasks.standalone_staffing(
+                    order["staffing_session"]
+                ),
             )
         return order, staffing, primary, project_slug
     except tasks.TaskRequestError as exc:
@@ -4967,6 +5015,7 @@ def make_handler(home, task_host=None):
                         home, "POST", segments,
                         self._body(),
                         task_host=task_host,
+                        who=who,
                     )
                     self._json(status, payload)
                 elif route.startswith("/api/runs/"):

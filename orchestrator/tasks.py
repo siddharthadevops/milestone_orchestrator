@@ -10,7 +10,7 @@ import math
 import os
 import uuid
 
-from orchestrator import brainstorming, contracts, kvstore
+from orchestrator import brainstorming, contracts, kvstore, staffing
 from orchestrator import state as st
 
 
@@ -50,9 +50,19 @@ _TASK_EXECUTORS = (
         ],
         "available_agent_configurations": (
             "One agent-call seat; agent, model, and effort resolve from the "
-            "current profile or call-time defaults."
+            "staffing session that owns the order, at the role below."
         ),
-        "configuration_schema": {},
+        # The process step the one call performs, and the only thing an
+        # orderer chooses about its staffing: the seat is always the role's
+        # first and the round always its first, so no caller can reach into
+        # a cycle the router keeps no history of.
+        "configuration_schema": {
+            "role": {
+                "type": "choice",
+                "choices": list(staffing.ROLES),
+                "default": "implement",
+            },
+        },
     },
     {
         "id": "brainstorming",
@@ -514,13 +524,32 @@ def update_slice_producer(state, slice_id, value):
     return effective_slice_producers(slice_plan)
 
 
+def _order_staffing_session(value):
+    """The owner's inherited staffing context on one order.
+
+    A session id, or ``None`` for the default document — a deliberate
+    choice either way, which is why the key is written on EVERY order this
+    validator admits. Its ABSENCE means something else entirely and is
+    reserved for records admitted before the cutover: those keep the
+    dispatch authority already frozen on them, and nothing rewrites them.
+
+    Nothing further is checked here. Whether the id names a session this
+    caller may reach is the admitting route's question, asked against the
+    session store itself; a shape rule invented here would be a second
+    vocabulary for the same refusal.
+    """
+    if value is None:
+        return None
+    return _text(value, "task order.staffing_session")
+
+
 def validate_order(order):
     """Validate a closed order and return its resolved, detached value."""
     try:
         _exact_keys(
             order,
             ("task_executor", "request"),
-            ("configuration",),
+            ("configuration", "staffing_session"),
             "task order",
         )
         task_executor = order["task_executor"]
@@ -538,10 +567,27 @@ def validate_order(order):
                 task_executor,
                 order.get("configuration", _MISSING),
             ),
+            "staffing_session": _order_staffing_session(
+                order.get("staffing_session")
+            ),
         }
         return _json_copy(checked, "task order")
     except (ContractError, TypeError, ValueError) as exc:
         _request_error(exc)
+
+
+def order_staffing_session(order):
+    """(supplied, session) for one stored order.
+
+    *supplied* says whether the order carries the field AT ALL, which is
+    the whole of standalone compatibility: a record admitted before the
+    cutover has no such key and keeps running its frozen snapshot, while a
+    record that carries an explicit ``None`` deliberately chose the default
+    document and resolves live like any other.
+    """
+    if not isinstance(order, dict) or "staffing_session" not in order:
+        return False, None
+    return True, order["staffing_session"]
 
 
 def _canonical_output_directory(order, primary_workspace):

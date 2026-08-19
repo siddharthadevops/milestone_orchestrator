@@ -529,6 +529,17 @@ class WorkerTaskCutoverTest(unittest.TestCase):
             (contracts.KIND_DELTA_REVIEW, st.UNIT_SLICE_IMPL, st.U_DELTA_REVIEW,
              report(contracts.KIND_DELTA_REVIEW)),
         )
+        # The process step each milestone order records: its own seat for
+        # the three production kinds, the fixer's for a fix, and `review`
+        # for both report-only kinds.
+        roles = {
+            contracts.KIND_DRAFT_SKELETON: "plan",
+            contracts.KIND_DRAFT_SLICE_NOTE: "draft",
+            contracts.KIND_IMPLEMENT: "implement",
+            contracts.KIND_FIX_FINDINGS: "fix",
+            contracts.KIND_REVIEW_ROUND: "review",
+            contracts.KIND_DELTA_REVIEW: "review",
+        }
         for number, (kind, unit_kind, status, response) in enumerate(cases):
             with self.subTest(kind=kind):
                 path = self._path("kind-%d" % number, unit_kind, status)
@@ -540,7 +551,14 @@ class WorkerTaskCutoverTest(unittest.TestCase):
                 task = self._task(state)
                 self.assertEqual(len(tasks.task_records(state)), 1)
                 self.assertEqual(task["order"]["task_executor"], "agent_call")
-                self.assertEqual(task["order"]["configuration"], {})
+                self.assertEqual(
+                    task["order"]["configuration"], {"role": roles[kind]}
+                )
+                # These runs bind no session; the order records the absence
+                # as the deliberate value it is.
+                self.assertEqual(
+                    tasks.order_staffing_session(task["order"]), (True, None)
+                )
                 self.assertEqual(task["order"]["request"]["context"]["task_kind"], kind)
                 self.assertEqual(task["result"]["status"], "success")
                 self.assertEqual(task["result"]["native_result"], response)

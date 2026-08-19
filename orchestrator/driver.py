@@ -3008,6 +3008,17 @@ class Driver(object):
                 raise st.IllegalTransition(
                     "selected production task is not an agent-call task"
                 )
+        # The milestone owns both of these, and writes them last. The
+        # producer channel chooses WHICH executor runs a production step,
+        # never which process step the call performs: a `role` an operator
+        # or an agent put in a prospective configuration would otherwise
+        # staff a milestone dispatch from outside milestone law. The
+        # session is the run's one binding, or none while it is unbound.
+        order["configuration"] = dict(
+            order.get("configuration") or {},
+            role=self._order_role(unit, kind),
+        )
+        order["staffing_session"] = st.staffing_session(self.state)
         record = tasks.admit_task(
             self.state,
             order,
@@ -5464,6 +5475,12 @@ class Driver(object):
             raise st.IllegalTransition(
                 "selected production task is not a Brainstorming task"
             )
+        # The same inherited context every other milestone order records.
+        # The discussion's own calls resolve through the selection below,
+        # which is where slice 6 put that authority; this key keeps the
+        # order honest about the session the work belongs to rather than
+        # letting the validator's default say it belongs to none.
+        order["staffing_session"] = st.staffing_session(self.state)
         try:
             record = brainstorming_tasks.admit_task(
                 self.state,
@@ -8648,6 +8665,24 @@ class Driver(object):
         """(family, model, effort) for one worker call, from the router."""
         role, round_number = self._worker_role(unit, kind)
         return self._staff(role, round=round_number)
+
+    def _order_role(self, unit, kind):
+        """The process step one admitted agent-call order records.
+
+        The same seat the call will actually resolve under, written into
+        the durable order so a reader can see which step bought it. A
+        report-only round is a `review` however many rounds it has had:
+        the order records the ROLE, and the seat and round the cycle is on
+        stay the dispatch's own facts.
+        """
+        if kind in contracts.REPORT_KINDS:
+            return "review"
+        role, _round = self._worker_role(unit, kind)
+        if role is None:
+            raise st.IllegalTransition(
+                "task kind %r has no staffing role" % (kind,)
+            )
+        return role
 
     def _acts_overlay(self):
         """Read the one current per-run override map beside state."""

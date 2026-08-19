@@ -12,6 +12,7 @@ import urllib.request
 from unittest import mock
 
 from orchestrator import access, brainstorming_tasks, registry, runners, service
+from orchestrator import staffing
 from orchestrator import state as st
 from orchestrator import task_api, tasks
 
@@ -265,6 +266,9 @@ class TaskApiTest(unittest.TestCase):
 
         with mock.patch.object(service, "_direct_task_config", side_effect=config):
             body = self.request("POST", "/api/tasks", self.order())[1]
+            # Order bookkeeping, taken from the machine as it was at
+            # admission. It selects nothing: the call below runs on a
+            # different family entirely.
             self.assertEqual(
                 body["task"]["resolved_staffing"]["agent_call"]["agent"],
                 "codex",
@@ -276,8 +280,21 @@ class TaskApiTest(unittest.TestCase):
         self.assertEqual(record["result"]["native_result"], raw)
         self.assertEqual(record["result"]["cost"], {"api_usd": 0.25, "real_usd": 0.25})
         marker = task_api.read_worker_marker(self.home, record["id"])
-        self.assertEqual((marker["family"], marker["model"], marker["effort"]),
-                         ("claude", "actual", "high"))
+        # The router answered for the machine the call actually ran on, and
+        # the marker records that answer — not the configured seat defaults
+        # the order was admitted beside.
+        answer = staffing.resolve(
+            self.home, None, "implement", families=["claude"]
+        ).answer
+        self.assertEqual(
+            (marker["family"], marker["model"], marker["effort"]),
+            (answer["agent"], answer["model"], answer["effort"]),
+        )
+        self.assertEqual(marker["family"], "claude")
+        self.assertNotEqual((marker["model"], marker["effort"]),
+                            ("actual", "high"))
+        self.assertEqual(seen[0][0], marker["family"])
+        self.assertEqual(seen[0][3:], (marker["model"], marker["effort"]))
         self.assertEqual(marker["task_id"], record["id"])
         fail.append(True)
         failed_id = self.request("POST", "/api/tasks", self.order())[1]["task"]["id"]
@@ -509,7 +526,7 @@ class TaskApiTest(unittest.TestCase):
         self.assertEqual((status, body["error"]), (503, tasks.TASK_UNAVAILABLE))
         self.assertEqual(len(task_api.StandaloneTaskStore(self.home).records()), before)
 
-    def test_malformed_standing_config_refuses_only_the_agent_call_order(self):
+    def test_malformed_standing_config_refuses_no_standalone_order(self):
         malformed_defaults = service.driver.load_config(None)
         malformed_defaults["model_defaults"] = True
         malformed_families = service.driver.load_config(None)
@@ -521,25 +538,37 @@ class TaskApiTest(unittest.TestCase):
         )
         malformed_timeouts = service.driver.load_config(None)
         malformed_timeouts["timeouts"] = True
-        before = len(task_api.StandaloneTaskStore(self.home).records())
 
-        for executor, config in (
-            ("agent_call", malformed_defaults),
-            ("agent_call", malformed_families),
-            ("agent_call", malformed_command),
+        # An agent call reads none of this at admission any more either.
+        # Its one call is staffed by the router immediately before it is
+        # made, so the standing families, the runtime defaults and the
+        # command templates decide nothing here; the snapshot beside the
+        # order is bookkeeping, and a configuration it cannot read yields
+        # no snapshot rather than refusing an order it does not staff.
+        for config, snapshot in (
+            (malformed_defaults, {}),
+            (malformed_families, {}),
+            (malformed_command, {"agent_call": {
+                "agent": "codex", "model": "gpt-5.6-sol", "effort": "xhigh",
+            }}),
         ):
-            with self.subTest(executor=executor, config=config):
+            with self.subTest(executor="agent_call", config=config):
+                admitted = len(
+                    task_api.StandaloneTaskStore(self.home).records()
+                )
                 with mock.patch.object(
                     service, "_direct_task_config", return_value=config
                 ):
                     status, body = self.request(
-                        "POST", "/api/tasks", self.order(executor)
+                        "POST", "/api/tasks", self.order("agent_call")
                     )
+                self.assertEqual(status, 201, body)
                 self.assertEqual(
-                    (status, body["error"]), (503, tasks.TASK_UNAVAILABLE)
+                    body["task"]["resolved_staffing"], snapshot
                 )
                 self.assertEqual(
-                    len(task_api.StandaloneTaskStore(self.home).records()), before
+                    len(task_api.StandaloneTaskStore(self.home).records()),
+                    admitted + 1,
                 )
 
         # A Brainstorming order reads none of this at admission any more.

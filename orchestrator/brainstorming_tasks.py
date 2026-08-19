@@ -89,18 +89,18 @@ def _execution_context(request):
     }
 
 
-def standalone_staffing():
+def standalone_staffing(session=None):
     """The selection a directly ordered Brainstorming task carries.
 
-    A standalone order names no owner session yet — the order body gains
-    that field in the standalone-task slice — so its discussion is bound to
-    the router holding none of its own: the `default` document at `medium`
-    with the host's configured families, which is the same answer an
-    unbound run gives the discussions it owns. That is a selection, not an
-    absent one; absence is reserved for a caller with no document store to
-    resolve against at all.
+    *session* is the id the order inherited from its owner, or ``None``
+    when the order deliberately named none: the discussion then resolves
+    every automatic call on the `default` document at `medium` with the
+    host's configured families, which is the same answer an unbound run
+    gives the discussions it owns. Either way this IS a selection; absence
+    is reserved for a caller with no document store to resolve against at
+    all, which is what a pre-cutover static record keeps.
     """
-    return {"session": None}
+    return {"session": session}
 
 
 def resolve_staffing(config, workspace, staffing_selection=None):

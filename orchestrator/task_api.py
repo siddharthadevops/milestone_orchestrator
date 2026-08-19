@@ -12,7 +12,7 @@ import time
 import uuid
 
 from orchestrator import brainstorming_tasks, driver, gitsync, kvstore, pricing
-from orchestrator import registry, runners, tasks
+from orchestrator import registry, runners, staffing, tasks
 
 
 def records_path(home):
@@ -92,7 +92,20 @@ class StandaloneTaskStore:
 
 
 def worker_staffing(config):
-    """Resolve the profile-less agent-call snapshot used at direct admission."""
+    """The order's best-effort agent-call bookkeeping at admission.
+
+    It DECIDES NOTHING. The call itself is staffed by the router,
+    immediately before it is dispatched, from the session the order
+    inherited; this snapshot is the ordinary configuration reading kept
+    beside the order so a reader can see what the machine looked like when
+    the work was admitted, and the marker remains the record of what ran.
+
+    Best-effort accordingly: a configuration this cannot read yields no
+    snapshot rather than a refusal. Refusing here would make order
+    bookkeeping an availability gate over a call whose staffing it does
+    not choose — and the gate would be the wrong one, since the family it
+    checks is not the family the router will pick.
+    """
     try:
         if not isinstance(config, dict):
             raise ValueError("config")
@@ -115,14 +128,8 @@ def worker_staffing(config):
                 not isinstance(value, str) or not value.strip()
             ):
                 raise ValueError("model default")
-        commands = config.get("commands")
-        if not isinstance(commands, dict) or family not in commands:
-            raise ValueError("family command")
-        runners.apply_model_effort(commands[family], model, effort)
-    except (KeyError, IndexError, TypeError, ValueError, runners.RunnerError) as exc:
-        raise tasks.TaskRequestError(
-            tasks.TASK_UNAVAILABLE, "Worker staffing is unavailable"
-        ) from exc
+    except (KeyError, IndexError, TypeError, ValueError):
+        return {}
     return {
         "agent_call": {"agent": family, "model": model, "effort": effort}
     }
@@ -166,9 +173,57 @@ def _write_worker_marker(home, task_id, marker):
             os.unlink(temporary)
 
 
-def _dispatch(config):
-    snapshot = worker_staffing(config)["agent_call"]
-    return snapshot["agent"], snapshot["model"], snapshot["effort"]
+# The pre-provider staffing boundary of a directly ordered agent call.
+#
+# One router answer, read immediately before the one physical call, from
+# the session the order inherited: an edit to that session or to the
+# document it names reaches this call, and neither the admission snapshot
+# beside the order nor the host's first configured family can select it.
+#
+# A record admitted BEFORE the cutover carries no `staffing_session` key at
+# all, and that absence is the whole of compatibility: it runs the staffing
+# frozen on it, under the current or the retired executor name, with no
+# rewrite and no derived session.
+
+
+def _frozen_dispatch(record):
+    """(family, model, effort) frozen on one pre-cutover order."""
+    staffed = record.get("resolved_staffing") or {}
+    snapshot = staffed.get("agent_call")
+    if snapshot is None:
+        snapshot = staffed.get("worker")
+    if not isinstance(snapshot, dict):
+        raise RuntimeError(
+            "the task carries no staffing and no session to resolve one"
+        )
+    return snapshot.get("agent"), snapshot.get("model"), snapshot.get("effort")
+
+
+def _dispatch(home, record, config):
+    """(family, model, effort, fallback) for this task's one call."""
+    order = record["order"]
+    supplied, session = tasks.order_staffing_session(order)
+    if not supplied:
+        return _frozen_dispatch(record) + (None,)
+    resolution = staffing.resolve(
+        home,
+        session,
+        # Always present: admission resolves the catalogue's own default
+        # for an order that named none, so there is no second default here.
+        (order.get("configuration") or {}).get("role"),
+        index=1,
+        round=1,
+        # The order's own text, passed best-effort and read by no rule.
+        brief=order["request"]["request"],
+        # Only reachable when the session itself cannot be read, which is
+        # also the one case where the machine's families cannot be.
+        families=list((config or {}).get("families_order") or []),
+    )
+    answer = resolution.answer
+    return (
+        answer["agent"], answer["model"], answer["effort"],
+        resolution.staffing_fallback,
+    )
 
 
 def _accounting(carrier, family, model, config, elapsed):
@@ -297,7 +352,9 @@ class DirectTaskHost:
         reason = None
         try:
             config = config_resolver()
-            family, model, effort = _dispatch(config)
+            family, model, effort, fallback = _dispatch(
+                self.home, record, config
+            )
             marker = {
                 "task_id": task_id,
                 "call_id": str(uuid.uuid4()),
@@ -306,7 +363,17 @@ class DirectTaskHost:
                 "effort": effort,
                 "started_at": started,
             }
-            _write_worker_marker(self.home, task_id, marker)
+            if fallback is not None:
+                # The call was staffed by the default document because an
+                # input could not be read. It ran; the marker says so.
+                marker["staffing_fallback"] = fallback
+            try:
+                _write_worker_marker(self.home, task_id, marker)
+            except Exception:
+                # Evidence, not a gate. This write is attempted before the
+                # provider call only so a call in flight is visible; losing
+                # it must not refuse a call the router already staffed.
+                pass
             runner = self.runner_factory(config, _workspace(record))
             carrier = tasks.execute_worker(
                 record,
@@ -320,6 +387,16 @@ class DirectTaskHost:
             )
             native = carrier.text
             status = "success"
+        except staffing.StaffingConditionError as exc:
+            # One of the router's two surfaced conditions. The task is
+            # terminal under that token, and no provider was called: the
+            # marker is written only once a call is actually staffed, so
+            # there is none to correct.
+            config = locals().get("config", {})
+            family = model = effort = None
+            carrier = exc
+            reason = "staffing refused this call (%s): %s" % (exc.code, exc)
+            status = "failure"
         except Exception as exc:
             config = locals().get("config", {})
             family = locals().get("family")
@@ -362,11 +439,16 @@ class DirectTaskHost:
 
     def _run_brainstorming(self, record, config_resolver):
         task_id = record["id"]
-        # A directly ordered task has no owner run: its discussion resolves
-        # every automatic call through the router holding no session of its
-        # own. A pre-cutover static record ignores this and keeps its pins.
+        # A directly ordered task carries its owner's session on the order
+        # itself — an id, or an explicit null choosing the default document
+        # — and every automatic call of its discussion resolves through
+        # that. A pre-cutover static record has no such key and keeps its
+        # pins; `standalone_staffing` reads the absence as no session.
+        _supplied, session = tasks.order_staffing_session(record["order"])
         start_options = {
-            "staffing_selection": brainstorming_tasks.standalone_staffing(),
+            "staffing_selection": brainstorming_tasks.standalone_staffing(
+                session
+            ),
         }
         try:
             config = config_resolver()
@@ -401,7 +483,9 @@ class DirectTaskHost:
                             effect_request,
                             dispatch_authority=authority,
                             staffing_selection=(
-                                brainstorming_tasks.standalone_staffing()
+                                brainstorming_tasks.standalone_staffing(
+                                    session
+                                )
                             ),
                         )
                     ),
