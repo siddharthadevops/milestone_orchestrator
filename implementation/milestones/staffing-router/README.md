@@ -331,4 +331,5 @@ The goal is achieved when:
 | slice_impl-05 (Staffing API) | reviewed | 5 | satisfied | fddce35 |
 | slice_doc-06 (Brainstorming cutover) | reviewed | 2 | satisfied | de1e51c |
 | slice_impl-06-a (Brainstorming cutover) | reviewed | 23 | satisfied | e345037 |
-| slice_impl-06-b (Brainstorming cutover) | reviewed | 24 | satisfied | - |
+| slice_impl-06-b (Brainstorming cutover) | reviewed | 24 | satisfied | 5072f04 |
+| slice_doc-07 (Standalone tasks and work-area alignment) | reviewed | 2 | satisfied | - |
