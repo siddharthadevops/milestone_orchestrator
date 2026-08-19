@@ -315,7 +315,7 @@ The goal is achieved when:
 
 | Unit | Status | Rounds | Review result | Gate commit |
 |---|---|---|---|---|
-| skeleton | reviewed | 12 | satisfied | 0b8caea |
+| skeleton | reviewed | 12 | satisfied | 9f3b176 |
 | slice_doc-01 (Rename `worker` to `agent_call`) | reviewed | 2 | satisfied | 544cd57 |
 | slice_impl-01 (Rename `worker` to `agent_call`) | reviewed | 5 | satisfied | f156bdd |
 | slice_doc-02 (Staffing document store) | reviewed | 7 | satisfied | d8a9324 |
@@ -324,6 +324,7 @@ The goal is achieved when:
 | slice_doc-03 (Sessions and resolution) | reviewed | 2 | satisfied | b2a1952 |
 | slice_impl-03-a (Sessions and resolution) | reviewed | 8 | satisfied | e069b5f |
 | slice_impl-03-b (Sessions and resolution) | reviewed | 12 | satisfied | 4d8c6cb |
-| slice_doc-04 (Milestone driver cutover and run binding) | reviewed | 28 | satisfied | 24a1cf8 |
+| slice_doc-04 (Milestone driver cutover and run binding) | reviewed | 28 | satisfied | 9f3b176 |
 | slice_impl-04-a (Milestone driver cutover and run binding) | reviewed | 14 | satisfied | e57f9dc |
-| slice_impl-04-b (Milestone driver cutover and run binding) | reviewed | 30 | satisfied | - |
+| slice_impl-04-b (Milestone driver cutover and run binding) | reviewed | 30 | satisfied | 9f3b176 |
+| slice_doc-05 (Staffing API) | reviewed | 2 | satisfied | - |
