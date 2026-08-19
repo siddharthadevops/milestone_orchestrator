@@ -328,4 +328,5 @@ The goal is achieved when:
 | slice_impl-04-a (Milestone driver cutover and run binding) | reviewed | 14 | satisfied | e57f9dc |
 | slice_impl-04-b (Milestone driver cutover and run binding) | reviewed | 30 | satisfied | 9f3b176 |
 | slice_doc-05 (Staffing API) | reviewed | 2 | satisfied | 9175c3e |
-| slice_impl-05 (Staffing API) | reviewed | 5 | satisfied | - |
+| slice_impl-05 (Staffing API) | reviewed | 5 | satisfied | fddce35 |
+| slice_doc-06 (Brainstorming cutover) | reviewed | 2 | satisfied | - |
