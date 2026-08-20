@@ -240,30 +240,7 @@
   .closing-label { width: 64px; flex: none; color: #a1a1aa;
     font-size: 10px; text-transform: uppercase; letter-spacing: .04em; }
   .final-agreement { border-color: #bbe7c9; background: #fbfefc; }
-  /* The model column carries the widest inheritance/default hint; clipping
-     it would hide whether the row follows the profile or an override. */
-  .actgrid { display: grid; grid-template-columns: 90px 1fr 1.45fr .95fr;
-    gap: 6px; align-items: center; }
-  .actgrid label { font-size: 12px; color: #3f3f46; }
   .acthead { font-size: 10px; text-transform: uppercase; color: #a1a1aa; }
-  .actfamily { font-size: 12px; color: #52525b; padding: 4px 6px; }
-  .actgrid select, .actgrid input { font: inherit; font-size: 12px;
-    padding: 4px 6px; border: 1px solid var(--line); border-radius: 6px;
-    /* without this the controls' intrinsic width beats the fr track
-       sizes and the model column collapses */
-    min-width: 0; }
-  /* model-profile editor: one rigor at a time, the same act grid the
-     launch form uses, plus a managed example list. */
-  .mp-tabs { display: flex; gap: 6px; margin-bottom: 8px; }
-  .mp-tabs .btn.on { background: var(--accent); color: #fff;
-    border-color: var(--accent); }
-  .mp-listrow { display: flex; gap: 6px; align-items: center;
-    margin-bottom: 4px; }
-  .mp-listrow input { flex: 1; }
-  .mp-summary { display: grid; grid-template-columns: auto auto auto auto;
-    gap: 2px 10px; font-size: 12px; align-items: baseline; }
-  .mp-summary .mp-act { color: #3f3f46; }
-  .mp-summary .mp-unset { color: #a1a1aa; }
   .unit-title { color: #71717a; font-size: 11px; margin-left: 6px; }
   /* Brainstorming roster: one row per AI seat, configured like a
      milestone act (agent / model / effort) plus a remove control. */
@@ -586,7 +563,6 @@
     .strategy-decision { grid-template-columns: minmax(0, 1fr); gap: 4px; }
     .strategy-support { white-space: normal; }
     .storybody { min-width: 0; max-width: none; }
-    .actgrid { grid-template-columns: 70px 1fr 1.45fr .95fr; }
     .executor-config { grid-template-columns: 1fr; }
     .pathrow { flex-wrap: wrap; }
   }
@@ -616,8 +592,8 @@
         onclick="openTaskHistory()">Tasks</button>
       <button class="btn" id="newProjectBtn" style="display:none"
         onclick="openProjectCreate()" title="Declare a project">+ Project</button>
-      <button class="btn" id="modelProfilesBtn" style="display:none"
-        onclick="openModelProfiles()">Model profiles</button>
+      <button class="btn" id="staffingDocsBtn" style="display:none"
+        onclick="openStaffingDocuments()">Staffing documents</button>
       <button class="btn" id="strategyProfilesBtn" style="display:none"
         onclick="openStrategyProfiles()">Strategy profiles</button>
     </div>
@@ -1113,38 +1089,19 @@
   </div>
 </dialog>
 
-<dialog id="modelprofilesdlg">
-  <h2>Model profiles</h2>
-  <div id="mp_error" class="failure" style="display:none"></div>
-  <div id="mp_catalogue"></div>
+<dialog id="staffingdocsdlg">
+  <h2>Staffing documents</h2>
+  <p class="amend-hint">The whole document, as the service stores it. Each
+    <b>models</b> and <b>efforts</b> ladder runs least to most capable in the
+    order its author wrote; the panel never reorders or prices one.</p>
+  <div id="sd_error" class="failure" style="display:none"></div>
+  <div id="sd_catalogue"></div>
   <div class="formrow">
     <span></span>
-    <button class="btn" onclick="document.getElementById('modelprofilesdlg').close()">Close</button>
-    <button class="btn primary" id="mp_new" onclick="newModelProfile()">New profile</button>
-  </div>
-</dialog>
-
-<dialog id="mpeditor">
-  <h2 class="dlgtitle" id="mpe_title">Model profile</h2>
-  <div class="field"><label>Name</label>
-    <input id="mpe_name" placeholder="web-ui">
-    <div class="hint" id="mpe_name_hint"></div></div>
-  <div class="field"><label>When this profile matches</label>
-    <div id="mpe_examples"></div>
-    <button class="btn" type="button" onclick="mpAddExample()">+ example</button>
-    <div class="hint">Short clues, five words at most each. They are what you
-      read when you pick a profile at launch.</div></div>
-  <div class="field"><label>Staffing</label>
-    <div class="mp-tabs" id="mpe_tabs"></div>
-    <div class="actgrid" id="mpe_grid"></div>
-    <div class="hint">Rigor is chosen per run at launch, so each of the three
-      is staffed here. A blank row leaves that act out of the profile: it
-      keeps whatever the run already assigns, then the family default.</div>
-  </div>
-  <div class="formrow">
-    <span id="mpe_error" style="color:var(--bad);font-size:12px;margin-right:auto"></span>
-    <button class="btn" onclick="document.getElementById('mpeditor').close()">Cancel</button>
-    <button class="btn primary" onclick="saveModelProfileEditor()">Save</button>
+    <button class="btn"
+      onclick="document.getElementById('staffingdocsdlg').close()">Close</button>
+    <button class="btn primary" id="sd_new" style="display:none"
+      onclick="newStaffingDocument()">New document</button>
   </div>
 </dialog>
 
@@ -1256,7 +1213,7 @@ async function loadAccess() {
   };
   document.getElementById("newProjectBtn").style.display =
     appAccess.admin ? "" : "none";
-  document.getElementById("modelProfilesBtn").style.display =
+  document.getElementById("staffingDocsBtn").style.display =
     appAccess.user ? "" : "none";
   document.getElementById("strategyProfilesBtn").style.display =
     appAccess.user ? "" : "none";
@@ -4241,21 +4198,6 @@ function openForm(preselect) {
   document.getElementById("form").showModal();
 }
 
-/* ---- model-profile catalogue and current selection. The server remains the
-       one semantic validator; this panel only preserves Edit's opened name. */
-let modelProfileCatalogue = [];
-let modelProfileCatalogueError = "";
-async function loadModelProfileCatalogue() {
-  modelProfileCatalogue = [];
-  modelProfileCatalogueError = "";
-  try {
-    const data = await api("/api/model-profiles");
-    modelProfileCatalogue = data.profiles || [];
-  } catch (e) { modelProfileCatalogueError = e.message; }
-  if (document.getElementById("modelprofilesdlg").open)
-    renderModelProfiles();
-}
-
 /* ---- staffing documents: the one catalogue read every staffing choice
        in this panel offers. The run's staffing comes from the document it
        names and the rigor beside it; the server stays the one semantic
@@ -4299,6 +4241,71 @@ function onLaunchStaffingChange() {
   document.getElementById("f_staffing_hint").textContent =
     staffingDocumentsError ||
     `Every call of this run is staffed by ${name} at ${rigor}.`;
+}
+/* ---- the staffing-document catalogue and its whole-document editor
+       (staffing-router slice 8), replacing the transitional model-profile
+       catalogue. Every authorized viewer inspects the stored documents
+       whole; only the service administrator is offered save controls, and
+       a save posts ONE whole document back through the same route.
+
+       The editor is the shared syntax-only JSON one on purpose. A field
+       form here would be a second copy of the document schema — the
+       duplication this milestone exists to end — and any client-side
+       ordering or pricing rule would silently rewrite the operator's own
+       capability ladders, which are data and nobody else's to sort. ---- */
+async function openStaffingDocuments() {
+  document.getElementById("staffingdocsdlg").showModal();
+  await loadStaffingCatalogue();
+  renderStaffingDocuments();
+}
+function renderStaffingDocuments() {
+  const error = document.getElementById("sd_error");
+  error.textContent = staffingDocumentsError;
+  error.style.display = staffingDocumentsError ? "block" : "none";
+  const create = document.getElementById("sd_new");
+  create.style.display = appAccess.admin ? "" : "none";
+  // A new document is seeded from one the service already stores, so
+  // there is nothing to offer when the catalogue could not be read.
+  create.disabled = !staffingDocuments.length;
+  document.getElementById("sd_catalogue").innerHTML =
+    staffingDocuments.map(doc => `<div class="card"><h3>${esc(doc.name)}</h3>
+      <pre class="strategy-source mono">${
+        esc(JSON.stringify(doc, null, 1))}</pre>
+      ${appAccess.admin ? `<button class="btn" onclick="editStaffingDocument('${
+        esc(escJsSq(doc.name))}')">Edit…</button>` : ""}
+    </div>`).join("") || (staffingDocumentsError ? "" :
+      `<div class="empty">No staffing documents.</div>`);
+}
+const STAFFING_DOCUMENT_HINT =
+  "One whole document, created or wholly replaced under the name it " +
+  "carries. Arrays ride exactly as written — each family's models and " +
+  "efforts are a capability ladder, least capable first — and the " +
+  "service is the only validator of what any of it means.";
+function openStaffingDocumentEditor(title, value) {
+  document.getElementById("staffingdocsdlg").close();
+  openSgEditor({
+    title: title,
+    value: value,
+    hint: STAFFING_DOCUMENT_HINT,
+    onSave: parsed => postJSON("/api/staffing/documents", parsed),
+    afterSave: openStaffingDocuments,
+  });
+}
+function editStaffingDocument(name) {
+  if (!appAccess.admin) return;
+  const opened = staffingDocuments.find(doc => doc.name === name);
+  if (!opened) return;
+  openStaffingDocumentEditor(`Staffing document — ${name}`, opened);
+}
+function newStaffingDocument() {
+  if (!appAccess.admin) return;
+  // Seeded from a STORED document rather than a shape written here, with
+  // the name blanked so a save cannot silently replace the one it copied.
+  const seed = staffingDocuments.find(doc => doc.name === "default") ||
+    staffingDocuments[0];
+  if (!seed) return;
+  openStaffingDocumentEditor("New staffing document",
+                             Object.assign({}, seed, {name: ""}));
 }
 /* ---- the run's live staffing session (staffing-router slice 8). One
        card on the settings page, one editor over the session's own route.
@@ -4404,242 +4411,6 @@ async function saveStaffingSession() {
   } catch (e) { error.textContent = e.message; return; }  // token verbatim
   document.getElementById("staffingsessiondlg").close();
   refreshDetail();
-}
-/* ---- model-profile catalogue and editor: the transitional surface the
-       staffing-document catalogue replaces. ---- */
-async function openModelProfiles() {
-  document.getElementById("modelprofilesdlg").showModal();
-  await loadModelProfileCatalogue();
-}
-/* The nine seats a profile can staff, in the order the run uses them, with
-   what each seat actually honors: `full` takes a family and may tune model
-   and effort; `tuned` has a structurally fixed or derived family and only
-   tunes model/effort; `family` (consultation) derives both, so it chooses
-   only who answers. Sending anything else is an input error server-side —
-   the grid simply never offers it. */
-const MP_ROWS = [
-  {act: "skeletoner", label: "Skeleton", kind: "full"},
-  {act: "drafter", label: "Draft docs", kind: "full"},
-  {act: "implementer", label: "Implement", kind: "full"},
-  {act: "review_codex", label: "Review · Codex", kind: "tuned",
-   family: "codex"},
-  {act: "review_claude", label: "Review · Claude", kind: "tuned",
-   family: "claude"},
-  {act: "fixer", label: "Fix findings", kind: "full"},
-  {act: "reclassifier", label: "Reclassify", kind: "full"},
-  {act: "brainstorming_counterpart", label: "Counterpart", kind: "tuned",
-   family: "opposite"},
-  {act: "consultation", label: "Consultation", kind: "family"},
-];
-const MP_FAMILY_OPTS = ["codex", "claude", "self", "opposite"];
-const MP_RIGORS = ["low", "medium", "high"];
-function mpEntryFields(entry) {
-  // One seat is stored either as a bare family-policy string or as an
-  // object; the grid reads both and the operator sees neither.
-  if (typeof entry === "string")
-    return {agent: entry, model: "", effort: ""};
-  if (entry && typeof entry === "object")
-    return {agent: entry.agent || "", model: entry.model || "",
-            effort: entry.effort || ""};
-  return {agent: "", model: "", effort: ""};
-}
-function mpModelOpts(family) {
-  return MODEL_OPTS[family] ||
-    [...MODEL_OPTS.claude, ...MODEL_OPTS.codex];
-}
-function renderModelProfiles() {
-  const error = document.getElementById("mp_error");
-  error.textContent = modelProfileCatalogueError;
-  error.style.display = modelProfileCatalogueError ? "block" : "none";
-  document.getElementById("mp_new").style.display = appAccess.admin ? "" : "none";
-  document.getElementById("mp_catalogue").innerHTML =
-    modelProfileCatalogue.map(profile => {
-      const configs = MP_RIGORS.map(rigor =>
-        `<div><b>${rigor}</b>${
-          mpRigorSummary(profile.configurations[rigor])}</div>`
-      ).join("");
-      return `<div class="card"><h3>${esc(profile.name)}</h3>
-        <div class="amend-hint">${esc(profile.examples.join(" · "))}</div>
-        ${configs}
-        ${appAccess.admin ? `<button class="btn" onclick="editModelProfile('${esc(escJsSq(profile.name))}')">Edit…</button>` : ""}
-      </div>`;
-    }).join("") || (modelProfileCatalogueError ? "" :
-      `<div class="empty">No model profiles.</div>`);
-}
-function mpRigorSummary(cfg) {
-  const rows = MP_ROWS.filter(row => cfg && cfg[row.act] !== undefined);
-  if (!rows.length)
-    return `<div class="mp-unset">nothing staffed — run defaults</div>`;
-  return `<div class="mp-summary">` + rows.map(row => {
-    const f = mpEntryFields(cfg[row.act]);
-    const family = row.kind === "tuned" ? row.family : f.agent;
-    return `<span class="mp-act">${esc(row.label)}</span>
-      <span class="mono">${esc(family || "—")}</span>
-      <span class="mono">${esc(shortModel(f.model) || "—")}</span>
-      <span class="mono">${esc(f.effort || "—")}</span>`;
-  }).join("") + `</div>`;
-}
-
-/* ---- the model-profile editor. Every control is a staffing DECISION —
-   who answers, with which model, at what effort — one rigor at a time, in
-   the same three columns as the launch act grid. The document shape that
-   carries the decision is the panel's problem, not the operator's; the
-   service stays the one semantic validator. */
-let mpEdit = null;
-function newModelProfile() {
-  if (!appAccess.admin) return;
-  document.getElementById("modelprofilesdlg").close();
-  openModelProfileEditor({name: "", examples: [""], configurations: {}}, true);
-}
-function editModelProfile(name) {
-  if (!appAccess.admin) return;
-  const opened = modelProfileCatalogue.find(p => p.name === name);
-  if (!opened) return;
-  document.getElementById("modelprofilesdlg").close();
-  openModelProfileEditor(opened, false);
-}
-function openModelProfileEditor(profile, create) {
-  mpEdit = {
-    create: Boolean(create),
-    name: profile.name || "",
-    examples: (profile.examples || []).slice(),
-    configurations: JSON.parse(
-      JSON.stringify(profile.configurations || {})),
-    rigor: "medium",
-  };
-  for (const rigor of MP_RIGORS) {
-    const cfg = mpEdit.configurations[rigor];
-    if (!cfg || typeof cfg !== "object" || Array.isArray(cfg))
-      mpEdit.configurations[rigor] = {};
-  }
-  if (!mpEdit.examples.length) mpEdit.examples = [""];
-  document.getElementById("mpe_title").textContent = create
-    ? "New model profile" : `Model profile — ${mpEdit.name}`;
-  const nameEl = document.getElementById("mpe_name");
-  nameEl.value = mpEdit.name;
-  nameEl.disabled = !create;
-  document.getElementById("mpe_name_hint").textContent = create
-    ? "Letters, digits, - and _ — this is how you pick it at launch."
-    : "A saved profile keeps its name; Save replaces the whole definition.";
-  document.getElementById("mpe_error").textContent = "";
-  mpRenderExamples();
-  mpRenderTabs();
-  mpRenderGrid();
-  document.getElementById("mpeditor").showModal();
-}
-function mpRenderExamples() {
-  document.getElementById("mpe_examples").innerHTML =
-    mpEdit.examples.map((example, i) =>
-      `<div class="mp-listrow">
-         <input value="${esc(example)}" placeholder="public API contract"
-           oninput="mpSetExample(${i}, this.value)">
-         <button class="btn" type="button" onclick="mpRemoveExample(${i})"
-           ${mpEdit.examples.length < 2 ? "disabled" : ""}>×</button>
-       </div>`).join("");
-}
-function mpSetExample(i, value) { mpEdit.examples[i] = value; }
-function mpAddExample() { mpEdit.examples.push(""); mpRenderExamples(); }
-function mpRemoveExample(i) {
-  mpEdit.examples.splice(i, 1);
-  mpRenderExamples();
-}
-function mpRenderTabs() {
-  document.getElementById("mpe_tabs").innerHTML = MP_RIGORS.map(rigor =>
-    `<button class="btn ${rigor === mpEdit.rigor ? "on" : ""}" type="button"
-       onclick="mpSelectRigor('${rigor}')">${rigor}</button>`).join("");
-}
-function mpSelectRigor(rigor) {
-  mpEdit.rigor = rigor;
-  mpRenderTabs();
-  mpRenderGrid();
-}
-function mpOptions(values, current, emptyLabel) {
-  return `<option value="">— ${esc(emptyLabel)} —</option>` +
-    values.map(v =>
-      `<option ${v === current ? "selected" : ""}>${esc(v)}</option>`
-    ).join("");
-}
-function mpRenderGrid() {
-  const cfg = mpEdit.configurations[mpEdit.rigor];
-  document.getElementById("mpe_grid").innerHTML =
-    `<span></span><span class="acthead">family</span>
-     <span class="acthead">model</span><span class="acthead">effort</span>` +
-    MP_ROWS.map(row => {
-      const f = mpEntryFields(cfg[row.act]);
-      const declared = row.kind === "full" ? f.agent : row.family;
-      const family = row.kind === "full"
-        ? `<select id="mpe_${row.act}_agent"
-             onchange="mpOnFamily('${row.act}')">
-             ${mpOptions(MP_FAMILY_OPTS, f.agent, "unset")}</select>`
-        : row.kind === "family"
-        ? `<select id="mpe_${row.act}_agent"
-             onchange="mpOnField('${row.act}')">
-             ${mpOptions(MP_FAMILY_OPTS, f.agent, "unset")}</select>`
-        : `<span class="actfamily mono">${esc(row.family)}${
-             row.family === "opposite" ? " (derived)" : ""}</span>`;
-      const model = row.kind === "family"
-        ? `<span class="actfamily mono">derived</span>`
-        : `<select id="mpe_${row.act}_model"
-             onchange="mpOnField('${row.act}')">
-             ${mpOptions(mpModelOpts(declared), f.model,
-                         "family default")}</select>`;
-      const effort = row.kind === "family"
-        ? `<span class="actfamily mono">caller's</span>`
-        : `<select id="mpe_${row.act}_effort"
-             onchange="mpOnField('${row.act}')">
-             ${mpOptions(EFFORT_OPTS.claude, f.effort,
-                         "family default")}</select>`;
-      return `<label title="${esc(row.act)}">${esc(row.label)}</label>` +
-        family + model + effort;
-    }).join("");
-}
-function mpOnFamily(act) {
-  // The family just changed, so the other family's model no longer
-  // applies: clear the tuning and re-offer this family's models.
-  mpWriteAct(act, true);
-  mpRenderGrid();
-}
-function mpOnField(act) { mpWriteAct(act, false); }
-function mpWriteAct(act, familyChanged) {
-  const cfg = mpEdit.configurations[mpEdit.rigor];
-  const row = MP_ROWS.find(r => r.act === act);
-  const read = field => {
-    const el = document.getElementById(`mpe_${act}_${field}`);
-    return el ? el.value : "";
-  };
-  const agent = row.kind === "tuned" ? "" : read("agent");
-  const model = familyChanged ? "" : read("model");
-  const effort = familyChanged ? "" : read("effort");
-  // A wholly blank row is an ABSENT act, not an empty one: the run keeps
-  // its own assignment and then the family default.
-  if (!agent && !model && !effort) { delete cfg[act]; return; }
-  // Consultation derives model and effort, so its only form is the family
-  // policy; any other seat with nothing tuned takes that same short form.
-  if (agent && !model && !effort) { cfg[act] = agent; return; }
-  const entry = {};
-  if (agent) entry.agent = agent;
-  if (model) entry.model = model;
-  if (effort) entry.effort = effort;
-  cfg[act] = entry;
-}
-async function saveModelProfileEditor() {
-  const error = document.getElementById("mpe_error");
-  error.textContent = "";
-  const name = mpEdit.create
-    ? document.getElementById("mpe_name").value.trim() : mpEdit.name;
-  const document_ = {
-    name,
-    examples: mpEdit.examples.map(e => e.trim()).filter(Boolean),
-    configurations: mpEdit.configurations,
-  };
-  try {
-    if (mpEdit.create &&
-        modelProfileCatalogue.some(p => p.name === name))
-      throw new Error("That name already exists — open it with Edit.");
-    await postJSON("/api/model-profiles", document_);
-  } catch (e) { error.textContent = e.message; return; }  // token verbatim
-  document.getElementById("mpeditor").close();
-  await openModelProfiles();
 }
 /* ---- strategy catalogue, configurator, launch selection and live repoint.
    One GET supplies every semantic key, legal value and support label. ---- */

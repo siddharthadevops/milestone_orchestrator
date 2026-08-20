@@ -222,7 +222,10 @@ class CurrentModelProfileRuntimeTest(unittest.TestCase):
 
         edited = model_profiles.load(self.home, "work")
         edited["configurations"]["medium"]["fixer"]["model"] = "profile-v2"
-        service.save_model_profile(self.home, edited)
+        # Through the store the resolver reads: the catalogue's own write
+        # route retired with the panel it served (staffing-router slice 8),
+        # and what this asserts is the driver's live re-read either way.
+        model_profiles.save(self.home, edited)
         self.assertEqual(d._act_profile("fixer"),
                          ("claude", "profile-v2", "medium"))
         self.assertEqual(dispatched, ("claude", "profile-v1", "medium"))

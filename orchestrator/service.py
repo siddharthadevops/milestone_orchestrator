@@ -2040,9 +2040,8 @@ def _validated_launch_staffing(value, supplied=True):
 def staffing_documents_list(home):
     """Every stored staffing document, sorted by name.
 
-    Read-only, and loud on a damaged store exactly as the model-profile
-    catalogue is: a shorter list would silently hide the document an
-    operator is about to launch on.
+    Read-only, and loud on a damaged store: a shorter list would silently
+    hide the document an operator is about to launch on.
     """
     return staffing.list_staffing_documents(home)
 
@@ -2108,7 +2107,7 @@ def _require_encodable(body, token):
 
 def save_staffing_document(home, body):
     """Create or WHOLLY replace one staffing document — the catalogue's only
-    edit operation, and administrative like the model-profile catalogue.
+    edit operation, and administrative as the catalogue it replaced was.
 
     Whole replacement, never a merge: a friendly merge would leave a removed
     rule or seat alive in a document its author believes no longer carries
@@ -2843,27 +2842,6 @@ def save_profile(home, body):
     except profiles.ProfileError as exc:
         raise ApiError(400, str(exc))
     return _profile_view(saved)
-
-
-def model_profiles_list(home):
-    """All model profiles for the catalogue (model-profiles slice 1).
-
-    The API-visible document IS the stored source document — no view
-    wrapper, no derived metadata. Unlike the strategy list, a stored but
-    invalid definition is NOT skipped: the error propagates and the GET
-    fails loudly with the common 500 envelope, so a damaged catalogue never
-    looks merely shorter."""
-    return model_profiles.list_model_profiles(home)
-
-
-def save_model_profile(home, body):
-    """Create or wholly replace one model profile — the catalogue's only
-    edit operation. Validation refuses with 400 before any byte changes,
-    so the prior definition survives every rejected input."""
-    try:
-        return model_profiles.save(home, body)
-    except model_profiles.ModelProfileError as exc:
-        raise ApiError(400, str(exc))
 
 
 def set_slice_producer(home, run_id, slice_id, body):
@@ -4461,11 +4439,6 @@ def make_handler(home, task_host=None):
                         "profiles": profiles_list(home),
                         "decisions": profiles.decision_catalogue(),
                     })
-                elif route == "/api/model-profiles":
-                    self._json(
-                        200,
-                        {"ok": True, "profiles": model_profiles_list(home)},
-                    )
                 elif route == "/api/staffing/documents":
                     self._json(
                         200,
@@ -4800,10 +4773,6 @@ def make_handler(home, task_host=None):
                 elif route == "/api/profiles":
                     self._require_admin(who)
                     saved = save_profile(home, self._body())
-                    self._json(200, {"ok": True, "profile": saved})
-                elif route == "/api/model-profiles":
-                    self._require_admin(who)
-                    saved = save_model_profile(home, self._body())
                     self._json(200, {"ok": True, "profile": saved})
                 elif route == "/api/staffing/documents":
                     self._require_admin(who)

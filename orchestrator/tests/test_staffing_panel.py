@@ -1,9 +1,12 @@
 """Panel contracts for the staffing router (staffing-router slice 8).
 
-This part covers the RUN's staffing: the settings page reads the run's live
-session through the router's own routes and edits exactly its four editable
-fields, and the per-run model-profile chooser and act-override dialog retire
-with the routes they used.
+Two parts so far. The RUN's staffing: the settings page reads the run's
+live session through the router's own routes and edits exactly its four
+editable fields, and the per-run model-profile chooser and act-override
+dialog retire with the routes they used. The SERVICE's staffing catalogue:
+the standing sidebar surface reads whole staffing documents and lets the
+administrator save one whole document back, and the model-profile
+catalogue and editor retire with `GET/POST /api/model-profiles`.
 
 Two registers, as the panel's other suites use: static assertions over
 `static/panel.html` for what the single-page panel asks for, and live
@@ -11,6 +14,7 @@ assertions through a real `service.make_server` for what those requests
 actually do. The service harness is `test_staffing_api`'s, unchanged.
 """
 
+import json
 import os
 import re
 import unittest
@@ -19,6 +23,7 @@ from pathlib import Path
 
 from orchestrator import access, registry, service
 from orchestrator import driver as drv
+from orchestrator import model_profiles as mp
 from orchestrator import staffing as stf
 from orchestrator import state as st
 
@@ -39,6 +44,16 @@ class PanelSourceMixin:
         cls.session_ui = cls.panel.split(
             "/* ---- the run's live staffing session", 1
         )[1].split("/* ---- ", 1)[0]
+        # Same bounding for the standing document catalogue and its editor.
+        cls.documents_ui = cls.panel.split(
+            "/* ---- the staffing-document catalogue", 1
+        )[1].split("/* ---- ", 1)[0]
+
+    def section(self, source, header):
+        """One whole top-level function body, by its declaration."""
+        found = re.search(header + r" \{\n(.*?)\n\}", source, re.S)
+        self.assertIsNotNone(found, header)
+        return found.group(1)
 
 
 class RunSessionPanelControls(PanelSourceMixin, StaffingApiTestCase):
@@ -220,6 +235,157 @@ class RetiredRunStaffingSurfaces(PanelSourceMixin, StaffingApiTestCase):
             self.assertNotIn(retired, self.panel)
         self.assertIsNone(re.search(
             r"/api/runs/\$\{[^}]+\}/(model-profile|acts)", self.panel))
+
+
+class StaffingDocumentCatalogue(PanelSourceMixin, StaffingApiTestCase):
+    """The standing catalogue: whole documents in, whole documents out."""
+
+    def ladders_of(self, document):
+        """Every model and effort ladder, in the document's own order."""
+        return [(slot["models"], slot["efforts"])
+                for _key, slot in sorted(document["families"].items())]
+
+    def test_document_editor_uses_whole_api_and_preserves_ladder_order(self):
+        # -- what the panel asks for ------------------------------------
+        # Two routes and no third: the catalogue read every staffing choice
+        # in this panel already shares, and the one whole-document write.
+        self.assertIn('api("/api/staffing/documents")', self.panel)
+        self.assertIn('postJSON("/api/staffing/documents", parsed)',
+                      self.documents_ui)
+        self.assertEqual(self.panel.count("/api/staffing/documents"), 2)
+
+        # Inspection is every authorized viewer's; only the save controls
+        # are the administrator's.
+        opener = self.section(
+            self.documents_ui, r"async function openStaffingDocuments\(\)")
+        self.assertNotIn("appAccess.admin", opener)
+        render = self.section(
+            self.documents_ui, r"function renderStaffingDocuments\(\)")
+        self.assertIn('create.style.display = appAccess.admin ? "" : "none";',
+                      render)
+        self.assertIn("appAccess.admin ?", render)
+        for guard in (r"function editStaffingDocument\(name\)",
+                      r"function newStaffingDocument\(\)"):
+            self.assertIn("if (!appAccess.admin) return;",
+                          self.section(self.documents_ui, guard))
+        # What a viewer reads is the WHOLE stored document, not a summary
+        # the panel would need the schema to build.
+        self.assertIn("JSON.stringify(doc, null, 1)", render)
+
+        # No client-side schema, sort, or price rule on this path at all:
+        # the ladders are the operator's capability order (amendment A1)
+        # and the service is the only validator of what any of it means.
+        for forbidden in (".sort(", "localeCompare", "reverse()", "price",
+                          "cost", "MODEL_OPTS", "EFFORT_OPTS", "families",
+                          "tuning", "assignment", "roles", "materials"):
+            self.assertNotIn(forbidden, self.documents_ui)
+        # The editor is the shared syntax-only one, and that parse is its
+        # ONLY client-side check: it returns before the request, so invalid
+        # JSON never reaches the service and changes nothing.
+        self.assertIn("openSgEditor({", self.documents_ui)
+        save = self.section(self.panel, r"async function saveSgEditor\(\)")
+        self.assertIn('catch (e) { err.textContent = "not valid JSON: "'
+                      " + e.message; return; }", save)
+        self.assertIn("await sgEditor.onSave(parsed);", save)
+        self.assertLess(save.index("not valid JSON"), save.index("onSave"))
+        # A new document is seeded from a STORED one, so the panel still
+        # holds no document shape of its own.
+        seed = self.section(self.documents_ui, r"function newStaffingDocument\(\)")
+        self.assertIn('staffingDocuments.find(doc => doc.name === "default")',
+                      seed)
+        self.assertIn('{name: ""}', seed)
+
+        # -- what those requests do -------------------------------------
+        member = self.member()
+        posted = house_doc("ladders")
+        ladders = self.ladders_of(posted)
+        # The round trip below only means something because sorting would
+        # move every one of these ladders: capability order is not, and is
+        # not meant to be, alphabetical order.
+        for models, efforts in ladders:
+            self.assertNotEqual(models, sorted(models))
+            self.assertNotEqual(efforts, sorted(efforts))
+
+        saved = self.expect(200, "POST", "/api/staffing/documents",
+                            posted)["document"]
+        self.assertEqual(saved, posted)
+        # Through the store's own bytes, and through the read the panel
+        # renders and re-seeds from: the same arrays, in the same order.
+        self.assertEqual(
+            self.ladders_of(json.loads(self.document_bytes("ladders"))),
+            ladders)
+        listed = self.expect(200, "GET", "/api/staffing/documents",
+                             headers=member)["documents"]
+        by_name = {doc["name"]: doc for doc in listed}
+        self.assertEqual(by_name["ladders"], posted)
+        self.assertEqual(self.ladders_of(by_name["ladders"]), ladders)
+
+        # A semantically invalid whole document is the service's own
+        # refusal, verbatim, and the predecessor keeps every byte.
+        before = self.document_bytes("ladders")
+        broken = house_doc("ladders")
+        broken["assignment"]["plan"] = {"1": 9}  # a slot nobody carries
+        self.refused(400, service.INVALID_STAFFING_DOCUMENT, "POST",
+                     "/api/staffing/documents", broken)
+        self.assertEqual(self.document_bytes("ladders"), before)
+        # A viewer who is offered no save control does not write one either.
+        self.refused(403, service.FORBIDDEN, "POST",
+                     "/api/staffing/documents", house_doc("ladders"),
+                     headers=member)
+        self.assertEqual(self.document_bytes("ladders"), before)
+
+    def test_retired_model_profile_catalogue_and_routes_are_absent(self):
+        """`GET/POST /api/model-profiles` retire with their catalogue.
+
+        The documents they wrote are compatibility bytes — amendment A2
+        still reads a run's selected profile name and rigor at resume — so
+        nothing here deletes, rewrites or migrates one.
+        """
+        profiles_dir = mp.model_profiles_dir(self.home)
+
+        def profile_bytes():
+            out = {}
+            for name in sorted(os.listdir(profiles_dir)):
+                with open(os.path.join(profiles_dir, name), "rb") as fh:
+                    out[name] = fh.read()
+            return out
+
+        # Startup seeded `default`; a second stored document makes the
+        # snapshot more than that seed.
+        mp.save(self.home, {
+            "name": "kept", "examples": ["a retired catalogue"],
+            "configurations": {"low": {}, "medium": {"fixer": "codex"},
+                               "high": {}},
+        })
+        before = profile_bytes()
+        self.assertEqual(sorted(before), ["default.json", "kept.json"])
+
+        # The local administrator, so the answer is about the ROUTE and not
+        # about access: the ordinary absent-route answer, on both methods.
+        for method, payload in (
+            ("GET", None),
+            ("POST", {"name": "new", "examples": ["a refused create"],
+                      "configurations": {"low": {}, "medium": {},
+                                         "high": {}}}),
+        ):
+            with self.subTest(method=method):
+                status, body = self.request(
+                    method, "/api/model-profiles", payload=payload)
+                self.assertEqual(status, 404, body)
+                self.assertEqual(body, {"ok": False, "error": "not found"})
+        self.assertEqual(profile_bytes(), before)
+
+        # The controls that called them are gone, and the catalogue the
+        # sidebar now offers in that place is the staffing-document one.
+        for retired in ('id="modelprofilesdlg"', 'id="mpeditor"',
+                        'id="modelProfilesBtn"', "openModelProfiles(",
+                        "MP_ROWS", "mpRenderGrid", "saveModelProfileEditor",
+                        "/api/model-profiles"):
+            self.assertNotIn(retired, self.panel)
+        self.assertIn('id="staffingDocsBtn"', self.panel)
+        self.assertIn('onclick="openStaffingDocuments()">Staffing documents',
+                      self.panel)
+        self.assertIn('id="staffingdocsdlg"', self.panel)
 
 
 if __name__ == "__main__":  # pragma: no cover
