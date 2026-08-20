@@ -13,10 +13,8 @@ the operator's order, and its initialization posture.
 import copy
 import json
 import os
-import re
 import tempfile
 import unittest
-from pathlib import Path
 
 from orchestrator import brainstorming_milestone, driver
 from orchestrator import model_profiles as mp
@@ -659,22 +657,15 @@ class StaffingConversionTest(unittest.TestCase):
 
     # -- ladders -----------------------------------------------------------
 
-    @staticmethod
-    def _panel_lists(panel, name):
-        """The panel's per-family vocabulary, read statically."""
-        block = panel.split("const %s = {" % name, 1)[1].split("};", 1)[0]
-        return {
-            family: re.findall(r'"([^"]+)"', body)
-            for family, body in re.findall(r"(\w+):\s*\[([^\]]*)\]", block)
-        }
-
     def test_ladders_are_whole_vocabulary_in_operator_order(self):
         """Amendment A1's order, and the whole vocabulary whatever was used.
 
-        The panel lists models strongest-first for display; copied verbatim
-        they would invert the operator's order and make `step_up` climb
-        downwards. The order is asserted explicitly, and the vocabulary
-        agreement with the panel is asserted separately.
+        The panel used to list models strongest-first for display; copied
+        verbatim they would invert the operator's order and make `step_up`
+        climb downwards, so the order is asserted explicitly here. That
+        panel-side vocabulary retired with the seat controls that read it
+        (staffing-router slice 8) and is no longer a second list to agree
+        with: the ladders below are the converted document's own.
         """
         expected_models = {
             "codex": ["gpt-5.6-luna", "gpt-5.6-terra", "gpt-5.6-sol"],
@@ -704,20 +695,6 @@ class StaffingConversionTest(unittest.TestCase):
                                      expected_models[family])
                     self.assertEqual(document["families"][slot]["efforts"],
                                      expected_efforts)
-
-        # The same models and efforts the panel offers for that family —
-        # a static agreement check, not a new sharing mechanism.
-        panel = (
-            Path(__file__).resolve().parents[1] / "static" / "panel.html"
-        ).read_text(encoding="utf-8")
-        panel_models = self._panel_lists(panel, "MODEL_OPTS")
-        panel_efforts = self._panel_lists(panel, "EFFORT_OPTS")
-        self.assertEqual(set(panel_models), set(expected_models))
-        for family, models in expected_models.items():
-            with self.subTest(family=family):
-                self.assertEqual(set(panel_models[family]), set(models))
-                self.assertEqual(set(panel_efforts[family]),
-                                 set(expected_efforts))
 
     def test_unknown_values_append_after_the_known_rungs(self):
         """A model or effort outside the family's vocabulary is kept.

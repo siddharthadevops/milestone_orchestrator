@@ -358,7 +358,38 @@ def _project_entry(home, project):
     }
     if "defaults" in read.value:
         entry["defaults"] = read.value["defaults"]
+    families = _effective_families_order(project)
+    if families is not None:
+        entry["families_order"] = families
     return entry
+
+
+def _effective_families_order(project):
+    """The family order this project's standalone work is staffed from.
+
+    The service's own configuration under the project's declared defaults —
+    exactly the merge the direct task host and the git alignment already
+    make before they resolve — carried read-only beside the work areas a
+    standalone form is choosing between. A machine fact, never a choice:
+    the panel records it on the session it opens for a standalone
+    operation, so the families the router later reads keep ONE producer and
+    no browser holds a family name or a default order of its own.
+
+    ``None`` when the merged configuration leaves no readable order (a
+    declared default may replace it with anything JSON admits). The entry
+    then omits the fact rather than inventing an order nobody configured,
+    and stays the successful entry it already was: this projection gates
+    no project read.
+    """
+    config = driver.load_config(None)
+    if project.get("defaults"):
+        driver.merge_config(config, project["defaults"])
+    order = config.get("families_order")
+    if not isinstance(order, list) or any(
+        not isinstance(name, str) for name in order
+    ):
+        return None
+    return list(order)
 
 
 def _project_entry_or_error(home, project):

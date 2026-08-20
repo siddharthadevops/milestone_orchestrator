@@ -282,9 +282,11 @@ other hosts). The default roster is an Initial Position, a Contrary
 Position, and Dante as an external narrator: roles and delivery, not
 families — which family runs each of those seats is the discussion's
 staffing session's answer (below). Dante asks anti-drift questions in the
-language used by the request and discussion, and never votes. AI seats still
-carry the dialog's family, model and effort controls until that control
-retires; Dante's turn enters through the durable external contract.
+language used by the request and discussion, and never votes. That control
+has retired: the dialog's roster rows carry the position and nothing about
+who runs it, and the form's one staffing choice — document, rigor and an
+optional material — opens the session that answers every seat. Dante's turn
+enters through the durable external contract.
 Unanimity requires every position to accept the exact proposal. Majority
 requires a strict majority; ties and round-limit disagreement end as an
 irreducible gap. The coordinator records that result mechanically and never

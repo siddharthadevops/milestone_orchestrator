@@ -17,11 +17,15 @@ actually do. The service harness is `test_staffing_api`'s, unchanged.
 import json
 import os
 import re
+import subprocess
+import sys
 import unittest
 import urllib.parse
 from pathlib import Path
+from unittest import mock
 
-from orchestrator import access, registry, service
+from orchestrator import access, registry, service, task_api
+from orchestrator import brainstorming_lifecycle as lifecycle
 from orchestrator import driver as drv
 from orchestrator import model_profiles as mp
 from orchestrator import staffing as stf
@@ -48,12 +52,29 @@ class PanelSourceMixin:
         cls.documents_ui = cls.panel.split(
             "/* ---- the staffing-document catalogue", 1
         )[1].split("/* ---- ", 1)[0]
+        # And for the one control every standalone entry point shares.
+        cls.standalone_ui = cls.panel.split(
+            "/* ---- the shared standalone staffing choice", 1
+        )[1].split("/* ---- ", 1)[0]
 
     def section(self, source, header):
         """One whole top-level function body, by its declaration."""
         found = re.search(header + r" \{\n(.*?)\n\}", source, re.S)
         self.assertIsNotNone(found, header)
         return found.group(1)
+
+    @staticmethod
+    def code(source):
+        """One excerpt with its prose stripped: an absence assertion is
+        about what the page DOES, not about what its comments explain.
+
+        A section slice starts INSIDE its own header comment, so the
+        dangling opener that survives the split is prose here too.
+        """
+        _head, sep, rest = source.partition("---- */")
+        return re.sub(r"(?m)//.*$", "",
+                      re.sub(r"/\*.*?\*/", "", rest if sep else source,
+                             flags=re.S))
 
 
 class RunSessionPanelControls(PanelSourceMixin, StaffingApiTestCase):
@@ -386,6 +407,471 @@ class StaffingDocumentCatalogue(PanelSourceMixin, StaffingApiTestCase):
         self.assertIn('onclick="openStaffingDocuments()">Staffing documents',
                       self.panel)
         self.assertIn('id="staffingdocsdlg"', self.panel)
+
+
+class RecordingTaskHost:
+    """Admits and never runs.
+
+    What the panel must prove about a direct order is what it SENDS: the
+    durable order carries the id of the session the form just opened. What
+    the direct host then does with that id is slice 7's own contract, and
+    running a real agent call here would prove nothing this surface owns.
+    """
+
+    def __init__(self):
+        self.started = []
+
+    def start(self, record, _resolver):
+        self.started.append(record["id"])
+
+    def owns_workspace(self, _workspace):
+        return False
+
+
+class StandaloneStaffingHandoff(PanelSourceMixin, StaffingApiTestCase):
+    """One shared choice, one session, one id — at all four entry points."""
+
+    GS_AREA = "align area"
+
+    def setUp(self):
+        self.task_host = RecordingTaskHost()
+        patched = mock.patch.object(
+            service.task_api, "DirectTaskHost", return_value=self.task_host)
+        patched.start()
+        self.addCleanup(patched.stop)
+        self.processes = []
+        self.addCleanup(self.reap_launched)
+        super().setUp()
+
+    # -- fixtures --------------------------------------------------------
+
+    def reap_launched(self):
+        for process in self.processes:
+            process.kill()
+            process.wait(timeout=5)
+
+    def project_path(self, *suffix):
+        return "/".join(
+            ["/api/projects", urllib.parse.quote(PROJECT, safe="")]
+            + list(suffix))
+
+    def declare(self, name, primary):
+        return self.expect(200, "POST", self.project_path("work-areas"),
+                           {"name": name, "primary_path": primary})
+
+    def entry(self, headers=None):
+        """The project view the standalone forms already load."""
+        listed = self.expect(200, "GET", "/api/projects",
+                             headers=headers)["projects"]
+        return next(item for item in listed if item["slug"] == PROJECT)
+
+    def derived_order(self):
+        """The order the STANDALONE CONSUMERS derive for this project —
+        the direct host's own configuration seam, not a copy of the merge."""
+        return service._direct_task_config(self.home, PROJECT)["families_order"]
+
+    def panel_session(self, entry, area, document="house", rigor="high",
+                      material=None, headers=None):
+        """The panel's FIRST request, exactly as the shared control builds
+        it: the selected work area, the selection shown, and the families
+        fact the project view supplied — never a constant written here."""
+        body = {
+            "work_area": {"project": entry["slug"], "work_area": area},
+            "families": entry["families_order"],
+            "document": document,
+            "rigor": rigor,
+        }
+        if material:
+            body["material"] = material
+        return self.expect(201, "POST", "/api/staffing/sessions", body,
+                           headers=headers)["session"]["id"]
+
+    def task_body(self, executor, area, session):
+        return {
+            "task_executor": executor,
+            "staffing_session": session,
+            "request": {
+                "work_area": {"project": PROJECT, "work_area": area},
+                "request": "Do exactly the caller-authored work.",
+                "context": "",
+                "reference_documents": [],
+            },
+        }
+
+    def discussion_body(self, workspace, area, session):
+        target = os.path.join(workspace, "DECISION.md")
+        with open(target, "w", encoding="utf-8") as handle:
+            handle.write("initial target\n")
+        return {
+            "request": {
+                "workspace_path": workspace,
+                "target_path": "DECISION.md",
+                "request": "Settle the bounded request.",
+                "context": {"brief": "Everything the seats need."},
+                "max_rounds": 1,
+            },
+            # Exactly what the dedicated form now sends per seat.
+            "participants": [
+                {"id": "initial-position", "role": "initial_position",
+                 "delivery": "llm"},
+                {"id": "critic-1", "role": "contrary_position",
+                 "delivery": "llm"},
+            ],
+            "closure_policy": "unanimity",
+            "project": PROJECT,
+            "work_area": area,
+            "staffing_session": session,
+        }
+
+    def sleeper_launch(self, *_args, **_kwargs):
+        process = subprocess.Popen(
+            [sys.executable, "-c", "import time; time.sleep(120)"],
+            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL, start_new_session=True)
+        self.processes.append(process)
+        return lifecycle.GatedLaunch(process, lambda: None, lambda: None)
+
+    def task_orders(self):
+        return [record["order"]
+                for record in task_api.StandaloneTaskStore(self.home).records()]
+
+    # -- the four handoffs ----------------------------------------------
+
+    def test_standalone_forms_create_and_carry_one_session(self):
+        # -- what the panel asks for ------------------------------------
+        # One control, rendered from one place, hosted by all three dialogs
+        # (the direct form covers both the agent call and the task-owned
+        # discussion, which differ only in the executor already chosen).
+        for host in ('id="task_staffing"', 'id="bs_staffing"',
+                     'id="gs_staffing"'):
+            self.assertIn(host, self.panel)
+        for opened in ('loadStandaloneStaffing("task")',
+                       'loadStandaloneStaffing("bs")',
+                       'loadStandaloneStaffing("gs")'):
+            self.assertEqual(self.panel.count(opened), 1)
+        # One create route in the whole panel, reached from one function,
+        # called once per entry point and never anywhere else.
+        self.assertEqual(self.panel.count('"/api/staffing/sessions"'), 1)
+        self.assertIn('postJSON("/api/staffing/sessions", body)',
+                      self.standalone_ui)
+        self.assertEqual(
+            self.panel.count("await standaloneStaffingSession("), 3)
+        # The returned id rides the operation's OWN existing field.
+        self.assertIn("payload.staffing_session = await standaloneStaffingSession(",
+                      self.panel)
+        self.assertIn("body: JSON.stringify({work_area: area, "
+                      "staffing_session: session}),", self.panel)
+        # Families are read from the project view, never held here: the
+        # three sources are the three project reads the forms already make.
+        create = self.section(
+            self.standalone_ui,
+            r"async function standaloneStaffingSession\(prefix, workArea, families\)")
+        self.assertIn("families: families,", create)
+        self.assertIn("if (material) body.material = material;", create)
+        for source in ("].families_order;", "project.families_order",
+                       "gitSyncFamilies = project ? project.families_order : null;"):
+            self.assertIn(source, self.panel)
+        # Two of those three reads name their project in the same expression
+        # that supplies the fact. The alignment's does not — it keeps the
+        # order in a global that outlives one open — so its read only lands
+        # while the dialog still names the project it was made for, on both
+        # its success and its failure path. Otherwise an earlier project's
+        # slower read would staff a later project's alignment.
+        opening = self.code(self.section(
+            self.panel, r"async function openGitSync\(event, key\)"))
+        guard = "if (key !== gitSyncProject) return;"
+        self.assertEqual(opening.count(guard), 2)
+        self.assertLess(opening.index(guard),
+                        opening.index("gitSyncFamilies = project ?"))
+        # And the alignment goes to the project whose Sync was pressed:
+        # the submit captures its slug and its families BEFORE the session
+        # round trip and never reads those globals again, so a dialog
+        # closed and reopened on another project mid-request cannot
+        # retarget a merge-and-push at the repository it now names.
+        aligning = self.code(self.section(
+            self.panel, r"async function runGitSync\(\)"))
+        self.assertIn("const project = gitSyncProject;", aligning)
+        self.assertIn("const families = gitSyncFamilies;", aligning)
+        after = aligning.split("const families = gitSyncFamilies;", 1)[1]
+        self.assertIn("{project: project, work_area: area}, families)", after)
+        self.assertIn('encodeURIComponent(project) + "/git-sync"', after)
+        self.assertNotIn("gitSyncFamilies", after)
+        # …and what comes BACK is shown under the name it was asked for:
+        # the verdict, the report and the button state are written only
+        # while the shared dialog still names this project, so a reply to
+        # a superseded open is dropped instead of rendering A's "Aligned."
+        # inside the dialog now labelled B. That is the one thing the
+        # global may still be read for here.
+        for read in after.split("gitSyncProject")[:-1]:
+            self.assertTrue(read.endswith("if (project !== ")
+                            or read.endswith("if (project === "), read[-60:])
+        self.assertEqual(
+            after.count("if (project !== gitSyncProject) return;"), 2)
+        self.assertIn("if (project === gitSyncProject) go.disabled = false;",
+                      after)
+        # A project the view could not supply that fact for submits nothing.
+        self.assertIn("if (!Array.isArray(families))", create)
+        self.assertIn("if (staffingDocumentsError) throw new Error(", create)
+
+        # -- what those requests do -------------------------------------
+        member = self.member()
+        self.expect(200, "POST", "/api/staffing/documents", house_doc())
+        work = self.workspace("ws-standalone")
+        align = self.workspace("ws-align")
+        self.declare(AREA, work)
+        self.declare(self.GS_AREA, align)
+
+        # The fact the view carries IS the order the standalone consumers
+        # derive — under the service default and under a project override.
+        for label, defaults in (
+            ("service default", None),
+            ("project override", {"families_order": ["claude", "codex"]}),
+        ):
+            with self.subTest(order=label):
+                updated = None
+                if defaults is not None:
+                    updated = self.expect(200, "POST", self.project_path(),
+                                          {"defaults": defaults})["project"]
+                entry = self.entry()
+                self.assertEqual(entry["families_order"],
+                                 self.derived_order())
+                # Every route that answers with an entry gains that one
+                # fact — the listing, the single read and the defaults
+                # update alike — and a member reads what an admin reads.
+                self.assertEqual(
+                    self.expect(200, "GET", self.project_path()
+                                )["project"], entry)
+                if updated is not None:
+                    self.assertEqual(updated, entry)
+                self.assertEqual(self.entry(headers=member), entry)
+                session = self.panel_session(entry, AREA, material="prose",
+                                             headers=member)
+                stored = stf.read_session(self.home, session)
+                self.assertEqual(stored["families"], entry["families_order"])
+                self.assertEqual(stored["work_area"],
+                                 {"project": PROJECT, "work_area": AREA})
+                self.assertEqual(
+                    (stored["document"], stored["rigor"], stored["material"]),
+                    ("house", "high", "prose"))
+
+        # The order the project now derives is NOT the service default:
+        # a browser constant would have recorded the wrong one above.
+        self.assertNotEqual(self.derived_order(),
+                            drv.DEFAULT_CONFIG["families_order"])
+
+        # 1 + 2. The direct form, at both executors it can order.
+        entry = self.entry()
+        for executor in ("agent_call", "brainstorming"):
+            with self.subTest(executor=executor):
+                session = self.panel_session(entry, AREA)
+                task = self.expect(201, "POST", "/api/tasks",
+                                   self.task_body(executor, AREA, session))
+                self.assertIn(task["task"]["id"], self.task_host.started)
+                self.assertEqual(
+                    task["task"]["order"]["staffing_session"], session)
+                self.assertIn(
+                    session, [order["staffing_session"]
+                              for order in self.task_orders()])
+
+        # 3. The dedicated discussion form.
+        session = self.panel_session(entry, AREA)
+        with mock.patch.object(lifecycle, "_launch_lifecycle_process",
+                               side_effect=self.sleeper_launch):
+            created = self.expect(
+                201, "POST", "/api/brainstorming/sessions",
+                self.discussion_body(work, AREA, session))
+        record = lifecycle._record_by_id(self.home, created["session"]["id"])
+        self.assertEqual(record["staffing_session"], session)
+        # Its seats were staffed BY that session, on the project's own
+        # family order — nothing the participant entries pinned.
+        seats = [seat["model_family"] for seat in
+                 created["session"]["state"]["run_config"]["participants"]]
+        self.assertEqual(seats, [
+            stf.resolve(self.home, session, "brainstorm", index=index, round=1,
+                        families=list(entry["families_order"])
+                        ).answer["agent"]
+            for index in (1, 2)])
+
+        # 4. The git alignment, whose one call resolves through it live.
+        session = self.panel_session(entry, self.GS_AREA)
+        answer = stf.resolve(self.home, session, "sync", index=1, round=1,
+                             families=list(entry["families_order"])).answer
+        captured = []
+        with mock.patch.object(
+            service.gitsync, "run_sync",
+            side_effect=lambda *args, **kwargs: (
+                captured.append((args[2], kwargs.get("model"),
+                                 kwargs.get("effort")))
+                or {"outcome": "aligned", "report": "done"})
+        ):
+            synced = self.expect(200, "POST", self.project_path("git-sync"),
+                                 {"work_area": self.GS_AREA,
+                                  "staffing_session": session})
+        self.assertEqual(synced["sync"]["outcome"], "aligned")
+        self.assertEqual(
+            captured, [(answer["agent"], answer["model"], answer["effort"])])
+
+        # A fact the session store would not keep VERBATIM is not a handoff
+        # this panel makes either. The store normalizes each catalogue
+        # string it keeps, so the order the router later reads can differ
+        # from the one the project names — a different family, at a
+        # different cost, staffing the operation. The shared control
+        # compares what came back with what it sent and submits nothing on
+        # a mismatch, so no operation is ordered on families nobody chose.
+        self.expect(200, "POST", self.project_path(),
+                    {"defaults": {"families_order": [" codex ", "claude"]}})
+        padded = self.entry()
+        self.assertEqual(padded["families_order"], [" codex ", "claude"])
+        drifted = self.panel_session(padded, AREA)
+        self.assertNotEqual(stf.read_session(self.home, drifted)["families"],
+                            padded["families_order"])
+        self.assertIn("const stored = (created.session || {}).families;",
+                      create)
+        self.assertIn("stored.some((name, i) => name !== families[i])",
+                      create)
+
+        # And a project whose declared defaults leave no readable order
+        # carries no fact at all: the entry is still a successful entry —
+        # every other project route answers exactly as before — while the
+        # guard above has nothing to submit an operation on.
+        opened = self.catalogue_files()
+        self.expect(200, "POST", self.project_path(),
+                    {"defaults": {"families_order": "not an order"}})
+        unreadable = self.entry()
+        self.assertNotIn("families_order", unreadable)
+        self.assertNotIn("error", unreadable)
+        self.assertEqual(self.catalogue_files(), opened)
+
+    def test_standalone_forms_expose_no_seat_staffing(self):
+        # The shared control offers document, rigor and material, and the
+        # three ids it renders are the only inputs it reads.
+        markup = self.code(self.section(
+            self.standalone_ui, r"function standaloneStaffingMarkup\(prefix\)"))
+        self.assertEqual(
+            re.findall(r"\$\{prefix\}_staffing_(\w+)", markup),
+            ["document", "rigor", "material", "hint"])
+        for pinned in ("family", "families", "model", "effort", "agent",
+                       "index", "round", "seat", "assignment", "tuning"):
+            self.assertNotIn(pinned, markup)
+        # Rigor is the router's own three-value vocabulary, and the whole
+        # control names no family, model or effort of its own: the one it
+        # records is the fact the project view supplied.
+        self.assertIn('const STANDALONE_RIGORS = ["low", "medium", "high"];',
+                      self.standalone_ui)
+        shared = self.code(self.standalone_ui)
+        for named in ("codex", "claude", "gpt-", "opus", "sonnet", "fable",
+                      "xhigh"):
+            self.assertNotIn(named, shared)
+
+        # The Agent-call role is still the catalogue's own control, built
+        # from the returned schema and from no list written in the browser.
+        task_ui = self.panel.split(
+            "/* ---- task ordering and slice producer selection", 1
+        )[1].split("/* ---- ", 1)[0]
+        self.assertIn('api("/api/task-executors")', task_ui)
+        self.assertIn("entry.configuration_schema", task_ui)
+        self.assertIn("(definition.choices || [])", task_ui)
+        for copied in ('"role"', '"agent_call"'):
+            self.assertNotIn(copied, task_ui)
+
+        # A dedicated Brainstorming participant entry carries the roster
+        # fact and nothing about who runs it, at any roster size.
+        submit = self.section(
+            self.panel, r"async function submitBrainstorming\(\)")
+        seat = re.search(r"const entry = \{(.*?)\n    \};", submit, re.S)
+        self.assertEqual(
+            sorted(re.findall(r"^\s*(\w+):", seat.group(1), re.M)),
+            ["delivery", "id", "role"])
+        self.assertIn("entry.external_provider = seat.externalProvider;",
+                      submit)
+        for pinned in ("model_family", "entry.model", "entry.effort"):
+            self.assertNotIn(pinned, submit)
+        add = self.section(self.panel, r"function addBsSeat\(\)")
+        self.assertIn('bsRoster.push({role: "contrary_position", '
+                      'delivery: "llm"});', add)
+        # And the family/model/effort vocabulary the roster used to read
+        # is gone from the page: one authority, and it is the document.
+        for retired in ("const MODEL_OPTS", "const EFFORT_OPTS",
+                        "const FAMILY_DEFAULTS", "function onAgentChange",
+                        "_agent\"", "_effort\""):
+            self.assertNotIn(retired, self.panel)
+
+        # The catalogue this form reads says the same thing: a Brainstorming
+        # order is staffed by its session, not by a profile or a roster pin.
+        entries = {entry["id"]: entry for entry in
+                   self.expect(200, "GET", "/api/task-executors"
+                               )["task_executors"]}
+        for executor in ("agent_call", "brainstorming"):
+            with self.subTest(executor=executor):
+                described = entries[executor]["available_agent_configurations"]
+                self.assertIn("staffing session", described)
+                self.assertNotIn("profiles", described)
+
+    def test_handoff_failure_and_legacy_routes_are_bounded(self):
+        """The two-request composition, and no retired input reborn here.
+
+        Retirement itself is proven by this module's two retirement cases
+        (`RetiredRunStaffingSurfaces` and the model-profile catalogue): what
+        is asserted here is that the standalone surfaces this slice ADDS
+        reach none of those routes.
+        """
+        # -- what the panel asks for ------------------------------------
+        # The session is opened INSIDE the guarded submit and before the
+        # operation, and nothing compensates for a refusal afterwards.
+        submit = self.section(self.panel, r"async function submitTaskForm\(\)")
+        self.assertLess(submit.index("taskSubmitPending = true"),
+                        submit.index("await standaloneStaffingSession("))
+        self.assertLess(submit.index("await standaloneStaffingSession("),
+                        submit.index("await postJSON(path, payload)"))
+        for surface in (submit,
+                        self.section(self.panel,
+                                     r"async function submitBrainstorming\(\)"),
+                        self.section(self.panel, r"async function runGitSync\(\)")):
+            self.assertEqual(surface.count("await standaloneStaffingSession("), 1)
+        shared = self.code(self.standalone_ui)
+        for forbidden in ("DELETE", "retry", "setTimeout", "setInterval",
+                          "/api/model-profiles", "/model-profile", "/acts"):
+            self.assertNotIn(forbidden, shared)
+        self.assertNotIn("catch", shared)  # the caller shows the refusal
+
+        # -- what those requests do -------------------------------------
+        member = self.member()
+        self.expect(200, "POST", "/api/staffing/documents", house_doc())
+        work = self.workspace("ws-bounded")
+        self.declare(AREA, work)
+        entry = self.entry()
+        before = self.catalogue_files()
+
+        # Call one refused: no session, and no operation was ever sent.
+        self.refused(400, service.INVALID_STAFFING_SESSION, "POST",
+                     "/api/staffing/sessions",
+                     {"work_area": {"project": PROJECT, "work_area": AREA},
+                      "families": entry["families_order"],
+                      "document": "house", "rigor": "unheard-of"},
+                     headers=member)
+        self.assertEqual(self.catalogue_files(), before)
+        self.assertEqual(self.task_orders(), [])
+        self.assertEqual(self.task_host.started, [])
+
+        # Call two refused: the session stays, inert and readable, and no
+        # work was admitted. Nothing deletes it and nothing tries again.
+        session = self.panel_session(entry, AREA, headers=member)
+        opened = self.catalogue_files()
+        refused = self.task_body("agent_call", AREA, session)
+        refused["request"]["request"] = ""  # the route's own refusal
+        self.expect(400, "POST", "/api/tasks", refused, headers=member)
+        self.assertEqual(self.catalogue_files(), opened)
+        self.assertEqual(self.task_orders(), [])
+        self.assertEqual(self.task_host.started, [])
+        self.assertEqual(stf.read_session(self.home, session)["id"], session)
+        # The retried-by-hand order is ONE order, on that same session.
+        accepted = self.expect(201, "POST", "/api/tasks",
+                               self.task_body("agent_call", AREA, session),
+                               headers=member)
+        self.assertEqual(len(self.task_orders()), 1)
+        self.assertEqual(accepted["task"]["order"]["staffing_session"],
+                         session)
+        self.assertEqual(self.catalogue_files(), opened)
 
 
 if __name__ == "__main__":  # pragma: no cover

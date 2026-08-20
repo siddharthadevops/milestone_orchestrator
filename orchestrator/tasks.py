@@ -77,7 +77,8 @@ _TASK_EXECUTORS = (
         ],
         "available_agent_configurations": (
             "Initial Position, Contrary Position, and Dante seats; agent, "
-            "model, and effort resolve from profiles or Brainstorming."
+            "model, and effort resolve from the staffing session that owns "
+            "the order, at each seat's roster position."
         ),
         "configuration_schema": {
             "max_rounds": {

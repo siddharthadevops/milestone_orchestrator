@@ -240,11 +240,10 @@
   .closing-label { width: 64px; flex: none; color: #a1a1aa;
     font-size: 10px; text-transform: uppercase; letter-spacing: .04em; }
   .final-agreement { border-color: #bbe7c9; background: #fbfefc; }
-  .acthead { font-size: 10px; text-transform: uppercase; color: #a1a1aa; }
   .unit-title { color: #71717a; font-size: 11px; margin-left: 6px; }
-  /* Brainstorming roster: one row per AI seat, configured like a
-     milestone act (agent / model / effort) plus a remove control. */
-  .rosterrow { display: grid; grid-template-columns: 90px 1fr 1fr 1fr 22px;
+  /* Brainstorming roster: one row per seat — which position it is, and a
+     remove control. Who runs it is the staffing choice, not a row here. */
+  .rosterrow { display: grid; grid-template-columns: 1fr 22px;
     gap: 6px; align-items: center; margin-bottom: 6px; }
   .rosterrow label { font-size: 12px; color: #3f3f46; }
   .rosterrow select, .rosterrow input { font: inherit; font-size: 12px;
@@ -736,11 +735,11 @@
     <div class="rosterops">
       <button class="btn sm" type="button" onclick="addBsSeat()">+ Add contrary position</button>
     </div>
-    <div class="hint">opens pre-staffed: Initial Position gpt-5.6-sol/max,
-      Contrary Position claude-opus-5/max, and Dante on gpt-5.6-sol/max — edit any seat; anything
-      set back to default is resolved by the service (family by rotation
-      over this host's available agents, model/effort from the family's
-      defaults)</div></div>
+    <div class="hint">the roster is the discussion's shape — who proposes,
+      who challenges, and Dante asking anti-drift questions. Who RUNS each
+      position is the staffing below, answered at the seat's roster
+      position when its call is actually made.</div></div>
+  <div class="field" id="bs_staffing"></div>
   <div class="field"><label>Closure policy *</label>
     <select id="b_policy">
       <option value="unanimity">unanimity</option>
@@ -804,6 +803,7 @@
     <select id="t_executor" onchange="onTaskExecutorChange()"></select></div>
   <div id="task_executor_details"></div>
   <div id="task_configuration"></div>
+  <div class="field" id="task_staffing"></div>
   <div id="task_catalogue_error" class="failure" style="display:none"></div>
   <div id="task_accepted" class="task-accepted" style="display:none"></div>
   <div class="formrow">
@@ -849,6 +849,7 @@
     <label for="gs_area">Work area</label>
     <select id="gs_area"></select>
   </div>
+  <div class="field" id="gs_staffing"></div>
   <div id="gs_error" class="failure" style="display:none"></div>
   <div id="gs_report" class="mdbody flow" style="display:none"></div>
   <div class="formrow">
@@ -1961,10 +1962,19 @@ async function sendFloorIntervention() {
 }
 let gitSyncProject = null;
 let gitSyncRunning = false;
+// The family order the SERVICE derives for this project, carried on the
+// same project read the work-area choice comes from. Never a browser
+// default: an alignment whose project did not supply it is not ordered.
+// It is written only by the read of the project the dialog still names:
+// this global outlives one open, so an earlier project's slower read must
+// not land beside a later project's slug and staff its alignment.
+let gitSyncFamilies = null;
 async function openGitSync(event, key) {
   event.stopPropagation();
   closeProjectMenu();
   gitSyncProject = key;
+  gitSyncFamilies = null;
+  loadStandaloneStaffing("gs");
   const err = document.getElementById("gs_error");
   const report = document.getElementById("gs_report");
   err.style.display = "none";
@@ -1981,7 +1991,9 @@ async function openGitSync(event, key) {
   row.style.display = "none";
   try {
     const data = await api("/api/projects");
+    if (key !== gitSyncProject) return;  // superseded by a later open
     const project = (data.projects || []).find(p => p.slug === key);
+    gitSyncFamilies = project ? project.families_order : null;
     const areas = (project && project.work_areas) || [];
     sel.innerHTML = areas.map((a, i) =>
       `<option value="${esc(a.record.name)}">${esc(a.record.name)}</option>`
@@ -1993,6 +2005,7 @@ async function openGitSync(event, key) {
       document.getElementById("gs_go").disabled = true;
     }
   } catch (e) {
+    if (key !== gitSyncProject) return;  // superseded by a later open
     err.textContent = e.message;
     err.style.display = "";
     document.getElementById("gs_go").disabled = true;
@@ -2001,6 +2014,14 @@ async function openGitSync(event, key) {
 }
 async function runGitSync() {
   if (gitSyncRunning || !gitSyncProject) return;
+  // The project this click submits, its area and its families, captured
+  // once. The session request below is a real round trip, and the dialog
+  // stays closable while it is out: an operator who closes it and opens
+  // another project's would otherwise leave the globals naming THAT
+  // project, and the alignment would merge, commit and push a repository
+  // nobody submitted, staffed by the session opened for this one.
+  const project = gitSyncProject;
+  const families = gitSyncFamilies;
   const area = document.getElementById("gs_area").value;
   const err = document.getElementById("gs_error");
   const report = document.getElementById("gs_report");
@@ -2011,14 +2032,19 @@ async function runGitSync() {
   go.disabled = true;
   go.textContent = "Syncing…";
   try {
+    // First request. The alignment is not asked for at all unless its
+    // session exists; a refusal below leaves that session inert.
+    const session = await standaloneStaffingSession(
+      "gs", {project: project, work_area: area}, families);
     const data = await api(
-      "/api/projects/" + encodeURIComponent(gitSyncProject) + "/git-sync",
+      "/api/projects/" + encodeURIComponent(project) + "/git-sync",
       {
         method: "POST",
         headers: {"Content-Type": "application/json"},
-        body: JSON.stringify({work_area: area}),
+        body: JSON.stringify({work_area: area, staffing_session: session}),
       }
     );
+    if (project !== gitSyncProject) return;  // superseded by a later open
     // The agent exits 0 whether it aligned or refused, so the verdict —
     // not the fact that prose came back — decides what this looked like.
     const outcome = (data.sync && data.sync.outcome) || "unknown";
@@ -2034,12 +2060,18 @@ async function runGitSync() {
     report.style.display = "";
     go.textContent = outcome === "aligned" ? "Sync again" : "Try again";
   } catch (e) {
+    if (project !== gitSyncProject) return;  // superseded by a later open
     err.textContent = e.message;  // sealed refusal token, verbatim
     err.style.display = "";
     go.textContent = "Sync now";
   } finally {
+    // The alignment is over either way, so the panel accepts a new one;
+    // but the verdict, the report and the button belong to the open that
+    // asked for them. A dialog reopened on another project keeps the
+    // blank state and the enabled-or-not button ITS open just set, and
+    // this reply is dropped rather than shown under that project's name.
     gitSyncRunning = false;
-    go.disabled = false;
+    if (project === gitSyncProject) go.disabled = false;
   }
 }
 function runStatusIndicator(r) {
@@ -4412,6 +4444,89 @@ async function saveStaffingSession() {
   document.getElementById("staffingsessiondlg").close();
   refreshDetail();
 }
+/* ---- the shared standalone staffing choice (staffing-router slice 8).
+       Ordering a task, starting a discussion and aligning a work area each
+       ask the SAME three things — which document staffs the work, at which
+       rigor, over which optional material — and each hands the operation
+       one session opened from exactly what was shown.
+
+       Families are not a control here. The session records the family
+       order the service already staffs that project's standalone work
+       from, carried read-only on the project view these forms already load
+       for their work-area selectors: the one authority the router later
+       reads keeps one producer, and the browser holds no family name and
+       no default order of its own. A project the view cannot supply that
+       fact for submits nothing, exactly as an unreadable catalogue does.
+
+       Two ordinary requests, never a transaction: the operation is not
+       sent at all unless its session exists, and a refusal after it exists
+       is shown once — no retry, no rollback, no second attempt. ---- */
+const STANDALONE_RIGORS = ["low", "medium", "high"];
+function standaloneStaffingMarkup(prefix) {
+  // Document, rigor and optional material — and nothing else. A seat, a
+  // family, a model, an effort, an index or a round is the router's to
+  // answer from the document named here, never an orderer's to pin.
+  return `<label>Staffing</label>
+    <div class="pathrow">
+      <select id="${prefix}_staffing_document"></select>
+      <select id="${prefix}_staffing_rigor">${STANDALONE_RIGORS.map(rigor =>
+        `<option${rigor === "medium" ? " selected" : ""}>${rigor}</option>`
+      ).join("")}</select>
+      <input id="${prefix}_staffing_material" class="mono"
+        placeholder="material (optional)">
+    </div>
+    <div class="hint" id="${prefix}_staffing_hint"></div>`;
+}
+async function loadStandaloneStaffing(prefix) {
+  const host = document.getElementById(prefix + "_staffing");
+  host.innerHTML = standaloneStaffingMarkup(prefix);
+  await loadStaffingCatalogue();
+  const select = document.getElementById(prefix + "_staffing_document");
+  if (!select) return;  // the dialog was reopened while the read was out
+  select.innerHTML = staffingDocumentOptions("default");
+  document.getElementById(prefix + "_staffing_hint").textContent =
+    staffingDocumentsError ||
+    "Every call this orders is staffed by the chosen document, at the "
+    + "chosen rigor, over the material if one is named.";
+}
+async function standaloneStaffingSession(prefix, workArea, families) {
+  // The session the operation about to be submitted will carry: its work
+  // area, the selection shown above, and the families the SERVICE derived
+  // for that project. Returns the id to hand over, or throws the reason to
+  // show — in which case nothing is submitted at all.
+  if (staffingDocumentsError) throw new Error(staffingDocumentsError);
+  if (!Array.isArray(families))
+    throw new Error("this project's configured families could not be read "
+      + "— nothing was submitted");
+  const body = {
+    work_area: workArea,
+    families: families,
+    document: document.getElementById(prefix + "_staffing_document").value,
+    rigor: document.getElementById(prefix + "_staffing_rigor").value,
+  };
+  const material =
+    document.getElementById(prefix + "_staffing_material").value.trim();
+  if (material) body.material = material;
+  const created = await postJSON("/api/staffing/sessions", body);
+  // What the store actually kept, compared with what this project's
+  // configuration names. The stored list — not the fact above — is what
+  // the router reads when the operation runs, so an operation whose
+  // session came back carrying different family NAMES, or the same names
+  // in a different order, would be staffed from families nobody chose for
+  // it. The divergence the store can produce today is normalization: it
+  // strips each catalogue string it keeps, and family names are matched by
+  // exact string, so a configured " codex " that no ladder can match
+  // becomes a stored "codex" that runs — a different family, model and
+  // cost from the one this project's other standalone work is staffed on.
+  // Nothing is submitted then: an operation carries the exact order that
+  // was shown, or it is not ordered at all.
+  const stored = (created.session || {}).families;
+  if (!Array.isArray(stored) || stored.length !== families.length
+      || stored.some((name, i) => name !== families[i]))
+    throw new Error("the session records different family names or order "
+      + "than this project's configuration — nothing was submitted");
+  return created.session.id;
+}
 /* ---- strategy catalogue, configurator, launch selection and live repoint.
    One GET supplies every semantic key, legal value and support label. ---- */
 function profileLabel(p) {
@@ -4839,63 +4954,13 @@ document.getElementById("pk_list").addEventListener("click", (ev) => {
     document.getElementById("picker").close();
   }
 });
-const MODEL_OPTS = {
-  claude: ["claude-fable-5", "claude-opus-5", "claude-sonnet-5"],
-  codex: ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"],
-};
-const EFFORT_OPTS = {
-  claude: ["low", "medium", "high", "xhigh", "max"],
-  codex: ["low", "medium", "high", "xhigh", "max"],
-};
-// The per-family default a Brainstorming roster seat shows as its
-// placeholder when it pins no model or effort of its own. A label only:
-// the service resolves an unset seat. Keep in sync with driver.py.
-const FAMILY_DEFAULTS = {
-  claude: {model: "claude-opus-5", effort: "xhigh"},
-  codex: {model: "gpt-5.6-sol", effort: "xhigh"},
-};
-function familyDefault(agent) {
-  return FAMILY_DEFAULTS[agent] || {};
-}
+// Kept for the run list's workplace chips: this declaration shadows the
+// earlier `shortModel`, so `modelEffort` above renders through it. The
+// family names, model ladders, effort ladders and per-family defaults that
+// used to sit beside it were the second staffing authority this milestone
+// ends — the router answers all four from the document a session names.
 function shortModel(model) {
   return model ? String(model).replace(/^claude-/, "") : "";
-}
-function agentModels(agent) {
-  return MODEL_OPTS[agent] || [...MODEL_OPTS.claude, ...MODEL_OPTS.codex];
-}
-function agentEfforts(agent) {
-  return EFFORT_OPTS[agent] || ["low", "medium", "high", "xhigh", "max"];
-}
-function onAgentChange(prefix, act, userChanged) {
-  // The Brainstorming roster's only remaining caller: it refreshes one
-  // seat's model list and effort options for the family now selected.
-  const agentEl = document.getElementById(`${prefix}${act}_agent`);
-  const agent = agentEl ? agentEl.value : "";
-  const modelEl = document.getElementById(`${prefix}${act}_model`);
-  const effEl = document.getElementById(`${prefix}${act}_effort`);
-  if (userChanged) {
-    // The family just changed: the other family's model/effort no longer
-    // apply, so reset both to that family's default (empty = default)
-    // instead of leaving a stale codex model selected under claude.
-    if (modelEl) modelEl.value = "";
-    if (effEl) effEl.value = "";
-  }
-  const dl = document.getElementById(`dl_${prefix}${act}`);
-  if (dl)
-    dl.innerHTML = agentModels(agent)
-      .map(m => `<option>${m}</option>`).join("");
-  const def = familyDefault(agent);
-  if (modelEl)
-    modelEl.placeholder = def.model
-      ? `default (${shortModel(def.model)})` : "default";
-  if (effEl) {
-    const cur = effEl.value;
-    const opts = agentEfforts(agent);
-    const label = def.effort ? `default (${def.effort})` : "default";
-    effEl.innerHTML = `<option value="">${label}</option>` +
-      opts.map(o => `<option ${o === cur ? "selected" : ""}>${o}</option>`).join("");
-    if (cur && !opts.includes(cur)) effEl.value = "";
-  }
 }
 function toggleMore() {
   const el = document.getElementById("f_more");
@@ -5183,6 +5248,9 @@ function resetTaskDialog(mode) {
   const direct = mode === "direct";
   document.getElementById("task_direct_fields").style.display = direct ? "" : "none";
   document.getElementById("task_producer_context").style.display = direct ? "none" : "";
+  // A producer choice orders no call: it records which executor a future
+  // unit uses, and that unit is staffed by its own run's session.
+  document.getElementById("task_staffing").style.display = direct ? "" : "none";
   document.getElementById("task_submit").textContent = direct ? "Order task" : "Save producer";
   syncTaskSubmitDisabled();
 }
@@ -5197,6 +5265,7 @@ function openDirectTaskForm(preselect) {
   document.getElementById("taskform").showModal();
   loadTaskProjects(preselect);
   loadTaskExecutorCatalogue();
+  loadStandaloneStaffing("task");
 }
 async function loadTaskProjects(preselect) {
   const dialogSeq = taskDialogSeq;
@@ -5477,15 +5546,19 @@ async function submitTaskForm() {
   const payload = {task_executor: taskExecutorSelected};
   if (resolved.present) payload.configuration = resolved.configuration;
   let path;
+  let binding = null;
+  let families = null;
   if (mode === "producer") {
     payload.task_kind = producerTarget.taskKind;
     path = `/api/runs/${encodeURIComponent(producerTarget.runId)}/slices/${producerTarget.sliceId}/producer`;
   } else {
-    const binding = taskBinding();
+    binding = taskBinding();
     if (!binding) {
       error.textContent = "choose a project and work area";
       return;
     }
+    families = taskProjects[
+      +document.getElementById("t_project").value].families_order;
     const request = document.getElementById("t_request").value;
     if (!request.trim()) { error.textContent = "request is required"; return; }
     const requestDoc = {
@@ -5502,6 +5575,12 @@ async function submitTaskForm() {
   taskSubmitPending = true;
   syncTaskSubmitDisabled();
   try {
+    if (mode !== "producer")
+      // First request. It either yields the id this order carries, or the
+      // order is never sent — including when the fact the session must
+      // record could not be read for the chosen project.
+      payload.staffing_session = await standaloneStaffingSession(
+        "task", binding, families);
     const data = await postJSON(path, payload);
     if (mode === "producer") {
       if (dialogSeq === taskDialogSeq && producerViewSeq === detailSeq)
@@ -5676,33 +5755,21 @@ async function openTaskDetail(taskId) {
        service's refusal tokens surface verbatim. ---- */
 let bsProjects = [];
 /* The roster is a small state array rendered on structural changes only
-   (add/remove/family change) — the dialog is outside the 2s polled
-   containers, so typed model text is never clobbered mid-edit. Seat ids
+   (add/remove) — it carries the discussion's SHAPE and nothing about who
+   runs it: role, delivery, and for Dante its external provider. Seat ids
    are machinery, assigned automatically at submit. */
 let bsRoster = [];
 let bsRefs = [];
 function defaultBsRoster() {
-  // The standing roster the dialog opens with — visible, armed, and
-  // editable in place (an operator decision, not a hidden resolution):
-  // Codex proposes, Claude challenges, and Dante asks anti-drift questions.
+  // The standing roster the dialog opens with: one position proposes, one
+  // challenges it, and Dante asks anti-drift questions. Which agent, model
+  // and effort each of them runs on is the staffing session's answer at
+  // the seat's roster position, given when its call is actually made.
   return [
-    {role: "initial_position", delivery: "llm", agent: "codex",
-     model: "gpt-5.6-sol", effort: "max"},
-    {role: "contrary_position", delivery: "llm", agent: "claude",
-     model: "claude-opus-5", effort: "max"},
-    {role: "common_sense", delivery: "external", externalProvider: "narrator",
-     agent: "codex", model: "gpt-5.6-sol", effort: "max"},
+    {role: "initial_position", delivery: "llm"},
+    {role: "contrary_position", delivery: "llm"},
+    {role: "common_sense", delivery: "external", externalProvider: "narrator"},
   ];
-}
-function snapshotBsRoster() {
-  bsRoster.forEach((seat, i) => {
-    const agent = document.getElementById(`b_p${i}_agent`);
-    const model = document.getElementById(`b_p${i}_model`);
-    const effort = document.getElementById(`b_p${i}_effort`);
-    if (agent) seat.agent = agent.value;
-    if (model) seat.model = model.value.trim();
-    if (effort) seat.effort = effort.value;
-  });
 }
 function bsSeatLabel(seat, index) {
   if (seat.delivery === "external") return "Dante · external narrator";
@@ -5715,46 +5782,19 @@ function renderBsRoster() {
   const interlocutors = bsRoster.filter(
     s => s.role === "contrary_position" && s.delivery === "llm").length;
   document.getElementById("b_roster").innerHTML =
-    `<div class="rosterrow"><span></span><span class="acthead">agent</span>
-       <span class="acthead">model</span><span class="acthead">effort</span><span></span></div>` +
     bsRoster.map((seat, i) => `
     <div class="rosterrow">
       <label>${esc(bsSeatLabel(seat, i))}</label>
-      <select id="b_p${i}_agent" onchange="onBsAgentChange(${i})">
-        <option value=""${seat.agent === "" ? " selected" : ""}>default</option>
-        <option${seat.agent === "codex" ? " selected" : ""}>codex</option>
-        <option${seat.agent === "claude" ? " selected" : ""}>claude</option>
-      </select>
-      <input id="b_p${i}_model" list="dl_b_p${i}" placeholder="default"
-        value="${esc(seat.model)}">
-      <select id="b_p${i}_effort"><option value="">default</option></select>
-      <datalist id="dl_b_p${i}"></datalist>
       <button class="roster-x" type="button" title="Remove participant"
         onclick="removeBsSeat(${i})"
         ${seat.role === "initial_position" || seat.delivery === "external" || interlocutors <= 1 ? "disabled" : ""}>×</button>
     </div>`).join("");
-  // Populate each seat's datalist and effort options for its family —
-  // the exact machinery the milestone acts grid uses (prefix "b_p",
-  // act = the row index).
-  bsRoster.forEach((seat, i) => {
-    const effort = document.getElementById(`b_p${i}_effort`);
-    effort.value = seat.effort;
-    onAgentChange("b_p", String(i));
-    effort.value = seat.effort || "";
-  });
-}
-function onBsAgentChange(i) {
-  snapshotBsRoster();
-  onAgentChange("b_p", String(i), true);
-  snapshotBsRoster();
 }
 function addBsSeat() {
-  snapshotBsRoster();
-  bsRoster.push({role: "contrary_position", delivery: "llm", agent: "", model: "", effort: ""});
+  bsRoster.push({role: "contrary_position", delivery: "llm"});
   renderBsRoster();
 }
 function removeBsSeat(i) {
-  snapshotBsRoster();
   if (bsRoster[i].role === "initial_position" || bsRoster[i].delivery === "external") return;
   bsRoster.splice(i, 1);
   renderBsRoster();
@@ -5793,6 +5833,7 @@ function openBrainstormingForm(preselect) {
   renderBsRoster();
   renderBsRefs();
   loadBsProjects(preselect);
+  loadStandaloneStaffing("bs");
   document.getElementById("bsform").showModal();
 }
 async function loadBsProjects(preselect) {
@@ -5931,10 +5972,10 @@ async function submitBrainstorming() {
     err.textContent = "maximum rounds must be a positive whole number";
     return;
   }
-  snapshotBsRoster();
-  // Seat ids are generated, never typed: the operator's decision is what
-  // staffs the seat, not what it is called. Defaults are omitted so the
-  // service resolves them exactly as an unconfigured launch.
+  // Seat ids are generated, never typed. A participant entry carries the
+  // roster fact — who this position is and how its turn is delivered — and
+  // no staffing pin at all: the session below staffs each automatic
+  // position at its persisted index, live, when that position runs.
   let critics = 0;
   const participants = bsRoster.map(seat => {
     const entry = {
@@ -5945,9 +5986,6 @@ async function submitBrainstorming() {
     };
     if (seat.delivery === "external")
       entry.external_provider = seat.externalProvider;
-    if (seat.agent) entry.model_family = seat.agent;
-    if (seat.model) entry.model = seat.model;
-    if (seat.effort) entry.effort = seat.effort;
     return entry;
   });
   const context = {brief};
@@ -5976,6 +6014,11 @@ async function submitBrainstorming() {
   const button = document.getElementById("b_submit");
   button.disabled = true;
   try {
+    // First request. A refusal here leaves the discussion unsent; a
+    // refusal below leaves this session inert, and neither is retried.
+    payload.staffing_session = await standaloneStaffingSession(
+      "bs", {project: project.slug, work_area: area.record.name},
+      project.families_order);
     await api("/api/brainstorming/sessions", {
       method: "POST",
       headers: {"Content-Type": "application/json"},

@@ -37,6 +37,13 @@ GOAL = "Exercise the standing project surface"
 PROJECT = "life prod"
 AREA = "main area"
 
+# The read-only fact every SUCCESSFUL project entry now carries beside its
+# work areas (staffing-router slice 8): the family order this project's
+# standalone work is staffed from, which is the service configuration under
+# the project's own declared defaults. A project declaring none is the
+# service default; the error entries below gain nothing.
+DEFAULT_FAMILIES = list(drv.DEFAULT_CONFIG["families_order"])
+
 
 
 def _ws_states(workspace):
@@ -905,6 +912,7 @@ class TestProjectSurface(ProjectsServiceTestCase):
                 "work_areas": [],
                 "policy": [],
                 "defaults": defaults,
+                "families_order": DEFAULT_FAMILIES,
             },
         )
         body = self.expect(200, "GET", "/api/projects")
@@ -992,6 +1000,7 @@ class TestProjectSurface(ProjectsServiceTestCase):
                 "work_areas": [],
                 "policy": [],
                 "defaults": {"docs_dir": "notes/{slug}"},
+                "families_order": DEFAULT_FAMILIES,
             }],
         )
 
@@ -1006,7 +1015,8 @@ class TestProjectSurface(ProjectsServiceTestCase):
         by_slug = {p["slug"]: p for p in body["projects"]}
         self.assertEqual(
             by_slug["healthy"],
-            {"slug": "healthy", "work_areas": [], "policy": []},
+            {"slug": "healthy", "work_areas": [], "policy": [],
+             "families_order": DEFAULT_FAMILIES},
         )
         # Error entries carry the reason and no partial record.
         self.assertEqual(
@@ -2508,7 +2518,9 @@ class TestGuardedDelete(ProjectsServiceTestCase):
         # Nothing resurrects: no old defaults, policies, or work areas.
         created = self.create_project("reborn")
         self.assertEqual(
-            created, {"slug": "reborn", "work_areas": [], "policy": []}
+            created,
+            {"slug": "reborn", "work_areas": [], "policy": [],
+             "families_order": DEFAULT_FAMILIES},
         )
         with open(self.kv_file("reborn"), "r", encoding="utf-8") as fh:
             self.assertEqual(json.load(fh), {"entries": {}})
@@ -2756,7 +2768,9 @@ class TestPolicyAuthoring(ProjectsServiceTestCase):
         self.expect(200, "DELETE", self.project_path())
         created = self.create_project()
         self.assertEqual(
-            created, {"slug": PROJECT, "work_areas": [], "policy": []}
+            created,
+            {"slug": PROJECT, "work_areas": [], "policy": [],
+             "families_order": DEFAULT_FAMILIES},
         )
 
     def test_delete_id_rides_query_never_a_path_segment(self):
@@ -2816,10 +2830,17 @@ class TestPolicyAuthoring(ProjectsServiceTestCase):
         self.assertIn('role="menuitem"', text)
         self.assertIn("configureProject(", text)
         self.assertNotIn("OTHERS_KEY", text)
-        self.assertIn(
+        # The per-family model ladder this page used to keep beside its
+        # seat controls retired with them (staffing-router slice 8): the
+        # router answers family, model and effort from the document a
+        # staffing session names, and a browser copy would be the second
+        # authority this milestone exists to end.
+        self.assertNotIn(
             'codex: ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"]',
             text,
         )
+        # The display labels below name no ladder and stay: they render
+        # what a run ALREADY ran on, in the run list's workplace chips.
         for model_id, visible in (
             ("gpt-5.6-sol", "sol"),
             ("gpt-5.6-terra", "terra"),

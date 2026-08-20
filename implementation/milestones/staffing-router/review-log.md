@@ -627,3 +627,34 @@
 - deterministic result: every configured family was clean or debt-clean on the same current bytes; full verification was not due at this boundary; no extra reviewer was called
 - cited reviews: `slice_impl-08-b-codex-r1`, `slice_impl-08-b-claude-r1`
 
+## slice_impl-08-c (Panel: documents, sessions, standalone choices)
+
+- draft: kind `implement`, artifact `-` (raw: `implementation/milestones/staffing-router/.run/raw/slice_impl-08-c-draft.txt`)
+
+| Round | Kind | Family | Findings | Triage | Raw |
+|---|---|---|---|---|---|
+| slice_impl-08-c-codex-r1 | review_round | codex | 2 | 2 reported | `implementation/milestones/staffing-router/.run/raw/slice_impl-08-c-codex-r1.txt` |
+| slice_impl-08-c-claude-r1 | fix_findings | claude | 1 | 1 fixed | `implementation/milestones/staffing-router/.run/raw/slice_impl-08-c-fix1.txt` |
+| slice_impl-08-c-claude-r2 | delta_review | claude | 0 | clean | `implementation/milestones/staffing-router/.run/raw/slice_impl-08-c-delta1.txt` |
+| slice_impl-08-c-codex-r2 | review_round | codex | 2 | 2 reported | `implementation/milestones/staffing-router/.run/raw/slice_impl-08-c-codex-r2.txt` |
+| slice_impl-08-c-claude-r3 | fix_findings | claude | 2 | 2 fixed (1 consulted) | `implementation/milestones/staffing-router/.run/raw/slice_impl-08-c-fix2.txt` |
+| slice_impl-08-c-claude-r4 | delta_review | claude | 2 | 2 reported | `implementation/milestones/staffing-router/.run/raw/slice_impl-08-c-delta2.txt` |
+| slice_impl-08-c-claude-r5 | fix_findings | claude | 2 | 2 fixed (1 consulted) | `implementation/milestones/staffing-router/.run/raw/slice_impl-08-c-fix3.txt` |
+| slice_impl-08-c-claude-r6 | delta_review | claude | 2 | 2 reported | `implementation/milestones/staffing-router/.run/raw/slice_impl-08-c-delta3.txt` |
+| slice_impl-08-c-claude-r7 | fix_findings | claude | 2 | 1 fixed, 1 rejected (1 consulted) | `implementation/milestones/staffing-router/.run/raw/slice_impl-08-c-fix4.txt` |
+| slice_impl-08-c-claude-r8 | delta_review | claude | 0 | clean | `implementation/milestones/staffing-router/.run/raw/slice_impl-08-c-delta4.txt` |
+| slice_impl-08-c-codex-r3 | review_round | codex | 0 | clean | `implementation/milestones/staffing-router/.run/raw/slice_impl-08-c-codex-r3.txt` |
+| slice_impl-08-c-claude-r9 | review_round | claude | 3 | DEBT-CLEAN (reclassified) | `implementation/milestones/staffing-router/.run/raw/slice_impl-08-c-claude-r1.txt` |
+
+### Review completion — SATISFIED
+
+- deterministic result: every configured family was clean or debt-clean on the same current bytes; the scheduled full verification passed; no extra reviewer was called
+- cited reviews: `slice_impl-08-c-codex-r3`, `slice_impl-08-c-claude-r9`
+- scheduled verification event: `1125`
+
+**Deferred debt (opposite-family verified):**
+- `codex-S8C-002` (raised codex, cleared codex): The README contradicts the retired Brainstorming seat controls — The README states false current behavior that could steer contract or test work toward preserving retired pins, but the adjacent retirement statement and the panel payload both expose the contradiction immediately, leaving only a small local documentation or expectation correction.
+- `claude-S8C-C-001` (raised claude, cleared codex): The vocabulary retirement keeps a leftover duplicate `shortModel` and newly blesses it in a comment, but that declaration shadows the `MODEL_LABELS`-based `shortModel` defined earlier in the same single `<script>` block, so `MODEL_LABELS` is unreachable dead data and the run-list workplace chips render raw model ids; a new test comment in `orchestrator/tests/test_service_projects.py` simultaneously asserts those labels do render and newly pins their presence. — The explicit comment and presence-only test falsely certify friendly chip rendering, plausibly misleading later panel work despite the capable builder, while correction is a self-revealing local deletion plus a focused behavioral-test adjustment.
+- `claude-S8C-C-002` (raised claude, cleared codex): The README edit deletes the sentence that named the retiring seat controls but keeps the follow-on 'That control has retired:', leaving the demonstrative pointing at the preceding sentence about Dante never voting. — The dangling demonstrative could momentarily imply that Dante's no-vote rule retired, but a capable builder should resolve the minor ambiguity from the immediately following staffing-control explanation, and correction is a single local README wording fix.
+- `claude-S8C-C-003` (raised claude, cleared codex): Removing the per-seat agent/model/effort inputs from the Brainstorming roster leaves the `.rosterrow select, .rosterrow input` rule styling elements that no longer exist anywhere in the page. — The confirmed dead selector is inert cosmetic residue that cannot affect behavior or plausibly misstate a contract, so silent drift is unlikely and correction is one local CSS deletion.
+

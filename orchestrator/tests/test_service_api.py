@@ -170,29 +170,22 @@ class ServiceApiTest(unittest.TestCase):
         self.assertIn('id="bsform"', text)
         self.assertIn("function submitBrainstorming", text)
         self.assertIn('api("/api/brainstorming/sessions"', text)
-        # Seats are configured like milestone acts (agent/model/effort per
-        # row, add/remove), never as typed ids; references are a managed
-        # list with add/remove, not a free textarea.
+        # Seats are rows added and removed, never typed ids; references are
+        # a managed list with add/remove, not a free textarea.
         self.assertIn("function renderBsRoster", text)
         self.assertIn("function addBsSeat", text)
         self.assertIn("function removeBsSeat", text)
-        # The dialog opens pre-staffed with Codex, Claude, and Dante; the
-        # retired claude id is gone from every option list.
-        self.assertIn(
-            '{role: "initial_position", delivery: "llm", agent: "codex",', text)
-        self.assertIn(
-            '{role: "contrary_position", delivery: "llm", agent: "claude",',
-            text,
-        )
-        self.assertIn('model: "claude-opus-5", effort: "max"', text)
+        # The dialog opens on the standing three positions and pins the
+        # staffing of none of them: WHO runs a seat is the session's answer
+        # at that seat's roster position (staffing-router slice 8).
+        self.assertIn('{role: "initial_position", delivery: "llm"},', text)
+        self.assertIn('{role: "contrary_position", delivery: "llm"},', text)
         self.assertIn(
             '{role: "common_sense", delivery: "external", '
-            'externalProvider: "narrator",',
+            'externalProvider: "narrator"},',
             text,
         )
-        self.assertIn('agent: "codex", model: "gpt-5.6-sol", effort: "max"',
-                      text)
-        self.assertIn('"claude-opus-5"', text)
+        self.assertNotIn('effort: "max"', text)
         self.assertNotIn("opus-4-8", text)
         self.assertIn(".rosterrow { display: grid", text)
         self.assertIn("function addBsRef", text)
@@ -348,11 +341,13 @@ class ServiceApiTest(unittest.TestCase):
         self.assertNotIn('id="a_skeletoner_agent"', text)
         self.assertNotIn('id="ra_skeletoner_model"', text)
         self.assertNotIn('convergence_fixer', text)
-        # Switching a Brainstorming seat's family resets model+effort (not
-        # just the datalist): the onAgentChange userChanged branch clears both.
-        self.assertIn("function onAgentChange(prefix, act, userChanged)", text)
-        self.assertIn("if (userChanged)", text)
-        self.assertIn("modelEl.value = \"\"", text)
+        # A Brainstorming seat has no family to switch any more, so the
+        # per-seat agent/model/effort machinery — and the family list it
+        # read — retired with it (staffing-router slice 8).
+        self.assertNotIn("function onAgentChange", text)
+        self.assertNotIn("const MODEL_OPTS", text)
+        self.assertNotIn("const EFFORT_OPTS", text)
+        self.assertNotIn("const FAMILY_DEFAULTS", text)
         self.assertIn("function liveWorkSeconds", text)
         self.assertIn("function runStatusClock", text)
         self.assertIn("function tickLiveClocks", text)
