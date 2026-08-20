@@ -658,3 +658,23 @@
 - `claude-S8C-C-002` (raised claude, cleared codex): The README edit deletes the sentence that named the retiring seat controls but keeps the follow-on 'That control has retired:', leaving the demonstrative pointing at the preceding sentence about Dante never voting. — The dangling demonstrative could momentarily imply that Dante's no-vote rule retired, but a capable builder should resolve the minor ambiguity from the immediately following staffing-control explanation, and correction is a single local README wording fix.
 - `claude-S8C-C-003` (raised claude, cleared codex): Removing the per-seat agent/model/effort inputs from the Brainstorming roster leaves the `.rosterrow select, .rosterrow input` rule styling elements that no longer exist anywhere in the page. — The confirmed dead selector is inert cosmetic residue that cannot affect behavior or plausibly misstate a contract, so silent drift is unlikely and correction is one local CSS deletion.
 
+## slice_doc-09 (Planner material channel)
+
+- draft: kind `draft_slice_note`, artifact `implementation/milestones/staffing-router/slices/slice-09.md` (raw: `implementation/milestones/staffing-router/.run/raw/slice_doc-09-draft.txt`)
+
+| Round | Kind | Family | Findings | Triage | Raw |
+|---|---|---|---|---|---|
+| slice_doc-09-codex-r1 | review_round | codex | 1 | DEBT-CLEAN (reclassified) | `implementation/milestones/staffing-router/.run/raw/slice_doc-09-codex-r1.txt` |
+| slice_doc-09-claude-r1 | review_round | claude | 3 | DEBT-CLEAN (reclassified) | `implementation/milestones/staffing-router/.run/raw/slice_doc-09-claude-r1.txt` |
+
+### Review completion — SATISFIED
+
+- deterministic result: every configured family was clean or debt-clean on the same current bytes; full verification was not due at this boundary; no extra reviewer was called
+- cited reviews: `slice_doc-09-codex-r1`, `slice_doc-09-claude-r1`
+
+**Deferred debt (opposite-family verified):**
+- `codex-S9-001` (raised codex, cleared codex): Verification omits Agent-call restart and frozen-absence coverage — The artifact pins frozen absence but tests restart only Brainstorming with named materials, so Agent-call recovery could silently reread prose despite a passing matrix, while correction remains bounded to the restart carrier and one focused regression test.
+- `claude-S9-CLAUDE-R1-001` (raised claude, cleared codex): Acceptance row 7 says "Skeleton drafting, fixes ... gain no slice-material input", but acceptance rows 1 and 3 require the material catalogue and the visible-column instruction in exactly the skeleton-draft and fix-findings prompts, because the shared plan-authoring block that must carry them is embedded there. — The wording creates a minor ambiguity, but repeated every-plan-authoring requirements and named prompt tests should guide a capable builder correctly; if misread, those focused tests expose the omission and correction is local.
+- `claude-S9-CLAUDE-R1-002` (raised claude, cleared codex): Acceptance row 2 says the planner-authored plan string "is distinguished as an explicit write in later plan-review context", conflating a planner proposal with an authorized override; implemented literally it suppresses the very skeleton-table/plan agreement check acceptance row 3 requires. — The acceptance criterion directly mislabels the planner proposal as an explicit override, so literal implementation could silently disable the required skeleton/plan agreement check, while correction remains bounded to Slice 09's provenance, review-context logic, and focused tests.
+- `claude-S9-CLAUDE-R1-003` (raised claude, cleared codex): The note asserts the implementation "stays around the roughly 500-changed-line aim" and records no overrun reason, although it enumerates six new tests across five modules plus roughly nine source surfaces, and the two comparable slices in this milestone that made the same claim delivered 1062 and 1798 changed lines. — Although the ~500-line estimate is implausible against the six verification rows and numerous named surfaces, the full contract remains explicit and the overrun reveals itself as the diff grows, so a capable builder is unlikely to trim scope silently and correction requires only a local size-note up
+
