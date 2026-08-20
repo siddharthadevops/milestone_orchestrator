@@ -814,6 +814,29 @@
   </div>
 </dialog>
 
+<dialog id="slicematerialdlg">
+  <h2 id="sm_title">Slice material</h2>
+  <div class="field"><label>Material (optional)</label>
+    <input id="sm_material" class="mono" placeholder='"material name"'
+      oninput="markSliceMaterialEdited()">
+    <div class="hint">Enter the kind of work as a JSON string, in the staffing
+      document's own vocabulary. Quoted escapes such as <code>\r</code> and
+      <code>\n</code> preserve line breaks exactly. Save writes the decoded
+      string unchanged and leaves an untouched box's stored name exactly as it
+      is &mdash; a slice proposing nothing keeps none, and no save of its own
+      creates one; Clear removes the proposal and leaves the session's default
+      material in force. It applies to the next note-drafting or implementation
+      task ordered for this slice; a task already ordered keeps the material it
+      was ordered with.</div></div>
+  <div class="formrow">
+    <span id="sm_error" style="color:var(--bad);font-size:12px;margin-right:auto"></span>
+    <button class="btn"
+      onclick="document.getElementById('slicematerialdlg').close()">Cancel</button>
+    <button class="btn" onclick="clearSliceMaterial()">Clear</button>
+    <button class="btn primary" onclick="saveSliceMaterial()">Save</button>
+  </div>
+</dialog>
+
 <dialog id="taskhistorydialog">
   <h2 class="dlgtitle">
     <button class="btn sm" id="taskHistoryBack" type="button"
@@ -3764,10 +3787,16 @@ async function refreshDetail() {
       visibleSliceProducers = new Map((sum.slices || []).map(slice => [
         slice.id, slice.producer_task_executor || {},
       ]));
+      // The summary omits the key entirely when no proposal stands, so an
+      // absent material stays absent here instead of collapsing into the
+      // empty string a planner may deliberately have written.
+      visibleSliceMaterials = new Map((sum.slices || []).map(slice => [
+        slice.id, slice.material,
+      ]));
       const sliceTitle = id => {
         const sl = (sum.slices || []).find(x => x.id === id);
         return sl ? `<span class="unit-title">${esc(sl.title)}</span>${
-          producerControls(sl.id, sl.producer_task_executor)}` : "";
+          producerControls(sl.id, sl.producer_task_executor, sl.material)}` : "";
       };
       const catRow = (label, title, stat, duration, tokens,
                       tokenPartial, cls = "", cost = null,
@@ -5145,6 +5174,8 @@ let taskCatalogueSeq = 0;
 let taskDialogSeq = 0;
 let taskSubmitPending = false;
 let visibleSliceProducers = new Map();
+let visibleSliceMaterials = new Map();
+let sliceMaterialTarget = null;
 let visibleProducerRunId = null;
 // Canonical task responses are the only source for chips. A failed refresh
 // leaves this last good view alone; no task is inferred from milestone prose.
@@ -5493,14 +5524,119 @@ function producerSelectionLabel(selection) {
     : [];
   return selection.task_executor + (values.length ? ` · ${values.join(", ")}` : "");
 }
-function producerControls(sliceId, producerMap) {
+function producerControls(sliceId, producerMap, material) {
   const choices = producerMap || {};
   return `<span class="producer-choices">
     <button class="producer-choice" type="button"
       onclick="openProducerTask(${sliceId},'draft_slice_note')">Note · <span id="producer-${sliceId}-draft_slice_note">${esc(producerSelectionLabel(choices.draft_slice_note))}</span></button>
     <button class="producer-choice" type="button"
       onclick="openProducerTask(${sliceId},'implement')">Implementation · <span id="producer-${sliceId}-implement">${esc(producerSelectionLabel(choices.implement))}</span></button>
+    <button class="producer-choice" type="button"
+      onclick="openSliceMaterial(${sliceId})">Material · <span id="material-${sliceId}">${esc(sliceMaterialLabel(material))}</span></button>
   </span>`;
+}
+/* The material is one prospective string beside the two producer choices,
+   and nothing more: it never edits the skeleton artifact, the staffing
+   document, or the session's own default material, and the router still
+   decides the agent, the model and the effort behind every call. */
+function sliceMaterialAbsent(material) {
+  return material === null || material === undefined;
+}
+function sliceMaterialLabel(material) {
+  /* Absence is the only thing that means "the session's default stands".
+     JSON string syntax makes every present value distinguishable from it,
+     including the empty string, the literal "session default", and strings
+     containing line breaks. */
+  if (sliceMaterialAbsent(material)) return "session default";
+  return JSON.stringify(material);
+}
+function openSliceMaterial(sliceId) {
+  if (!selected || visibleProducerRunId !== selected) {
+    refreshDetail();
+    return;
+  }
+  const stored = visibleSliceMaterials.get(sliceId);
+  const box = document.getElementById("sm_material");
+  document.getElementById("sm_title").textContent =
+    `Slice ${String(sliceId).padStart(2, "0")} · material`;
+  document.getElementById("sm_error").textContent = "";
+  box.value = sliceMaterialAbsent(stored) ? "" : JSON.stringify(stored);
+  /* JSON string syntax keeps the single-line editor lossless for every
+     storable string, including CR and LF. Track actual input separately:
+     an untouched blank still means absence, while typing "\"\"" proposes
+     the explicit empty string. */
+  sliceMaterialTarget = {runId: selected, sliceId, stored, edited: false};
+  document.getElementById("slicematerialdlg").showModal();
+}
+function markSliceMaterialEdited() {
+  if (sliceMaterialTarget) sliceMaterialTarget.edited = true;
+}
+function applyConfirmedSliceMaterial(sliceId, material) {
+  visibleSliceMaterials.set(sliceId, material);
+  const el = document.getElementById(`material-${sliceId}`);
+  if (el) el.textContent = sliceMaterialLabel(material);
+}
+function saveSliceMaterial() {
+  /* Decode the exact string represented in the box. Trimming or folding an
+     emptied box into a clear would rewrite the operator's own word: a name
+     the document cannot carry resolves to the session default today, and
+     silently repairing it into one the document DOES carry would restaff
+     the next production task nobody asked to restaff. */
+  const box = document.getElementById("sm_material").value;
+  const target = sliceMaterialTarget;
+  if (target && !target.edited) {
+    /* A slice with no proposal shows the same empty box as one proposing
+       the empty string, so the untouched rule has to cover ABSENCE too,
+       and absence is the one state no request can express: posting the
+       box would author a `""` nobody typed, and posting null would record
+       a withdrawal nobody asked for. Both are explicit operator writes a
+       later plan review reads as settled, so an untouched box on such a
+       slice sends nothing at all and simply closes. */
+    if (sliceMaterialAbsent(target.stored)) {
+      document.getElementById("slicematerialdlg").close();
+      return;
+    }
+    return writeSliceMaterial(target.stored);
+  }
+  let material;
+  try {
+    material = JSON.parse(box);
+  } catch (_error) {
+    document.getElementById("sm_error").textContent =
+      "Enter a valid JSON string.";
+    return;
+  }
+  if (typeof material !== "string") {
+    document.getElementById("sm_error").textContent =
+      "Material must be a JSON string.";
+    return;
+  }
+  return writeSliceMaterial(material);
+}
+function clearSliceMaterial() {
+  /* Removing the proposal is its own deliberate act, never a side effect
+     of an emptied box. */
+  return writeSliceMaterial(null);
+}
+async function writeSliceMaterial(material) {
+  if (!sliceMaterialTarget) return;
+  const target = Object.assign({}, sliceMaterialTarget);
+  const materialViewSeq = detailSeq;
+  const error = document.getElementById("sm_error");
+  error.textContent = "";
+  let data;
+  try {
+    // One request, sent once: a refusal is rendered exactly as the
+    // service worded it and nothing is queued or resent.
+    data = await postJSON(
+      `/api/runs/${encodeURIComponent(target.runId)}/slices/${
+        target.sliceId}/material`,
+      {material: material});
+  } catch (e) { error.textContent = e.message; return; }
+  if (materialViewSeq === detailSeq)
+    applyConfirmedSliceMaterial(target.sliceId, data.material);
+  document.getElementById("slicematerialdlg").close();
+  refreshDetail();
 }
 function openProducerTask(sliceId, taskKind) {
   if (!selected || visibleProducerRunId !== selected) {

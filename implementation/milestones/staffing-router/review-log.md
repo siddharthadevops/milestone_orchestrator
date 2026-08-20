@@ -678,3 +678,67 @@
 - `claude-S9-CLAUDE-R1-002` (raised claude, cleared codex): Acceptance row 2 says the planner-authored plan string "is distinguished as an explicit write in later plan-review context", conflating a planner proposal with an authorized override; implemented literally it suppresses the very skeleton-table/plan agreement check acceptance row 3 requires. — The acceptance criterion directly mislabels the planner proposal as an explicit override, so literal implementation could silently disable the required skeleton/plan agreement check, while correction remains bounded to Slice 09's provenance, review-context logic, and focused tests.
 - `claude-S9-CLAUDE-R1-003` (raised claude, cleared codex): The note asserts the implementation "stays around the roughly 500-changed-line aim" and records no overrun reason, although it enumerates six new tests across five modules plus roughly nine source surfaces, and the two comparable slices in this milestone that made the same claim delivered 1062 and 1798 changed lines. — Although the ~500-line estimate is implausible against the six verification rows and numerous named surfaces, the full contract remains explicit and the overrun reveals itself as the diff grows, so a capable builder is unlikely to trim scope silently and correction requires only a local size-note up
 
+## slice_impl-09-a (Planner material channel)
+
+- draft: kind `implement`, artifact `-` (raw: `implementation/milestones/staffing-router/.run/raw/slice_impl-09-draft.txt`)
+
+| Round | Kind | Family | Findings | Triage | Raw |
+|---|---|---|---|---|---|
+| slice_impl-09-codex-r1 | review_round | codex | 3 | 3 reported | `implementation/milestones/staffing-router/.run/raw/slice_impl-09-codex-r1.txt` |
+| slice_impl-09-claude-r1 | fix_findings | claude | 3 | 3 fixed (1 consulted) | `implementation/milestones/staffing-router/.run/raw/slice_impl-09-fix1.txt` |
+| slice_impl-09-claude-r2 | delta_review | claude | 2 | 2 reported | `implementation/milestones/staffing-router/.run/raw/slice_impl-09-delta1.txt` |
+| slice_impl-09-claude-r3 | fix_findings | claude | 2 | 1 fixed, 1 rejected (1 consulted) | `implementation/milestones/staffing-router/.run/raw/slice_impl-09-fix2.txt` |
+| slice_impl-09-claude-r4 | delta_review | claude | 1 | 1 reported | `implementation/milestones/staffing-router/.run/raw/slice_impl-09-delta2.txt` |
+| slice_impl-09-claude-r5 | fix_findings | claude | 1 | 1 fixed | `implementation/milestones/staffing-router/.run/raw/slice_impl-09-fix3.txt` |
+| slice_impl-09-claude-r6 | delta_review | claude | 1 | 1 reported | `implementation/milestones/staffing-router/.run/raw/slice_impl-09-delta3.txt` |
+| slice_impl-09-claude-r7 | fix_findings | claude | 1 | 1 fixed | `implementation/milestones/staffing-router/.run/raw/slice_impl-09-fix4.txt` |
+| slice_impl-09-claude-r8 | delta_review | claude | 0 | clean | `implementation/milestones/staffing-router/.run/raw/slice_impl-09-delta4.txt` |
+| slice_impl-09-codex-r2 | review_round | codex | 1 | 1 reported | `implementation/milestones/staffing-router/.run/raw/slice_impl-09-codex-r2.txt` |
+| slice_impl-09-claude-r9 | fix_findings | claude | 1 | 1 fixed | `implementation/milestones/staffing-router/.run/raw/slice_impl-09-fix5.txt` |
+| slice_impl-09-claude-r10 | delta_review | claude | 0 | clean | `implementation/milestones/staffing-router/.run/raw/slice_impl-09-delta5.txt` |
+| slice_impl-09-codex-r3 | review_round | codex | 3 | 3 reported | `implementation/milestones/staffing-router/.run/raw/slice_impl-09-codex-r3.txt` |
+| slice_impl-09-claude-r11 | fix_findings | claude | 3 | 3 fixed (1 consulted) | `implementation/milestones/staffing-router/.run/raw/slice_impl-09-fix6.txt` |
+| slice_impl-09-claude-r12 | delta_review | claude | 0 | clean | `implementation/milestones/staffing-router/.run/raw/slice_impl-09-delta6.txt` |
+| slice_impl-09-codex-r4 | review_round | codex | 2 | 2 reported | `implementation/milestones/staffing-router/.run/raw/slice_impl-09-codex-r4.txt` |
+| slice_impl-09-claude-r13 | fix_findings | claude | 2 | 2 fixed (1 consulted) | `implementation/milestones/staffing-router/.run/raw/slice_impl-09-fix7.txt` |
+| slice_impl-09-claude-r14 | delta_review | claude | 0 | clean | `implementation/milestones/staffing-router/.run/raw/slice_impl-09-delta7.txt` |
+| slice_impl-09-codex-r5 | review_round | codex | 4 | 4 reported | `implementation/milestones/staffing-router/.run/raw/slice_impl-09-codex-r5.txt` |
+| slice_impl-09-claude-r15 | fix_findings | claude | 4 | 2 fixed, 2 rejected (4 consulted) | `implementation/milestones/staffing-router/.run/raw/slice_impl-09-fix8.txt` |
+| slice_impl-09-claude-r16 | delta_review | claude | 1 | 1 reported | `implementation/milestones/staffing-router/.run/raw/slice_impl-09-delta8.txt` |
+| slice_impl-09-claude-r17 | fix_findings | claude | 1 | 1 fixed | `implementation/milestones/staffing-router/.run/raw/slice_impl-09-fix9.txt` |
+| slice_impl-09-claude-r18 | delta_review | claude | 0 | clean | `implementation/milestones/staffing-router/.run/raw/slice_impl-09-delta9.txt` |
+| slice_impl-09-codex-r6 | review_round | codex | 2 | 2 reported | `implementation/milestones/staffing-router/.run/raw/slice_impl-09-codex-r6.txt` |
+| slice_impl-09-claude-r19 | fix_findings | claude | 2 | 2 fixed | `implementation/milestones/staffing-router/.run/raw/slice_impl-09-fix10.txt` |
+| slice_impl-09-claude-r20 | delta_review | claude | 0 | clean | `implementation/milestones/staffing-router/.run/raw/slice_impl-09-delta10.txt` |
+| slice_impl-09-codex-r7 | review_round | codex | 0 | clean | `implementation/milestones/staffing-router/.run/raw/slice_impl-09-codex-r7.txt` |
+| slice_impl-09-claude-r21 | review_round | claude | 1 | 1 reported | `implementation/milestones/staffing-router/.run/raw/slice_impl-09-claude-r1.txt` |
+| slice_impl-09-claude-r22 | fix_findings | claude | 1 | 1 fixed | `implementation/milestones/staffing-router/.run/raw/slice_impl-09-fix11.txt` |
+| slice_impl-09-claude-r23 | delta_review | claude | 0 | clean | `implementation/milestones/staffing-router/.run/raw/slice_impl-09-delta11.txt` |
+| slice_impl-09-codex-r8 | review_round | codex | 2 | 2 reported | `implementation/milestones/staffing-router/.run/raw/slice_impl-09-codex-r8.txt` |
+| slice_impl-09-claude-r24 | fix_findings | claude | 2 | 2 fixed (1 consulted) | `implementation/milestones/staffing-router/.run/raw/slice_impl-09-fix12.txt` |
+| slice_impl-09-claude-r25 | delta_review | claude | 1 | 1 reported | `implementation/milestones/staffing-router/.run/raw/slice_impl-09-delta12.txt` |
+| slice_impl-09-claude-r26 | fix_findings | claude | 1 | 1 fixed | `implementation/milestones/staffing-router/.run/raw/slice_impl-09-fix13.txt` |
+| slice_impl-09-claude-r27 | delta_review | claude | 0 | clean | `implementation/milestones/staffing-router/.run/raw/slice_impl-09-delta13.txt` |
+| slice_impl-09-codex-r9 | review_round | codex | 1 | 1 reported | `implementation/milestones/staffing-router/.run/raw/slice_impl-09-codex-r9.txt` |
+| slice_impl-09-claude-r28 | fix_findings | claude | 1 | 1 rejected (1 consulted) | `implementation/milestones/staffing-router/.run/raw/slice_impl-09-fix14-rethink-return.txt` |
+| slice_impl-09-claude-r29 | delta_review | claude | 1 | 1 reported | `implementation/milestones/staffing-router/.run/raw/slice_impl-09-delta14.txt` |
+| slice_impl-09-codex-r10 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/staffing-router/.run/raw/slice_impl-09-fix15.txt` |
+| slice_impl-09-codex-r11 | delta_review | codex | 0 | clean | `implementation/milestones/staffing-router/.run/raw/slice_impl-09-delta15.txt` |
+| slice_impl-09-codex-r12 | review_round | codex | 1 | 1 reported | `implementation/milestones/staffing-router/.run/raw/slice_impl-09-codex-r10.txt` |
+| slice_impl-09-codex-r13 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/staffing-router/.run/raw/slice_impl-09-fix16.txt` |
+| slice_impl-09-codex-r14 | delta_review | codex | 0 | clean | `implementation/milestones/staffing-router/.run/raw/slice_impl-09-delta16.txt` |
+| slice_impl-09-codex-r15 | review_round | codex | 1 | 1 reported | `implementation/milestones/staffing-router/.run/raw/slice_impl-09-codex-r11.txt` |
+| slice_impl-09-codex-r16 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/staffing-router/.run/raw/slice_impl-09-fix17.txt` |
+| slice_impl-09-codex-r17 | delta_review | codex | 0 | clean | `implementation/milestones/staffing-router/.run/raw/slice_impl-09-delta17.txt` |
+| slice_impl-09-codex-r18 | review_round | codex | 0 | clean | `implementation/milestones/staffing-router/.run/raw/slice_impl-09-codex-r12.txt` |
+| slice_impl-09-claude-r30 | review_round | claude | 2 | DEBT-CLEAN (reclassified) | `implementation/milestones/staffing-router/.run/raw/slice_impl-09-claude-r2.txt` |
+
+### Review completion — SATISFIED
+
+- deterministic result: every configured family was clean or debt-clean on the same current bytes; full verification was not due at this boundary; no extra reviewer was called
+- cited reviews: `slice_impl-09-codex-r18`, `slice_impl-09-claude-r30`
+
+**Deferred debt (opposite-family verified):**
+- `claude-S9A-CLAUDE-001` (raised claude, cleared codex): The worker OUTPUT CONTRACT's slice shape (orchestrator/contracts.py:1314-1320) still enumerates only `id`, `title` and `producer_task_executor`, so the one authoritative schema block a plan-authoring worker is told to obey never mentions the new optional `material` key, even though SLICE MATERIAL PLANNING tells it to make the structured result agree with the skeleton column. The sibling optional field `producer_task_executor` was added to that same block when it was introduced, so the omission is an inconsistency with the established precedent, and it propagates to draft_slice_note, implement and fix_findings, which all say "using the same shape as draft_skeleton above". — The schema omission can silently encourage material-free plans, but the adjacent agreement instruction should make a capable builder reconcile or report the ambiguity, and any realized drift is corrected locally by documenting the optional key and re-pinning affected slice values.
+- `claude-S9A-CLAUDE-002` (raised claude, cleared codex): In `saveSliceMaterial` (orchestrator/static/panel.html:5599), an untouched dialog on a slice that already carries a material re-POSTs the stored string instead of closing. The plan value does not change, but the write appends a `slice_material_updated` event, and `tasks.operator_material_overrides` turns every such event after the last `slices_updated` into an entry in `explicit_operator_material_overrides` regardless of whether the value changed. The review prompt tells the reviewer to treat a document-vs-plan material mismatch as settled for any slice appearing there, so merely opening the dialog and pressing Save suppresses that check for the slice. The same function deliberately declines to write in the absent case for exactly this reason ('would record a write nobody asked for'), so the two branches are inconsistent. — The implementation and focused test explicitly preserve a silent no-op POST that falsely settles a real material mismatch, but correction is local to closing every untouched dialog without writing and updating that assertion.
+

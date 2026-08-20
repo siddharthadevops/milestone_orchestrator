@@ -355,6 +355,27 @@ def effective_slice_producers(slice_plan):
     }
 
 
+def slice_material(slice_plan):
+    """The material one slice currently proposes, or ``None``.
+
+    A read, never a default: an omitted material is not "no material" the
+    router must be told about, it is simply nothing to send, and the
+    session's own default then stands.
+    """
+    if not isinstance(slice_plan, dict):
+        raise TaskRequestError(
+            INVALID_TASK_REQUEST, "slice plan must be an object"
+        )
+    material = slice_plan.get("material")
+    if material is None:
+        return None
+    if not isinstance(material, str):
+        raise TaskRequestError(
+            INVALID_TASK_REQUEST, "slice material must be a string"
+        )
+    return material
+
+
 def effective_slice_plan(slices):
     """Return a detached plan whose every slice exposes both effective choices."""
     checked = _json_copy(slices, "slice plan")
@@ -523,6 +544,108 @@ def update_slice_producer(state, slice_id, value):
         selection=_json_copy(selection, "producer selection"),
     )
     return effective_slice_producers(slice_plan)
+
+
+def validate_material_override(value):
+    """Validate the closed slice-material write body.
+
+    Exactly `{"material": <string>}` or `{"material": null}`: a string
+    replaces the slice's proposal, ``None`` withdraws it. Nothing is checked
+    against the document's live catalogue — a name it does not carry is the
+    router's business and already degrades there, so a renamed material can
+    never refuse a write.
+    """
+    try:
+        _exact_keys(value, ("material",), (), "material override")
+        material = value["material"]
+        if material is not None and not isinstance(material, str):
+            raise ContractError(
+                "material must be a string, or null to clear it"
+            )
+        return {"material": material}
+    except (ContractError, TypeError, ValueError) as exc:
+        _request_error(exc)
+
+
+def update_slice_material(state, slice_id, value):
+    """Change one slice's still-prospective material in loaded state.
+
+    Prospective, and prospective ONLY: unlike a producer choice, this write
+    is never frozen by an admitted task, because it does not decide which
+    executor runs the work. Each production task took the material in force
+    when it was admitted and keeps it; this write governs the next one.
+    """
+    checked = validate_material_override(value)
+    if type(slice_id) is not int:
+        raise TaskRequestError(
+            INVALID_TASK_REQUEST, "slice id must be an integer"
+        )
+    slices = (state.get("milestone") or {}).get("slices")
+    if not isinstance(slices, list):
+        raise TaskRequestError(INVALID_TASK_REQUEST, "slice plan is unavailable")
+    slice_plan = next(
+        (candidate for candidate in slices if candidate.get("id") == slice_id),
+        None,
+    )
+    if slice_plan is None:
+        raise TaskRequestError(
+            INVALID_TASK_REQUEST, "unknown slice id %r" % slice_id
+        )
+    material = checked["material"]
+    if material is None:
+        # Clearing REMOVES the key. A plan that never carried one and a plan
+        # whose proposal was withdrawn read the same way, so no reader has to
+        # learn a second spelling for "no material".
+        slice_plan.pop("material", None)
+    else:
+        slice_plan["material"] = material
+    st.append_event(
+        state,
+        "slice_material_updated",
+        slice_id=slice_id,
+        material=material,
+    )
+    return slice_material(slice_plan)
+
+
+def operator_material_overrides(state):
+    """Project current-plan explicit material writes from append-only history.
+
+    The same cutoff the producer projection uses: a later authorized complete
+    slice plan replaces the proposals wholesale, so writes made before it no
+    longer describe the plan a reviewer is reading.
+    """
+    events = state.get("events", [])
+    latest_plan_update = max(
+        (
+            index
+            for index, event in enumerate(events)
+            if isinstance(event, dict) and event.get("type") == "slices_updated"
+        ),
+        default=-1,
+    )
+    overrides = {}
+    for index, event in enumerate(events):
+        if index <= latest_plan_update:
+            continue
+        if not isinstance(event, dict) or event.get("type") != (
+            "slice_material_updated"
+        ):
+            continue
+        slice_id = event.get("slice_id")
+        material = event.get("material")
+        if type(slice_id) is not int or (
+            material is not None and not isinstance(material, str)
+        ):
+            raise TaskRequestError(
+                INVALID_TASK_REQUEST,
+                "slice material event %d has invalid identity" % index,
+            )
+        overrides[slice_id] = material
+    return [
+        {"slice_id": slice_id, "material": material}
+        for slice_id, material in sorted(overrides.items())
+    ]
 
 
 def _order_staffing_session(value):

@@ -1437,10 +1437,10 @@ class Driver(object):
         detected only afterwards, at save time, as HistoryRewriteError.
 
         A continuous driver may briefly lose the between-step handoff to a
-        producer write.  It retries only long enough for that local write to
-        finish and proceeds only if the resulting state is unchanged or exactly
-        an adoptable producer-only delta.  Direct steps and every unrelated
-        durable change retain the ordinary non-blocking refusal."""
+        prospective slice write.  It retries only long enough for that local
+        write to finish and proceeds only if the resulting state is unchanged
+        or exactly an adoptable slice-write delta.  Direct steps and every
+        unrelated durable change retain the ordinary non-blocking refusal."""
         if adopt_producer_handoff is None:
             adopt_producer_handoff = self._allow_producer_handoff
 
@@ -1484,7 +1484,8 @@ class Driver(object):
             lock.close()
 
     def _assert_not_stale(self):
-        """Adopt authorized producer writes; refuse every other stale state."""
+        """Adopt authorized prospective slice writes; refuse every other stale
+        state."""
         if not os.path.exists(self.state_path):
             return
         disk = st.load(self.state_path)
@@ -1498,7 +1499,11 @@ class Driver(object):
             )
 
     def _adopt_live_producer_updates(self, disk):
-        """Refresh only when disk is exactly this state plus producer writes."""
+        """Refresh only when disk is exactly this state plus prospective
+        slice writes: a producer choice, or a slice material. Both come
+        through the same route family and the same exclusive mutation, so a
+        loaded driver adopts either one rather than refusing the run over a
+        write it authorized itself."""
         current_events = self.state.get("events")
         disk_events = disk.get("events")
         if not isinstance(current_events, list) or not isinstance(
@@ -1514,16 +1519,29 @@ class Driver(object):
         for index, event in enumerate(
             disk_events[len(current_events):], start=len(current_events)
         ):
-            if (
-                not isinstance(event, dict)
-                or event.get("type") != "slice_producer_updated"
-                or event.get("seq") != index
-            ):
+            if not isinstance(event, dict) or event.get("seq") != index:
                 return False
-            selection = event.get("selection")
-            if not isinstance(selection, dict):
+            if not self._replay_prospective_slice_write(candidate, event):
                 return False
-            try:
+            candidate["events"][-1] = copy.deepcopy(event)
+        if candidate != disk:
+            return False
+        self.state = disk
+        return True
+
+    @staticmethod
+    def _replay_prospective_slice_write(candidate, event):
+        """Apply one recorded prospective slice write to *candidate* state.
+
+        Replayed through the very writers the route used, so an event this
+        driver cannot reproduce exactly is refused rather than guessed at;
+        the caller then keeps the ordinary stale-state refusal."""
+        kind = event.get("type")
+        try:
+            if kind == "slice_producer_updated":
+                selection = event.get("selection")
+                if not isinstance(selection, dict):
+                    return False
                 checked = tasks.validate_producer_selection(
                     selection, "live producer update"
                 )
@@ -1535,12 +1553,21 @@ class Driver(object):
                         **checked,
                     },
                 )
-            except tasks.TaskRequestError:
+            elif kind == "slice_material_updated":
+                # A cleared material is recorded as an explicit null, so the
+                # key must be PRESENT: an event missing it is not a write
+                # this driver can replay.
+                if "material" not in event:
+                    return False
+                tasks.update_slice_material(
+                    candidate,
+                    event.get("slice_id"),
+                    {"material": event["material"]},
+                )
+            else:
                 return False
-            candidate["events"][-1] = copy.deepcopy(event)
-        if candidate != disk:
+        except tasks.TaskRequestError:
             return False
-        self.state = disk
         return True
 
     def _fix_family(self):
@@ -6182,11 +6209,8 @@ class Driver(object):
                 ),
                 original_request=original_request,
                 episode_authority=episode_authority,
-                producer_planning=(
-                    amendment_mode
-                    and self._skeleton_artifact()
-                    in self._editable_design_paths(unit)
-                ),
+                producer_planning=self._continuation_may_plan_slices(unit),
+                materials=self._planning_materials(),
             )
             durable_stabilization_size = None
             if kind == contracts.KIND_IMPLEMENT:
@@ -6791,6 +6815,13 @@ class Driver(object):
             "explicit_operator_overrides": (
                 tasks.operator_producer_overrides(self.state)
             ),
+            # The material an authorized caller wrote after the current plan
+            # was installed. Same rule as a producer override and the same
+            # cutoff: it supersedes the document's own column without
+            # requiring the reviewed artifact to be rewritten.
+            "explicit_operator_material_overrides": (
+                tasks.operator_material_overrides(self.state)
+            ),
         }
 
     def _ensure_goal_ledger(self):
@@ -7014,6 +7045,7 @@ class Driver(object):
                 artifact_path=ledgers.skeleton_path(self.state),
                 project_context=project_context, gap_enabled=gap_enabled,
                 two_register=two_register, battery=battery,
+                materials=self._planning_materials(),
             )
         elif unit["kind"] == st.UNIT_SLICE_DOC:
             sl = self._slice_info(unit["slice_id"])
@@ -7026,6 +7058,7 @@ class Driver(object):
                 project_context=project_context, gap_enabled=gap_enabled,
                 two_register=two_register, battery=battery,
                 editable_design_paths=self._editable_design_paths(unit),
+                materials=self._planning_materials(),
             )
         else:
             sl = self._slice_info(unit["slice_id"])
@@ -7053,6 +7086,7 @@ class Driver(object):
                                     unit["slice_id"]))),
                 editable_design_paths=self._editable_design_paths(unit),
                 implementation_scope=self._implementation_scope(unit),
+                materials=self._planning_materials(),
             )
         # The reviewed baseline as it stands BEFORE the builder runs: the local
         # ref map, HEAD's branch identity and commit tip, and the index tree
@@ -8416,6 +8450,57 @@ class Driver(object):
         except staffing.StaffingConditionError as exc:
             self._fail_staffing(exc)
 
+    def _continuation_may_plan_slices(self, unit):
+        """Whether a resumed worker task may still author the slice plan.
+
+        Keyed to what this driver can INSTALL from the continuation's result
+        (`_maybe_update_slices`), never to the discussion's result mode: a
+        skeleton fixer edits its own artifact's slice table under any mode,
+        and a unit already carrying the skeleton among its editable design
+        paths keeps that authority when its discussion returned a proposal
+        rather than an amendment. Either one is a plan-authoring prompt and
+        needs the pair read at THIS boundary, because the catalogue quoted
+        inside its frozen request is the one its first call was dispatched
+        with — a document edited since is otherwise invisible to it, and the
+        retired vocabulary reads as current. This only widens the condition:
+        every amendment case that carried the pair still does.
+        """
+        return (
+            unit["kind"] == st.UNIT_SKELETON
+            or self._skeleton_artifact() in self._editable_design_paths(unit)
+        )
+
+    def _planning_materials(self):
+        """The material vocabulary a plan-authoring prompt shows, live.
+
+        The `materials` of the document this run's session REFERENCES, read
+        at the prompt boundary through the same validated session and
+        document reads every dispatch uses. Guidance only: it names no
+        agent, model or effort and decides no call, so an unreadable
+        session or document leaves it empty and planning continues. That
+        deliberately does NOT borrow the resolver's mandatory fallback — a
+        catalogue from a document this run does not name would be a
+        vocabulary nobody wrote for it, and inventing one is worse than
+        asking for no proposal at all.
+        """
+        if self.model_profiles_home is None:
+            return {}
+        session = st.staffing_session(self.state)
+        if not session:
+            return {}
+        try:
+            record = staffing.read_session(self.model_profiles_home, session)
+            document = staffing.load(
+                self.model_profiles_home, record["document"]
+            )
+        except (staffing.StaffingError, OSError):
+            return {}
+        # Whether the prompt can CARRY a name is the prompt's own question,
+        # not a reason to read less: a document that loads supplies every
+        # name it validated, and `prompts._material_catalogue_json` decides
+        # how to quote one no UTF-8 encoder emits.
+        return copy.deepcopy(document["materials"])
+
     def _staff(self, role, index=1, round=1):
         """(family, model, effort) for one driver-made call."""
         answer = self._staffing_resolution(role, index, round).answer
@@ -9277,6 +9362,7 @@ class Driver(object):
                 unit["kind"] != st.UNIT_SKELETON
                 and self._skeleton_artifact() in editable_design_paths
             ),
+            materials=self._planning_materials(),
             )
         n_fix = 1 + len(
             [r for r in unit["rounds"] if r["kind"] == contracts.KIND_FIX_FINDINGS]

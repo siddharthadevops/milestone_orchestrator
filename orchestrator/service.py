@@ -2902,6 +2902,39 @@ def set_slice_producer(home, run_id, slice_id, body):
     return producer_map
 
 
+def set_slice_material(home, run_id, slice_id, body):
+    """Serialize one prospective slice-material write against task admission.
+
+    The producer route's sibling, and deliberately its twin: one exclusive
+    mutation, no queue behind a busy driver step, and no retry. It differs
+    in one way only — a material is never frozen by an admitted task,
+    because the task already took the value it will keep, so this write
+    simply governs the next one.
+    """
+    entry = registry.get(registry.load(home), run_id)
+    if entry is None:
+        raise ApiError(404, "unknown run %r" % run_id)
+    # A material is stored and echoed verbatim, so shape alone does not
+    # make a string writable: the staffing routes' own guard answers the
+    # one this route could otherwise neither keep nor return.
+    _require_encodable(body, tasks.INVALID_TASK_REQUEST)
+    try:
+        checked = tasks.validate_material_override(body)
+    except tasks.TaskRequestError as exc:
+        raise ApiError(400, exc.code) from exc
+    try:
+        with st.exclusive_mutation(entry["state_path"]):
+            state = st.load(entry["state_path"])
+            material = tasks.update_slice_material(state, slice_id, checked)
+            st.save(entry["state_path"], state)
+    except st.ConcurrentStateMutation as exc:
+        raise ApiError(409, tasks.TASK_UPDATE_BUSY) from exc
+    except tasks.TaskRequestError as exc:
+        raise ApiError(400, exc.code) from exc
+    _evict_summary(entry["state_path"])
+    return material
+
+
 def set_profile_swap(home, run_id, body):
     """Repoint a run at another strategy profile at RUNTIME. Swap != edit:
     the profile is never mutated in place. Resolve one complete retained
@@ -4880,6 +4913,33 @@ def make_handler(home, task_host=None):
                                 "producer_task_executor": producer_map,
                             },
                         )
+                    elif (
+                        len(parts) == 7
+                        and parts[4] == "slices"
+                        and parts[6] == "material"
+                    ):
+                        try:
+                            slice_id = int(parts[5])
+                        except (TypeError, ValueError):
+                            raise ApiError(400, tasks.INVALID_TASK_REQUEST)
+                        # A body the transport could not read at all is
+                        # this route's own refusal token, not a second
+                        # vocabulary a caller would have to string-match:
+                        # every malformed material write answers alike.
+                        # `RecursionError` is read failure too, and the only
+                        # one the decoder raises past its own guard: nesting
+                        # deeper than the interpreter can descend is input
+                        # this route cannot read, not a fault in serving it.
+                        try:
+                            body = self._task_body()
+                        except RecursionError as exc:
+                            raise ApiError(
+                                400, tasks.INVALID_TASK_REQUEST
+                            ) from exc
+                        material = set_slice_material(
+                            home, parts[3], slice_id, body
+                        )
+                        self._json(200, {"ok": True, "material": material})
                     elif len(parts) == 5 and parts[4] == "start":
                         entry = start_run(home, parts[3])
                         self._json(200, {"ok": True, "run": run_status(entry, home=home)})

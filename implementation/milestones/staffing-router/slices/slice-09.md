@@ -127,7 +127,8 @@ justified.
 
 - Validating a proposal against the current catalogue would turn a harmless
   document rename into a stopped plan or write. Shape validation therefore
-  checks only string-or-absence; the router remains responsible for meaning.
+  checks only string-or-absence, plus that the string is storable as UTF-8;
+  the router remains responsible for meaning.
 - Reading the slice plan again during an active Brainstorming discussion would
   let a prospective edit split one task across materials. The task admission
   boundary and restart proof pin one value for the whole task.
