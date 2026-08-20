@@ -264,12 +264,6 @@
     gap: 2px 10px; font-size: 12px; align-items: baseline; }
   .mp-summary .mp-act { color: #3f3f46; }
   .mp-summary .mp-unset { color: #a1a1aa; }
-  .empty-act-overrides { display: flex; gap: 6px; flex-wrap: wrap;
-    align-items: center; margin-top: 8px; }
-  .empty-act-overrides .empty-act { border: 1px solid var(--line);
-    border-radius: 6px; padding: 3px 5px; }
-  .empty-act-overrides .btn { padding: 2px 5px; margin-left: 3px;
-    font-size: 11px; }
   .unit-title { color: #71717a; font-size: 11px; margin-left: 6px; }
   /* Brainstorming roster: one row per AI seat, configured like a
      milestone act (agent / model / effort) plus a remove control. */
@@ -653,16 +647,11 @@
       to open a fix cycle vs record as tracked debt). Every profile uses the
       same deterministic seal. No seed is pre-selected on purpose — the
       choice is explicit.</p>
-    <p><b>Acts</b> — an entirely blank launch row adds no panel override;
-      project defaults or Advanced config may still supply the current
-      override ahead of the model profile. Any nonblank row is a panel
-      override; its omitted fields use the structural/family defaults. Model
-      options adapt to the agent and remain editable mid-run from the run
-      view. The Skeleton row drives all skeleton
-      content work — its draft, re-drafts and fixes; only skeleton reviews stay
-      on the review rows. The two review rows tune each fixed family for review
-      rounds and delta reviews; family rotation never changes. Sealing does not
-      launch a model.</p>
+    <p><b>Staffing document</b> — the document and rigor this run is
+      staffed from: every call it makes resolves through the staffing
+      session opened here, and no seat, model or effort is chosen at
+      launch. Change either from the run's Edit page while it runs; the
+      change reaches the next call.</p>
     <p><b>Verification</b> — left empty, the implementer reports the repo's
       official suite and the driver arms the gates with it.</p>
   </div>
@@ -695,82 +684,6 @@
       </select>
     </div>
     <div class="hint" id="f_staffing_hint"></div></div>
-  <div class="field"><label>Agents, models and effort</label>
-    <div class="actgrid">
-      <span></span><span class="acthead">agent</span>
-      <span class="acthead">model</span><span class="acthead">effort</span>
-      <label>Skeleton</label>
-      <select id="a_skeletoner_agent"
-        onchange="onAgentChange('a_','skeletoner', true)">
-        <option value="">no panel override</option>
-        <option>codex</option><option>claude</option></select>
-      <input id="a_skeletoner_model" list="dl_a_skeletoner"
-        placeholder="no panel override">
-      <select id="a_skeletoner_effort"><option value="">no panel override</option>
-        <option>low</option><option>medium</option><option>high</option>
-        <option>xhigh</option><option>max</option></select>
-      <label>Draft docs</label>
-      <select id="a_drafter_agent" onchange="onAgentChange('a_','drafter', true)">
-        <option value="">no panel override</option>
-        <option>codex</option><option>claude</option></select>
-      <input id="a_drafter_model" list="dl_a_drafter" placeholder="no panel override">
-      <select id="a_drafter_effort"><option value="">no panel override</option>
-        <option>low</option><option>medium</option><option>high</option>
-        <option>xhigh</option><option>max</option></select>
-      <label>Implement</label>
-      <select id="a_implementer_agent"
-        onchange="onAgentChange('a_','implementer', true)">
-        <option value="">no panel override</option>
-        <option>codex</option><option>claude</option></select>
-      <input id="a_implementer_model" list="dl_a_implementer"
-        placeholder="no panel override">
-      <select id="a_implementer_effort"><option value="">no panel override</option>
-        <option>low</option><option>medium</option><option>high</option>
-        <option>xhigh</option><option>max</option></select>
-      <label>Review · Codex</label>
-      <span class="actfamily mono">codex</span>
-      <input id="a_review_codex_model" list="dl_a_review_codex"
-        placeholder="no panel override">
-      <select id="a_review_codex_effort"><option value="">no panel override</option>
-        <option>low</option><option>medium</option><option>high</option>
-        <option>xhigh</option><option>max</option></select>
-      <label>Review · Claude</label>
-      <span class="actfamily mono">claude</span>
-      <input id="a_review_claude_model" list="dl_a_review_claude"
-        placeholder="no panel override">
-      <select id="a_review_claude_effort"><option value="">no panel override</option>
-        <option>low</option><option>medium</option><option>high</option>
-        <option>xhigh</option><option>max</option></select>
-      <label>Fix findings</label>
-      <select id="a_fixer_agent" onchange="onAgentChange('a_','fixer', true)">
-        <option value="">no panel override</option>
-        <option>codex</option><option>claude</option></select>
-      <input id="a_fixer_model" list="dl_a_fixer" placeholder="no panel override">
-      <select id="a_fixer_effort"><option value="">no panel override</option>
-        <option>low</option><option>medium</option><option>high</option>
-        <option>xhigh</option><option>max</option></select>
-      <label>Reclassify</label>
-      <select id="a_reclassifier_agent"
-        onchange="onAgentChange('a_','reclassifier', true)">
-        <option value="">no panel override</option>
-        <option>codex</option><option>claude</option></select>
-      <input id="a_reclassifier_model" list="dl_a_reclassifier"
-        placeholder="no panel override">
-      <select id="a_reclassifier_effort"><option value="">no panel override</option>
-        <option>low</option><option>medium</option><option>high</option>
-        <option>xhigh</option><option>max</option></select>
-    </div>
-    <datalist id="dl_a_skeletoner"></datalist>
-    <datalist id="dl_a_drafter"></datalist>
-    <datalist id="dl_a_implementer"></datalist>
-    <datalist id="dl_a_review_codex"></datalist>
-    <datalist id="dl_a_review_claude"></datalist>
-    <datalist id="dl_a_fixer"></datalist>
-    <datalist id="dl_a_reclassifier"></datalist>
-    <div class="hint">Entire blank row = no panel override. Project defaults
-      or Advanced config may still provide the current override; otherwise the
-      current model profile applies. In a nonblank panel override, omitted
-      fields use structural/family defaults.</div></div>
   <div class="field">
     <button class="btn" type="button" id="f_more_btn"
       onclick="toggleMore()">More options ▾</button></div>
@@ -1057,83 +970,6 @@
   </div>
 </dialog>
 
-<dialog id="actsdlg">
-  <h2>Acts (models and roles)</h2>
-  <div class="actgrid">
-    <span></span><span class="acthead">agent</span>
-    <span class="acthead">model</span><span class="acthead">effort</span>
-    <label>Skeleton</label>
-    <select id="ra_skeletoner_agent"
-      onchange="onAgentChange('ra_','skeletoner', true)">
-      <option value="">current profile</option>
-      <option>codex</option><option>claude</option></select>
-    <input id="ra_skeletoner_model" list="dl_ra_skeletoner"
-      placeholder="current profile">
-    <select id="ra_skeletoner_effort">
-      <option value="">current profile</option></select>
-    <label>Draft docs</label>
-    <select id="ra_drafter_agent" onchange="onAgentChange('ra_','drafter', true)">
-      <option value="">current profile</option>
-      <option>codex</option><option>claude</option></select>
-    <input id="ra_drafter_model" list="dl_ra_drafter" placeholder="current profile">
-    <select id="ra_drafter_effort"><option value="">current profile</option></select>
-    <label>Implement</label>
-    <select id="ra_implementer_agent"
-      onchange="onAgentChange('ra_','implementer', true)">
-      <option value="">current profile</option>
-      <option>codex</option><option>claude</option></select>
-    <input id="ra_implementer_model" list="dl_ra_implementer"
-      placeholder="current profile">
-    <select id="ra_implementer_effort"><option value="">current profile</option></select>
-    <label>Review · Codex</label>
-    <span class="actfamily mono">codex</span>
-    <input id="ra_review_codex_model" list="dl_ra_review_codex"
-      placeholder="current profile">
-    <select id="ra_review_codex_effort"><option value="">current profile</option></select>
-    <label>Review · Claude</label>
-    <span class="actfamily mono">claude</span>
-    <input id="ra_review_claude_model" list="dl_ra_review_claude"
-      placeholder="current profile">
-    <select id="ra_review_claude_effort"><option value="">current profile</option></select>
-    <label>Fix findings</label>
-    <select id="ra_fixer_agent" onchange="onAgentChange('ra_','fixer', true)">
-      <option value="">current profile</option>
-      <option>codex</option><option>claude</option></select>
-    <input id="ra_fixer_model" list="dl_ra_fixer" placeholder="current profile">
-    <select id="ra_fixer_effort"><option value="">current profile</option></select>
-    <label>Reclassify</label>
-    <select id="ra_reclassifier_agent"
-      onchange="onAgentChange('ra_','reclassifier', true)">
-      <option value="">current profile</option>
-      <option>codex</option><option>claude</option></select>
-    <input id="ra_reclassifier_model" list="dl_ra_reclassifier"
-      placeholder="current profile">
-    <select id="ra_reclassifier_effort">
-      <option value="">current profile</option></select>
-  </div>
-  <datalist id="dl_ra_skeletoner"></datalist>
-  <datalist id="dl_ra_drafter"></datalist>
-  <datalist id="dl_ra_implementer"></datalist>
-  <datalist id="dl_ra_review_codex"></datalist>
-  <datalist id="dl_ra_review_claude"></datalist>
-  <datalist id="dl_ra_fixer"></datalist>
-  <datalist id="dl_ra_reclassifier"></datalist>
-  <div id="ra_empty_overrides" class="empty-act-overrides hint"></div>
-  <div class="hint" style="margin-top:8px">Entire blank row = current model
-    profile. In a nonblank override, omitted fields use structural/family
-    defaults. Creation-time structural-default overrides are listed separately
-    above and remain in force until “Use profile”.
-    Skeleton drives the skeleton's draft, re-drafts and fixes (not its
-    reviews). Binds from the NEXT act resolution (drivers started before
-    this feature need one Stop → Start).</div>
-  <div class="formrow">
-    <span></span>
-    <button class="btn"
-      onclick="document.getElementById('actsdlg').close()">Cancel</button>
-    <button class="btn primary" onclick="saveActs()">Save</button>
-  </div>
-</dialog>
-
 <dialog id="profileswapdlg">
   <h2>Repoint strategy profile</h2>
   <div class="field"><label>Profile</label>
@@ -1312,20 +1148,31 @@
   </div>
 </dialog>
 
-<dialog id="modelprofileselectiondlg">
-  <h2>Current model profile</h2>
-  <div class="field"><label>Profile</label>
-    <select id="mps_name" onchange="onRunModelProfileChange()"></select>
-  </div>
+<dialog id="staffingsessiondlg">
+  <h2>Staffing session</h2>
+  <div class="field"><label>Document</label>
+    <select id="ss_document"></select>
+    <div class="hint" id="ss_document_hint"></div></div>
   <div class="field"><label>Rigor</label>
-    <select id="mps_rigor">
+    <select id="ss_rigor">
       <option>low</option><option>medium</option><option>high</option>
-    </select>
-    <div class="hint" id="mps_hint"></div></div>
+    </select></div>
+  <div class="field"><label>Default material (optional)</label>
+    <input id="ss_material" class="mono" placeholder="none">
+    <div class="hint">The material every call of this run resolves under
+      unless its own request names one. Empty clears it.</div></div>
+  <div class="field"><label>Session overrides (optional)</label>
+    <textarea id="ss_overrides" class="jsonarea" spellcheck="false"></textarea>
+    <div class="hint">The document's own shape (`assignment`, `tuning`),
+      outranking the document for the roles it names. Empty clears them;
+      the service is the only semantic validator.</div></div>
+  <div class="hint" id="ss_facts"></div>
+  <div class="hint" id="ss_warn"></div>
   <div class="formrow">
-    <span id="mps_error" style="color:var(--bad);font-size:12px;margin-right:auto"></span>
-    <button class="btn" onclick="document.getElementById('modelprofileselectiondlg').close()">Cancel</button>
-    <button class="btn primary" onclick="saveRunModelProfile()">Save</button>
+    <span id="ss_error" style="color:var(--bad);font-size:12px;margin-right:auto"></span>
+    <button class="btn"
+      onclick="document.getElementById('staffingsessiondlg').close()">Cancel</button>
+    <button class="btn primary" onclick="saveStaffingSession()">Save</button>
   </div>
 </dialog>
 
@@ -3787,12 +3634,18 @@ async function refreshDetail() {
   refreshSelectedTaskRecords(runId);
   try {
     const d = await api("/api/runs/" + runId);
-    let modelProfileSelection = null, modelProfileSelectionError = "";
-    if (runView === "edit") {
+    // The settings page shows the run's staffing as the ROUTER holds it:
+    // the summary carries the bound id and nothing else, so the selection
+    // is read live from the session itself. An unbound run asks nothing —
+    // the panel never opens or repairs a binding (amendment A2 derives one
+    // at resume).
+    let sessionView = null, sessionError = "";
+    const sessionId = (d.summary || {}).staffing_session || null;
+    if (runView === "edit" && sessionId) {
       try {
-        const current = await api(`/api/runs/${runId}/model-profile`);
-        modelProfileSelection = current.selection;
-      } catch (e) { modelProfileSelectionError = e.message; }
+        sessionView = await api(
+          "/api/staffing/sessions/" + encodeURIComponent(sessionId));
+      } catch (e) { sessionError = e.message; }
     }
     if (seq !== detailSeq || runId !== selected) return;
     const s = d.status, sum = d.summary;
@@ -3877,22 +3730,13 @@ async function refreshDetail() {
       <button class="btn" style="margin-left:auto"
         onclick="openRunEdit()">Edit&#8230;</button>
     </div>`;
-    // Amendments and acts come straight from their own files — never gate
-    // them on the state summary, which can be transiently unreadable.
-    // They live on the SETTINGS page (Edit), off the monitoring screen.
-    lastActs = d.acts || {};
-    // This is the current OVERRIDE layer, not resolved staffing. Inherited
-    // profile/config values must stay empty in the editor: copying them back
-    // through Save would silently turn them into live overrides.
-    lastActOverrides = {};
-    for (const a of ACT_NAMES) {
-      const present = Object.prototype.hasOwnProperty.call(lastActs, a);
-      lastActOverrides[a] = present ? lastActs[a] : null;
-      lastActOverrides[a + "_hot"] = present;
-    }
+    // Amendments come straight from their own file — never gated on the
+    // state summary, which can be transiently unreadable. They live on the
+    // SETTINGS page (Edit), off the monitoring screen.
     lastProfile = d.profile || null;
-    lastModelProfileSelection = modelProfileSelection;
-    lastModelProfileSelectionError = modelProfileSelectionError;
+    lastSession = sessionView;
+    lastSessionError = sessionError;
+    lastSessionId = sessionId;
     if (runView === "edit") {
     html += `<div class="card"><h3>Operator amendments</h3>` +
       ((d.amendments || []).map(a =>
@@ -3903,31 +3747,7 @@ async function refreshDetail() {
          <button class="btn" onclick="addAmend()">Add</button>
        </div>
        <div class="amend-hint">Applies from the next worker call. Drivers started before this feature exists need one Stop → Start to begin reading amendments.</div></div>`;
-    const modelProfileLabel = lastModelProfileSelection
-      ? `${lastModelProfileSelection.name}@${lastModelProfileSelection.rigor}`
-      : `unavailable: ${lastModelProfileSelectionError || "not readable"}`;
-    html += `<div class="card"><h3>Model profile</h3>
-      <div class="amendform">
-        <span class="amend-hint mono" style="flex:1">${esc(modelProfileLabel)}</span>
-        <button class="btn" onclick="openRunModelProfile()">Change…</button>
-      </div></div>`;
-    const actLabel = {drafter: "draft", implementer: "impl",
-                      review_codex: "review codex",
-                      review_claude: "review claude",
-                      fixer: "fix", skeletoner: "skeleton",
-                      reclassifier: "reclass"};
-    const actsSum = ACT_NAMES.map(a => {
-      const v = lastActOverrides[a];
-      const overridden = lastActOverrides[a + "_hot"];
-      const e = typeof v === "string" ? {agent: v} : (v || {});
-      const bits = [e.agent, e.model, e.effort].filter(Boolean).join(" · ");
-      return `${actLabel[a]}: ${bits || (overridden ? "structural default" : "inherited")}${overridden ? " (override)" : ""}`;
-    }).join("   —   ");
-    html += `<div class="card"><h3>Act overrides (models and roles)</h3>
-      <div class="amendform">
-        <span class="amend-hint mono" style="flex:1">${esc(actsSum)}</span>
-        <button class="btn" onclick="openActs()">Edit…</button>
-      </div></div>`;
+    html += staffingSessionCard();
     if (d.profile) {
       const g = d.profile.governing, b = d.profile.base;
       const swapped = !!d.profile.swap;
@@ -4091,17 +3911,6 @@ async function refreshDetail() {
         <button class="btn" onclick="openEvents()">Events</button>
         <button class="btn" onclick="openDriverLog()">Driver log</button>
       </div>`;
-    const actDraft = {};
-    for (const act of ACT_NAMES) {
-      for (const f of ["agent", "model", "effort"]) {
-        const el = document.getElementById(`ra_${act}_${f}`);
-        if (el && document.activeElement &&
-            document.activeElement.id &&
-            document.activeElement.id.startsWith("ra_")) {
-          actDraft[`ra_${act}_${f}`] = el.value;
-        }
-      }
-    }
     const prev = document.getElementById("amendText");
     const draft = prev ? {
       value: prev.value,
@@ -4121,10 +3930,6 @@ async function refreshDetail() {
           el.setSelectionRange(draft.selStart, draft.selEnd);
         }
       }
-    }
-    for (const [id, val] of Object.entries(actDraft)) {
-      const el = document.getElementById(id);
-      if (el) el.value = val;
     }
     requestAnimationFrame(updateBottomJump);
   } catch (e) {
@@ -4350,121 +4155,15 @@ async function delAmend(aid) {
   } catch (e) { alert(e.message); }
   refreshDetail();
 }
-let lastActs = {};
-let lastActOverrides = {};
-let openedActs = {};
-let openedActEditorEntries = {};
-let retainedEmptyActOverrides = new Set();
 let lastProfile = null;   // the run's profile block from the last detail poll
-let lastModelProfileSelection = null;
-let lastModelProfileSelectionError = "";
-function isEmptyActOverride(value) {
-  return value === null || value === "" ||
-    (value && typeof value === "object" && !Array.isArray(value) &&
-     Object.keys(value).length === 0);
-}
-function renderEmptyActOverrides() {
-  const el = document.getElementById("ra_empty_overrides");
-  const labels = {skeletoner: "Skeleton", drafter: "Draft docs",
-                  implementer: "Implement", review_codex: "Review · Codex",
-                  review_claude: "Review · Claude", fixer: "Fix findings",
-                  reclassifier: "Reclassify"};
-  const explicit = ACT_NAMES.filter(act =>
-    Object.prototype.hasOwnProperty.call(openedActs, act) &&
-    isEmptyActOverride(openedActs[act]));
-  el.innerHTML = explicit.map(act => retainedEmptyActOverrides.has(act)
-    ? `<span class="empty-act">${esc(labels[act])}: structural default override <button type="button" class="btn" onclick="clearEmptyActOverride('${act}')">Use profile</button></span>`
-    : `<span class="empty-act">${esc(labels[act])}: will use profile <button type="button" class="btn" onclick="restoreEmptyActOverride('${act}')">Undo</button></span>`
-  ).join("");
-}
-function clearEmptyActOverride(act) {
-  retainedEmptyActOverrides.delete(act);
-  clearActEditorRow(act);
-  renderEmptyActOverrides();
-}
-function restoreEmptyActOverride(act) {
-  retainedEmptyActOverrides.add(act);
-  clearActEditorRow(act);
-  renderEmptyActOverrides();
-}
-function clearActEditorRow(act) {
-  const agentEl = document.getElementById(`ra_${act}_agent`);
-  if (agentEl) agentEl.value = "";
-  document.getElementById(`ra_${act}_model`).value = "";
-  document.getElementById(`ra_${act}_effort`).value = "";
-  onAgentChange("ra_", act);
-}
-function readActEditorEntry(act) {
-  const fixed = FIXED_ACT_AGENTS[act];
-  const agentEl = document.getElementById(`ra_${act}_agent`);
-  const agent = agentEl ? agentEl.value : "";
-  const model = document.getElementById(`ra_${act}_model`).value.trim();
-  const effort = document.getElementById(`ra_${act}_effort`).value;
-  const entry = {};
-  if (!fixed && agent) entry.agent = agent;
-  if (model) entry.model = model;
-  if (effort) entry.effort = effort;
-  return entry;
-}
-function openActs() {
-  // The dialog lives OUTSIDE the polled container: the 2s re-render can
-  // never reset an edit in progress. Values are seeded once, on open.
-  openedActs = JSON.parse(JSON.stringify(lastActs));
-  openedActEditorEntries = {};
-  retainedEmptyActOverrides = new Set(ACT_NAMES.filter(act =>
-    Object.prototype.hasOwnProperty.call(openedActs, act) &&
-    isEmptyActOverride(openedActs[act])));
-  for (const act of ACT_NAMES) {
-    const v = openedActs[act];
-    const entry = typeof v === "string" ? {agent: v} : (v || {});
-    const agentEl = document.getElementById(`ra_${act}_agent`);
-    if (agentEl) agentEl.value = entry.agent || "";
-    onAgentChange("ra_", act);
-    document.getElementById(`ra_${act}_model`).value = entry.model || "";
-    const eff = document.getElementById(`ra_${act}_effort`);
-    eff.value = entry.effort || "";
-    if (eff.value !== (entry.effort || "")) eff.value = "";
-    onAgentChange("ra_", act);
-    openedActEditorEntries[act] = readActEditorEntry(act);
-  }
-  renderEmptyActOverrides();
-  document.getElementById("actsdlg").showModal();
-}
-function actsDialogPatch() {
-  // Send only changed rows. Omission preserves hidden acts and the meaningful
-  // explicit-empty entries whose separate controls remain enabled.
-  const changes = {};
-  for (const act of ACT_NAMES) {
-    const entry = readActEditorEntry(act);
-    const had = Object.prototype.hasOwnProperty.call(openedActs, act);
-    const explicitEmpty = had && isEmptyActOverride(openedActs[act]);
-    const changed = JSON.stringify(entry) !==
-      JSON.stringify(openedActEditorEntries[act]);
-    if (!changed) {
-      if (explicitEmpty && !retainedEmptyActOverrides.has(act))
-        changes[act] = null;
-      continue;
-    }
-    changes[act] = Object.keys(entry).length ? entry : null;
-  }
-  return changes;
-}
-async function saveActs() {
-  const changes = actsDialogPatch();
-  if (!Object.keys(changes).length) {
-    document.getElementById("actsdlg").close();
-    return;
-  }
-  try {
-    await api(`/api/runs/${selected}/acts`, {
-      method: "PATCH",
-      headers: {"Content-Type": "application/json"},
-      body: JSON.stringify(changes),
-    });
-    document.getElementById("actsdlg").close();
-  } catch (e) { alert(e.message); }
-  refreshDetail();
-}
+// The run's live staffing session, as the last settings poll read it: the
+// whole view (record + the live unsatisfied-split projection), the refusal
+// when the bound id could not be read, and the id the summary carries.
+// Never a copy that ages — every poll re-reads it, and every save goes to
+// the session's own route.
+let lastSession = null;
+let lastSessionError = "";
+let lastSessionId = null;
 async function addAmend() {
   const el = document.getElementById("amendText");
   const text = (el.value || "").trim();
@@ -4538,9 +4237,7 @@ function openForm(preselect) {
   loadRecents();
   loadLaunchProjects(preselect);
   loadProfiles();
-  loadModelProfileCatalogue();
   loadStaffingDocuments();
-  for (const act of ACT_NAMES) onAgentChange("a_", act);
   document.getElementById("form").showModal();
 }
 
@@ -4559,18 +4256,33 @@ async function loadModelProfileCatalogue() {
     renderModelProfiles();
 }
 
-/* ---- staffing documents: the launch form's own catalogue. The run's
-       staffing comes from the document it names and the rigor beside it;
-       the server stays the one semantic validator. ---- */
+/* ---- staffing documents: the one catalogue read every staffing choice
+       in this panel offers. The run's staffing comes from the document it
+       names and the rigor beside it; the server stays the one semantic
+       validator, and the panel copies no part of the document schema. ---- */
 let staffingDocuments = [];
 let staffingDocumentsError = "";
-async function loadStaffingDocuments() {
+async function loadStaffingCatalogue() {
   staffingDocuments = [];
   staffingDocumentsError = "";
   try {
     const data = await api("/api/staffing/documents");
     staffingDocuments = data.documents || [];
   } catch (e) { staffingDocumentsError = e.message; }
+}
+function staffingDocumentOptions(current) {
+  // The catalogue, plus the name already in force when the catalogue no
+  // longer carries it: a chooser that quietly dropped back to `default`
+  // would repoint the work it is only supposed to show.
+  const names = staffingDocuments.map(d => d.name);
+  if (current && !names.includes(current)) names.unshift(current);
+  return (names.length ? names : ["default"]).map(name =>
+    `<option value="${esc(name)}"${name === current ? " selected" : ""}>${
+      esc(name)}${staffingDocuments.some(d => d.name === name)
+        ? "" : " — not in the catalogue"}</option>`).join("");
+}
+async function loadStaffingDocuments() {
+  await loadStaffingCatalogue();
   const select = document.getElementById("f_staffing_document");
   const keep = select.value;
   select.innerHTML = (staffingDocuments.length
@@ -4588,6 +4300,113 @@ function onLaunchStaffingChange() {
     staffingDocumentsError ||
     `Every call of this run is staffed by ${name} at ${rigor}.`;
 }
+/* ---- the run's live staffing session (staffing-router slice 8). One
+       card on the settings page, one editor over the session's own route.
+       The panel reads the binding from the run summary and NOTHING else:
+       it never opens, moves or repairs one, and the split-family warning
+       beside it gates nothing — only an actual dispatch of that role
+       refuses on that condition. ---- */
+function staffingWorkAreaLabel(area) {
+  const parts = [];
+  if (area.project) parts.push(`project “${area.project}”`);
+  if (area.work_area) parts.push(`work area “${area.work_area}”`);
+  if (area.workspace_path) parts.push(area.workspace_path);
+  return parts.join(" / ");
+}
+function staffingSessionFacts(record) {
+  // What the session IS rather than what it selects: where the work
+  // happens and which families this machine has. Both are recorded at
+  // creation and no edit can move them.
+  return `${staffingWorkAreaLabel(record.work_area || {})} · families: ${
+    (record.families || []).join(", ") || "none"}`;
+}
+function staffingSplitWarning(roles) {
+  if (!roles || !roles.length) return "";
+  return `<div class="failure">Declared distinct families cannot be
+    honoured for: ${esc(roles.join(", "))}. This session still reads and
+    saves normally; a dispatch of that role is what refuses.</div>`;
+}
+function staffingSessionCard() {
+  if (!lastSessionId)
+    return `<div class="card"><h3>Staffing session</h3>
+      <div class="amend-hint">No session is bound to this run yet. Its next
+        resume opens one from the profile name and rigor it already
+        selected; nothing here binds, derives or repairs it.</div></div>`;
+  if (!lastSession)
+    return `<div class="card"><h3>Staffing session</h3>
+      <div class="failure">${esc(lastSessionId)}: ${
+        esc(lastSessionError || "not readable")}</div>
+      <div class="amend-hint">The run keeps this binding. The panel does not
+        rebind or repair it, and a dispatch that cannot read it falls back to
+        the default document on its own.</div></div>`;
+  const record = lastSession.session;
+  const overrides = record.overrides
+    ? Object.keys(record.overrides).sort().join(", ") : "";
+  return `<div class="card"><h3>Staffing session</h3>
+    <div class="amendform">
+      <span class="amend-hint mono" style="flex:1">${esc(record.document)}@${
+        esc(record.rigor)}${record.material
+          ? ` · material ${esc(record.material)}` : ""}${
+        overrides ? ` · overrides: ${esc(overrides)}` : ""}</span>
+      <button class="btn" onclick="openStaffingSession()">Change…</button>
+    </div>
+    ${staffingSplitWarning(lastSession.distinct_families_unsatisfiable)}
+    <div class="amend-hint mono">${esc(record.id)} · ${
+      esc(staffingSessionFacts(record))}</div>
+    <div class="amend-hint">Applies from the next call of this run; work
+      already dispatched keeps what it was staffed with.</div></div>`;
+}
+let openedStaffingSession = null;
+async function openStaffingSession() {
+  // Seeded once, from the settings poll's own read: the dialog lives
+  // outside the polled container, so a 2s re-render never resets an edit
+  // in progress. Opening writes nothing.
+  if (!lastSession) return;
+  const record = lastSession.session;
+  openedStaffingSession = record.id;
+  document.getElementById("ss_error").textContent = "";
+  await loadStaffingCatalogue();
+  document.getElementById("ss_document").innerHTML =
+    staffingDocumentOptions(record.document);
+  document.getElementById("ss_document_hint").textContent =
+    staffingDocumentsError || "";
+  document.getElementById("ss_rigor").value = record.rigor;
+  document.getElementById("ss_material").value = record.material || "";
+  document.getElementById("ss_overrides").value =
+    record.overrides ? JSON.stringify(record.overrides, null, 1) : "";
+  document.getElementById("ss_facts").textContent =
+    staffingSessionFacts(record);
+  document.getElementById("ss_warn").innerHTML =
+    staffingSplitWarning(lastSession.distinct_families_unsatisfiable);
+  document.getElementById("staffingsessiondlg").showModal();
+}
+async function saveStaffingSession() {
+  const error = document.getElementById("ss_error");
+  error.textContent = "";
+  const material = document.getElementById("ss_material").value.trim();
+  const raw = document.getElementById("ss_overrides").value.trim();
+  let overrides = null;
+  if (raw) {
+    try { overrides = JSON.parse(raw); }
+    catch (e) { error.textContent = "overrides: not valid JSON: " + e.message;
+                return; }
+  }
+  try {
+    // Exactly the four editable fields, every time: an emptied optional
+    // one rides as an explicit null, which is how the store clears it.
+    await postJSON("/api/staffing/sessions/" +
+                   encodeURIComponent(openedStaffingSession), {
+      document: document.getElementById("ss_document").value,
+      rigor: document.getElementById("ss_rigor").value,
+      material: material || null,
+      overrides: overrides,
+    });
+  } catch (e) { error.textContent = e.message; return; }  // token verbatim
+  document.getElementById("staffingsessiondlg").close();
+  refreshDetail();
+}
+/* ---- model-profile catalogue and editor: the transitional surface the
+       staffing-document catalogue replaces. ---- */
 async function openModelProfiles() {
   document.getElementById("modelprofilesdlg").showModal();
   await loadModelProfileCatalogue();
@@ -4821,43 +4640,6 @@ async function saveModelProfileEditor() {
   } catch (e) { error.textContent = e.message; return; }  // token verbatim
   document.getElementById("mpeditor").close();
   await openModelProfiles();
-}
-async function openRunModelProfile() {
-  const error = document.getElementById("mps_error");
-  error.textContent = "";
-  await loadModelProfileCatalogue();
-  const select = document.getElementById("mps_name");
-  select.innerHTML = `<option value="">— choose profile —</option>` +
-    modelProfileCatalogue.map(profile =>
-      `<option value="${esc(profile.name)}">${esc(profile.name)}</option>`
-    ).join("");
-  try {
-    const current = await api(`/api/runs/${selected}/model-profile`);
-    select.value = current.selection.name;
-    document.getElementById("mps_rigor").value = current.selection.rigor;
-  } catch (e) { error.textContent = e.message; }
-  if (modelProfileCatalogueError) error.textContent = modelProfileCatalogueError;
-  onRunModelProfileChange();
-  document.getElementById("modelprofileselectiondlg").showModal();
-}
-function onRunModelProfileChange() {
-  const profile = modelProfileCatalogue.find(p => p.name ===
-    document.getElementById("mps_name").value);
-  document.getElementById("mps_hint").textContent = profile
-    ? profile.examples.join(" · ") : "";
-}
-async function saveRunModelProfile() {
-  const error = document.getElementById("mps_error");
-  const name = document.getElementById("mps_name").value;
-  if (!name) { error.textContent = "Choose a model profile."; return; }
-  try {
-    await postJSON(`/api/runs/${selected}/model-profile`, {
-      name,
-      rigor: document.getElementById("mps_rigor").value,
-    });
-  } catch (e) { error.textContent = e.message; return; }
-  document.getElementById("modelprofileselectiondlg").close();
-  refreshDetail();
 }
 /* ---- strategy catalogue, configurator, launch selection and live repoint.
    One GET supplies every semantic key, legal value and support label. ---- */
@@ -5286,12 +5068,6 @@ document.getElementById("pk_list").addEventListener("click", (ev) => {
     document.getElementById("picker").close();
   }
 });
-const ACT_NAMES = ["skeletoner", "drafter", "implementer", "review_codex",
-                   "review_claude", "fixer", "reclassifier"];
-const FIXED_ACT_AGENTS = {
-  review_codex: "codex",
-  review_claude: "claude",
-};
 const MODEL_OPTS = {
   claude: ["claude-fable-5", "claude-opus-5", "claude-sonnet-5"],
   codex: ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"],
@@ -5300,37 +5076,15 @@ const EFFORT_OPTS = {
   claude: ["low", "medium", "high", "xhigh", "max"],
   codex: ["low", "medium", "high", "xhigh", "max"],
 };
-// Structural defaults used by a NONBLANK whole-act override when it omits
-// model or effort. A blank live row follows the current model profile; a blank
-// launch row adds no panel layer, but lower creation layers may still override
-// that profile. Keep these fallback labels in sync with driver.py.
+// The per-family default a Brainstorming roster seat shows as its
+// placeholder when it pins no model or effort of its own. A label only:
+// the service resolves an unset seat. Keep in sync with driver.py.
 const FAMILY_DEFAULTS = {
   claude: {model: "claude-opus-5", effort: "xhigh"},
   codex: {model: "gpt-5.6-sol", effort: "xhigh"},
 };
-const ACT_DEFAULTS = {
-  // stickyEffort: the driver re-asserts the skeleton's own effort even
-  // when the operator moves the act to the other family
-  // (driver._skeletoner_profile), so the label must not drop to xhigh.
-  skeletoner: {agent: "claude", model: "claude-fable-5", effort: "max",
-               stickyEffort: true},
-  drafter: {agent: "codex"},
-  implementer: {agent: "claude", model: "claude-fable-5", effort: "max"},
-  review_codex: {agent: "codex"},
-  review_claude: {agent: "claude"},
-  fixer: {agent: "codex"},
-  reclassifier: {agent: "codex", effort: "xhigh"},
-};
-function actDefaults(act, agent) {
-  // A pinned act keeps its own model/effort; anything unpinned falls to the
-  // family default of the agent in force once a whole-act override exists.
-  const pin = ACT_DEFAULTS[act] || {};
-  const moved = Boolean(agent) && agent !== pin.agent;
-  const fam = FAMILY_DEFAULTS[agent || pin.agent] || {};
-  return {
-    model: (moved ? null : pin.model) || fam.model,
-    effort: (moved && !pin.stickyEffort ? null : pin.effort) || fam.effort,
-  };
+function familyDefault(agent) {
+  return FAMILY_DEFAULTS[agent] || {};
 }
 function shortModel(model) {
   return model ? String(model).replace(/^claude-/, "") : "";
@@ -5342,9 +5096,10 @@ function agentEfforts(agent) {
   return EFFORT_OPTS[agent] || ["low", "medium", "high", "xhigh", "max"];
 }
 function onAgentChange(prefix, act, userChanged) {
+  // The Brainstorming roster's only remaining caller: it refreshes one
+  // seat's model list and effort options for the family now selected.
   const agentEl = document.getElementById(`${prefix}${act}_agent`);
-  const explicitAgent = agentEl ? agentEl.value : "";
-  const agent = FIXED_ACT_AGENTS[act] || explicitAgent;
+  const agent = agentEl ? agentEl.value : "";
   const modelEl = document.getElementById(`${prefix}${act}_model`);
   const effEl = document.getElementById(`${prefix}${act}_effort`);
   if (userChanged) {
@@ -5354,70 +5109,29 @@ function onAgentChange(prefix, act, userChanged) {
     if (modelEl) modelEl.value = "";
     if (effEl) effEl.value = "";
   }
-  const profileLayer = prefix === "a_" || prefix === "ra_";
-  const retainedEmpty = prefix === "ra_" &&
-    retainedEmptyActOverrides.has(act);
-  const rowHasOverride = retainedEmpty || Boolean(
-    explicitAgent || (modelEl && modelEl.value.trim()) ||
-    (effEl && effEl.value)
-  );
-  const inheritsProfile = prefix === "ra_" && !rowHasOverride;
-  const noPanelOverride = prefix === "a_" && !rowHasOverride;
-  if (agentEl && profileLayer) {
-    const empty = agentEl.querySelector('option[value=""]');
-    if (empty) empty.textContent = inheritsProfile ? "current profile"
-      : noPanelOverride ? "no panel override" : "no family override";
-  }
   const dl = document.getElementById(`dl_${prefix}${act}`);
   if (dl)
     dl.innerHTML = agentModels(agent)
       .map(m => `<option>${m}</option>`).join("");
-  const def = actDefaults(act, agent);
-  const modelBox = modelEl;
-  if (modelBox)
-    modelBox.placeholder = inheritsProfile ? "current profile"
-      : noPanelOverride ? "no panel override" : def.model
+  const def = familyDefault(agent);
+  if (modelEl)
+    modelEl.placeholder = def.model
       ? `default (${shortModel(def.model)})` : "default";
-  const eff = effEl;
-  if (eff) {
-    const cur = eff.value;
+  if (effEl) {
+    const cur = effEl.value;
     const opts = agentEfforts(agent);
-    const label = inheritsProfile ? "current profile"
-      : noPanelOverride ? "no panel override" : def.effort
-      ? `default (${def.effort})` : "default";
-    eff.innerHTML = `<option value="">${label}</option>` +
+    const label = def.effort ? `default (${def.effort})` : "default";
+    effEl.innerHTML = `<option value="">${label}</option>` +
       opts.map(o => `<option ${o === cur ? "selected" : ""}>${o}</option>`).join("");
-    if (cur && !opts.includes(cur)) eff.value = "";
+    if (cur && !opts.includes(cur)) effEl.value = "";
   }
 }
-function refreshActInheritanceLabel(event) {
-  const match = /^(a_|ra_)(.+)_(model|effort)$/.exec(event.target.id || "");
-  if (match) onAgentChange(match[1], match[2]);
-}
-document.addEventListener("input", refreshActInheritanceLabel);
-document.addEventListener("change", refreshActInheritanceLabel);
 function toggleMore() {
   const el = document.getElementById("f_more");
   const open = el.style.display !== "none";
   el.style.display = open ? "none" : "block";
   document.getElementById("f_more_btn").textContent =
     open ? "More options ▾" : "More options ▴";
-}
-function collectActs(prefix) {
-  const acts = {};
-  for (const act of ACT_NAMES) {
-    const fixed = FIXED_ACT_AGENTS[act];
-    const agentEl = document.getElementById(`${prefix}${act}_agent`);
-    const agent = agentEl ? agentEl.value : "";
-    const model = document.getElementById(`${prefix}${act}_model`).value.trim();
-    const effort = document.getElementById(`${prefix}${act}_effort`).value;
-    const entry = {};
-    if (!fixed && agent) entry.agent = agent;
-    if (model) entry.model = model;
-    if (effort) entry.effort = effort;
-    if (Object.keys(entry).length) acts[act] = entry;
-  }
-  return acts;
 }
 async function submitForm() {
   const err = document.getElementById("formError");
@@ -5452,10 +5166,6 @@ async function submitForm() {
     catch (e) { err.textContent = "config is not valid JSON"; return; }
   }
   if (verify) config.verification = [verify];
-  const acts = collectActs("a_");
-  if (Object.keys(acts).length) {
-    config.acts = Object.assign({}, config.acts || {}, acts);
-  }
   if (Object.keys(config).length) payload.config = config;
   if (strategyCatalogueLoading) {
     err.textContent = "strategy profiles are still loading";

@@ -20,10 +20,6 @@ run's live state) and a JSON API:
     GET    /api/runs/<id>          entry + full state summary + log tail +
                                    commit_web_base (workspace origin as an
                                    https web URL, for gate-commit links)
-    GET    /api/runs/<id>/model-profile
-                                   current {name, rigor} model-profile choice
-    POST   /api/runs/<id>/model-profile
-                                   wholly replace that current choice
     POST   /api/runs/<id>/slices/<slice-id>/producer
                                    replace one still-prospective slice producer
     GET    /api/runs/<id>/artifact ?unit=<unit_key> — the unit's recorded
@@ -2760,107 +2756,6 @@ def _write_amendments(entry, amendments):
     os.replace(tmp, path)
 
 
-ACT_KEYS = model_profiles.PROFILE_ACT_KEYS
-
-
-def _acts_path(entry):
-    # Beside the state file (the run's runtime dir), matching the driver.
-    return os.path.join(os.path.dirname(entry["state_path"]), "acts.json")
-
-
-def read_acts(entry):
-    try:
-        with open(_acts_path(entry), "r", encoding="utf-8") as fh:
-            data = json.load(fh)
-        return data if isinstance(data, dict) else {}
-    except (OSError, ValueError):
-        return {}
-
-
-def set_acts(home, run_id, body):
-    """Write hot act assignments (draft/impl/review/fix model profiles).
-
-    Same lock-free pattern as
-    amendments: this file is operator-owned; the driver re-reads it
-    before every act resolution, so a change binds the next call (for
-    drivers new enough to read it)."""
-    reg = registry.load(home)
-    entry = registry.get(reg, run_id)
-    if entry is None:
-        raise ApiError(404, "unknown run %r" % run_id)
-    acts = _validated_acts(body)
-    _write_acts(entry, acts)
-    return acts
-
-
-def patch_acts(home, run_id, body):
-    """Apply only the supplied live-act changes.
-
-    The panel uses this mutation form so editing one row does not erase an
-    untouched creation-time explicit-empty entry.  Empty supplied values keep
-    the public clear meaning; omitted keys remain semantically unchanged.
-    """
-    reg = registry.load(home)
-    entry = registry.get(reg, run_id)
-    if entry is None:
-        raise ApiError(404, "unknown run %r" % run_id)
-    changes = _validated_acts(body, retain_clears=True)
-    try:
-        acts = driver.read_current_acts_overlay(
-            entry["state_path"], strict=True
-        )
-    except model_profiles.ModelProfileError as exc:
-        raise ApiError(400, str(exc))
-    # A partial mutation must not make malformed omitted state look healthy.
-    # Validate the whole current layer, but preserve its original values and
-    # meaningful explicit-empty forms byte-for-semantics when merging changes.
-    _validated_acts(acts, retain_clears=True)
-    for key, val in changes.items():
-        if val is None:
-            acts.pop(key, None)
-        else:
-            acts[key] = val
-    _write_acts(entry, acts)
-    return acts
-
-
-def _validated_acts(body, retain_clears=False):
-    if not isinstance(body, dict):
-        raise ApiError(400, "acts body must be an object")
-    acts = {}
-    for key, val in body.items():
-        if key not in ACT_KEYS:
-            raise ApiError(400, "unknown act %r (allowed: %s)"
-                           % (key, ", ".join(ACT_KEYS)))
-        if val in (None, "", {}):
-            if retain_clears:
-                acts[key] = None
-            continue  # cleared -> fall back to profile/config/defaults
-        try:
-            acts[key] = model_profiles.validate_act_entry(
-                "acts", key, val
-            )
-        except model_profiles.ModelProfileError as exc:
-            raise ApiError(400, str(exc))
-
-    return acts
-
-
-def _write_acts(entry, acts):
-    path = _acts_path(entry)
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    fd, tmp = tempfile.mkstemp(
-        prefix=".acts-", suffix=".json", dir=os.path.dirname(path)
-    )
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as fh:
-            json.dump(acts, fh, indent=1)
-        os.replace(tmp, path)
-    finally:
-        if os.path.exists(tmp):
-            os.unlink(tmp)
-
-
 def _profile_overlay_path(entry):
     # Beside the state file (the run's runtime dir), matching acts.json and
     # amendments.json.
@@ -2891,8 +2786,8 @@ def read_profile_overlay(entry):
 
 def read_profile(entry):
     """The run's governing strategy profile for the panel, or None for a
-    profile-less, never-swapped run. Read straight from state (like
-    read_acts) and tolerant of a transiently unreadable state. `base` is
+    profile-less, never-swapped run. Read straight from state and
+    tolerant of a transiently unreadable state. `base` is
     retained pair stored in the run config at creation; `swap` is the
     operator's runtime repoint (present only after a swap); `governing` is
     the profile selected for the run — the swap when present, else the base.
@@ -2969,54 +2864,6 @@ def save_model_profile(home, body):
         return model_profiles.save(home, body)
     except model_profiles.ModelProfileError as exc:
         raise ApiError(400, str(exc))
-
-
-def _write_model_profile_selection(state_path, selection):
-    """Atomically replace one run's exact current selection."""
-    path = os.path.join(
-        os.path.dirname(os.path.abspath(state_path)), "model_profile.json"
-    )
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    fd, tmp = tempfile.mkstemp(
-        prefix=".model-profile-selection-",
-        suffix=".tmp",
-        dir=os.path.dirname(path),
-    )
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as fh:
-            json.dump(selection, fh, indent=1, sort_keys=True)
-        os.replace(tmp, path)
-    finally:
-        if os.path.exists(tmp):
-            os.unlink(tmp)
-
-
-def read_model_profile_selection(home, run_id):
-    """Return the validated current choice; absence reads default@medium."""
-    entry = registry.get(registry.load(home), run_id)
-    if entry is None:
-        raise ApiError(404, "unknown run %r" % run_id)
-    selection = driver.read_current_model_profile_selection(
-        entry["state_path"]
-    )
-    selected, _configuration = model_profiles.resolve_selection(
-        home, selection
-    )
-    return selected
-
-
-def set_model_profile_selection(home, run_id, body):
-    """Validate, then wholly replace one run's current model-profile choice."""
-    entry = registry.get(registry.load(home), run_id)
-    if entry is None:
-        raise ApiError(404, "unknown run %r" % run_id)
-    try:
-        selected, _configuration = model_profiles.resolve_selection(home, body)
-    except model_profiles.ModelProfileError as exc:
-        raise ApiError(400, str(exc))
-    _write_model_profile_selection(entry["state_path"], selected)
-    _evict_summary(entry["state_path"])
-    return selected
 
 
 def set_slice_producer(home, run_id, slice_id, body):
@@ -3530,7 +3377,6 @@ def run_detail(home, run_id, log_tail=80):
         detail["summary_error"] = str(exc)
     detail["log"] = read_log_tail(home, run_id, log_tail)
     detail["amendments"] = read_amendments(entry)
-    detail["acts"] = read_acts(entry)
     detail["profile"] = read_profile(entry)
     detail["commit_web_base"] = commit_web_base(entry["workspace"])
     return detail
@@ -4793,13 +4639,6 @@ def make_handler(home, task_host=None):
                             **run_commit(home, parts[3],
                                          query.get("unit", "")),
                         })
-                    elif len(parts) == 5 and parts[4] == "model-profile":
-                        selection = read_model_profile_selection(
-                            home, parts[3]
-                        )
-                        self._json(
-                            200, {"ok": True, "selection": selection}
-                        )
                     else:
                         self._json(404, {"ok": False, "error": "not found"})
                 else:
@@ -5066,16 +4905,6 @@ def make_handler(home, task_host=None):
                         self._json(
                             200, {"ok": True, "amendments": amendments}
                         )
-                    elif len(parts) == 5 and parts[4] == "acts":
-                        acts = set_acts(home, parts[3], self._body())
-                        self._json(200, {"ok": True, "acts": acts})
-                    elif len(parts) == 5 and parts[4] == "model-profile":
-                        selection = set_model_profile_selection(
-                            home, parts[3], self._body()
-                        )
-                        self._json(
-                            200, {"ok": True, "selection": selection}
-                        )
                     elif len(parts) == 5 and parts[4] == "profile":
                         swap = set_profile_swap(home, parts[3], self._body())
                         self._json(200, {"ok": True, "profile_swap": swap})
@@ -5093,18 +4922,17 @@ def make_handler(home, task_host=None):
                 self._json(500, {"ok": False, "error": str(exc)})
 
         def do_PATCH(self):
+            # The act overlay was this verb's only route and retires with
+            # the panel's acts dialog. The method stays so a PATCH is
+            # answered as the absent route it now is, in the ordinary JSON
+            # envelope, rather than as the base handler's 501 HTML page.
+            # Identity is still resolved first, exactly as every other verb
+            # does, so a caller the panel does not admit is refused here on
+            # the same terms and only an admitted request sees the 404.
             try:
                 brainstorming_lifecycle.reap_children(home)
-                route, _query = self._route()
-                who = self._who()
-                parts = route.rstrip("/").split("/")
-                if (len(parts) == 5 and route.startswith("/api/runs/")
-                        and parts[4] == "acts"):
-                    require_run_access(home, who, parts[3])
-                    acts = patch_acts(home, parts[3], self._body())
-                    self._json(200, {"ok": True, "acts": acts})
-                else:
-                    self._json(404, {"ok": False, "error": "not found"})
+                self._who()
+                self._json(404, {"ok": False, "error": "not found"})
             except ApiError as exc:
                 self._json(exc.status, {"ok": False, "error": str(exc)})
             except Exception as exc:

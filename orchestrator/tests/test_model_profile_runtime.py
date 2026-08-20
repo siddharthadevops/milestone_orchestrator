@@ -2,14 +2,12 @@
 
 import contextlib
 import copy
-import http.client
 import io
 import json
 import os
 import shlex
 import subprocess
 import tempfile
-import threading
 import time
 import types
 import unittest
@@ -216,8 +214,8 @@ class CurrentModelProfileRuntimeTest(unittest.TestCase):
             run_id, "runtime", self.workspace, path
         ))
         d = self.resolver(path)
-        service.set_model_profile_selection(
-            self.home, run_id, {"name": "work", "rigor": "medium"}
+        self.write_runtime(
+            path, "model_profile.json", {"name": "work", "rigor": "medium"}
         )
         dispatched = d._act_profile("fixer")
         self.assertEqual(dispatched, ("claude", "profile-v1", "medium"))
@@ -229,20 +227,20 @@ class CurrentModelProfileRuntimeTest(unittest.TestCase):
                          ("claude", "profile-v2", "medium"))
         self.assertEqual(dispatched, ("claude", "profile-v1", "medium"))
 
-        service.set_model_profile_selection(
-            self.home, run_id, {"name": "other", "rigor": "medium"}
+        self.write_runtime(
+            path, "model_profile.json", {"name": "other", "rigor": "medium"}
         )
         self.assertEqual(d._act_profile("fixer"),
                          ("codex", "other-profile", "low"))
 
-        service.set_acts(
-            self.home, run_id,
+        self.write_runtime(
+            path, "acts.json",
             {"fixer": {"agent": "codex", "model": "override",
                        "effort": "high"}},
         )
         self.assertEqual(d._act_profile("fixer"),
                          ("codex", "override", "high"))
-        service.set_acts(self.home, run_id, {})
+        self.write_runtime(path, "acts.json", {})
         self.assertEqual(d._act_profile("fixer"),
                          ("codex", "other-profile", "low"))
 
@@ -598,7 +596,7 @@ class CurrentModelProfileRuntimeTest(unittest.TestCase):
                     self.home,
                     profile("matrix", {act: copy.deepcopy(entry)}),
                 )
-                service.set_acts(self.home, run_id, {})
+                self.write_runtime(path, "acts.json", {})
                 with mock.patch.object(
                     driver, "_resolve_act_from_layers", wraps=real_seam
                 ) as seam:
@@ -607,36 +605,18 @@ class CurrentModelProfileRuntimeTest(unittest.TestCase):
                     self.assertGreater(profile_hits, 0)
 
                     model_profiles.save(self.home, profile("matrix", {}))
-                    service.set_acts(
-                        self.home, run_id, {act: copy.deepcopy(entry)}
+                    self.write_runtime(
+                        path, "acts.json", {act: copy.deepcopy(entry)}
                     )
                     from_override = effective_result(act)
                     self.assertGreater(seam.call_count, profile_hits)
 
                 self.assertEqual(from_override, from_profile)
 
-        # Empty live submissions are the route's clear forms: they expose the
-        # current profile again instead of becoming a second policy shape.
-        model_profiles.save(
-            self.home, profile("matrix", {"fixer": "claude"})
-        )
-        for empty in (None, "", {}):
-            with self.subTest(clear=empty):
-                service.set_acts(self.home, run_id, {"fixer": "codex"})
-                self.assertEqual(
-                    service.set_acts(
-                        self.home, run_id, {"fixer": copy.deepcopy(empty)}
-                    ),
-                    {},
-                )
-                self.assertEqual(
-                    subject._act_profile("fixer")[0], "claude"
-                )
-
         # The independently supervised Brainstorming dispatch consumes the
         # counterpart override, while its family remains structurally opposite.
         model_profiles.save(self.home, profile("matrix", {}))
-        service.set_acts(self.home, run_id, {
+        self.write_runtime(path, "acts.json", {
             "implementer": {
                 "agent": "claude", "model": "lead-live", "effort": "high",
             },
@@ -667,50 +647,6 @@ class CurrentModelProfileRuntimeTest(unittest.TestCase):
                          "codex")
         self.assertEqual(subject._act_profile("fixer"),
                          ("claude", None, "high"))
-
-        # The actual hot endpoint refuses unknown acts and attempts to cross a
-        # structural authority ceiling before its atomic writer can run.
-        service.set_acts(self.home, run_id, {"fixer": "claude"})
-        acts_path = self.runtime_path(path, "acts.json")
-        with open(acts_path, "rb") as fh:
-            prior_bytes = fh.read()
-        invalid = (
-            {"reviewer": "claude"},
-            {"delta_review": {"agent": "claude", "model": "illegal"}},
-            {"review_codex": {"agent": "claude", "model": "illegal"}},
-            {"brainstorming_counterpart": {
-                "agent": "codex", "model": "illegal",
-            }},
-            {"consultation": {"model": "illegal", "effort": "low"}},
-        )
-        server = service.make_server(self.home, 0)
-        server_thread = threading.Thread(
-            target=server.serve_forever, daemon=True
-        )
-        server_thread.start()
-        try:
-            for body in invalid:
-                with self.subTest(hot_refusal=body):
-                    connection = http.client.HTTPConnection(
-                        "127.0.0.1", server.server_address[1], timeout=5
-                    )
-                    try:
-                        connection.request(
-                            "POST", "/api/runs/%s/acts" % run_id,
-                            body=json.dumps(body),
-                            headers={"Content-Type": "application/json"},
-                        )
-                        response = connection.getresponse()
-                        response.read()
-                        self.assertEqual(response.status, 400)
-                    finally:
-                        connection.close()
-                    with open(acts_path, "rb") as fh:
-                        self.assertEqual(fh.read(), prior_bytes)
-        finally:
-            server.shutdown()
-            server.server_close()
-            server_thread.join(timeout=5)
 
         malformed = (
             (

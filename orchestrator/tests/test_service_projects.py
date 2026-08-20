@@ -379,7 +379,6 @@ class ProjectAccessApiTest(ProjectsServiceTestCase):
             ("POST", "/api/runs/%s/name" % run_id, {"name": "renamed"}),
             ("POST", "/api/runs/%s/amendments" % run_id,
              {"text": "keep the scope small"}),
-            ("POST", "/api/runs/%s/acts" % run_id, {"fixer": "codex"}),
             ("POST", "/api/runs/%s/pause-after-seal" % run_id,
              {"enabled": True}),
             ("POST", "/api/runs/%s/profile" % run_id, {"profile": "light"}),
