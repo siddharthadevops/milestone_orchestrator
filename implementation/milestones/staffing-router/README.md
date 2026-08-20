@@ -2,7 +2,7 @@
 
 # Milestone
 
-Status: **open**
+Status: **closed**
 
 ## Goal
 
@@ -343,4 +343,4 @@ The goal is achieved when:
 | slice_impl-09-a (Planner material channel) | reviewed | 48 | satisfied | 763f64e |
 | slice_impl-09-b (Planner material channel) | reviewed | 6 | satisfied | 3abbd13 |
 | slice_doc-10 (Compatibility and conformance) | reviewed | 8 | satisfied | ec05f3c |
-| slice_impl-10 (Compatibility and conformance) | reviewed | 6 | satisfied | - |
+| slice_impl-10 (Compatibility and conformance) | reviewed | 6 | satisfied | 109f276 |
