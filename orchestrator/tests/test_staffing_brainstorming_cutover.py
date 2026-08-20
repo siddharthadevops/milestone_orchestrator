@@ -878,11 +878,8 @@ class BrainstormingCutoverTest(unittest.TestCase):
 
         self.assertEqual(lead["model_family"], self.answer(1)[0])
         self.assertEqual(
-            (
-                runtime["executors"][lead["executor_ref"]]["model"],
-                runtime["executors"][lead["executor_ref"]]["effort"],
-            ),
-            self.answer(1)[1:],
+            runtime["executors"][lead["executor_ref"]],
+            {"model_family": self.answer(1)[0]},
         )
         self.assertEqual(
             runtime["model_defaults"], {"codex": {}, "claude": {}}

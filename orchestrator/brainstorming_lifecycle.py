@@ -628,27 +628,34 @@ def _seat_positions(participants):
     }
 
 
-def _router_seat(staffing_binding, index, families):
-    """Resolve one roster seat now, for the durable run config.
+def _router_roster_families(staffing_binding, families):
+    """The family each persisted Brainstorming roster position describes.
 
-    Creation needs a family per seat to bind an executor and to record the
-    run config the store validates. This is that answer and nothing more:
-    it is re-resolved before every dispatch, and a surfaced condition here
-    refuses the create in the lifecycle's own vocabulary rather than
-    leaving a session that could never dispatch.
+    Creating a discussion dispatches nothing.  It therefore uses the public
+    descriptive family read, which can answer an unhonourable declared split,
+    and leaves the split judgement to each later physical call.  A document
+    may omit a roster position; that position inherits role index 1 exactly as
+    resolution does.
     """
-    resolver = _SeatStaffing(
-        staffing_binding["home"],
-        staffing_binding["session"],
-        "brainstorm",
-        index,
-        families,
-        material=staffing_binding.get("material"),
-    )
     try:
-        return resolver(1)
+        seats = staffing.session_seats(
+            staffing_binding["home"],
+            staffing_binding["session"],
+            "brainstorm",
+            material=staffing_binding.get("material"),
+            families=families,
+        )
+        seat_families = staffing.session_seat_families(
+            staffing_binding["home"],
+            staffing_binding["session"],
+            "brainstorm",
+            material=staffing_binding.get("material"),
+            families=families,
+        )
     except staffing.StaffingError as exc:
         raise PublicLifecycleError(503, UNAVAILABLE) from exc
+    by_index = dict(zip(seats, seat_families))
+    return by_index, by_index[1]
 
 
 def _runtime_document(
@@ -813,9 +820,9 @@ def _runtime_and_roster(
         raise PublicLifecycleError(503, UNAVAILABLE)
 
     # One executor binding per SEAT, not per family: two seats on the same
-    # family may legitimately run different models, and the roster's
-    # executor_ref is the only key the sealed execution seam looks a
-    # binding up by.
+    # family may legitimately resolve different live models, and the roster's
+    # executor_ref is the only key the sealed execution seam looks a binding
+    # up by.
     def seat_ref(family, participant_id):
         return "brainstorming-%s-%s" % (family, participant_id)
 
@@ -972,14 +979,18 @@ def _router_runtime_and_roster(
     Router law replaces roster law here. Family rotation, the same-family
     diversification flip and any `model_family`/`model`/`effort` a caller
     pinned in the create body decide nothing: each automatic seat takes the
-    family the session's document assigns it, at that document's model and
-    effort. Two seats sharing one family is therefore an ordinary answer —
-    the ONLY split rule left is a `distinct_families` the document itself
-    declares, which the router enforces at each dispatch it affects — so
-    the eligible roster is exactly the selected one and the sealed
-    cross-family refusal has no alternative to prefer.
+    family the session's document assigns it. Model and effort are not roster
+    values; the physical call resolves them live. Two seats sharing one family
+    is therefore an ordinary descriptive answer — the ONLY split rule left is
+    a `distinct_families` the document itself declares, which the router
+    enforces at each dispatch it affects — so the eligible roster is exactly
+    the selected one and the sealed cross-family refusal has no alternative to
+    prefer.
     """
     positions = _seat_positions(participants)
+    roster_families, first_family = _router_roster_families(
+        staffing_binding, families
+    )
     selected = []
     executors = {}
     external_providers = {}
@@ -997,10 +1008,9 @@ def _router_runtime_and_roster(
             })
             external_providers[external_ref] = {"kind": "manual"}
             continue
-        answer = _router_seat(
-            staffing_binding, positions[participant["id"]], families
+        family = roster_families.get(
+            positions[participant["id"]], first_family
         )
-        family = answer["agent"]
         if family not in families:
             # The document answers with a family this machine cannot run.
             # There is nothing to bind, and the lifecycle says so the way it
@@ -1029,8 +1039,6 @@ def _router_runtime_and_roster(
             })
         executors[binding_ref] = {
             "model_family": family,
-            "model": answer["model"],
-            "effort": answer["effort"],
         }
     eligible = copy.deepcopy(selected)
     try:

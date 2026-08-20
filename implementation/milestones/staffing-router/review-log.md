@@ -797,3 +797,27 @@
 - `codex-codex-S10-009` (raised codex, cleared codex): Fallback acceptance suppresses an allowed surfaced condition — Risk is high because repeated strict and conformance claims could make the builder suppress a valid fallback-triggered `distinct_families_unsatisfiable`, while damage is medium because the existing resolver and focused tests should expose it during this unit and correction remains bounded to its cod
 - `claude-S10-CLAUDE-001` (raised claude, cleared codex): Acceptance criterion :128-132 closes the milestone by asserting that every retained profile/act helper is limited to conversion, A2's name-and-rigor read, old-record compatibility, or a home-less in-process construction with no operator or product entry point. That enumeration is falsified by the shipped launch path: `driver.init_run` builds `creation_overrides` from operator-supplied act layers whenever a catalogue home is present (`orchestrator/driver.py:12072-12074`), validates each entry against the retired `model_profiles.PROFILE_ACT_KEYS` vocabulary (`:11936-11954`), and writes `acts.json` (`:12123-12125`). The layers come from project defaults and the launch `config_override` on project-bound launches (`:12049-12055`, `orchestrator/service.py:1976`), from `config.acts` on the direct launch route (`orchestrator/service.py:2450-2455`), and from `--config` on CLI init (`:12158`) — all live operator/product entry points, all post-slice-8. The Question Battery `consumers_touched` row omits the same channel from both its observed and its verified-untouched lists. — The explicit closed-inventory and test-coverage claim can silently mislead a capable builder because live launch surfaces still accept and persist retired acts, while correction is bounded to removing or accurately re-pinning that creation channel and its focused tests with no external contract or d
 
+## slice_impl-10 (Compatibility and conformance)
+
+- draft: kind `implement`, artifact `-` (raw: `implementation/milestones/staffing-router/.run/raw/slice_impl-10-draft.txt`)
+
+| Round | Kind | Family | Findings | Triage | Raw |
+|---|---|---|---|---|---|
+| slice_impl-10-codex-r1 | review_round | codex | 0 | clean | `implementation/milestones/staffing-router/.run/raw/slice_impl-10-codex-r1.txt` |
+| slice_impl-10-claude-r1 | review_round | claude | 2 | DEBT-CLEAN (reclassified) | `implementation/milestones/staffing-router/.run/raw/slice_impl-10-claude-r1.txt` |
+| slice_impl-10-codex-r2 | fix_findings | codex | 0 | clean | `implementation/milestones/staffing-router/.run/raw/slice_impl-10-fix1.txt` |
+| slice_impl-10-codex-r3 | delta_review | codex | 0 | clean | `implementation/milestones/staffing-router/.run/raw/slice_impl-10-delta1.txt` |
+| slice_impl-10-codex-r4 | review_round | codex | 0 | clean | `implementation/milestones/staffing-router/.run/raw/slice_impl-10-codex-r2.txt` |
+| slice_impl-10-claude-r2 | review_round | claude | 1 | DEBT-CLEAN (reclassified) | `implementation/milestones/staffing-router/.run/raw/slice_impl-10-claude-r2.txt` |
+
+### Review completion — SATISFIED
+
+- deterministic result: every configured family was clean or debt-clean on the same current bytes; the scheduled full verification passed; no extra reviewer was called
+- cited reviews: `slice_impl-10-codex-r4`, `slice_impl-10-claude-r2`
+- scheduled verification event: `1434`
+
+**Deferred debt (opposite-family verified):**
+- `claude-S10-CLAUDE-001` (raised claude, cleared codex): The closing consumer-inventory cell never asserts the pinned retained-legacy-helper clause, so the driver's still-wired profile/act staffing channel is outside the closing proof — The green conformance cell inventories router calls but never pins the live model_profiles_home=None legacy dispatch branches, so a future bare Driver entry point could silently staff from config/acts, while correction is a local constructor/default guard and assertion.
+- `claude-S10-CLAUDE-002` (raised claude, cleared codex): The new Brainstorming roster read pairs seat indices with families taken from two independent live document reads, so a concurrent edit can persist a seat's family against the wrong index — The green creation path can silently preserve a real seat-to-family race that ordinary tests will not expose, while correction is confined to one document-consistent roster read plus a focused regression test and no provider call or downstream data needs repair.
+- `claude-S10-CLAUDE-R1-001` (raised claude, cleared codex): The slice's Brainstorming creation correction drops `model` and `effort` from the durable `runtime.executors` binding, but leaves `orchestrator/README.md:309-312` asserting the retired shape — that each seat's *answer* is recorded there and is the child's initial binding — a paragraph an earlier review in this same milestone already adjudicated and rewrote for exactly this claim. — The README states a concrete false durable and initial-binding contract that can silently misdirect a builder, but correction is a local documentation re-pin and any attempt to restore model and effort is immediately exposed by the existing family-only assertion.
+

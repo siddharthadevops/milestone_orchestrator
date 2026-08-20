@@ -629,9 +629,9 @@ class StandaloneBrainstormingApiTest(unittest.TestCase):
                  for item in ("lead", "critic-1", "critic-2")],
                 [answer["agent"] for answer in seats],
             )
-            # Executor refs stay per SEAT so two same-family seats can run
-            # different models; the recorded runtime carries each seat's
-            # resolved model/effort — the document's, never the pin's.
+            # Executor refs stay per SEAT so two same-family seats can resolve
+            # different live models.  Creation records only the descriptive
+            # family roster; model and effort remain dispatch-time answers.
             record = lifecycle._record_by_id(
                 self.home, body["session"]["id"]
             )
@@ -644,11 +644,7 @@ class StandaloneBrainstormingApiTest(unittest.TestCase):
                 [executors[by_id[item]["executor_ref"]]
                  for item in ("lead", "critic-1", "critic-2")],
                 [
-                    {
-                        "model_family": answer["agent"],
-                        "model": answer["model"],
-                        "effort": answer["effort"],
-                    }
+                    {"model_family": answer["agent"]}
                     for answer in seats
                 ],
             )

@@ -358,18 +358,20 @@ class BrainstormingVisualizationTest(unittest.TestCase):
         self.assertEqual(view["revision"], created["session"]["revision"])
         record = lifecycle._record_by_id(self.api.home, session_id)
         expected_participants = []
-        for participant in state["run_config"]["participants"]:
-            binding = record["runtime"]["executors"][
-                participant["executor_ref"]
-            ]
+        for index, participant in enumerate(
+            state["run_config"]["participants"], start=1
+        ):
+            answer = self.api._seat_answer(
+                index, session=record["staffing_session"]
+            )
             expected_participants.append({
                 "id": participant["id"],
                 "role": participant["role"],
                 "delivery": "llm",
                 "external_provider": None,
-                "model_family": participant["model_family"],
-                "model": binding["model"],
-                "effort": binding["effort"],
+                "model_family": answer["agent"],
+                "model": answer["model"],
+                "effort": answer["effort"],
             })
         self.assertEqual(view["participants"], expected_participants)
         self.assertTrue(all(
