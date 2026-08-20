@@ -822,16 +822,17 @@ class _RoleDispatch(object):
     return value the runner would have to learn about.
     """
 
-    def __init__(self, driver, role, index=1, round=1):
+    def __init__(self, driver, role, index=1, round=1, material=None):
         self._driver = driver
         self.role = role
         self.index = index
         self.round = round
+        self.material = material
         self.staffing_fallback = None
 
     def __call__(self):
         resolution = self._driver._staffing_resolution(
-            self.role, self.index, self.round
+            self.role, self.index, self.round, material=self.material
         )
         self.staffing_fallback = resolution.staffing_fallback
         answer = resolution.answer
@@ -5514,7 +5515,7 @@ class Driver(object):
                 order,
                 self.config,
                 self.workspace,
-                staffing_selection=self._brainstorming_staffing(),
+                staffing_selection=self._brainstorming_staffing(order),
             )
         except tasks.TaskRequestError as exc:
             reason = "Brainstorming producer admission failed: %s" % exc.code
@@ -5573,7 +5574,9 @@ class Driver(object):
                 record["id"],
                 self.config,
                 home,
-                staffing_selection=self._brainstorming_staffing(),
+                staffing_selection=self._brainstorming_staffing(
+                    record["order"]
+                ),
             )
         except brainstorming_lifecycle.PublicLifecycleError as exc:
             if exc.code == brainstorming_lifecycle.STOP_INCOMPLETE:
@@ -5642,7 +5645,7 @@ class Driver(object):
             "dispatch_authority"
         )
         staffing_selection = (
-            self._brainstorming_staffing()
+            self._brainstorming_staffing(active["order"])
             if dispatch_authority == "current_profile"
             else None
         )
@@ -8436,7 +8439,7 @@ class Driver(object):
             self._save()
         raise StopStep(reason)
 
-    def _staffing_resolution(self, role, index=1, round=1):
+    def _staffing_resolution(self, role, index=1, round=1, material=None):
         """One router answer, read live from the run's session."""
         try:
             return staffing.resolve(
@@ -8445,6 +8448,7 @@ class Driver(object):
                 role,
                 index=index,
                 round=round,
+                material=material,
                 families=list(self.config["families_order"]),
             )
         except staffing.StaffingConditionError as exc:
@@ -8501,14 +8505,18 @@ class Driver(object):
         # how to quote one no UTF-8 encoder emits.
         return copy.deepcopy(document["materials"])
 
-    def _staff(self, role, index=1, round=1):
+    def _staff(self, role, index=1, round=1, material=None):
         """(family, model, effort) for one driver-made call."""
-        answer = self._staffing_resolution(role, index, round).answer
+        answer = self._staffing_resolution(
+            role, index, round, material=material
+        ).answer
         return answer["agent"], answer["model"], answer["effort"]
 
-    def _dispatch_for_role(self, role, index=1, round=1):
+    def _dispatch_for_role(self, role, index=1, round=1, material=None):
         """A fresh router resolution for every physical provider dispatch."""
-        return _RoleDispatch(self, role, index=index, round=round)
+        return _RoleDispatch(
+            self, role, index=index, round=round, material=material
+        )
 
     # -- the review cycle IS the document's `review` seats ------------------
     #
@@ -8749,7 +8757,24 @@ class Driver(object):
     def _worker_staffing(self, unit, kind):
         """(family, model, effort) for one worker call, from the router."""
         role, round_number = self._worker_role(unit, kind)
-        return self._staff(role, round=round_number)
+        return self._staff(
+            role,
+            round=round_number,
+            material=self._worker_staffing_material(unit, kind),
+        )
+
+    def _worker_staffing_material(self, unit, kind):
+        """The admitted production material, or the value about to be admitted.
+
+        Recovery reads the active task's immutable order.  Only a task with no
+        admitted record yet consults the prospective slice plan.
+        """
+        if kind not in tasks.PRODUCER_TASK_KINDS:
+            return None
+        active = self._active_worker_task(unit, kind)
+        if active is not None:
+            return tasks.order_staffing_material(active["order"])
+        return tasks.slice_material(self._slice_info(unit["slice_id"]))
 
     def _order_role(self, unit, kind):
         """The process step one admitted agent-call order records.
@@ -8861,7 +8886,11 @@ class Driver(object):
             role, round_number = self._worker_role(unit, kind)
             if role is None:
                 return None
-            return self._dispatch_for_role(role, round=round_number)
+            return self._dispatch_for_role(
+                role,
+                round=round_number,
+                material=self._worker_staffing_material(unit, kind),
+            )
         if kind == contracts.KIND_DRAFT_SKELETON:
             return self._dispatch_for_act(
                 "skeletoner", origin_family=origin_family, skeleton=True
@@ -8973,7 +9002,7 @@ class Driver(object):
         }
         return lead, counterpart
 
-    def _brainstorming_staffing(self):
+    def _brainstorming_staffing(self, order=None):
         """The run's one staffing session, for a discussion it owns.
 
         A discussion the milestone starts is staffed by the same session
@@ -8990,13 +9019,24 @@ class Driver(object):
         binding a session at a later resume does not reach back into a
         discussion already created.
 
+        For a selected production order the same mapping also carries that
+        order's admitted optional material. It is request context, not a
+        copied staffing answer: every physical call still resolves the live
+        session and document.
+
         `None` — no selection at all — only for a `Driver` built without a
         catalogue home, which has no document store to read and keeps
         today's configuration-act seats.
         """
         if self.model_profiles_home is None:
             return None
-        return {"session": st.staffing_session(self.state)}
+        selection = {"session": st.staffing_session(self.state)}
+        if order is not None:
+            # Production discussions inherit the task order's admitted
+            # material, including an explicit absence.  Other discussions
+            # have no slice-material source and keep the selection's old shape.
+            selection["material"] = tasks.order_staffing_material(order)
+        return selection
 
     def _modern_design_updates(self):
         # Compatibility must never restore retired redocumentation machinery.

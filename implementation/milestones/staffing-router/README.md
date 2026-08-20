@@ -339,5 +339,6 @@ The goal is achieved when:
 | slice_impl-08-a (Panel: documents, sessions, standalone choices) | reviewed | 2 | satisfied | c049a12 |
 | slice_impl-08-b (Panel: documents, sessions, standalone choices) | reviewed | 2 | satisfied | 47ca6fd |
 | slice_impl-08-c (Panel: documents, sessions, standalone choices) | reviewed | 12 | satisfied | a2181ac |
-| slice_doc-09 (Planner material channel) | reviewed | 2 | satisfied | 6df6ed0 |
-| slice_impl-09-a (Planner material channel) | reviewed | 48 | satisfied | - |
+| slice_doc-09 (Planner material channel) | reviewed | 2 | satisfied | 763f64e |
+| slice_impl-09-a (Planner material channel) | reviewed | 48 | satisfied | 763f64e |
+| slice_impl-09-b (Planner material channel) | reviewed | 6 | satisfied | - |

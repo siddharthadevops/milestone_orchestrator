@@ -54,6 +54,7 @@ CONFIG = {
     },
     "timeouts": {},
 }
+_UNSET = object()
 
 
 def milestone_roster():
@@ -179,6 +180,7 @@ class _Recorder:
             "role": role,
             "index": index,
             "round": round,
+            "material": material,
         })
         return self._real(
             home, session, role, index=index, round=round,
@@ -238,21 +240,32 @@ class BrainstormingCutoverTest(unittest.TestCase):
         ).answer
         return resolved["agent"], resolved["model"], resolved["effort"]
 
-    def roster(self, participants=None, config=None):
+    def roster(self, participants=None, config=None, material=_UNSET):
         """Build one router-backed runtime and run config."""
+        binding = (
+            lifecycle._staffing_binding(self.home, self.session)
+            if material is _UNSET else
+            lifecycle._staffing_binding(self.home, self.session, material)
+        )
         runtime, run_config, eligible = lifecycle._runtime_and_roster(
             CONFIG if config is None else config,
             participants or milestone_roster(),
             "unanimity",
             self.workspace,
-            staffing_binding=lifecycle._staffing_binding(
-                self.home, self.session
-            ),
+            staffing_binding=binding,
         )
         return runtime, run_config, eligible
 
-    def durable(self, session_id, participants=None, staffing_session=True):
-        runtime, run_config, eligible = self.roster(participants)
+    def durable(
+        self,
+        session_id,
+        participants=None,
+        staffing_session=True,
+        staffing_material=_UNSET,
+    ):
+        runtime, run_config, eligible = self.roster(
+            participants, material=staffing_material
+        )
         created = self.store.create(
             session_id,
             {
@@ -293,6 +306,8 @@ class BrainstormingCutoverTest(unittest.TestCase):
         }
         if staffing_session:
             record["staffing_session"] = self.session
+            if staffing_material is not _UNSET:
+                record["staffing_material"] = staffing_material
         return lifecycle._validate_record(record)
 
     def narrator_turn(self, session_id):
@@ -407,8 +422,15 @@ class BrainstormingCutoverTest(unittest.TestCase):
         record.pop("pid", None)
         return json.dumps(record, sort_keys=True)
 
-    def dispatched(self, session_id, participants=None, caller=None,
-                   static_pins=None, max_rounds=1):
+    def dispatched(
+        self,
+        session_id,
+        participants=None,
+        caller=None,
+        static_pins=None,
+        max_rounds=1,
+        staffing_material=_UNSET,
+    ):
         """One registry-backed session whose seats dispatch real processes.
 
         Router-backed unless *static_pins* names a pre-cutover roster, in
@@ -423,7 +445,13 @@ class BrainstormingCutoverTest(unittest.TestCase):
             static_binding=static_pins is not None,
             staffing_binding=(
                 None if static_pins is not None
-                else lifecycle._staffing_binding(self.home, self.session)
+                else (
+                    lifecycle._staffing_binding(self.home, self.session)
+                    if staffing_material is _UNSET else
+                    lifecycle._staffing_binding(
+                        self.home, self.session, staffing_material
+                    )
+                )
             ),
         )
         target_path = os.path.join(self.workspace, "%s.md" % session_id)
@@ -469,6 +497,8 @@ class BrainstormingCutoverTest(unittest.TestCase):
         }
         if static_pins is None:
             record["staffing_session"] = self.session
+            if staffing_material is not _UNSET:
+                record["staffing_material"] = staffing_material
         return self.register(lifecycle._validate_record(record))
 
     # -- acceptance ------------------------------------------------------
@@ -554,7 +584,7 @@ class BrainstormingCutoverTest(unittest.TestCase):
         self.assertEqual(
             recorder.requests,
             [{"session": self.session, "role": "classify",
-              "index": 1, "round": 1}],
+              "index": 1, "round": 1, "material": None}],
         )
         self.assertEqual(captured["answer"], self.answer(1, role="classify"))
 
@@ -583,6 +613,258 @@ class BrainstormingCutoverTest(unittest.TestCase):
 
         self.assertNotEqual(first, second)
         self.assertEqual(second, self.answer(1, 1))
+
+    def test_slice_material_reaches_agent_call_and_brainstorming_production(
+        self,
+    ):
+        """Both producer choices carry one admitted material end to end."""
+        document = staffing.default_document_seed()
+        document["name"] = "production-materials"
+        document["materials"] = {
+            "analysis": {"examples": ["Understand the problem."]},
+            "delivery": {"examples": ["Apply the agreed change."]},
+        }
+
+        def seats(slot):
+            return {
+                "assignment": {
+                    "draft": {"1": slot},
+                    "implement": {"1": slot},
+                    "brainstorm": {"1": slot, "2": slot, "3": slot},
+                    "classify": {"1": slot},
+                }
+            }
+
+        document["overrides"] = {
+            "analysis": seats(1),
+            "delivery": seats(2),
+        }
+        staffing.save(self.home, document)
+        staffing.edit_session(
+            self.home, self.session, {"document": document["name"]}
+        )
+
+        request = {
+            "work_area": {
+                "workspace_path": self.workspace,
+                "primary": self.workspace,
+                "additional": [],
+            },
+            "request": "Produce the slice's requested artifact.",
+            "context": {"unit": "slice-1"},
+            "reference_documents": [],
+        }
+        producer_maps = (
+            {
+                contracts.KIND_DRAFT_SLICE_NOTE: "brainstorming",
+                contracts.KIND_IMPLEMENT: "agent_call",
+            },
+            {
+                contracts.KIND_DRAFT_SLICE_NOTE: "agent_call",
+                contracts.KIND_IMPLEMENT: "brainstorming",
+            },
+        )
+        owner = types.SimpleNamespace(
+            model_profiles_home=self.home,
+            state={"staffing_session": self.session},
+        )
+        resolver_owner = types.SimpleNamespace()
+        resolver_owner._staffing_resolution = (
+            lambda role, index=1, round=1, material=None: staffing.resolve(
+                self.home,
+                self.session,
+                role,
+                index=index,
+                round=round,
+                material=material,
+                families=list(CONFIG["families_order"]),
+            )
+        )
+        brainstorming_selection = None
+        agent_roles = []
+        recorder = _Recorder()
+        with mock.patch.object(staffing, "resolve", side_effect=recorder):
+            for producer_map in producer_maps:
+                plan = {
+                    "id": 1,
+                    "title": "One",
+                    "material": "analysis",
+                    "producer_task_executor": {
+                        kind: {"task_executor": executor}
+                        for kind, executor in producer_map.items()
+                    },
+                }
+                for kind, role in (
+                    (contracts.KIND_DRAFT_SLICE_NOTE, "draft"),
+                    (contracts.KIND_IMPLEMENT, "implement"),
+                ):
+                    admitted_request = copy.deepcopy(request)
+                    admitted_request["context"]["task_kind"] = kind
+                    order = tasks.tasks.validate_order(
+                        tasks.tasks.producer_order(plan, kind, admitted_request)
+                    )
+                    self.assertEqual(
+                        tasks.tasks.order_staffing_material(order), "analysis"
+                    )
+                    if order["task_executor"] == "agent_call":
+                        driver._RoleDispatch(
+                            resolver_owner,
+                            role,
+                            material=tasks.tasks.order_staffing_material(order),
+                        )()
+                        agent_roles.append(role)
+                    else:
+                        selection = driver.Driver._brainstorming_staffing(
+                            owner, order
+                        )
+                        self.assertEqual(selection, {
+                            "session": self.session,
+                            "material": "analysis",
+                        })
+                        brainstorming_selection = selection
+
+            self.assertEqual(sorted(agent_roles), ["draft", "implement"])
+
+            # Create through the real lifecycle boundary. The registry, not
+            # the mutable slice plan, becomes every later call's carrier.
+            target = os.path.join(self.workspace, "production-material.md")
+            with open(target, "wb") as handle:
+                handle.write(b"initial target")
+            body = {
+                "request": {
+                    "workspace_path": self.workspace,
+                    "target_path": target,
+                    "request": "Agree the bounded production approach.",
+                    "context": {"brief": "One production task."},
+                    "max_rounds": 1,
+                },
+                "participants": llm_roster(),
+                "closure_policy": "unanimity",
+            }
+            config = self.provider_config()
+            launch = lifecycle.GatedLaunch(
+                process=types.SimpleNamespace(pid=999999),
+                release=mock.Mock(),
+                abort=mock.Mock(),
+            )
+            with mock.patch.object(lifecycle, "_track_child"):
+                created = lifecycle.create_resolved_session(
+                    self.home,
+                    body,
+                    "task-profile:material-task",
+                    {
+                        "workspace_path": self.workspace,
+                        "project": None,
+                        "work_area": None,
+                        "primary": None,
+                        "additional": [],
+                    },
+                    config,
+                    launcher=lambda _home, _session_id: launch,
+                    owned_target_path=target,
+                    staffing_selection=brainstorming_selection,
+                )
+            session_id = created["id"]
+            record = lifecycle._record_by_id(self.home, session_id)
+            self.assertEqual(record["staffing_material"], "analysis")
+
+            subject = self.executors(record, recorder, dispatching=True)
+            lead_ref = self.store.read(session_id).state["run_config"][
+                "participants"
+            ][0]["executor_ref"]
+            lead = subject.executors[lead_ref]
+            lead.prepare_dispatch(1)
+            first = (lead.model_family, lead.model, lead.effort)
+
+            # Prospective edit: the admitted discussion remains on analysis.
+            task_state = {"milestone": {"slices": [plan]}, "events": []}
+            tasks.tasks.update_slice_material(
+                task_state, 1, {"material": "delivery"}
+            )
+            lead.prepare_dispatch(1)
+            self.assertEqual(
+                (lead.model_family, lead.model, lead.effort), first
+            )
+
+            # Staffing is still live: changing what ANALYSIS means reaches
+            # the next call without retargeting the task to DELIVERY.
+            document["overrides"]["analysis"] = seats(2)
+            staffing.save(self.home, document)
+            lead.prepare_dispatch(2)
+            second = (lead.model_family, lead.model, lead.effort)
+            self.assertNotEqual(first, second)
+
+            classified = {}
+
+            def classify(_exc, **kwargs):
+                classified["answer"] = kwargs["resolve_dispatch"]()
+                return "unknown", None, "test"
+
+            with mock.patch.object(
+                lifecycle.errclass,
+                "classify_worker_failure",
+                side_effect=classify,
+            ):
+                subject.failure_classifier(
+                    session_id,
+                    {"id": "initial-position"},
+                    lead,
+                    RuntimeError("mystery"),
+                )
+            self.assertEqual(classified["answer"][0], second[0])
+
+            # A stopped process restarts from the durable registry fields.
+            lifecycle._clear_pid(self.home, session_id, 999999)
+            launched = self.restart(
+                session_id,
+                lambda _record: (_ for _ in ()).throw(
+                    AssertionError("a marked record consulted its owner")
+                ),
+            )
+            launched.assert_called_once_with(
+                self.home, session_id, staffing_session=self.session
+            )
+            restarted_record = lifecycle._record_by_id(self.home, session_id)
+            self.assertEqual(
+                restarted_record["staffing_material"], "analysis"
+            )
+            restarted = self.executors(
+                restarted_record, recorder, dispatching=True
+            )
+            restarted_lead = restarted.executors[lead_ref]
+            restarted_lead.prepare_dispatch(2)
+            self.assertEqual(
+                (restarted_lead.model_family,
+                 restarted_lead.model,
+                 restarted_lead.effort),
+                second,
+            )
+
+            # The agreed production effect reopens the same durable binding.
+            self.agree(session_id, restarted_record, subject=restarted)
+            self.store.begin_task_effect_attempt(session_id, {
+                "task_id": "material-task",
+                "token": "material-effect-1",
+                "started_at": time.time(),
+            })
+            completion, _result = lifecycle.apply_production_effect(
+                self.home,
+                session_id,
+                lambda _record: None,
+                tasks._production_prompt({
+                    "request": {"request": "Apply the agreement."},
+                    "agreement": {"closing_summary": closing_summary()},
+                }),
+                tasks.validate_production_completion,
+                participant_process_factory=lifecycle._spawn_participant,
+            )
+            self.assertTrue(completion["completed"])
+
+        self.assertTrue(recorder.requests)
+        self.assertEqual(
+            {item["material"] for item in recorder.requests}, {"analysis"}
+        )
+        self.assertIn("classify", {item["role"] for item in recorder.requests})
 
     def test_retired_selectors_decide_nothing_for_a_router_session(self):
         # A caller-pinned seat, the family rotation and the configured
@@ -1562,7 +1844,7 @@ class OwnerSessionInheritanceTest(unittest.TestCase):
                 "additional": [],
             },
             "request": "Produce the slice note.",
-            "context": {},
+            "context": {"task_kind": contracts.KIND_DRAFT_SLICE_NOTE},
             "reference_documents": [],
         }
         production_unit = {
@@ -1619,7 +1901,12 @@ class OwnerSessionInheritanceTest(unittest.TestCase):
                 captured["design"], captured["calibration"],
                 captured["start"], captured["effect"],
             ],
-            [{"session": self.owner}] * 4,
+            [
+                {"session": self.owner},
+                {"session": self.owner},
+                {"session": self.owner, "material": None},
+                {"session": self.owner, "material": None},
+            ],
         )
         self.assertEqual(captured["authority"], "current_profile")
         self.assertEqual(

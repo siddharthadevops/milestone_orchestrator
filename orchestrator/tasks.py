@@ -438,6 +438,10 @@ def producer_order(slice_plan, task_kind, request):
     order = {
         "task_executor": selection["task_executor"],
         "request": _json_copy(request, "task request"),
+        # The production task owns this value from admission onward.  Write
+        # the absence too, so a later slice edit cannot be mistaken for
+        # context an older admitted order omitted.
+        "staffing_material": slice_material(slice_plan),
     }
     if "configuration" in selection:
         order["configuration"] = _json_copy(
@@ -667,13 +671,26 @@ def _order_staffing_session(value):
     return _text(value, "task order.staffing_session")
 
 
+def _order_staffing_material(value):
+    """One production order's frozen optional router material."""
+    if value is None:
+        return None
+    # Reuse the plan boundary's one definition of a storable material.  This
+    # remains shape validation, never catalogue-membership validation.
+    try:
+        contracts._require_material(value, "task order")
+    except contracts.ContractError as exc:
+        raise ContractError(str(exc)) from exc
+    return value
+
+
 def validate_order(order):
     """Validate a closed order and return its resolved, detached value."""
     try:
         _exact_keys(
             order,
             ("task_executor", "request"),
-            ("configuration", "staffing_session"),
+            ("configuration", "staffing_session", "staffing_material"),
             "task order",
         )
         task_executor = order["task_executor"]
@@ -695,6 +712,10 @@ def validate_order(order):
                 order.get("staffing_session")
             ),
         }
+        if "staffing_material" in order:
+            checked["staffing_material"] = _order_staffing_material(
+                order["staffing_material"]
+            )
         return _json_copy(checked, "task order")
     except (ContractError, TypeError, ValueError) as exc:
         _request_error(exc)
@@ -712,6 +733,18 @@ def order_staffing_session(order):
     if not isinstance(order, dict) or "staffing_session" not in order:
         return False, None
     return True, order["staffing_session"]
+
+
+def order_staffing_material(order):
+    """The frozen production material on one stored order, if any.
+
+    Older and non-production orders carry no key and therefore ask the router
+    for no request material.  New production orders write the key even when
+    its value is ``None``, fixing that absence at their admission boundary.
+    """
+    if not isinstance(order, dict) or "staffing_material" not in order:
+        return None
+    return order["staffing_material"]
 
 
 def _canonical_output_directory(order, primary_workspace):

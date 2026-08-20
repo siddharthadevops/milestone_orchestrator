@@ -322,6 +322,17 @@ class TaskContractsTest(unittest.TestCase):
             brainstorming_order["configuration"],
             {"max_rounds": 3, "closure_policy": "unanimity"},
         )
+        production_order = tasks.producer_order(
+            {"id": 1, "title": "one", "material": "analysis"},
+            contracts.KIND_IMPLEMENT,
+            task_request(context={}),
+        )
+        admitted_production_order = tasks.validate_order(production_order)
+        self.assertEqual(
+            tasks.order_staffing_material(admitted_production_order),
+            "analysis",
+        )
+        self.assertEqual(admitted_production_order["request"]["context"], {})
 
         invalid_requests = []
         for missing in (

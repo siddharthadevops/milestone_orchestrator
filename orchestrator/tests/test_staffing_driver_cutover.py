@@ -33,6 +33,7 @@ from orchestrator import runners
 from orchestrator import service
 from orchestrator import staffing as stf
 from orchestrator import state as st
+from orchestrator import task_api
 from orchestrator import tasks
 
 from orchestrator.tests.test_driver_mock import (
@@ -350,6 +351,184 @@ class DriverCallsAskTheRouter(StaffingCutoverTestCase):
         self.assertIn((contracts.KIND_REVIEW_ROUND,) + REVIEW_1, ran)
         self.assertIn((contracts.KIND_REVIEW_ROUND,) + REVIEW_2, ran)
         self.assertIn((contracts.KIND_DELTA_REVIEW,) + REVIEW_2, ran)
+
+    def test_unknown_slice_material_degrades_and_nonproduction_calls_stay_unset(
+        self,
+    ):
+        document = stf.default_document_seed()
+        document["name"] = "slice-material-boundary"
+        document["materials"] = {
+            "fallback": {"examples": ["The session's standing choice."]},
+            "removed": {"examples": ["A choice later renamed away."]},
+            "later": {"examples": ["The next production task's choice."]},
+        }
+        document["overrides"] = {
+            "fallback": {"assignment": {"draft": {"1": 1}}},
+            "removed": {"assignment": {"draft": {"1": 2}}},
+            "later": {"assignment": {"draft": {"1": 2}}},
+        }
+        path = self.bound_to(document, name="ws-slice-material-boundary")
+        session = self.session_of(path)
+        stf.edit_session(self.home, session, {"material": "fallback"})
+
+        state = st.load(path)
+        state["milestone"]["slices"] = [{
+            "id": 1,
+            "title": "One",
+            "material": "removed",
+        }]
+        state["units"][0].update({
+            "status": st.U_SEALED,
+            "artifact": "docs/skeleton.md",
+        })
+        unit = st.ensure_next_unit(state)
+        st.save(path, state)
+
+        subject = self.driver_for(path)
+        unit = st.current_unit(subject.state)
+        family, model, effort = subject._worker_staffing(
+            unit, contracts.KIND_DRAFT_SLICE_NOTE
+        )
+        admitted = subject._admit_worker_task(
+            unit,
+            contracts.KIND_DRAFT_SLICE_NOTE,
+            "KIND: draft_slice_note\n",
+            family,
+            model=model,
+            effort=effort,
+            dispatch_resolver=subject._dispatch_for_worker_kind(
+                unit, contracts.KIND_DRAFT_SLICE_NOTE
+            ),
+        )
+        self.assertEqual(
+            tasks.order_staffing_material(admitted["order"]), "removed"
+        )
+
+        # The prospective plan moves on, while the admitted order does not.
+        tasks.update_slice_material(
+            subject.state, 1, {"material": "later"}
+        )
+        subject._save()
+
+        # The admitted name then disappears from the live document. Existing
+        # router law ignores it and falls through to the session default.
+        del document["materials"]["removed"]
+        del document["overrides"]["removed"]
+        stf.save(self.home, document)
+        expected = stf.resolve(
+            self.home,
+            session,
+            "draft",
+            material="removed",
+            families=["codex", "claude"],
+        ).answer
+        mutable_plan_answer = stf.resolve(
+            self.home,
+            session,
+            "draft",
+            material="later",
+            families=["codex", "claude"],
+        ).answer
+        self.assertNotEqual(expected, mutable_plan_answer)
+
+        requests, patched = self.captured()
+        restarted = self.driver_for(path)
+        unit = st.current_unit(restarted.state)
+        with patched:
+            ran = restarted._dispatch_for_worker_kind(
+                unit, contracts.KIND_DRAFT_SLICE_NOTE
+            )()
+
+            # Every adjacent driver call has no production material source.
+            skeleton = restarted.state["units"][0]
+            restarted._dispatch_for_worker_kind(
+                skeleton, contracts.KIND_DRAFT_SKELETON
+            )()
+            restarted._dispatch_for_worker_kind(
+                unit, contracts.KIND_FIX_FINDINGS
+            )()
+            restarted._dispatch_for_role("classify")()
+            restarted._dispatch_for_role("consult")()
+            # Full and delta review use the same material-free review seat
+            # resolver; take one request for each reviewed call shape.
+            restarted._review_dispatch(unit, 1)()
+            restarted._review_dispatch(unit, 2)()
+
+            standalone_order = tasks.validate_order({
+                "task_executor": "agent_call",
+                "configuration": {"role": "implement"},
+                "staffing_session": session,
+                "request": {
+                    "work_area": {
+                        "workspace_path": restarted.workspace,
+                        "primary": restarted.workspace,
+                        "additional": [],
+                    },
+                    "request": "Run one standalone task.",
+                    "context": {},
+                    "reference_documents": [],
+                },
+            })
+            task_api._dispatch(
+                self.home,
+                {"order": standalone_order, "resolved_staffing": {}},
+                restarted.config,
+            )
+
+            area_store = mock.Mock()
+            area_store.read.return_value = mock.Mock(
+                ok=True,
+                value={"primary": {"path": restarted.workspace}},
+            )
+            with mock.patch.object(
+                service, "_require_declared", return_value=("project", {})
+            ), mock.patch.object(
+                service.registry, "get_project", return_value={"defaults": {}}
+            ), mock.patch.object(
+                service, "read_staffing_session"
+            ), mock.patch.object(
+                service.workareas, "WorkAreaStore", return_value=area_store
+            ), mock.patch.object(
+                service.gitops, "is_repo_root", return_value=True
+            ), mock.patch.object(
+                service, "_require_unowned_workspace"
+            ), mock.patch.object(
+                service.driver,
+                "load_config",
+                return_value=copy.deepcopy(restarted.config),
+            ), mock.patch.object(
+                service.gitsync,
+                "run_sync",
+                return_value={"outcome": "aligned"},
+            ):
+                service.sync_project_git(
+                    self.home,
+                    "project",
+                    {"work_area": "main", "staffing_session": session},
+                    who={"admin": True},
+                )
+
+        self.assertEqual(
+            ran, (expected["agent"], expected["model"], expected["effort"])
+        )
+        draft_requests = [
+            request for request in requests if request["role"] == "draft"
+        ]
+        self.assertEqual(len(draft_requests), 1)
+        self.assertEqual(draft_requests[0]["material"], "removed")
+        adjacent = [
+            request for request in requests if request["role"] != "draft"
+        ]
+        self.assertEqual(
+            sorted(request["role"] for request in adjacent),
+            [
+                "classify", "consult", "fix", "implement", "plan",
+                "review", "review", "sync",
+            ],
+        )
+        self.assertTrue(all(
+            request["material"] is None for request in adjacent
+        ))
 
     def test_the_failure_classifier_asks_the_classify_seat(self):
         """The classifier is a `classify` seat, not the opposite of the

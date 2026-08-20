@@ -868,6 +868,15 @@ def apply_agreed_effects(
     completion = None
     failure = None
     try:
+        staffing_kwargs = {}
+        if staffing_selection is not None:
+            staffing_kwargs["staffing_session"] = staffing_selection.get(
+                "session"
+            )
+            if "material" in staffing_selection:
+                staffing_kwargs["staffing_material"] = staffing_selection[
+                    "material"
+                ]
         completion, _result = lifecycle.apply_production_effect(
             home,
             session_id,
@@ -876,11 +885,8 @@ def apply_agreed_effects(
             ),
             _production_prompt(effect_request),
             validate_production_completion,
-            staffing_session=(
-                None if staffing_selection is None
-                else staffing_selection.get("session")
-            ),
             participant_process_factory=participant_process_factory,
+            **staffing_kwargs
         )
     except Exception as exc:
         if (
