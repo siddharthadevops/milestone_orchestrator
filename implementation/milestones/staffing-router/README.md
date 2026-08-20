@@ -334,4 +334,5 @@ The goal is achieved when:
 | slice_impl-06-b (Brainstorming cutover) | reviewed | 24 | satisfied | 5072f04 |
 | slice_doc-07 (Standalone tasks and work-area alignment) | reviewed | 2 | satisfied | b25f31a |
 | slice_impl-07-a (Standalone tasks and work-area alignment) | reviewed | 7 | satisfied | 14dbf1e |
-| slice_impl-07-b (Standalone tasks and work-area alignment) | reviewed | 2 | satisfied | - |
+| slice_impl-07-b (Standalone tasks and work-area alignment) | reviewed | 2 | satisfied | 1200ece |
+| slice_doc-08 (Panel: documents, sessions, standalone choices) | reviewed | 12 | satisfied | - |

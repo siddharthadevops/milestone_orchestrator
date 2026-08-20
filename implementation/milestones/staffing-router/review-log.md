@@ -564,3 +564,34 @@
 - deterministic result: every configured family was clean or debt-clean on the same current bytes; full verification was not due at this boundary; no extra reviewer was called
 - cited reviews: `slice_impl-07-b-codex-r1`, `slice_impl-07-b-claude-r1`
 
+## slice_doc-08 (Panel: documents, sessions, standalone choices)
+
+- draft: kind `draft_slice_note`, artifact `implementation/milestones/staffing-router/slices/slice-08.md` (raw: `implementation/milestones/staffing-router/.run/raw/slice_doc-08-draft.txt`)
+
+| Round | Kind | Family | Findings | Triage | Raw |
+|---|---|---|---|---|---|
+| slice_doc-08-codex-r1 | review_round | codex | 3 | 3 reported | `implementation/milestones/staffing-router/.run/raw/slice_doc-08-codex-r1.txt` |
+| slice_doc-08-claude-r1 | fix_findings | claude | 2 | 1 fixed, 1 rejected (1 consulted) | `implementation/milestones/staffing-router/.run/raw/slice_doc-08-fix1.txt` |
+| slice_doc-08-claude-r2 | delta_review | claude | 1 | 1 reported | `implementation/milestones/staffing-router/.run/raw/slice_doc-08-delta1.txt` |
+| slice_doc-08-claude-r3 | fix_findings | claude | 1 | 1 fixed | `implementation/milestones/staffing-router/.run/raw/slice_doc-08-fix2.txt` |
+| slice_doc-08-claude-r4 | delta_review | claude | 1 | 1 reported | `implementation/milestones/staffing-router/.run/raw/slice_doc-08-delta2.txt` |
+| slice_doc-08-claude-r5 | fix_findings | claude | 1 | 1 fixed | `implementation/milestones/staffing-router/.run/raw/slice_doc-08-fix3.txt` |
+| slice_doc-08-claude-r6 | delta_review | claude | 1 | 1 reported | `implementation/milestones/staffing-router/.run/raw/slice_doc-08-delta3.txt` |
+| slice_doc-08-claude-r7 | fix_findings | claude | 1 | 1 fixed | `implementation/milestones/staffing-router/.run/raw/slice_doc-08-fix4.txt` |
+| slice_doc-08-claude-r8 | delta_review | claude | 1 | 1 reported | `implementation/milestones/staffing-router/.run/raw/slice_doc-08-delta4.txt` |
+| slice_doc-08-claude-r9 | fix_findings | claude | 1 | 1 fixed | `implementation/milestones/staffing-router/.run/raw/slice_doc-08-fix5.txt` |
+| slice_doc-08-codex-r2 | review_round | codex | 2 | DEBT-CLEAN (reclassified) | `implementation/milestones/staffing-router/.run/raw/slice_doc-08-codex-r2.txt` |
+| slice_doc-08-claude-r10 | review_round | claude | 2 | DEBT-CLEAN (reclassified) | `implementation/milestones/staffing-router/.run/raw/slice_doc-08-claude-r1.txt` |
+
+### Review completion — SATISFIED
+
+- deterministic result: every configured family was clean or debt-clean on the same current bytes; full verification was not due at this boundary; no extra reviewer was called
+- cited reviews: `slice_doc-08-codex-r2`, `slice_doc-08-claude-r10`
+
+**Deferred debt (opposite-family verified):**
+- `codex-S8-003` (raised codex, cleared codex): Verification criteria are anchored to source machinery instead of observable behavior — The contract explicitly requires retired API strings to be absent, likely steering the builder into a brittle source-text assertion, but a harmless dead string exposes the mistake immediately and correction is a local verification-row/test rewrite.
+- `codex-S8-CODEX-002` (raised codex, cleared codex): The project-level family projection is not the available-family set used by dedicated Brainstorming — The artifact repeatedly pins the configured project order as the exact families fact for dedicated Brainstorming even though executable discovery filters that set, so the builder is likely to implement and test the wrong contract without stopping, while correction is visible on first affected use an
+- `codex-S8-CODEX-004` (raised codex, cleared codex): The browser round-trip can turn a stale project-family projection into call authority — The artifact wrongly pins a loaded browser projection as current service authority, so a capable builder will implement silent stale-family staffing, while correction remains bounded to making the shared session handoff derive or validate families server-side and updating its focused tests.
+- `claude-S8-CLAUDE-001` (raised claude, cleared codex): The note owns and touches the dual-mode Order-task dialog but never bounds its producer-selection mode: no pinned fact, Acceptance row, Verification row or Enforceability Gate row says that mode keeps no staffing control and opens no session. — The note consistently scopes session creation to standalone operations but omits an explicit guard for the shared dialog's producer mode, so a capable builder should infer or flag the boundary yet could still leak the controls, while correction is only a local mode check plus one focused regression 
+- `claude-S8-CLAUDE-002` (raised claude, cleared codex): 'Truthful panel wording' is listed as owned and pinned in the facts table, but no Acceptance row, Verification row or Enforceability Gate row covers it, so the false public catalogue description and roster hint survive every named check. — This direct test-coverage gap can silently leave the stale public staffing hint while every named check passes, but correction is only a local catalogue-string change plus one focused assertion and is immediately visible in the order dialog.
+
