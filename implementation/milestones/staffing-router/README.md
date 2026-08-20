@@ -341,4 +341,5 @@ The goal is achieved when:
 | slice_impl-08-c (Panel: documents, sessions, standalone choices) | reviewed | 12 | satisfied | a2181ac |
 | slice_doc-09 (Planner material channel) | reviewed | 2 | satisfied | 763f64e |
 | slice_impl-09-a (Planner material channel) | reviewed | 48 | satisfied | 763f64e |
-| slice_impl-09-b (Planner material channel) | reviewed | 6 | satisfied | - |
+| slice_impl-09-b (Planner material channel) | reviewed | 6 | satisfied | 3abbd13 |
+| slice_doc-10 (Compatibility and conformance) | reviewed | 8 | satisfied | - |
