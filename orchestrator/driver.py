@@ -12310,6 +12310,10 @@ def _install_stop_forwarding():
         return  # pragma: no cover - embedded use; CLI always hits main thread
 
     def handler(signum, frame):
+        # One breadcrumb before dying signal-silent: a driver that vanishes
+        # with an empty log is unattributable (2026-08-21).
+        print("DRIVER SIGTERM: killing worker groups and exiting",
+              file=sys.stderr, flush=True)
         runners.kill_active_worker_groups()
         signal.signal(signal.SIGTERM, signal.SIG_DFL)
         os.kill(os.getpid(), signal.SIGTERM)  # die with the real signal status

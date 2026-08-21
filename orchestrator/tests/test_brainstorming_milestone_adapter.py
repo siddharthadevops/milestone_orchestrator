@@ -3895,5 +3895,48 @@ class MilestoneDriverRethinkTest(unittest.TestCase):
         self.assertIn("does not match", error)
 
 
+class FixerRethinkFindingMatchTest(unittest.TestCase):
+    """The queue's id selects; the queue's body governs."""
+
+    def test_id_match_substitutes_the_queued_canonical_body(self):
+        queued = report_finding()
+        echoed = copy.deepcopy(queued)
+        # The fixer's echo normalized one byte it never meant to contest.
+        echoed["validity"]["actual_outcome"] += " "
+        signal = rethink(contracts.KIND_FIX_FINDINGS, finding=echoed)
+
+        checked = adapter.validate_origin_signal(
+            signal, contracts.KIND_FIX_FINDINGS, queued_findings=[queued]
+        )
+
+        self.assertEqual(checked["finding"], queued)
+
+    def test_unqueued_or_ambiguous_id_still_refuses(self):
+        queued = report_finding()
+        for queue in ([], [queued, copy.deepcopy(queued)]):
+            signal = rethink(
+                contracts.KIND_FIX_FINDINGS, finding=report_finding()
+            )
+            with self.assertRaisesRegex(
+                adapter.AdapterError, "exactly one currently queued"
+            ):
+                adapter.validate_origin_signal(
+                    signal,
+                    contracts.KIND_FIX_FINDINGS,
+                    queued_findings=queue,
+                )
+        signal = rethink(
+            contracts.KIND_FIX_FINDINGS, finding=report_finding("F9")
+        )
+        with self.assertRaisesRegex(
+            adapter.AdapterError, "exactly one currently queued"
+        ):
+            adapter.validate_origin_signal(
+                signal,
+                contracts.KIND_FIX_FINDINGS,
+                queued_findings=[queued],
+            )
+
+
 if __name__ == "__main__":
     unittest.main()

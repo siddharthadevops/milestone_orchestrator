@@ -885,6 +885,7 @@ class CurrentModelProfileRuntimeTest(unittest.TestCase):
         store.read.return_value = snapshot
         launch = mock.Mock()
         launch.process.pid = 12345
+        launch.process.poll.return_value = None
         validate_launch = mock.Mock(
             side_effect=lambda record: (
                 service._attached_brainstorming_staffing_session(

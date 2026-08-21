@@ -743,7 +743,9 @@ class BrainstormingCutoverTest(unittest.TestCase):
             }
             config = self.provider_config()
             launch = lifecycle.GatedLaunch(
-                process=types.SimpleNamespace(pid=999999),
+                process=types.SimpleNamespace(
+                    pid=999999, poll=lambda: None
+                ),
                 release=mock.Mock(),
                 abort=mock.Mock(),
             )
@@ -1526,6 +1528,7 @@ class BrainstormingCutoverTest(unittest.TestCase):
         """
         launch = mock.Mock()
         launch.process.pid = 4242
+        launch.process.poll.return_value = None
 
         with mock.patch.object(
             lifecycle, "_launch_lifecycle_process", return_value=launch

@@ -250,13 +250,27 @@ def _load_registry(home):
         raise RuntimeError("invalid Brainstorming service registry")
     seen = set()
     sessions = []
+    unrecognized = []
     for record in document["sessions"]:
-        checked = _validate_record(record)
+        try:
+            checked = _validate_record(record)
+        except (RuntimeError, ValueError, brainstorming.ContractError):
+            # A record another writer generation shaped differently must not
+            # poison every other session's read: one foreign-schema record in
+            # the shared registry took a whole run down mid-wait (2026-08-21).
+            # Reads skip it, saves carry it through verbatim, and only its
+            # own writer generation interprets it.
+            unrecognized.append(copy.deepcopy(record))
+            continue
         if checked["id"] in seen:
             raise RuntimeError("invalid Brainstorming service registry")
         seen.add(checked["id"])
         sessions.append(checked)
-    return {"schema_version": SCHEMA_VERSION, "sessions": sessions}
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "sessions": sessions,
+        "unrecognized_sessions": unrecognized,
+    }
 
 
 def _save_registry(home, document):
@@ -268,6 +282,11 @@ def _save_registry(home, document):
             raise RuntimeError("invalid Brainstorming service registry")
         seen.add(record["id"])
         checked["sessions"].append(record)
+    # Records this generation could not read are preserved byte-for-byte:
+    # tolerating them on load and dropping them on save would silently
+    # delete another generation's sessions.
+    for record in document.get("unrecognized_sessions", []):
+        checked["sessions"].append(copy.deepcopy(record))
     directory = service_directory(home)
     os.makedirs(directory, exist_ok=True)
     descriptor, temporary = tempfile.mkstemp(
@@ -1464,6 +1483,21 @@ def _launch_lifecycle_process(
     return GatedLaunch(process, release, abort)
 
 
+def _release_started(launch):
+    """Open the start gate only for a child that is still alive.
+
+    A child that died before its gate opened — an argv its generation
+    cannot parse, an interpreter that failed to start — used to leave a
+    session that would run nothing forever (2026-08-21). Its death is loud
+    here instead: the caller's error path aborts and rolls back. The check
+    is a non-blocking poll: by release time the record persistence has
+    given a spawn-refused child ample time to exit.
+    """
+    if launch.process.poll() is not None:
+        raise PublicLifecycleError(503, UNAVAILABLE)
+    launch.release()
+
+
 def _track_child(home, session_id, process):
     with _CHILDREN_LOCK:
         _CHILDREN[process.pid] = (
@@ -2058,7 +2092,7 @@ def _create_session_with_context(
             _save_registry(home, document)
         projected = _projection(home, record)
         _track_child(home, session_id, launch.process)
-        launch.release()
+        _release_started(launch)
         return projected
     except PublicLifecycleError:
         if launch is not None:
@@ -2817,7 +2851,7 @@ def start_session(
             _save_registry(home, document)
             resumed = copy.deepcopy(current)
         _track_child(home, session_id, launch.process)
-        launch.release()
+        _release_started(launch)
         return _projection(home, resumed)
     except PublicLifecycleError:
         if launch is not None:
@@ -3503,6 +3537,13 @@ def main(argv=None):
     # reference here. A record that carries the mark is its own authority
     # and needs no argument.
     run.add_argument("--staffing-session")
+    # Retired flags a pre-cutover driver still in memory passes when it
+    # spawns this newer on-disk module: accepted and ignored, so the
+    # executor starts instead of dying in argparse (2026-08-21 deploy skew
+    # left sessions running with a dead executor). Keep for one deploy
+    # generation past the staffing cutover.
+    run.add_argument("--model-profile-state", help=argparse.SUPPRESS)
+    run.add_argument("--model-profiles-home", help=argparse.SUPPRESS)
     args = parser.parse_args(argv)
     if args.command != "run" or not _wait_for_start(args.start_fd):
         return 2

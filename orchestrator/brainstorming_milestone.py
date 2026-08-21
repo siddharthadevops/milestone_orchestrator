@@ -183,15 +183,23 @@ def validate_origin_signal(signal, kind, queued_findings=None):
         require_plain=kind in contracts.REPORT_KINDS,
     )
     if kind == contracts.KIND_FIX_FINDINGS:
+        wanted = (signal.get("finding") or {}).get("id")
         matches = [
             finding
             for finding in list(queued_findings or [])
-            if brainstorming._same_json_value(finding, signal["finding"])
+            if wanted is not None and finding.get("id") == wanted
         ]
         if len(matches) != 1:
             raise AdapterError(
                 "a fixer rethink must name exactly one currently queued finding"
             )
+        # The queue's copy is the authoritative text. A fixer echoing the
+        # finding may normalize a byte it never meant to contest — one
+        # transposed character in the echo killed a run (2026-08-21) —
+        # so the id selects and the queue supplies the body.
+        checked = copy.deepcopy(signal)
+        checked["finding"] = copy.deepcopy(matches[0])
+        return checked
     return copy.deepcopy(signal)
 
 

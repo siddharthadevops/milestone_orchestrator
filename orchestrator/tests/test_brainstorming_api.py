@@ -3229,5 +3229,126 @@ class StandaloneBrainstormingApiTest(unittest.TestCase):
             )
 
 
+def _service_record(sid="bs-generation-skew-1"):
+    return {
+        "id": sid,
+        "caller": "milestone:test:unit:1",
+        "project": None,
+        "work_area": None,
+        "target_path": "/tmp/skew/target.md",
+        "target_identity": {"device": 0, "inode": 0, "tail": []},
+        "pid": None,
+        "created_at": "2026-08-21T00:00:00+0000",
+        "runtime": {},
+        "execution_context": {},
+    }
+
+
+class RegistryGenerationSkewTest(unittest.TestCase):
+    """One foreign-schema record must not poison the shared registry."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.home = self.tmp.name
+
+    def test_foreign_record_is_skipped_on_read_and_kept_on_save(self):
+        document = lifecycle._new_registry()
+        document["sessions"].append(_service_record())
+        lifecycle._save_registry(self.home, document)
+        path = lifecycle.registry_path(self.home)
+        with open(path, encoding="utf-8") as handle:
+            raw = json.load(handle)
+        alien = dict(
+            _service_record("bs-generation-skew-2"),
+            key_from_a_newer_generation=True,
+        )
+        raw["sessions"].append(alien)
+        with open(path, "w", encoding="utf-8") as handle:
+            json.dump(raw, handle)
+
+        loaded = lifecycle._load_registry(self.home)
+        self.assertEqual(
+            [record["id"] for record in loaded["sessions"]],
+            ["bs-generation-skew-1"],
+        )
+        self.assertEqual(loaded["unrecognized_sessions"], [alien])
+
+        # A read-modify-save cycle by this generation keeps the foreign
+        # record byte-for-byte instead of silently deleting it.
+        lifecycle._save_registry(self.home, loaded)
+        with open(path, encoding="utf-8") as handle:
+            saved = json.load(handle)
+        self.assertEqual(len(saved["sessions"]), 2)
+        self.assertIn(alien, saved["sessions"])
+
+
+class ReleaseStartedTest(unittest.TestCase):
+    """The start gate opens only for a child that is still alive."""
+
+    class _Launch:
+        def __init__(self, dead):
+            self.released = 0
+
+            class _Process:
+                def poll(self):
+                    return 2 if dead else None
+
+            self.process = _Process()
+
+        def release(self):
+            self.released += 1
+
+    def test_dead_child_raises_and_never_releases(self):
+        launch = self._Launch(dead=True)
+        with self.assertRaises(lifecycle.PublicLifecycleError) as caught:
+            lifecycle._release_started(launch)
+        self.assertEqual(caught.exception.code, lifecycle.UNAVAILABLE)
+        self.assertEqual(launch.released, 0)
+
+    def test_living_child_is_released(self):
+        launch = self._Launch(dead=False)
+        lifecycle._release_started(launch)
+        self.assertEqual(launch.released, 1)
+
+
+class ExecutorCliCompatibilityTest(unittest.TestCase):
+    """Retired spawn flags from an older driver generation still parse."""
+
+    def test_retired_flags_are_accepted_and_ignored(self):
+        read_fd, write_fd = os.pipe()
+        try:
+            os.set_inheritable(read_fd, True)
+            with tempfile.TemporaryDirectory() as home:
+                proc = subprocess.Popen(
+                    [
+                        sys.executable, "-m",
+                        "orchestrator.brainstorming_lifecycle", "run",
+                        "--home", home,
+                        "--session", "bs-compat-check",
+                        "--start-fd", str(read_fd),
+                        "--model-profile-state", "/tmp/none/state.json",
+                        "--model-profiles-home", "/tmp/none",
+                    ],
+                    cwd=os.path.dirname(os.path.dirname(
+                        os.path.dirname(os.path.abspath(__file__)))),
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    pass_fds=(read_fd,),
+                    text=True,
+                )
+                # Close the gate without writing: the child must reach the
+                # start wait (past argparse) and exit 2 from the refused gate.
+                os.close(write_fd)
+                write_fd = None
+                output, _ = proc.communicate(timeout=30)
+        finally:
+            os.close(read_fd)
+            if write_fd is not None:
+                os.close(write_fd)
+        self.assertEqual(proc.returncode, 2, output)
+        self.assertNotIn("unrecognized arguments", output)
+
+
 if __name__ == "__main__":
     unittest.main()

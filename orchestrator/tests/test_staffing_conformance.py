@@ -210,7 +210,7 @@ class StaffingConformanceTest(driver_cases.StaffingCutoverTestCase):
             "closure_policy": "unanimity",
         }
         launch = lifecycle.GatedLaunch(
-            process=types.SimpleNamespace(pid=999999),
+            process=types.SimpleNamespace(pid=999999, poll=lambda: None),
             release=mock.Mock(),
             abort=mock.Mock(),
         )

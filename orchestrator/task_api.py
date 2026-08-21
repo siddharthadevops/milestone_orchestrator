@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import datetime
 import json
 import math
 import os
@@ -36,6 +37,13 @@ def records_path(home):
 def task_key(task_id):
     """`tasks/task:<id>` — one namespace beside runs and Brainstorming."""
     return _TASK_KEY_PREFIX + kvstore.validate_fragment(task_id, "task_id")
+
+
+def _admission_stamp():
+    """Microsecond ISO stamp: second-resolution ties lose admission order."""
+    return datetime.datetime.now(datetime.timezone.utc).strftime(
+        "%Y-%m-%dT%H:%M:%S.%f+0000"
+    )
 
 
 class StandaloneTaskStore:
@@ -129,7 +137,7 @@ class StandaloneTaskStore:
         outcome = self._store.cas(
             task_key(record["id"]),
             None,
-            self._document(record, st.now_iso()),
+            self._document(record, _admission_stamp()),
         )
         if not outcome.ok:
             raise tasks.TaskRecordError(
