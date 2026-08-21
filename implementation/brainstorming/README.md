@@ -29,3 +29,9 @@ This directory may remain empty when there is no active planning material.
   standalone, calling product) from owner-opened sessions: numeric families,
   per-family tuning, per-role assignment, materials as overrides, programmable
   rules; `worker` renamed to `agent_call`.
+- [`brainstorming-is-a-task.md`](brainstorming-is-a-task.md) — every
+  Brainstorming session is owned by a task; the standalone Brainstorming
+  ordering surface (panel form, public create route) is retired and the
+  engine stays as executor internals. Queued after staffing-router, with
+  small companions (producer override as a note, Dante exit rule, skeleton
+  executor choice).
