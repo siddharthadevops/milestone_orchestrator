@@ -210,6 +210,7 @@
   #driverlogdialog { width: min(900px, 92vw); }
   #driverLogBody { max-height: 70vh; }
   #incidentsdialog { width: min(900px, 92vw); }
+  #sgeditor { width: min(760px, 92vw); }
   #incidentsBody { min-width: 0; max-width: none; max-height: 70vh;
     overflow-y: auto; }
   .bottom-tools { display: flex; justify-content: flex-end; gap: 8px;
@@ -517,9 +518,11 @@
   .wa-form input, .wa-form textarea { flex: 1; }
   .wa-form textarea { resize: vertical; }
   .wa-form .pathrow { margin-bottom: 6px; }
-  .jsonarea { width: 100%; min-height: 240px; font-family: "SF Mono",
-    ui-monospace, Menlo, monospace; font-size: 12px; border: 1px solid
-    var(--line); border-radius: 8px; padding: 8px; resize: vertical; }
+  textarea.jsonarea { width: 100%; min-height: 240px; font-family: "SF Mono",
+    ui-monospace, Menlo, monospace; font-size: 12px; line-height: 1.5;
+    border: 1px solid var(--line); border-radius: 8px; padding: 8px;
+    resize: vertical; }
+  #sgeditor .jsonarea { min-height: min(52vh, 460px); }
   .access-user { display: flex; align-items: center; gap: 8px;
     padding: 8px 0; border-bottom: 1px solid var(--line); font-size: 13px; }
   .access-user:last-child { border-bottom: 0; }
@@ -6751,9 +6754,11 @@ function openSgEditor(cfg) {
   document.getElementById("sg_title").textContent = cfg.title;
   document.getElementById("sg_hint").textContent = cfg.hint || "";
   document.getElementById("sg_error").textContent = "";
-  document.getElementById("sg_json").value =
-    JSON.stringify(cfg.value, null, 1);
+  const area = document.getElementById("sg_json");
+  area.value = JSON.stringify(cfg.value, null, 1);
   document.getElementById("sgeditor").showModal();
+  area.setSelectionRange(0, 0);
+  area.scrollTop = 0;
 }
 async function saveSgEditor() {
   const err = document.getElementById("sg_error");
