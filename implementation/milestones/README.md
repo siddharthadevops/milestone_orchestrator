@@ -41,4 +41,5 @@ milestones.
 | [Brainstorming](brainstorming/) | open | 8 | 2026-07-23 | - |
 | [Model profiles](model-profiles/) | closed | 6 | 2026-08-08 | 2026-08-11 |
 | [Tasks](tasks-2/) | closed | 10 | 2026-08-14 | 2026-08-17 |
+| [Staffing Router](staffing-router/) | closed | 10 | 2026-08-18 | 2026-08-20 |
 <!-- impl_roadmap:milestones:end -->

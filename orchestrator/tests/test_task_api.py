@@ -12,6 +12,7 @@ import urllib.request
 from unittest import mock
 
 from orchestrator import access, brainstorming_tasks, registry, runners, service
+from orchestrator import staffing
 from orchestrator import state as st
 from orchestrator import task_api, tasks
 
@@ -73,7 +74,16 @@ class TaskApiTest(unittest.TestCase):
             with exc:
                 return exc.code, json.loads(exc.read().decode("utf-8"))
 
-    def order(self, executor="worker", work_area=None, **request_changes):
+    @staticmethod
+    def _age_stored_record(store, record):
+        """Rewrite one stored task document as a pre-rename service left it."""
+        key = task_api.task_key(record["id"])
+        current = store._store.read(key)
+        store._store.cas(
+            key, current["revision"], dict(current["value"], record=record)
+        )
+
+    def order(self, executor="agent_call", work_area=None, **request_changes):
         request = {
             "work_area": work_area or {
                 "workspace_path": self.primary,
@@ -266,8 +276,13 @@ class TaskApiTest(unittest.TestCase):
 
         with mock.patch.object(service, "_direct_task_config", side_effect=config):
             body = self.request("POST", "/api/tasks", self.order())[1]
-            self.assertEqual(body["task"]["resolved_staffing"]["worker"]["agent"],
-                             "codex")
+            # Order bookkeeping, taken from the machine as it was at
+            # admission. It selects nothing: the call below runs on a
+            # different family entirely.
+            self.assertEqual(
+                body["task"]["resolved_staffing"]["agent_call"]["agent"],
+                "codex",
+            )
             release.set()
             record = self.wait_record(body["task"]["id"])
         self.assertEqual(len(seen), 1)
@@ -275,8 +290,21 @@ class TaskApiTest(unittest.TestCase):
         self.assertEqual(record["result"]["native_result"], raw)
         self.assertEqual(record["result"]["cost"], {"api_usd": 0.25, "real_usd": 0.25})
         marker = task_api.read_worker_marker(self.home, record["id"])
-        self.assertEqual((marker["family"], marker["model"], marker["effort"]),
-                         ("claude", "actual", "high"))
+        # The router answered for the machine the call actually ran on, and
+        # the marker records that answer — not the configured seat defaults
+        # the order was admitted beside.
+        answer = staffing.resolve(
+            self.home, None, "implement", families=["claude"]
+        ).answer
+        self.assertEqual(
+            (marker["family"], marker["model"], marker["effort"]),
+            (answer["agent"], answer["model"], answer["effort"]),
+        )
+        self.assertEqual(marker["family"], "claude")
+        self.assertNotEqual((marker["model"], marker["effort"]),
+                            ("actual", "high"))
+        self.assertEqual(seen[0][0], marker["family"])
+        self.assertEqual(seen[0][3:], (marker["model"], marker["effort"]))
         self.assertEqual(marker["task_id"], record["id"])
         fail.append(True)
         failed_id = self.request("POST", "/api/tasks", self.order())[1]["task"]["id"]
@@ -285,6 +313,112 @@ class TaskApiTest(unittest.TestCase):
                          ("failure", "partial evidence"))
         self.assertTrue(failure["token_usage_partial"])
         self.assertTrue(failure["cost_partial"])
+
+    def test_retired_executor_is_refused_on_write_and_read_from_storage(self):
+        """The rename is one-way: refused as new input, still run from disk."""
+        store = task_api.StandaloneTaskStore(self.home)
+        status, refused = self.request(
+            "POST", "/api/tasks", self.order("worker")
+        )
+        self.assertEqual(
+            (status, refused["error"]), (400, tasks.UNKNOWN_TASK_EXECUTOR)
+        )
+        self.assertEqual(store.records(), [])
+
+        admitted = self.request("POST", "/api/tasks", self.order())[1]["task"]
+        self.assertEqual(admitted["order"]["task_executor"], "agent_call")
+
+        # Age the stored record into the shape every pre-rename order has.
+        aged = store.records()
+        aged[0]["order"]["task_executor"] = "worker"
+        aged[0]["resolved_staffing"] = {
+            "worker": aged[0]["resolved_staffing"]["agent_call"]
+        }
+        self._age_stored_record(store, aged[0])
+
+        prompts = []
+
+        class Runner:
+            def call(_self, _family, prompt, _workspace, model=None,
+                     effort=None, **_kwargs):
+                prompts.append(prompt)
+                return runners.RunnerResult("native text", 0, 1.0)
+
+        host = task_api.DirectTaskHost(
+            self.home, runner_factory=lambda _config, _workspace: Runner()
+        )
+        host.start(
+            store.record(admitted["id"]),
+            lambda: service.driver.load_config(None),
+        )
+        record = self.wait_record(admitted["id"])
+        self.assertEqual(record["result"]["status"], "success", record["result"])
+        self.assertEqual(record["result"]["native_result"], "native text")
+        self.assertEqual(prompts, ["Do exactly the caller-authored work."])
+        # Routing the retired order neither raised nor rewrote its bytes.
+        self.assertEqual(record["order"]["task_executor"], "worker")
+        self.assertEqual(list(record["resolved_staffing"]), ["worker"])
+
+    def test_task_reads_name_a_stored_retired_executor_as_agent_call(self):
+        """Every task read projects the current id; stored bytes keep theirs."""
+        direct = self.request("POST", "/api/tasks", self.order())[1]["task"]
+        store = task_api.StandaloneTaskStore(self.home)
+        aged = store.records()
+        aged[0]["order"]["task_executor"] = "worker"
+        self._age_stored_record(store, aged[0])
+
+        state_path = os.path.join(self.tmp.name, "aged-state.json")
+        state = st.new_state("aged", self.primary, {})
+        milestone = tasks.admit_task(
+            state,
+            direct["order"],
+            {"agent_call": {"agent": "codex"}},
+            self.primary,
+        )
+        state["tasks"][0]["order"]["task_executor"] = "worker"
+        st.save_new(state_path, state)
+        registry.add(self.home, registry.new_entry(
+            "aged", "aged", self.primary, state_path,
+        ))
+        with open(state_path, "rb") as handle:
+            state_before = handle.read()
+        with open(task_api.records_path(self.home), "rb") as handle:
+            records_before = handle.read()
+
+        listed = {
+            row["id"]: row["order"]["task_executor"]
+            for row in self.request("GET", "/api/tasks")[1]["tasks"]
+        }
+        self.assertEqual(listed, {
+            direct["id"]: "agent_call", milestone["id"]: "agent_call",
+        })
+        self.assertEqual(
+            [
+                row["order"]["task_executor"]
+                for row in self.request(
+                    "GET", "/api/tasks?run_id=aged"
+                )[1]["tasks"]
+            ],
+            ["agent_call"],
+        )
+        for path in (
+            "/api/tasks/%s" % direct["id"],
+            "/api/tasks/%s" % milestone["id"],
+            "/api/tasks/%s?run_id=aged" % milestone["id"],
+        ):
+            self.assertEqual(
+                self.request("GET", path)[1]["task"]["order"]["task_executor"],
+                "agent_call",
+                path,
+            )
+
+        with open(state_path, "rb") as handle:
+            self.assertEqual(handle.read(), state_before)
+        with open(task_api.records_path(self.home), "rb") as handle:
+            self.assertEqual(handle.read(), records_before)
+        self.assertEqual(
+            store.records()[0]["order"]["task_executor"], "worker"
+        )
 
     def test_worker_marker_completion_failure_keeps_native_success(self):
         class Runner:
@@ -350,8 +484,10 @@ class TaskApiTest(unittest.TestCase):
         pins = {"dispatch_authority": "static", "participants": [{"id": "lead"}]}
         captured = []
 
-        def start(state, task_id, config, home):
-            captured.append((tasks.task_record(state, task_id), config, home))
+        def start(state, task_id, config, home, **options):
+            captured.append(
+                (tasks.task_record(state, task_id), config, home, options)
+            )
             return {"id": "session-one"}
 
         def finish(state, task_id, _home, _session_id, apply_effects):
@@ -386,6 +522,13 @@ class TaskApiTest(unittest.TestCase):
             effect_release.set()
             self.assertEqual(self.wait_record(task_id)["result"]["native_result"],
                              {"agreement": "kept opaque"})
+        # The direct host carries a standalone order's staffing selection —
+        # the router holding no session of its own — into every launch. A
+        # stored static authority is unmoved by it and keeps its own pins.
+        self.assertEqual(
+            [options for _record, _config, _home, options in captured],
+            [{"staffing_selection": brainstorming_tasks.standalone_staffing()}],
+        )
         before = len(task_api.StandaloneTaskStore(self.home).records())
         unavailable = tasks.TaskRequestError(tasks.TASK_UNAVAILABLE, "no seats")
         with mock.patch.object(brainstorming_tasks, "resolve_staffing",
@@ -394,7 +537,7 @@ class TaskApiTest(unittest.TestCase):
         self.assertEqual((status, body["error"]), (503, tasks.TASK_UNAVAILABLE))
         self.assertEqual(len(task_api.StandaloneTaskStore(self.home).records()), before)
 
-    def test_malformed_standing_staffing_is_unavailable_before_admission(self):
+    def test_malformed_standing_config_refuses_no_standalone_order(self):
         malformed_defaults = service.driver.load_config(None)
         malformed_defaults["model_defaults"] = True
         malformed_families = service.driver.load_config(None)
@@ -406,28 +549,66 @@ class TaskApiTest(unittest.TestCase):
         )
         malformed_timeouts = service.driver.load_config(None)
         malformed_timeouts["timeouts"] = True
-        before = len(task_api.StandaloneTaskStore(self.home).records())
 
-        for executor, config in (
-            ("worker", malformed_defaults),
-            ("brainstorming", malformed_defaults),
-            ("worker", malformed_families),
-            ("worker", malformed_command),
-            ("brainstorming", malformed_command),
-            ("brainstorming", malformed_timeouts),
+        # An agent call reads none of this at admission any more either.
+        # Its one call is staffed by the router immediately before it is
+        # made, so the standing families, the runtime defaults and the
+        # command templates decide nothing here; the snapshot beside the
+        # order is bookkeeping, and a configuration it cannot read yields
+        # no snapshot rather than refusing an order it does not staff.
+        for config, snapshot in (
+            (malformed_defaults, {}),
+            (malformed_families, {}),
+            (malformed_command, {"agent_call": {
+                "agent": "codex", "model": "gpt-5.6-sol", "effort": "xhigh",
+            }}),
         ):
-            with self.subTest(executor=executor, config=config):
+            with self.subTest(executor="agent_call", config=config):
+                admitted = len(
+                    task_api.StandaloneTaskStore(self.home).records()
+                )
                 with mock.patch.object(
                     service, "_direct_task_config", return_value=config
                 ):
                     status, body = self.request(
-                        "POST", "/api/tasks", self.order(executor)
+                        "POST", "/api/tasks", self.order("agent_call")
                     )
+                self.assertEqual(status, 201, body)
                 self.assertEqual(
-                    (status, body["error"]), (503, tasks.TASK_UNAVAILABLE)
+                    body["task"]["resolved_staffing"], snapshot
                 )
                 self.assertEqual(
-                    len(task_api.StandaloneTaskStore(self.home).records()), before
+                    len(task_api.StandaloneTaskStore(self.home).records()),
+                    admitted + 1,
+                )
+
+        # A Brainstorming order reads none of this at admission any more.
+        # Its seats are staffed by the router immediately before every
+        # call, so the standing rotation, the runtime defaults and the
+        # command templates decide nothing here and cannot refuse the
+        # order; the record it admits names the router and freezes no seat.
+        for config in (
+            malformed_defaults, malformed_command, malformed_timeouts,
+        ):
+            with self.subTest(executor="brainstorming", config=config):
+                admitted = len(task_api.StandaloneTaskStore(self.home).records())
+                with mock.patch.object(
+                    service, "_direct_task_config", return_value=config
+                ):
+                    status, body = self.request(
+                        "POST", "/api/tasks", self.order("brainstorming")
+                    )
+                self.assertEqual(status, 201, body)
+                staffing = body["task"]["resolved_staffing"]
+                self.assertEqual(
+                    staffing["dispatch_authority"], "current_profile"
+                )
+                for seat in staffing["participants"]:
+                    for field in ("model_family", "model", "effort"):
+                        self.assertNotIn(field, seat)
+                self.assertEqual(
+                    len(task_api.StandaloneTaskStore(self.home).records()),
+                    admitted + 1,
                 )
 
     def test_static_recovery_inspects_owned_session_before_current_config(self):
@@ -574,8 +755,10 @@ class TaskApiTest(unittest.TestCase):
         }
         captured = []
 
-        def restart(state, task_id, config, home, session_id=None):
-            captured.append((state, task_id, config, home, session_id))
+        def restart(state, task_id, config, home, session_id=None, **options):
+            captured.append(
+                (state, task_id, config, home, session_id, options)
+            )
             return projection
 
         with mock.patch.object(
@@ -597,9 +780,14 @@ class TaskApiTest(unittest.TestCase):
 
         self.assertEqual((status, body["session"]), (200, projection))
         self.assertEqual(len(captured), 1)
-        state, task_id, config, home, attached_session = captured[0]
+        state, task_id, config, home, attached_session, options = captured[0]
         self.assertEqual(tasks.task_record(state, task_id), record)
         self.assertEqual((config, home, attached_session), ({}, self.home, session_id))
+        # A standalone restart carries the same selection its admission did.
+        self.assertEqual(
+            options,
+            {"staffing_selection": brainstorming_tasks.standalone_staffing()},
+        )
         self.assertEqual(host.started, [record["id"], record["id"]])
 
     def test_terminal_standalone_session_restart_completes_open_task(self):
@@ -705,10 +893,10 @@ class TaskApiTest(unittest.TestCase):
         state_path = os.path.join(self.tmp.name, "registered-state.json")
         state = st.new_state("registered", self.primary, {})
         milestone = tasks.admit_task(
-            state, mine["order"], {"worker": {"agent": "codex"}}, self.primary
+            state, mine["order"], {"agent_call": {"agent": "codex"}}, self.primary
         )
         foreign_bound = tasks.admit_task(
-            state, foreign["order"], {"worker": {"agent": "codex"}}, other
+            state, foreign["order"], {"agent_call": {"agent": "codex"}}, other
         )
         st.save_new(state_path, state)
         registry.add(self.home, registry.new_entry(

@@ -10,7 +10,7 @@ import math
 import os
 import uuid
 
-from orchestrator import brainstorming, contracts, kvstore
+from orchestrator import brainstorming, contracts, kvstore, staffing
 from orchestrator import state as st
 
 
@@ -40,19 +40,29 @@ _WORKER_ACCOUNTING_EVENTS = frozenset({
 
 _TASK_EXECUTORS = (
     {
-        "id": "worker",
-        "name": "Worker",
-        "description": "Runs one contracted Worker call for focused work.",
-        "operating_mode": "One contracted Worker call.",
+        "id": "agent_call",
+        "name": "Agent call",
+        "description": "Runs one contracted agent call for focused work.",
+        "operating_mode": "One contracted agent call.",
         "usage_examples": [
             "drafting documents",
             "programming small chunks of code",
         ],
         "available_agent_configurations": (
-            "One Worker seat; agent, model, and effort resolve from the "
-            "current profile or call-time defaults."
+            "One agent-call seat; agent, model, and effort resolve from the "
+            "staffing session that owns the order, at the role below."
         ),
-        "configuration_schema": {},
+        # The process step the one call performs, and the only thing an
+        # orderer chooses about its staffing: the seat is always the role's
+        # first and the round always its first, so no caller can reach into
+        # a cycle the router keeps no history of.
+        "configuration_schema": {
+            "role": {
+                "type": "choice",
+                "choices": list(staffing.ROLES),
+                "default": "implement",
+            },
+        },
     },
     {
         "id": "brainstorming",
@@ -67,7 +77,8 @@ _TASK_EXECUTORS = (
         ],
         "available_agent_configurations": (
             "Initial Position, Contrary Position, and Dante seats; agent, "
-            "model, and effort resolve from profiles or Brainstorming."
+            "model, and effort resolve from the staffing session that owns "
+            "the order, at each seat's roster position."
         ),
         "configuration_schema": {
             "max_rounds": {
@@ -90,6 +101,37 @@ _TASK_EXECUTORS = (
 _TASK_EXECUTOR_BY_ID = {
     entry["id"]: entry for entry in _TASK_EXECUTORS
 }
+# One retired spelling per renamed executor.  Durable orders, durable producer
+# maps, stored producer events, and plans an agent echoes back keep the bytes
+# they were written with; reading names them under the current id.  The
+# catalogue itself never gains the retired key, so a new write still meets the
+# ordinary unknown-executor refusal.
+_RETIRED_TASK_EXECUTORS = {"worker": "agent_call"}
+
+
+def stored_task_executor(value):
+    """Read a stored or agent-returned executor id under its current name."""
+    if isinstance(value, str):
+        return _RETIRED_TASK_EXECUTORS.get(value, value)
+    return value
+
+
+def projected_task_record(record):
+    """Read one durable task record under the current executor name.
+
+    Applied where a record is projected outward rather than inside
+    `task_records`: the standalone store loads through that reader before
+    saving, so normalizing there would rewrite durable bytes the rename
+    forbids touching.
+    """
+    order = record.get("order") if isinstance(record, dict) else None
+    if not isinstance(order, dict):
+        return record
+    stored = order.get("task_executor")
+    current = stored_task_executor(stored)
+    if current == stored:
+        return record
+    return dict(record, order=dict(order, task_executor=current))
 
 
 class ContractError(contracts.ContractError):
@@ -257,9 +299,11 @@ def resolve_configuration(task_executor, configuration=_MISSING):
         _request_error(exc)
 
 
-def _validate_producer_selection(value, context):
+def _validate_producer_selection(value, context, stored=False):
     _exact_keys(value, ("task_executor",), ("configuration",), context)
     task_executor = value["task_executor"]
+    if stored:
+        task_executor = stored_task_executor(task_executor)
     configuration = value.get("configuration", _MISSING)
     # Resolve only as a validation probe.  Prospective state preserves an
     # omitted configuration; catalogue defaults freeze when a task is admitted.
@@ -273,22 +317,29 @@ def _validate_producer_selection(value, context):
 
 
 def validate_producer_selection(value, context="producer selection"):
-    """Validate one prospective TaskExecutor choice without freezing defaults."""
+    """Read one recorded prospective choice without freezing defaults.
+
+    Both callers project an already-stored `slice_producer_updated` event, so a
+    retired id reads under its current name.  The write body has its own
+    validator and keeps refusing it.
+    """
     try:
-        return _validate_producer_selection(value, context)
+        return _validate_producer_selection(value, context, stored=True)
     except (ContractError, TypeError, ValueError) as exc:
         _request_error(exc)
 
 
 def validate_producer_map(value, context="producer_task_executor"):
-    """Validate a partial/raw producer map; omissions retain Worker defaults."""
+    """Read a partial/raw producer map; omissions retain agent-call defaults."""
     try:
         _exact_keys(value, (), PRODUCER_TASK_KINDS, context)
         checked = {}
         for task_kind in PRODUCER_TASK_KINDS:
             if task_kind in value:
                 checked[task_kind] = _validate_producer_selection(
-                    value[task_kind], "%s.%s" % (context, task_kind)
+                    value[task_kind],
+                    "%s.%s" % (context, task_kind),
+                    stored=True,
                 )
         return _json_copy(checked, context)
     except (ContractError, TypeError, ValueError) as exc:
@@ -303,11 +354,32 @@ def effective_slice_producers(slice_plan):
     checked = {} if raw is _MISSING else validate_producer_map(raw)
     return {
         task_kind: _json_copy(
-            checked.get(task_kind, {"task_executor": "worker"}),
+            checked.get(task_kind, {"task_executor": "agent_call"}),
             "effective producer selection",
         )
         for task_kind in PRODUCER_TASK_KINDS
     }
+
+
+def slice_material(slice_plan):
+    """The material one slice currently proposes, or ``None``.
+
+    A read, never a default: an omitted material is not "no material" the
+    router must be told about, it is simply nothing to send, and the
+    session's own default then stands.
+    """
+    if not isinstance(slice_plan, dict):
+        raise TaskRequestError(
+            INVALID_TASK_REQUEST, "slice plan must be an object"
+        )
+    material = slice_plan.get("material")
+    if material is None:
+        return None
+    if not isinstance(material, str):
+        raise TaskRequestError(
+            INVALID_TASK_REQUEST, "slice material must be a string"
+        )
+    return material
 
 
 def effective_slice_plan(slices):
@@ -372,6 +444,10 @@ def producer_order(slice_plan, task_kind, request):
     order = {
         "task_executor": selection["task_executor"],
         "request": _json_copy(request, "task request"),
+        # The production task owns this value from admission onward.  Write
+        # the absence too, so a later slice edit cannot be mistaken for
+        # context an older admitted order omitted.
+        "staffing_material": slice_material(slice_plan),
     }
     if "configuration" in selection:
         order["configuration"] = _json_copy(
@@ -455,7 +531,14 @@ def update_slice_producer(state, slice_id, value):
         )
 
     raw = slice_plan.get("producer_task_executor", _MISSING)
-    producer_map = {} if raw is _MISSING else validate_producer_map(raw)
+    if raw is _MISSING:
+        producer_map = {}
+    else:
+        # Check the stored map, then carry its own bytes forward: a retired id
+        # recorded on the sibling kind keeps reading as its current name and is
+        # not rewritten by an override of the other kind.
+        validate_producer_map(raw)
+        producer_map = _json_copy(raw, "producer_task_executor")
     selection = {
         key: checked[key]
         for key in ("task_executor", "configuration")
@@ -473,13 +556,147 @@ def update_slice_producer(state, slice_id, value):
     return effective_slice_producers(slice_plan)
 
 
+def validate_material_override(value):
+    """Validate the closed slice-material write body.
+
+    Exactly `{"material": <string>}` or `{"material": null}`: a string
+    replaces the slice's proposal, ``None`` withdraws it. Nothing is checked
+    against the document's live catalogue — a name it does not carry is the
+    router's business and already degrades there, so a renamed material can
+    never refuse a write.
+    """
+    try:
+        _exact_keys(value, ("material",), (), "material override")
+        material = value["material"]
+        if material is not None and not isinstance(material, str):
+            raise ContractError(
+                "material must be a string, or null to clear it"
+            )
+        return {"material": material}
+    except (ContractError, TypeError, ValueError) as exc:
+        _request_error(exc)
+
+
+def update_slice_material(state, slice_id, value):
+    """Change one slice's still-prospective material in loaded state.
+
+    Prospective, and prospective ONLY: unlike a producer choice, this write
+    is never frozen by an admitted task, because it does not decide which
+    executor runs the work. Each production task took the material in force
+    when it was admitted and keeps it; this write governs the next one.
+    """
+    checked = validate_material_override(value)
+    if type(slice_id) is not int:
+        raise TaskRequestError(
+            INVALID_TASK_REQUEST, "slice id must be an integer"
+        )
+    slices = (state.get("milestone") or {}).get("slices")
+    if not isinstance(slices, list):
+        raise TaskRequestError(INVALID_TASK_REQUEST, "slice plan is unavailable")
+    slice_plan = next(
+        (candidate for candidate in slices if candidate.get("id") == slice_id),
+        None,
+    )
+    if slice_plan is None:
+        raise TaskRequestError(
+            INVALID_TASK_REQUEST, "unknown slice id %r" % slice_id
+        )
+    material = checked["material"]
+    if material is None:
+        # Clearing REMOVES the key. A plan that never carried one and a plan
+        # whose proposal was withdrawn read the same way, so no reader has to
+        # learn a second spelling for "no material".
+        slice_plan.pop("material", None)
+    else:
+        slice_plan["material"] = material
+    st.append_event(
+        state,
+        "slice_material_updated",
+        slice_id=slice_id,
+        material=material,
+    )
+    return slice_material(slice_plan)
+
+
+def operator_material_overrides(state):
+    """Project current-plan explicit material writes from append-only history.
+
+    The same cutoff the producer projection uses: a later authorized complete
+    slice plan replaces the proposals wholesale, so writes made before it no
+    longer describe the plan a reviewer is reading.
+    """
+    events = state.get("events", [])
+    latest_plan_update = max(
+        (
+            index
+            for index, event in enumerate(events)
+            if isinstance(event, dict) and event.get("type") == "slices_updated"
+        ),
+        default=-1,
+    )
+    overrides = {}
+    for index, event in enumerate(events):
+        if index <= latest_plan_update:
+            continue
+        if not isinstance(event, dict) or event.get("type") != (
+            "slice_material_updated"
+        ):
+            continue
+        slice_id = event.get("slice_id")
+        material = event.get("material")
+        if type(slice_id) is not int or (
+            material is not None and not isinstance(material, str)
+        ):
+            raise TaskRequestError(
+                INVALID_TASK_REQUEST,
+                "slice material event %d has invalid identity" % index,
+            )
+        overrides[slice_id] = material
+    return [
+        {"slice_id": slice_id, "material": material}
+        for slice_id, material in sorted(overrides.items())
+    ]
+
+
+def _order_staffing_session(value):
+    """The owner's inherited staffing context on one order.
+
+    A session id, or ``None`` for the default document — a deliberate
+    choice either way, which is why the key is written on EVERY order this
+    validator admits. Its ABSENCE means something else entirely and is
+    reserved for records admitted before the cutover: those keep the
+    dispatch authority already frozen on them, and nothing rewrites them.
+
+    Nothing further is checked here. Whether the id names a session this
+    caller may reach is the admitting route's question, asked against the
+    session store itself; a shape rule invented here would be a second
+    vocabulary for the same refusal.
+    """
+    if value is None:
+        return None
+    return _text(value, "task order.staffing_session")
+
+
+def _order_staffing_material(value):
+    """One production order's frozen optional router material."""
+    if value is None:
+        return None
+    # Reuse the plan boundary's one definition of a storable material.  This
+    # remains shape validation, never catalogue-membership validation.
+    try:
+        contracts._require_material(value, "task order")
+    except contracts.ContractError as exc:
+        raise ContractError(str(exc)) from exc
+    return value
+
+
 def validate_order(order):
     """Validate a closed order and return its resolved, detached value."""
     try:
         _exact_keys(
             order,
             ("task_executor", "request"),
-            ("configuration",),
+            ("configuration", "staffing_session", "staffing_material"),
             "task order",
         )
         task_executor = order["task_executor"]
@@ -497,10 +714,43 @@ def validate_order(order):
                 task_executor,
                 order.get("configuration", _MISSING),
             ),
+            "staffing_session": _order_staffing_session(
+                order.get("staffing_session")
+            ),
         }
+        if "staffing_material" in order:
+            checked["staffing_material"] = _order_staffing_material(
+                order["staffing_material"]
+            )
         return _json_copy(checked, "task order")
     except (ContractError, TypeError, ValueError) as exc:
         _request_error(exc)
+
+
+def order_staffing_session(order):
+    """(supplied, session) for one stored order.
+
+    *supplied* says whether the order carries the field AT ALL, which is
+    the whole of standalone compatibility: a record admitted before the
+    cutover has no such key and keeps running its frozen snapshot, while a
+    record that carries an explicit ``None`` deliberately chose the default
+    document and resolves live like any other.
+    """
+    if not isinstance(order, dict) or "staffing_session" not in order:
+        return False, None
+    return True, order["staffing_session"]
+
+
+def order_staffing_material(order):
+    """The frozen production material on one stored order, if any.
+
+    Older and non-production orders carry no key and therefore ask the router
+    for no request material.  New production orders write the key even when
+    its value is ``None``, fixing that absence at their admission boundary.
+    """
+    if not isinstance(order, dict) or "staffing_material" not in order:
+        return None
+    return order["staffing_material"]
 
 
 def _canonical_output_directory(order, primary_workspace):
@@ -593,8 +843,10 @@ def execute_worker(record, dispatch):
     if not isinstance(record, dict):
         raise TaskRecordError("Worker execution requires a task record")
     order = record.get("order")
-    if not isinstance(order, dict) or order.get("task_executor") != "worker":
-        raise TaskRecordError("Worker execution requires a Worker task")
+    if not isinstance(order, dict) or stored_task_executor(
+        order.get("task_executor")
+    ) != "agent_call":
+        raise TaskRecordError("Worker execution requires an agent-call task")
     if record.get("result") is not None:
         raise TaskRecordError("a terminal Worker task cannot execute")
     if not callable(dispatch):

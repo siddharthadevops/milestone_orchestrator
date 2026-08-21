@@ -281,17 +281,25 @@ def load(home, name):
     return doc
 
 
+def model_profile_names(home):
+    """Stored profile names, sorted, without loading any of them.
+
+    Kept apart from listing so a caller that must survive one damaged
+    candidate — the staffing conversion skips it and continues — can decide
+    that per profile instead of losing the whole catalogue."""
+    d = model_profiles_dir(home)
+    if not os.path.isdir(d):
+        return []
+    return sorted(fn[:-5] for fn in os.listdir(d) if fn.endswith(".json"))
+
+
 def list_model_profiles(home):
     """All model profiles, sorted by name.
 
     Every candidate is loaded AND validated; the first invalid one raises
     instead of being skipped, so a damaged store fails visibly rather than
     presenting a silently shortened catalogue."""
-    d = model_profiles_dir(home)
-    if not os.path.isdir(d):
-        return []
-    names = sorted(fn[:-5] for fn in os.listdir(d) if fn.endswith(".json"))
-    return [load(home, name) for name in names]
+    return [load(home, name) for name in model_profile_names(home)]
 
 
 def _case_variant(home, name):

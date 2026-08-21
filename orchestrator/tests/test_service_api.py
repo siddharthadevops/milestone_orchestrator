@@ -177,29 +177,22 @@ class ServiceApiTest(unittest.TestCase):
         self.assertIn('id="bsform"', text)
         self.assertIn("function submitBrainstorming", text)
         self.assertIn('api("/api/brainstorming/sessions"', text)
-        # Seats are configured like milestone acts (agent/model/effort per
-        # row, add/remove), never as typed ids; references are a managed
-        # list with add/remove, not a free textarea.
+        # Seats are rows added and removed, never typed ids; references are
+        # a managed list with add/remove, not a free textarea.
         self.assertIn("function renderBsRoster", text)
         self.assertIn("function addBsSeat", text)
         self.assertIn("function removeBsSeat", text)
-        # The dialog opens pre-staffed with Codex, Claude, and Dante; the
-        # retired claude id is gone from every option list.
-        self.assertIn(
-            '{role: "initial_position", delivery: "llm", agent: "codex",', text)
-        self.assertIn(
-            '{role: "contrary_position", delivery: "llm", agent: "claude",',
-            text,
-        )
-        self.assertIn('model: "claude-opus-5", effort: "max"', text)
+        # The dialog opens on the standing three positions and pins the
+        # staffing of none of them: WHO runs a seat is the session's answer
+        # at that seat's roster position (staffing-router slice 8).
+        self.assertIn('{role: "initial_position", delivery: "llm"},', text)
+        self.assertIn('{role: "contrary_position", delivery: "llm"},', text)
         self.assertIn(
             '{role: "common_sense", delivery: "external", '
-            'externalProvider: "narrator",',
+            'externalProvider: "narrator"},',
             text,
         )
-        self.assertIn('agent: "codex", model: "gpt-5.6-sol", effort: "max"',
-                      text)
-        self.assertIn('"claude-opus-5"', text)
+        self.assertNotIn('effort: "max"', text)
         self.assertNotIn("opus-4-8", text)
         self.assertIn(".rosterrow { display: grid", text)
         self.assertIn("function addBsRef", text)
@@ -351,14 +344,21 @@ class ServiceApiTest(unittest.TestCase):
             '`Historical attempt ${group.number}`',
             text,
         )
-        self.assertIn('id="a_skeletoner_agent"', text)
-        self.assertIn('id="ra_skeletoner_model"', text)
+        # The run's staffing is the router's session: one card on the
+        # settings page over the session's own route, and no act grid
+        # anywhere (staffing-router slice 8).
+        self.assertIn('id="staffingsessiondlg"', text)
+        self.assertIn("function staffingSessionCard", text)
+        self.assertNotIn('id="a_skeletoner_agent"', text)
+        self.assertNotIn('id="ra_skeletoner_model"', text)
         self.assertNotIn('convergence_fixer', text)
-        # Switching an act's family resets model+effort (not just the
-        # datalist): the onAgentChange userChanged branch clears both.
-        self.assertIn("function onAgentChange(prefix, act, userChanged)", text)
-        self.assertIn("if (userChanged)", text)
-        self.assertIn("modelEl.value = \"\"", text)
+        # A Brainstorming seat has no family to switch any more, so the
+        # per-seat agent/model/effort machinery — and the family list it
+        # read — retired with it (staffing-router slice 8).
+        self.assertNotIn("function onAgentChange", text)
+        self.assertNotIn("const MODEL_OPTS", text)
+        self.assertNotIn("const EFFORT_OPTS", text)
+        self.assertNotIn("const FAMILY_DEFAULTS", text)
         self.assertIn("function liveWorkSeconds", text)
         self.assertIn("function runStatusClock", text)
         self.assertIn("function tickLiveClocks", text)
@@ -985,197 +985,6 @@ class AmendmentsApiTest(ServiceApiTest):
 
 
 class ActsApiTest(ServiceApiTest):
-    def test_concurrent_saves_are_atomic_and_last_replacement_wins(self):
-        ws = self.workspace("ws-concurrent-acts")
-        status, body = self.create_run(ws)
-        self.assertEqual(status, 201, body)
-        entry = registry.get(registry.load(self.home), body["run"]["id"])
-        first = {"fixer": "claude"}
-        second = {"fixer": "codex"}
-        real_replace = os.replace
-        both_ready = threading.Barrier(2)
-        first_replaced = threading.Event()
-        errors = []
-
-        def ordered_replace(source, target):
-            both_ready.wait(timeout=5)
-            if threading.current_thread().name == "acts-first":
-                real_replace(source, target)
-                first_replaced.set()
-            else:
-                self.assertTrue(first_replaced.wait(timeout=5))
-                real_replace(source, target)
-
-        def save(acts):
-            try:
-                service._write_acts(entry, acts)
-            except Exception as exc:  # pragma: no cover - assertion surface
-                errors.append(exc)
-
-        with mock.patch(
-                "orchestrator.service.os.replace",
-                side_effect=ordered_replace):
-            threads = (
-                threading.Thread(
-                    target=save, args=(first,), name="acts-first"
-                ),
-                threading.Thread(
-                    target=save, args=(second,), name="acts-second"
-                ),
-            )
-            for thread in threads:
-                thread.start()
-            for thread in threads:
-                thread.join(timeout=10)
-
-        self.assertFalse(any(thread.is_alive() for thread in threads))
-        self.assertEqual(errors, [])
-        self.assertEqual(service.read_acts(entry), second)
-
-    def test_panel_distinguishes_and_preserves_explicit_empty_overrides(self):
-        status, body = self.request("GET", "/")
-        self.assertEqual(status, 200)
-        panel = body.decode("utf-8")
-        self.assertIn(
-            "lastActOverrides[a] = present ? lastActs[a] : null", panel
-        )
-        self.assertNotIn("lastActs[a] || cfgActs[a]", panel)
-        self.assertIn("retainedEmptyActOverrides", panel)
-        self.assertIn("structural default override", panel)
-        self.assertIn("Use profile", panel)
-        self.assertIn("const changes = actsDialogPatch()", panel)
-        self.assertIn('method: "PATCH"', panel)
-        self.assertIn("Act overrides (models and roles)", panel)
-
-    def test_patch_preserves_untouched_explicit_empty_and_can_clear_it(self):
-        current = model_profiles.load(self.home, "default")
-        current["configurations"]["medium"]["skeletoner"] = {
-            "agent": "claude", "model": "claude-opus-5", "effort": "high"
-        }
-        model_profiles.save(self.home, current)
-        ws = self.workspace("ws-panel-explicit-empty-acts")
-        status, body = self.create_run(ws, config={"acts": {
-            "skeletoner": None,
-            "drafter": "",
-            "implementer": {},
-            "fixer": {"agent": "claude", "model": "claude-opus-5"},
-            "brainstorming_counterpart": {
-                "model": "gpt-5.6-luna", "effort": "max"
-            },
-        }})
-        self.assertEqual(status, 201, body)
-        rid = body["run"]["id"]
-        state_path = os.path.join(ws, ".orchestrator", "state.json")
-        run_state = st.load(state_path)
-        acts_path = os.path.join(ws, ".orchestrator", "acts.json")
-
-        # The creation-time empty is meaningful: it suppresses the current
-        # profile and exposes the structural default.
-        self.assertEqual(driver.resolve_current_act(
-            state_path, run_state["config"], self.home, "skeletoner"
-        ), ("codex", None, None))
-
-        status, body = self.request_json(
-            "PATCH", "/api/runs/%s/acts" % rid,
-            {"fixer": {"agent": "codex", "model": "gpt-5.6-sol"}},
-        )
-        self.assertEqual(status, 200, body)
-        self.assertIsNone(body["acts"]["skeletoner"])
-        self.assertEqual(body["acts"]["drafter"], "")
-        self.assertEqual(body["acts"]["implementer"], {})
-        self.assertEqual(
-            body["acts"]["brainstorming_counterpart"]["model"],
-            "gpt-5.6-luna",
-        )
-        self.assertEqual(driver.resolve_current_act(
-            state_path, run_state["config"], self.home, "skeletoner"
-        ), ("codex", None, None))
-
-        # The explicit control sends this one clear; it now inherits the
-        # current profile selected above.
-        status, body = self.request_json(
-            "PATCH", "/api/runs/%s/acts" % rid, {"skeletoner": None}
-        )
-        self.assertEqual(status, 200, body)
-        self.assertNotIn("skeletoner", body["acts"])
-        self.assertEqual(body["acts"]["drafter"], "")
-        self.assertEqual(body["acts"]["implementer"], {})
-        self.assertEqual(
-            body["acts"]["brainstorming_counterpart"]["effort"], "max"
-        )
-        self.assertEqual(driver.resolve_current_act(
-            state_path, run_state["config"], self.home, "skeletoner"
-        ), ("claude", "claude-opus-5", "high"))
-
-        with open(acts_path, "rb") as fh:
-            before = fh.read()
-        status, _ = self.request_json(
-            "PATCH", "/api/runs/%s/acts" % rid,
-            {"reviewer": "claude"},
-        )
-        self.assertEqual(status, 400)
-        with open(acts_path, "rb") as fh:
-            self.assertEqual(fh.read(), before)
-
-    def test_patch_rejects_malformed_current_state_without_mutation(self):
-        ws = self.workspace("ws-malformed-current-acts")
-        status, body = self.create_run(ws)
-        self.assertEqual(status, 201, body)
-        rid = body["run"]["id"]
-        acts_path = os.path.join(ws, ".orchestrator", "acts.json")
-
-        malformed = (
-            b"{",
-            b"[]",
-            b'{"review_codex":{"agent":"claude"}}',
-        )
-        for raw in malformed:
-            with self.subTest(raw=raw):
-                with open(acts_path, "wb") as fh:
-                    fh.write(raw)
-                status, _ = self.request_json(
-                    "PATCH", "/api/runs/%s/acts" % rid,
-                    {"fixer": {"agent": "codex"}},
-                )
-                self.assertEqual(status, 400)
-                with open(acts_path, "rb") as fh:
-                    self.assertEqual(fh.read(), raw)
-
-    def test_panel_blank_rows_advertise_layer_semantics(self):
-        status, body = self.request("GET", "/")
-        self.assertEqual(status, 200)
-        panel = body.decode("utf-8")
-        launch_grid = panel[panel.index('id="a_skeletoner_agent"'):
-                            panel.index('id="dl_a_skeletoner"')]
-        runtime_grid = panel[panel.index('id="ra_skeletoner_agent"'):
-                             panel.index('id="dl_ra_skeletoner"')]
-        self.assertIn("no panel override", launch_grid)
-        self.assertNotIn("current profile", launch_grid)
-        self.assertIn("current profile", runtime_grid)
-        self.assertIn("Project defaults", panel)
-        self.assertIn("Advanced config may still provide", panel)
-        self.assertIn(
-            'const inheritsProfile = prefix === "ra_" && !rowHasOverride',
-            panel,
-        )
-        self.assertIn(
-            'const noPanelOverride = prefix === "a_" && !rowHasOverride',
-            panel,
-        )
-
-    def test_panel_preserves_overrides_missing_from_compact_dialog(self):
-        status, body = self.request("GET", "/")
-        self.assertEqual(status, 200)
-        panel = body.decode("utf-8")
-        self.assertIn("Send only changed rows", panel)
-        self.assertIn("Omission preserves hidden acts", panel)
-        self.assertNotIn('"consultation"', panel[panel.index(
-            "const ACT_NAMES"
-        ):panel.index("const FIXED_ACT_AGENTS")])
-        self.assertNotIn('"brainstorming_counterpart"', panel[panel.index(
-            "const ACT_NAMES"
-        ):panel.index("const FIXED_ACT_AGENTS")])
-
     def test_projectless_creation_acts_are_single_homed(self):
         ws = self.workspace("ws-creation-acts")
         status, body = self.create_run(ws, config={"acts": {
@@ -1209,85 +1018,6 @@ class ActsApiTest(ServiceApiTest):
                 self.assertFalse(os.path.exists(os.path.join(
                     ws, ".orchestrator", "state.json"
                 )))
-
-    def test_set_and_read_acts(self):
-        ws = self.workspace("ws-acts")
-        status, body = self.create_run(ws)
-        rid = body["run"]["id"]
-        status, body = self.request_json(
-            "POST", "/api/runs/%s/acts" % rid,
-            {"implementer": {"agent": "claude", "model": "sonnet",
-                             "effort": "high"},
-             "review_codex": {"model": "gpt-5.6-terra",
-                              "effort": "high"},
-             "review_claude": {"model": "claude-sonnet-5",
-                               "effort": "medium"},
-             "brainstorming_counterpart": {"model": "gpt-5.6-luna",
-                                            "effort": "max"},
-             "fixer": "codex",
-             "skeletoner": {"agent": "claude",
-                            "model": "claude-fable-5",
-                            "effort": "max"},
-             "drafter": None})
-        self.assertEqual(status, 200)
-        self.assertEqual(body["acts"]["implementer"]["model"], "sonnet")
-        self.assertNotIn("drafter", body["acts"])
-        self.assertEqual(body["acts"]["review_codex"]["effort"], "high")
-        self.assertEqual(body["acts"]["review_claude"]["model"],
-                         "claude-sonnet-5")
-        self.assertNotIn("agent", body["acts"]["review_claude"])
-        self.assertEqual(
-            body["acts"]["brainstorming_counterpart"]["model"],
-            "gpt-5.6-luna",
-        )
-        self.assertEqual(body["acts"]["skeletoner"]["effort"], "max")
-        status, body = self.request_json("GET", "/api/runs/%s" % rid)
-        self.assertEqual(body["acts"]["fixer"], "codex")
-        with open(os.path.join(ws, ".orchestrator", "acts.json"),
-                  encoding="utf-8") as fh:
-            self.assertEqual(json.load(fh)["implementer"]["effort"], "high")
-
-    def test_acts_validation(self):
-        ws = self.workspace("ws-acts-bad")
-        status, body = self.create_run(ws)
-        rid = body["run"]["id"]
-        status, _ = self.request_json(
-            "POST", "/api/runs/%s/acts" % rid, {"fixer": "claude"})
-        self.assertEqual(status, 200)
-        acts_path = os.path.join(ws, ".orchestrator", "acts.json")
-        with open(acts_path, "rb") as fh:
-            before = fh.read()
-
-        status, _ = self.request_json(
-            "POST", "/api/runs/%s/acts" % rid, {"reviewer": "claude"})
-        self.assertEqual(status, 400)
-        with open(acts_path, "rb") as fh:
-            self.assertEqual(fh.read(), before)
-        status, _ = self.request_json(
-            "POST", "/api/runs/%s/acts" % rid,
-            {"delta_review": {"agent": "claude", "model": "x"}})
-        self.assertEqual(status, 400)
-        status, _ = self.request_json(
-            "POST", "/api/runs/%s/acts" % rid, {"fixer": {"model": "x" * 200}})
-        self.assertEqual(status, 400)
-        status, _ = self.request_json(
-            "POST", "/api/runs/%s/acts" % rid,
-            {"review_codex": {"agent": "claude", "model": "x"}})
-        self.assertEqual(status, 400)
-        status, _ = self.request_json(
-            "POST", "/api/runs/%s/acts" % rid,
-            {"review_claude": "claude"})
-        self.assertEqual(status, 400)
-        status, _ = self.request_json(
-            "POST", "/api/runs/%s/acts" % rid,
-            {"review_claude": {"agent": "claude", "model": "x"}})
-        self.assertEqual(status, 400)
-        status, _ = self.request_json(
-            "POST", "/api/runs/%s/acts" % rid,
-            {"consultation": {"model": "claude-opus-5"}})
-        self.assertEqual(status, 400)
-        with open(acts_path, "rb") as fh:
-            self.assertEqual(fh.read(), before)
 
 
 class StoryApiTest(ServiceApiTest):
@@ -2971,193 +2701,15 @@ class StrategyConfiguratorPanelTest(ServiceApiTest):
         )
 
 
-class ModelProfilesApiTest(ServiceApiTest):
-    """Model-profile catalogue API (model-profiles slice 1): the seeded
-    `default` is listed from startup, POST is the sole create/edit surface
-    with loud validation and no mutation on refusal, stored corruption
-    fails the listing instead of shortening it, and the strategy
-    `/api/profiles` surface stays untouched."""
-
-    def member_request_json(self, method, path, payload=None):
-        """The same request as an authenticated NON-admin member (the
-        remote OAuth identity headers a real member request carries)."""
-        data = (json.dumps(payload).encode("utf-8")
-                if payload is not None else None)
-        req = urllib.request.Request(
-            self.base + path, data=data, method=method)
-        req.add_header("Content-Type", "application/json")
-        req.add_header("Host", "example.ngrok-free.dev")
-        req.add_header(access.REMOTE_HEADER, access.REMOTE_MARKER)
-        req.add_header(access.USER_HEADER, access.USER_EMAILS[0])
-        try:
-            with urllib.request.urlopen(req, timeout=10) as resp:
-                return resp.status, json.loads(resp.read().decode("utf-8"))
-        except urllib.error.HTTPError as exc:
-            with exc:
-                return exc.code, json.loads(exc.read().decode("utf-8"))
-
-    def catalogue_doc(self, name="docs-work"):
-        return {
-            "name": name,
-            "examples": ["internal note", "public API contract"],
-            "configurations": {
-                "low": {"implementer": {"agent": "claude",
-                                        "model": "claude-sonnet-5",
-                                        "effort": "medium"}},
-                "medium": {"fixer": "codex", "consultation": "opposite"},
-                "high": {"review_codex": {"effort": "max"}},
-            },
-        }
-
-    def test_list_create_edit_and_validation_contract(self):
-        # Startup seeded the editable `default`; the listing serves the
-        # exact source documents, sorted by name, in the pinned envelope.
-        status, body = self.request_json("GET", "/api/model-profiles")
-        self.assertEqual(status, 200)
-        self.assertIs(body["ok"], True)
-        names = [p["name"] for p in body["profiles"]]
-        self.assertEqual(names, sorted(names))
-        self.assertIn("default", names)
-        default = [p for p in body["profiles"] if p["name"] == "default"][0]
-        self.assertEqual(default, model_profiles.DEFAULT_SEED)
-        self.assertEqual(set(default), {"name", "examples", "configurations"})
-
-        # A case variant is a conflicting catalogue identity, not a second
-        # create.  Refuse it before a case-insensitive filesystem can replace
-        # the seeded default and make listing/startup fail.
-        status, body = self.request_json(
-            "POST", "/api/model-profiles", self.catalogue_doc("Default"))
-        self.assertEqual(status, 400)
-        self.assertFalse(body["ok"])
-        self.assertIn("case-insensitively unique", body["error"])
-        self.assertEqual(model_profiles.load(self.home, "default"),
-                         model_profiles.DEFAULT_SEED)
-        status, body = self.request_json("GET", "/api/model-profiles")
-        self.assertEqual(status, 200)
-        self.assertEqual([p["name"] for p in body["profiles"]], ["default"])
-
-        # Create through the sole create/edit operation.
-        doc = self.catalogue_doc()
-        status, body = self.request_json("POST", "/api/model-profiles", doc)
-        self.assertEqual(status, 200)
-        self.assertIs(body["ok"], True)
-        self.assertEqual(body["profile"], doc)
-        prefix_doc = self.catalogue_doc("default-heavy")
-        status, body = self.request_json(
-            "POST", "/api/model-profiles", prefix_doc)
-        self.assertEqual(status, 200)
-        self.assertIs(body["ok"], True)
-        status, body = self.request_json("GET", "/api/model-profiles")
-        self.assertEqual([p["name"] for p in body["profiles"]],
-                         ["default", "default-heavy", "docs-work"])
-
-        # A same-name save wholly replaces the definition.
-        edited = {
-            "name": "docs-work",
-            "examples": ["storage migration"],
-            "configurations": {
-                "low": {},
-                "medium": {"drafter": {"agent": "codex", "effort": "low"}},
-                "high": {"review_claude": {"effort": "max"}},
-            },
-        }
-        status, body = self.request_json(
-            "POST", "/api/model-profiles", edited)
-        self.assertEqual(status, 200)
-        _, body = self.request_json("GET", "/api/model-profiles")
-        stored = [p for p in body["profiles"] if p["name"] == "docs-work"][0]
-        self.assertEqual(stored, edited)
-        self.assertNotIn("fixer", stored["configurations"]["medium"])
-
-        # Invalid input: pinned 400 envelope, and the prior definition
-        # survives byte-identical.
-        extra_key = dict(self.catalogue_doc(), version=1)
-        missing_rigor = self.catalogue_doc()
-        del missing_rigor["configurations"]["high"]
-        unknown_act = self.catalogue_doc()
-        unknown_act["configurations"]["medium"] = {"delta_review": "codex"}
-        dead_agent = self.catalogue_doc()
-        dead_agent["configurations"]["medium"] = {
-            "review_claude": {"agent": "claude"}}
-        dead_consultation = self.catalogue_doc()
-        dead_consultation["configurations"]["medium"] = {
-            "consultation": {"model": "gpt-5.6-sol"}}
-        for bad in (extra_key, missing_rigor, unknown_act, dead_agent,
-                    dead_consultation, ["not", "a", "document"]):
-            status, body = self.request_json(
-                "POST", "/api/model-profiles", bad)
-            self.assertEqual(status, 400, body)
-            self.assertFalse(body["ok"])
-            self.assertTrue(body["error"])
-        self.assertEqual(
-            model_profiles.load(self.home, "docs-work"), edited)
-
-        # POST is administrative under the existing access posture; the
-        # catalogue read stays member-visible like /api/profiles.
-        status, body = self.member_request_json("GET", "/api/model-profiles")
-        self.assertEqual(status, 200)
-        status, body = self.member_request_json(
-            "POST", "/api/model-profiles", self.catalogue_doc("member-try"))
-        self.assertEqual(status, 403)
-        self.assertFalse(body["ok"])
-        with self.assertRaises(model_profiles.ModelProfileError):
-            model_profiles.load(self.home, "member-try")
-
-        # The seeded default is an ordinary editable profile, and a
-        # service restart over the same home never re-seeds over the edit.
-        edited_default = json.loads(
-            json.dumps(model_profiles.DEFAULT_SEED))
-        edited_default["examples"] = ["operator edited clue"]
-        status, _ = self.request_json(
-            "POST", "/api/model-profiles", edited_default)
-        self.assertEqual(status, 200)
-        second = service.make_server(self.home, 0)
-        thread = threading.Thread(
-            target=second.serve_forever, daemon=True)
-        thread.start()
-        base = self.base
-        try:
-            self.base = "http://127.0.0.1:%d" % second.server_address[1]
-            status, body = self.request_json("GET", "/api/model-profiles")
-        finally:
-            self.base = base
-            second.shutdown()
-            second.server_close()
-            thread.join(timeout=5)
-        self.assertEqual(status, 200)
-        restarted = [p for p in body["profiles"]
-                     if p["name"] == "default"][0]
-        self.assertEqual(restarted["examples"], ["operator edited clue"])
-
-        # A damaged stored definition fails the WHOLE listing loudly with
-        # the common 500 envelope — never a silently shortened catalogue.
-        corrupt = os.path.join(
-            self.home, model_profiles.MODEL_PROFILES_DIRNAME,
-            "zz-corrupt.json")
-        with open(corrupt, "w", encoding="utf-8") as fh:
-            fh.write("{broken")
-        status, body = self.request_json("GET", "/api/model-profiles")
-        self.assertEqual(status, 500)
-        self.assertFalse(body["ok"])
-        self.assertTrue(body["error"])
-        os.unlink(corrupt)
-        status, body = self.request_json("GET", "/api/model-profiles")
-        self.assertEqual(status, 200)
-
-        # The strategy catalogue remains separate: no model-profile fields
-        # leak in, and editable strategy definitions expose no seal status.
-        status, body = self.request_json("GET", "/api/profiles")
-        self.assertEqual(status, 200)
-        strategy = {p["name"]: p for p in body["profiles"]}
-        self.assertEqual(sorted(strategy), ["legacy", "light", "strict"])
-        for entry in strategy.values():
-            self.assertEqual(
-                set(entry),
-                {"name", "version", "description", "hash", "profile"})
-
-
 class ModelProfileSurfacesApiTest(ServiceApiTest):
-    """Slice 3's current-selection, launch, and panel-facing contracts."""
+    """All that survives the model-profile surfaces: the launch refusal.
+
+    A run's staffing is the router's session, so the per-run chooser and
+    its `GET/POST /api/runs/<id>/model-profile`, then the catalogue and its
+    `GET/POST /api/model-profiles`, retired with the panel controls they
+    served (staffing-router slice 8). The stored documents and
+    `model_profile.json` are untouched and still read at resume, which
+    `test_model_profiles` and `test_model_profile_runtime` cover."""
 
     def catalogue_doc(self, name, model="profile-model"):
         return {
@@ -3178,132 +2730,31 @@ class ModelProfileSurfacesApiTest(ServiceApiTest):
             os.path.dirname(entry["state_path"]), "model_profile.json"
         )
 
-    def remote_request_json(self, email, method, path, payload=None):
-        data = (json.dumps(payload).encode("utf-8")
-                if payload is not None else None)
-        req = urllib.request.Request(
-            self.base + path, data=data, method=method
-        )
-        req.add_header("Content-Type", "application/json")
-        req.add_header("Host", "example.ngrok-free.dev")
-        req.add_header(access.REMOTE_HEADER, access.REMOTE_MARKER)
-        req.add_header(access.USER_HEADER, email)
-        try:
-            with urllib.request.urlopen(req, timeout=10) as resp:
-                return resp.status, json.loads(resp.read().decode("utf-8"))
-        except urllib.error.HTTPError as exc:
-            with exc:
-                return exc.code, json.loads(exc.read().decode("utf-8"))
-
-    def test_current_selection_default_read_and_whole_replace(self):
-        model_profiles.save(self.home, self.catalogue_doc("work"))
-        new_ws = self.workspace("ws-selection-new")
-        status, created = self.create_run(new_ws)
-        self.assertEqual(status, 201, created)
-
-        old_ws = self.workspace("ws-selection-old")
-        driver.init_run(
-            "old run", old_ws, state_path=driver.default_state_path(old_ws)
-        )
-        status, attached = self.request_json("POST", "/api/runs", {
-            "workspace": old_ws, "attach": True, "autostart": False,
-        })
-        self.assertEqual(status, 201, attached)
-
-        for run_id in (created["run"]["id"], attached["run"]["id"]):
-            path = self.selection_path(run_id)
-            self.assertFalse(os.path.lexists(path))
-            status, body = self.request_json(
-                "GET", "/api/runs/%s/model-profile" % run_id
-            )
-            self.assertEqual(status, 200, body)
-            self.assertEqual(body, {"ok": True, "selection": {
-                "name": "default", "rigor": "medium"
-            }})
-            self.assertFalse(os.path.lexists(path))
-
-        run_id = created["run"]["id"]
-        status, body = self.request_json(
-            "POST", "/api/runs/%s/model-profile" % run_id,
-            {"name": "work", "rigor": "high"},
-        )
-        self.assertEqual(status, 200, body)
-        self.assertEqual(body["selection"], {"name": "work", "rigor": "high"})
-        with open(self.selection_path(run_id), encoding="utf-8") as fh:
-            self.assertEqual(json.load(fh), body["selection"])
-
-    def test_current_selection_refusal_preserves_prior_bytes(self):
-        model_profiles.save(self.home, self.catalogue_doc("work"))
-        _, created = self.create_run(self.workspace("ws-selection-refusal"))
-        run_id = created["run"]["id"]
-        route = "/api/runs/%s/model-profile" % run_id
-        self.request_json(
-            "POST", route, {"name": "work", "rigor": "medium"}
-        )
-        path = self.selection_path(run_id)
-        with open(path, "rb") as fh:
-            before = fh.read()
-
-        for invalid in (
-            {"name": "work"},
-            {"name": "work", "rigor": "extreme"},
-            {"name": "missing", "rigor": "medium"},
-            {"name": "work", "rigor": "medium", "origin": "panel"},
-        ):
-            status, body = self.request_json("POST", route, invalid)
-            self.assertEqual(status, 400, body)
-            with open(path, "rb") as fh:
-                self.assertEqual(fh.read(), before)
-
-        with open(path, "wb") as fh:
-            fh.write(b"{broken")
-        status, body = self.request_json("GET", route)
-        self.assertEqual(status, 500, body)
-        self.assertTrue(body["error"])
-
-        missing = os.path.join(self.tmp.name, "missing-selection")
-        os.unlink(path)
-        os.symlink(missing, path)
-        status, body = self.request_json("GET", route)
-        self.assertEqual(status, 500, body)
-
-        os.unlink(path)
-        with open(path, "wb") as fh:
-            fh.write(before)
-        stored_profile = os.path.join(
-            self.home, model_profiles.MODEL_PROFILES_DIRNAME, "work.json"
-        )
-        with open(stored_profile, "w", encoding="utf-8") as fh:
-            fh.write("{broken")
-        status, body = self.request_json("GET", route)
-        self.assertEqual(status, 500, body)
-        status, body = self.request_json(
-            "POST", route, {"name": "work", "rigor": "medium"}
-        )
-        self.assertEqual(status, 400, body)
-        with open(path, "rb") as fh:
-            self.assertEqual(fh.read(), before)
-
-    def test_launch_selection_precedes_autostart_and_omission_stays_default(self):
+    def test_launch_refuses_model_profile_and_writes_no_selection(self):
+        """`model_profile` decides no call after the driver cutover, so the
+        launch refuses it before creating anything and writes no sidecar."""
         model_profiles.save(self.home, self.catalogue_doc("launch"))
-        observed = []
 
-        def fake_start(home, run_id):
-            entry = registry.get(registry.load(home), run_id)
-            observed.append(driver.read_current_model_profile_selection(
-                entry["state_path"]
-            ))
-            return entry
-
-        ws = self.workspace("ws-selection-launch")
-        with mock.patch("orchestrator.service.start_run", side_effect=fake_start):
-            status, body = self.request_json("POST", "/api/runs", {
-                "workspace": ws, "goal": "launch", "autostart": True,
-                "config": {"docs_dir": "docs"},
-                "model_profile": {"name": "launch", "rigor": "low"},
-            })
-        self.assertEqual(status, 201, body)
-        self.assertEqual(observed, [{"name": "launch", "rigor": "low"}])
+        for label, selection in (
+            ("named", {"name": "launch", "rigor": "low"}),
+            ("unknown", {"name": "missing", "rigor": "medium"}),
+            ("null", None),
+        ):
+            with self.subTest(case=label):
+                ws = self.workspace("ws-selection-launch-%s" % label)
+                with mock.patch(
+                    "orchestrator.service.start_run"
+                ) as mocked_start:
+                    status, body = self.request_json("POST", "/api/runs", {
+                        "workspace": ws, "goal": "launch", "autostart": True,
+                        "config": {"docs_dir": "docs"},
+                        "model_profile": selection,
+                    })
+                self.assertEqual(status, 400, body)
+                self.assertIn("staffing", body["error"])
+                self.assertFalse(
+                    os.path.exists(driver.default_state_path(ws)))
+                mocked_start.assert_not_called()
 
         plain_ws = self.workspace("ws-selection-launch-default")
         status, plain = self.create_run(plain_ws)
@@ -3312,273 +2763,17 @@ class ModelProfileSurfacesApiTest(ServiceApiTest):
             self.selection_path(plain["run"]["id"])
         ))
 
-        bad_ws = self.workspace("ws-selection-launch-bad")
-        status, _body = self.request_json("POST", "/api/runs", {
-            "workspace": bad_ws, "goal": "bad", "autostart": False,
-            "config": {"docs_dir": "docs"},
-            "model_profile": {"name": "missing", "rigor": "medium"},
-        })
-        self.assertEqual(status, 400)
-        self.assertFalse(os.path.exists(driver.default_state_path(bad_ws)))
-
-        null_ws = self.workspace("ws-selection-launch-null")
-        with mock.patch("orchestrator.service.start_run") as mocked_start:
-            status, body = self.request_json("POST", "/api/runs", {
-                "workspace": null_ws, "goal": "null", "autostart": True,
-                "config": {"docs_dir": "docs"},
-                "model_profile": None,
-            })
-        self.assertEqual(status, 400, body)
-        self.assertTrue(body["error"])
-        self.assertFalse(os.path.exists(driver.default_state_path(null_ws)))
-        mocked_start.assert_not_called()
-
         attach_ws = self.workspace("ws-selection-launch-attach")
         driver.init_run(
             "attach", attach_ws, state_path=driver.default_state_path(attach_ws)
         )
-        status, body = self.request_json("POST", "/api/runs", {
-            "workspace": attach_ws, "attach": True, "autostart": False,
-            "model_profile": {"name": "launch", "rigor": "medium"},
-        })
-        self.assertEqual(status, 400, body)
-        self.assertIn("attach", body["error"])
-
-        status, body = self.request_json("POST", "/api/runs", {
-            "workspace": attach_ws, "attach": True, "autostart": False,
-            "model_profile": None,
-        })
-        self.assertEqual(status, 400, body)
-        self.assertIn("attach", body["error"])
-
-    def test_current_selection_access_and_strategy_route_separation(self):
-        model_profiles.save(self.home, self.catalogue_doc("member-work"))
-        _, created = self.create_run(self.workspace("ws-selection-access"))
-        run_id = created["run"]["id"]
-        service.create_project(self.home, {"slug": "shared"})
-        service.update_project_users(
-            self.home, "shared", {"users": [access.USER_EMAILS[0]]}
-        )
-        registry.update(
-            self.home, run_id, project="shared", work_area="main"
-        )
-        route = "/api/runs/%s/model-profile" % run_id
-
-        status, body = self.remote_request_json(
-            access.USER_EMAILS[0], "GET", route
-        )
-        self.assertEqual(status, 200, body)
-        status, body = self.remote_request_json(
-            access.USER_EMAILS[0], "POST", route,
-            {"name": "member-work", "rigor": "medium"},
-        )
-        self.assertEqual(status, 200, body)
-        status, _body = self.remote_request_json(
-            access.USER_EMAILS[1], "GET", route
-        )
-        self.assertEqual(status, 403)
-        status, _body = self.request_json(
-            "GET", "/api/runs/no-such-run/model-profile"
-        )
-        self.assertEqual(status, 404)
-
-        before = body["selection"]
-        status, strategy = self.request_json("GET", "/api/profiles")
-        self.assertEqual(status, 200, strategy)
-        status, _swap = self.request_json(
-            "POST", "/api/runs/%s/profile" % run_id,
-            {"profile": "light"},
-        )
-        self.assertEqual(status, 200)
-        _, after = self.request_json("GET", route)
-        self.assertEqual(after["selection"], before)
-
-    def test_concurrent_selection_replacements_are_atomic_and_last_completion_wins(self):
-        for name in ("first", "second"):
-            model_profiles.save(self.home, self.catalogue_doc(name, name))
-        _, created = self.create_run(self.workspace("ws-selection-concurrent"))
-        run_id = created["run"]["id"]
-        service.set_model_profile_selection(
-            self.home, run_id, {"name": "default", "rigor": "medium"}
-        )
-        path = self.selection_path(run_id)
-        first = {"name": "first", "rigor": "low"}
-        second = {"name": "second", "rigor": "high"}
-        real_replace = os.replace
-        ready = threading.Barrier(2)
-        first_done = threading.Event()
-        stop_reader = threading.Event()
-        seen, errors = [], []
-
-        def ordered_replace(source, target):
-            ready.wait(timeout=5)
-            if threading.current_thread().name == "selection-first":
-                real_replace(source, target)
-                first_done.set()
-            else:
-                self.assertTrue(first_done.wait(timeout=5))
-                real_replace(source, target)
-
-        def write(selection):
-            try:
-                service.set_model_profile_selection(
-                    self.home, run_id, selection
-                )
-            except Exception as exc:
-                errors.append(exc)
-
-        def read():
-            while not stop_reader.is_set():
-                try:
-                    with open(path, encoding="utf-8") as fh:
-                        seen.append(json.load(fh))
-                except Exception as exc:
-                    errors.append(exc)
-                    return
-
-        reader = threading.Thread(target=read)
-        reader.start()
-        with mock.patch(
-                "orchestrator.service.os.replace", side_effect=ordered_replace):
-            writers = (
-                threading.Thread(
-                    target=write, args=(first,), name="selection-first"
-                ),
-                threading.Thread(
-                    target=write, args=(second,), name="selection-second"
-                ),
-            )
-            for thread in writers:
-                thread.start()
-            for thread in writers:
-                thread.join(timeout=10)
-        stop_reader.set()
-        reader.join(timeout=5)
-
-        self.assertFalse(any(thread.is_alive() for thread in writers))
-        self.assertEqual(errors, [])
-        self.assertTrue(seen)
-        self.assertTrue(all(value in (
-            {"name": "default", "rigor": "medium"}, first, second
-        ) for value in seen))
-        self.assertEqual(
-            service.read_model_profile_selection(self.home, run_id), second
-        )
-
-    def test_panel_catalogue_selection_and_override_contract(self):
-        status, body = self.request("GET", "/")
-        self.assertEqual(status, 200)
-        panel = body.decode("utf-8")
-        self.assertIn('id="modelprofilesdlg"', panel)
-        self.assertIn('id="f_model_profile"', panel)
-        self.assertIn('id="modelprofileselectiondlg"', panel)
-        self.assertIn('api("/api/model-profiles")', panel)
-        self.assertIn('profile.configurations[rigor]', panel)
-        self.assertIn('payload.model_profile = {', panel)
-        self.assertIn('api(`/api/runs/${runId}/model-profile`)', panel)
-        self.assertIn('postJSON(`/api/runs/${selected}/model-profile`', panel)
-        self.assertIn("default@medium — no saved selection", panel)
-        self.assertIn("current profile", panel)
-
-        model_surface = panel[
-            panel.index("/* ---- model-profile catalogue"):
-            panel.index("/* ---- strategy catalogue, configurator")
-        ].lower()
-        self.assertNotIn("/acts", model_surface)
-        for forbidden in ("origin", "provenance", "history"):
-            self.assertNotIn(forbidden, model_surface)
-
-    def test_panel_catalogue_is_member_visible_and_edits_stay_admin_only(self):
-        status, body = self.remote_request_json(
-            access.USER_EMAILS[0], "GET", "/api/model-profiles"
-        )
-        self.assertEqual(status, 200, body)
-
-        status, raw_panel = self.request("GET", "/")
-        self.assertEqual(status, 200)
-        panel = raw_panel.decode("utf-8")
-        access_setup = panel[
-            panel.index("async function loadAccess()"):
-            panel.index("function bsPickerScope()")
-        ]
-        self.assertIn(
-            'modelProfilesBtn").style.display =\n    appAccess.user ? "" : "none"',
-            access_setup,
-        )
-        self.assertIn(
-            'sidebarActions").style.display =\n    appAccess.user ? "" : "none"',
-            access_setup,
-        )
-
-        open_catalogue = panel[
-            panel.index("async function openModelProfiles()"):
-            panel.index("function renderModelProfiles()")
-        ]
-        self.assertNotIn("appAccess.admin", open_catalogue)
-
-        render_catalogue = panel[
-            panel.index("function renderModelProfiles()"):
-            panel.index("function newModelProfile()")
-        ]
-        self.assertIn("profile.examples", render_catalogue)
-        self.assertIn("profile.configurations[rigor]", render_catalogue)
-        self.assertIn("appAccess.admin ?", render_catalogue)
-        self.assertIn("Edit…", render_catalogue)
-        self.assertIn("if (!appAccess.admin) return;", panel[
-            panel.index("function newModelProfile()"):
-            panel.index("async function openRunModelProfile()")
-        ])
-
-    def test_panel_profile_edit_keeps_opened_name(self):
-        status, body = self.request("GET", "/")
-        self.assertEqual(status, 200)
-        panel = body.decode("utf-8")
-        editor = panel[
-            panel.index("function openModelProfileEditor(profile, create)"):
-            panel.index("async function openRunModelProfile()")
-        ]
-        # An opened profile's name is not editable and is never read back
-        # from the form: Save reuses the opened one, so Edit cannot rename.
-        self.assertIn("nameEl.disabled = !create", editor)
-        save = panel[
-            panel.index("async function saveModelProfileEditor()"):
-            panel.index("async function openRunModelProfile()")
-        ]
-        self.assertIn("mpEdit.create", save)
-        self.assertIn(": mpEdit.name", save)
-        self.assertIn("That name already exists", save)
-        self.assertIn('postJSON("/api/model-profiles", document_)', save)
-
-    def test_panel_model_profile_editor_offers_controls_not_raw_json(self):
-        # The operator edits STAFFING (who answers, which model, how hard),
-        # never the document that carries it: the shared JSON editor is not
-        # on this path at all.
-        status, body = self.request("GET", "/")
-        self.assertEqual(status, 200)
-        panel = body.decode("utf-8")
-        self.assertIn('id="mpeditor"', panel)
-        section = panel[
-            panel.index("/* ---- the model-profile editor."):
-            panel.index("async function openRunModelProfile()")
-        ]
-        self.assertNotIn("openSgEditor", section)
-        self.assertNotIn("sg_json", section)
-        rows = panel[
-            panel.index("const MP_ROWS = ["):
-            panel.index("const MP_FAMILY_OPTS")
-        ]
-        for act in model_profiles.PROFILE_ACT_KEYS:
-            self.assertIn('"%s"' % act, rows)
-        # Every honored field is a control, and only the honored ones: the
-        # fixed/derived-family seats offer no family picker.
-        grid = panel[
-            panel.index("function mpRenderGrid()"):
-            panel.index("function mpOnFamily(act)")
-        ]
-        for field in ("_agent", "_model", "_effort"):
-            self.assertIn('mpe_${row.act}%s' % field, grid)
-        self.assertIn('kind === "full"', grid)
-        self.assertIn('kind === "family"', grid)
+        for selection in ({"name": "launch", "rigor": "medium"}, None):
+            status, body = self.request_json("POST", "/api/runs", {
+                "workspace": attach_ws, "attach": True, "autostart": False,
+                "model_profile": selection,
+            })
+            self.assertEqual(status, 400, body)
+            self.assertIn("staffing", body["error"])
 
 
 class CommitWebBaseTest(unittest.TestCase):

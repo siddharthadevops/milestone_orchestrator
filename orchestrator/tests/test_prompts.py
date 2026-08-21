@@ -23,7 +23,7 @@ import re
 import unittest
 from unittest import mock
 
-from orchestrator import contracts, prompts
+from orchestrator import contracts, prompts, tasks
 
 FAMILY = "codex"
 WORKSPACE = "/tmp/ws"
@@ -1430,6 +1430,399 @@ class TestSequentialImplementationScope(unittest.TestCase):
                 self.assertNotIn("SEQUENTIAL IMPLEMENTATION PART", prompt)
 
 
+class TestPlannerMaterialChannel(unittest.TestCase):
+    """Slice 9: the material a planner may propose, and never staffing."""
+
+    MATERIALS = {
+        "research": {"examples": ["reading unfamiliar code",
+                                  "tracing an unclear failure"]},
+        "plumbing": {"examples": ["wiring one existing seam"]},
+    }
+
+    def _plan_authoring_prompts(self, materials):
+        """Every prompt permitted to return a complete or updated slice plan."""
+        return {
+            "draft_skeleton": prompts.build_draft_skeleton(
+                FAMILY, WORKSPACE, GOAL, materials=materials
+            ),
+            "draft_slice_note": prompts.build_draft_slice_note(
+                FAMILY, WORKSPACE, GOAL, SLICE, "docs/skeleton.md",
+                editable_design_paths=["docs/skeleton.md"],
+                materials=materials,
+            ),
+            "implement": prompts.build_implement(
+                FAMILY, WORKSPACE, GOAL, SLICE, "docs/slice-01.md",
+                ["make test"], editable_design_paths=["docs/skeleton.md"],
+                materials=materials,
+            ),
+            "fix_findings": prompts.build_fix_findings(
+                FAMILY, WORKSPACE, GOAL, UNIT, FINDINGS, [], "claude",
+                ["claude", "-p"], unit_kind="skeleton", materials=materials,
+            ),
+            "rethink_continuation": prompts.build_rethink_continuation(
+                contracts.KIND_IMPLEMENT,
+                FAMILY,
+                WORKSPACE,
+                {
+                    "session_id": "s1",
+                    "accepted_target_revision": 3,
+                    "result": {"status": "success"},
+                    "retained_target": "# amendment\n",
+                },
+                producer_planning=True,
+                materials=materials,
+            ),
+        }
+
+    def test_planner_instruction_pairs_material_column_with_structured_plan(self):
+        catalogue = json.dumps(
+            {
+                "plumbing": ["wiring one existing seam"],
+                "research": ["reading unfamiliar code",
+                             "tracing an unclear failure"],
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+            indent=2,
+        )
+        executors = json.dumps(
+            tasks.task_executor_catalogue(),
+            ensure_ascii=False,
+            sort_keys=True,
+            indent=2,
+        )
+        for name, prompt in self._plan_authoring_prompts(
+            self.MATERIALS
+        ).items():
+            with self.subTest(surface=name):
+                # The vocabulary itself, beside the executor catalogue the
+                # same block already carries.
+                self.assertIn("SLICE MATERIAL PLANNING", prompt)
+                self.assertIn(catalogue, prompt)
+                self.assertIn(executors, prompt)
+                self.assertLess(
+                    prompt.index("TASKEXECUTOR CATALOGUE"),
+                    prompt.index("MATERIAL CATALOGUE"),
+                )
+                block = normalized(
+                    prompt.split("SLICE MATERIAL PLANNING", 1)[1].split(
+                        "MATERIAL CATALOGUE", 1
+                    )[0]
+                )
+                # Structured entry AND a visible column, and omission means
+                # the session default rather than "no material anywhere".
+                self.assertIn("one `material`", block)
+                self.assertIn(
+                    "Show that name in a visible material column of the "
+                    "skeleton's slice table",
+                    block,
+                )
+                self.assertIn(
+                    "structured result and document must agree", block
+                )
+                self.assertIn(
+                    "Omitting it leaves that column empty and the session's "
+                    "default material in force",
+                    block,
+                )
+                # And it never asks the planner for staffing.
+                self.assertIn(
+                    "names WORK, never staffing: propose no agent, model, "
+                    "effort or seat",
+                    block,
+                )
+                for staffing_word in ("family", "rigor", "round", "index"):
+                    self.assertNotIn(staffing_word, block)
+
+    def test_unreadable_vocabulary_leaves_an_empty_catalogue(self):
+        for materials in (None, {}):
+            for name, prompt in self._plan_authoring_prompts(
+                materials
+            ).items():
+                with self.subTest(surface=name, materials=materials):
+                    self.assertIn(
+                        "MATERIAL CATALOGUE (name to usage phrases):\n{}\n",
+                        prompt,
+                    )
+
+    def test_a_vocabulary_only_json_can_escape_is_still_carried_exactly(self):
+        # The operator's own words are quoted as themselves — an accented or
+        # non-Latin vocabulary is what the planner has to read, not a wall
+        # of escapes.
+        for name, prompt in self._plan_authoring_prompts(
+            {"redacci\u00f3n": {"examples": ["redactar una cl\u00e1usula"]}}
+        ).items():
+            with self.subTest(surface=name):
+                self.assertIn("redacci\u00f3n", prompt)
+                self.assertIn("redactar una cl\u00e1usula", prompt)
+                self.assertNotIn("\\u00f3", prompt)
+        # JSON also admits an escaped unpaired surrogate, which the document
+        # store keeps and returns as an ordinary `str`. No UTF-8 encoder
+        # emits one, so THAT catalogue is quoted the way its own stored
+        # bytes are — every validated name still present, and the exact
+        # mapping back under `json.loads`.
+        exotic = {
+            "research": {"examples": ["reading \ud800 code"]},
+            "plumbing": {"examples": ["wiring one existing seam"]},
+        }
+        for name, prompt in self._plan_authoring_prompts(exotic).items():
+            with self.subTest(surface=name):
+                prompt.encode("utf-8")
+                block = prompt.split(
+                    "MATERIAL CATALOGUE (name to usage phrases):\n", 1
+                )[1]
+                self.assertEqual(
+                    json.JSONDecoder().raw_decode(block)[0],
+                    {"research": ["reading \ud800 code"],
+                     "plumbing": ["wiring one existing seam"]},
+                )
+                self.assertIn("reading \\ud800 code", prompt)
+                self.assertIn("wiring one existing seam", prompt)
+
+    def test_prompts_that_cannot_author_a_plan_gain_no_material(self):
+        silent = {
+            "draft_slice_note": prompts.build_draft_slice_note(
+                FAMILY, WORKSPACE, GOAL, SLICE, "docs/skeleton.md",
+                materials=self.MATERIALS,
+            ),
+            "implement": prompts.build_implement(
+                FAMILY, WORKSPACE, GOAL, SLICE, "docs/slice-01.md",
+                ["make test"], materials=self.MATERIALS,
+            ),
+            "fix_findings": prompts.build_fix_findings(
+                FAMILY, WORKSPACE, GOAL, UNIT, FINDINGS, [], "claude",
+                ["claude", "-p"], unit_kind="slice_impl",
+                materials=self.MATERIALS,
+            ),
+            "review_round": prompts.build_review_round(
+                FAMILY, WORKSPACE, GOAL, UNIT, "docs/slice-01.md", []
+            ),
+            "delta_review": prompts.build_delta_review(
+                FAMILY, WORKSPACE, GOAL, UNIT, []
+            ),
+        }
+        for name, prompt in silent.items():
+            with self.subTest(surface=name):
+                self.assertNotIn("SLICE MATERIAL PLANNING", prompt)
+                self.assertNotIn("research", prompt)
+
+    def test_a_continuation_never_edits_its_frozen_request(self):
+        # The quotation is the request this task was DISPATCHED with, so
+        # the vocabulary it carried is the honest record of that call and
+        # stays byte for byte — exactly as its TaskExecutor catalogue
+        # already does. This boundary's own live pair is stated below it.
+        ordered = prompts.build_draft_slice_note(
+            FAMILY, WORKSPACE, GOAL, SLICE, "docs/skeleton.md",
+            editable_design_paths=["docs/skeleton.md"],
+            materials={"retired": {"examples": ["work nobody asks for now"]}},
+        )
+        self.assertIn("retired", ordered)
+        for producer_planning in (True, False):
+            with self.subTest(producer_planning=producer_planning):
+                prompt = prompts.build_rethink_continuation(
+                    contracts.KIND_DRAFT_SLICE_NOTE,
+                    FAMILY,
+                    WORKSPACE,
+                    {
+                        "session_id": "s1",
+                        "accepted_target_revision": 3,
+                        "result": {"status": "success"},
+                        "retained_target": "# amendment\n",
+                    },
+                    original_request=ordered,
+                    producer_planning=producer_planning,
+                    materials=self.MATERIALS,
+                )
+                self.assertTrue(prompt.startswith(ordered.rstrip()))
+                self.assertIn("work nobody asks for now", prompt)
+                self.assertIn("TASKEXECUTOR CATALOGUE", prompt)
+                self.assertIn("draft the slice note for slice", prompt)
+                # The live pair appears exactly where the TaskExecutor
+                # catalogue appears, and only there: one added catalogue
+                # each when this continuation may author a plan, none when
+                # it may not.
+                added = 1 if producer_planning else 0
+                self.assertEqual(
+                    prompt.count("MATERIAL CATALOGUE (name to usage phrases)"),
+                    1 + added,
+                )
+                self.assertEqual(
+                    prompt.count("TASKEXECUTOR CATALOGUE"), 1 + added
+                )
+                if producer_planning:
+                    self.assertIn("wiring one existing seam", prompt)
+                    self.assertTrue(
+                        prompt.rindex("MATERIAL CATALOGUE (name to usage "
+                                      "phrases)")
+                        > prompt.rindex("draft the slice note for slice")
+                    )
+                    # Keeping the quotation whole is only half of it: the
+                    # retired vocabulary and the live one otherwise read as
+                    # two equally current catalogues, each telling the
+                    # author to use "the vocabulary below". The live one is
+                    # named as the authority, before it is stated, and the
+                    # frozen task and contract keep their own standing.
+                    self.assertEqual(
+                        prompt.count("PLANNING VOCABULARY PRECEDENCE"), 1
+                    )
+                    precedence = normalized(
+                        prompt.split("PLANNING VOCABULARY PRECEDENCE", 1)[1]
+                        .split("SLICE PRODUCER PLANNING", 1)[0]
+                    )
+                    self.assertIn(
+                        "may name choices that no longer exist", precedence
+                    )
+                    self.assertIn(
+                        "it is the current catalogue and it alone governs "
+                        "the producer and material you propose now",
+                        precedence,
+                    )
+                    self.assertIn(
+                        "its task and OUTPUT CONTRACT still stand exactly "
+                        "as quoted",
+                        precedence,
+                    )
+                    self.assertLess(
+                        prompt.index("PLANNING VOCABULARY PRECEDENCE"),
+                        prompt.rindex("MATERIAL CATALOGUE (name to usage "
+                                      "phrases)"),
+                    )
+                    self.assertGreater(
+                        prompt.index("PLANNING VOCABULARY PRECEDENCE"),
+                        prompt.index("work nobody asks for now"),
+                    )
+                else:
+                    self.assertNotIn("wiring one existing seam", prompt)
+                    self.assertNotIn("PLANNING VOCABULARY PRECEDENCE", prompt)
+        # No frozen request, no second catalogue to rank against it: a
+        # pre-task continuation states one pair and says nothing about
+        # precedence.
+        legacy = prompts.build_rethink_continuation(
+            contracts.KIND_DRAFT_SLICE_NOTE,
+            FAMILY,
+            WORKSPACE,
+            {
+                "session_id": "s1",
+                "accepted_target_revision": 3,
+                "result": {"status": "success"},
+                "retained_target": "# amendment\n",
+            },
+            producer_planning=True,
+            materials=self.MATERIALS,
+        )
+        self.assertEqual(
+            legacy.count("MATERIAL CATALOGUE (name to usage phrases)"), 1
+        )
+        self.assertNotIn("PLANNING VOCABULARY PRECEDENCE", legacy)
+
+    def test_operator_prose_quoting_the_block_is_never_rewritten(self):
+        # An operator may quote this very block — to ask for its rewording,
+        # or to bind a planner to words of their own. Generated bytes and
+        # quoted bytes are the same bytes, so no reader can tell them
+        # apart; the continuation therefore edits neither.
+        goal = (
+            "Do the thing.\n"
+            "An operator heading about SLICE MATERIAL PLANNING\n"
+            "and the paragraph that explains it.\n"
+            "\nA later goal paragraph.\n"
+            "\nSLICE MATERIAL PLANNING\n"
+            "A slice may also carry one `material`: the kind of work it "
+            "contains, from\n"
+            "a quotation the operator wrote and must keep reading.\n"
+            + "\n"
+            + prompts._producer_planning_block(
+                {"operator-illustration": {"examples": ["as the goal says"]}}
+            )
+            + "BINDING: reword the block above; never drop this line.\n"
+        )
+        ordered = prompts.build_draft_skeleton(
+            FAMILY, WORKSPACE, goal,
+            materials={"retired": {"examples": ["work nobody asks for now"]}},
+        )
+        for producer_planning in (True, False):
+            with self.subTest(producer_planning=producer_planning):
+                prompt = prompts.build_rethink_continuation(
+                    contracts.KIND_DRAFT_SKELETON,
+                    FAMILY,
+                    WORKSPACE,
+                    {
+                        "session_id": "s1",
+                        "accepted_target_revision": 3,
+                        "result": {"status": "success"},
+                        "retained_target": "# amendment\n",
+                    },
+                    original_request=ordered,
+                    producer_planning=producer_planning,
+                    materials=self.MATERIALS,
+                )
+                self.assertTrue(prompt.startswith(ordered.rstrip()))
+                self.assertIn("An operator heading about SLICE MATERIAL "
+                              "PLANNING", prompt)
+                self.assertIn(
+                    "a quotation the operator wrote and must keep reading.",
+                    prompt,
+                )
+                self.assertIn('"as the goal says"', prompt)
+                self.assertIn(
+                    "BINDING: reword the block above; never drop this line.",
+                    prompt,
+                )
+                # The operator's quoted pair and the order's own generated
+                # pair both stand; only a planning continuation adds a
+                # third, read at THIS boundary.
+                added = 1 if producer_planning else 0
+                self.assertEqual(
+                    prompt.count("MATERIAL CATALOGUE (name to usage phrases)"),
+                    2 + added,
+                )
+                self.assertEqual(
+                    prompt.count("TASKEXECUTOR CATALOGUE"), 2 + added
+                )
+
+    def test_a_continuation_without_planning_asks_for_no_material(self):
+        # A quotation that never carried the vocabulary cannot author a
+        # plan, so nothing is added back to it.
+        ordered = prompts.build_draft_slice_note(
+            FAMILY, WORKSPACE, GOAL, SLICE, "docs/skeleton.md",
+        )
+        self.assertNotIn("SLICE MATERIAL PLANNING", ordered)
+        prompt = prompts.build_rethink_continuation(
+            contracts.KIND_DRAFT_SLICE_NOTE,
+            FAMILY,
+            WORKSPACE,
+            {
+                "session_id": "s1",
+                "accepted_target_revision": 3,
+                "result": {"status": "success"},
+                "retained_target": "# amendment\n",
+            },
+            original_request=ordered,
+            producer_planning=False,
+            materials=self.MATERIALS,
+        )
+        self.assertNotIn("SLICE MATERIAL PLANNING", prompt)
+        self.assertNotIn("MATERIAL CATALOGUE", prompt)
+        self.assertNotIn("wiring one existing seam", prompt)
+
+    def test_plan_review_context_reads_material_like_a_producer_choice(self):
+        prompt = prompts.build_review_round(
+            FAMILY, WORKSPACE, GOAL, UNIT, "docs/skeleton.md", [],
+            unit_kind="skeleton",
+            producer_review_context={
+                "producer_task_executor_by_slice": [
+                    {"id": 1, "title": "core", "material": "research",
+                     "producer_task_executor": {}},
+                ],
+                "explicit_operator_overrides": [],
+                "explicit_operator_material_overrides": [
+                    {"slice_id": 1, "material": "research"},
+                ],
+            },
+        )
+        self.assertIn("explicit_operator_material_overrides", prompt)
+        self.assertIn("A material names a KIND OF\nWORK", prompt)
+
+
 class TestPromptCompression(unittest.TestCase):
     """Keep static instructions small; run data is deliberately excluded."""
 
@@ -1449,7 +1842,7 @@ class TestPromptCompression(unittest.TestCase):
         limits = {
             "slice_impl": (10_000, 10_000, 14_000),
             "slice_doc": (12_000, 12_000, 16_000),
-            "skeleton": (12_000, 12_000, 16_000),
+            "skeleton": (12_000, 12_000, 16_500),
         }
         for kind, (review_limit, delta_limit, fix_limit) in limits.items():
             review = prompts.build_review_round(

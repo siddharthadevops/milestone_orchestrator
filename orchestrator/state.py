@@ -462,6 +462,33 @@ def append_event(state, etype, **data):
 
 
 # ---------------------------------------------------------------------------
+# The run's one staffing session
+
+#: The staffing session a milestone run is bound to. ABSENT on a run that has
+#: none — never present-null, exactly as `project` is — so a pre-router state
+#: document gains nothing and "is this run bound?" is one key test.
+STAFFING_SESSION_KEY = "staffing_session"
+
+
+def staffing_session(state):
+    """The run's bound staffing session id, or None."""
+    return state.get(STAFFING_SESSION_KEY) or None
+
+
+def bind_staffing_session(state, session_id):
+    """Write the run's ONE session id, once.
+
+    Write-once by construction: a run that already carries an id keeps it,
+    so neither writer — the launch nor the first resume without one — can
+    rebind a run mid-flight. Changing a run's staffing means editing that
+    session, never binding a second one. Returns the id now in force.
+    """
+    if not staffing_session(state):
+        state[STAFFING_SESSION_KEY] = session_id
+    return state[STAFFING_SESSION_KEY]
+
+
+# ---------------------------------------------------------------------------
 # Unit navigation and transitions
 
 
@@ -884,8 +911,19 @@ def record_draft(state, unit, kind, result, raw_path=None, family=None,
     return unit["draft"]
 
 
-def current_family(state, unit):
-    families = state["config"]["families_order"]
+def current_family(state, unit, families=None):
+    """The family standing at the unit's review-cycle index.
+
+    *families* is the cycle the caller is running. A run with a staffing
+    document passes the families its assigned `review` seats resolve to, in
+    seat order; without it the run's configured family order answers, which
+    is still the cycle a `Driver` with no catalogue home reviews with.
+    Returns None when the index has walked past the last one — the cycle is
+    exhausted, which is a routing fact and not a failure.
+    """
+    families = (
+        state["config"]["families_order"] if families is None else families
+    )
     idx = unit["family_index"]
     if idx >= len(families):
         return None
@@ -1057,17 +1095,20 @@ def restart_reviews_after_candidate_change(state, unit, reason):
     return start
 
 
-def advance_family_if_clean(state, unit, last_result):
+def advance_family_if_clean(state, unit, last_result, families=None):
     """After a clean review round, move to the next family or to pre-seal.
 
-    Families run in configured order for one candidate. Accepted byte changes
-    start a new cycle from the first family.
+    Families run in cycle order for one candidate — the run's `review`
+    seats when the caller passes them, its configured order otherwise.
+    Accepted byte changes start a new cycle from the first one.
     """
     from . import contracts
 
     if not contracts.findings_clean(last_result):
         return  # stay in rounds with same family
-    families = state["config"]["families_order"]
+    families = (
+        state["config"]["families_order"] if families is None else families
+    )
     unit["family_index"] += 1
     if unit["family_index"] >= len(families):
         transition_unit(state, unit, U_PRE_SEAL_VERIFY, reason="all families clean")
@@ -1092,12 +1133,14 @@ def _round_effectively_clean(round_rec):
     return bool(round_rec.get("deferred_clean"))
 
 
-def advance_family_deferred(state, unit):
+def advance_family_deferred(state, unit, families=None):
     """Advance after a review round whose findings were all deferred as debt.
 
     This is equivalent to a clean round for family ordering.
     (The clean case goes through advance_family_if_clean.)"""
-    families = state["config"]["families_order"]
+    families = (
+        state["config"]["families_order"] if families is None else families
+    )
     unit["family_index"] += 1
     if unit["family_index"] >= len(families):
         transition_unit(state, unit, U_PRE_SEAL_VERIFY,
@@ -1109,10 +1152,11 @@ def advance_family_deferred(state, unit):
         )
 
 
-def can_open_seal(state, unit):
+def can_open_seal(state, unit, families=None):
     """Whether every family is effectively clean in the current review cycle."""
     return seal_predicate_reviews(
-        unit, state["config"]["families_order"]
+        unit,
+        state["config"]["families_order"] if families is None else families,
     ) is not None
 
 
@@ -2319,6 +2363,13 @@ _BRAINSTORMING_OUTCOMES = {
 
 
 def summary(state, acts_overlay=None, current_review_model=None):
+    """The run's read-only projection.
+
+    *current_review_model* is the rounds-time review projection: the
+    ``(family, model)`` pair the next review round would run on, or None
+    when the caller could not read it. It is bookkeeping — nothing here
+    staffs, seals or accepts anything.
+    """
     unit = current_unit(state)
     model_defaults = state["config"].get("model_defaults") or {}
     debt_requeues = requeued_debt_refs(state)
@@ -2678,10 +2729,19 @@ def summary(state, acts_overlay=None, current_review_model=None):
     if unit is not None and unit.get("family_index", 0) < len(families):
         current_fam = families[unit["family_index"]]
     current_model = effective_setting(current_fam, None, "model")
-    if current_fam and unit is not None and unit.get("status") == U_ROUNDS:
+    if unit is not None and unit.get("status") == U_ROUNDS:
         if current_review_model:
-            current_model = current_review_model
-        else:
+            # The rounds-time review projection: the (family, model) the
+            # next review round would run on, resolved by its own staffing.
+            # It names the FAMILY too, because a run whose review cycle is
+            # its document's `review` seats no longer walks the configured
+            # order this function counts through. Best-effort throughout: a
+            # withheld projection leaves the configured reading below, and
+            # neither decides any call.
+            projected_family, projected_model = current_review_model
+            current_fam = projected_family or current_fam
+            current_model = projected_model or current_model
+        elif current_fam:
             review_key = "review_%s" % current_fam
             if isinstance(acts_overlay, dict) and review_key in acts_overlay:
                 review_act = acts_overlay[review_key]
@@ -2767,4 +2827,12 @@ def summary(state, acts_overlay=None, current_review_model=None):
         # pre-project summaries stay key-identical.
         out["project"] = block["project"]
         out["work_area"] = block["work_area"]
+    bound = staffing_session(state)
+    if bound:
+        # The run's binding, as the ID and nothing else: a copied session
+        # would be a second authority going stale beside the live one, so a
+        # reader who wants the selection asks the session route for it.
+        # ABSENT on an unbound run, exactly like `project` above, so a
+        # pre-router run's summary gains no invented session.
+        out[STAFFING_SESSION_KEY] = bound
     return out

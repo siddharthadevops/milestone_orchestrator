@@ -234,40 +234,10 @@
   .closing-label { width: 64px; flex: none; color: #a1a1aa;
     font-size: 10px; text-transform: uppercase; letter-spacing: .04em; }
   .final-agreement { border-color: #bbe7c9; background: #fbfefc; }
-  /* The model column carries the widest inheritance/default hint; clipping
-     it would hide whether the row follows the profile or an override. */
-  .actgrid { display: grid; grid-template-columns: 90px 1fr 1.45fr .95fr;
-    gap: 6px; align-items: center; }
-  .actgrid label { font-size: 12px; color: #3f3f46; }
-  .acthead { font-size: 10px; text-transform: uppercase; color: #a1a1aa; }
-  .actfamily { font-size: 12px; color: #52525b; padding: 4px 6px; }
-  .actgrid select, .actgrid input { font: inherit; font-size: 12px;
-    padding: 4px 6px; border: 1px solid var(--line); border-radius: 6px;
-    /* without this the controls' intrinsic width beats the fr track
-       sizes and the model column collapses */
-    min-width: 0; }
-  /* model-profile editor: one rigor at a time, the same act grid the
-     launch form uses, plus a managed example list. */
-  .mp-tabs { display: flex; gap: 6px; margin-bottom: 8px; }
-  .mp-tabs .btn.on { background: var(--accent); color: #fff;
-    border-color: var(--accent); }
-  .mp-listrow { display: flex; gap: 6px; align-items: center;
-    margin-bottom: 4px; }
-  .mp-listrow input { flex: 1; }
-  .mp-summary { display: grid; grid-template-columns: auto auto auto auto;
-    gap: 2px 10px; font-size: 12px; align-items: baseline; }
-  .mp-summary .mp-act { color: #3f3f46; }
-  .mp-summary .mp-unset { color: #a1a1aa; }
-  .empty-act-overrides { display: flex; gap: 6px; flex-wrap: wrap;
-    align-items: center; margin-top: 8px; }
-  .empty-act-overrides .empty-act { border: 1px solid var(--line);
-    border-radius: 6px; padding: 3px 5px; }
-  .empty-act-overrides .btn { padding: 2px 5px; margin-left: 3px;
-    font-size: 11px; }
   .unit-title { color: #71717a; font-size: 11px; margin-left: 6px; }
-  /* Brainstorming roster: one row per AI seat, configured like a
-     milestone act (agent / model / effort) plus a remove control. */
-  .rosterrow { display: grid; grid-template-columns: 90px 1fr 1fr 1fr 22px;
+  /* Brainstorming roster: one row per seat — which position it is, and a
+     remove control. Who runs it is the staffing choice, not a row here. */
+  .rosterrow { display: grid; grid-template-columns: 1fr 22px;
     gap: 6px; align-items: center; margin-bottom: 6px; }
   .rosterrow label { font-size: 12px; color: #3f3f46; }
   .rosterrow select, .rosterrow input { font: inherit; font-size: 12px;
@@ -586,7 +556,6 @@
     .strategy-decision { grid-template-columns: minmax(0, 1fr); gap: 4px; }
     .strategy-support { white-space: normal; }
     .storybody { min-width: 0; max-width: none; }
-    .actgrid { grid-template-columns: 70px 1fr 1.45fr .95fr; }
     .executor-config { grid-template-columns: 1fr; }
     .pathrow { flex-wrap: wrap; }
   }
@@ -615,8 +584,8 @@
     <div class="actions" id="sidebarActions" style="display:none">
       <button class="btn" id="newProjectBtn" style="display:none"
         onclick="openProjectCreate()" title="Declare a project">+ Project</button>
-      <button class="btn" id="modelProfilesBtn" style="display:none"
-        onclick="openModelProfiles()">Model profiles</button>
+      <button class="btn" id="staffingDocsBtn" style="display:none"
+        onclick="openStaffingDocuments()">Staffing documents</button>
       <button class="btn" id="strategyProfilesBtn" style="display:none"
         onclick="openStrategyProfiles()">Strategy profiles</button>
     </div>
@@ -646,16 +615,11 @@
       to open a fix cycle vs record as tracked debt). Every profile uses the
       same deterministic seal. No seed is pre-selected on purpose — the
       choice is explicit.</p>
-    <p><b>Acts</b> — an entirely blank launch row adds no panel override;
-      project defaults or Advanced config may still supply the current
-      override ahead of the model profile. Any nonblank row is a panel
-      override; its omitted fields use the structural/family defaults. Model
-      options adapt to the agent and remain editable mid-run from the run
-      view. The Skeleton row drives all skeleton
-      content work — its draft, re-drafts and fixes; only skeleton reviews stay
-      on the review rows. The two review rows tune each fixed family for review
-      rounds and delta reviews; family rotation never changes. Sealing does not
-      launch a model.</p>
+    <p><b>Staffing document</b> — the document and rigor this run is
+      staffed from: every call it makes resolves through the staffing
+      session opened here, and no seat, model or effort is chosen at
+      launch. Change either from the run's Edit page while it runs; the
+      change reaches the next call.</p>
     <p><b>Verification</b> — left empty, the implementer reports the repo's
       official suite and the driver arms the gates with it.</p>
   </div>
@@ -679,91 +643,15 @@
     <select id="f_profile" onchange="onProfileChange()">
       <option value="" disabled selected>— choose: strict / light / legacy —</option></select>
     <div class="hint" id="f_profile_hint"></div></div>
-  <div class="field"><label>Model profile</label>
+  <div class="field"><label>Staffing document</label>
     <div class="pathrow">
-      <select id="f_model_profile" onchange="onLaunchModelProfileChange()">
-        <option value="">default@medium — no saved selection</option></select>
-      <select id="f_model_rigor" disabled onchange="onLaunchModelProfileChange()">
+      <select id="f_staffing_document" onchange="onLaunchStaffingChange()">
+        <option value="default">default</option></select>
+      <select id="f_staffing_rigor" onchange="onLaunchStaffingChange()">
         <option>low</option><option selected>medium</option><option>high</option>
       </select>
     </div>
-    <div class="hint" id="f_model_profile_hint"></div></div>
-  <div class="field"><label>Agents, models and effort</label>
-    <div class="actgrid">
-      <span></span><span class="acthead">agent</span>
-      <span class="acthead">model</span><span class="acthead">effort</span>
-      <label>Skeleton</label>
-      <select id="a_skeletoner_agent"
-        onchange="onAgentChange('a_','skeletoner', true)">
-        <option value="">no panel override</option>
-        <option>codex</option><option>claude</option></select>
-      <input id="a_skeletoner_model" list="dl_a_skeletoner"
-        placeholder="no panel override">
-      <select id="a_skeletoner_effort"><option value="">no panel override</option>
-        <option>low</option><option>medium</option><option>high</option>
-        <option>xhigh</option><option>max</option></select>
-      <label>Draft docs</label>
-      <select id="a_drafter_agent" onchange="onAgentChange('a_','drafter', true)">
-        <option value="">no panel override</option>
-        <option>codex</option><option>claude</option></select>
-      <input id="a_drafter_model" list="dl_a_drafter" placeholder="no panel override">
-      <select id="a_drafter_effort"><option value="">no panel override</option>
-        <option>low</option><option>medium</option><option>high</option>
-        <option>xhigh</option><option>max</option></select>
-      <label>Implement</label>
-      <select id="a_implementer_agent"
-        onchange="onAgentChange('a_','implementer', true)">
-        <option value="">no panel override</option>
-        <option>codex</option><option>claude</option></select>
-      <input id="a_implementer_model" list="dl_a_implementer"
-        placeholder="no panel override">
-      <select id="a_implementer_effort"><option value="">no panel override</option>
-        <option>low</option><option>medium</option><option>high</option>
-        <option>xhigh</option><option>max</option></select>
-      <label>Review · Codex</label>
-      <span class="actfamily mono">codex</span>
-      <input id="a_review_codex_model" list="dl_a_review_codex"
-        placeholder="no panel override">
-      <select id="a_review_codex_effort"><option value="">no panel override</option>
-        <option>low</option><option>medium</option><option>high</option>
-        <option>xhigh</option><option>max</option></select>
-      <label>Review · Claude</label>
-      <span class="actfamily mono">claude</span>
-      <input id="a_review_claude_model" list="dl_a_review_claude"
-        placeholder="no panel override">
-      <select id="a_review_claude_effort"><option value="">no panel override</option>
-        <option>low</option><option>medium</option><option>high</option>
-        <option>xhigh</option><option>max</option></select>
-      <label>Fix findings</label>
-      <select id="a_fixer_agent" onchange="onAgentChange('a_','fixer', true)">
-        <option value="">no panel override</option>
-        <option>codex</option><option>claude</option></select>
-      <input id="a_fixer_model" list="dl_a_fixer" placeholder="no panel override">
-      <select id="a_fixer_effort"><option value="">no panel override</option>
-        <option>low</option><option>medium</option><option>high</option>
-        <option>xhigh</option><option>max</option></select>
-      <label>Reclassify</label>
-      <select id="a_reclassifier_agent"
-        onchange="onAgentChange('a_','reclassifier', true)">
-        <option value="">no panel override</option>
-        <option>codex</option><option>claude</option></select>
-      <input id="a_reclassifier_model" list="dl_a_reclassifier"
-        placeholder="no panel override">
-      <select id="a_reclassifier_effort"><option value="">no panel override</option>
-        <option>low</option><option>medium</option><option>high</option>
-        <option>xhigh</option><option>max</option></select>
-    </div>
-    <datalist id="dl_a_skeletoner"></datalist>
-    <datalist id="dl_a_drafter"></datalist>
-    <datalist id="dl_a_implementer"></datalist>
-    <datalist id="dl_a_review_codex"></datalist>
-    <datalist id="dl_a_review_claude"></datalist>
-    <datalist id="dl_a_fixer"></datalist>
-    <datalist id="dl_a_reclassifier"></datalist>
-    <div class="hint">Entire blank row = no panel override. Project defaults
-      or Advanced config may still provide the current override; otherwise the
-      current model profile applies. In a nonblank panel override, omitted
-      fields use structural/family defaults.</div></div>
+    <div class="hint" id="f_staffing_hint"></div></div>
   <div class="field">
     <button class="btn" type="button" id="f_more_btn"
       onclick="toggleMore()">More options ▾</button></div>
@@ -840,11 +728,11 @@
     <div class="rosterops">
       <button class="btn sm" type="button" onclick="addBsSeat()">+ Add contrary position</button>
     </div>
-    <div class="hint">opens pre-staffed: Initial Position gpt-5.6-sol/max,
-      Contrary Position claude-opus-5/max, and Dante on gpt-5.6-sol/max — edit any seat; anything
-      set back to default is resolved by the service (family by rotation
-      over this host's available agents, model/effort from the family's
-      defaults)</div></div>
+    <div class="hint">the roster is the discussion's shape — who proposes,
+      who challenges, and Dante asking anti-drift questions. Who RUNS each
+      position is the staffing below, answered at the seat's roster
+      position when its call is actually made.</div></div>
+  <div class="field" id="bs_staffing"></div>
   <div class="field"><label>Closure policy *</label>
     <select id="b_policy">
       <option value="unanimity">unanimity</option>
@@ -908,6 +796,7 @@
     <select id="t_executor" onchange="onTaskExecutorChange()"></select></div>
   <div id="task_executor_details"></div>
   <div id="task_configuration"></div>
+  <div class="field" id="task_staffing"></div>
   <div id="task_catalogue_error" class="failure" style="display:none"></div>
   <div id="task_accepted" class="task-accepted" style="display:none"></div>
   <div class="formrow">
@@ -918,6 +807,28 @@
   </div>
 </dialog>
 
+<dialog id="slicematerialdlg">
+  <h2 id="sm_title">Slice material</h2>
+  <div class="field"><label>Material (optional)</label>
+    <input id="sm_material" class="mono" placeholder='"material name"'
+      oninput="markSliceMaterialEdited()">
+    <div class="hint">Enter the kind of work as a JSON string, in the staffing
+      document's own vocabulary. Quoted escapes such as <code>\r</code> and
+      <code>\n</code> preserve line breaks exactly. Save writes the decoded
+      string unchanged and leaves an untouched box's stored name exactly as it
+      is &mdash; a slice proposing nothing keeps none, and no save of its own
+      creates one; Clear removes the proposal and leaves the session's default
+      material in force. It applies to the next note-drafting or implementation
+      task ordered for this slice; a task already ordered keeps the material it
+      was ordered with.</div></div>
+  <div class="formrow">
+    <span id="sm_error" style="color:var(--bad);font-size:12px;margin-right:auto"></span>
+    <button class="btn"
+      onclick="document.getElementById('slicematerialdlg').close()">Cancel</button>
+    <button class="btn" onclick="clearSliceMaterial()">Clear</button>
+    <button class="btn primary" onclick="saveSliceMaterial()">Save</button>
+  </div>
+</dialog>
 
 <dialog id="requestdlg">
   <h2>Requested outcome</h2>
@@ -940,6 +851,7 @@
     <label for="gs_area">Work area</label>
     <select id="gs_area"></select>
   </div>
+  <div class="field" id="gs_staffing"></div>
   <div id="gs_error" class="failure" style="display:none"></div>
   <div id="gs_report" class="mdbody flow" style="display:none"></div>
   <div class="formrow">
@@ -1034,83 +946,6 @@
     <label style="font-size:12px;margin-right:auto">
       <input type="checkbox" id="dv_raw" onchange="dvRender()"> raw</label>
     <button class="btn" onclick="document.getElementById('docview').close()">Close</button>
-  </div>
-</dialog>
-
-<dialog id="actsdlg">
-  <h2>Acts (models and roles)</h2>
-  <div class="actgrid">
-    <span></span><span class="acthead">agent</span>
-    <span class="acthead">model</span><span class="acthead">effort</span>
-    <label>Skeleton</label>
-    <select id="ra_skeletoner_agent"
-      onchange="onAgentChange('ra_','skeletoner', true)">
-      <option value="">current profile</option>
-      <option>codex</option><option>claude</option></select>
-    <input id="ra_skeletoner_model" list="dl_ra_skeletoner"
-      placeholder="current profile">
-    <select id="ra_skeletoner_effort">
-      <option value="">current profile</option></select>
-    <label>Draft docs</label>
-    <select id="ra_drafter_agent" onchange="onAgentChange('ra_','drafter', true)">
-      <option value="">current profile</option>
-      <option>codex</option><option>claude</option></select>
-    <input id="ra_drafter_model" list="dl_ra_drafter" placeholder="current profile">
-    <select id="ra_drafter_effort"><option value="">current profile</option></select>
-    <label>Implement</label>
-    <select id="ra_implementer_agent"
-      onchange="onAgentChange('ra_','implementer', true)">
-      <option value="">current profile</option>
-      <option>codex</option><option>claude</option></select>
-    <input id="ra_implementer_model" list="dl_ra_implementer"
-      placeholder="current profile">
-    <select id="ra_implementer_effort"><option value="">current profile</option></select>
-    <label>Review · Codex</label>
-    <span class="actfamily mono">codex</span>
-    <input id="ra_review_codex_model" list="dl_ra_review_codex"
-      placeholder="current profile">
-    <select id="ra_review_codex_effort"><option value="">current profile</option></select>
-    <label>Review · Claude</label>
-    <span class="actfamily mono">claude</span>
-    <input id="ra_review_claude_model" list="dl_ra_review_claude"
-      placeholder="current profile">
-    <select id="ra_review_claude_effort"><option value="">current profile</option></select>
-    <label>Fix findings</label>
-    <select id="ra_fixer_agent" onchange="onAgentChange('ra_','fixer', true)">
-      <option value="">current profile</option>
-      <option>codex</option><option>claude</option></select>
-    <input id="ra_fixer_model" list="dl_ra_fixer" placeholder="current profile">
-    <select id="ra_fixer_effort"><option value="">current profile</option></select>
-    <label>Reclassify</label>
-    <select id="ra_reclassifier_agent"
-      onchange="onAgentChange('ra_','reclassifier', true)">
-      <option value="">current profile</option>
-      <option>codex</option><option>claude</option></select>
-    <input id="ra_reclassifier_model" list="dl_ra_reclassifier"
-      placeholder="current profile">
-    <select id="ra_reclassifier_effort">
-      <option value="">current profile</option></select>
-  </div>
-  <datalist id="dl_ra_skeletoner"></datalist>
-  <datalist id="dl_ra_drafter"></datalist>
-  <datalist id="dl_ra_implementer"></datalist>
-  <datalist id="dl_ra_review_codex"></datalist>
-  <datalist id="dl_ra_review_claude"></datalist>
-  <datalist id="dl_ra_fixer"></datalist>
-  <datalist id="dl_ra_reclassifier"></datalist>
-  <div id="ra_empty_overrides" class="empty-act-overrides hint"></div>
-  <div class="hint" style="margin-top:8px">Entire blank row = current model
-    profile. In a nonblank override, omitted fields use structural/family
-    defaults. Creation-time structural-default overrides are listed separately
-    above and remain in force until “Use profile”.
-    Skeleton drives the skeleton's draft, re-drafts and fixes (not its
-    reviews). Binds from the NEXT act resolution (drivers started before
-    this feature need one Stop → Start).</div>
-  <div class="formrow">
-    <span></span>
-    <button class="btn"
-      onclick="document.getElementById('actsdlg').close()">Cancel</button>
-    <button class="btn primary" onclick="saveActs()">Save</button>
   </div>
 </dialog>
 
@@ -1257,55 +1092,47 @@
   </div>
 </dialog>
 
-<dialog id="modelprofilesdlg">
-  <h2>Model profiles</h2>
-  <div id="mp_error" class="failure" style="display:none"></div>
-  <div id="mp_catalogue"></div>
+<dialog id="staffingdocsdlg">
+  <h2>Staffing documents</h2>
+  <p class="amend-hint">The whole document, as the service stores it. Each
+    <b>models</b> and <b>efforts</b> ladder runs least to most capable in the
+    order its author wrote; the panel never reorders or prices one.</p>
+  <div id="sd_error" class="failure" style="display:none"></div>
+  <div id="sd_catalogue"></div>
   <div class="formrow">
     <span></span>
-    <button class="btn" onclick="document.getElementById('modelprofilesdlg').close()">Close</button>
-    <button class="btn primary" id="mp_new" onclick="newModelProfile()">New profile</button>
+    <button class="btn"
+      onclick="document.getElementById('staffingdocsdlg').close()">Close</button>
+    <button class="btn primary" id="sd_new" style="display:none"
+      onclick="newStaffingDocument()">New document</button>
   </div>
 </dialog>
 
-<dialog id="mpeditor">
-  <h2 class="dlgtitle" id="mpe_title">Model profile</h2>
-  <div class="field"><label>Name</label>
-    <input id="mpe_name" placeholder="web-ui">
-    <div class="hint" id="mpe_name_hint"></div></div>
-  <div class="field"><label>When this profile matches</label>
-    <div id="mpe_examples"></div>
-    <button class="btn" type="button" onclick="mpAddExample()">+ example</button>
-    <div class="hint">Short clues, five words at most each. They are what you
-      read when you pick a profile at launch.</div></div>
-  <div class="field"><label>Staffing</label>
-    <div class="mp-tabs" id="mpe_tabs"></div>
-    <div class="actgrid" id="mpe_grid"></div>
-    <div class="hint">Rigor is chosen per run at launch, so each of the three
-      is staffed here. A blank row leaves that act out of the profile: it
-      keeps whatever the run already assigns, then the family default.</div>
-  </div>
-  <div class="formrow">
-    <span id="mpe_error" style="color:var(--bad);font-size:12px;margin-right:auto"></span>
-    <button class="btn" onclick="document.getElementById('mpeditor').close()">Cancel</button>
-    <button class="btn primary" onclick="saveModelProfileEditor()">Save</button>
-  </div>
-</dialog>
-
-<dialog id="modelprofileselectiondlg">
-  <h2>Current model profile</h2>
-  <div class="field"><label>Profile</label>
-    <select id="mps_name" onchange="onRunModelProfileChange()"></select>
-  </div>
+<dialog id="staffingsessiondlg">
+  <h2>Staffing session</h2>
+  <div class="field"><label>Document</label>
+    <select id="ss_document"></select>
+    <div class="hint" id="ss_document_hint"></div></div>
   <div class="field"><label>Rigor</label>
-    <select id="mps_rigor">
+    <select id="ss_rigor">
       <option>low</option><option>medium</option><option>high</option>
-    </select>
-    <div class="hint" id="mps_hint"></div></div>
+    </select></div>
+  <div class="field"><label>Default material (optional)</label>
+    <input id="ss_material" class="mono" placeholder="none">
+    <div class="hint">The material every call of this run resolves under
+      unless its own request names one. Empty clears it.</div></div>
+  <div class="field"><label>Session overrides (optional)</label>
+    <textarea id="ss_overrides" class="jsonarea" spellcheck="false"></textarea>
+    <div class="hint">The document's own shape (`assignment`, `tuning`),
+      outranking the document for the roles it names. Empty clears them;
+      the service is the only semantic validator.</div></div>
+  <div class="hint" id="ss_facts"></div>
+  <div class="hint" id="ss_warn"></div>
   <div class="formrow">
-    <span id="mps_error" style="color:var(--bad);font-size:12px;margin-right:auto"></span>
-    <button class="btn" onclick="document.getElementById('modelprofileselectiondlg').close()">Cancel</button>
-    <button class="btn primary" onclick="saveRunModelProfile()">Save</button>
+    <span id="ss_error" style="color:var(--bad);font-size:12px;margin-right:auto"></span>
+    <button class="btn"
+      onclick="document.getElementById('staffingsessiondlg').close()">Cancel</button>
+    <button class="btn primary" onclick="saveStaffingSession()">Save</button>
   </div>
 </dialog>
 
@@ -1398,7 +1225,7 @@ async function loadAccess() {
   };
   document.getElementById("newProjectBtn").style.display =
     appAccess.admin ? "" : "none";
-  document.getElementById("modelProfilesBtn").style.display =
+  document.getElementById("staffingDocsBtn").style.display =
     appAccess.user ? "" : "none";
   document.getElementById("strategyProfilesBtn").style.display =
     appAccess.user ? "" : "none";
@@ -2180,10 +2007,19 @@ async function sendFloorIntervention() {
 }
 let gitSyncProject = null;
 let gitSyncRunning = false;
+// The family order the SERVICE derives for this project, carried on the
+// same project read the work-area choice comes from. Never a browser
+// default: an alignment whose project did not supply it is not ordered.
+// It is written only by the read of the project the dialog still names:
+// this global outlives one open, so an earlier project's slower read must
+// not land beside a later project's slug and staff its alignment.
+let gitSyncFamilies = null;
 async function openGitSync(event, key) {
   event.stopPropagation();
   closeProjectMenu();
   gitSyncProject = key;
+  gitSyncFamilies = null;
+  loadStandaloneStaffing("gs");
   const err = document.getElementById("gs_error");
   const report = document.getElementById("gs_report");
   err.style.display = "none";
@@ -2200,7 +2036,9 @@ async function openGitSync(event, key) {
   row.style.display = "none";
   try {
     const data = await api("/api/projects");
+    if (key !== gitSyncProject) return;  // superseded by a later open
     const project = (data.projects || []).find(p => p.slug === key);
+    gitSyncFamilies = project ? project.families_order : null;
     const areas = (project && project.work_areas) || [];
     sel.innerHTML = areas.map((a, i) =>
       `<option value="${esc(a.record.name)}">${esc(a.record.name)}</option>`
@@ -2212,6 +2050,7 @@ async function openGitSync(event, key) {
       document.getElementById("gs_go").disabled = true;
     }
   } catch (e) {
+    if (key !== gitSyncProject) return;  // superseded by a later open
     err.textContent = e.message;
     err.style.display = "";
     document.getElementById("gs_go").disabled = true;
@@ -2220,6 +2059,14 @@ async function openGitSync(event, key) {
 }
 async function runGitSync() {
   if (gitSyncRunning || !gitSyncProject) return;
+  // The project this click submits, its area and its families, captured
+  // once. The session request below is a real round trip, and the dialog
+  // stays closable while it is out: an operator who closes it and opens
+  // another project's would otherwise leave the globals naming THAT
+  // project, and the alignment would merge, commit and push a repository
+  // nobody submitted, staffed by the session opened for this one.
+  const project = gitSyncProject;
+  const families = gitSyncFamilies;
   const area = document.getElementById("gs_area").value;
   const err = document.getElementById("gs_error");
   const report = document.getElementById("gs_report");
@@ -2230,14 +2077,19 @@ async function runGitSync() {
   go.disabled = true;
   go.textContent = "Syncing…";
   try {
+    // First request. The alignment is not asked for at all unless its
+    // session exists; a refusal below leaves that session inert.
+    const session = await standaloneStaffingSession(
+      "gs", {project: project, work_area: area}, families);
     const data = await api(
-      "/api/projects/" + encodeURIComponent(gitSyncProject) + "/git-sync",
+      "/api/projects/" + encodeURIComponent(project) + "/git-sync",
       {
         method: "POST",
         headers: {"Content-Type": "application/json"},
-        body: JSON.stringify({work_area: area}),
+        body: JSON.stringify({work_area: area, staffing_session: session}),
       }
     );
+    if (project !== gitSyncProject) return;  // superseded by a later open
     // The agent exits 0 whether it aligned or refused, so the verdict —
     // not the fact that prose came back — decides what this looked like.
     const outcome = (data.sync && data.sync.outcome) || "unknown";
@@ -2253,12 +2105,18 @@ async function runGitSync() {
     report.style.display = "";
     go.textContent = outcome === "aligned" ? "Sync again" : "Try again";
   } catch (e) {
+    if (project !== gitSyncProject) return;  // superseded by a later open
     err.textContent = e.message;  // sealed refusal token, verbatim
     err.style.display = "";
     go.textContent = "Sync now";
   } finally {
+    // The alignment is over either way, so the panel accepts a new one;
+    // but the verdict, the report and the button belong to the open that
+    // asked for them. A dialog reopened on another project keeps the
+    // blank state and the enabled-or-not button ITS open just set, and
+    // this reply is dropped rather than shown under that project's name.
     gitSyncRunning = false;
-    go.disabled = false;
+    if (project === gitSyncProject) go.disabled = false;
   }
 }
 function runStatusIndicator(r) {
@@ -3823,12 +3681,18 @@ async function refreshDetail() {
   const seq = ++detailSeq, runId = selected;
   try {
     const d = await api("/api/runs/" + runId);
-    let modelProfileSelection = null, modelProfileSelectionError = "";
-    if (runView === "edit") {
+    // The settings page shows the run's staffing as the ROUTER holds it:
+    // the summary carries the bound id and nothing else, so the selection
+    // is read live from the session itself. An unbound run asks nothing —
+    // the panel never opens or repairs a binding (amendment A2 derives one
+    // at resume).
+    let sessionView = null, sessionError = "";
+    const sessionId = (d.summary || {}).staffing_session || null;
+    if (runView === "edit" && sessionId) {
       try {
-        const current = await api(`/api/runs/${runId}/model-profile`);
-        modelProfileSelection = current.selection;
-      } catch (e) { modelProfileSelectionError = e.message; }
+        sessionView = await api(
+          "/api/staffing/sessions/" + encodeURIComponent(sessionId));
+      } catch (e) { sessionError = e.message; }
     }
     if (seq !== detailSeq || runId !== selected) return;
     const s = d.status, sum = d.summary;
@@ -3912,22 +3776,13 @@ async function refreshDetail() {
       <button class="btn" style="margin-left:auto"
         onclick="openRunEdit()">Edit&#8230;</button>
     </div>`;
-    // Amendments and acts come straight from their own files — never gate
-    // them on the state summary, which can be transiently unreadable.
-    // They live on the SETTINGS page (Edit), off the monitoring screen.
-    lastActs = d.acts || {};
-    // This is the current OVERRIDE layer, not resolved staffing. Inherited
-    // profile/config values must stay empty in the editor: copying them back
-    // through Save would silently turn them into live overrides.
-    lastActOverrides = {};
-    for (const a of ACT_NAMES) {
-      const present = Object.prototype.hasOwnProperty.call(lastActs, a);
-      lastActOverrides[a] = present ? lastActs[a] : null;
-      lastActOverrides[a + "_hot"] = present;
-    }
+    // Amendments come straight from their own file — never gated on the
+    // state summary, which can be transiently unreadable. They live on the
+    // SETTINGS page (Edit), off the monitoring screen.
     lastProfile = d.profile || null;
-    lastModelProfileSelection = modelProfileSelection;
-    lastModelProfileSelectionError = modelProfileSelectionError;
+    lastSession = sessionView;
+    lastSessionError = sessionError;
+    lastSessionId = sessionId;
     if (runView === "edit") {
     html += `<div class="card"><h3>Operator amendments</h3>` +
       ((d.amendments || []).map(a =>
@@ -3938,31 +3793,7 @@ async function refreshDetail() {
          <button class="btn" onclick="addAmend()">Add</button>
        </div>
        <div class="amend-hint">Applies from the next worker call. Drivers started before this feature exists need one Stop → Start to begin reading amendments.</div></div>`;
-    const modelProfileLabel = lastModelProfileSelection
-      ? `${lastModelProfileSelection.name}@${lastModelProfileSelection.rigor}`
-      : `unavailable: ${lastModelProfileSelectionError || "not readable"}`;
-    html += `<div class="card"><h3>Model profile</h3>
-      <div class="amendform">
-        <span class="amend-hint mono" style="flex:1">${esc(modelProfileLabel)}</span>
-        <button class="btn" onclick="openRunModelProfile()">Change…</button>
-      </div></div>`;
-    const actLabel = {drafter: "draft", implementer: "impl",
-                      review_codex: "review codex",
-                      review_claude: "review claude",
-                      fixer: "fix", skeletoner: "skeleton",
-                      reclassifier: "reclass"};
-    const actsSum = ACT_NAMES.map(a => {
-      const v = lastActOverrides[a];
-      const overridden = lastActOverrides[a + "_hot"];
-      const e = typeof v === "string" ? {agent: v} : (v || {});
-      const bits = [e.agent, e.model, e.effort].filter(Boolean).join(" · ");
-      return `${actLabel[a]}: ${bits || (overridden ? "structural default" : "inherited")}${overridden ? " (override)" : ""}`;
-    }).join("   —   ");
-    html += `<div class="card"><h3>Act overrides (models and roles)</h3>
-      <div class="amendform">
-        <span class="amend-hint mono" style="flex:1">${esc(actsSum)}</span>
-        <button class="btn" onclick="openActs()">Edit…</button>
-      </div></div>`;
+    html += staffingSessionCard();
     if (d.profile) {
       const g = d.profile.governing, b = d.profile.base;
       const swapped = !!d.profile.swap;
@@ -3990,10 +3821,16 @@ async function refreshDetail() {
       visibleSliceProducers = new Map((sum.slices || []).map(slice => [
         slice.id, slice.producer_task_executor || {},
       ]));
+      // The summary omits the key entirely when no proposal stands, so an
+      // absent material stays absent here instead of collapsing into the
+      // empty string a planner may deliberately have written.
+      visibleSliceMaterials = new Map((sum.slices || []).map(slice => [
+        slice.id, slice.material,
+      ]));
       const sliceTitle = id => {
         const sl = (sum.slices || []).find(x => x.id === id);
         return sl ? `<span class="unit-title">${esc(sl.title)}</span>${
-          producerControls(sl.id, sl.producer_task_executor)}` : "";
+          producerControls(sl.id, sl.producer_task_executor, sl.material)}` : "";
       };
       const catRow = (label, title, stat, duration, tokens,
                       tokenPartial, cls = "", cost = null,
@@ -4130,17 +3967,6 @@ async function refreshDetail() {
         <button class="btn" onclick="openEvents()">Events</button>
         <button class="btn" onclick="openDriverLog()">Driver log</button>
       </div>`;
-    const actDraft = {};
-    for (const act of ACT_NAMES) {
-      for (const f of ["agent", "model", "effort"]) {
-        const el = document.getElementById(`ra_${act}_${f}`);
-        if (el && document.activeElement &&
-            document.activeElement.id &&
-            document.activeElement.id.startsWith("ra_")) {
-          actDraft[`ra_${act}_${f}`] = el.value;
-        }
-      }
-    }
     const prev = document.getElementById("amendText");
     const draft = prev ? {
       value: prev.value,
@@ -4164,10 +3990,6 @@ async function refreshDetail() {
           el.setSelectionRange(draft.selStart, draft.selEnd);
         }
       }
-    }
-    for (const [id, val] of Object.entries(actDraft)) {
-      const el = document.getElementById(id);
-      if (el) el.value = val;
     }
     requestAnimationFrame(updateBottomJump);
   } catch (e) {
@@ -4393,121 +4215,15 @@ async function delAmend(aid) {
   } catch (e) { alert(e.message); }
   refreshDetail();
 }
-let lastActs = {};
-let lastActOverrides = {};
-let openedActs = {};
-let openedActEditorEntries = {};
-let retainedEmptyActOverrides = new Set();
 let lastProfile = null;   // the run's profile block from the last detail poll
-let lastModelProfileSelection = null;
-let lastModelProfileSelectionError = "";
-function isEmptyActOverride(value) {
-  return value === null || value === "" ||
-    (value && typeof value === "object" && !Array.isArray(value) &&
-     Object.keys(value).length === 0);
-}
-function renderEmptyActOverrides() {
-  const el = document.getElementById("ra_empty_overrides");
-  const labels = {skeletoner: "Skeleton", drafter: "Draft docs",
-                  implementer: "Implement", review_codex: "Review · Codex",
-                  review_claude: "Review · Claude", fixer: "Fix findings",
-                  reclassifier: "Reclassify"};
-  const explicit = ACT_NAMES.filter(act =>
-    Object.prototype.hasOwnProperty.call(openedActs, act) &&
-    isEmptyActOverride(openedActs[act]));
-  el.innerHTML = explicit.map(act => retainedEmptyActOverrides.has(act)
-    ? `<span class="empty-act">${esc(labels[act])}: structural default override <button type="button" class="btn" onclick="clearEmptyActOverride('${act}')">Use profile</button></span>`
-    : `<span class="empty-act">${esc(labels[act])}: will use profile <button type="button" class="btn" onclick="restoreEmptyActOverride('${act}')">Undo</button></span>`
-  ).join("");
-}
-function clearEmptyActOverride(act) {
-  retainedEmptyActOverrides.delete(act);
-  clearActEditorRow(act);
-  renderEmptyActOverrides();
-}
-function restoreEmptyActOverride(act) {
-  retainedEmptyActOverrides.add(act);
-  clearActEditorRow(act);
-  renderEmptyActOverrides();
-}
-function clearActEditorRow(act) {
-  const agentEl = document.getElementById(`ra_${act}_agent`);
-  if (agentEl) agentEl.value = "";
-  document.getElementById(`ra_${act}_model`).value = "";
-  document.getElementById(`ra_${act}_effort`).value = "";
-  onAgentChange("ra_", act);
-}
-function readActEditorEntry(act) {
-  const fixed = FIXED_ACT_AGENTS[act];
-  const agentEl = document.getElementById(`ra_${act}_agent`);
-  const agent = agentEl ? agentEl.value : "";
-  const model = document.getElementById(`ra_${act}_model`).value.trim();
-  const effort = document.getElementById(`ra_${act}_effort`).value;
-  const entry = {};
-  if (!fixed && agent) entry.agent = agent;
-  if (model) entry.model = model;
-  if (effort) entry.effort = effort;
-  return entry;
-}
-function openActs() {
-  // The dialog lives OUTSIDE the polled container: the 2s re-render can
-  // never reset an edit in progress. Values are seeded once, on open.
-  openedActs = JSON.parse(JSON.stringify(lastActs));
-  openedActEditorEntries = {};
-  retainedEmptyActOverrides = new Set(ACT_NAMES.filter(act =>
-    Object.prototype.hasOwnProperty.call(openedActs, act) &&
-    isEmptyActOverride(openedActs[act])));
-  for (const act of ACT_NAMES) {
-    const v = openedActs[act];
-    const entry = typeof v === "string" ? {agent: v} : (v || {});
-    const agentEl = document.getElementById(`ra_${act}_agent`);
-    if (agentEl) agentEl.value = entry.agent || "";
-    onAgentChange("ra_", act);
-    document.getElementById(`ra_${act}_model`).value = entry.model || "";
-    const eff = document.getElementById(`ra_${act}_effort`);
-    eff.value = entry.effort || "";
-    if (eff.value !== (entry.effort || "")) eff.value = "";
-    onAgentChange("ra_", act);
-    openedActEditorEntries[act] = readActEditorEntry(act);
-  }
-  renderEmptyActOverrides();
-  document.getElementById("actsdlg").showModal();
-}
-function actsDialogPatch() {
-  // Send only changed rows. Omission preserves hidden acts and the meaningful
-  // explicit-empty entries whose separate controls remain enabled.
-  const changes = {};
-  for (const act of ACT_NAMES) {
-    const entry = readActEditorEntry(act);
-    const had = Object.prototype.hasOwnProperty.call(openedActs, act);
-    const explicitEmpty = had && isEmptyActOverride(openedActs[act]);
-    const changed = JSON.stringify(entry) !==
-      JSON.stringify(openedActEditorEntries[act]);
-    if (!changed) {
-      if (explicitEmpty && !retainedEmptyActOverrides.has(act))
-        changes[act] = null;
-      continue;
-    }
-    changes[act] = Object.keys(entry).length ? entry : null;
-  }
-  return changes;
-}
-async function saveActs() {
-  const changes = actsDialogPatch();
-  if (!Object.keys(changes).length) {
-    document.getElementById("actsdlg").close();
-    return;
-  }
-  try {
-    await api(`/api/runs/${selected}/acts`, {
-      method: "PATCH",
-      headers: {"Content-Type": "application/json"},
-      body: JSON.stringify(changes),
-    });
-    document.getElementById("actsdlg").close();
-  } catch (e) { alert(e.message); }
-  refreshDetail();
-}
+// The run's live staffing session, as the last settings poll read it: the
+// whole view (record + the live unsatisfied-split projection), the refusal
+// when the bound id could not be read, and the id the summary carries.
+// Never a copy that ages — every poll re-reads it, and every save goes to
+// the session's own route.
+let lastSession = null;
+let lastSessionError = "";
+let lastSessionId = null;
 async function addAmend() {
   const el = document.getElementById("amendText");
   const text = (el.value || "").trim();
@@ -4581,317 +4297,306 @@ function openForm(preselect) {
   loadRecents();
   loadLaunchProjects(preselect);
   loadProfiles();
-  loadModelProfileCatalogue();
-  for (const act of ACT_NAMES) onAgentChange("a_", act);
+  loadStaffingDocuments();
   document.getElementById("form").showModal();
 }
 
-/* ---- model-profile catalogue and current selection. The server remains the
-       one semantic validator; this panel only preserves Edit's opened name. */
-let modelProfileCatalogue = [];
-let modelProfileCatalogueError = "";
-async function loadModelProfileCatalogue() {
-  modelProfileCatalogue = [];
-  modelProfileCatalogueError = "";
+/* ---- staffing documents: the one catalogue read every staffing choice
+       in this panel offers. The run's staffing comes from the document it
+       names and the rigor beside it; the server stays the one semantic
+       validator, and the panel copies no part of the document schema. ---- */
+let staffingDocuments = [];
+let staffingDocumentsError = "";
+async function loadStaffingCatalogue() {
+  staffingDocuments = [];
+  staffingDocumentsError = "";
   try {
-    const data = await api("/api/model-profiles");
-    modelProfileCatalogue = data.profiles || [];
-  } catch (e) { modelProfileCatalogueError = e.message; }
-  syncLaunchModelProfiles();
-  if (document.getElementById("modelprofilesdlg").open)
-    renderModelProfiles();
+    const data = await api("/api/staffing/documents");
+    staffingDocuments = data.documents || [];
+  } catch (e) { staffingDocumentsError = e.message; }
 }
-function syncLaunchModelProfiles() {
-  const select = document.getElementById("f_model_profile");
+function staffingDocumentOptions(current) {
+  // The catalogue, plus the name already in force when the catalogue no
+  // longer carries it: a chooser that quietly dropped back to `default`
+  // would repoint the work it is only supposed to show.
+  const names = staffingDocuments.map(d => d.name);
+  if (current && !names.includes(current)) names.unshift(current);
+  return (names.length ? names : ["default"]).map(name =>
+    `<option value="${esc(name)}"${name === current ? " selected" : ""}>${
+      esc(name)}${staffingDocuments.some(d => d.name === name)
+        ? "" : " — not in the catalogue"}</option>`).join("");
+}
+async function loadStaffingDocuments() {
+  await loadStaffingCatalogue();
+  const select = document.getElementById("f_staffing_document");
   const keep = select.value;
-  select.innerHTML =
-    `<option value="">default@medium — no saved selection</option>` +
-    modelProfileCatalogue.map(p =>
-      `<option value="${esc(p.name)}">${esc(p.name)}</option>`
-    ).join("");
-  select.value = modelProfileCatalogue.some(p => p.name === keep) ? keep : "";
-  onLaunchModelProfileChange();
+  select.innerHTML = (staffingDocuments.length
+    ? staffingDocuments
+    : [{name: "default"}]
+  ).map(d => `<option value="${esc(d.name)}">${esc(d.name)}</option>`).join("");
+  select.value =
+    staffingDocuments.some(d => d.name === keep) ? keep : "default";
+  onLaunchStaffingChange();
 }
-function onLaunchModelProfileChange() {
-  const name = document.getElementById("f_model_profile").value;
-  const rigor = document.getElementById("f_model_rigor");
-  rigor.disabled = !name;
-  if (!name) rigor.value = "medium";
-  const profile = modelProfileCatalogue.find(p => p.name === name);
-  document.getElementById("f_model_profile_hint").textContent =
-    modelProfileCatalogueError || (profile ? profile.examples.join(" · ") :
-      "No saved choice uses the current default at medium.");
+function onLaunchStaffingChange() {
+  const name = document.getElementById("f_staffing_document").value;
+  const rigor = document.getElementById("f_staffing_rigor").value;
+  document.getElementById("f_staffing_hint").textContent =
+    staffingDocumentsError ||
+    `Every call of this run is staffed by ${name} at ${rigor}.`;
 }
-async function openModelProfiles() {
-  document.getElementById("modelprofilesdlg").showModal();
-  await loadModelProfileCatalogue();
-}
-/* The nine seats a profile can staff, in the order the run uses them, with
-   what each seat actually honors: `full` takes a family and may tune model
-   and effort; `tuned` has a structurally fixed or derived family and only
-   tunes model/effort; `family` (consultation) derives both, so it chooses
-   only who answers. Sending anything else is an input error server-side —
-   the grid simply never offers it. */
-const MP_ROWS = [
-  {act: "skeletoner", label: "Skeleton", kind: "full"},
-  {act: "drafter", label: "Draft docs", kind: "full"},
-  {act: "implementer", label: "Implement", kind: "full"},
-  {act: "review_codex", label: "Review · Codex", kind: "tuned",
-   family: "codex"},
-  {act: "review_claude", label: "Review · Claude", kind: "tuned",
-   family: "claude"},
-  {act: "fixer", label: "Fix findings", kind: "full"},
-  {act: "reclassifier", label: "Reclassify", kind: "full"},
-  {act: "brainstorming_counterpart", label: "Counterpart", kind: "tuned",
-   family: "opposite"},
-  {act: "consultation", label: "Consultation", kind: "family"},
-];
-const MP_FAMILY_OPTS = ["codex", "claude", "self", "opposite"];
-const MP_RIGORS = ["low", "medium", "high"];
-function mpEntryFields(entry) {
-  // One seat is stored either as a bare family-policy string or as an
-  // object; the grid reads both and the operator sees neither.
-  if (typeof entry === "string")
-    return {agent: entry, model: "", effort: ""};
-  if (entry && typeof entry === "object")
-    return {agent: entry.agent || "", model: entry.model || "",
-            effort: entry.effort || ""};
-  return {agent: "", model: "", effort: ""};
-}
-function mpModelOpts(family) {
-  return MODEL_OPTS[family] ||
-    [...MODEL_OPTS.claude, ...MODEL_OPTS.codex];
-}
-function renderModelProfiles() {
-  const error = document.getElementById("mp_error");
-  error.textContent = modelProfileCatalogueError;
-  error.style.display = modelProfileCatalogueError ? "block" : "none";
-  document.getElementById("mp_new").style.display = appAccess.admin ? "" : "none";
-  document.getElementById("mp_catalogue").innerHTML =
-    modelProfileCatalogue.map(profile => {
-      const configs = MP_RIGORS.map(rigor =>
-        `<div><b>${rigor}</b>${
-          mpRigorSummary(profile.configurations[rigor])}</div>`
-      ).join("");
-      return `<div class="card"><h3>${esc(profile.name)}</h3>
-        <div class="amend-hint">${esc(profile.examples.join(" · "))}</div>
-        ${configs}
-        ${appAccess.admin ? `<button class="btn" onclick="editModelProfile('${esc(escJsSq(profile.name))}')">Edit…</button>` : ""}
-      </div>`;
-    }).join("") || (modelProfileCatalogueError ? "" :
-      `<div class="empty">No model profiles.</div>`);
-}
-function mpRigorSummary(cfg) {
-  const rows = MP_ROWS.filter(row => cfg && cfg[row.act] !== undefined);
-  if (!rows.length)
-    return `<div class="mp-unset">nothing staffed — run defaults</div>`;
-  return `<div class="mp-summary">` + rows.map(row => {
-    const f = mpEntryFields(cfg[row.act]);
-    const family = row.kind === "tuned" ? row.family : f.agent;
-    return `<span class="mp-act">${esc(row.label)}</span>
-      <span class="mono">${esc(family || "—")}</span>
-      <span class="mono">${esc(shortModel(f.model) || "—")}</span>
-      <span class="mono">${esc(f.effort || "—")}</span>`;
-  }).join("") + `</div>`;
-}
+/* ---- the staffing-document catalogue and its whole-document editor
+       (staffing-router slice 8), replacing the transitional model-profile
+       catalogue. Every authorized viewer inspects the stored documents
+       whole; only the service administrator is offered save controls, and
+       a save posts ONE whole document back through the same route.
 
-/* ---- the model-profile editor. Every control is a staffing DECISION —
-   who answers, with which model, at what effort — one rigor at a time, in
-   the same three columns as the launch act grid. The document shape that
-   carries the decision is the panel's problem, not the operator's; the
-   service stays the one semantic validator. */
-let mpEdit = null;
-function newModelProfile() {
-  if (!appAccess.admin) return;
-  document.getElementById("modelprofilesdlg").close();
-  openModelProfileEditor({name: "", examples: [""], configurations: {}}, true);
+       The editor is the shared syntax-only JSON one on purpose. A field
+       form here would be a second copy of the document schema — the
+       duplication this milestone exists to end — and any client-side
+       ordering or pricing rule would silently rewrite the operator's own
+       capability ladders, which are data and nobody else's to sort. ---- */
+async function openStaffingDocuments() {
+  document.getElementById("staffingdocsdlg").showModal();
+  await loadStaffingCatalogue();
+  renderStaffingDocuments();
 }
-function editModelProfile(name) {
+function renderStaffingDocuments() {
+  const error = document.getElementById("sd_error");
+  error.textContent = staffingDocumentsError;
+  error.style.display = staffingDocumentsError ? "block" : "none";
+  const create = document.getElementById("sd_new");
+  create.style.display = appAccess.admin ? "" : "none";
+  // A new document is seeded from one the service already stores, so
+  // there is nothing to offer when the catalogue could not be read.
+  create.disabled = !staffingDocuments.length;
+  document.getElementById("sd_catalogue").innerHTML =
+    staffingDocuments.map(doc => `<div class="card"><h3>${esc(doc.name)}</h3>
+      <pre class="strategy-source mono">${
+        esc(JSON.stringify(doc, null, 1))}</pre>
+      ${appAccess.admin ? `<button class="btn" onclick="editStaffingDocument('${
+        esc(escJsSq(doc.name))}')">Edit…</button>` : ""}
+    </div>`).join("") || (staffingDocumentsError ? "" :
+      `<div class="empty">No staffing documents.</div>`);
+}
+const STAFFING_DOCUMENT_HINT =
+  "One whole document, created or wholly replaced under the name it " +
+  "carries. Arrays ride exactly as written — each family's models and " +
+  "efforts are a capability ladder, least capable first — and the " +
+  "service is the only validator of what any of it means.";
+function openStaffingDocumentEditor(title, value) {
+  document.getElementById("staffingdocsdlg").close();
+  openSgEditor({
+    title: title,
+    value: value,
+    hint: STAFFING_DOCUMENT_HINT,
+    onSave: parsed => postJSON("/api/staffing/documents", parsed),
+    afterSave: openStaffingDocuments,
+  });
+}
+function editStaffingDocument(name) {
   if (!appAccess.admin) return;
-  const opened = modelProfileCatalogue.find(p => p.name === name);
+  const opened = staffingDocuments.find(doc => doc.name === name);
   if (!opened) return;
-  document.getElementById("modelprofilesdlg").close();
-  openModelProfileEditor(opened, false);
+  openStaffingDocumentEditor(`Staffing document — ${name}`, opened);
 }
-function openModelProfileEditor(profile, create) {
-  mpEdit = {
-    create: Boolean(create),
-    name: profile.name || "",
-    examples: (profile.examples || []).slice(),
-    configurations: JSON.parse(
-      JSON.stringify(profile.configurations || {})),
-    rigor: "medium",
-  };
-  for (const rigor of MP_RIGORS) {
-    const cfg = mpEdit.configurations[rigor];
-    if (!cfg || typeof cfg !== "object" || Array.isArray(cfg))
-      mpEdit.configurations[rigor] = {};
+function newStaffingDocument() {
+  if (!appAccess.admin) return;
+  // Seeded from a STORED document rather than a shape written here, with
+  // the name blanked so a save cannot silently replace the one it copied.
+  const seed = staffingDocuments.find(doc => doc.name === "default") ||
+    staffingDocuments[0];
+  if (!seed) return;
+  openStaffingDocumentEditor("New staffing document",
+                             Object.assign({}, seed, {name: ""}));
+}
+/* ---- the run's live staffing session (staffing-router slice 8). One
+       card on the settings page, one editor over the session's own route.
+       The panel reads the binding from the run summary and NOTHING else:
+       it never opens, moves or repairs one, and the split-family warning
+       beside it gates nothing — only an actual dispatch of that role
+       refuses on that condition. ---- */
+function staffingWorkAreaLabel(area) {
+  const parts = [];
+  if (area.project) parts.push(`project “${area.project}”`);
+  if (area.work_area) parts.push(`work area “${area.work_area}”`);
+  if (area.workspace_path) parts.push(area.workspace_path);
+  return parts.join(" / ");
+}
+function staffingSessionFacts(record) {
+  // What the session IS rather than what it selects: where the work
+  // happens and which families this machine has. Both are recorded at
+  // creation and no edit can move them.
+  return `${staffingWorkAreaLabel(record.work_area || {})} · families: ${
+    (record.families || []).join(", ") || "none"}`;
+}
+function staffingSplitWarning(roles) {
+  if (!roles || !roles.length) return "";
+  return `<div class="failure">Declared distinct families cannot be
+    honoured for: ${esc(roles.join(", "))}. This session still reads and
+    saves normally; a dispatch of that role is what refuses.</div>`;
+}
+function staffingSessionCard() {
+  if (!lastSessionId)
+    return `<div class="card"><h3>Staffing session</h3>
+      <div class="amend-hint">No session is bound to this run yet. Its next
+        resume opens one from the profile name and rigor it already
+        selected; nothing here binds, derives or repairs it.</div></div>`;
+  if (!lastSession)
+    return `<div class="card"><h3>Staffing session</h3>
+      <div class="failure">${esc(lastSessionId)}: ${
+        esc(lastSessionError || "not readable")}</div>
+      <div class="amend-hint">The run keeps this binding. The panel does not
+        rebind or repair it, and a dispatch that cannot read it falls back to
+        the default document on its own.</div></div>`;
+  const record = lastSession.session;
+  const overrides = record.overrides
+    ? Object.keys(record.overrides).sort().join(", ") : "";
+  return `<div class="card"><h3>Staffing session</h3>
+    <div class="amendform">
+      <span class="amend-hint mono" style="flex:1">${esc(record.document)}@${
+        esc(record.rigor)}${record.material
+          ? ` · material ${esc(record.material)}` : ""}${
+        overrides ? ` · overrides: ${esc(overrides)}` : ""}</span>
+      <button class="btn" onclick="openStaffingSession()">Change…</button>
+    </div>
+    ${staffingSplitWarning(lastSession.distinct_families_unsatisfiable)}
+    <div class="amend-hint mono">${esc(record.id)} · ${
+      esc(staffingSessionFacts(record))}</div>
+    <div class="amend-hint">Applies from the next call of this run; work
+      already dispatched keeps what it was staffed with.</div></div>`;
+}
+let openedStaffingSession = null;
+async function openStaffingSession() {
+  // Seeded once, from the settings poll's own read: the dialog lives
+  // outside the polled container, so a 2s re-render never resets an edit
+  // in progress. Opening writes nothing.
+  if (!lastSession) return;
+  const record = lastSession.session;
+  openedStaffingSession = record.id;
+  document.getElementById("ss_error").textContent = "";
+  await loadStaffingCatalogue();
+  document.getElementById("ss_document").innerHTML =
+    staffingDocumentOptions(record.document);
+  document.getElementById("ss_document_hint").textContent =
+    staffingDocumentsError || "";
+  document.getElementById("ss_rigor").value = record.rigor;
+  document.getElementById("ss_material").value = record.material || "";
+  document.getElementById("ss_overrides").value =
+    record.overrides ? JSON.stringify(record.overrides, null, 1) : "";
+  document.getElementById("ss_facts").textContent =
+    staffingSessionFacts(record);
+  document.getElementById("ss_warn").innerHTML =
+    staffingSplitWarning(lastSession.distinct_families_unsatisfiable);
+  document.getElementById("staffingsessiondlg").showModal();
+}
+async function saveStaffingSession() {
+  const error = document.getElementById("ss_error");
+  error.textContent = "";
+  const material = document.getElementById("ss_material").value.trim();
+  const raw = document.getElementById("ss_overrides").value.trim();
+  let overrides = null;
+  if (raw) {
+    try { overrides = JSON.parse(raw); }
+    catch (e) { error.textContent = "overrides: not valid JSON: " + e.message;
+                return; }
   }
-  if (!mpEdit.examples.length) mpEdit.examples = [""];
-  document.getElementById("mpe_title").textContent = create
-    ? "New model profile" : `Model profile — ${mpEdit.name}`;
-  const nameEl = document.getElementById("mpe_name");
-  nameEl.value = mpEdit.name;
-  nameEl.disabled = !create;
-  document.getElementById("mpe_name_hint").textContent = create
-    ? "Letters, digits, - and _ — this is how you pick it at launch."
-    : "A saved profile keeps its name; Save replaces the whole definition.";
-  document.getElementById("mpe_error").textContent = "";
-  mpRenderExamples();
-  mpRenderTabs();
-  mpRenderGrid();
-  document.getElementById("mpeditor").showModal();
-}
-function mpRenderExamples() {
-  document.getElementById("mpe_examples").innerHTML =
-    mpEdit.examples.map((example, i) =>
-      `<div class="mp-listrow">
-         <input value="${esc(example)}" placeholder="public API contract"
-           oninput="mpSetExample(${i}, this.value)">
-         <button class="btn" type="button" onclick="mpRemoveExample(${i})"
-           ${mpEdit.examples.length < 2 ? "disabled" : ""}>×</button>
-       </div>`).join("");
-}
-function mpSetExample(i, value) { mpEdit.examples[i] = value; }
-function mpAddExample() { mpEdit.examples.push(""); mpRenderExamples(); }
-function mpRemoveExample(i) {
-  mpEdit.examples.splice(i, 1);
-  mpRenderExamples();
-}
-function mpRenderTabs() {
-  document.getElementById("mpe_tabs").innerHTML = MP_RIGORS.map(rigor =>
-    `<button class="btn ${rigor === mpEdit.rigor ? "on" : ""}" type="button"
-       onclick="mpSelectRigor('${rigor}')">${rigor}</button>`).join("");
-}
-function mpSelectRigor(rigor) {
-  mpEdit.rigor = rigor;
-  mpRenderTabs();
-  mpRenderGrid();
-}
-function mpOptions(values, current, emptyLabel) {
-  return `<option value="">— ${esc(emptyLabel)} —</option>` +
-    values.map(v =>
-      `<option ${v === current ? "selected" : ""}>${esc(v)}</option>`
-    ).join("");
-}
-function mpRenderGrid() {
-  const cfg = mpEdit.configurations[mpEdit.rigor];
-  document.getElementById("mpe_grid").innerHTML =
-    `<span></span><span class="acthead">family</span>
-     <span class="acthead">model</span><span class="acthead">effort</span>` +
-    MP_ROWS.map(row => {
-      const f = mpEntryFields(cfg[row.act]);
-      const declared = row.kind === "full" ? f.agent : row.family;
-      const family = row.kind === "full"
-        ? `<select id="mpe_${row.act}_agent"
-             onchange="mpOnFamily('${row.act}')">
-             ${mpOptions(MP_FAMILY_OPTS, f.agent, "unset")}</select>`
-        : row.kind === "family"
-        ? `<select id="mpe_${row.act}_agent"
-             onchange="mpOnField('${row.act}')">
-             ${mpOptions(MP_FAMILY_OPTS, f.agent, "unset")}</select>`
-        : `<span class="actfamily mono">${esc(row.family)}${
-             row.family === "opposite" ? " (derived)" : ""}</span>`;
-      const model = row.kind === "family"
-        ? `<span class="actfamily mono">derived</span>`
-        : `<select id="mpe_${row.act}_model"
-             onchange="mpOnField('${row.act}')">
-             ${mpOptions(mpModelOpts(declared), f.model,
-                         "family default")}</select>`;
-      const effort = row.kind === "family"
-        ? `<span class="actfamily mono">caller's</span>`
-        : `<select id="mpe_${row.act}_effort"
-             onchange="mpOnField('${row.act}')">
-             ${mpOptions(EFFORT_OPTS.claude, f.effort,
-                         "family default")}</select>`;
-      return `<label title="${esc(row.act)}">${esc(row.label)}</label>` +
-        family + model + effort;
-    }).join("");
-}
-function mpOnFamily(act) {
-  // The family just changed, so the other family's model no longer
-  // applies: clear the tuning and re-offer this family's models.
-  mpWriteAct(act, true);
-  mpRenderGrid();
-}
-function mpOnField(act) { mpWriteAct(act, false); }
-function mpWriteAct(act, familyChanged) {
-  const cfg = mpEdit.configurations[mpEdit.rigor];
-  const row = MP_ROWS.find(r => r.act === act);
-  const read = field => {
-    const el = document.getElementById(`mpe_${act}_${field}`);
-    return el ? el.value : "";
-  };
-  const agent = row.kind === "tuned" ? "" : read("agent");
-  const model = familyChanged ? "" : read("model");
-  const effort = familyChanged ? "" : read("effort");
-  // A wholly blank row is an ABSENT act, not an empty one: the run keeps
-  // its own assignment and then the family default.
-  if (!agent && !model && !effort) { delete cfg[act]; return; }
-  // Consultation derives model and effort, so its only form is the family
-  // policy; any other seat with nothing tuned takes that same short form.
-  if (agent && !model && !effort) { cfg[act] = agent; return; }
-  const entry = {};
-  if (agent) entry.agent = agent;
-  if (model) entry.model = model;
-  if (effort) entry.effort = effort;
-  cfg[act] = entry;
-}
-async function saveModelProfileEditor() {
-  const error = document.getElementById("mpe_error");
-  error.textContent = "";
-  const name = mpEdit.create
-    ? document.getElementById("mpe_name").value.trim() : mpEdit.name;
-  const document_ = {
-    name,
-    examples: mpEdit.examples.map(e => e.trim()).filter(Boolean),
-    configurations: mpEdit.configurations,
-  };
   try {
-    if (mpEdit.create &&
-        modelProfileCatalogue.some(p => p.name === name))
-      throw new Error("That name already exists — open it with Edit.");
-    await postJSON("/api/model-profiles", document_);
-  } catch (e) { error.textContent = e.message; return; }  // token verbatim
-  document.getElementById("mpeditor").close();
-  await openModelProfiles();
-}
-async function openRunModelProfile() {
-  const error = document.getElementById("mps_error");
-  error.textContent = "";
-  await loadModelProfileCatalogue();
-  const select = document.getElementById("mps_name");
-  select.innerHTML = `<option value="">— choose profile —</option>` +
-    modelProfileCatalogue.map(profile =>
-      `<option value="${esc(profile.name)}">${esc(profile.name)}</option>`
-    ).join("");
-  try {
-    const current = await api(`/api/runs/${selected}/model-profile`);
-    select.value = current.selection.name;
-    document.getElementById("mps_rigor").value = current.selection.rigor;
-  } catch (e) { error.textContent = e.message; }
-  if (modelProfileCatalogueError) error.textContent = modelProfileCatalogueError;
-  onRunModelProfileChange();
-  document.getElementById("modelprofileselectiondlg").showModal();
-}
-function onRunModelProfileChange() {
-  const profile = modelProfileCatalogue.find(p => p.name ===
-    document.getElementById("mps_name").value);
-  document.getElementById("mps_hint").textContent = profile
-    ? profile.examples.join(" · ") : "";
-}
-async function saveRunModelProfile() {
-  const error = document.getElementById("mps_error");
-  const name = document.getElementById("mps_name").value;
-  if (!name) { error.textContent = "Choose a model profile."; return; }
-  try {
-    await postJSON(`/api/runs/${selected}/model-profile`, {
-      name,
-      rigor: document.getElementById("mps_rigor").value,
+    // Exactly the four editable fields, every time: an emptied optional
+    // one rides as an explicit null, which is how the store clears it.
+    await postJSON("/api/staffing/sessions/" +
+                   encodeURIComponent(openedStaffingSession), {
+      document: document.getElementById("ss_document").value,
+      rigor: document.getElementById("ss_rigor").value,
+      material: material || null,
+      overrides: overrides,
     });
-  } catch (e) { error.textContent = e.message; return; }
-  document.getElementById("modelprofileselectiondlg").close();
+  } catch (e) { error.textContent = e.message; return; }  // token verbatim
+  document.getElementById("staffingsessiondlg").close();
   refreshDetail();
+}
+/* ---- the shared standalone staffing choice (staffing-router slice 8).
+       Ordering a task, starting a discussion and aligning a work area each
+       ask the SAME three things — which document staffs the work, at which
+       rigor, over which optional material — and each hands the operation
+       one session opened from exactly what was shown.
+
+       Families are not a control here. The session records the family
+       order the service already staffs that project's standalone work
+       from, carried read-only on the project view these forms already load
+       for their work-area selectors: the one authority the router later
+       reads keeps one producer, and the browser holds no family name and
+       no default order of its own. A project the view cannot supply that
+       fact for submits nothing, exactly as an unreadable catalogue does.
+
+       Two ordinary requests, never a transaction: the operation is not
+       sent at all unless its session exists, and a refusal after it exists
+       is shown once — no retry, no rollback, no second attempt. ---- */
+const STANDALONE_RIGORS = ["low", "medium", "high"];
+function standaloneStaffingMarkup(prefix) {
+  // Document, rigor and optional material — and nothing else. A seat, a
+  // family, a model, an effort, an index or a round is the router's to
+  // answer from the document named here, never an orderer's to pin.
+  return `<label>Staffing</label>
+    <div class="pathrow">
+      <select id="${prefix}_staffing_document"></select>
+      <select id="${prefix}_staffing_rigor">${STANDALONE_RIGORS.map(rigor =>
+        `<option${rigor === "medium" ? " selected" : ""}>${rigor}</option>`
+      ).join("")}</select>
+      <input id="${prefix}_staffing_material" class="mono"
+        placeholder="material (optional)">
+    </div>
+    <div class="hint" id="${prefix}_staffing_hint"></div>`;
+}
+async function loadStandaloneStaffing(prefix) {
+  const host = document.getElementById(prefix + "_staffing");
+  host.innerHTML = standaloneStaffingMarkup(prefix);
+  await loadStaffingCatalogue();
+  const select = document.getElementById(prefix + "_staffing_document");
+  if (!select) return;  // the dialog was reopened while the read was out
+  select.innerHTML = staffingDocumentOptions("default");
+  document.getElementById(prefix + "_staffing_hint").textContent =
+    staffingDocumentsError ||
+    "Every call this orders is staffed by the chosen document, at the "
+    + "chosen rigor, over the material if one is named.";
+}
+async function standaloneStaffingSession(prefix, workArea, families) {
+  // The session the operation about to be submitted will carry: its work
+  // area, the selection shown above, and the families the SERVICE derived
+  // for that project. Returns the id to hand over, or throws the reason to
+  // show — in which case nothing is submitted at all.
+  if (staffingDocumentsError) throw new Error(staffingDocumentsError);
+  if (!Array.isArray(families))
+    throw new Error("this project's configured families could not be read "
+      + "— nothing was submitted");
+  const body = {
+    work_area: workArea,
+    families: families,
+    document: document.getElementById(prefix + "_staffing_document").value,
+    rigor: document.getElementById(prefix + "_staffing_rigor").value,
+  };
+  const material =
+    document.getElementById(prefix + "_staffing_material").value.trim();
+  if (material) body.material = material;
+  const created = await postJSON("/api/staffing/sessions", body);
+  // What the store actually kept, compared with what this project's
+  // configuration names. The stored list — not the fact above — is what
+  // the router reads when the operation runs, so an operation whose
+  // session came back carrying different family NAMES, or the same names
+  // in a different order, would be staffed from families nobody chose for
+  // it. The divergence the store can produce today is normalization: it
+  // strips each catalogue string it keeps, and family names are matched by
+  // exact string, so a configured " codex " that no ladder can match
+  // becomes a stored "codex" that runs — a different family, model and
+  // cost from the one this project's other standalone work is staffed on.
+  // Nothing is submitted then: an operation carries the exact order that
+  // was shown, or it is not ordered at all.
+  const stored = (created.session || {}).families;
+  if (!Array.isArray(stored) || stored.length !== families.length
+      || stored.some((name, i) => name !== families[i]))
+    throw new Error("the session records different family names or order "
+      + "than this project's configuration — nothing was submitted");
+  return created.session.id;
 }
 /* ---- strategy catalogue, configurator, launch selection and live repoint.
    One GET supplies every semantic key, legal value and support label. ---- */
@@ -5328,138 +5033,20 @@ document.getElementById("pk_list").addEventListener("click", (ev) => {
     document.getElementById("picker").close();
   }
 });
-const ACT_NAMES = ["skeletoner", "drafter", "implementer", "review_codex",
-                   "review_claude", "fixer", "reclassifier"];
-const FIXED_ACT_AGENTS = {
-  review_codex: "codex",
-  review_claude: "claude",
-};
-const MODEL_OPTS = {
-  claude: ["claude-fable-5", "claude-opus-5", "claude-sonnet-5"],
-  codex: ["gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"],
-};
-const EFFORT_OPTS = {
-  claude: ["low", "medium", "high", "xhigh", "max"],
-  codex: ["low", "medium", "high", "xhigh", "max"],
-};
-// Structural defaults used by a NONBLANK whole-act override when it omits
-// model or effort. A blank live row follows the current model profile; a blank
-// launch row adds no panel layer, but lower creation layers may still override
-// that profile. Keep these fallback labels in sync with driver.py.
-const FAMILY_DEFAULTS = {
-  claude: {model: "claude-opus-5", effort: "xhigh"},
-  codex: {model: "gpt-5.6-sol", effort: "xhigh"},
-};
-const ACT_DEFAULTS = {
-  // stickyEffort: the driver re-asserts the skeleton's own effort even
-  // when the operator moves the act to the other family
-  // (driver._skeletoner_profile), so the label must not drop to xhigh.
-  skeletoner: {agent: "claude", model: "claude-fable-5", effort: "max",
-               stickyEffort: true},
-  drafter: {agent: "codex"},
-  implementer: {agent: "claude", model: "claude-fable-5", effort: "max"},
-  review_codex: {agent: "codex"},
-  review_claude: {agent: "claude"},
-  fixer: {agent: "codex"},
-  reclassifier: {agent: "codex", effort: "xhigh"},
-};
-function actDefaults(act, agent) {
-  // A pinned act keeps its own model/effort; anything unpinned falls to the
-  // family default of the agent in force once a whole-act override exists.
-  const pin = ACT_DEFAULTS[act] || {};
-  const moved = Boolean(agent) && agent !== pin.agent;
-  const fam = FAMILY_DEFAULTS[agent || pin.agent] || {};
-  return {
-    model: (moved ? null : pin.model) || fam.model,
-    effort: (moved && !pin.stickyEffort ? null : pin.effort) || fam.effort,
-  };
-}
+// Kept for the run list's workplace chips: this declaration shadows the
+// earlier `shortModel`, so `modelEffort` above renders through it. The
+// family names, model ladders, effort ladders and per-family defaults that
+// used to sit beside it were the second staffing authority this milestone
+// ends — the router answers all four from the document a session names.
 function shortModel(model) {
   return model ? String(model).replace(/^claude-/, "") : "";
 }
-function agentModels(agent) {
-  return MODEL_OPTS[agent] || [...MODEL_OPTS.claude, ...MODEL_OPTS.codex];
-}
-function agentEfforts(agent) {
-  return EFFORT_OPTS[agent] || ["low", "medium", "high", "xhigh", "max"];
-}
-function onAgentChange(prefix, act, userChanged) {
-  const agentEl = document.getElementById(`${prefix}${act}_agent`);
-  const explicitAgent = agentEl ? agentEl.value : "";
-  const agent = FIXED_ACT_AGENTS[act] || explicitAgent;
-  const modelEl = document.getElementById(`${prefix}${act}_model`);
-  const effEl = document.getElementById(`${prefix}${act}_effort`);
-  if (userChanged) {
-    // The family just changed: the other family's model/effort no longer
-    // apply, so reset both to that family's default (empty = default)
-    // instead of leaving a stale codex model selected under claude.
-    if (modelEl) modelEl.value = "";
-    if (effEl) effEl.value = "";
-  }
-  const profileLayer = prefix === "a_" || prefix === "ra_";
-  const retainedEmpty = prefix === "ra_" &&
-    retainedEmptyActOverrides.has(act);
-  const rowHasOverride = retainedEmpty || Boolean(
-    explicitAgent || (modelEl && modelEl.value.trim()) ||
-    (effEl && effEl.value)
-  );
-  const inheritsProfile = prefix === "ra_" && !rowHasOverride;
-  const noPanelOverride = prefix === "a_" && !rowHasOverride;
-  if (agentEl && profileLayer) {
-    const empty = agentEl.querySelector('option[value=""]');
-    if (empty) empty.textContent = inheritsProfile ? "current profile"
-      : noPanelOverride ? "no panel override" : "no family override";
-  }
-  const dl = document.getElementById(`dl_${prefix}${act}`);
-  if (dl)
-    dl.innerHTML = agentModels(agent)
-      .map(m => `<option>${m}</option>`).join("");
-  const def = actDefaults(act, agent);
-  const modelBox = modelEl;
-  if (modelBox)
-    modelBox.placeholder = inheritsProfile ? "current profile"
-      : noPanelOverride ? "no panel override" : def.model
-      ? `default (${shortModel(def.model)})` : "default";
-  const eff = effEl;
-  if (eff) {
-    const cur = eff.value;
-    const opts = agentEfforts(agent);
-    const label = inheritsProfile ? "current profile"
-      : noPanelOverride ? "no panel override" : def.effort
-      ? `default (${def.effort})` : "default";
-    eff.innerHTML = `<option value="">${label}</option>` +
-      opts.map(o => `<option ${o === cur ? "selected" : ""}>${o}</option>`).join("");
-    if (cur && !opts.includes(cur)) eff.value = "";
-  }
-}
-function refreshActInheritanceLabel(event) {
-  const match = /^(a_|ra_)(.+)_(model|effort)$/.exec(event.target.id || "");
-  if (match) onAgentChange(match[1], match[2]);
-}
-document.addEventListener("input", refreshActInheritanceLabel);
-document.addEventListener("change", refreshActInheritanceLabel);
 function toggleMore() {
   const el = document.getElementById("f_more");
   const open = el.style.display !== "none";
   el.style.display = open ? "none" : "block";
   document.getElementById("f_more_btn").textContent =
     open ? "More options ▾" : "More options ▴";
-}
-function collectActs(prefix) {
-  const acts = {};
-  for (const act of ACT_NAMES) {
-    const fixed = FIXED_ACT_AGENTS[act];
-    const agentEl = document.getElementById(`${prefix}${act}_agent`);
-    const agent = agentEl ? agentEl.value : "";
-    const model = document.getElementById(`${prefix}${act}_model`).value.trim();
-    const effort = document.getElementById(`${prefix}${act}_effort`).value;
-    const entry = {};
-    if (!fixed && agent) entry.agent = agent;
-    if (model) entry.model = model;
-    if (effort) entry.effort = effort;
-    if (Object.keys(entry).length) acts[act] = entry;
-  }
-  return acts;
 }
 async function submitForm() {
   const err = document.getElementById("formError");
@@ -5494,10 +5081,6 @@ async function submitForm() {
     catch (e) { err.textContent = "config is not valid JSON"; return; }
   }
   if (verify) config.verification = [verify];
-  const acts = collectActs("a_");
-  if (Object.keys(acts).length) {
-    config.acts = Object.assign({}, config.acts || {}, acts);
-  }
   if (Object.keys(config).length) payload.config = config;
   if (strategyCatalogueLoading) {
     err.textContent = "strategy profiles are still loading";
@@ -5518,10 +5101,9 @@ async function submitForm() {
     return;
   }
   payload.profile = profile;
-  const modelProfile = document.getElementById("f_model_profile").value;
-  if (modelProfile) payload.model_profile = {
-    name: modelProfile,
-    rigor: document.getElementById("f_model_rigor").value,
+  payload.staffing = {
+    document: document.getElementById("f_staffing_document").value || "default",
+    rigor: document.getElementById("f_staffing_rigor").value,
   };
   try {
     const data = await api("/api/runs", {
@@ -5908,6 +5490,8 @@ let taskCatalogueSeq = 0;
 let taskDialogSeq = 0;
 let taskSubmitPending = false;
 let visibleSliceProducers = new Map();
+let visibleSliceMaterials = new Map();
+let sliceMaterialTarget = null;
 let visibleProducerRunId = null;
 // Canonical task responses are the only source for chips. A failed refresh
 // leaves this last good view alone; no task is inferred from milestone prose.
@@ -5937,6 +5521,9 @@ function resetTaskDialog(mode) {
   const direct = mode === "direct";
   document.getElementById("task_direct_fields").style.display = direct ? "" : "none";
   document.getElementById("task_producer_context").style.display = direct ? "none" : "";
+  // A producer choice orders no call: it records which executor a future
+  // unit uses, and that unit is staffed by its own run's session.
+  document.getElementById("task_staffing").style.display = direct ? "" : "none";
   document.getElementById("task_submit").textContent = direct ? "Order task" : "Save producer";
   syncTaskSubmitDisabled();
 }
@@ -5951,6 +5538,7 @@ function openDirectTaskForm(preselect) {
   document.getElementById("taskform").showModal();
   loadTaskProjects(preselect);
   loadTaskExecutorCatalogue();
+  loadStandaloneStaffing("task");
 }
 async function loadTaskProjects(preselect) {
   const dialogSeq = taskDialogSeq;
@@ -6178,14 +5766,119 @@ function producerSelectionLabel(selection) {
     : [];
   return selection.task_executor + (values.length ? ` · ${values.join(", ")}` : "");
 }
-function producerControls(sliceId, producerMap) {
+function producerControls(sliceId, producerMap, material) {
   const choices = producerMap || {};
   return `<span class="producer-choices">
     <button class="producer-choice" type="button"
       onclick="openProducerTask(${sliceId},'draft_slice_note')">Note · <span id="producer-${sliceId}-draft_slice_note">${esc(producerSelectionLabel(choices.draft_slice_note))}</span></button>
     <button class="producer-choice" type="button"
       onclick="openProducerTask(${sliceId},'implement')">Implementation · <span id="producer-${sliceId}-implement">${esc(producerSelectionLabel(choices.implement))}</span></button>
+    <button class="producer-choice" type="button"
+      onclick="openSliceMaterial(${sliceId})">Material · <span id="material-${sliceId}">${esc(sliceMaterialLabel(material))}</span></button>
   </span>`;
+}
+/* The material is one prospective string beside the two producer choices,
+   and nothing more: it never edits the skeleton artifact, the staffing
+   document, or the session's own default material, and the router still
+   decides the agent, the model and the effort behind every call. */
+function sliceMaterialAbsent(material) {
+  return material === null || material === undefined;
+}
+function sliceMaterialLabel(material) {
+  /* Absence is the only thing that means "the session's default stands".
+     JSON string syntax makes every present value distinguishable from it,
+     including the empty string, the literal "session default", and strings
+     containing line breaks. */
+  if (sliceMaterialAbsent(material)) return "session default";
+  return JSON.stringify(material);
+}
+function openSliceMaterial(sliceId) {
+  if (!selected || visibleProducerRunId !== selected) {
+    refreshDetail();
+    return;
+  }
+  const stored = visibleSliceMaterials.get(sliceId);
+  const box = document.getElementById("sm_material");
+  document.getElementById("sm_title").textContent =
+    `Slice ${String(sliceId).padStart(2, "0")} · material`;
+  document.getElementById("sm_error").textContent = "";
+  box.value = sliceMaterialAbsent(stored) ? "" : JSON.stringify(stored);
+  /* JSON string syntax keeps the single-line editor lossless for every
+     storable string, including CR and LF. Track actual input separately:
+     an untouched blank still means absence, while typing "\"\"" proposes
+     the explicit empty string. */
+  sliceMaterialTarget = {runId: selected, sliceId, stored, edited: false};
+  document.getElementById("slicematerialdlg").showModal();
+}
+function markSliceMaterialEdited() {
+  if (sliceMaterialTarget) sliceMaterialTarget.edited = true;
+}
+function applyConfirmedSliceMaterial(sliceId, material) {
+  visibleSliceMaterials.set(sliceId, material);
+  const el = document.getElementById(`material-${sliceId}`);
+  if (el) el.textContent = sliceMaterialLabel(material);
+}
+function saveSliceMaterial() {
+  /* Decode the exact string represented in the box. Trimming or folding an
+     emptied box into a clear would rewrite the operator's own word: a name
+     the document cannot carry resolves to the session default today, and
+     silently repairing it into one the document DOES carry would restaff
+     the next production task nobody asked to restaff. */
+  const box = document.getElementById("sm_material").value;
+  const target = sliceMaterialTarget;
+  if (target && !target.edited) {
+    /* A slice with no proposal shows the same empty box as one proposing
+       the empty string, so the untouched rule has to cover ABSENCE too,
+       and absence is the one state no request can express: posting the
+       box would author a `""` nobody typed, and posting null would record
+       a withdrawal nobody asked for. Both are explicit operator writes a
+       later plan review reads as settled, so an untouched box on such a
+       slice sends nothing at all and simply closes. */
+    if (sliceMaterialAbsent(target.stored)) {
+      document.getElementById("slicematerialdlg").close();
+      return;
+    }
+    return writeSliceMaterial(target.stored);
+  }
+  let material;
+  try {
+    material = JSON.parse(box);
+  } catch (_error) {
+    document.getElementById("sm_error").textContent =
+      "Enter a valid JSON string.";
+    return;
+  }
+  if (typeof material !== "string") {
+    document.getElementById("sm_error").textContent =
+      "Material must be a JSON string.";
+    return;
+  }
+  return writeSliceMaterial(material);
+}
+function clearSliceMaterial() {
+  /* Removing the proposal is its own deliberate act, never a side effect
+     of an emptied box. */
+  return writeSliceMaterial(null);
+}
+async function writeSliceMaterial(material) {
+  if (!sliceMaterialTarget) return;
+  const target = Object.assign({}, sliceMaterialTarget);
+  const materialViewSeq = detailSeq;
+  const error = document.getElementById("sm_error");
+  error.textContent = "";
+  let data;
+  try {
+    // One request, sent once: a refusal is rendered exactly as the
+    // service worded it and nothing is queued or resent.
+    data = await postJSON(
+      `/api/runs/${encodeURIComponent(target.runId)}/slices/${
+        target.sliceId}/material`,
+      {material: material});
+  } catch (e) { error.textContent = e.message; return; }
+  if (materialViewSeq === detailSeq)
+    applyConfirmedSliceMaterial(target.sliceId, data.material);
+  document.getElementById("slicematerialdlg").close();
+  refreshDetail();
 }
 function openProducerTask(sliceId, taskKind) {
   if (!selected || visibleProducerRunId !== selected) {
@@ -6231,15 +5924,19 @@ async function submitTaskForm() {
   const payload = {task_executor: taskExecutorSelected};
   if (resolved.present) payload.configuration = resolved.configuration;
   let path;
+  let binding = null;
+  let families = null;
   if (mode === "producer") {
     payload.task_kind = producerTarget.taskKind;
     path = `/api/runs/${encodeURIComponent(producerTarget.runId)}/slices/${producerTarget.sliceId}/producer`;
   } else {
-    const binding = taskBinding();
+    binding = taskBinding();
     if (!binding) {
       error.textContent = "choose a project and work area";
       return;
     }
+    families = taskProjects[
+      +document.getElementById("t_project").value].families_order;
     const request = document.getElementById("t_request").value;
     if (!request.trim()) { error.textContent = "request is required"; return; }
     const requestDoc = {
@@ -6256,6 +5953,12 @@ async function submitTaskForm() {
   taskSubmitPending = true;
   syncTaskSubmitDisabled();
   try {
+    if (mode !== "producer")
+      // First request. It either yields the id this order carries, or the
+      // order is never sent — including when the fact the session must
+      // record could not be read for the chosen project.
+      payload.staffing_session = await standaloneStaffingSession(
+        "task", binding, families);
     const data = await postJSON(path, payload);
     if (mode === "producer") {
       if (dialogSeq === taskDialogSeq && producerViewSeq === detailSeq)
@@ -6304,33 +6007,21 @@ function taskKind(record) {
        service's refusal tokens surface verbatim. ---- */
 let bsProjects = [];
 /* The roster is a small state array rendered on structural changes only
-   (add/remove/family change) — the dialog is outside the 2s polled
-   containers, so typed model text is never clobbered mid-edit. Seat ids
+   (add/remove) — it carries the discussion's SHAPE and nothing about who
+   runs it: role, delivery, and for Dante its external provider. Seat ids
    are machinery, assigned automatically at submit. */
 let bsRoster = [];
 let bsRefs = [];
 function defaultBsRoster() {
-  // The standing roster the dialog opens with — visible, armed, and
-  // editable in place (an operator decision, not a hidden resolution):
-  // Codex proposes, Claude challenges, and Dante asks anti-drift questions.
+  // The standing roster the dialog opens with: one position proposes, one
+  // challenges it, and Dante asks anti-drift questions. Which agent, model
+  // and effort each of them runs on is the staffing session's answer at
+  // the seat's roster position, given when its call is actually made.
   return [
-    {role: "initial_position", delivery: "llm", agent: "codex",
-     model: "gpt-5.6-sol", effort: "max"},
-    {role: "contrary_position", delivery: "llm", agent: "claude",
-     model: "claude-opus-5", effort: "max"},
-    {role: "common_sense", delivery: "external", externalProvider: "narrator",
-     agent: "codex", model: "gpt-5.6-sol", effort: "max"},
+    {role: "initial_position", delivery: "llm"},
+    {role: "contrary_position", delivery: "llm"},
+    {role: "common_sense", delivery: "external", externalProvider: "narrator"},
   ];
-}
-function snapshotBsRoster() {
-  bsRoster.forEach((seat, i) => {
-    const agent = document.getElementById(`b_p${i}_agent`);
-    const model = document.getElementById(`b_p${i}_model`);
-    const effort = document.getElementById(`b_p${i}_effort`);
-    if (agent) seat.agent = agent.value;
-    if (model) seat.model = model.value.trim();
-    if (effort) seat.effort = effort.value;
-  });
 }
 function bsSeatLabel(seat, index) {
   if (seat.delivery === "external") return "Dante · external narrator";
@@ -6343,46 +6034,19 @@ function renderBsRoster() {
   const interlocutors = bsRoster.filter(
     s => s.role === "contrary_position" && s.delivery === "llm").length;
   document.getElementById("b_roster").innerHTML =
-    `<div class="rosterrow"><span></span><span class="acthead">agent</span>
-       <span class="acthead">model</span><span class="acthead">effort</span><span></span></div>` +
     bsRoster.map((seat, i) => `
     <div class="rosterrow">
       <label>${esc(bsSeatLabel(seat, i))}</label>
-      <select id="b_p${i}_agent" onchange="onBsAgentChange(${i})">
-        <option value=""${seat.agent === "" ? " selected" : ""}>default</option>
-        <option${seat.agent === "codex" ? " selected" : ""}>codex</option>
-        <option${seat.agent === "claude" ? " selected" : ""}>claude</option>
-      </select>
-      <input id="b_p${i}_model" list="dl_b_p${i}" placeholder="default"
-        value="${esc(seat.model)}">
-      <select id="b_p${i}_effort"><option value="">default</option></select>
-      <datalist id="dl_b_p${i}"></datalist>
       <button class="roster-x" type="button" title="Remove participant"
         onclick="removeBsSeat(${i})"
         ${seat.role === "initial_position" || seat.delivery === "external" || interlocutors <= 1 ? "disabled" : ""}>×</button>
     </div>`).join("");
-  // Populate each seat's datalist and effort options for its family —
-  // the exact machinery the milestone acts grid uses (prefix "b_p",
-  // act = the row index).
-  bsRoster.forEach((seat, i) => {
-    const effort = document.getElementById(`b_p${i}_effort`);
-    effort.value = seat.effort;
-    onAgentChange("b_p", String(i));
-    effort.value = seat.effort || "";
-  });
-}
-function onBsAgentChange(i) {
-  snapshotBsRoster();
-  onAgentChange("b_p", String(i), true);
-  snapshotBsRoster();
 }
 function addBsSeat() {
-  snapshotBsRoster();
-  bsRoster.push({role: "contrary_position", delivery: "llm", agent: "", model: "", effort: ""});
+  bsRoster.push({role: "contrary_position", delivery: "llm"});
   renderBsRoster();
 }
 function removeBsSeat(i) {
-  snapshotBsRoster();
   if (bsRoster[i].role === "initial_position" || bsRoster[i].delivery === "external") return;
   bsRoster.splice(i, 1);
   renderBsRoster();
@@ -6421,6 +6085,7 @@ function openBrainstormingForm(preselect) {
   renderBsRoster();
   renderBsRefs();
   loadBsProjects(preselect);
+  loadStandaloneStaffing("bs");
   document.getElementById("bsform").showModal();
 }
 async function loadBsProjects(preselect) {
@@ -6559,10 +6224,10 @@ async function submitBrainstorming() {
     err.textContent = "maximum rounds must be a positive whole number";
     return;
   }
-  snapshotBsRoster();
-  // Seat ids are generated, never typed: the operator's decision is what
-  // staffs the seat, not what it is called. Defaults are omitted so the
-  // service resolves them exactly as an unconfigured launch.
+  // Seat ids are generated, never typed. A participant entry carries the
+  // roster fact — who this position is and how its turn is delivered — and
+  // no staffing pin at all: the session below staffs each automatic
+  // position at its persisted index, live, when that position runs.
   let critics = 0;
   const participants = bsRoster.map(seat => {
     const entry = {
@@ -6573,9 +6238,6 @@ async function submitBrainstorming() {
     };
     if (seat.delivery === "external")
       entry.external_provider = seat.externalProvider;
-    if (seat.agent) entry.model_family = seat.agent;
-    if (seat.model) entry.model = seat.model;
-    if (seat.effort) entry.effort = seat.effort;
     return entry;
   });
   const context = {brief};
@@ -6604,6 +6266,11 @@ async function submitBrainstorming() {
   const button = document.getElementById("b_submit");
   button.disabled = true;
   try {
+    // First request. A refusal here leaves the discussion unsent; a
+    // refusal below leaves this session inert, and neither is retried.
+    payload.staffing_session = await standaloneStaffingSession(
+      "bs", {project: project.slug, work_area: area.record.name},
+      project.families_order);
     await api("/api/brainstorming/sessions", {
       method: "POST",
       headers: {"Content-Type": "application/json"},

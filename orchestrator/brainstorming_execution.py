@@ -52,12 +52,27 @@ class RunnerParticipantExecutor:
         self.timeout_override = timeout_override
         self.current_resolver = current_resolver
         self.fresh_each_call = bool(fresh_each_call)
+        # What the LAST resolution reported beside its answer: the default
+        # document answered because an input could not be read. Carried on
+        # the executor, exactly as the milestone driver carries it on its own
+        # dispatch resolver, so the activity entry for this call can say so
+        # without the answer growing a fourth key.
+        self.staffing_fallback = None
 
-    def prepare_dispatch(self):
-        """Resolve optional current settings immediately before one call."""
+    def prepare_dispatch(self, round_number=1):
+        """Resolve optional current settings immediately before one call.
+
+        *round_number* is the discussion round the call belongs to — a
+        consumer fact the router keeps no history of, and the one input a
+        `step_up` rule reads. The seat itself is fixed when the binding is
+        built; only the round moves.
+        """
         if self.current_resolver is None:
             return
-        current = self.current_resolver()
+        current = self.current_resolver(round_number)
+        self.staffing_fallback = getattr(
+            self.current_resolver, "staffing_fallback", None
+        )
         if not isinstance(current, dict):
             raise ExecutionRejected(
                 "current participant resolver returned no staffing"
@@ -299,6 +314,96 @@ class ParticipantExecution:
             evidence["quiescent"] = True
         return result
 
+    def _action_context(self, session_id, participant):
+        """Identify the action one physical call belongs to.
+
+        ONE derivation, read by the two seams that need it: the round the
+        router is asked for immediately before the call, and the activity
+        entry written after it. Returns ``None`` when no coordinator or
+        production seam recorded an action, which is how a low-level caller
+        exercising :class:`ParticipantExecution` directly stays silent.
+
+        Read afresh per physical call, so the ROUND stays the action's while
+        the provider attempt moves: an envelope repair bumps the durable
+        attempt before its dispatch (`mark_turn_attempt_envelope_repair`,
+        `retry_external_provider`) and the production branch counts what the
+        ledger already holds, which is why a repair records its own activity
+        instead of reusing the failed call's identity.
+        """
+        attempt = self.store.read_turn_attempt(session_id)
+        if attempt is not None:
+            kind = attempt.get("kind", "discussion_turn")
+            return {
+                "action_id": attempt["token"],
+                "provider_attempt": attempt.get("provider_attempt", 1),
+                "completed": attempt["completed_turn_count"],
+                "kind": kind,
+                "stage": (
+                    (attempt.get("action_context") or {}).get("stage")
+                    if kind == "closure"
+                    else "discussion"
+                ),
+                "production": None,
+            }
+        intervention = self.store.read_external_intervention(session_id)
+        if (
+            intervention is not None
+            and intervention["participant_id"] == participant["id"]
+        ):
+            kind = (
+                "discussion_turn"
+                if intervention["action_kind"] == "discussion_turn"
+                else "closure"
+            )
+            return {
+                "action_id": intervention["token"],
+                "provider_attempt": intervention["provider_attempt"],
+                "completed": intervention["completed_turn_count"],
+                "kind": kind,
+                "stage": (
+                    "discussion" if kind == "discussion_turn" else "vote"
+                ),
+                "production": None,
+            }
+        production = self.store.read_task_effect_attempt(session_id)
+        if production is None:
+            return None
+        action_id = "task-production-effect:%s:lead" % production["token"]
+        activity = self.store.read_activity(session_id) or {"events": []}
+        return {
+            "action_id": action_id,
+            "provider_attempt": 1 + sum(
+                event.get("action_id") == action_id
+                for event in activity["events"]
+            ),
+            "completed": 0,
+            "kind": "production_effect",
+            "stage": "production",
+            "production": production,
+        }
+
+    def _action_round(self, session_id, context):
+        """The discussion round *context*'s call belongs to.
+
+        The same count the activity entry records and the one the router is
+        asked with, so a `step_up` rule and the ledger can never disagree
+        about which round ran. A production effect belongs to the round the
+        agreement closed on, not to a round of its own.
+        """
+        state = self.store.read(session_id)
+        if state is None:
+            raise brainstorming.SessionNotFound(session_id)
+        participants = state.state["run_config"]["participants"]
+        if context["production"] is not None:
+            native_result = state.state.get("result") or {}
+            round_number = native_result.get("rounds_used", 1)
+            if type(round_number) is not int or round_number <= 0:
+                round_number = 1
+            return round_number
+        if context["kind"] == "discussion_turn":
+            return context["completed"] // len(participants) + 1
+        return max(1, context["completed"] // len(participants))
+
     def _record_activity(
         self,
         session_id,
@@ -310,52 +415,15 @@ class ParticipantExecution:
         failure_type=None,
         error=None,
     ):
-        attempt = self.store.read_turn_attempt(session_id)
-        production = None
-        if attempt is None:
-            intervention = self.store.read_external_intervention(session_id)
-            if (
-                intervention is None
-                or intervention["participant_id"] != participant["id"]
-            ):
-                production = self.store.read_task_effect_attempt(session_id)
-                if production is None:
-                    # Low-level callers may exercise ParticipantExecution
-                    # without any coordinator or production seam.
-                    return None
-                action_id = "task-production-effect:%s:lead" % production[
-                    "token"
-                ]
-                activity = self.store.read_activity(session_id) or {
-                    "events": []
-                }
-                provider_attempt = 1 + sum(
-                    event.get("action_id") == action_id
-                    for event in activity["events"]
-                )
-                completed = 0
-                kind = "production_effect"
-                stage = "production"
-            else:
-                action_id = intervention["token"]
-                provider_attempt = intervention["provider_attempt"]
-                completed = intervention["completed_turn_count"]
-                kind = (
-                    "discussion_turn"
-                    if intervention["action_kind"] == "discussion_turn"
-                    else "closure"
-                )
-                stage = "discussion" if kind == "discussion_turn" else "vote"
-        else:
-            action_id = attempt["token"]
-            provider_attempt = attempt.get("provider_attempt", 1)
-            completed = attempt["completed_turn_count"]
-            kind = attempt.get("kind", "discussion_turn")
-            stage = (
-                (attempt.get("action_context") or {}).get("stage")
-                if kind == "closure"
-                else "discussion"
-            )
+        context = self._action_context(session_id, participant)
+        if context is None:
+            # Low-level callers may exercise ParticipantExecution without
+            # any coordinator or production seam.
+            return None
+        action_id = context["action_id"]
+        provider_attempt = context["provider_attempt"]
+        kind = context["kind"]
+        stage = context["stage"]
         digest = hashlib.sha256(
             ("%s:%d" % (action_id, provider_attempt)).encode("utf-8")
         ).hexdigest()[:20]
@@ -381,21 +449,7 @@ class ParticipantExecution:
         raw_ref = self.store.save_activity_output(
             session_id, event_id, raw_text or ""
         )
-        state = self.store.read(session_id)
-        if state is None:
-            raise brainstorming.SessionNotFound(session_id)
-        participants = state.state["run_config"]["participants"]
-        if production is not None:
-            native_result = state.state.get("result") or {}
-            round_number = native_result.get("rounds_used", 1)
-            if type(round_number) is not int or round_number <= 0:
-                round_number = 1
-        else:
-            round_number = (
-                completed // len(participants) + 1
-                if kind == "discussion_turn"
-                else max(1, completed // len(participants))
-            )
+        round_number = self._action_round(session_id, context)
         event = {
             "id": event_id,
             "action_id": action_id,
@@ -413,6 +467,11 @@ class ParticipantExecution:
             "status": status,
             "raw_ref": raw_ref,
         }
+        # What actually ran, including the note that the default document
+        # answered because the session or its document could not be read.
+        fallback = getattr(executor, "staffing_fallback", None)
+        if fallback:
+            event["staffing_fallback"] = fallback
         usage_source = result if result is not None else error
         token_usage = runners.normalize_token_usage(
             getattr(usage_source, "token_usage", None)
@@ -462,7 +521,36 @@ class ParticipantExecution:
         if callable(prepare):
             # Resolution failure is pre-dispatch: do not manufacture a model
             # call activity record when no provider was invoked.
-            prepare()
+            #
+            # A surfaced staffing condition is RAISED here carrying its
+            # exact token, and that raise is the whole of what this seam
+            # owes it: from here the condition travels as this discussion's
+            # ordinary participant failure, in the discussion's own
+            # vocabulary, and the router's tokens are not a second stored
+            # or public failure language for Brainstorming to speak.
+            #
+            # The round is the one the action about to run belongs to, read
+            # from the same seams the activity entry reads afterwards. A
+            # provider RETRY of the same action is the same discussion round
+            # — attempts are not rounds — so a `step_up` rule escalates the
+            # seat the discussion is actually on.
+            #
+            # Nothing is dispatched when that raise happens, and the failure
+            # says so itself: the supervising seam retires the durable
+            # attempt without manufacturing an activity record — a family, a
+            # cost and a token uncertainty — for a call that never ran.
+            try:
+                context = self._action_context(session_id, participant)
+                prepare(
+                    1 if context is None
+                    else self._action_round(session_id, context)
+                )
+            except BaseException as exc:
+                try:
+                    exc.brainstorming_dispatch_refused = True
+                except (AttributeError, TypeError):
+                    pass
+                raise
         started_at = time.time()
         try:
             result = self._invoke_executor(

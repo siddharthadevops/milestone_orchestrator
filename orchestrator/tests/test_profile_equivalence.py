@@ -64,6 +64,10 @@ NONDET_FIELDS = frozenset({
     # git object ids — different repos, different shas
     "sha", "wip_sha", "gate_sha", "gate_commit", "commit", "parent", "head",
     "tree",
+    # The staffing session the run binds: a store-assigned opaque id, so two
+    # equivalent runs necessarily hold different ones. WHAT it selects is
+    # compared through the staffing the calls actually ran on.
+    "staffing_session",
 })
 
 

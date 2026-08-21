@@ -39,6 +39,7 @@ except ImportError:  # pragma: no cover - non-POSIX: flock degrades to the
 from . import brainstorming, brainstorming_lifecycle, brainstorming_milestone
 from . import contracts, errclass, gitops, interpreter, kvstore, ledgers
 from . import model_profiles, pricing, profiles, projects, prompts, registry, runners
+from . import staffing
 from . import tasks
 from . import verifiers, workareas
 from . import state as st
@@ -611,36 +612,138 @@ def resolve_current_act(
     )[0]
 
 
-def resolve_current_review_model(state_path, model_profiles_home, run_state=None):
-    """Best-effort model projection for read-only rounds-time status.
+def staffing_work_area(run_state):
+    """The `work_area` handles the run's own session records.
 
-    Dispatch resolution remains strict.  Status and the service guard are
-    generic diagnostic/recovery paths, so unavailable model-profile state
-    merely withholds this optional projection instead of hiding the run.
+    The run's binding when it has one — project and work area are one
+    authority and travel together — always beside the workspace path, which
+    every run has. Nothing here invents a handle: this is the same pair the
+    service and the Brainstorming adapter already carry.
+    """
+    block = run_state.get("project") or {}
+    handles = {}
+    if block.get("project") and block.get("work_area"):
+        handles["project"] = block["project"]
+        handles["work_area"] = block["work_area"]
+    handles["workspace_path"] = os.path.abspath(run_state["workspace"])
+    return handles
+
+
+def open_run_staffing_session(state_path, model_profiles_home, document,
+                              rigor, material=None, run_state=None,
+                              derived=False):
+    """Open the run's ONE staffing session and record its id in run state.
+
+    Both writers come through here — the launch, which is told the document
+    and rigor, and the first resume of a run that has none, which derives
+    them (amendment A2). The session REFERENCES the document by name and
+    never copies it, so an edit to either reaches the next call. A run that
+    already carries an id keeps it: this binds once and never rebinds.
+
+    Returns the session id now in force.
+    """
+    run_state = run_state if run_state is not None else st.load(state_path)
+    bound = st.staffing_session(run_state)
+    if bound:
+        return bound
+    config = interpreter.effective_config(run_state)
+    body = {
+        "work_area": staffing_work_area(run_state),
+        "families": list(config["families_order"]),
+        "document": document,
+        "rigor": rigor,
+    }
+    if material:
+        body["material"] = material
+    record = staffing.create_session(model_profiles_home, body)
+    st.bind_staffing_session(run_state, record["id"])
+    st.append_event(
+        run_state,
+        "staffing_session_bound",
+        staffing_session=record["id"],
+        document=body["document"],
+        rigor=body["rigor"],
+        derived=bool(derived),
+    )
+    st.save(state_path, run_state)
+    return record["id"]
+
+
+# How many times one review dispatch re-reads its seat to settle the round
+# its family wants. Two is the stable-document cost (ask, derive, confirm);
+# the third is the margin a save landing between two of those reads needs,
+# and stopping there keeps a document saved over and over from holding a
+# dispatch open.
+_REVIEW_SEAT_SETTLE_READS = 3
+
+
+def _review_rounds_done(unit, family):
+    """*family*'s review rounds already recorded in the current cycle.
+
+    The count the round cap takes, and the count a `review` request carries
+    plus one. Two independent boundaries grant a fresh budget: resume
+    amnesty forgives rounds from before an operator retry, a new review
+    cycle forgives rounds over obsolete candidate bytes — count only rounds
+    after whichever boundary is newer.
+    """
+    budget_start = max(
+        int(unit.get("rounds_amnesty") or 0),
+        int(unit.get("review_cycle_start") or 0),
+    )
+    return len([
+        r
+        for r in unit["rounds"][budget_start:]
+        if r["family"] == family and r["kind"] == contracts.KIND_REVIEW_ROUND
+    ])
+
+
+def resolve_current_review_model(state_path, model_profiles_home, run_state=None):
+    """The (family, model) the next review round would run on, or None.
+
+    Best-effort projection for read-only rounds-time status, read exactly
+    where the dispatch will read it: the run's session, its document's
+    `review` seats, and the seat the cycle stands on. It names the family
+    as well as the model because the review cycle is those seats and no
+    longer the run's configured family order.
+
+    Withheld — None — when nothing can be read, when the cycle stands past
+    its last assigned seat, and when the router refuses the role, since in
+    none of those cases is there a review round to project. Status and the
+    service guard are generic diagnostic paths: a withheld projection never
+    hides the run, and nothing here decides a dispatch.
     """
     run_state = run_state or st.load(state_path)
     unit = st.current_unit(run_state)
     if unit is None or unit.get("status") != st.U_ROUNDS:
         return None
     config = interpreter.effective_config(run_state)
-    families = config.get("families_order") or []
-    index = unit.get("family_index", 0)
-    if index >= len(families):
-        return None
-    family = families[index]
+    families = list(config.get("families_order") or [])
+    session = st.staffing_session(run_state)
     try:
-        _fixed_family, model, _effort = resolve_current_act(
-            state_path,
-            config,
-            model_profiles_home,
-            "review_%s" % family,
-            origin_family=family,
-            default_family=family,
+        seats = staffing.session_seats(
+            model_profiles_home, session, "review", families=families
         )
-    except model_profiles.ModelProfileError:
+        index = int(unit.get("family_index") or 0)
+        if index >= len(seats):
+            return None
+
+        def answer(round_number):
+            return staffing.resolve(
+                model_profiles_home,
+                session,
+                "review",
+                index=seats[index],
+                round=round_number,
+                families=families,
+            ).answer
+
+        projected = answer(1)
+        round_number = 1 + _review_rounds_done(unit, projected["agent"])
+        if round_number > 1:
+            projected = answer(round_number)
+    except (staffing.StaffingError, OSError):
         return None
-    defaults = (config.get("model_defaults") or {}).get(family) or {}
-    return model or defaults.get("model")
+    return projected["agent"], projected["model"]
 
 
 def resolve_current_structural_dispatch(
@@ -712,6 +815,64 @@ def resolve_current_brainstorming_profile(
     return contrary if counterpart else lead
 
 
+class _RoleDispatch(object):
+    """One driver-made call's staffing, resolved afresh at every physical
+    dispatch.
+
+    Callable, so `runners.call_worker` uses it exactly as it uses any other
+    dispatch resolver, and it carries the LAST answer's fallback note beside
+    itself so the in-flight marker can say that the default document
+    answered. The note travels on the resolver rather than as a fourth
+    return value the runner would have to learn about.
+    """
+
+    def __init__(self, driver, role, index=1, round=1, material=None):
+        self._driver = driver
+        self.role = role
+        self.index = index
+        self.round = round
+        self.material = material
+        self.staffing_fallback = None
+
+    def __call__(self):
+        resolution = self._driver._staffing_resolution(
+            self.role, self.index, self.round, material=self.material
+        )
+        self.staffing_fallback = resolution.staffing_fallback
+        answer = resolution.answer
+        return answer["agent"], answer["model"], answer["effort"]
+
+
+class _ReviewSeatDispatch(_RoleDispatch):
+    """A review dispatch whose round — and cap — follow the family it
+    resolves.
+
+    The seat is this dispatch's and does not move, but the family behind it
+    is a live document read: a save completing between the driver's
+    pre-dispatch read and this one changes who runs. Review law is keyed to
+    that family — the round a `review` request carries is the count of its
+    review rounds in this cycle plus one, and the round cap takes the same
+    count — so both are derived HERE, from the family this dispatch
+    actually resolves, and neither is carried from the earlier read.
+    """
+
+    def __init__(self, driver, unit, index=1, capped=False):
+        _RoleDispatch.__init__(self, driver, "review", index=index)
+        self._unit = unit
+        self._capped = capped
+
+    def __call__(self):
+        self.round, resolution = self._driver._settled_review_seat(
+            self._unit, self.index
+        )
+        family = resolution.answer["agent"]
+        if self._capped:
+            self._driver._enforce_review_round_cap(self._unit, family)
+        self.staffing_fallback = resolution.staffing_fallback
+        answer = resolution.answer
+        return answer["agent"], answer["model"], answer["effort"]
+
+
 class Driver(object):
     model_profiles_home = None
 
@@ -742,24 +903,78 @@ class Driver(object):
         # append a different state transition and obscure the stale call.
         self._consume_stale_marker()
         if self.model_profiles_home is not None:
+            # Whether the profile catalogue's floor could be read at all.
+            # The conversion below is the one thing that must NOT run when
+            # it could not: see the two comments that follow.
+            profile_floor_readable = True
             try:
-                # Startup readiness only: seed absence, validate presence.
-                # Generic crash accounting above must remain independent of
-                # this optional catalogue; per-call resolution never repairs
-                # or falls back.
+                # Startup readiness only: seed absence, never repair or
+                # rewrite what the catalogue already holds. Generic crash
+                # accounting above must remain independent of this optional
+                # catalogue.
                 model_profiles.ensure_default(self.model_profiles_home)
-            except model_profiles.ModelProfileError as exc:
-                if self.state.get("failure") is None:
-                    st.fail_run(
-                        self.state,
-                        "model-profile catalogue unavailable: %s" % exc,
-                        unit=st.current_unit(self.state),
-                        type_="orchestrator",
-                    )
-                    st.save(self.state_path, self.state)
-                raise RuntimeError(
-                    "model-profile catalogue unavailable: %s" % exc
-                ) from exc
+            except model_profiles.ModelProfileError:
+                # A damaged catalogue no longer stops a HOMED run. This gate
+                # was loud because the driver's own calls resolved through a
+                # profile; slice 6 moved the last of them — the Brainstorming
+                # seats — onto the router, so every seat of a homed run is
+                # now staffed by the run's staffing session
+                # (`_worker_staffing`, `_staff`, `_dispatch_for_role`,
+                # `_brainstorming_staffing`) and every remaining
+                # `_act_profile` reader is reached only when there is no
+                # catalogue home at all. Failing here would gate a
+                # router-backed call — an attached discussion's included —
+                # on an input nothing dispatches from, which this slice
+                # forbids. The file is left exactly as the operator's bytes
+                # are: the catalogue stays an operator surface until slice 8
+                # retires it, and the service's own start-up and its profile
+                # routes still report a damaged one there.
+                profile_floor_readable = False
+            if profile_floor_readable:
+                try:
+                    # Beside the profile seed: a started driver converts what
+                    # the profile catalogue holds and seeds the `default`
+                    # staffing document. Missing-only, so this is a no-op on
+                    # every start after the first; a damaged profile is skipped
+                    # inside rather than making start-up louder than today.
+                    staffing.ensure_documents(self.model_profiles_home)
+                except (staffing.StaffingError, OSError):
+                    # And UNLIKE the profile seed in what a failure means
+                    # here: a damaged staffing catalogue never stops a run.
+                    # The initialization itself stays exactly as loud as it
+                    # is — it raises, repairs nothing, and leaves the
+                    # operator's own bytes untouched — but every resolution
+                    # below has the mandatory fallback that cannot fail (an
+                    # unreadable stored `default` answers from the in-code
+                    # seed), so the run dispatches on the default document
+                    # and the marker's `staffing_fallback` note records what
+                    # answered. Failing the run here would be a start-up
+                    # validation gate for an unreadable input, which is what
+                    # this milestone retires, and it would block a resume
+                    # this cut promises never to block.
+                    pass
+            # Not gating the CALL on a damaged profile is this slice's
+            # licence; writing a durable document from that fault is not.
+            # `ensure_documents` skips the profile it cannot read and then
+            # finds no `default` document to read, so it would seed the
+            # in-code `default` OVER a stored `default` profile that exists
+            # and is merely unreadable — the seeding-over the skeleton names
+            # a conversion defect rather than a compatibility exception, and
+            # conversion is missing-only, so repairing the profile afterwards
+            # would never convert it. Deferring the whole conversion to a
+            # later start costs nothing it does not already promise: it is
+            # missing-only and runs at every service and driver start, so it
+            # converts once the profile is readable again, and until then the
+            # resolver's mandatory fallback answers with the same in-code
+            # seed WITH the marker's `staffing_fallback` note — the same
+            # reasoning `_derive_staffing_session` gives for refusing to
+            # write a once-only binding derived from a fault, silently.
+            # A run opened before the cutover has no session; this is the
+            # first resume that finds none, so it gets one here — before any
+            # dispatch can ask for one, and whether or not the conversion
+            # above ran or completed: the session names a document, it does
+            # not need one to exist.
+            self._derive_staffing_session()
         # Before repo validation: if a pending gap's cleanup never ran (a crash
         # between recording the gap and cleaning up), worker junk such as a
         # nested repo could make ensure_repo reject the workspace and deadlock
@@ -1227,10 +1442,10 @@ class Driver(object):
         detected only afterwards, at save time, as HistoryRewriteError.
 
         A continuous driver may briefly lose the between-step handoff to a
-        producer write.  It retries only long enough for that local write to
-        finish and proceeds only if the resulting state is unchanged or exactly
-        an adoptable producer-only delta.  Direct steps and every unrelated
-        durable change retain the ordinary non-blocking refusal."""
+        prospective slice write.  It retries only long enough for that local
+        write to finish and proceeds only if the resulting state is unchanged
+        or exactly an adoptable slice-write delta.  Direct steps and every
+        unrelated durable change retain the ordinary non-blocking refusal."""
         if adopt_producer_handoff is None:
             adopt_producer_handoff = self._allow_producer_handoff
 
@@ -1274,7 +1489,8 @@ class Driver(object):
             lock.close()
 
     def _assert_not_stale(self):
-        """Adopt authorized producer writes; refuse every other stale state."""
+        """Adopt authorized prospective slice writes; refuse every other stale
+        state."""
         if not os.path.exists(self.state_path):
             return
         disk = st.load(self.state_path)
@@ -1288,7 +1504,11 @@ class Driver(object):
             )
 
     def _adopt_live_producer_updates(self, disk):
-        """Refresh only when disk is exactly this state plus producer writes."""
+        """Refresh only when disk is exactly this state plus prospective
+        slice writes: a producer choice, or a slice material. Both come
+        through the same route family and the same exclusive mutation, so a
+        loaded driver adopts either one rather than refusing the run over a
+        write it authorized itself."""
         current_events = self.state.get("events")
         disk_events = disk.get("events")
         if not isinstance(current_events, list) or not isinstance(
@@ -1304,16 +1524,29 @@ class Driver(object):
         for index, event in enumerate(
             disk_events[len(current_events):], start=len(current_events)
         ):
-            if (
-                not isinstance(event, dict)
-                or event.get("type") != "slice_producer_updated"
-                or event.get("seq") != index
-            ):
+            if not isinstance(event, dict) or event.get("seq") != index:
                 return False
-            selection = event.get("selection")
-            if not isinstance(selection, dict):
+            if not self._replay_prospective_slice_write(candidate, event):
                 return False
-            try:
+            candidate["events"][-1] = copy.deepcopy(event)
+        if candidate != disk:
+            return False
+        self.state = disk
+        return True
+
+    @staticmethod
+    def _replay_prospective_slice_write(candidate, event):
+        """Apply one recorded prospective slice write to *candidate* state.
+
+        Replayed through the very writers the route used, so an event this
+        driver cannot reproduce exactly is refused rather than guessed at;
+        the caller then keeps the ordinary stale-state refusal."""
+        kind = event.get("type")
+        try:
+            if kind == "slice_producer_updated":
+                selection = event.get("selection")
+                if not isinstance(selection, dict):
+                    return False
                 checked = tasks.validate_producer_selection(
                     selection, "live producer update"
                 )
@@ -1325,12 +1558,21 @@ class Driver(object):
                         **checked,
                     },
                 )
-            except tasks.TaskRequestError:
+            elif kind == "slice_material_updated":
+                # A cleared material is recorded as an explicit null, so the
+                # key must be PRESENT: an event missing it is not a write
+                # this driver can replay.
+                if "material" not in event:
+                    return False
+                tasks.update_slice_material(
+                    candidate,
+                    event.get("slice_id"),
+                    {"material": event["material"]},
+                )
+            else:
                 return False
-            candidate["events"][-1] = copy.deepcopy(event)
-        if candidate != disk:
+        except tasks.TaskRequestError:
             return False
-        self.state = disk
         return True
 
     def _fix_family(self):
@@ -1345,18 +1587,21 @@ class Driver(object):
     def _opposite_cmd(self, family):
         return self.config["commands"].get(self._opposite(family), [])
 
-    def _consultation_command(self, family, caller_effort,
-                              caller_act="fixer", caller_origin=None):
+    def _consultation_command(self, family, caller_effort):
         """The consulted family's command line, ready to run.
 
         The fixer runs this line VERBATIM, so the template must arrive
         resolved: an unsubstituted {model}/{effort} would reach the CLI
-        as a literal brace-string. Model comes from the consulted
-        family's defaults; effort is the CALLER'S, so a rejection is
-        never argued by a lighter opponent than the one rejecting.
+        as a literal brace-string. Homed, the line resolves the `consult 1`
+        seat through the run's session AT THE MOMENT the fixer runs it, so a
+        session or document edit reaches the consultation like every other
+        call and nothing is derived from the caller. Without a home there is
+        no session to read: the model comes from the consulted family's
+        defaults and the effort is the CALLER'S, so a rejection is never
+        argued by a lighter opponent than the one rejecting.
         """
         if self.model_profiles_home is not None:
-            command = [
+            return [
                 sys.executable,
                 os.path.join(
                     os.path.dirname(os.path.abspath(__file__)),
@@ -1366,12 +1611,7 @@ class Driver(object):
                 os.path.abspath(self.state_path),
                 "--home",
                 os.path.abspath(self.model_profiles_home),
-                "--caller-act",
-                caller_act,
             ]
-            if caller_origin is not None:
-                command.extend(["--caller-origin", caller_origin])
-            return command
         template = self.config["commands"].get(family) or []
         if not template:
             return []
@@ -2683,10 +2923,14 @@ class Driver(object):
                 "unit %s has an incompatible active task" % st.unit_key(unit)
             )
         record = tasks.task_record(self.state, reference.get("id"))
-        if record["order"]["task_executor"] != "worker":
-            raise st.IllegalTransition("the active task is not a Worker task")
+        if tasks.stored_task_executor(
+            record["order"]["task_executor"]
+        ) != "agent_call":
+            raise st.IllegalTransition(
+                "the active task is not an agent-call task"
+            )
         if record["result"] is not None:
-            raise st.IllegalTransition("the active Worker task is terminal")
+            raise st.IllegalTransition("the active agent-call task is terminal")
         return record
 
     def _active_brainstorming_task(self, unit, kind):
@@ -2784,7 +3028,7 @@ class Driver(object):
         if output_directory is not None:
             request["output_directory"] = output_directory
         order = {
-            "task_executor": "worker",
+            "task_executor": "agent_call",
             "configuration": {},
             "request": request,
         }
@@ -2792,15 +3036,26 @@ class Driver(object):
             order = tasks.producer_order(
                 self._slice_info(unit["slice_id"]), kind, request
             )
-            if order["task_executor"] != "worker":
+            if order["task_executor"] != "agent_call":
                 raise st.IllegalTransition(
-                    "selected production task is not a Worker task"
+                    "selected production task is not an agent-call task"
                 )
+        # The milestone owns both of these, and writes them last. The
+        # producer channel chooses WHICH executor runs a production step,
+        # never which process step the call performs: a `role` an operator
+        # or an agent put in a prospective configuration would otherwise
+        # staff a milestone dispatch from outside milestone law. The
+        # session is the run's one binding, or none while it is unbound.
+        order["configuration"] = dict(
+            order.get("configuration") or {},
+            role=self._order_role(unit, kind),
+        )
+        order["staffing_session"] = st.staffing_session(self.state)
         record = tasks.admit_task(
             self.state,
             order,
             {
-                "worker": {
+                "agent_call": {
                     "agent": staffing_family,
                     "model": staffing_model,
                     "effort": staffing_effort,
@@ -3054,12 +3309,17 @@ class Driver(object):
             return False
 
     def _mark_busy(self, label, kind, family, model=None, effort=None,
-                   nested=False, task_id=None):
+                   nested=False, task_id=None, staffing_fallback=None):
         """Durable in-flight marker, with any unsaved parent calls.
 
         The top-level fields remain the panel's active-call projection.
         Nested classifiers retain the completed parent in ``pending_calls``
         until the enclosing step saves all accounting together.
+
+        ``staffing_fallback`` says the staffing was resolved on the default
+        document because an input could not be read. It is bookkeeping and
+        additive — absent on an ordinary call — and losing it changes no
+        acceptance, seal or result.
         """
         with self._busy_lock:
             state_digest = self._state_file_digest()
@@ -3083,12 +3343,20 @@ class Driver(object):
                 "state_digest": state_digest,
             }
             marker.update(self._task_id_fields(task_id))
+            if staffing_fallback:
+                marker["staffing_fallback"] = staffing_fallback
             if pending:
                 marker["pending_calls"] = pending
             return self._write_busy(marker)
 
-    def _retarget_busy(self, label, kind, family, model, effort):
-        """Keep the generic in-flight marker aligned with the next call."""
+    def _retarget_busy(self, label, kind, family, model, effort,
+                       staffing_fallback=None):
+        """Keep the generic in-flight marker aligned with the next call.
+
+        Including the fallback note: the marker says what the LAST physical
+        dispatch actually ran on, so a call that no longer falls back loses
+        the note the previous attempt left.
+        """
         with self._busy_lock:
             marker = self._read_busy()
             if (
@@ -3106,6 +3374,10 @@ class Driver(object):
                 "effort": effort,
                 "started_at": time.time(),
             })
+            if staffing_fallback:
+                marker["staffing_fallback"] = staffing_fallback
+            else:
+                marker.pop("staffing_fallback", None)
             if not self._write_busy(marker):
                 raise RuntimeError(
                     "%s call could not update its accounting marker"
@@ -3341,7 +3613,10 @@ class Driver(object):
                 call_family, call_model, call_effort = dispatch_resolver()
             if not self._mark_busy(
                 raw_name, kind, call_family,
-                model=call_model, effort=call_effort, task_id=task_id
+                model=call_model, effort=call_effort, task_id=task_id,
+                staffing_fallback=getattr(
+                    dispatch_resolver, "staffing_fallback", None
+                ),
             ):
                 st.fail_run(
                     self.state,
@@ -3368,7 +3643,10 @@ class Driver(object):
                     resolve_dispatch=dispatch_resolver,
                     continuation_family=continuation_family,
                     on_dispatch=lambda f, m, e: self._retarget_busy(
-                        raw_name, kind, f, m, e
+                        raw_name, kind, f, m, e,
+                        staffing_fallback=getattr(
+                            dispatch_resolver, "staffing_fallback", None
+                        ),
                     ),
                 )
                 actual_family, actual_model, actual_effort = (
@@ -3721,27 +3999,53 @@ class Driver(object):
         When the LLM stage runs, its prompt+response (or the error, if the
         classifier call itself failed) are persisted as a
         <raw_name>-classify-<family>.txt artifact so an "unknown" verdict is
-        auditable after the fact."""
-        opposite = self._opposite(family)
-        cls_model, cls_effort = self._family_defaults(opposite)
+        auditable after the fact.
+
+        A surfaced staffing condition met at the classifier's own dispatch is
+        DELIBERATELY not promoted to the run's failure. The classifier never
+        worsens the failure it is diagnosing (errclass.llm_classify): the run
+        keeps naming the primary call that actually failed, with its own
+        recovery type, and the condition travels verbatim as that failure's
+        `classify_evidence` — which the panel prints on the same failure card
+        ("classified via: ..."). Replacing the reason would hide the real
+        cause and swap a transient, auto-resumable type for a stop."""
+        if self.model_profiles_home is not None:
+            # The classifier is a `classify` seat like the debt rater: which
+            # family types a failure is the document's choice, not a
+            # structural derivation off the family that failed.
+            #
+            # Resolved by the dispatch hook and NOWHERE else: the LLM stage
+            # is a fallback behind the deterministic patterns and behind
+            # `error_classifier`, so most failures never reach a classifier
+            # call at all. Asking the router here would let a surfaced
+            # condition stop a call that was never going to be made — and
+            # bury the failure the run actually has under it.
+            resolver = self._dispatch_for_role("classify")
+            classifier = cls_model = cls_effort = None
+        else:
+            classifier = self._opposite(family)
+            cls_model, cls_effort = self._family_defaults(classifier)
+            resolver = self._structural_dispatch(
+                classifier, cls_model, cls_effort
+            )
         task_id = self._matching_busy_call(label=raw_name).get("task_id")
         return errclass.classify_worker_failure(
             exc,
             runner=self.runner,
-            opposite_family=opposite,
+            opposite_family=classifier,
             workspace=self.workspace,
             use_llm=bool(self.config.get("error_classifier", True)),
             on_llm_raw=self._classify_raw_saver(raw_name),
             classifier_model=cls_model,
             classifier_effort=cls_effort,
             on_llm_call=self._classify_call_recorder(raw_name, task_id),
-            on_llm_start=self._classify_call_starter(raw_name, task_id),
-            resolve_dispatch=self._structural_dispatch(
-                opposite, cls_model, cls_effort
+            on_llm_start=self._classify_call_starter(
+                raw_name, task_id, resolver=resolver
             ),
+            resolve_dispatch=resolver,
         )
 
-    def _classify_call_starter(self, raw_name, task_id=None):
+    def _classify_call_starter(self, raw_name, task_id=None, resolver=None):
         """Mark the optional classifier only when its LLM call starts."""
         def _start(call):
             if not self._mark_busy(
@@ -3752,6 +4056,9 @@ class Driver(object):
                 effort=call.get("effort"),
                 nested=True,
                 task_id=task_id,
+                staffing_fallback=getattr(
+                    resolver, "staffing_fallback", None
+                ),
             ):
                 raise RuntimeError(
                     "classifier accounting marker is unavailable"
@@ -3798,8 +4105,11 @@ class Driver(object):
             return None
 
         def _save(classifier_family, prompt, raw):
+            # The family is unknown only when the dispatch never resolved
+            # one; the artifact still has to land, since it carries WHY.
             self._save_raw(
-                "%s-classify-%s" % (raw_name, classifier_family),
+                "%s-classify-%s" % (raw_name, classifier_family
+                                    or "unresolved"),
                 "CLASSIFIER PROMPT\n=================\n%s\n\n"
                 "CLASSIFIER RESPONSE\n===================\n%s\n"
                 % (prompt, raw if raw is not None else "(no response)"),
@@ -3808,18 +4118,43 @@ class Driver(object):
         return _save
 
     def _builders_desc(self):
-        """One line naming the run's REAL downstream builders (resolved
-        acts, family defaults filled in) for the drift-risk rater: 'who
-        builds on this artifact' is a fact of the run, not a hypothetical
-        junior — a fable-5-at-max implementer reads an ambiguity very
-        differently than the rater's imagined worst case."""
+        """One line naming the run's REAL downstream builders for the
+        drift-risk rater: 'who builds on this artifact' is a fact of the
+        run, not a hypothetical junior — a fable-5-at-max implementer reads
+        an ambiguity very differently than the rater's imagined worst case.
+
+        Homed, those builders are the session's `draft` and `implement`
+        seats, so this asks the router: the debt rating is a driver-made
+        worker call, and after the cutover no profile, act sidecar or
+        config act may decide any part of one or stop it. This is PROMPT
+        TEXT for a call whose own staffing resolved above, so a condition
+        surfaced on a seat this call does not dispatch withholds its line
+        instead of stopping the rating — only `classify`'s own resolution
+        may do that. A home-less run keeps today's act derivation, family
+        defaults filled in, byte-identical."""
         parts = []
-        for act, label in (("drafter", "slice docs drafted by"),
-                           ("implementer", "implementation built by")):
-            fam, model, effort = self._act_profile(act)
-            dm, de = self._family_defaults(fam)
-            parts.append("%s %s (%s, %s effort)"
-                         % (label, fam, model or dm, effort or de))
+        for role, act, label in (
+            ("draft", "drafter", "slice docs drafted by"),
+            ("implement", "implementer", "implementation built by"),
+        ):
+            if self.model_profiles_home is not None:
+                try:
+                    answer = staffing.resolve(
+                        self.model_profiles_home,
+                        st.staffing_session(self.state),
+                        role,
+                        families=list(self.config["families_order"]),
+                    ).answer
+                except staffing.StaffingConditionError:
+                    continue
+                fam, model, effort = (
+                    answer["agent"], answer["model"], answer["effort"]
+                )
+            else:
+                fam, model, effort = self._act_profile(act)
+                dm, de = self._family_defaults(fam)
+                model, effort = model or dm, effort or de
+            parts.append("%s %s (%s, %s effort)" % (label, fam, model, effort))
         return "; ".join(parts)
 
     def _enforce_sealed_artifacts(self, raw_name, editable_sealed=None):
@@ -4633,9 +4968,9 @@ class Driver(object):
                     "goal": self.state.get("goal"),
                     "project_context": project_context,
                 })
-            profile_runtime = self._brainstorming_profile_runtime()
+            staffing_selection = self._brainstorming_staffing()
             lead_profile = counterpart_profile = None
-            if profile_runtime is None:
+            if staffing_selection is None:
                 lead_profile, counterpart_profile = (
                     self._brainstorming_profiles()
                 )
@@ -4648,7 +4983,8 @@ class Driver(object):
                 authority_context=authority_context,
                 lead_profile=lead_profile,
                 counterpart_profile=counterpart_profile,
-                model_profile_runtime=profile_runtime,
+                staffing_selection=staffing_selection,
+                active_home=self.model_profiles_home,
             )
             progress = brainstorming.coordination_projection(created["state"])
             if (
@@ -4919,9 +5255,9 @@ class Driver(object):
         if settings is None:
             return self._finish_draft(unit, "drafted")
         skeleton_path = unit.get("artifact") or self._skeleton_artifact()
-        profile_runtime = self._brainstorming_profile_runtime()
+        staffing_selection = self._brainstorming_staffing()
         lead_profile = counterpart_profile = None
-        if profile_runtime is None:
+        if staffing_selection is None:
             lead_profile, counterpart_profile = self._brainstorming_profiles()
         project_context, _extensions, _roots = self._project_prompt_inputs(
             unit, contracts.KIND_DRAFT_SKELETON, record_seen=False
@@ -4946,7 +5282,8 @@ class Driver(object):
                         "project_context": project_context,
                     },
                     max_rounds=settings["max_rounds"],
-                    model_profile_runtime=profile_runtime,
+                    staffing_selection=staffing_selection,
+                    active_home=self.model_profiles_home,
                 )
             )
         except Exception as exc:
@@ -5161,13 +5498,19 @@ class Driver(object):
             raise st.IllegalTransition(
                 "selected production task is not a Brainstorming task"
             )
+        # The same inherited context every other milestone order records.
+        # The discussion's own calls resolve through the selection below,
+        # which is where slice 6 put that authority; this key keeps the
+        # order honest about the session the work belongs to rather than
+        # letting the validator's default say it belongs to none.
+        order["staffing_session"] = st.staffing_session(self.state)
         try:
             record = brainstorming_tasks.admit_task(
                 self.state,
                 order,
                 self.config,
                 self.workspace,
-                model_profile_runtime=self._brainstorming_profile_runtime(),
+                staffing_selection=self._brainstorming_staffing(order),
             )
         except tasks.TaskRequestError as exc:
             reason = "Brainstorming producer admission failed: %s" % exc.code
@@ -5226,7 +5569,9 @@ class Driver(object):
                 record["id"],
                 self.config,
                 home,
-                model_profile_runtime=self._brainstorming_profile_runtime(),
+                staffing_selection=self._brainstorming_staffing(
+                    record["order"]
+                ),
             )
         except brainstorming_lifecycle.PublicLifecycleError as exc:
             if exc.code == brainstorming_lifecycle.STOP_INCOMPLETE:
@@ -5291,15 +5636,13 @@ class Driver(object):
         home = brainstorming_milestone.service_home(
             self.state, active_home=self.model_profiles_home
         )
-        profile_runtime = (
-            self._brainstorming_profile_runtime()
-            if (active.get("resolved_staffing") or {}).get(
-                "dispatch_authority"
-            ) == "current_profile"
-            else None
-        )
         dispatch_authority = (active.get("resolved_staffing") or {}).get(
             "dispatch_authority"
+        )
+        staffing_selection = (
+            self._brainstorming_staffing(active["order"])
+            if dispatch_authority == "current_profile"
+            else None
         )
         try:
             terminal = brainstorming_tasks.finish_task(
@@ -5313,7 +5656,7 @@ class Driver(object):
                     task_id,
                     effect_request,
                     dispatch_authority=dispatch_authority,
-                    model_profile_runtime=profile_runtime,
+                    staffing_selection=staffing_selection,
                 ),
             )
         except Exception as exc:
@@ -5864,11 +6207,8 @@ class Driver(object):
                 ),
                 original_request=original_request,
                 episode_authority=episode_authority,
-                producer_planning=(
-                    amendment_mode
-                    and self._skeleton_artifact()
-                    in self._editable_design_paths(unit)
-                ),
+                producer_planning=self._continuation_may_plan_slices(unit),
+                materials=self._planning_materials(),
             )
             durable_stabilization_size = None
             if kind == contracts.KIND_IMPLEMENT:
@@ -6473,6 +6813,13 @@ class Driver(object):
             "explicit_operator_overrides": (
                 tasks.operator_producer_overrides(self.state)
             ),
+            # The material an authorized caller wrote after the current plan
+            # was installed. Same rule as a producer override and the same
+            # cutoff: it supersedes the document's own column without
+            # requiring the reviewed artifact to be rewritten.
+            "explicit_operator_material_overrides": (
+                tasks.operator_material_overrides(self.state)
+            ),
         }
 
     def _ensure_goal_ledger(self):
@@ -6651,10 +6998,12 @@ class Driver(object):
             effort = carrier.get("effort")
             dispatch_resolver = None
         else:
-            # Skeleton drafts (and re-drafts on remodel) run the `skeletoner`
-            # act; slice docs keep `drafter`, implementation keeps
-            # `implementer`. Only skeleton reviews use the review families.
-            if unit["kind"] == st.UNIT_SKELETON:
+            # The unit's own seat: `plan` for the skeleton, `draft` for a
+            # slice note, `implement` for an implementation. Only its
+            # reviews use the review seats.
+            if self.model_profiles_home is not None:
+                family, model, effort = self._worker_staffing(unit, kind)
+            elif unit["kind"] == st.UNIT_SKELETON:
                 family, model, effort = self._skeletoner_profile()
             else:
                 act = (
@@ -6694,6 +7043,7 @@ class Driver(object):
                 artifact_path=ledgers.skeleton_path(self.state),
                 project_context=project_context, gap_enabled=gap_enabled,
                 two_register=two_register, battery=battery,
+                materials=self._planning_materials(),
             )
         elif unit["kind"] == st.UNIT_SLICE_DOC:
             sl = self._slice_info(unit["slice_id"])
@@ -6706,6 +7056,7 @@ class Driver(object):
                 project_context=project_context, gap_enabled=gap_enabled,
                 two_register=two_register, battery=battery,
                 editable_design_paths=self._editable_design_paths(unit),
+                materials=self._planning_materials(),
             )
         else:
             sl = self._slice_info(unit["slice_id"])
@@ -6733,6 +7084,7 @@ class Driver(object):
                                     unit["slice_id"]))),
                 editable_design_paths=self._editable_design_paths(unit),
                 implementation_scope=self._implementation_scope(unit),
+                materials=self._planning_materials(),
             )
         # The reviewed baseline as it stands BEFORE the builder runs: the local
         # ref map, HEAD's branch identity and commit tip, and the index tree
@@ -7978,6 +8330,465 @@ class Driver(object):
     def _debt(self, unit):
         return list(st.active_debt(self.state, unit))
 
+    # -- staffing: the run's one session decides every driver-made call -----
+    #
+    # A driver with a catalogue home asks the router and nothing else. A
+    # `Driver` built WITHOUT one has no document store to read, so it keeps
+    # today's configuration-act resolution: it is a library and test
+    # construction, not a channel an operator or a product can reach — the
+    # service and every CLI entry point supply the home.
+    #
+    # WHICH read decides. One worker call reads the router more than once,
+    # exactly as it read profiles before: `_worker_staffing` for the family
+    # the PROMPT is built with, `_admit_worker_task` for the order's
+    # best-effort `resolved_staffing`, `_call` to seed the in-flight marker,
+    # and `runners`' dispatch hook. Only the LAST one staffs the call: the
+    # earlier answers are prompt text and bookkeeping, are never cached
+    # forward, and are overwritten by the hook's own retarget. "Do not
+    # resolve at order time" is about AUTHORITY — no order-time answer may
+    # decide a dispatch — not about the count of reads, since the prompt
+    # cannot be written without a family and `resolved_staffing` is out of
+    # this slice's scope.
+    #
+    # WHEN it is read. A seat is asked for only where a dispatch is really
+    # due. The `classify` seat is the one that is often NOT: the debt
+    # rater's single-family gate withholds the rating before any call, and
+    # the failure classifier's LLM stage sits behind the deterministic
+    # patterns and behind `error_classifier`. Resolving those speculatively
+    # would let a surfaced condition stop a call nobody was going to make.
+
+    def _derive_staffing_session(self):
+        """Amendment A2: give a run that has none a session, once.
+
+        The session REFERENCES the document named by the run's model-profile
+        selection at that selection's rigor — `default` at `medium` when
+        there is no selection, and `default` when no document carries that
+        name — with the run's own configured families. NOTHING else is
+        derived: the run's `acts.json` literals are not carried and no
+        override is written from them; the document's own numbers apply from
+        the next call, and the operator edits the session to change it.
+
+        It reads `model_profile.json` and the stored document NAMES, and no
+        other file, and writes only the session and the run's one key: no
+        document, profile file or act sidecar is created, edited or deleted.
+        Resume is NEVER failed or blocked for it — every step of the
+        derivation, the catalogue listing included, leaves the run unbound
+        on failure, and an unbound run sends every call to the resolver's
+        visible default-document fallback.
+        """
+        if st.staffing_session(self.state):
+            return
+        try:
+            selection = read_current_model_profile_selection(self.state_path)
+        except model_profiles.ModelProfileError:
+            selection = None
+        selection = selection or {}
+        name = selection.get("name")
+        try:
+            # Reading the catalogue to answer "does that name exist?" is
+            # part of the derivation and fails like the rest of it: an
+            # unreadable documents directory leaves the run UNBOUND rather
+            # than escaping this method, which would raise out of the
+            # constructor and block the resume A2 promises never to block.
+            # Unbound is also the honest answer — binding `default` on a
+            # read fault would write a once-only binding derived from a
+            # fault, silently, where the resolver's fallback already gives
+            # the same document with the marker's `staffing_fallback` note
+            # and the next resume can still derive properly.
+            document = (
+                name
+                if name in staffing.document_names(self.model_profiles_home)
+                else staffing.DEFAULT_DOCUMENT_NAME
+            )
+            # `self.state` IS the record it binds, so the id is in force for
+            # this process even when the save below is what failed.
+            open_run_staffing_session(
+                self.state_path,
+                self.model_profiles_home,
+                document,
+                selection.get("rigor") or staffing.FALLBACK_RIGOR,
+                run_state=self.state,
+                derived=True,
+            )
+        except (staffing.StaffingError, OSError, st.HistoryRewriteError):
+            return
+
+    def _fail_staffing(self, exc):
+        """Stop this dispatch through ordinary run recovery.
+
+        The reason carries the surfaced condition's own token, which is the
+        whole of what a consumer switches on. These are the ONLY two
+        conditions that stop a driver call: everything else the router meets
+        — an unreadable session or document, an unbound family, an
+        out-of-range rank, an unknown material, an unassigned seat — has an
+        answer.
+        """
+        reason = "staffing refused this call (%s): %s" % (exc.code, exc)
+        if self.state.get("failure") is None:
+            st.fail_run(
+                self.state,
+                reason,
+                unit=st.current_unit(self.state),
+                type_="orchestrator",
+            )
+            self._save()
+        raise StopStep(reason)
+
+    def _staffing_resolution(self, role, index=1, round=1, material=None):
+        """One router answer, read live from the run's session."""
+        try:
+            return staffing.resolve(
+                self.model_profiles_home,
+                st.staffing_session(self.state),
+                role,
+                index=index,
+                round=round,
+                material=material,
+                families=list(self.config["families_order"]),
+            )
+        except staffing.StaffingConditionError as exc:
+            self._fail_staffing(exc)
+
+    def _continuation_may_plan_slices(self, unit):
+        """Whether a resumed worker task may still author the slice plan.
+
+        Keyed to what this driver can INSTALL from the continuation's result
+        (`_maybe_update_slices`), never to the discussion's result mode: a
+        skeleton fixer edits its own artifact's slice table under any mode,
+        and a unit already carrying the skeleton among its editable design
+        paths keeps that authority when its discussion returned a proposal
+        rather than an amendment. Either one is a plan-authoring prompt and
+        needs the pair read at THIS boundary, because the catalogue quoted
+        inside its frozen request is the one its first call was dispatched
+        with — a document edited since is otherwise invisible to it, and the
+        retired vocabulary reads as current. This only widens the condition:
+        every amendment case that carried the pair still does.
+        """
+        return (
+            unit["kind"] == st.UNIT_SKELETON
+            or self._skeleton_artifact() in self._editable_design_paths(unit)
+        )
+
+    def _planning_materials(self):
+        """The material vocabulary a plan-authoring prompt shows, live.
+
+        The `materials` of the document this run's session REFERENCES, read
+        at the prompt boundary through the same validated session and
+        document reads every dispatch uses. Guidance only: it names no
+        agent, model or effort and decides no call, so an unreadable
+        session or document leaves it empty and planning continues. That
+        deliberately does NOT borrow the resolver's mandatory fallback — a
+        catalogue from a document this run does not name would be a
+        vocabulary nobody wrote for it, and inventing one is worse than
+        asking for no proposal at all.
+        """
+        if self.model_profiles_home is None:
+            return {}
+        session = st.staffing_session(self.state)
+        if not session:
+            return {}
+        try:
+            record = staffing.read_session(self.model_profiles_home, session)
+            document = staffing.load(
+                self.model_profiles_home, record["document"]
+            )
+        except (staffing.StaffingError, OSError):
+            return {}
+        # Whether the prompt can CARRY a name is the prompt's own question,
+        # not a reason to read less: a document that loads supplies every
+        # name it validated, and `prompts._material_catalogue_json` decides
+        # how to quote one no UTF-8 encoder emits.
+        return copy.deepcopy(document["materials"])
+
+    def _staff(self, role, index=1, round=1, material=None):
+        """(family, model, effort) for one driver-made call."""
+        answer = self._staffing_resolution(
+            role, index, round, material=material
+        ).answer
+        return answer["agent"], answer["model"], answer["effort"]
+
+    def _dispatch_for_role(self, role, index=1, round=1, material=None):
+        """A fresh router resolution for every physical provider dispatch."""
+        return _RoleDispatch(
+            self, role, index=index, round=round, material=material
+        )
+
+    # -- the review cycle IS the document's `review` seats ------------------
+    #
+    # Which families review a unit comes from the seats the run's session
+    # document assigns to `review`, in index order, read live — not from the
+    # run's configured family order. Rotation, the round cap, cycle
+    # restarts, resume amnesty and the seal predicate keep exactly their
+    # present shape; only the list they walk changes, so nothing about what
+    # a review round means, about convergence or about sealing moves here.
+    # A `Driver` with no catalogue home has no document to read and keeps
+    # reviewing in the configured order.
+
+    def _review_seats(self):
+        """The `review` seat indices this run's document assigns, live.
+
+        Never empty: every stored document assigns index 1 to every role
+        (`staffing._validate_seats`), a session override only ADDS seats,
+        and an unreadable session or document falls back to the default
+        document, which assigns two. A family slot the document carries but
+        assigns to no `review` seat adds no seat, because this reads the
+        assignment and not the family table.
+        """
+        return staffing.session_seats(
+            self.model_profiles_home,
+            st.staffing_session(self.state),
+            "review",
+            families=list(self.config["families_order"]),
+        )
+
+    def _review_families(self):
+        """The family each assigned `review` seat runs on, in seat order.
+
+        The run's review cycle, as the rotation, the cap and the seal
+        predicate read it. Describing the cycle DISPATCHES nothing, so it
+        is a read and not a call: the router answers it from one reading of
+        one document, and a `review` role whose declared split this session
+        cannot honour comes back described rather than refused.
+        `distinct_families_unsatisfiable` keeps the placement it is given —
+        an affected review dispatch, and nothing else — because a read that
+        stopped here would fail a run that called nobody, discard a clean
+        cycle it has no authority over, and then buy every one of its
+        rounds again after the repair.
+
+        `staffing_unavailable` still raises: with no family available there
+        is no cycle to describe, and an empty list is not the honest
+        substitute, since the seal predicate reads it as a cycle with no
+        seat left to review and would open a seal on no reviews at all.
+        """
+        if self.model_profiles_home is None:
+            return list(self.config["families_order"])
+        return staffing.session_seat_families(
+            self.model_profiles_home,
+            st.staffing_session(self.state),
+            "review",
+            families=list(self.config["families_order"]),
+        )
+
+    def _seal_reviews(self, unit, current_fingerprint=None):
+        """The seal predicate over the CURRENTLY assigned review seats.
+
+        Reading the cycle is not dispatching one, so a document whose
+        `review` role declares a split this session cannot honour still
+        seals here on the rounds its currently assigned seats have already
+        earned — the same pre-seal path a shrunken seat list takes, which
+        seals on the current seats or restarts because one is not clean.
+        `staffing_unavailable` leaves no cycle to describe and takes its
+        own declared route through ordinary recovery naming its token.
+        """
+        try:
+            families = self._review_families()
+        except staffing.StaffingConditionError as exc:
+            self._fail_staffing(exc)
+        return st.seal_predicate_reviews(
+            unit, families, current_fingerprint=current_fingerprint
+        )
+
+    def _current_review_family(self, unit):
+        """The family standing at the unit's review-cycle index, or None.
+
+        Its one consumer is a bookkeeping field on the `delta_checkpoint`
+        event, so a run with nobody to call leaves the field empty rather
+        than stopping a step that has already restarted the cycle and has
+        no other record of having done so.
+        """
+        try:
+            families = self._review_families()
+        except staffing.StaffingConditionError:
+            return None
+        return st.current_family(self.state, unit, families=families)
+
+    def _advance_review_cycle(self, unit, last_result=None, deferred=False):
+        """Move the cycle to the next assigned seat, or to pre-seal.
+
+        Advancing reads the cycle to know its length and to name the seat
+        the round that just finished ran on; it dispatches nothing, so a
+        declared split this session cannot honour is described here and the
+        clean round that just landed stands. `staffing_unavailable` stops
+        the run with its token — but the move itself happens first, because
+        it is bookkeeping over a round the ledger already holds. Nobody to
+        call leaves no family to NAME, and nothing else: the cycle still
+        has one entry per assigned seat, which the seat read answers on its
+        own, and the `family_clean` label is left empty exactly as the
+        checkpoint's current-family field is. Stopping before the move
+        would leave the cycle standing on a seat whose clean round is
+        already recorded, and nothing skips a seat already clean, so the
+        repaired run would buy that round a second time.
+        """
+        stopping = None
+        try:
+            families = self._review_families()
+        except staffing.StaffingConditionError as exc:
+            families = [None] * len(self._review_seats())
+            stopping = exc
+        if deferred:
+            st.advance_family_deferred(self.state, unit, families=families)
+        else:
+            st.advance_family_if_clean(
+                self.state, unit, last_result, families=families
+            )
+        if stopping is not None:
+            self._fail_staffing(stopping)
+
+    def _settled_review_seat(self, unit, seat):
+        """One coherent (round, resolution) for a `review` seat, read live.
+
+        A `review` request carries the count of review rounds that seat's
+        family already has in the current cycle, plus one — the count the
+        round cap itself takes — so the round needs the family, while the
+        family comes from a resolution the round is an input to. Ask,
+        derive, and ask again until a resolution's family still wants the
+        round it was asked at: then the answer, its round and the count the
+        cap takes are one reading of the document. A stable document
+        settles on the second ask, since `round` feeds `step_up` alone and
+        cannot itself move the family. Only a document rewritten under
+        consecutive asks spends the bound, and the last ask is then made at
+        the round this returns, so what RUNS is always the document's
+        answer FOR that round — a spent bound can leave the round itself
+        one reading behind the family that answers, never the `step_up`
+        rung behind the round beside it. Spending it takes three completed
+        writes, one in each gap between the four asks: one write always
+        settles by the third ask, and two leave the last two asks reading
+        the same document. That residual costs at most the rung this one
+        call runs on — the cap is taken at the dispatch on the family this
+        returns, and no round is recorded from here — and no finite retry
+        closes it, since one more ask only moves the gap the next write
+        lands in. Only freezing the document for the dispatch would, which
+        live uncached reads exclude. Resolving is also the split-family
+        check for this dispatch: the router's own refusal stops the run
+        with its own token.
+        """
+        round_number = 1
+        for _ in range(_REVIEW_SEAT_SETTLE_READS):
+            resolution = self._staffing_resolution("review", seat,
+                                                   round_number)
+            wanted = 1 + _review_rounds_done(unit, resolution.answer["agent"])
+            if wanted == round_number:
+                return round_number, resolution
+            round_number = wanted
+        return round_number, self._staffing_resolution(
+            "review", seat, round_number)
+
+    def _review_seat_staffing(self, unit, seat):
+        """(family, model, effort) a review at *seat* is prepared under.
+
+        What the prompt, the raw name and the round record start from; the
+        dispatch settles the seat again and is what actually runs.
+        """
+        _round, resolution = self._settled_review_seat(unit, seat)
+        answer = resolution.answer
+        return answer["agent"], answer["model"], answer["effort"]
+
+    def _enforce_review_round_cap(self, unit, family):
+        """Stop the run when *family* has spent this cycle's review rounds.
+
+        Taken twice for one round: once as the cycle prepares it, so a run
+        with nothing left to spend stops before building a prompt, and once
+        at each physical dispatch, which is where the family the cap must
+        bind is finally known — a dispatch resolves live and may land on a
+        different family than the preparing read named.
+        """
+        cap = self.config["max_rounds_per_family"]
+        if _review_rounds_done(unit, family) < cap:
+            return
+        st.fail_run(
+            self.state,
+            "family %s reached max_rounds_per_family=%d on %s without a "
+            "clean round" % (family, cap, st.unit_key(unit)),
+            unit=unit,
+        )
+        self._save()
+        raise StopStep("round cap")
+
+    def _review_dispatch(self, unit, index, capped=False):
+        """A review dispatch that re-derives its round when it resolves."""
+        return _ReviewSeatDispatch(self, unit, index=index, capped=capped)
+
+    def _delta_review_staffing(self, unit, fixer_family):
+        """(seat, family, model, effort) for one delta review.
+
+        A delta review is a review, so it chooses among the seats the
+        document assigns to `review` and nowhere else: the lowest-index
+        seat whose resolved family is the latest fixer's, and the lowest
+        assigned seat when none is. Walking the seats resolves them, which
+        is this dispatch's split-family check as well.
+        """
+        chosen = None
+        for seat in self._review_seats():
+            family, _model, _effort = self._staff("review", index=seat)
+            if chosen is None:
+                chosen = seat
+            if fixer_family and family == fixer_family:
+                chosen = seat
+                break
+        return (chosen,) + self._review_seat_staffing(unit, chosen)
+
+    @staticmethod
+    def _worker_role(unit, kind):
+        """The (role, round) one worker call resolves under.
+
+        Round is 1 for every role but `fix`, which carries the unit's
+        active-episode fixer iteration count plus one — the counter the fix
+        loop already keeps — so a `step_up` rule written for a stuck fixer
+        can see how long it has been stuck. A fix on the SKELETON is the
+        skeleton's own seat (`plan`), exactly as it is today.
+        """
+        if kind == contracts.KIND_DRAFT_SKELETON:
+            return "plan", 1
+        if kind == contracts.KIND_DRAFT_SLICE_NOTE:
+            return "draft", 1
+        if kind == contracts.KIND_IMPLEMENT:
+            return "implement", 1
+        if kind == contracts.KIND_FIX_FINDINGS:
+            if unit["kind"] == st.UNIT_SKELETON:
+                return "plan", 1
+            return "fix", 1 + int(unit.get("fix_loop_rounds") or 0)
+        return None, None
+
+    def _worker_staffing(self, unit, kind):
+        """(family, model, effort) for one worker call, from the router."""
+        role, round_number = self._worker_role(unit, kind)
+        return self._staff(
+            role,
+            round=round_number,
+            material=self._worker_staffing_material(unit, kind),
+        )
+
+    def _worker_staffing_material(self, unit, kind):
+        """The admitted production material, or the value about to be admitted.
+
+        Recovery reads the active task's immutable order.  Only a task with no
+        admitted record yet consults the prospective slice plan.
+        """
+        if kind not in tasks.PRODUCER_TASK_KINDS:
+            return None
+        active = self._active_worker_task(unit, kind)
+        if active is not None:
+            return tasks.order_staffing_material(active["order"])
+        return tasks.slice_material(self._slice_info(unit["slice_id"]))
+
+    def _order_role(self, unit, kind):
+        """The process step one admitted agent-call order records.
+
+        The same seat the call will actually resolve under, written into
+        the durable order so a reader can see which step bought it. A
+        report-only round is a `review` however many rounds it has had:
+        the order records the ROLE, and the seat and round the cycle is on
+        stay the dispatch's own facts.
+        """
+        if kind in contracts.REPORT_KINDS:
+            return "review"
+        role, _round = self._worker_role(unit, kind)
+        if role is None:
+            raise st.IllegalTransition(
+                "task kind %r has no staffing role" % (kind,)
+            )
+        return role
+
     def _acts_overlay(self):
         """Read the one current per-run override map beside state."""
         try:
@@ -8066,6 +8877,15 @@ class Driver(object):
         return resolve
 
     def _dispatch_for_worker_kind(self, unit, kind, origin_family=None):
+        if self.model_profiles_home is not None:
+            role, round_number = self._worker_role(unit, kind)
+            if role is None:
+                return None
+            return self._dispatch_for_role(
+                role,
+                round=round_number,
+                material=self._worker_staffing_material(unit, kind),
+            )
         if kind == contracts.KIND_DRAFT_SKELETON:
             return self._dispatch_for_act(
                 "skeletoner", origin_family=origin_family, skeleton=True
@@ -8177,14 +8997,41 @@ class Driver(object):
         }
         return lead, counterpart
 
-    def _brainstorming_profile_runtime(self):
-        """Return locators for independent per-dispatch current resolution."""
+    def _brainstorming_staffing(self, order=None):
+        """The run's one staffing session, for a discussion it owns.
+
+        A discussion the milestone starts is staffed by the same session
+        every other call of this run is staffed by: the reference travels as
+        inherited context, never as a copied document or a second staffing
+        value, and each of the discussion's own calls resolves it afresh.
+
+        A selection carrying no session is that same answer for a run that
+        holds none — the A2 derivation faulted and left it unbound — and it
+        is not a missing one: every call this run makes meanwhile resolves
+        through the visible default-document fallback, so the discussion is
+        staffed exactly as its owner is. Inheritance happens once, at
+        creation: the record it writes is its own authority, and this run
+        binding a session at a later resume does not reach back into a
+        discussion already created.
+
+        For a selected production order the same mapping also carries that
+        order's admitted optional material. It is request context, not a
+        copied staffing answer: every physical call still resolves the live
+        session and document.
+
+        `None` — no selection at all — only for a `Driver` built without a
+        catalogue home, which has no document store to read and keeps
+        today's configuration-act seats.
+        """
         if self.model_profiles_home is None:
             return None
-        return {
-            "state_path": os.path.abspath(self.state_path),
-            "home": os.path.abspath(self.model_profiles_home),
-        }
+        selection = {"session": st.staffing_session(self.state)}
+        if order is not None:
+            # Production discussions inherit the task order's admitted
+            # material, including an explicit absence.  Other discussions
+            # have no slice-material source and keep the selection's old shape.
+            selection["material"] = tasks.order_staffing_material(order)
+        return selection
 
     def _modern_design_updates(self):
         # Compatibility must never restore retired redocumentation machinery.
@@ -8394,6 +9241,27 @@ class Driver(object):
             dispatch_resolver = None
             consultation_family = family
             consultation_cmd = None
+        elif self.model_profiles_home is not None:
+            family, fix_model, fix_effort = self._worker_staffing(
+                unit, contracts.KIND_FIX_FINDINGS
+            )
+            dispatch_resolver = self._dispatch_for_worker_kind(
+                unit, contracts.KIND_FIX_FINDINGS
+            )
+            # The prompt names the family the `consult` seat resolves to now;
+            # the command line resolves it again when the fixer runs it. An
+            # ALREADY ADMITTED fixer reuses its frozen prompt and builds no
+            # consultation text below, so its call uses no `consult` answer
+            # and none is asked for: a seat no call uses is never resolved,
+            # and a `consult` role this machine cannot split therefore stops
+            # a resumed fixer no more than an unsatisfiable `classify` stops
+            # a failure the classifier never sees.
+            consultation_family = consultation_cmd = None
+            if active_task is None:
+                consultation_family, _cm, _ce = self._staff("consult")
+                consultation_cmd = self._consultation_command(
+                    consultation_family, None
+                )
         else:
             if unit["kind"] == st.UNIT_SKELETON:
                 # Skeleton content uses the operator-selected `skeletoner`;
@@ -8416,11 +9284,6 @@ class Driver(object):
             consultation_cmd = self._consultation_command(
                 consultation_family,
                 fix_effort or fixer_family_effort,
-                caller_act=(
-                    "skeletoner"
-                    if unit["kind"] == st.UNIT_SKELETON else "fixer"
-                ),
-                caller_origin=source.get("family"),
             )
         authority = None
         if not has_validated_carrier:
@@ -8534,6 +9397,7 @@ class Driver(object):
                 unit["kind"] != st.UNIT_SKELETON
                 and self._skeleton_artifact() in editable_design_paths
             ),
+            materials=self._planning_materials(),
             )
         n_fix = 1 + len(
             [r for r in unit["rounds"] if r["kind"] == contracts.KIND_FIX_FINDINGS]
@@ -9077,9 +9941,8 @@ class Driver(object):
             target = source.get("return_to") or st.U_PRE_SEAL_VERIFY
             if (
                 target == st.U_PRE_SEAL_VERIFY
-                and st.seal_predicate_reviews(
+                and self._seal_reviews(
                     unit,
-                    self.config["families_order"],
                     current_fingerprint=self._review_evidence_fingerprint(unit),
                 ) is None
             ):
@@ -9115,9 +9978,8 @@ class Driver(object):
         elif suite_corrected and target == st.U_ROUNDS:
             target = st.U_PRE_REVIEW_VERIFY
         elif (target == st.U_PRE_SEAL_VERIFY
-              and st.seal_predicate_reviews(
+              and self._seal_reviews(
                   unit,
-                  self.config["families_order"],
                   current_fingerprint=self._review_evidence_fingerprint(unit),
               ) is None):
             target = st.U_PRE_REVIEW_VERIFY
@@ -9311,9 +10173,8 @@ class Driver(object):
             unit["fix_queue"] = []
             unit["fix_source"] = None
             if (return_to == st.U_PRE_SEAL_VERIFY
-                    and st.seal_predicate_reviews(
+                    and self._seal_reviews(
                         unit,
-                        self.config["families_order"],
                         current_fingerprint=(
                             self._review_evidence_fingerprint(unit)
                         ),
@@ -9374,7 +10235,7 @@ class Driver(object):
                 fixes=fix_number,
                 dirty_deltas=dirty_deltas,
                 return_to=return_to,
-                review_family=st.current_family(self.state, unit),
+                review_family=self._current_review_family(unit),
             )
             unit["fix_queue"] = []
             unit["fix_source"] = None
@@ -9395,9 +10256,18 @@ class Driver(object):
             if r["kind"] == contracts.KIND_FIX_FINDINGS:
                 fixer_family = r["family"]
                 break
-        family, delta_model, delta_effort = self._delta_review_profile(
-            fixer_family
-        )
+        delta_seat = None
+        if self.model_profiles_home is not None:
+            (
+                delta_seat,
+                family,
+                delta_model,
+                delta_effort,
+            ) = self._delta_review_staffing(unit, fixer_family)
+        else:
+            family, delta_model, delta_effort = self._delta_review_profile(
+                fixer_family
+            )
         active_task = self._active_worker_task(
             unit, contracts.KIND_DELTA_REVIEW
         )
@@ -9464,10 +10334,14 @@ class Driver(object):
             } or None,
             model=delta_model,
             effort=delta_effort,
-            dispatch_resolver=self._dispatch_for_act(
-                "review_%s" % family,
-                origin_family=family,
-                fixed_family=family,
+            dispatch_resolver=(
+                self._review_dispatch(unit, delta_seat)
+                if delta_seat is not None
+                else self._dispatch_for_act(
+                    "review_%s" % family,
+                    origin_family=family,
+                    fixed_family=family,
+                )
             ),
             task_id=(active_task or {}).get("id"),
             project_context=project_context,
@@ -9630,10 +10504,9 @@ class Driver(object):
 
     def _complete_seal_from_reviews(self, unit, verification_event=None):
         """Seal deterministically from current whole-artifact reviews."""
-        families = self.config["families_order"]
         current_fingerprint = self._review_evidence_fingerprint(unit)
-        cite = st.seal_predicate_reviews(
-            unit, families, current_fingerprint=current_fingerprint
+        cite = self._seal_reviews(
+            unit, current_fingerprint=current_fingerprint
         )
         if cite is None:
             st.restart_reviews_after_candidate_change(
@@ -9722,10 +10595,8 @@ class Driver(object):
 
         if stage == st.U_PRE_SEAL_VERIFY:
             current_fingerprint = self._review_evidence_fingerprint(unit)
-            if st.seal_predicate_reviews(
-                unit,
-                self.config["families_order"],
-                current_fingerprint=current_fingerprint,
+            if self._seal_reviews(
+                unit, current_fingerprint=current_fingerprint
             ) is None:
                 st.restart_reviews_after_candidate_change(
                     self.state,
@@ -9953,14 +10824,44 @@ class Driver(object):
             threshold = "low"
         try:
             for finding, raising_family in items:
+                rater_dispatch = None
                 try:
-                    opp, rater_model, rater_effort, explicit = (
-                        self._act_profile(
-                            "reclassifier", origin_family=raising_family,
-                            default_family=self._opposite(raising_family),
-                            include_explicit=True,
+                    if self.model_profiles_home is not None:
+                        # The one machine fact the dispatch has, and the one
+                        # the retired derivation read: a run that SUPPLIES a
+                        # single family has no second family to rate with,
+                        # whatever its document assigns. It decides the gate
+                        # BEFORE the router is asked, because a withheld
+                        # rating makes no call — and a call nobody makes must
+                        # not be stopped by a surfaced condition.
+                        explicit = (
+                            self._opposite(raising_family) != raising_family
                         )
-                    )
+                        if explicit:
+                            # The rater is the `classify` seat the run's
+                            # document assigns — the EXPLICIT rater today's
+                            # rule already admits as a second look, whichever
+                            # family it names.
+                            rater_dispatch = self._dispatch_for_role(
+                                "classify"
+                            )
+                            opp, rater_model, rater_effort = self._staff(
+                                "classify"
+                            )
+                        else:
+                            # The single family the run supplies is the only
+                            # one collapse could ever answer with, so the
+                            # gate below closes on it without a resolution.
+                            opp = raising_family
+                            rater_model = rater_effort = None
+                    else:
+                        opp, rater_model, rater_effort, explicit = (
+                            self._act_profile(
+                                "reclassifier", origin_family=raising_family,
+                                default_family=self._opposite(raising_family),
+                                include_explicit=True,
+                            )
+                        )
                 except StopStep:
                     self._preserve_reclassify_parent(
                         parent_call,
@@ -10026,7 +10927,7 @@ class Driver(object):
                     raw_name = "%s-reclassify-%s-%s" % (
                         st.unit_key(unit), raising_family, safe_id)
                     try:
-                        def resolve_rater():
+                        def resolve_profile_rater():
                             current_opp, current_model, current_effort, current_explicit = (
                                 self._act_profile(
                                     "reclassifier",
@@ -10050,6 +10951,14 @@ class Driver(object):
                                 current_effort or current_de,
                             )
 
+                        # Homed, the router is the whole resolution: the kept
+                        # single-family gate reads the run's own families,
+                        # which no live edit can change mid-episode, so there
+                        # is nothing left for a dispatch to re-derive.
+                        resolve_rater = (
+                            rater_dispatch if rater_dispatch is not None
+                            else resolve_profile_rater
+                        )
                         dm, de = self._family_defaults(opp)
                         effective_model = rater_model or dm
                         effective_effort = rater_effort or de
@@ -10060,6 +10969,9 @@ class Driver(object):
                             model=effective_model,
                             effort=effective_effort,
                             nested=True,
+                            staffing_fallback=getattr(
+                                rater_dispatch, "staffing_fallback", None
+                            ),
                         ):
                             if parent_call is not None:
                                 self._record_worker_unaccepted(
@@ -10100,6 +11012,11 @@ class Driver(object):
                                         f,
                                         m,
                                         e,
+                                        staffing_fallback=getattr(
+                                            rater_dispatch,
+                                            "staffing_fallback",
+                                            None,
+                                        ),
                                     )
                                 ),
                             )
@@ -10288,40 +11205,68 @@ class Driver(object):
             "extensions": extensions,
             "roots": roots,
         }
-        family = st.current_family(self.state, unit)
-        if family is None:
-            raise st.IllegalTransition("rounds status with no family left")
-        # Two independent boundaries grant a fresh budget.  Resume amnesty
-        # deliberately forgives rounds from before an operator retry; a new
-        # review cycle forgives rounds over obsolete candidate bytes.  Count
-        # only rounds after whichever boundary is newer.
-        budget_start = max(
-            int(unit.get("rounds_amnesty") or 0),
-            int(unit.get("review_cycle_start") or 0),
-        )
-        done = len(
-            [
-                r
-                for r in unit["rounds"][budget_start:]
-                if r["family"] == family
-                and r["kind"] == contracts.KIND_REVIEW_ROUND
-            ]
-        )
-        if done >= self.config["max_rounds_per_family"]:
-            st.fail_run(
-                self.state,
-                "family %s reached max_rounds_per_family=%d on %s without a "
-                "clean round"
-                % (family, self.config["max_rounds_per_family"], st.unit_key(unit)),
-                unit=unit,
+        seat = None
+        if self.model_profiles_home is not None:
+            seats = self._review_seats()
+            index = int(unit.get("family_index") or 0)
+            if index >= len(seats):
+                # Seats are read live, so the list can SHRINK below the seat
+                # this cycle already stands on — an edited document, a
+                # session repointed at a smaller one, or the default
+                # document answering for an unreadable one. That is not a
+                # stopping condition: with no seat left at this index the
+                # cycle is exhausted, exactly as it is when the last seat
+                # comes back clean, and the ordinary pre-seal path decides
+                # between sealing on the currently assigned seats and
+                # restarting the cycle because one of them is not clean.
+                if active_review is not None:
+                    # A review admitted for the seat that just vanished can
+                    # never be delivered: `review_round` is not continuable,
+                    # and neither continuation dispatches its frozen request
+                    # — sealing ends the cycle, and a restart re-opens it at
+                    # seat 1. That is an abandonment, so it records the
+                    # invocation's failure like every other one. Leaving the
+                    # task open would carry an active-task reference onto a
+                    # sealed unit, where the supported repair reopen could
+                    # admit no successor of its own kind.
+                    self._fail_worker_task_if_open(
+                        unit,
+                        None,
+                        task_id=active_review["id"],
+                        reason=(
+                            "the assigned review seats shrank below the "
+                            "seat this review was admitted for"
+                        ),
+                    )
+                st.transition_unit(
+                    self.state,
+                    unit,
+                    st.U_PRE_SEAL_VERIFY,
+                    reason=(
+                        "review cycle exhausted: the document assigns %d "
+                        "review seat(s) and the cycle stands at seat %d"
+                        % (len(seats), index + 1)
+                    ),
+                )
+                return (
+                    "%s review cycle exhausted at seat %d of %d; pre-seal "
+                    "decides" % (st.unit_key(unit), index + 1, len(seats))
+                )
+            seat = seats[index]
+            family, review_model, review_effort = (
+                self._review_seat_staffing(unit, seat)
             )
-            self._save()
-            raise StopStep("round cap")
+        else:
+            family = st.current_family(self.state, unit)
+            if family is None:
+                raise st.IllegalTransition("rounds status with no family left")
+        self._enforce_review_round_cap(unit, family)
         # Reform runs: reviewers of doc units check the question battery
         # (presence and substance, never prose — spec §4) and every
         # finding hard-requires its plain/example lay mirror.
         reform = interpreter.reform_active(self.state)
-        review_model, review_effort = self._review_profile(family)
+        if seat is None:
+            review_model, review_effort = self._review_profile(family)
         producer_review_context = self._producer_review_context(unit)
         prompt = prompts.build_review_round(
             family,
@@ -10376,10 +11321,14 @@ class Driver(object):
             validate_opts={"require_plain": True} if reform else None,
             model=review_model,
             effort=review_effort,
-            dispatch_resolver=self._dispatch_for_act(
-                "review_%s" % family,
-                origin_family=family,
-                fixed_family=family,
+            dispatch_resolver=(
+                self._review_dispatch(unit, seat, capped=True)
+                if seat is not None
+                else self._dispatch_for_act(
+                    "review_%s" % family,
+                    origin_family=family,
+                    fixed_family=family,
+                )
             ),
             task_id=(active_review or {}).get("id"),
             project_context=project_context,
@@ -10492,10 +11441,10 @@ class Driver(object):
         if deferred:
             st.record_debt(self.state, unit, deferred, "round", rec["id"])
         if not findings:
-            st.advance_family_if_clean(self.state, unit, output)
+            self._advance_review_cycle(unit, last_result=output)
             return "%s round: clean" % family
         if not fix_findings:
-            st.advance_family_deferred(self.state, unit)
+            self._advance_review_cycle(unit, deferred=True)
             return ("%s round: %d finding(s) deferred as debt (verified by %s)"
                     % (family, len(deferred), self._opposite(family)))
         st.enter_fix_episode(
@@ -10525,10 +11474,8 @@ class Driver(object):
         if self._migrate_retired_seal_review_handoff(unit):
             return "retired seal discussion migrated to ordinary reviews"
         current_fingerprint = self._review_evidence_fingerprint(unit)
-        cite = st.seal_predicate_reviews(
-            unit,
-            self.config["families_order"],
-            current_fingerprint=current_fingerprint,
+        cite = self._seal_reviews(
+            unit, current_fingerprint=current_fingerprint
         )
         if cite is None:
             st.restart_reviews_after_candidate_change(
@@ -11121,6 +12068,7 @@ def init_run(goal, workspace=None, config=None, state_path=None, name=None,
     if model_profiles_home is not None:
         creation_overrides = _creation_act_overrides(creation_act_layers)
         model_profiles.ensure_default(model_profiles_home)
+        staffing.ensure_documents(model_profiles_home)
         _restrict_config_acts_to_shipped(config)
     template = (config or {}).get("docs_dir") or "docs"
     slug = None

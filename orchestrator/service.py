@@ -20,10 +20,6 @@ run's live state) and a JSON API:
     GET    /api/runs/<id>          entry + full state summary + log tail +
                                    commit_web_base (workspace origin as an
                                    https web URL, for gate-commit links)
-    GET    /api/runs/<id>/model-profile
-                                   current {name, rigor} model-profile choice
-    POST   /api/runs/<id>/model-profile
-                                   wholly replace that current choice
     POST   /api/runs/<id>/slices/<slice-id>/producer
                                    replace one still-prospective slice producer
     GET    /api/runs/<id>/artifact ?unit=<unit_key> — the unit's recorded
@@ -204,6 +200,7 @@ from . import driver, errclass, gitops, gitsync, interpreter, kvstore, model_pro
 from . import profiles
 from . import projects, registry, tasks
 from . import reuse_audit
+from . import staffing
 from . import state as st
 from . import task_api
 from . import workareas
@@ -361,7 +358,38 @@ def _project_entry(home, project):
     }
     if "defaults" in read.value:
         entry["defaults"] = read.value["defaults"]
+    families = _effective_families_order(project)
+    if families is not None:
+        entry["families_order"] = families
     return entry
+
+
+def _effective_families_order(project):
+    """The family order this project's standalone work is staffed from.
+
+    The service's own configuration under the project's declared defaults —
+    exactly the merge the direct task host and the git alignment already
+    make before they resolve — carried read-only beside the work areas a
+    standalone form is choosing between. A machine fact, never a choice:
+    the panel records it on the session it opens for a standalone
+    operation, so the families the router later reads keep ONE producer and
+    no browser holds a family name or a default order of its own.
+
+    ``None`` when the merged configuration leaves no readable order (a
+    declared default may replace it with anything JSON admits). The entry
+    then omits the fact rather than inventing an order nobody configured,
+    and stays the successful entry it already was: this projection gates
+    no project read.
+    """
+    config = driver.load_config(None)
+    if project.get("defaults"):
+        driver.merge_config(config, project["defaults"])
+    order = config.get("families_order")
+    if not isinstance(order, list) or any(
+        not isinstance(name, str) for name in order
+    ):
+        return None
+    return list(order)
 
 
 def _project_entry_or_error(home, project):
@@ -852,13 +880,16 @@ def project_route_segments(route):
     ]
 
 
-def projects_api(home, method, segments, body, query=None, task_host=None):
+def projects_api(
+    home, method, segments, body, query=None, task_host=None, who=None
+):
     """Dispatch one /api/projects request. Returns (status, payload).
 
     `query` carries the decoded query parameters for the one route that
     uses them: the policy delete's `id` (a query parameter by amendment
     A2, so ids the sealed grammar allows but browsers would normalize
-    away as path segments still round-trip)."""
+    away as path segments still round-trip). `who` is the request identity
+    the one route that inherits a staffing session authorizes it with."""
     n = len(segments)
     if n == 0:
         if method == "GET":
@@ -893,7 +924,7 @@ def projects_api(home, method, segments, body, query=None, task_host=None):
             return 200, {
                 "ok": True,
                 **sync_project_git(
-                    home, segments[0], body, task_host=task_host
+                    home, segments[0], body, task_host=task_host, who=who
                 ),
             }
     elif n == 2 and segments[1] == "policies":
@@ -1976,6 +2007,297 @@ def _snapshot_profile(state_path, ref, content):
     st.save(state_path, state)
 
 
+#: Exactly what a launch may say about staffing: which document, how hard,
+#: and (optionally) the session's default material. Seats are never named
+#: here — they are the document's business.
+STAFFING_LAUNCH_FIELDS = ("document", "rigor", "material")
+
+
+def _validated_launch_staffing(value, supplied=True):
+    """The launch's staffing selection, refused before any state exists.
+
+    OMITTING `staffing` binds the `default` document at `medium`, which is
+    what an unconfigured run staffs today; that is the only launch this
+    fills in for. A `staffing` that IS supplied must carry the document and
+    the rigor it names — the binding is written once and this slice offers
+    no route to change it, so a blank or half-filled selection quietly
+    running the whole run on `default@medium` is exactly the misstaffing
+    the router exists to end. The shape is then validated by the session
+    store's own validator over a probe record, so the launch and the store
+    cannot disagree about what a document name or a rigor is; the work area
+    and families the real session carries are the run's own and are known
+    only once the run exists.
+    """
+    if not supplied:
+        return {
+            "document": staffing.DEFAULT_DOCUMENT_NAME,
+            "rigor": staffing.FALLBACK_RIGOR,
+        }
+    if not isinstance(value, dict):
+        raise ApiError(
+            400,
+            "staffing must be an object of {document, rigor, material?}",
+        )
+    unknown = sorted(set(value) - set(STAFFING_LAUNCH_FIELDS))
+    if unknown:
+        raise ApiError(
+            400,
+            "staffing carries unknown key %r (allowed: %s)"
+            % (unknown[0], ", ".join(STAFFING_LAUNCH_FIELDS)),
+        )
+    missing = [key for key in ("document", "rigor") if key not in value]
+    if missing:
+        raise ApiError(
+            400,
+            "staffing must name %s (omit 'staffing' entirely for %s at %s)"
+            % (" and ".join(missing), staffing.DEFAULT_DOCUMENT_NAME,
+               staffing.FALLBACK_RIGOR),
+        )
+    selection = {"document": value["document"], "rigor": value["rigor"]}
+    if value.get("material") is not None:
+        selection["material"] = value["material"]
+    try:
+        staffing.validate_session(dict(
+            selection,
+            id="probe",
+            work_area={"workspace_path": "/"},
+            families=[],
+        ))
+    except staffing.StaffingError as exc:
+        raise ApiError(400, str(exc))
+    return selection
+
+
+def staffing_documents_list(home):
+    """Every stored staffing document, sorted by name.
+
+    Read-only, and loud on a damaged store: a shorter list would silently
+    hide the document an operator is about to launch on.
+    """
+    return staffing.list_staffing_documents(home)
+
+
+# ---------------------------------------------------------------------------
+# The staffing API: documents, sessions, and one resolution
+#
+# Thin adapters over slice 2's document store, slice 3's session store and
+# the resolver. Nothing here staffs anything, keeps a record, or holds a
+# permission of its own: every route reuses the request identity and the
+# project access the service already enforces, and every refusal is one of
+# the fixed tokens below, riding verbatim as the error body.
+
+#: A document the store refuses. Validation happens before any byte changes,
+#: so the previously stored definition survives a refused save untouched.
+INVALID_STAFFING_DOCUMENT = "invalid_staffing_document"
+
+#: A create body or an edit the session store refuses, for the same reason.
+INVALID_STAFFING_SESSION = "invalid_staffing_session"
+
+#: A session id no stored record answers. "Cannot be read" is ONE condition
+#: in the store — unknown, unreadable, malformed, damaged alike — so it is
+#: one condition here too: from a caller's side, the session is not there.
+UNKNOWN_STAFFING_SESSION = "unknown_staffing_session"
+
+#: A resolve body the router will not admit: malformed, an unknown key, an
+#: unknown role, a non-positive index or round, a non-string material. This
+#: rejects a request BEFORE resolution and is not a surfaced condition.
+INVALID_STAFFING_REQUEST = "invalid_staffing_request"
+
+#: The two SURFACED conditions, as their HTTP statuses. The tokens are the
+#: router's own; this maps them and adds none.
+_STAFFING_CONDITION_STATUS = {
+    staffing.STAFFING_UNAVAILABLE: 503,
+    staffing.DISTINCT_FAMILIES_UNSATISFIABLE: 409,
+}
+
+#: Exactly what a resolve request admits. `index` and `round` default to 1
+#: when absent. `brief` travels with the request, is read by no rule and is
+#: never stored, so — as in the router itself — there is nothing about its
+#: value to refuse. `families` is deliberately absent: they are the
+#: session's own fact, never a caller's claim.
+STAFFING_RESOLVE_FIELDS = ("role", "index", "round", "material", "brief")
+
+
+def _require_encodable(body, token):
+    """Refuse a body no successful response could carry back.
+
+    JSON admits an escaped unpaired surrogate, and the stores record
+    strings verbatim — refusing only a shape no consumer could use — so one
+    is validated and stored happily. No UTF-8 response can carry it, so the
+    write would commit and then answer neither its stored record nor a
+    fixed token, and a document holding one makes the whole catalogue
+    unreadable until it is replaced. That is this route's own invalid
+    input: refused here, before any byte changes, by exactly the encoder
+    the response will use.
+    """
+    try:
+        json.dumps(body, ensure_ascii=False).encode("utf-8")
+    except UnicodeEncodeError as exc:
+        raise ApiError(400, token) from exc
+
+
+def save_staffing_document(home, body):
+    """Create or WHOLLY replace one staffing document — the catalogue's only
+    edit operation, and administrative as the catalogue it replaced was.
+
+    Whole replacement, never a merge: a friendly merge would leave a removed
+    rule or seat alive in a document its author believes no longer carries
+    it. The store validates before any byte changes, so a refused write
+    leaves the prior document byte-identical.
+    """
+    _require_encodable(body, INVALID_STAFFING_DOCUMENT)
+    try:
+        return staffing.save(home, body)
+    except staffing.StaffingError as exc:
+        raise ApiError(400, INVALID_STAFFING_DOCUMENT) from exc
+
+
+def _staffing_session_project(work_area):
+    """The project slug a session's work area names, or None.
+
+    Read defensively because it is read on the CREATE body too, before the
+    store has looked at it: a body whose work area is missing or misshapen
+    names no project, and so takes the administrative path below rather
+    than being authorized from something a caller made up.
+    """
+    if not isinstance(work_area, dict):
+        return None
+    slug = work_area.get("project")
+    return slug if isinstance(slug, str) else None
+
+
+def require_staffing_session_access(home, who, work_area, stored=True):
+    """Authorize one session route from the work area the session names.
+
+    The whole session policy, and no rung of its own: a session bound to a
+    project needs the same live project access as the work it names, and a
+    session with no project handle stays on the existing local-administrator
+    path. Live, because it is re-derived per request — a member whose access
+    is withdrawn loses the session with it.
+
+    *stored* says where the handle came from, which is the whole difference
+    between the two. A handle the STORE holds was decided once already, so
+    the administrator reaches it as they reach every run and every
+    discussion (`require_run_access`, `require_brainstorming_access`), and
+    a project deleted afterwards leaves no session that nobody can read.
+    A handle the CALLER supplies is a claim, so the project gate decides it
+    for everyone — the sibling create at `/api/brainstorming/sessions`
+    authorizes exactly that way — and only a session naming NO project
+    takes the administrative path. Otherwise an undeclared project would
+    open a session bound to nothing the service declares, in a record whose
+    work area no edit can correct and no route deletes.
+
+    Nothing further is checked. Every caller who passes here may read the
+    session and write or clear its overrides: there is no creator check, no
+    owner field and no caller identity stored (amendment A3).
+    """
+    slug = _staffing_session_project(work_area)
+    if slug is None:
+        if not who.get("admin"):
+            raise ApiError(403, FORBIDDEN)
+        return None
+    if stored and who.get("admin"):
+        return None
+    return require_project_access(home, who, slug)
+
+
+def staffing_session_view(home, record):
+    """One successful session response: the stored record and, beside it,
+    the roles whose declared split this session cannot honour.
+
+    Read LIVE on every response — the document may change under the session
+    — and it gates nothing: a role listed here still reads and edits
+    normally, and only an actual resolution refuses on that condition.
+    """
+    return {
+        "session": record,
+        "distinct_families_unsatisfiable":
+            staffing.distinct_families_projection(home, record["id"]),
+    }
+
+
+def read_staffing_session(home, who, session_id):
+    """One stored session, authorized from its OWN work-area handle.
+
+    Authorization is derived from what the store holds and never from what
+    the request carries, so a caller cannot reach another project's session
+    by describing it differently.
+    """
+    try:
+        record = staffing.read_session(home, session_id)
+    except staffing.StaffingError as exc:
+        raise ApiError(404, UNKNOWN_STAFFING_SESSION) from exc
+    require_staffing_session_access(home, who, record["work_area"])
+    return record
+
+
+def create_staffing_session(home, who, body):
+    """Open one session for the work area the body names.
+
+    Authorization comes first, from that named work area — a caller who may
+    not open work there learns nothing about what else the body got wrong —
+    and the handle is the caller's own claim, so a named project is one the
+    service declares and this caller may work in, for every identity.
+    The id is the store's, never the caller's.
+    """
+    require_staffing_session_access(
+        home, who, body.get("work_area"), stored=False)
+    _require_encodable(body, INVALID_STAFFING_SESSION)
+    try:
+        return staffing.create_session(home, body)
+    except staffing.StaffingError as exc:
+        raise ApiError(400, INVALID_STAFFING_SESSION) from exc
+
+
+def edit_staffing_session(home, session_id, changes):
+    """Apply one partial edit to an already-authorized session.
+
+    The store owns the shape: exactly `document`, `rigor`, `material` and
+    `overrides`, an absent field left alone and an explicit null clearing
+    one of the two optional ones. Optimistic, as the stores are — no version
+    and no compare-and-set — and byte-stable on refusal.
+    """
+    _require_encodable(changes, INVALID_STAFFING_SESSION)
+    try:
+        return staffing.edit_session(home, session_id, changes)
+    except staffing.StaffingError as exc:
+        raise ApiError(400, INVALID_STAFFING_SESSION) from exc
+
+
+def resolve_staffing_request(home, record, body):
+    """Staff one call through a session the caller has already been
+    authorized to read.
+
+    Returns EXACTLY the router's answer — `agent`, `model`, `effort` — and
+    nothing beside it: no seat, no cycle, no history and no fallback note.
+    A referenced document that cannot be read is not a failure here either;
+    the router's mandatory fallback answers it on the default document and
+    the answer looks like any other.
+
+    It refuses in exactly three ways: an input the router will not admit,
+    and the two surfaced conditions under their own tokens.
+    """
+    unknown = sorted(set(body) - set(STAFFING_RESOLVE_FIELDS))
+    if unknown or "role" not in body:
+        raise ApiError(400, INVALID_STAFFING_REQUEST)
+    try:
+        resolution = staffing.resolve(
+            home,
+            record["id"],
+            body["role"],
+            index=body.get("index", 1),
+            round=body.get("round", 1),
+            material=body.get("material"),
+            brief=body.get("brief"),
+        )
+    except staffing.StaffingConditionError as exc:
+        raise ApiError(
+            _STAFFING_CONDITION_STATUS[exc.code], exc.code) from exc
+    except staffing.StaffingError as exc:
+        raise ApiError(400, INVALID_STAFFING_REQUEST) from exc
+    return resolution.answer
+
+
 def create_run(home, payload):
     attach = bool(payload.get("attach"))
     bound = (
@@ -2009,29 +2331,25 @@ def create_run(home, payload):
         except profiles.ProfileError as exc:
             raise ApiError(400, str(exc))
 
-    # Model profiles are current settings, not creation snapshots.  Validate
-    # an optional first selection before creating any run state; once written
-    # below it is the same sidecar the live replacement route owns.
-    model_profile_supplied = "model_profile" in payload
-    model_profile_selection = payload.get("model_profile")
-    if attach and model_profile_supplied:
+    # The run's staffing: one session, opened from `staffing` and bound
+    # below. Validated here, before any run state is created, so a launch
+    # that cannot be honoured leaves nothing behind.
+    if "model_profile" in payload:
         raise ApiError(
             400,
-            "attach adopts the existing state as-is; 'model_profile' cannot "
-            "be combined with it",
+            "'model_profile' no longer decides any call of a run: launch "
+            "with 'staffing' {document, rigor, material?} instead",
         )
-    if model_profile_supplied:
-        try:
-            model_profile_selection = model_profiles.validate_selection(
-                model_profile_selection
-            )
-            model_profile_selection, _configuration = (
-                model_profiles.resolve_selection(
-                    home, model_profile_selection
-                )
-            )
-        except model_profiles.ModelProfileError as exc:
-            raise ApiError(400, str(exc))
+    staffing_supplied = "staffing" in payload
+    if attach and staffing_supplied:
+        raise ApiError(
+            400,
+            "attach adopts the existing state as-is; 'staffing' cannot be "
+            "combined with it",
+        )
+    staffing_selection = _validated_launch_staffing(
+        payload.get("staffing"), supplied=staffing_supplied
+    )
 
     goal_doc = None
     if attach:
@@ -2042,7 +2360,7 @@ def create_run(home, payload):
         # legacy workspace-root state, or an explicit `state_path` for a
         # per-milestone run.
         for key in ("goal", "goal_doc", "config", "project", "work_area",
-                    "profile", "model_profile"):
+                    "profile", "staffing"):
             if payload.get(key) is not None:
                 raise ApiError(
                     400,
@@ -2141,9 +2459,15 @@ def create_run(home, payload):
         except FileExistsError as exc:
             raise ApiError(409, str(exc) + ' (use "attach": true to adopt it)')
 
-    if model_profile_supplied:
-        _write_model_profile_selection(
-            state_path, model_profile_selection
+    if not attach:
+        # Exactly one session per run, written once. An attached run adopts
+        # the state as it is; its first resume derives one (amendment A2).
+        driver.open_run_staffing_session(
+            state_path,
+            home,
+            staffing_selection["document"],
+            staffing_selection["rigor"],
+            material=staffing_selection.get("material"),
         )
 
     if profile_name is not None:
@@ -2462,107 +2786,6 @@ def _write_amendments(entry, amendments):
     os.replace(tmp, path)
 
 
-ACT_KEYS = model_profiles.PROFILE_ACT_KEYS
-
-
-def _acts_path(entry):
-    # Beside the state file (the run's runtime dir), matching the driver.
-    return os.path.join(os.path.dirname(entry["state_path"]), "acts.json")
-
-
-def read_acts(entry):
-    try:
-        with open(_acts_path(entry), "r", encoding="utf-8") as fh:
-            data = json.load(fh)
-        return data if isinstance(data, dict) else {}
-    except (OSError, ValueError):
-        return {}
-
-
-def set_acts(home, run_id, body):
-    """Write hot act assignments (draft/impl/review/fix model profiles).
-
-    Same lock-free pattern as
-    amendments: this file is operator-owned; the driver re-reads it
-    before every act resolution, so a change binds the next call (for
-    drivers new enough to read it)."""
-    reg = registry.load(home)
-    entry = registry.get(reg, run_id)
-    if entry is None:
-        raise ApiError(404, "unknown run %r" % run_id)
-    acts = _validated_acts(body)
-    _write_acts(entry, acts)
-    return acts
-
-
-def patch_acts(home, run_id, body):
-    """Apply only the supplied live-act changes.
-
-    The panel uses this mutation form so editing one row does not erase an
-    untouched creation-time explicit-empty entry.  Empty supplied values keep
-    the public clear meaning; omitted keys remain semantically unchanged.
-    """
-    reg = registry.load(home)
-    entry = registry.get(reg, run_id)
-    if entry is None:
-        raise ApiError(404, "unknown run %r" % run_id)
-    changes = _validated_acts(body, retain_clears=True)
-    try:
-        acts = driver.read_current_acts_overlay(
-            entry["state_path"], strict=True
-        )
-    except model_profiles.ModelProfileError as exc:
-        raise ApiError(400, str(exc))
-    # A partial mutation must not make malformed omitted state look healthy.
-    # Validate the whole current layer, but preserve its original values and
-    # meaningful explicit-empty forms byte-for-semantics when merging changes.
-    _validated_acts(acts, retain_clears=True)
-    for key, val in changes.items():
-        if val is None:
-            acts.pop(key, None)
-        else:
-            acts[key] = val
-    _write_acts(entry, acts)
-    return acts
-
-
-def _validated_acts(body, retain_clears=False):
-    if not isinstance(body, dict):
-        raise ApiError(400, "acts body must be an object")
-    acts = {}
-    for key, val in body.items():
-        if key not in ACT_KEYS:
-            raise ApiError(400, "unknown act %r (allowed: %s)"
-                           % (key, ", ".join(ACT_KEYS)))
-        if val in (None, "", {}):
-            if retain_clears:
-                acts[key] = None
-            continue  # cleared -> fall back to profile/config/defaults
-        try:
-            acts[key] = model_profiles.validate_act_entry(
-                "acts", key, val
-            )
-        except model_profiles.ModelProfileError as exc:
-            raise ApiError(400, str(exc))
-
-    return acts
-
-
-def _write_acts(entry, acts):
-    path = _acts_path(entry)
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    fd, tmp = tempfile.mkstemp(
-        prefix=".acts-", suffix=".json", dir=os.path.dirname(path)
-    )
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as fh:
-            json.dump(acts, fh, indent=1)
-        os.replace(tmp, path)
-    finally:
-        if os.path.exists(tmp):
-            os.unlink(tmp)
-
-
 def _profile_overlay_path(entry):
     # Beside the state file (the run's runtime dir), matching acts.json and
     # amendments.json.
@@ -2593,8 +2816,8 @@ def read_profile_overlay(entry):
 
 def read_profile(entry):
     """The run's governing strategy profile for the panel, or None for a
-    profile-less, never-swapped run. Read straight from state (like
-    read_acts) and tolerant of a transiently unreadable state. `base` is
+    profile-less, never-swapped run. Read straight from state and
+    tolerant of a transiently unreadable state. `base` is
     retained pair stored in the run config at creation; `swap` is the
     operator's runtime repoint (present only after a swap); `governing` is
     the profile selected for the run — the swap when present, else the base.
@@ -2652,75 +2875,6 @@ def save_profile(home, body):
     return _profile_view(saved)
 
 
-def model_profiles_list(home):
-    """All model profiles for the catalogue (model-profiles slice 1).
-
-    The API-visible document IS the stored source document — no view
-    wrapper, no derived metadata. Unlike the strategy list, a stored but
-    invalid definition is NOT skipped: the error propagates and the GET
-    fails loudly with the common 500 envelope, so a damaged catalogue never
-    looks merely shorter."""
-    return model_profiles.list_model_profiles(home)
-
-
-def save_model_profile(home, body):
-    """Create or wholly replace one model profile — the catalogue's only
-    edit operation. Validation refuses with 400 before any byte changes,
-    so the prior definition survives every rejected input."""
-    try:
-        return model_profiles.save(home, body)
-    except model_profiles.ModelProfileError as exc:
-        raise ApiError(400, str(exc))
-
-
-def _write_model_profile_selection(state_path, selection):
-    """Atomically replace one run's exact current selection."""
-    path = os.path.join(
-        os.path.dirname(os.path.abspath(state_path)), "model_profile.json"
-    )
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    fd, tmp = tempfile.mkstemp(
-        prefix=".model-profile-selection-",
-        suffix=".tmp",
-        dir=os.path.dirname(path),
-    )
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as fh:
-            json.dump(selection, fh, indent=1, sort_keys=True)
-        os.replace(tmp, path)
-    finally:
-        if os.path.exists(tmp):
-            os.unlink(tmp)
-
-
-def read_model_profile_selection(home, run_id):
-    """Return the validated current choice; absence reads default@medium."""
-    entry = registry.get(registry.load(home), run_id)
-    if entry is None:
-        raise ApiError(404, "unknown run %r" % run_id)
-    selection = driver.read_current_model_profile_selection(
-        entry["state_path"]
-    )
-    selected, _configuration = model_profiles.resolve_selection(
-        home, selection
-    )
-    return selected
-
-
-def set_model_profile_selection(home, run_id, body):
-    """Validate, then wholly replace one run's current model-profile choice."""
-    entry = registry.get(registry.load(home), run_id)
-    if entry is None:
-        raise ApiError(404, "unknown run %r" % run_id)
-    try:
-        selected, _configuration = model_profiles.resolve_selection(home, body)
-    except model_profiles.ModelProfileError as exc:
-        raise ApiError(400, str(exc))
-    _write_model_profile_selection(entry["state_path"], selected)
-    _evict_summary(entry["state_path"])
-    return selected
-
-
 def set_slice_producer(home, run_id, slice_id, body):
     """Serialize one prospective producer write against task admission."""
     entry = registry.get(registry.load(home), run_id)
@@ -2746,6 +2900,39 @@ def set_slice_producer(home, run_id, slice_id, body):
         raise ApiError(status, exc.code) from exc
     _evict_summary(entry["state_path"])
     return producer_map
+
+
+def set_slice_material(home, run_id, slice_id, body):
+    """Serialize one prospective slice-material write against task admission.
+
+    The producer route's sibling, and deliberately its twin: one exclusive
+    mutation, no queue behind a busy driver step, and no retry. It differs
+    in one way only — a material is never frozen by an admitted task,
+    because the task already took the value it will keep, so this write
+    simply governs the next one.
+    """
+    entry = registry.get(registry.load(home), run_id)
+    if entry is None:
+        raise ApiError(404, "unknown run %r" % run_id)
+    # A material is stored and echoed verbatim, so shape alone does not
+    # make a string writable: the staffing routes' own guard answers the
+    # one this route could otherwise neither keep nor return.
+    _require_encodable(body, tasks.INVALID_TASK_REQUEST)
+    try:
+        checked = tasks.validate_material_override(body)
+    except tasks.TaskRequestError as exc:
+        raise ApiError(400, exc.code) from exc
+    try:
+        with st.exclusive_mutation(entry["state_path"]):
+            state = st.load(entry["state_path"])
+            material = tasks.update_slice_material(state, slice_id, checked)
+            st.save(entry["state_path"], state)
+    except st.ConcurrentStateMutation as exc:
+        raise ApiError(409, tasks.TASK_UPDATE_BUSY) from exc
+    except tasks.TaskRequestError as exc:
+        raise ApiError(400, exc.code) from exc
+    _evict_summary(entry["state_path"])
+    return material
 
 
 def set_profile_swap(home, run_id, body):
@@ -3232,7 +3419,6 @@ def run_detail(home, run_id, log_tail=80):
         detail["summary_error"] = str(exc)
     detail["log"] = read_log_tail(home, run_id, log_tail)
     detail["amendments"] = read_amendments(entry)
-    detail["acts"] = read_acts(entry)
     detail["profile"] = read_profile(entry)
     detail["commit_web_base"] = commit_web_base(entry["workspace"])
     return detail
@@ -3446,15 +3632,27 @@ def _require_unowned_workspace(
             raise ApiError(409, WORK_AREA_BUSY)
 
 
-def sync_project_git(home, slug, body, task_host=None):
-    """Hand one work area to the project's lead family to align with git.
+def sync_project_git(home, slug, body, task_host=None, who=None):
+    """Hand one work area to the router's `sync` seat to align with git.
 
     Authorization happened at the route. The refusal that stays here is
     the deterministic one: a work area with a live milestone driver is
     never handed over, because the driver owns that worktree.
+
+    Staffing is the caller's own session, or the default document when the
+    request names none, resolved as `sync` at seat 1 — and resolved only
+    once the alignment is actually eligible to run, so a busy or unusable
+    work area is still refused as a busy or unusable work area rather than
+    reported as a staffing condition for a call nobody was going to make.
     """
     slug, rec = _require_declared(home, slug)
     project = registry.get_project(rec, slug)
+    session = (body or {}).get("staffing_session")
+    if session is not None:
+        # A caller's claim, authorized exactly as the session's own route
+        # authorizes it: 404 for one no record answers, 403 for one this
+        # caller may not read. Omitted or null names none and asks nothing.
+        read_staffing_session(home, who or {}, session)
     area = (body or {}).get("work_area")
     if not isinstance(area, str) or not area.strip():
         raise ApiError(400, workareas.INVALID_NAME)
@@ -3481,9 +3679,6 @@ def sync_project_git(home, slug, body, task_host=None):
     config = driver.load_config(None)
     if project.get("defaults"):
         driver.merge_config(config, project["defaults"])
-    families = config.get("families_order") or ["codex"]
-    family = families[0]
-    seat = (config.get("model_defaults") or {}).get(family) or {}
 
     # One sync per work area at a time, with the ownership checks re-run
     # under the lease: without it two POSTs both passed a check taken
@@ -3491,19 +3686,39 @@ def sync_project_git(home, slug, body, task_host=None):
     # window between the check and the call.
     with _git_sync_lease(home, workspace):
         _require_unowned_workspace(home, workspace, task_host=task_host)
+        # Live, immediately before the one physical call: an edit to the
+        # session or to the document it names reaches this alignment.
+        try:
+            resolution = staffing.resolve(
+                home,
+                session,
+                "sync",
+                index=1,
+                round=1,
+                families=list(config.get("families_order") or []),
+            )
+        except staffing.StaffingConditionError as exc:
+            raise ApiError(
+                _STAFFING_CONDITION_STATUS[exc.code], exc.code
+            ) from exc
+        answer = resolution.answer
         try:
             outcome = gitsync.run_sync(
                 config["commands"],
                 config.get("timeouts"),
-                family,
+                answer["agent"],
                 workspace,
-                model=seat.get("model"),
-                effort=seat.get("effort"),
+                model=answer["model"],
+                effort=answer["effort"],
                 stall_window_s=config.get("worker_stall_window_s"),
                 stall_min_cpu_s=config.get("worker_stall_min_cpu_s"),
             )
         except runners.RunnerError as exc:
             raise ApiError(502, str(exc)) from exc
+    if resolution.staffing_fallback is not None:
+        # The alignment ran, staffed by the default document because an
+        # input could not be read. The outcome says so.
+        outcome["staffing_fallback"] = resolution.staffing_fallback
     return {
         "work_area": area,
         "workspace": workspace,
@@ -3650,17 +3865,18 @@ def _brainstorming_task_attachment(home, record, allow_missing=False):
     return matches[0]
 
 
-def _attached_brainstorming_model_profile_runtime(
+def _attached_brainstorming_staffing_session(
     home, session_id, record=None
 ):
-    """Resolve launch-only current staffing from the generic run attachment.
+    """Find the staffing session an ATTACHED discussion resolves through.
 
-    The Brainstorming registry does not retain model-profile locators.  On an
-    explicit restart the service can reattach a registered run through the
-    session id held in ordinary milestone state or the immutable task id held
-    by a profile-backed task session.  A current-profile session without that
-    generic attachment cannot resolve current staffing and must refuse before
-    launching; standalone sessions remain profile-independent.
+    A discussion created since the staffing cutover names its own session in
+    its registry entry and never needs this. One created BEFORE it does not,
+    and its entry is never rewritten to add one, so an explicit restart
+    reattaches it to the run that owns it — through the session id held in
+    ordinary milestone state, or the immutable task id held by an attached
+    task session — and reads that run's one bound staffing session.
+    Standalone sessions stay unattached and answer nothing.
     """
     if record is None:
         record = brainstorming_lifecycle._record_by_id(home, session_id)
@@ -3671,10 +3887,7 @@ def _attached_brainstorming_model_profile_runtime(
             return None
         if task_attachment["terminal"]:
             raise ApiError(503, brainstorming_lifecycle.UNAVAILABLE)
-        return {
-            "state_path": task_attachment["state_path"],
-            "home": os.path.abspath(home),
-        }
+        return _run_staffing_session(task_attachment["state_path"])
     milestone_session = (
         isinstance(caller, str) and caller.startswith("milestone:")
     )
@@ -3717,10 +3930,15 @@ def _attached_brainstorming_model_profile_runtime(
         raise ApiError(503, brainstorming_lifecycle.UNAVAILABLE)
     if not matches:
         raise ApiError(503, brainstorming_lifecycle.UNAVAILABLE)
-    return {
-        "state_path": matches[0],
-        "home": os.path.abspath(home),
-    }
+    return _run_staffing_session(matches[0])
+
+
+def _run_staffing_session(state_path):
+    """The one staffing session a registered run binds, or None."""
+    try:
+        return st.staffing_session(st.load(state_path))
+    except Exception as exc:
+        raise ApiError(503, brainstorming_lifecycle.UNAVAILABLE) from exc
 
 
 def _start_brainstorming_session(home, who, session_id, task_host=None):
@@ -3749,9 +3967,9 @@ def _start_brainstorming_session(home, who, session_id, task_host=None):
             home,
             session_id,
             lambda current: require_brainstorming_access(home, who, current),
-            validate_launch=(
+            resolve_staffing_session=(
                 lambda current: (
-                    _attached_brainstorming_model_profile_runtime(
+                    _attached_brainstorming_staffing_session(
                         home,
                         session_id,
                         record=current,
@@ -3778,12 +3996,19 @@ def _start_brainstorming_session(home, who, session_id, task_host=None):
             task = tasks.task_record(state, attachment["task_id"])
             if workspace_sync_in_flight(task_api._workspace(task)):
                 raise ApiError(409, WORK_AREA_BUSY)
+            # The restart carries the SAME reference the order was admitted
+            # with, read from the order itself: a pre-cutover record has no
+            # such key and keeps its static pins.
+            _supplied, inherited = tasks.order_staffing_session(task["order"])
             try:
                 projection = brainstorming_tasks.start_task(
                     state,
                     attachment["task_id"],
                     {},
                     home,
+                    staffing_selection=(
+                        brainstorming_tasks.standalone_staffing(inherited)
+                    ),
                     session_id=session_id,
                 )
             except brainstorming_lifecycle.PublicLifecycleError:
@@ -3808,11 +4033,8 @@ def _start_brainstorming_session(home, who, session_id, task_host=None):
                     lambda: _direct_task_config(home, project),
                 )
         return projection
-    model_profile_runtime = (
-        {
-            "state_path": attachment["state_path"],
-            "home": os.path.abspath(home),
-        }
+    staffing_selection = (
+        {"session": _run_staffing_session(attachment["state_path"])}
         if attachment["dispatch_authority"] == "current_profile"
         else None
     )
@@ -3822,7 +4044,7 @@ def _start_brainstorming_session(home, who, session_id, task_host=None):
             attachment["task_id"],
             {},
             home,
-            model_profile_runtime=model_profile_runtime,
+            staffing_selection=staffing_selection,
             session_id=session_id,
         )
     except st.ConcurrentStateMutation as exc:
@@ -3833,29 +4055,6 @@ def _start_brainstorming_session(home, who, session_id, task_host=None):
         _evict_summary(attachment["state_path"])
         raise ApiError(503, brainstorming_lifecycle.UNAVAILABLE)
     return projection
-
-
-def _current_brainstorming_staffing(home, record, session_state):
-    """Best-effort current staffing for a read-only profile-backed view."""
-    try:
-        current = _attached_brainstorming_model_profile_runtime(
-            home, record["id"], record=record
-        )
-        lead, counterpart = driver.resolve_current_brainstorming_profiles(
-            current["state_path"], current["home"]
-        )
-    except Exception:
-        return {}
-    return {
-        participant["id"]: copy.deepcopy(
-            counterpart
-            if participant.get("role") == "contrary_position"
-            else lead
-        )
-        for participant in session_state["run_config"]["participants"]
-        if participant.get("delivery") != "external"
-        or participant.get("role") == "common_sense"
-    }
 
 
 def brainstorming_visibility(home, who):
@@ -4019,13 +4218,27 @@ def _resolve_direct_task_order(home, who, body):
                 tasks.INVALID_TASK_REQUEST, "invalid task work area selector"
             )
         order["request"]["work_area"] = work_area
+        if order["staffing_session"] is not None:
+            # A named session must be one this caller could already read:
+            # the same authorization its own route applies, so an order
+            # cannot become a side door onto another project's staffing.
+            # Unknown is 404 `unknown_staffing_session` and inaccessible is
+            # 403, exactly as `GET /api/staffing/sessions/<id>` answers
+            # them, and neither admits a task. Omitting it names no session
+            # at all and asks nothing here: those calls take the default
+            # document, and their marker says so.
+            read_staffing_session(home, who, order["staffing_session"])
         primary = _validate_task_references(order)
         order = tasks._canonical_output_directory(order, primary)
-        if order["task_executor"] == "worker":
+        if order["task_executor"] == "agent_call":
             staffing = task_api.worker_staffing(config)
         else:
             staffing = brainstorming_tasks.resolve_staffing(
-                config, os.path.realpath(primary)
+                config,
+                os.path.realpath(primary),
+                brainstorming_tasks.standalone_staffing(
+                    order["staffing_session"]
+                ),
             )
         return order, staffing, primary, project_slug
     except tasks.TaskRequestError as exc:
@@ -4184,7 +4397,10 @@ def visible_tasks(home, who):
         direct = [
             record for record in direct if _task_project(record) in allowed
         ]
-    return direct + _registered_task_records(home, allowed)
+    return [
+        tasks.projected_task_record(record)
+        for record in direct + _registered_task_records(home, allowed)
+    ]
 
 
 def visible_direct_task_rows(home, who, limit=None):
@@ -4262,11 +4478,11 @@ def visible_run_tasks(home, who, run_id):
         records = tasks.task_records(state)
     except tasks.TaskRecordError as exc:
         raise ApiError(500, "task storage unavailable") from exc
-    if allowed is None:
-        return records
-    return [
-        record for record in records if _task_project(record) in allowed
-    ]
+    if allowed is not None:
+        records = [
+            record for record in records if _task_project(record) in allowed
+        ]
+    return [tasks.projected_task_record(record) for record in records]
 
 
 def read_task(home, who, task_id, run_id=None):
@@ -4280,7 +4496,7 @@ def read_task(home, who, task_id, run_id=None):
             raise ApiError(500, "task storage unavailable") from exc
         if allowed is not None and _task_project(record) not in allowed:
             raise ApiError(403, FORBIDDEN)
-        return record
+        return tasks.projected_task_record(record)
 
     allowed = _allowed_task_projects(home, who)
     direct = task_api.StandaloneTaskStore(home).records()
@@ -4290,7 +4506,7 @@ def read_task(home, who, task_id, run_id=None):
     if record is not None:
         if allowed is not None and _task_project(record) not in allowed:
             raise ApiError(403, FORBIDDEN)
-        return record
+        return tasks.projected_task_record(record)
 
     entries = registry.load(home)["runs"]
     if allowed is None:
@@ -4318,7 +4534,7 @@ def read_task(home, who, task_id, run_id=None):
         if record is not None:
             if allowed is not None and _task_project(record) not in allowed:
                 raise ApiError(403, FORBIDDEN)
-            return record
+            return tasks.projected_task_record(record)
 
     # Preserve the public foreign-record classification without letting an
     # unreadable, unauthorized run couple its faults to another inspection.
@@ -4450,11 +4666,24 @@ def make_handler(home, task_host=None):
                         "profiles": profiles_list(home),
                         "decisions": profiles.decision_catalogue(),
                     })
-                elif route == "/api/model-profiles":
+                elif route == "/api/staffing/documents":
                     self._json(
                         200,
-                        {"ok": True, "profiles": model_profiles_list(home)},
+                        {
+                            "ok": True,
+                            "documents": staffing_documents_list(home),
+                        },
                     )
+                elif route.startswith("/api/staffing/sessions/"):
+                    parts = route.rstrip("/").split("/")
+                    if len(parts) == 5 and parts[4]:
+                        record = read_staffing_session(home, who, parts[4])
+                        self._json(200, {
+                            "ok": True,
+                            **staffing_session_view(home, record),
+                        })
+                    else:
+                        self._json(404, {"ok": False, "error": "not found"})
                 elif route == "/api/fs":
                     # Unscoped browsing spans the whole host and stays
                     # administrative. A project+work_area scope authorizes
@@ -4561,9 +4790,9 @@ def make_handler(home, task_host=None):
                                 home, who, record
                             ),
                             ARTIFACT_MAX,
-                            current_staffing=lambda record, state: (
-                                _current_brainstorming_staffing(
-                                    home, record, state
+                            resolve_staffing_session=lambda record: (
+                                _attached_brainstorming_staffing_session(
+                                    home, record["id"], record=record
                                 )
                             ),
                         )
@@ -4610,13 +4839,6 @@ def make_handler(home, task_host=None):
                             **run_commit(home, parts[3],
                                          query.get("unit", "")),
                         })
-                    elif len(parts) == 5 and parts[4] == "model-profile":
-                        selection = read_model_profile_selection(
-                            home, parts[3]
-                        )
-                        self._json(
-                            200, {"ok": True, "selection": selection}
-                        )
                     else:
                         self._json(404, {"ok": False, "error": "not found"})
                 else:
@@ -4657,6 +4879,19 @@ def make_handler(home, task_host=None):
                     else:
                         project = require_brainstorming_project_access(
                             home, who, checked["project"]
+                        )
+                    if checked["staffing_session"] is not None:
+                        # A named session must be one this caller could
+                        # already read: the same authorization the session's
+                        # own route applies, so a discussion cannot become a
+                        # side door onto another project's staffing. Unknown
+                        # is 404 `unknown_staffing_session` and inaccessible
+                        # is 403, exactly as `GET /api/staffing/sessions/<id>`
+                        # answers them. Omitted names no session at all and
+                        # asks nothing here: those calls take the default
+                        # document, and their activity says so.
+                        read_staffing_session(
+                            home, who, checked["staffing_session"]
                         )
                     # A discussion started into a tree a sync is merging
                     # would fight it, the same way a run would — and the
@@ -4774,10 +5009,48 @@ def make_handler(home, task_host=None):
                     self._require_admin(who)
                     saved = save_profile(home, self._body())
                     self._json(200, {"ok": True, "profile": saved})
-                elif route == "/api/model-profiles":
+                elif route == "/api/staffing/documents":
                     self._require_admin(who)
-                    saved = save_model_profile(home, self._body())
-                    self._json(200, {"ok": True, "profile": saved})
+                    saved = save_staffing_document(
+                        home,
+                        self._staffing_body(INVALID_STAFFING_DOCUMENT),
+                    )
+                    self._json(200, {"ok": True, "document": saved})
+                elif route == "/api/staffing/sessions":
+                    session = create_staffing_session(
+                        home, who,
+                        self._staffing_body(INVALID_STAFFING_SESSION),
+                    )
+                    self._json(201, {
+                        "ok": True,
+                        **staffing_session_view(home, session),
+                    })
+                elif route.startswith("/api/staffing/sessions/"):
+                    parts = route.rstrip("/").split("/")
+                    # Both session writes authorize from the STORED record
+                    # before the body is read at all, so an unknown or
+                    # foreign session is answered as such rather than as
+                    # whatever the body got wrong.
+                    if len(parts) == 5 and parts[4]:
+                        record = read_staffing_session(home, who, parts[4])
+                        edited = edit_staffing_session(
+                            home, record["id"],
+                            self._staffing_body(INVALID_STAFFING_SESSION),
+                        )
+                        self._json(200, {
+                            "ok": True,
+                            **staffing_session_view(home, edited),
+                        })
+                    elif (len(parts) == 6 and parts[4]
+                            and parts[5] == "resolve"):
+                        record = read_staffing_session(home, who, parts[4])
+                        answer = resolve_staffing_request(
+                            home, record,
+                            self._staffing_body(INVALID_STAFFING_REQUEST),
+                        )
+                        self._json(200, {"ok": True, "staffing": answer})
+                    else:
+                        self._json(404, {"ok": False, "error": "not found"})
                 elif route == "/api/projects" or route.startswith("/api/projects/"):
                     segments = project_route_segments(route)
                     self._authorize_project_route(who, "POST", segments)
@@ -4785,6 +5058,7 @@ def make_handler(home, task_host=None):
                         home, "POST", segments,
                         self._body(),
                         task_host=task_host,
+                        who=who,
                     )
                     self._json(status, payload)
                 elif route.startswith("/api/runs/"):
@@ -4810,6 +5084,33 @@ def make_handler(home, task_host=None):
                                 "producer_task_executor": producer_map,
                             },
                         )
+                    elif (
+                        len(parts) == 7
+                        and parts[4] == "slices"
+                        and parts[6] == "material"
+                    ):
+                        try:
+                            slice_id = int(parts[5])
+                        except (TypeError, ValueError):
+                            raise ApiError(400, tasks.INVALID_TASK_REQUEST)
+                        # A body the transport could not read at all is
+                        # this route's own refusal token, not a second
+                        # vocabulary a caller would have to string-match:
+                        # every malformed material write answers alike.
+                        # `RecursionError` is read failure too, and the only
+                        # one the decoder raises past its own guard: nesting
+                        # deeper than the interpreter can descend is input
+                        # this route cannot read, not a fault in serving it.
+                        try:
+                            body = self._task_body()
+                        except RecursionError as exc:
+                            raise ApiError(
+                                400, tasks.INVALID_TASK_REQUEST
+                            ) from exc
+                        material = set_slice_material(
+                            home, parts[3], slice_id, body
+                        )
+                        self._json(200, {"ok": True, "material": material})
                     elif len(parts) == 5 and parts[4] == "start":
                         entry = start_run(home, parts[3])
                         self._json(200, {"ok": True, "run": run_status(entry, home=home)})
@@ -4835,16 +5136,6 @@ def make_handler(home, task_host=None):
                         self._json(
                             200, {"ok": True, "amendments": amendments}
                         )
-                    elif len(parts) == 5 and parts[4] == "acts":
-                        acts = set_acts(home, parts[3], self._body())
-                        self._json(200, {"ok": True, "acts": acts})
-                    elif len(parts) == 5 and parts[4] == "model-profile":
-                        selection = set_model_profile_selection(
-                            home, parts[3], self._body()
-                        )
-                        self._json(
-                            200, {"ok": True, "selection": selection}
-                        )
                     elif len(parts) == 5 and parts[4] == "profile":
                         swap = set_profile_swap(home, parts[3], self._body())
                         self._json(200, {"ok": True, "profile_swap": swap})
@@ -4862,18 +5153,17 @@ def make_handler(home, task_host=None):
                 self._json(500, {"ok": False, "error": str(exc)})
 
         def do_PATCH(self):
+            # The act overlay was this verb's only route and retires with
+            # the panel's acts dialog. The method stays so a PATCH is
+            # answered as the absent route it now is, in the ordinary JSON
+            # envelope, rather than as the base handler's 501 HTML page.
+            # Identity is still resolved first, exactly as every other verb
+            # does, so a caller the panel does not admit is refused here on
+            # the same terms and only an admitted request sees the 404.
             try:
                 brainstorming_lifecycle.reap_children(home)
-                route, _query = self._route()
-                who = self._who()
-                parts = route.rstrip("/").split("/")
-                if (len(parts) == 5 and route.startswith("/api/runs/")
-                        and parts[4] == "acts"):
-                    require_run_access(home, who, parts[3])
-                    acts = patch_acts(home, parts[3], self._body())
-                    self._json(200, {"ok": True, "acts": acts})
-                else:
-                    self._json(404, {"ok": False, "error": "not found"})
+                self._who()
+                self._json(404, {"ok": False, "error": "not found"})
             except ApiError as exc:
                 self._json(exc.status, {"ok": False, "error": str(exc)})
             except Exception as exc:
@@ -4972,6 +5262,20 @@ def make_handler(home, task_host=None):
             except ApiError as exc:
                 if exc.status in (400, 413):
                     raise ApiError(400, tasks.INVALID_TASK_REQUEST) from exc
+                raise
+
+        def _staffing_body(self, token):
+            """One staffing route's body under that route's fixed token.
+
+            The `_task_body` pattern: a body the service could not read at
+            all is that route's own invalid-input refusal, not a second
+            vocabulary a caller would have to string-match.
+            """
+            try:
+                return self._body()
+            except ApiError as exc:
+                if exc.status in (400, 413):
+                    raise ApiError(400, token) from exc
                 raise
 
         def _json(self, status, payload):
@@ -5189,6 +5493,11 @@ def make_server(home, port, task_host=None):
     # rewritten), so a seed or validation failure here stops startup
     # visibly instead of serving without the guaranteed catalogue entry.
     model_profiles.ensure_default(home)
+    # The staffing catalogue initializes beside it, with the same posture:
+    # every readable, valid profile gains a document of its own name once,
+    # and a served home always holds a valid `default` document. Conversion
+    # is missing-only, so an operator's edited document is never reverted.
+    staffing.ensure_documents(home)
     adopt = task_host is None
     if task_host is None:
         task_host = task_api.DirectTaskHost(home)

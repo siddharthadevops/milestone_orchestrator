@@ -21,6 +21,7 @@ from orchestrator import driver as drv
 from orchestrator import model_profiles
 from orchestrator import profiles
 from orchestrator import runners
+from orchestrator import staffing as stf
 from orchestrator import state as st
 
 from orchestrator.tests.test_driver_mock import (
@@ -41,6 +42,60 @@ from orchestrator.tests.test_driver_mock import (
 
 def draft_step():
     return skeleton_script()[0]
+
+
+def homed_draft_step():
+    """`draft_step()` for a run the ROUTER staffs.
+
+    The converted `default` document seats `plan 1` on claude whatever the
+    run config's own act table says, and after slice 4 that table decides
+    no driver call.
+    """
+    return dict(draft_step(), expect_family="claude")
+
+
+def unstaffable_document(name="ghosts"):
+    """A document whose every family slot names nobody this machine has.
+
+    A session repointed at it resolves `staffing_unavailable` — one of the
+    two conditions that still stop a dispatch — without touching the run's
+    own configuration.
+    """
+    document = stf.default_document_seed()
+    document["name"] = name
+    for slot in document["families"].values():
+        slot["name"] = "ghost-%s" % slot["name"]
+    return document
+
+
+def split_classify_document(name="split-classify"):
+    """A document whose `classify` role demands two distinct families.
+
+    A document owner may ask the independence seat to be split; on a machine
+    with one family the two seats collapse onto it, which is
+    `distinct_families_unsatisfiable` — for a rating DISPATCH, and only for
+    one.
+    """
+    document = stf.default_document_seed()
+    document["name"] = name
+    document["roles"]["classify"] = {"distinct_families": True}
+    document["assignment"]["classify"] = {"1": 1, "2": 2}
+    return document
+
+
+def one_review_seat(document):
+    """The same document with `review` assigned a SINGLE seat.
+
+    A run whose available families are one cannot honour the converted
+    `default`'s split `review` — its two seats both collapse onto that one
+    family — so it stops at its first review dispatch with
+    `distinct_families_unsatisfiable`. Such a run's single-family debt
+    behaviour is observable only where its reviews run at all: under a
+    `review` role with one assigned seat, which any declared split honours
+    trivially. Nothing else about the document changes.
+    """
+    document["assignment"]["review"] = {"1": 1}
+    return document
 
 
 def reform_draft_step():
@@ -222,12 +277,13 @@ class TestP3Debt(DriverTestCase):
             original_mark = driver._mark_busy
 
             def admit(label, kind, family, model=None, effort=None,
-                      nested=False, task_id=None):
+                      nested=False, task_id=None, staffing_fallback=None):
                 if kind == contracts.KIND_RECLASSIFY:
                     return False
                 return original_mark(
                     label, kind, family, model=model, effort=effort,
                     nested=nested, task_id=task_id,
+                    staffing_fallback=staffing_fallback,
                 )
 
             with mock.patch.object(driver, "_mark_busy", side_effect=admit):
@@ -248,11 +304,6 @@ class TestP3Debt(DriverTestCase):
         with tempfile.TemporaryDirectory(prefix="orch-mock-") as ws:
             home = os.path.join(ws, "home")
             model_profiles.ensure_default(home)
-            current_profile = model_profiles.load(home, "default")
-            current_profile["configurations"]["medium"]["skeletoner"] = {
-                "agent": "codex"
-            }
-            model_profiles.save(home, current_profile)
             config = make_config(p3_reclassify_debt=True)
             config["model_defaults"] = copy.deepcopy(
                 drv.DEFAULT_CONFIG["model_defaults"]
@@ -266,16 +317,21 @@ class TestP3Debt(DriverTestCase):
                 "total_tokens": 24,
             }
 
-            def invalidate_selection(_workspace):
-                runtime = os.path.dirname(path)
-                with open(
-                    os.path.join(runtime, "model_profile.json"),
-                    "w",
-                    encoding="utf-8",
-                ) as handle:
-                    handle.write(
-                        '{"name":"missing","rigor":"medium"}'
-                    )
+            def unstaff_the_run(_workspace):
+                """Leave the run's session with nobody to call at all.
+
+                Run as the review round's own side effect, so it lands
+                AFTER that dispatch resolved and before the rating's: the
+                review itself is a `review` seat now, and unstaffing before
+                its physical dispatch would simply stop the review instead
+                of the rating this test is about.
+                """
+                stf.save(home, unstaffable_document())
+                stf.edit_session(
+                    home,
+                    st.load(path)["staffing_session"],
+                    {"document": "ghosts"},
+                )
 
             class UsageRunner(runners.MockRunner):
                 def call(inner, *args, **kwargs):
@@ -286,11 +342,12 @@ class TestP3Debt(DriverTestCase):
                     return result
 
             runner = UsageRunner([
-                draft_step(),
+                homed_draft_step(),
                 step(
                     "review_round",
                     report("review_round", [finding("F1", "stale word")]),
                     family="codex",
+                    side_effect=unstaff_the_run,
                 ),
             ])
             subject = drv.Driver(
@@ -300,32 +357,7 @@ class TestP3Debt(DriverTestCase):
                 subject,
                 lambda current: current["units"][0]["status"] == st.U_ROUNDS,
             )
-
-            original_mark = subject._mark_busy
-
-            def invalidate_after_nested_admission(
-                label, kind, family, model=None, effort=None, nested=False,
-                task_id=None,
-            ):
-                admitted = original_mark(
-                    label,
-                    kind,
-                    family,
-                    model=model,
-                    effort=effort,
-                    nested=nested,
-                    task_id=task_id,
-                )
-                if admitted and kind == contracts.KIND_RECLASSIFY:
-                    invalidate_selection(ws)
-                return admitted
-
-            with mock.patch.object(
-                subject,
-                "_mark_busy",
-                side_effect=invalidate_after_nested_admission,
-            ):
-                subject.step()
+            subject.step()
 
             current = st.load(path)
             parent = [
@@ -347,8 +379,7 @@ class TestP3Debt(DriverTestCase):
                  contracts.KIND_REVIEW_ROUND],
             )
             self.assertIn(
-                "model-profile resolution failed",
-                current["failure"]["reason"],
+                stf.STAFFING_UNAVAILABLE, current["failure"]["reason"]
             )
             self.assertFalse(os.path.exists(subject._busy_path()))
 
@@ -362,6 +393,7 @@ class TestP3Debt(DriverTestCase):
                 "reclassifier": {"agent": "codex"},
             })
             model_profiles.save(home, current_profile)
+            stf.save(home, one_review_seat(stf.default_document_seed()))
             config = make_config(p3_reclassify_debt=True)
             config["families_order"] = ["codex"]
             config["model_defaults"] = copy.deepcopy(
@@ -386,9 +418,12 @@ class TestP3Debt(DriverTestCase):
 
             original_mark = subject._mark_busy
 
+            # The edit fires before the rating decision is taken, which is
+            # exactly what a single-family run must be indifferent to: the
+            # gate reads the families the RUN supplies, not a profile.
             def remove_explicit_rater_after_admission(
                 label, kind, family, model=None, effort=None, nested=False,
-                task_id=None,
+                task_id=None, staffing_fallback=None,
             ):
                 admitted = original_mark(
                     label,
@@ -398,8 +433,9 @@ class TestP3Debt(DriverTestCase):
                     effort=effort,
                     nested=nested,
                     task_id=task_id,
+                    staffing_fallback=staffing_fallback,
                 )
-                if admitted and kind == contracts.KIND_RECLASSIFY:
+                if admitted and kind == contracts.KIND_REVIEW_ROUND:
                     edited = model_profiles.load(home, "default")
                     edited["configurations"]["medium"].pop(
                         "reclassifier"
@@ -437,6 +473,15 @@ class TestP3Debt(DriverTestCase):
                  contracts.KIND_REVIEW_ROUND],
             )
             self.assertFalse(os.path.exists(subject._busy_path()))
+            # The profile edit really happened, and decided nothing: the
+            # rater is the seat the run's document assigns, and the run's
+            # single family is the only reason no rating was taken.
+            self.assertNotIn(
+                "reclassifier",
+                model_profiles.load(home, "default")["configurations"][
+                    "medium"],
+            )
+            self.assertEqual(subject._staff("classify")[0], "codex")
 
     def test_doc_round_p3_only_is_deferred_as_debt(self):
         with tempfile.TemporaryDirectory(prefix="orch-mock-") as ws:
@@ -582,9 +627,9 @@ class TestP3Debt(DriverTestCase):
                 st.summary(state)["units"][0]["work_duration_s"], 0.03
             )
 
-    def test_shipped_reclassifier_remains_explicit_when_profile_omits_act(
-        self,
-    ):
+    def test_config_act_table_does_not_choose_the_rater(self):
+        """The document the run's session names does — and it rates even
+        when its `classify` seat is the family that raised the finding."""
         with tempfile.TemporaryDirectory(prefix="orch-profile-rater-") as ws:
             home = os.path.join(ws, "home")
             model_profiles.ensure_default(home)
@@ -594,8 +639,10 @@ class TestP3Debt(DriverTestCase):
                 "configurations": {"low": {}, "medium": {}, "high": {}},
             })
             config = make_config(p3_reclassify_debt=True)
+            # Deliberately at odds with the document's own `classify 1`
+            # seat: after the cutover this table decides no driver call.
             config["acts"]["reclassifier"] = {
-                "agent": "codex", "effort": "xhigh"
+                "agent": "claude", "effort": "low"
             }
             path = init_state(ws, config)
             with open(
@@ -606,7 +653,7 @@ class TestP3Debt(DriverTestCase):
                 json.dump({"name": "lean", "rigor": "medium"}, handle)
 
             mock_runner = runners.MockRunner([
-                draft_step(),
+                homed_draft_step(),
                 step(
                     "review_round",
                     report(
@@ -614,7 +661,7 @@ class TestP3Debt(DriverTestCase):
                     ),
                     family="codex",
                 ),
-                reclassify(True, family="codex", reason="shipped policy"),
+                reclassify(True, family="codex", reason="assigned seat"),
             ])
             subject = drv.Driver(
                 path, runner=mock_runner, model_profiles_home=home
@@ -627,14 +674,29 @@ class TestP3Debt(DriverTestCase):
                 ),
             )
 
+            # The run's session points at the converted `lean` document.
+            self.assertEqual(
+                st.load(path)["staffing_session"],
+                stf.read_session(
+                    home, st.load(path)["staffing_session"])["id"],
+            )
+            seat = subject._staff("classify")
+            self.assertEqual(seat[0], "codex")
             event = next(
                 event for event in st.load(path)["events"]
                 if event["type"] == "reclassify_recorded"
             )
-            self.assertEqual(event["reclassifier"], "codex")
-            self.assertEqual(event["effort"], "xhigh")
+            # Rated at the assigned seat, by the family that raised it, and
+            # the entry names both.
+            self.assertEqual(event["reclassifier"], seat[0])
+            self.assertEqual(event["model"], seat[1])
+            self.assertEqual(event["effort"], seat[2])
             self.assertTrue(event["defer_ok"])
-            self.assertEqual(event["reason"], "shipped policy")
+            self.assertEqual(event["reason"], "assigned seat")
+            entry = st.load(path)["units"][0]["debt"][0]
+            self.assertEqual(
+                (entry["raised_by"], entry["cleared_by"]), ("codex", seat[0])
+            )
 
     def test_current_profile_can_explicitly_choose_same_family_reclassifier(
         self,
@@ -649,6 +711,9 @@ class TestP3Debt(DriverTestCase):
                 "effort": "high",
             }
             model_profiles.save(home, current)
+            # The document conversion runs at the first driver start, so
+            # this edit is what the run's `classify 1` seat is converted
+            # FROM; after that the document alone decides.
             path = init_state(ws, make_config(p3_reclassify_debt=True))
             mock = runners.MockRunner([
                 step(
@@ -1007,6 +1072,80 @@ class TestP3Debt(DriverTestCase):
             self.assertNotIn("reclassify", [c[1] for c in mock.calls])
             self.assertEqual(unit["debt"], [])
             self.assertEqual([f["id"] for f in unit["fix_queue"]], ["F1"])
+
+    def test_single_family_homed_run_never_defers_either(self):
+        # The same invariant for the run an operator actually gets: HOMED,
+        # so the router staffs every call, and supplying one family is the
+        # one case the rating is still withheld — no second family can run
+        # it, whatever the document's `classify` seat says. Its review runs
+        # on that same one family, so it reaches the finding at all.
+        with tempfile.TemporaryDirectory(prefix="orch-mock-") as ws:
+            home = os.path.join(ws, "home")
+            model_profiles.ensure_default(home)
+            stf.save(home, one_review_seat(stf.default_document_seed()))
+            cfg = make_config(p3_reclassify_debt=True,
+                              families_order=["codex"], fix_family="codex")
+            path = init_state(ws, cfg)
+            mock_runner = runners.MockRunner([
+                draft_step(),
+                step("review_round",
+                     report("review_round", [finding("F1", "stale word")]),
+                     family="codex"),
+            ])
+            driver = drv.Driver(
+                path, runner=mock_runner, model_profiles_home=home
+            )
+            self.step_until(
+                driver, lambda s: s["units"][0]["status"] == st.U_FIXING)
+            unit = st.load(path)["units"][0]
+            self.assertNotIn(
+                "reclassify", [call[1] for call in mock_runner.calls]
+            )
+            self.assertEqual(unit["debt"], [])
+            self.assertEqual([f["id"] for f in unit["fix_queue"]], ["F1"])
+            # The document does assign a `classify` seat; the run's single
+            # family, not the document, is why no rating was taken.
+            self.assertEqual(driver._staff("classify")[0], "codex")
+
+    def test_a_withheld_rating_never_asks_the_router_at_all(self):
+        # Same single-family run, under a document whose `classify` role
+        # demands two distinct families — which one family cannot honour.
+        # The rating is withheld for the run's own families, exactly as
+        # above, so NO classifier dispatch is due and the surfaced condition
+        # has no call to stop: the finding reaches the fix queue and the run
+        # does not fail. Only a dispatch that really happens is refused.
+        with tempfile.TemporaryDirectory(prefix="orch-mock-") as ws:
+            home = os.path.join(ws, "home")
+            model_profiles.ensure_default(home)
+            stf.save(home, one_review_seat(split_classify_document()))
+            cfg = make_config(p3_reclassify_debt=True,
+                              families_order=["codex"], fix_family="codex")
+            path = init_state(ws, cfg)
+            drv.open_run_staffing_session(
+                path, home, "split-classify", "medium")
+            mock_runner = runners.MockRunner([
+                draft_step(),
+                step("review_round",
+                     report("review_round", [finding("F1", "stale word")]),
+                     family="codex"),
+            ])
+            driver = drv.Driver(
+                path, runner=mock_runner, model_profiles_home=home
+            )
+            self.step_until(
+                driver, lambda s: s["units"][0]["status"] == st.U_FIXING)
+            state = st.load(path)
+            unit = state["units"][0]
+            self.assertIsNone(state["failure"])
+            self.assertNotIn(
+                "reclassify", [call[1] for call in mock_runner.calls]
+            )
+            self.assertEqual(unit["debt"], [])
+            self.assertEqual([f["id"] for f in unit["fix_queue"]], ["F1"])
+            # The seat itself is still unsatisfiable — nothing was softened;
+            # a dispatch that reached it would be refused.
+            with self.assertRaises(drv.StopStep):
+                driver._staff("classify")
 
     def _impl_pending(self, ws):
         # State with skeleton + slice_doc SEALED and the slice_impl unit

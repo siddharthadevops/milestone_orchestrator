@@ -2,23 +2,22 @@
 
 import contextlib
 import copy
-import http.client
 import io
 import json
 import os
 import shlex
 import subprocess
 import tempfile
-import threading
 import time
 import types
 import unittest
 from unittest import mock
 
-from orchestrator import contracts, current_model_call, driver, gitops
+from orchestrator import contracts, driver, gitops
 from orchestrator import model_profiles
 from orchestrator import brainstorming_lifecycle
-from orchestrator import prompts, registry, runners, service, state, tasks
+from orchestrator import prompts, registry, runners, service, staffing
+from orchestrator import state, tasks
 from orchestrator import verifiers
 
 
@@ -59,6 +58,22 @@ class CurrentModelProfileRuntimeTest(unittest.TestCase):
         with open(tmp, "w", encoding="utf-8") as fh:
             json.dump(value, fh)
         os.replace(tmp, path)
+
+    def bind_owner_session(self, state_path):
+        """Bind one staffing session to a run, as a launch or resume does."""
+        run_state = state.load(state_path)
+        bound = state.staffing_session(run_state)
+        if bound:
+            return bound
+        record = staffing.create_session(self.home, {
+            "work_area": {"workspace_path": self.workspace},
+            "families": list(driver.DEFAULT_CONFIG["families_order"]),
+            "document": staffing.DEFAULT_DOCUMENT_NAME,
+            "rigor": "medium",
+        })
+        state.bind_staffing_session(run_state, record["id"])
+        state.save(state_path, run_state)
+        return record["id"]
 
     def resolver(self, state_path, runner=None):
         return driver.Driver(
@@ -199,33 +214,36 @@ class CurrentModelProfileRuntimeTest(unittest.TestCase):
             run_id, "runtime", self.workspace, path
         ))
         d = self.resolver(path)
-        service.set_model_profile_selection(
-            self.home, run_id, {"name": "work", "rigor": "medium"}
+        self.write_runtime(
+            path, "model_profile.json", {"name": "work", "rigor": "medium"}
         )
         dispatched = d._act_profile("fixer")
         self.assertEqual(dispatched, ("claude", "profile-v1", "medium"))
 
         edited = model_profiles.load(self.home, "work")
         edited["configurations"]["medium"]["fixer"]["model"] = "profile-v2"
-        service.save_model_profile(self.home, edited)
+        # Through the store the resolver reads: the catalogue's own write
+        # route retired with the panel it served (staffing-router slice 8),
+        # and what this asserts is the driver's live re-read either way.
+        model_profiles.save(self.home, edited)
         self.assertEqual(d._act_profile("fixer"),
                          ("claude", "profile-v2", "medium"))
         self.assertEqual(dispatched, ("claude", "profile-v1", "medium"))
 
-        service.set_model_profile_selection(
-            self.home, run_id, {"name": "other", "rigor": "medium"}
+        self.write_runtime(
+            path, "model_profile.json", {"name": "other", "rigor": "medium"}
         )
         self.assertEqual(d._act_profile("fixer"),
                          ("codex", "other-profile", "low"))
 
-        service.set_acts(
-            self.home, run_id,
+        self.write_runtime(
+            path, "acts.json",
             {"fixer": {"agent": "codex", "model": "override",
                        "effort": "high"}},
         )
         self.assertEqual(d._act_profile("fixer"),
                          ("codex", "override", "high"))
-        service.set_acts(self.home, run_id, {})
+        self.write_runtime(path, "acts.json", {})
         self.assertEqual(d._act_profile("fixer"),
                          ("codex", "other-profile", "low"))
 
@@ -349,10 +367,20 @@ class CurrentModelProfileRuntimeTest(unittest.TestCase):
         with open(default_path, "w", encoding="utf-8") as fh:
             fh.write("{broken")
 
-        with self.assertRaisesRegex(
-            RuntimeError, "model-profile catalogue unavailable"
-        ):
-            self.resolver(path)
+        # A damaged catalogue no longer stops a homed run: nothing this
+        # driver dispatches resolves through a profile any more, so the
+        # start does its generic recovery and the run keeps staffing every
+        # seat from its own staffing session.
+        restarted = self.resolver(path)
+        self.assertEqual(
+            restarted._staff("implement")[0],
+            staffing.resolve(
+                self.home,
+                state.staffing_session(restarted.state),
+                "implement",
+                families=list(driver.DEFAULT_CONFIG["families_order"]),
+            ).answer["agent"],
+        )
 
         recovered = state.load(path)
         incidents = [
@@ -364,10 +392,10 @@ class CurrentModelProfileRuntimeTest(unittest.TestCase):
         self.assertEqual(incidents[0]["duration_s"], 2.5)
         self.assertEqual(incidents[0]["token_usage"], usage)
         self.assertIsNotNone(incidents[0]["cost"])
-        self.assertIn(
-            "model-profile catalogue unavailable",
-            recovered["failure"]["reason"],
-        )
+        self.assertIsNone(recovered["failure"])
+        # The operator's bytes are left exactly as they are.
+        with open(default_path, "r", encoding="utf-8") as fh:
+            self.assertEqual(fh.read(), "{broken")
         self.assertFalse(os.path.exists(worker_junk))
         self.assertTrue(any(
             event.get("type") == "unclean_stop_restored"
@@ -376,6 +404,66 @@ class CurrentModelProfileRuntimeTest(unittest.TestCase):
         self.assertFalse(os.path.exists(
             self.runtime_path(path, "current.json")
         ))
+
+    def test_damaged_default_profile_seeds_no_durable_default_document(self):
+        """A fault never becomes the operator's converted `default`.
+
+        Not gating the call on a damaged profile is this slice's licence;
+        writing a durable document from that fault is not. `ensure_documents`
+        skips the profile it cannot read, so with no `default` document to
+        find it would seed the in-code `default` over a stored `default`
+        profile that merely cannot be read — and conversion is missing-only,
+        so repairing the profile afterwards would never convert it. The
+        resolver's mandatory fallback answers the same seat from the same
+        seed meanwhile, and says so.
+        """
+        path = self.init()
+        # Today's stored `default` is what conversion must not lose: it
+        # differs from the in-code seed on the seat asserted below.
+        stored = model_profiles.load(self.home, "default")
+        stored["configurations"]["medium"]["implementer"] = {
+            "agent": "claude", "model": "claude-sonnet-5", "effort": "low",
+        }
+        model_profiles.save(self.home, stored)
+        converted = staffing.convert_profile(stored)
+
+        # A home that has not converted yet — the pre-cutover state the
+        # conversion rule governs — whose `default` profile is unreadable.
+        for name in staffing.document_names(self.home):
+            os.remove(os.path.join(
+                staffing.staffing_documents_dir(self.home), "%s.json" % name
+            ))
+        default_path = os.path.join(
+            self.home, "model_profiles", "default.json"
+        )
+        with open(default_path, "w", encoding="utf-8") as fh:
+            fh.write("{broken")
+
+        restarted = self.resolver(path)
+        # Nothing durable was written from the fault, so the operator's own
+        # `default` still converts once the profile is readable again.
+        self.assertEqual(staffing.document_names(self.home), [])
+        answered = staffing.resolve(
+            self.home,
+            state.staffing_session(restarted.state),
+            "implement",
+            families=list(driver.DEFAULT_CONFIG["families_order"]),
+        )
+        self.assertEqual(
+            answered.staffing_fallback,
+            staffing.STAFFING_FALLBACK_DEFAULT_DOCUMENT,
+        )
+        self.assertEqual(
+            restarted._staff("implement")[0], answered.answer["agent"]
+        )
+        self.assertIsNone(state.load(path)["failure"])
+
+        # Repair, restart: the conversion the fault deferred now happens,
+        # and it is the operator's profile that sources `default`.
+        model_profiles.save(self.home, stored)
+        self.resolver(path)
+        self.assertEqual(staffing.load(self.home, "default"), converted)
+        self.assertNotEqual(converted, staffing.default_document_seed())
 
     def test_purged_legacy_run_does_not_supply_next_run_current_settings(self):
         model_profiles.ensure_default(self.home)
@@ -511,7 +599,7 @@ class CurrentModelProfileRuntimeTest(unittest.TestCase):
                     self.home,
                     profile("matrix", {act: copy.deepcopy(entry)}),
                 )
-                service.set_acts(self.home, run_id, {})
+                self.write_runtime(path, "acts.json", {})
                 with mock.patch.object(
                     driver, "_resolve_act_from_layers", wraps=real_seam
                 ) as seam:
@@ -520,36 +608,18 @@ class CurrentModelProfileRuntimeTest(unittest.TestCase):
                     self.assertGreater(profile_hits, 0)
 
                     model_profiles.save(self.home, profile("matrix", {}))
-                    service.set_acts(
-                        self.home, run_id, {act: copy.deepcopy(entry)}
+                    self.write_runtime(
+                        path, "acts.json", {act: copy.deepcopy(entry)}
                     )
                     from_override = effective_result(act)
                     self.assertGreater(seam.call_count, profile_hits)
 
                 self.assertEqual(from_override, from_profile)
 
-        # Empty live submissions are the route's clear forms: they expose the
-        # current profile again instead of becoming a second policy shape.
-        model_profiles.save(
-            self.home, profile("matrix", {"fixer": "claude"})
-        )
-        for empty in (None, "", {}):
-            with self.subTest(clear=empty):
-                service.set_acts(self.home, run_id, {"fixer": "codex"})
-                self.assertEqual(
-                    service.set_acts(
-                        self.home, run_id, {"fixer": copy.deepcopy(empty)}
-                    ),
-                    {},
-                )
-                self.assertEqual(
-                    subject._act_profile("fixer")[0], "claude"
-                )
-
         # The independently supervised Brainstorming dispatch consumes the
         # counterpart override, while its family remains structurally opposite.
         model_profiles.save(self.home, profile("matrix", {}))
-        service.set_acts(self.home, run_id, {
+        self.write_runtime(path, "acts.json", {
             "implementer": {
                 "agent": "claude", "model": "lead-live", "effort": "high",
             },
@@ -573,55 +643,13 @@ class CurrentModelProfileRuntimeTest(unittest.TestCase):
             subject._delta_review_profile("codex"),
             ("codex", "review-live", "medium"),
         )
-        consultation = current_model_call.consultation_command(
-            path, self.home, "fixer"
-        )
-        self.assertIn("gpt-5.6-sol", consultation)
-        self.assertIn("model_reasoning_effort=high", consultation)
-
-        # The actual hot endpoint refuses unknown acts and attempts to cross a
-        # structural authority ceiling before its atomic writer can run.
-        service.set_acts(self.home, run_id, {"fixer": "claude"})
-        acts_path = self.runtime_path(path, "acts.json")
-        with open(acts_path, "rb") as fh:
-            prior_bytes = fh.read()
-        invalid = (
-            {"reviewer": "claude"},
-            {"delta_review": {"agent": "claude", "model": "illegal"}},
-            {"review_codex": {"agent": "claude", "model": "illegal"}},
-            {"brainstorming_counterpart": {
-                "agent": "codex", "model": "illegal",
-            }},
-            {"consultation": {"model": "illegal", "effort": "low"}},
-        )
-        server = service.make_server(self.home, 0)
-        server_thread = threading.Thread(
-            target=server.serve_forever, daemon=True
-        )
-        server_thread.start()
-        try:
-            for body in invalid:
-                with self.subTest(hot_refusal=body):
-                    connection = http.client.HTTPConnection(
-                        "127.0.0.1", server.server_address[1], timeout=5
-                    )
-                    try:
-                        connection.request(
-                            "POST", "/api/runs/%s/acts" % run_id,
-                            body=json.dumps(body),
-                            headers={"Content-Type": "application/json"},
-                        )
-                        response = connection.getresponse()
-                        response.read()
-                        self.assertEqual(response.status, 400)
-                    finally:
-                        connection.close()
-                    with open(acts_path, "rb") as fh:
-                        self.assertEqual(fh.read(), prior_bytes)
-        finally:
-            server.shutdown()
-            server.server_close()
-            server_thread.join(timeout=5)
+        # `consultation` remains an ACT the profile layer resolves; the
+        # command line the fixer runs is the router's `consult` seat after
+        # slice 4 and is pinned there, not here.
+        self.assertEqual(subject._resolve_act("consultation", "claude"),
+                         "codex")
+        self.assertEqual(subject._act_profile("fixer"),
+                         ("claude", None, "high"))
 
         malformed = (
             (
@@ -645,15 +673,9 @@ class CurrentModelProfileRuntimeTest(unittest.TestCase):
                     ),
                 model_profiles.ModelProfileError,
             ),
-            (
-                "consultation", "consultation",
-                {"model": "illegal", "effort": "low"},
-                lambda _current, current_path:
-                    current_model_call.consultation_command(
-                        current_path, self.home, "fixer"
-                    ),
-                model_profiles.ModelProfileError,
-            ),
+            # `consultation` is deliberately absent: after slice 4 the
+            # command line the fixer runs resolves through the run's
+            # staffing session, so no profile act can make it raise.
         )
         for source in ("profile", "override"):
             for index, (seat, act, entry, resolve, error) in enumerate(
@@ -791,7 +813,7 @@ class CurrentModelProfileRuntimeTest(unittest.TestCase):
         service_home = os.path.join(self.tmp.name, "service-home")
         self.assertEqual(registry.load(service_home)["runs"], [])
         with self.assertRaises(service.ApiError) as raised:
-            service._attached_brainstorming_model_profile_runtime(
+            service._attached_brainstorming_staffing_session(
                 service_home, "legacy-session", record=legacy_record
             )
         self.assertEqual(raised.exception.status, 503)
@@ -813,7 +835,7 @@ class CurrentModelProfileRuntimeTest(unittest.TestCase):
             side_effect=OSError("registered run state is unreadable"),
         ):
             with self.assertRaises(service.ApiError) as raised:
-                service._attached_brainstorming_model_profile_runtime(
+                service._attached_brainstorming_staffing_session(
                     service_home, "legacy-session", record=legacy_record
                 )
         self.assertEqual(raised.exception.status, 503)
@@ -839,18 +861,17 @@ class CurrentModelProfileRuntimeTest(unittest.TestCase):
                 raise OSError("unrelated registered state is unreadable")
             return real_load(state_path)
 
-        current = {
-            "state_path": os.path.abspath(path),
-            "home": os.path.abspath(service_home),
-        }
+        # The attached session resolves through the run's OWN staffing
+        # session, read live from the state the attachment finds.
+        owner_session = self.bind_owner_session(path)
         with mock.patch.object(
             service.st, "load", side_effect=load_readable_attachment
         ):
             self.assertEqual(
-                service._attached_brainstorming_model_profile_runtime(
+                service._attached_brainstorming_staffing_session(
                     service_home, "legacy-session", record=legacy_record
                 ),
-                current,
+                owner_session,
             )
 
         lifecycle_record = {
@@ -866,7 +887,7 @@ class CurrentModelProfileRuntimeTest(unittest.TestCase):
         launch.process.pid = 12345
         validate_launch = mock.Mock(
             side_effect=lambda record: (
-                service._attached_brainstorming_model_profile_runtime(
+                service._attached_brainstorming_staffing_session(
                     service_home, "legacy-session", record=record
                 )
             )
@@ -911,13 +932,13 @@ class CurrentModelProfileRuntimeTest(unittest.TestCase):
                 service_home,
                 "legacy-session",
                 lambda _record: None,
-                validate_launch=validate_launch,
+                resolve_staffing_session=validate_launch,
             )
         validate_launch.assert_called_once_with(lifecycle_record)
         launch_process.assert_called_once_with(
             service_home,
             "legacy-session",
-            model_profile_runtime=current,
+            staffing_session=owner_session,
         )
 
     def test_brainstorming_monitoring_uses_current_or_actual_staffing(self):
@@ -936,17 +957,6 @@ class CurrentModelProfileRuntimeTest(unittest.TestCase):
                 path,
             ),
         )
-        edited = model_profiles.load(self.home, "default")
-        edited["configurations"]["medium"].update({
-            "implementer": {
-                "agent": "claude", "model": "current-lead",
-                "effort": "high",
-            },
-            "brainstorming_counterpart": {
-                "model": "current-counterpart", "effort": "low",
-            },
-        })
-        model_profiles.save(self.home, edited)
         participants = [
             {
                 "id": "lead", "role": "initial_position",
@@ -981,20 +991,29 @@ class CurrentModelProfileRuntimeTest(unittest.TestCase):
                 ),
             },
         }
-        current = service._current_brainstorming_staffing(
-            self.home, record, session_state
+        self.bind_owner_session(path)
+        owner_session = service._attached_brainstorming_staffing_session(
+            self.home, record["id"], record=record
         )
+        binding = {"home": self.home, "session": owner_session}
         projected = brainstorming_lifecycle._view_participants(
-            record, session_state, current_staffing=current
+            record, session_state, staffing_binding=binding
         )
+        # The view is the LIVE router answer for each roster seat, never the
+        # creation roster the record still carries.
         self.assertEqual(
             [
                 (item["model_family"], item["model"], item["effort"])
                 for item in projected
             ],
             [
-                ("claude", "current-lead", "high"),
-                ("codex", "current-counterpart", "low"),
+                tuple(
+                    staffing.resolve(
+                        self.home, owner_session, "brainstorm", index=index
+                    ).answer[key]
+                    for key in ("agent", "model", "effort")
+                )
+                for index in (1, 2)
             ],
         )
 
@@ -1027,20 +1046,14 @@ class CurrentModelProfileRuntimeTest(unittest.TestCase):
             ),
         })
         self.assertEqual(
-            service._attached_brainstorming_model_profile_runtime(
+            service._attached_brainstorming_staffing_session(
                 self.home, task_record["id"], record=task_record
             ),
-            {
-                "state_path": os.path.abspath(path),
-                "home": os.path.abspath(self.home),
-            },
-        )
-        task_current = service._current_brainstorming_staffing(
-            self.home, task_record, session_state
+            owner_session,
         )
         self.assertEqual(
             brainstorming_lifecycle._view_participants(
-                task_record, session_state, current_staffing=task_current
+                task_record, session_state, staffing_binding=binding
             ),
             projected,
         )
@@ -1057,7 +1070,7 @@ class CurrentModelProfileRuntimeTest(unittest.TestCase):
         })
         state.save(path, terminal)
         with self.assertRaises(service.ApiError) as terminal_attachment:
-            service._attached_brainstorming_model_profile_runtime(
+            service._attached_brainstorming_staffing_session(
                 self.home, task_record["id"], record=task_record
             )
         self.assertEqual(terminal_attachment.exception.status, 503)
@@ -1068,7 +1081,7 @@ class CurrentModelProfileRuntimeTest(unittest.TestCase):
             + "missing-task"
         )
         with self.assertRaises(service.ApiError):
-            service._attached_brainstorming_model_profile_runtime(
+            service._attached_brainstorming_staffing_session(
                 self.home, missing_task["id"], record=missing_task
             )
 
@@ -1094,14 +1107,11 @@ class CurrentModelProfileRuntimeTest(unittest.TestCase):
         self.assertIsNone(active["model"])
         self.assertIsNone(active["effort"])
 
+        # With no binding at all — an unattached record, or an owning run
+        # the lookup cannot reach — the view omits staffing rather than
+        # showing the creation roster the next dispatch would contradict.
         without_attachment = copy.deepcopy(record)
         without_attachment["id"] = "unattached"
-        self.assertEqual(
-            service._current_brainstorming_staffing(
-                self.home, without_attachment, session_state
-            ),
-            {},
-        )
         omitted = brainstorming_lifecycle._view_participants(
             without_attachment, session_state
         )
@@ -1163,7 +1173,7 @@ class CurrentModelProfileRuntimeTest(unittest.TestCase):
                         self.home,
                         "legacy-session",
                         lambda _record: None,
-                        validate_launch=validate_launch,
+                        resolve_staffing_session=validate_launch,
                     )
                 self.assertEqual(projected, {"process": "unchanged"})
                 validate_launch.assert_not_called()
@@ -1271,20 +1281,6 @@ class CurrentModelProfileRuntimeTest(unittest.TestCase):
         )
         self.assertIn("\nFAMILY: claude\n", continuation.calls[0][2])
 
-        # The separately launched consultation resolves after the fixer has
-        # started, from the same current-state source used by normal calls.
-        current = model_profiles.load(self.home, "default")
-        current["configurations"]["medium"].update({
-            "fixer": {"agent": "claude", "effort": "high"},
-            "consultation": "opposite",
-        })
-        model_profiles.save(self.home, current)
-        command = current_model_call.consultation_command(
-            path, self.home, "fixer"
-        )
-        self.assertIn("gpt-5.6-sol", command)
-        self.assertIn("model_reasoning_effort=high", command)
-
     def test_consultation_command_round_trips_spaced_paths(self):
         spaced_home = os.path.join(self.tmp.name, "profile home")
         spaced_workspace = os.path.join(self.tmp.name, "run workspace")
@@ -1300,53 +1296,12 @@ class CurrentModelProfileRuntimeTest(unittest.TestCase):
             runner=runners.MockRunner([]),
             model_profiles_home=spaced_home,
         )
-        argv = subject._consultation_command(
-            "claude", "high", caller_act="fixer"
-        )
+        argv = subject._consultation_command("claude", "high")
         block = prompts._consultation_block("claude", argv)
         rendered = block.split("Command (prompt on stdin):\n  ", 1)[1].split(
             "\n", 1
         )[0]
         self.assertEqual(shlex.split(rendered), argv)
-
-    def test_consultation_resolution_keeps_caller_structural_origin(self):
-        model_profiles.ensure_default(self.home)
-        current = model_profiles.load(self.home, "default")
-        current["configurations"]["medium"].update({
-            "fixer": "self",
-            "skeletoner": "self",
-            "consultation": "opposite",
-        })
-        model_profiles.save(self.home, current)
-        path = self.init()
-
-        fixer_command = current_model_call.consultation_command(
-            path, self.home, "fixer", caller_origin="claude"
-        )
-        skeletoner_command = current_model_call.consultation_command(
-            path, self.home, "skeletoner", caller_origin="codex"
-        )
-
-        self.assertIn("gpt-5.6-sol", fixer_command)
-        self.assertIn("claude-opus-5", skeletoner_command)
-
-    def test_consultation_uses_the_fixers_structural_default(self):
-        config = copy.deepcopy(driver.DEFAULT_CONFIG)
-        config["fix_family"] = "claude"
-        path = self.init(config=config)
-        self.write_runtime(path, "acts.json", {"fixer": None})
-
-        subject = self.resolver(path)
-        self.assertEqual(
-            subject._act_profile("fixer", default_family="codex"),
-            ("codex", None, None),
-        )
-        consultation_command = current_model_call.consultation_command(
-            path, self.home, "fixer", caller_origin="claude"
-        )
-
-        self.assertIn("claude-opus-5", consultation_command)
-        self.assertNotIn("gpt-5.6-sol", consultation_command)
 
     def test_infrastructure_retry_reresolves_current_staffing(self):
         model_profiles.ensure_default(self.home)
@@ -1478,6 +1433,11 @@ class CurrentModelProfileRuntimeTest(unittest.TestCase):
             subject._classify_failure(
                 "codex", runners.RunnerError("mystery"), "classifier-test"
             )
+        # Both classifiers are the router's `classify` seat: which family
+        # types a failure is the document's choice, not the family opposite
+        # the call that failed.
+        self.assertEqual(resolutions.pop(0),
+                         ("driver", subject._staff("classify")))
 
         participant = {
             "id": "lead",
@@ -1520,9 +1480,9 @@ class CurrentModelProfileRuntimeTest(unittest.TestCase):
             Store(),
             record,
             None,
-            current_model_profile={
-                "state_path": path,
+            staffing_binding={
                 "home": self.home,
+                "session": state.staffing_session(state.load(path)),
             },
         )
 
@@ -1544,15 +1504,9 @@ class CurrentModelProfileRuntimeTest(unittest.TestCase):
                 runners.RunnerError("mystery"),
             )
 
-        expected = (
-            "claude",
-            driver.DEFAULT_CONFIG["model_defaults"]["claude"]["model"],
-            driver.DEFAULT_CONFIG["model_defaults"]["claude"]["effort"],
+        self.assertEqual(
+            resolutions, [("brainstorming", subject._staff("classify"))]
         )
-        self.assertEqual(resolutions, [
-            ("driver", expected),
-            ("brainstorming", expected),
-        ])
 
     def test_predispatch_failure_preserves_completed_malformed_attempt(self):
         usage = {
@@ -1991,17 +1945,26 @@ class CurrentModelProfileRuntimeTest(unittest.TestCase):
         d = self.resolver(path)
         self.assertEqual(d._act_profile("fixer")[0], "codex")
         after = state.load(path)
-        self.assertEqual(after["events"], before_events)
+        # The resume derivation appends its own binding event (amendment A2)
+        # and nothing else: no event is written for the stale binding data,
+        # and no recorded event is rewritten.
+        self.assertEqual(after["events"][:len(before_events)], before_events)
+        self.assertEqual(
+            [event["type"] for event in after["events"][len(before_events):]],
+            ["staffing_session_bound"],
+        )
         self.assertEqual(after["model_profile"]["name"], "missing")
 
-    def test_summary_choice_equals_next_call_without_intervening_change(self):
+    def test_summary_projection_is_the_router_and_profiles_decide_nothing(self):
+        """The rounds-time projection names the NEXT review round's staffing.
+
+        It reads the same router that dispatch will read — the run's
+        session, its document's `review` seats and the seat the cycle
+        stands on — so the summary and the call agree without any
+        intervening change. The model profile and the acts sidecar that
+        used to decide this projection now decide nothing.
+        """
         model_profiles.ensure_default(self.home)
-        current = model_profiles.load(self.home, "default")
-        current["configurations"]["medium"]["review_codex"] = {
-            "model": "summary-v1",
-            "effort": "high",
-        }
-        model_profiles.save(self.home, current)
         model_profiles.save(self.home, profile("other", {
             "review_codex": {"model": "selection-model", "effort": "low"},
         }))
@@ -2012,37 +1975,52 @@ class CurrentModelProfileRuntimeTest(unittest.TestCase):
         unit["family_index"] = 0
         state.save(path, run_state)
 
+        # No session bound yet, so the resolver's default-document fallback
+        # answers here exactly as it would answer a dispatch.
+        seat_one = driver.resolve_current_review_model(path, self.home)
+        self.assertEqual(seat_one[0], "codex")  # `default` review seat 1
         summary = service.load_summary(path, model_profiles_home=self.home)
-        self.assertEqual(summary["current_model"], "summary-v1")
         self.assertEqual(
-            summary["current_model"],
-            driver.resolve_current_review_model(path, self.home),
+            (summary["current_family"], summary["current_model"]), seat_one
         )
 
-        current["configurations"]["medium"]["review_codex"]["model"] = (
-            "summary-v2"
-        )
-        model_profiles.save(self.home, current)
-        summary = service.load_summary(path, model_profiles_home=self.home)
-        self.assertEqual(summary["current_model"], "summary-v2")
-
+        # Neither the profile the run selects nor its acts sidecar moves it.
         self.write_runtime(
-            path,
-            "model_profile.json",
-            {"name": "other", "rigor": "medium"},
+            path, "model_profile.json", {"name": "other", "rigor": "medium"}
         )
-        summary = service.load_summary(path, model_profiles_home=self.home)
-        self.assertEqual(summary["current_model"], "selection-model")
-
         self.write_runtime(path, "acts.json", {
             "review_codex": {"model": "override-model", "effort": "medium"}
         })
         summary = service.load_summary(path, model_profiles_home=self.home)
-        self.assertEqual(summary["current_model"], "override-model")
         self.assertEqual(
-            summary["current_model"],
-            driver.resolve_current_review_model(path, self.home),
+            (summary["current_family"], summary["current_model"]), seat_one
         )
+        self.assertEqual(
+            driver.resolve_current_review_model(path, self.home), seat_one
+        )
+
+        # Standing on the second seat projects the second seat.
+        run_state = state.load(path)
+        state.current_unit(run_state)["family_index"] = 1
+        state.save(path, run_state)
+        seat_two = driver.resolve_current_review_model(path, self.home)
+        self.assertEqual(seat_two[0], "claude")  # `default` review seat 2
+        self.assertNotEqual(seat_two, seat_one)
+        summary = service.load_summary(path, model_profiles_home=self.home)
+        self.assertEqual(
+            (summary["current_family"], summary["current_model"]), seat_two
+        )
+
+        # Past the last assigned seat there is no round to project, and the
+        # summary keeps working without one.
+        run_state = state.load(path)
+        state.current_unit(run_state)["family_index"] = 7
+        state.save(path, run_state)
+        self.assertIsNone(
+            driver.resolve_current_review_model(path, self.home)
+        )
+        summary = service.load_summary(path, model_profiles_home=self.home)
+        self.assertIsNone(summary["current_family"])
 
 
 if __name__ == "__main__":

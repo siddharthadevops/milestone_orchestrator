@@ -531,7 +531,8 @@ class BrainstormingExecutionTest(unittest.TestCase):
             "effort": "medium",
         }
 
-        def resolve():
+        def resolve(round_number):
+            self.assertEqual(round_number, 1)
             return dict(current)
 
         first_binding = execution.RunnerParticipantExecutor(

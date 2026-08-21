@@ -12,7 +12,7 @@ from unittest import mock
 
 from orchestrator import brainstorming, contracts
 from orchestrator import driver as drv
-from orchestrator import runners
+from orchestrator import runners, staffing
 from orchestrator import state as st
 from orchestrator import tasks
 
@@ -58,7 +58,7 @@ def task_result(**changes):
     return value
 
 
-def task_order(task_executor="worker", **request_changes):
+def task_order(task_executor="agent_call", **request_changes):
     return {
         "task_executor": task_executor,
         "request": task_request(**request_changes),
@@ -87,7 +87,7 @@ class TaskContractsTest(unittest.TestCase):
         self.assertIsInstance(catalogue, list)
         self.assertEqual(
             [entry["id"] for entry in catalogue],
-            ["worker", "brainstorming"],
+            ["agent_call", "brainstorming"],
         )
         fields = {
             "id",
@@ -112,7 +112,34 @@ class TaskContractsTest(unittest.TestCase):
             )
             self.assertTrue(entry["available_agent_configurations"].strip())
 
-        self.assertEqual(catalogue[0]["configuration_schema"], {})
+        # The one thing an orderer chooses about an agent call's staffing:
+        # the process step it performs, from the router's own closed
+        # vocabulary and defaulting to implementation work. No seat and no
+        # round: those are the consumer facts the router keeps no history
+        # of, and nothing here exposes them.
+        self.assertEqual(
+            catalogue[0]["configuration_schema"],
+            {
+                "role": {
+                    "type": "choice",
+                    "choices": [
+                        "plan", "draft", "implement", "fix", "classify",
+                        "review", "brainstorm", "consult", "sync",
+                    ],
+                    "default": "implement",
+                },
+            },
+        )
+        self.assertEqual(
+            catalogue[0]["configuration_schema"]["role"]["choices"],
+            list(staffing.ROLES),
+        )
+        self.assertEqual(catalogue[0]["name"], "Agent call")
+        # The retired spelling survives only in stored bytes, never in the
+        # catalogue an operator, a product, or a planner reads.
+        for entry in catalogue:
+            text = json.dumps(entry, sort_keys=True).lower()
+            self.assertNotIn("worker", text)
         self.assertEqual(
             catalogue[1]["configuration_schema"],
             {
@@ -142,8 +169,18 @@ class TaskContractsTest(unittest.TestCase):
         )
 
     def test_configuration_schema_and_resolution(self):
-        self.assertEqual(tasks.resolve_configuration("worker"), {})
-        self.assertEqual(tasks.resolve_configuration("worker", {}), {})
+        self.assertEqual(
+            tasks.resolve_configuration("agent_call"), {"role": "implement"}
+        )
+        self.assertEqual(
+            tasks.resolve_configuration("agent_call", {}),
+            {"role": "implement"},
+        )
+        for role in staffing.ROLES:
+            self.assertEqual(
+                tasks.resolve_configuration("agent_call", {"role": role}),
+                {"role": role},
+            )
         self.assertEqual(
             tasks.resolve_configuration("brainstorming"),
             {"max_rounds": 20, "closure_policy": "unanimity"},
@@ -162,8 +199,11 @@ class TaskContractsTest(unittest.TestCase):
         )
 
         invalid = [
-            ("worker", {"max_rounds": 1}),
-            ("worker", None),
+            ("agent_call", {"max_rounds": 1}),
+            ("agent_call", {"role": "reviewer"}),
+            ("agent_call", {"role": None}),
+            ("agent_call", {"role": "implement", "index": 2}),
+            ("agent_call", None),
             ("brainstorming", {"max_rounds": True}),
             ("brainstorming", {"max_rounds": 1.0}),
             ("brainstorming", {"closure_policy": "consensus"}),
@@ -231,10 +271,44 @@ class TaskContractsTest(unittest.TestCase):
         )
 
         order = tasks.validate_order(
-            {"task_executor": "worker", "request": task_request()}
+            {"task_executor": "agent_call", "request": task_request()}
         )
-        self.assertEqual(order["configuration"], {})
+        self.assertEqual(order["configuration"], {"role": "implement"})
         self.assertEqual(order["request"], task_request())
+        # Every order this validator admits carries the owner's staffing
+        # context, and an omitted one is an explicit null: absence of the
+        # key is reserved for records admitted before the cutover.
+        self.assertIsNone(order["staffing_session"])
+        self.assertEqual(tasks.order_staffing_session(order), (True, None))
+        named = tasks.validate_order({
+            "task_executor": "agent_call",
+            "request": task_request(),
+            "configuration": {"role": "consult"},
+            "staffing_session": "stf-abc",
+        })
+        self.assertEqual(named["staffing_session"], "stf-abc")
+        self.assertEqual(named["configuration"], {"role": "consult"})
+        self.assertEqual(
+            tasks.order_staffing_session(named), (True, "stf-abc")
+        )
+        # A pre-cutover record has no such key at all, and reads as one.
+        self.assertEqual(
+            tasks.order_staffing_session(
+                {"task_executor": "worker", "request": task_request()}
+            ),
+            (False, None),
+        )
+        for refused in ("", "   ", 7, False, []):
+            with self.subTest(staffing_session=refused):
+                self.assert_request_error(
+                    tasks.INVALID_TASK_REQUEST,
+                    tasks.validate_order,
+                    {
+                        "task_executor": "agent_call",
+                        "request": task_request(),
+                        "staffing_session": refused,
+                    },
+                )
         brainstorming_order = tasks.validate_order(
             {
                 "task_executor": "brainstorming",
@@ -246,6 +320,17 @@ class TaskContractsTest(unittest.TestCase):
             brainstorming_order["configuration"],
             {"max_rounds": 20, "closure_policy": "unanimity"},  # raised
         )
+        production_order = tasks.producer_order(
+            {"id": 1, "title": "one", "material": "analysis"},
+            contracts.KIND_IMPLEMENT,
+            task_request(context={}),
+        )
+        admitted_production_order = tasks.validate_order(production_order)
+        self.assertEqual(
+            tasks.order_staffing_material(admitted_production_order),
+            "analysis",
+        )
+        self.assertEqual(admitted_production_order["request"]["context"], {})
 
         invalid_requests = []
         for missing in (
@@ -284,17 +369,17 @@ class TaskContractsTest(unittest.TestCase):
 
         invalid_orders = [
             {},
-            {"task_executor": "worker"},
+            {"task_executor": "agent_call"},
             {"request": task_request()},
             {
-                "task_executor": "worker",
+                "task_executor": "agent_call",
                 "request": task_request(),
                 "extra": True,
             },
             {"task_executor": 1, "request": task_request()},
-            {"task_executor": "worker", "request": []},
+            {"task_executor": "agent_call", "request": []},
             {
-                "task_executor": "worker",
+                "task_executor": "agent_call",
                 "request": task_request(),
                 "configuration": None,
             },
@@ -623,7 +708,7 @@ class DurableTaskRecordsTest(unittest.TestCase):
             os.makedirs(outside)
             os.symlink(outside, os.path.join(primary, "linked-outside"))
 
-            for executor in ("worker", "brainstorming"):
+            for executor in ("agent_call", "brainstorming"):
                 with self.subTest(executor=executor):
                     state = st.new_state("goal", primary, {})
                     omitted = tasks.admit_task(

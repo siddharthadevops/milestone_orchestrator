@@ -1712,8 +1712,14 @@ class BrainstormingCoordinator:
                 )
                 raise
             try:
+                # A refusal before the provider started leaves no call to
+                # account for; the preservation below then writes nothing.
                 self.store.mark_turn_attempt_quiescent(
-                    session_id, attempt["token"]
+                    session_id,
+                    attempt["token"],
+                    dispatch_refused=getattr(
+                        exc, "brainstorming_dispatch_refused", False
+                    ) is True,
                 )
             except BaseException as mark_error:
                 self._recover_rejected(
@@ -1903,8 +1909,14 @@ class BrainstormingCoordinator:
                 )
                 raise
             try:
+                # A refusal before the provider started leaves no call to
+                # account for; the preservation below then writes nothing.
                 self.store.mark_turn_attempt_quiescent(
-                    session_id, attempt["token"]
+                    session_id,
+                    attempt["token"],
+                    dispatch_refused=getattr(
+                        exc, "brainstorming_dispatch_refused", False
+                    ) is True,
                 )
             except BaseException as mark_error:
                 self._recover_rejected(

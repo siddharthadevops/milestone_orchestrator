@@ -16,7 +16,6 @@ import time
 from orchestrator import brainstorming
 from orchestrator import brainstorming_lifecycle as lifecycle
 from orchestrator import brainstorming_milestone as milestone
-from orchestrator import driver
 from orchestrator import kvstore
 from orchestrator import state as st
 from orchestrator import tasks
@@ -95,24 +94,35 @@ def _execution_context(request):
     }
 
 
-def _profile_participants(model_profile_runtime):
-    try:
-        runtime = lifecycle._current_model_profile_runtime(model_profile_runtime)
-        lead, contrary = driver.resolve_current_brainstorming_profiles(
-            runtime["state_path"], runtime["home"]
-        )
-        return milestone._participants(lead, contrary)
-    except Exception as exc:
-        raise tasks.TaskRequestError(
-            tasks.TASK_UNAVAILABLE,
-            "current Brainstorming staffing is unavailable",
-        ) from exc
+def standalone_staffing(session=None):
+    """The selection a directly ordered Brainstorming task carries.
+
+    *session* is the id the order inherited from its owner, or ``None``
+    when the order deliberately named none: the discussion then resolves
+    every automatic call on the `default` document at `medium` with the
+    host's configured families, which is the same answer an unbound run
+    gives the discussions it owns. Either way this IS a selection; absence
+    is reserved for a caller with no document store to resolve against at
+    all, which is what a pre-cutover static record keeps.
+    """
+    return {"session": session}
 
 
-def resolve_staffing(config, workspace, model_profile_runtime=None):
-    """Resolve the historical snapshot, including static dispatch pins."""
-    if model_profile_runtime is not None:
-        participants = _profile_participants(model_profile_runtime)
+def resolve_staffing(config, workspace, staffing_selection=None):
+    """Resolve the order's staffing authority before durable admission.
+
+    A task carrying a staffing selection is ROUTER-BACKED: it records no
+    seat pins at all, because every one of its calls resolves through that
+    selection immediately before it is made. The selection may name no
+    session — a standalone order, or an owner run that holds none — and the
+    default document answers for it.
+
+    Only a caller with no staffing document store to read — a `Driver`
+    built without a catalogue home — freezes an explicit static binding
+    here, which is also the shape a pre-cutover record holds and keeps.
+    """
+    if staffing_selection is not None:
+        participants = milestone._participants()
         authority = _PROFILE_AUTHORITY
     else:
         try:
@@ -149,7 +159,7 @@ def admit_task(
     order,
     config,
     primary_workspace,
-    model_profile_runtime=None,
+    staffing_selection=None,
 ):
     """Resolve Brainstorming staffing before the common durable admission."""
     checked = tasks._canonical_output_directory(
@@ -161,7 +171,7 @@ def admit_task(
             "the Brainstorming adapter requires task_executor brainstorming",
         )
     staffing = resolve_staffing(
-        config, os.path.realpath(primary_workspace), model_profile_runtime
+        config, os.path.realpath(primary_workspace), staffing_selection
     )
     return tasks.admit_task(
         state, checked, staffing, primary_workspace=primary_workspace
@@ -423,7 +433,7 @@ def _resume_projection(
     session_id,
     caller,
     projection,
-    model_profile_runtime,
+    staffing_selection,
     authority_failure_reason=None,
 ):
     if (
@@ -441,9 +451,9 @@ def _resume_projection(
             home,
             session_id,
             _authorize_caller(caller),
-            validate_launch=(
-                (lambda _record: model_profile_runtime)
-                if model_profile_runtime is not None else None
+            resolve_staffing_session=(
+                (lambda _record: staffing_selection.get("session"))
+                if staffing_selection is not None else None
             ),
         )
     except lifecycle.PublicLifecycleError as exc:
@@ -463,7 +473,7 @@ def _start_task_exclusive(
     task_id,
     config,
     home,
-    model_profile_runtime=None,
+    staffing_selection=None,
     launcher=None,
     session_id=None,
     pre_session_failure_reason=None,
@@ -474,15 +484,20 @@ def _start_task_exclusive(
     authority = staffing.get("dispatch_authority")
     authority_failure_reason = None
     if authority == _PROFILE_AUTHORITY:
-        if model_profile_runtime is None:
+        if staffing_selection is None:
+            # An attached task admitted before this cutover carries no
+            # session of its own. Its owner supplies one at every launch;
+            # with none supplied there is nothing to resolve through, and
+            # the task says so exactly as it did for the profile it used to
+            # need.
             authority_failure_reason = (
-                "Brainstorming session admission failed: current-profile "
-                "staffing authority is unavailable"
+                "Brainstorming session admission failed: the owner's "
+                "staffing session is unavailable"
             )
     elif authority == _STATIC_AUTHORITY:
-        # Ambient profile attachment may change after admission.  The durable
+        # An ambient owner session may appear after admission. The durable
         # task authority still selects the static frozen binding.
-        model_profile_runtime = None
+        staffing_selection = None
     else:
         raise AdapterError("the task has no recognized staffing authority")
     caller = _task_caller(record, task_id)
@@ -512,7 +527,7 @@ def _start_task_exclusive(
             session_id,
             caller,
             projection,
-            model_profile_runtime,
+            staffing_selection,
             authority_failure_reason,
         )
 
@@ -529,7 +544,7 @@ def _start_task_exclusive(
             recovered_id,
             caller,
             projection,
-            model_profile_runtime,
+            staffing_selection,
             authority_failure_reason,
         )
 
@@ -553,8 +568,8 @@ def _start_task_exclusive(
     created_work_area = None
     try:
         participants = (
-            _profile_participants(model_profile_runtime)
-            if model_profile_runtime is not None
+            milestone._participants()
+            if staffing_selection is not None
             else _frozen_participants(record)
         )
         created_work_area, target = _private_target(workspace, home, task_id)
@@ -565,8 +580,8 @@ def _start_task_exclusive(
         kwargs = {"owned_target_path": target}
         if launcher is not None:
             kwargs["launcher"] = launcher
-        if model_profile_runtime is not None:
-            kwargs["model_profile_runtime"] = model_profile_runtime
+        if staffing_selection is not None:
+            kwargs["staffing_selection"] = staffing_selection
         else:
             kwargs["static_binding"] = True
         return lifecycle.create_resolved_session(
@@ -593,7 +608,7 @@ def _start_task_exclusive(
                     recovered_id,
                     caller,
                     projection,
-                    model_profile_runtime,
+                    staffing_selection,
                 )
         if created_work_area is not None and code != lifecycle.TARGET_IN_USE:
             shutil.rmtree(created_work_area, ignore_errors=True)
@@ -610,7 +625,7 @@ def start_task(
     task_id,
     config,
     home,
-    model_profile_runtime=None,
+    staffing_selection=None,
     launcher=None,
     session_id=None,
     pre_session_failure_reason=None,
@@ -633,7 +648,7 @@ def start_task(
             task_id,
             config,
             home,
-            model_profile_runtime=model_profile_runtime,
+            staffing_selection=staffing_selection,
             launcher=launcher,
             session_id=session_id,
             pre_session_failure_reason=pre_session_failure_reason,
@@ -645,7 +660,7 @@ def start_persisted_task(
     task_id,
     config,
     home,
-    model_profile_runtime=None,
+    staffing_selection=None,
     launcher=None,
     session_id=None,
 ):
@@ -657,7 +672,7 @@ def start_persisted_task(
             task_id,
             config,
             home,
-            model_profile_runtime=model_profile_runtime,
+            staffing_selection=staffing_selection,
             launcher=launcher,
             session_id=session_id,
         )
@@ -852,7 +867,7 @@ def apply_agreed_effects(
     task_id,
     effect_request,
     dispatch_authority,
-    model_profile_runtime=None,
+    staffing_selection=None,
     participant_process_factory=None,
 ):
     """Run the agreed production work through the task session's lead."""
@@ -864,6 +879,15 @@ def apply_agreed_effects(
     completion = None
     failure = None
     try:
+        staffing_kwargs = {}
+        if staffing_selection is not None:
+            staffing_kwargs["staffing_session"] = staffing_selection.get(
+                "session"
+            )
+            if "material" in staffing_selection:
+                staffing_kwargs["staffing_material"] = staffing_selection[
+                    "material"
+                ]
         completion, _result = lifecycle.apply_production_effect(
             home,
             session_id,
@@ -872,17 +896,17 @@ def apply_agreed_effects(
             ),
             _production_prompt(effect_request),
             validate_production_completion,
-            model_profile_runtime=model_profile_runtime,
             participant_process_factory=participant_process_factory,
+            **staffing_kwargs
         )
     except Exception as exc:
         if (
             dispatch_authority == _PROFILE_AUTHORITY
-            and model_profile_runtime is None
+            and staffing_selection is None
             and isinstance(exc, lifecycle.PublicLifecycleError)
             and exc.code == lifecycle.UNAVAILABLE
         ):
-            failure = "current-profile staffing authority is unavailable"
+            failure = "the owner's staffing session is unavailable"
         else:
             failure = str(exc).strip() or type(exc).__name__
     events, accounting = _production_call_accounting(

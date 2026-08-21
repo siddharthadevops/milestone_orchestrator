@@ -215,8 +215,8 @@ class TestCalculatorE2E(unittest.TestCase):
                 "id": 1,
                 "title": "Calculator core",
                 "producer_task_executor": {
-                    "draft_slice_note": {"task_executor": "worker"},
-                    "implement": {"task_executor": "worker"},
+                    "draft_slice_note": {"task_executor": "agent_call"},
+                    "implement": {"task_executor": "agent_call"},
                 },
             }],
         )
@@ -254,9 +254,14 @@ class TestCalculatorE2E(unittest.TestCase):
                 "implementation_stabilization",
                 "acts_config",
                 "model_defaults",
+                # This run reached the driver, so it carries the staffing
+                # session the first start derives (amendment A2) — as the
+                # id alone, never a copy of the record.
+                "staffing_session",
             },
         )
         self.assertEqual(summ["goal"], GOAL)
+        self.assertIsInstance(summ["staffing_session"], str)
         self.assertEqual(summ["workspace"], self.work)
         self.assertIsInstance(summ["events_total"], int)
         self.assertGreater(summ["work_duration_s"], 0)

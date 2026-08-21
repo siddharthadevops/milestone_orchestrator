@@ -26,7 +26,7 @@ class TaskActivityProjectionTests(unittest.TestCase):
             {"families_order": ["codex", "claude"]},
         )
 
-    def order(self, unit=None, kind=None, executor="worker"):
+    def order(self, unit=None, kind=None, executor="agent_call"):
         context = {"source": "focused test"}
         if unit is not None:
             context["unit"] = unit
@@ -46,13 +46,13 @@ class TaskActivityProjectionTests(unittest.TestCase):
             },
         }
 
-    def admit(self, state, unit=None, kind=None, executor="worker",
+    def admit(self, state, unit=None, kind=None, executor="agent_call",
               staffing=None):
         return tasks.admit_task(
             state,
             self.order(unit, kind, executor),
             staffing or {
-                "worker": {
+                "agent_call": {
                     "agent": "codex",
                     "model": "order-model",
                     "effort": "high",
@@ -124,7 +124,7 @@ class TaskActivityProjectionTests(unittest.TestCase):
     def test_task_history_and_detail_use_canonical_records(self):
         direct = task_api.StandaloneTaskStore(self.home).admit(
             self.order(),
-            {"worker": {"agent": "codex"}},
+            {"agent_call": {"agent": "codex"}},
             self.workspace,
         )
         state = self.state()
@@ -214,7 +214,7 @@ class TaskActivityProjectionTests(unittest.TestCase):
             st.summary(state)["units"][0]["task_ids"],
             [draft["id"], implementation["id"]],
         )
-        self.assertEqual(draft["order"]["task_executor"], "worker")
+        self.assertEqual(draft["order"]["task_executor"], "agent_call")
         self.assertEqual(
             implementation["order"]["task_executor"], "brainstorming"
         )
@@ -318,7 +318,7 @@ class TaskActivityProjectionTests(unittest.TestCase):
         self.assertNotIn("resolved_staffing", after["units"][0])
         self.assertEqual(
             tasks.task_record(state, record["id"])["resolved_staffing"]
-            ["worker"]["model"],
+            ["agent_call"]["model"],
             "order-model",
         )
 
