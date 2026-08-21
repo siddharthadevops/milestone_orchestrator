@@ -53,8 +53,10 @@
     background: var(--accent-soft); }
   .run-icon { flex: none; margin-top: 2px; color: #a1a1aa; }
   .run-icon .ui-icon { width: 14px; height: 14px; }
-  .run:not(.closed) .run-icon { color: #52525b; }
-  .run.brainstorm:not(.closed) .run-icon { color: var(--accent); }
+  /* Anything still open — milestone or task — carries the accent-blue
+     icon; closed items keep the muted grey, so the sidebar reads at a
+     glance (operator, 2026-08-18). */
+  .run:not(.closed) .run-icon { color: var(--accent); }
   .run-copy { flex: 1; min-width: 0; }
   .run-name-row, .run-info-row { display: flex; align-items: center;
     min-width: 0; gap: 8px; }
@@ -119,6 +121,10 @@
   .grpmenu-item:hover { background: var(--accent-soft); color: var(--accent); }
   .grpmenu-item .ui-icon { width: 15px; height: 15px; }
   .grpmenu-sep { height: 1px; margin: 4px 2px; background: var(--line); }
+  .grpmenu-item.danger { color: var(--bad); }
+  .grpmenu-item.danger:hover { background: #fff1f1; color: var(--bad); }
+  .grpmenu.always .grpmenu-btn { opacity: 1; }
+  .page-title-row { display: flex; align-items: center; gap: 10px; }
   .grp-empty { padding: 4px 14px 6px 33px; font-size: 11px; color: var(--dim);
     font-style: italic; }
   /* "show more/less" toggle under a project's first milestones */
@@ -206,18 +212,6 @@
   #incidentsdialog { width: min(900px, 92vw); }
   #incidentsBody { min-width: 0; max-width: none; max-height: 70vh;
     overflow-y: auto; }
-  #taskhistorydialog { width: min(780px, 92vw); }
-  #taskHistoryBody { min-width: 0; max-width: none; max-height: 70vh; }
-  .task-list { display: grid; gap: 7px; }
-  .task-row { width: 100%; border: 1px solid var(--line); border-radius: 8px;
-    padding: 8px 10px; background: #fff; color: var(--text); cursor: pointer;
-    text-align: left; font: inherit; }
-  .task-row:hover { border-color: #c3d4fb; background: var(--accent-soft); }
-  .task-row-head { display: flex; align-items: center; gap: 7px; }
-  .task-row-title { font-weight: 600; }
-  .task-row-id { margin-top: 3px; color: var(--dim); font-size: 10.5px;
-    overflow-wrap: anywhere; }
-  .task-row .story-meta, .task-row-id { display: block; margin-bottom: 0; }
   .bottom-tools { display: flex; justify-content: flex-end; gap: 8px;
     margin: 14px 0; }
   .danger-zone { border-color: #fecaca; background: #fffafa; }
@@ -614,12 +608,11 @@
 </header>
 <main>
   <aside>
-    <!-- Launching is a PROJECT act: both "New milestone" and "New
-         brainstorming" live in each project's ⋯ menu. The standing buttons
-         expose task history and manage service-wide catalogues. -->
+    <!-- Launching is a PROJECT act: "New milestone" and "New task" live in
+         each project's ⋯ menu. The standing buttons manage service-wide
+         catalogues. Standalone tasks are listed in the sidebar itself
+         (newest first, bounded page); there is no cross-project task list. -->
     <div class="actions" id="sidebarActions" style="display:none">
-      <button class="btn" id="taskHistoryBtn"
-        onclick="openTaskHistory()">Tasks</button>
       <button class="btn" id="newProjectBtn" style="display:none"
         onclick="openProjectCreate()" title="Declare a project">+ Project</button>
       <button class="btn" id="modelProfilesBtn" style="display:none"
@@ -925,19 +918,6 @@
   </div>
 </dialog>
 
-<dialog id="taskhistorydialog">
-  <h2 class="dlgtitle">
-    <button class="btn sm" id="taskHistoryBack" type="button"
-      style="display:none" onclick="showTaskHistoryList()">&#8592;</button>
-    <span id="taskHistoryTitle">Task history</span>
-  </h2>
-  <div id="taskHistoryError" class="failure" style="display:none"></div>
-  <div id="taskHistoryBody" class="storybody"></div>
-  <div class="formrow"><span></span>
-    <button class="btn"
-      onclick="document.getElementById('taskhistorydialog').close()">Close</button>
-  </div>
-</dialog>
 
 <dialog id="requestdlg">
   <h2>Requested outcome</h2>
@@ -1331,6 +1311,10 @@
 
 <script>
 let selected = null;
+// Where to land after the first paint of a freshly opened page: a milestone
+// on its last chip, a task at the top. Cleared once applied so the 2s tick
+// never yanks the scroll afterwards.
+let pendingLanding = null;
 let runView = "main";  // "main" | "edit" — the run's settings page
 let goalOpen = false;
 let appAccess = {user: null, admin: false, local: false, users: []};
@@ -1350,6 +1334,11 @@ let lastRuns = [];
 // registry: they arrive from their own list route and are merged only at
 // render time, exactly like the project grouping above.
 let lastSessions = [];
+// Sidebar tasks: standalone task rows ({admitted_at, record}), newest first,
+// bounded page. Milestone tasks are seen inside their run; Brainstorming
+// sessions are reached from the chips of the run or task that owns them.
+let lastTaskRows = [];
+const SIDEBAR_TASK_LIMIT = 20;
 let uiState = {project_order: [], collapsed: []};
 // A slash can never appear in an operator-typed project slug
 // (kvstore._validate_segment rejects "/"), so this key can never
@@ -1461,6 +1450,39 @@ function runRow(r) {
         </div>
       </div>`;
 }
+/* ---- standalone tasks in the same sidebar list: one row per task ordered
+   outside a milestone (Worker call or Brainstorming). They open the task
+   detail; a Brainstorming task's session is reached from there. ---- */
+function fmtAdmitted(iso) {
+  // Same day: clock only; otherwise day and clock. Local time, short.
+  const t = new Date(iso);
+  if (Number.isNaN(t.getTime())) return String(iso);
+  const now = new Date();
+  const clock = t.toTimeString().slice(0, 5);
+  const sameDay = t.toDateString() === now.toDateString();
+  return sameDay ? clock : `${t.getDate()}/${t.getMonth() + 1} ${clock}`;
+}
+function taskRow(row) {
+  const record = row.record || {};
+  const order = record.order || {};
+  const request = order.request || {};
+  const executor = order.task_executor || "?";
+  const brief = String(request.request || "").trim().split("\n")[0];
+  const state = taskState(record);
+  const when = row.admitted_at ? fmtAdmitted(row.admitted_at) : "";
+  const bits = [executor, state, when].filter(Boolean).join(" · ");
+  const icon = executor === "brainstorming" ? ICONS.brainstorm : ICONS.task;
+  return `
+      <div class="run ${record.result !== null ? "closed " : ""}${record.id === selectedTask ? "sel" : ""}" onclick="openTask('${esc(escJsSq(record.id))}')">
+        <span class="run-icon" title="task">${icon}</span>
+        <div class="run-copy">
+          <div class="run-name-row">
+            <span class="name" title="${esc(brief)}">${esc(brief || record.id)}</span>
+          </div>
+          <div class="run-info-row">${esc(bits)}</div>
+        </div>
+      </div>`;
+}
 /* ---- brainstorming sessions in the same sidebar list. They are NOT runs:
    no registry entry, no driver, no pipeline — so they carry their own row
    and open their own page. What they share with milestones is the project
@@ -1569,6 +1591,7 @@ let sessionView = "main";  // "main" | "info"
 function openSession(id) {
   selectedSession = id;
   selected = null;
+  selectedTask = null; taskPageRunId = null; lastTaskPage = null;
   runView = "main";
   sessionView = "main";
   goalOpen = false;
@@ -2250,7 +2273,7 @@ function runStatusIndicator(r) {
    the per-project limit are computed on items, so a brainstorming session
    in progress competes for the top of its project on exactly the same
    terms as a milestone in progress. */
-function sidebarItems(runs, sessions) {
+function sidebarItems(runs, taskRows) {
   const items = (runs || []).map(r => ({
     kind: "run",
     project: r.project || null,
@@ -2260,16 +2283,20 @@ function sidebarItems(runs, sessions) {
     closed: r.milestone_status === "closed",
     data: r,
   }));
-  for (const s of sessions || [])
+  for (const row of taskRows || []) {
+    const record = row.record || {};
+    const project = ((((record.order || {}).request || {}).work_area) || {})
+      .project || null;
     items.push({
-      kind: "brainstorm",
-      project: s.project || null,
-      created_at: s.created_at,
-      last_action_epoch: s.last_action_epoch,
-      running: s.process === "running",
-      closed: BS_TERMINAL.has(s.status),
-      data: s,
+      kind: "task",
+      project,
+      created_at: row.admitted_at,
+      last_action_epoch: null,
+      running: record.result === null,
+      closed: record.result !== null,
+      data: row,
     });
+  }
   return items;
 }
 function groupItems(items) {
@@ -2303,7 +2330,9 @@ function compareItemsForSidebar(a, b) {
   return itemEpoch(b) - itemEpoch(a);
 }
 function itemRow(item) {
-  return item.kind === "run" ? runRow(item.data) : sessionRow(item.data);
+  if (item.kind === "run") return runRow(item.data);
+  if (item.kind === "task") return taskRow(item.data);
+  return sessionRow(item.data);
 }
 // How many items each project shows before "show more" (per project,
 // in-memory: it survives the 2s sidebar repaint like projectMenuOpen and
@@ -2359,8 +2388,6 @@ function groupHeader(key, label) {
              onclick="newMilestone(event, '${safeKey}')">${ICONS.milestone}<span>New milestone</span></button>
            <button class="grpmenu-item" type="button" role="menuitem"
              onclick="newTask(event, '${safeKey}')">${ICONS.task}<span>New task</span></button>
-           <button class="grpmenu-item" type="button" role="menuitem"
-             onclick="newBrainstorming(event, '${safeKey}')">${ICONS.brainstorm}<span>New brainstorming</span></button>
            ${projectAdmin ? `<div class="grpmenu-sep"></div>
            <button class="grpmenu-item" type="button" role="menuitem"
              onclick="openGitSync(event, '${safeKey}')">${ICONS.sync}<span>Sync with git…</span></button>` : ""}
@@ -2378,8 +2405,8 @@ function groupHeader(key, label) {
       ${menu}
     </div>`;
 }
-function renderRunsTree(runs, sessions) {
-  const byProject = groupItems(sidebarItems(runs, sessions));
+function renderRunsTree(runs, taskRows) {
+  const byProject = groupItems(sidebarItems(runs, taskRows));
   const realKeys = presentProjectKeys(byProject);
   if (realKeys.length === 0) return "";
   const ordered = orderedProjectKeys(realKeys, byProject);
@@ -2509,7 +2536,7 @@ document.addEventListener("keydown", event => {
 });
 function renderRunsTree_paint() {
   document.getElementById("runs").innerHTML =
-    renderRunsTree(lastRuns, lastSessions) ||
+    renderRunsTree(lastRuns, lastTaskRows) ||
     '<div class="empty">No projects yet.</div>';
 }
 function esc(s) {
@@ -2824,22 +2851,24 @@ async function refreshRuns() {
   // Two independent sources, one paint. Either can fail on its own tick
   // (a broken session store must not blank the milestones, and vice
   // versa): a failed source simply keeps its last known list.
-  const [runs, sessions] = await Promise.all([
+  const [runs, taskRows] = await Promise.all([
     api("/api/runs").then(d => d.runs || []).catch(() => null),
-    api("/api/brainstorming/sessions").then(d => d.sessions || [])
-      .catch(() => null),
+    api("/api/tasks?scope=direct&limit=" + SIDEBAR_TASK_LIMIT)
+      .then(d => d.rows || []).catch(() => null),
   ]);
-  if (runs === null && sessions === null) return;  // keep last render
+  if (runs === null && taskRows === null) return;  // keep last render
   if (runs !== null) lastRuns = runs;
-  if (sessions !== null) lastSessions = sessions;
+  if (taskRows !== null) lastTaskRows = taskRows;
   renderRunsTree_paint();
   if (selected) refreshDetail();
   if (selectedSession) refreshSessionDetail();
+  if (selectedTask) refreshTaskPage();
 }
 function select(id) {
   selected = id; goalOpen = false; runView = "main";
-  resetSelectedTaskRecords(id);
+  pendingLanding = "last-chip";
   selectedSession = null; lastSessionView = null;
+  selectedTask = null; taskPageRunId = null; lastTaskPage = null;
   document.body.classList.add("m-detail");  // mobile: swap to the detail page
   refreshRuns(); refreshDetail();
 }
@@ -2898,16 +2927,26 @@ function updateBottomJump() {
   button.classList.toggle("gone",
     (!selected && !selectedSession) || runView === "edit" || remaining < 48);
 }
-function jumpToBottom() {
+function jumpToBottom(instant) {
+  // Land on the latest activity — the last chip of the pipeline, centred —
+  // rather than the page bottom, which sits below not-yet-started slices
+  // and the events/log (operator, 2026-08-18). No chip: plain bottom.
   const detail = document.getElementById("detail");
-  detail.scrollTo({top: detail.scrollHeight, behavior: "smooth"});
+  const behavior = instant ? "auto" : "smooth";
+  const chips = detail.querySelectorAll(".unit .chip");
+  const last = chips.length ? chips[chips.length - 1] : null;
+  if (last) {
+    last.scrollIntoView({block: "center", behavior});
+    return;
+  }
+  detail.scrollTo({top: detail.scrollHeight, behavior});
 }
 function mobileBack() {
   runView = "main";
   document.body.classList.remove("m-detail");
   selected = null;
-  resetSelectedTaskRecords(null);
   selectedSession = null;
+  selectedTask = null; taskPageRunId = null; lastTaskPage = null;
   lastSessionView = null;
   document.getElementById("detail").innerHTML =
     '<div class="empty">Nothing selected.</div>';
@@ -3065,8 +3104,9 @@ function unitHistory(u, activity, running) {
     ? u.drafts : (u.draft ? [u.draft] : []);
   const lead = drafts.map(draft => draftChip(draft, u.unit))
     .concat([docChip(u)]).filter(Boolean);
-  const taskChips = (u.task_ids || [])
-    .map(taskRecordById).filter(Boolean).map(taskChip);
+  // Task chips per unit were dropped from the unit history: the draft, round,
+  // verify, and Brainstorming chips already carry the same calls with more
+  // detail, so the "Tasks" line only repeated them (operator, 2026-08-18).
   const repairs = u.repairs || [];
   const repairRoundIds = new Set(repairs.flatMap(repair => repair.round_ids || []));
   const repairSealAttempts = new Set(repairs.flatMap(repair => repair.seal_attempts || []));
@@ -3199,7 +3239,6 @@ function unitHistory(u, activity, running) {
     }
     section.lines.push({label, chips});
   };
-  if (taskChips.length) addLine("Tasks", "", taskChips);
   if (lead.length) {
     const title = drafts.some(draft => draft.kind === "implement")
       ? "Implementation" : "Draft";
@@ -3782,9 +3821,6 @@ async function refreshDetail() {
   // Poll ticks and select() clicks race; a slow response must never
   // overwrite a newer render (stale run, vanished cards).
   const seq = ++detailSeq, runId = selected;
-  // Task chips are disposable bookkeeping.  Start their independent,
-  // coalesced refresh, but never make the milestone view wait for it.
-  refreshSelectedTaskRecords(runId);
   try {
     const d = await api("/api/runs/" + runId);
     let modelProfileSelection = null, modelProfileSelectionError = "";
@@ -3796,7 +3832,6 @@ async function refreshDetail() {
     }
     if (seq !== detailSeq || runId !== selected) return;
     const s = d.status, sum = d.summary;
-    refreshSelectedTaskRecords(runId, selectedRunTaskIds(sum));
     currentRunName = s.name || "";
     const running = s.process === "running";
     lastEvents = sum ? (sum.last_events || []).slice().reverse() : [];
@@ -4073,12 +4108,16 @@ async function refreshDetail() {
                        sliceDuration, sliceTokens, sliceTokensPartial,
                        "slice-cat", sliceCost, sliceCostPartial);
         const docKey = `slice_doc-${pad}`;
+        // A slice nobody has started yet is one line: its header. The
+        // Documentation / Implementation ghost rows only appear once the
+        // slice is active, where they show what is still to come.
+        const started = Boolean(doc) || impls.length > 0;
         if (doc) { rows += unitRow(doc); seen[docKey] = 1; }
-        else rows += ghostRow(docKey);
+        else if (started) rows += ghostRow(docKey);
         if (impls.length) impls.forEach(u => {
           rows += unitRow(u); seen[u.unit] = 1;
         });
-        else rows += ghostRow(`slice_impl-${pad}`);
+        else if (started) rows += ghostRow(`slice_impl-${pad}`);
       });
       (sum.units || []).forEach(u => { if (!seen[u.unit]) rows += unitRow(u); });
       html += `<div class="card"><h3>Pipeline</h3>` + rows + `</div>`;
@@ -4111,6 +4150,10 @@ async function refreshDetail() {
       selEnd: prev.selectionEnd,
     } : null;
     document.getElementById("detail").innerHTML = html;
+    if (pendingLanding === "last-chip") {
+      pendingLanding = null;
+      jumpToBottom(true);
+    }
     if (draft) {
       const el = document.getElementById("amendText");
       if (el) {
@@ -5158,10 +5201,18 @@ async function applyProfileSwap() {
 }
 function browseGoalDoc() {
   // Start listing at the bound work area's directory when the launch has
-  // one; the goal doc keeps its absolute-path convention.
+  // one; the goal doc keeps its absolute-path convention. With a bound
+  // area the listing is SCOPED to that area's roots, the same way the task
+  // form browses: a project admin or member then picks a goal inside the
+  // area without the admin-only whole-host endpoint (which refused every
+  // non-service-admin, so remote project admins could not browse at all).
   const w = boundArea();
+  const pi = document.getElementById("f_project").value;
+  const scope = (w && pi !== "")
+    ? {project: launchProjects[+pi].slug, work_area: w.record.name}
+    : null;
   openPicker("file", "f_doc", false,
-             w ? w.record.primary.path : undefined);
+             w ? w.record.primary.path : undefined, null, scope);
 }
 async function loadRecents() {
   try {
@@ -5575,6 +5626,272 @@ function launchBinding() {
   return {project: launchProjects[+pi].slug, work_area: w.record.name};
 }
 
+/* ---- the task page: a standalone task (Worker call or Brainstorming)
+   opens in the right pane like a run or a session. What it is, its state,
+   who is running it, what it produced — and Stop while it runs. Milestone
+   tasks open here too (from their chips), read-only. ---- */
+let selectedTask = null;
+let taskPageRunId = null;
+let lastTaskPage = null;
+let lastTaskPageSession = null;
+let taskPageSeq = 0;
+let taskStopping = false;
+let taskStopNotice = "";
+let taskDeleting = false;
+let taskMenuOpen = false;
+function taskWorkArea(record) {
+  return (((record.order || {}).request || {}).work_area) || {};
+}
+function taskExecutor(record) {
+  return (record.order || {}).task_executor || "?";
+}
+function taskTitle(record) {
+  const request = String(((record.order || {}).request || {}).request || "");
+  const first = request.trim().split("\n")[0].trim();
+  return first || record.id;
+}
+function taskStateClassName(record) {
+  const result = record.result;
+  if (result === null || result === undefined) return "open";
+  return result.status === "success" ? "closed" : "failed";
+}
+function taskStaffingLine(record) {
+  const staffing = record.resolved_staffing || {};
+  if (staffing.worker) {
+    const w = staffing.worker;
+    return [w.agent, w.model, w.effort].filter(Boolean).join(" · ");
+  }
+  if (Array.isArray(staffing.participants)) {
+    return staffing.participants.map(p =>
+      [p.id || p.role, p.model_family, p.model, p.effort]
+        .filter(Boolean).join(" ")).join(" | ");
+  }
+  return "";
+}
+function taskSessionId(record) {
+  const native = (record.result || {}).native_result;
+  if (native && typeof native === "object") {
+    if (typeof native.session_id === "string") return native.session_id;
+    if (typeof native.id === "string" && native.id.startsWith("bs-")) return native.id;
+  }
+  return null;
+}
+function renderTaskPage(record, admittedAt) {
+  const result = record.result;
+  const running = result === null || result === undefined;
+  const executor = taskExecutor(record);
+  const area = taskWorkArea(record);
+  const request = (record.order || {}).request || {};
+  const context = request.context || {};
+  const configuration = (record.order || {}).configuration || {};
+  const state = running ? "running" : result.status;
+  const stateCls = taskStateClassName(record);
+  const standalone = !taskPageRunId;
+  let html = `<div class="run-sticky-head">`;
+  // Project line with the page menu at the far right: the few actions on
+  // a task (delete) live there, out of the way, red where they must be.
+  const menuItems = [];
+  if (!running && standalone)
+    menuItems.push(`<button class="grpmenu-item danger" type="button" role="menuitem"
+      ${taskDeleting ? "disabled" : ""} onclick="deleteSelectedTask(event)">${
+      taskDeleting ? "Deleting…" : "Delete task…"}</button>`);
+  const menu = menuItems.length ? `<div class="grpmenu always ${taskMenuOpen ? "open" : ""}">
+    <button class="grpmenu-btn" type="button" title="Task menu" aria-label="Task menu"
+      aria-haspopup="menu" aria-expanded="${taskMenuOpen}"
+      onclick="toggleTaskMenu(event)">${ICONS.ellipsis}</button>
+    ${taskMenuOpen ? `<div class="grpmenu-popover" role="menu" onclick="event.stopPropagation()">
+      ${menuItems.join("")}</div>` : ""}
+  </div>` : "";
+  html += `<div class="page-title-row"><div class="proj-title">${
+    esc(area.project || "")}</div>${menu}</div>`;
+  html += `<div class="run-title-row"><h2>${esc(taskTitle(record))}</h2>` +
+    `<span class="chip ${stateCls}">${esc(state)}</span></div>`;
+  const bits = [
+    executor === "brainstorming" ? "brainstorming task" : "agent call",
+    area.work_area ? `area ${area.work_area}` : "",
+    admittedAt ? `ordered ${fmtAdmitted(admittedAt)}` : "",
+    result && result.duration_s != null ? `took ${fmtDHMS(result.duration_s)}` : "",
+    (function () {
+      if (!result) return "";
+      const tokens = fmtTokenUsage(result.token_usage, result.token_usage_partial);
+      if (!result.cost && !result.cost_partial) return tokens;
+      const reading = costReading(result.cost, result.cost_partial);
+      return reading.known ? reading.text : (tokens || reading.text);
+    })(),
+  ].filter(Boolean);
+  html += `<div class="activity-line detail">` +
+    (running ? spinEl() : "") +
+    `<span>${esc(bits.join(" · "))}</span></div>`;
+  html += `</div>`;
+  const sessionId = lastTaskPageSession || taskSessionId(record);
+  html += `<div class="toolbar">
+    ${running && standalone
+      ? `<button class="btn danger" ${taskStopping ? "disabled" : ""}
+          onclick="stopSelectedTask()">${taskStopping ? "Stopping…" : "Stop task"}</button>`
+      : ""}
+    ${sessionId
+      ? `<button class="btn" onclick="openSession('${esc(escJsSq(sessionId))}')">Open discussion</button>`
+      : ""}
+    <span class="mono amend-hint" style="margin-left:auto">${esc(record.id)}</span>
+  </div>`;
+  if (taskStopNotice)
+    html += `<div class="failure">${esc(taskStopNotice)}</div>`;
+  if (!running && result.reason)
+    html += `<div class="failure">${esc(result.reason)}</div>`;
+  html += `<div class="card"><h3>Request</h3>
+    <div class="mdbody flow" style="white-space:pre-wrap">${esc(String(request.request || ""))}</div></div>`;
+  const ctxRows = [];
+  if (context.brief) ctxRows.push(["brief", context.brief]);
+  if (context.task_kind) ctxRows.push(["kind", context.task_kind]);
+  if (context.unit) ctxRows.push(["unit", context.unit]);
+  const refs = Array.isArray(request.reference_documents) ? request.reference_documents : [];
+  if (refs.length) ctxRows.push(["references", refs.join("\n")]);
+  if (request.output_directory) ctxRows.push(["output directory", request.output_directory]);
+  if (Object.keys(configuration).length)
+    ctxRows.push(["configuration", Object.entries(configuration)
+      .map(([k, v]) => `${k}: ${v}`).join(" · ")]);
+  const staffing = taskStaffingLine(record);
+  if (staffing) ctxRows.push(["staffing", staffing]);
+  if (ctxRows.length) {
+    html += `<div class="card"><h3>Context</h3>` + ctxRows.map(([k, v]) =>
+      `<div class="story-meta"><b>${esc(k)}</b> · <span style="white-space:pre-wrap">${esc(String(v))}</span></div>`
+    ).join("") + `</div>`;
+  }
+  if (!running) {
+    html += `<div class="card"><h3>Result</h3>` +
+      costHtml(result.cost, result.cost_partial) +
+      tokenUsageHtml(result.token_usage, result.token_usage_partial) +
+      `<details><summary class="amend-hint">Native result (opaque TaskExecutor output)</summary>
+       <pre class="story-note mono">${esc(typeof result.native_result === "string"
+         ? result.native_result : JSON.stringify(result.native_result, null, 2))}</pre></details></div>`;
+  }
+  return html;
+}
+function toggleTaskMenu(event) {
+  event.stopPropagation();
+  taskMenuOpen = !taskMenuOpen;
+  const listed = lastTaskRows.find(row => row.record && row.record.id === selectedTask);
+  if (lastTaskPage) document.getElementById("detail").innerHTML =
+    renderTaskPage(lastTaskPage, listed ? listed.admitted_at : null);
+}
+function closeTaskMenu() {
+  if (!taskMenuOpen) return;
+  taskMenuOpen = false;
+  if (selectedTask && lastTaskPage) {
+    const listed = lastTaskRows.find(row => row.record && row.record.id === selectedTask);
+    document.getElementById("detail").innerHTML =
+      renderTaskPage(lastTaskPage, listed ? listed.admitted_at : null);
+  }
+}
+document.addEventListener("click", closeTaskMenu);
+async function deleteSelectedTask(event) {
+  if (event) event.stopPropagation();
+  // Close (and repaint) the menu before asking: a cancelled confirm must
+  // not leave a popover on screen that the state already thinks is closed.
+  const listedRow = lastTaskRows.find(row => row.record && row.record.id === selectedTask);
+  taskMenuOpen = false;
+  if (lastTaskPage) document.getElementById("detail").innerHTML =
+    renderTaskPage(lastTaskPage, listedRow ? listedRow.admitted_at : null);
+  if (!selectedTask || taskDeleting || !lastTaskPage) return;
+  if (!confirm(`Delete task “${taskTitle(lastTaskPage)}”? This removes its `
+      + "record and private discussion state; repository files are untouched."))
+    return;
+  taskDeleting = true;
+  const listed = lastTaskRows.find(row => row.record && row.record.id === selectedTask);
+  document.getElementById("detail").innerHTML =
+    renderTaskPage(lastTaskPage, listed ? listed.admitted_at : null);
+  try {
+    await api("/api/tasks/" + encodeURIComponent(selectedTask), {method: "DELETE"});
+  } catch (e) {
+    taskDeleting = false;
+    alert(e.message);
+    return;
+  }
+  taskDeleting = false;
+  selectedTask = null; taskPageRunId = null; lastTaskPage = null;
+  document.body.classList.remove("m-detail");
+  document.getElementById("detail").innerHTML =
+    '<div class="empty">Nothing selected.</div>';
+  refreshRuns();
+}
+async function refreshTaskPage() {
+  if (!selectedTask) return;
+  // A terminal record cannot change: leave the page alone so the operator
+  // can read it (the native-result <details> would snap shut otherwise).
+  if (lastTaskPage && lastTaskPage.result !== null && !taskStopping) return;
+  const seq = ++taskPageSeq, id = selectedTask, runId = taskPageRunId;
+  try {
+    const data = await api("/api/tasks/" + encodeURIComponent(id) +
+      (runId ? "?run_id=" + encodeURIComponent(runId) : ""));
+    if (seq !== taskPageSeq || id !== selectedTask) return;
+    const listed = lastTaskRows.find(row => row.record && row.record.id === id);
+    lastTaskPage = data.task;
+    if (data.session_id) lastTaskPageSession = data.session_id;
+    if (data.task.result !== null) taskStopping = false;
+    const det = document.getElementById("detail");
+    const wasOpen = Array.from(det.querySelectorAll("details"))
+      .map(node => node.open);
+    det.innerHTML = renderTaskPage(data.task, listed ? listed.admitted_at : null);
+    Array.from(det.querySelectorAll("details")).forEach((node, i) => {
+      if (wasOpen[i]) node.open = true;
+    });
+    if (pendingLanding === "top") {
+      pendingLanding = null;
+      det.scrollTop = 0;
+    }
+  } catch (e) {
+    if (seq !== taskPageSeq || id !== selectedTask) return;
+    if (!lastTaskPage)
+      document.getElementById("detail").innerHTML =
+        `<div class="failure">task unavailable: ${esc(e.message)}</div>`;
+  }
+}
+function openTask(taskId, runId) {
+  pendingLanding = "top";
+  selectedTask = taskId;
+  taskPageRunId = runId || null;
+  lastTaskPage = null;
+  lastTaskPageSession = null;
+  taskStopping = false;
+  taskStopNotice = "";
+  taskDeleting = false;
+  taskMenuOpen = false;
+  selected = null;
+  selectedSession = null;
+  lastSessionView = null;
+  goalOpen = false;
+  document.body.classList.add("m-detail");
+  document.getElementById("detail").innerHTML =
+    '<div class="empty">Loading task…</div>';
+  renderRunsTree_paint();
+  refreshTaskPage();
+}
+// Chips inside a run open the same page, scoped to that run's records.
+function openTaskDetail(taskId) { openTask(taskId, selected); }
+async function stopSelectedTask() {
+  if (!selectedTask || taskStopping) return;
+  taskStopping = true;
+  taskStopNotice = "";
+  const listed = lastTaskRows.find(row => row.record && row.record.id === selectedTask);
+  if (lastTaskPage) document.getElementById("detail").innerHTML =
+    renderTaskPage(lastTaskPage, listed ? listed.admitted_at : null);
+  try {
+    const answer = await postJSON(
+      "/api/tasks/" + encodeURIComponent(selectedTask) + "/stop", {});
+    if (!answer.stopped) {
+      taskStopping = false;
+      taskStopNotice = answer.state === "terminal"
+        ? "The task had already finished."
+        : "The task is not running on this service; its record stays open.";
+    }
+  } catch (e) {
+    taskStopping = false;
+    taskStopNotice = e.message;
+  }
+  // taskStopping clears when the refetched record is terminal.
+  refreshTaskPage();
+}
+
 /* ---- task ordering and slice producer selection (tasks-2 slice 8), plus
        task activity (slice 9): one catalogue-driven editor serves both writes.
        It owns only transient form
@@ -5594,84 +5911,10 @@ let visibleSliceProducers = new Map();
 let visibleProducerRunId = null;
 // Canonical task responses are the only source for chips. A failed refresh
 // leaves this last good view alone; no task is inferred from milestone prose.
-let lastTaskRecords = [];
-let selectedTaskRecords = [];
-let selectedTaskRunId = null;
-let selectedTaskHistoryLoaded = false;
-let selectedTaskListRefresh = null;
-let selectedTaskDetailRefreshes = new Map();
-let selectedTaskIds = new Set();
-let taskHistoryMode = "list";
-let taskDetailSeq = 0;
-
-function resetSelectedTaskRecords(runId) {
-  if (selectedTaskRunId === runId) return;
-  selectedTaskRunId = runId;
-  selectedTaskRecords = [];
-  selectedTaskHistoryLoaded = false;
-  selectedTaskListRefresh = null;
-  selectedTaskDetailRefreshes = new Map();
-  selectedTaskIds = new Set();
-}
-
-function selectedRunTaskIds(summary) {
-  const ids = [];
-  const seen = new Set();
-  for (const unit of (summary && summary.units) || []) {
-    for (const id of unit.task_ids || []) {
-      if (typeof id === "string" && id && !seen.has(id)) {
-        seen.add(id);
-        ids.push(id);
-      }
-    }
-  }
-  return ids;
-}
-
-function rememberSelectedTaskRecord(record) {
-  if (!record || typeof record.id !== "string") return;
-  const index = selectedTaskRecords.findIndex(item => item.id === record.id);
-  if (index < 0) selectedTaskRecords.push(record);
-  else selectedTaskRecords[index] = record;
-}
-
-function refreshSelectedTaskRecords(runId, taskIds) {
-  resetSelectedTaskRecords(runId);
-  if (Array.isArray(taskIds)) selectedTaskIds = new Set(taskIds);
-  if (!selectedTaskHistoryLoaded) {
-    if (selectedTaskListRefresh) return selectedTaskListRefresh;
-    const request = api(
-      "/api/tasks?run_id=" + encodeURIComponent(runId)
-    ).then(data => {
-      if (selectedTaskRunId !== runId) return false;
-      if (Array.isArray(data.tasks)) selectedTaskRecords = data.tasks;
-      selectedTaskHistoryLoaded = true;
-      return true;
-    }).catch(() => false).finally(() => {
-      if (selectedTaskListRefresh === request) selectedTaskListRefresh = null;
-    });
-    selectedTaskListRefresh = request;
-    return request;
-  }
-  for (const taskId of selectedTaskIds) {
-    const record = selectedTaskRecords.find(item => item.id === taskId);
-    if (record && record.result !== null) continue;
-    if (selectedTaskDetailRefreshes.has(taskId)) continue;
-    const request = api(
-      "/api/tasks/" + encodeURIComponent(taskId) +
-      "?run_id=" + encodeURIComponent(runId)
-    ).then(data => {
-      if (selectedTaskRunId === runId) rememberSelectedTaskRecord(data.task);
-      return true;
-    }).catch(() => false).finally(() => {
-      if (selectedTaskDetailRefreshes.get(taskId) === request)
-        selectedTaskDetailRefreshes.delete(taskId);
-    });
-    selectedTaskDetailRefreshes.set(taskId, request);
-  }
-  return null;
-}
-
+// Per-run task records used to be polled here every tick (one list GET
+// plus one GET per open task) to feed the unit "Tasks" chip line. That
+// line is gone; nothing reads them now, so nothing is fetched. A task
+// opens its own page (openTask) on demand.
 function setTaskMessage(id, message) {
   const el = document.getElementById(id);
   el.textContent = message || "";
@@ -6033,10 +6276,6 @@ async function submitTaskForm() {
   }
 }
 
-function taskRecordById(taskId) {
-  return selectedTaskRecords.find(record => record.id === taskId) ||
-    lastTaskRecords.find(record => record.id === taskId) || null;
-}
 function taskContext(record) {
   const context = record && record.order && record.order.request
     ? record.order.request.context : null;
@@ -6055,128 +6294,6 @@ function taskStateClass(record) {
 function taskKind(record) {
   return taskContext(record).task_kind || "direct";
 }
-function taskChip(record) {
-  const state = taskState(record);
-  const executor = (record.order || {}).task_executor || "?";
-  const kind = taskKind(record);
-  return `<span class="chip task ${taskStateClass(record)} clicky"
-    title="${esc(record.id)}" onclick="openTaskDetail('${esc(escJsSq(record.id))}')">Task · ${esc(executor)} · ${esc(shortKind(kind))} · ${esc(state)}</span>`;
-}
-function taskHistoryRow(record) {
-  const request = (record.order || {}).request || {};
-  const workArea = request.work_area || {};
-  const context = taskContext(record);
-  const scope = [
-    workArea.project ? `project ${workArea.project}` : "",
-    context.unit ? `unit ${context.unit}` : "",
-  ].filter(Boolean).join(" · ");
-  return `<button class="task-row" type="button"
-    onclick="openTaskDetail('${esc(escJsSq(record.id))}')">
-    <span class="task-row-head"><span class="chip ${taskStateClass(record)}">${esc(taskState(record))}</span>
-      <span class="task-row-title">${esc((record.order || {}).task_executor || "?")} · ${esc(shortKind(taskKind(record)))}</span></span>
-    ${scope ? `<span class="story-meta">${esc(scope)}</span>` : ""}
-    <span class="task-row-id mono">${esc(record.id)}</span>
-  </button>`;
-}
-function setTaskHistoryError(message) {
-  const error = document.getElementById("taskHistoryError");
-  error.textContent = message || "";
-  error.style.display = message ? "" : "none";
-}
-function renderTaskHistoryList() {
-  document.getElementById("taskHistoryTitle").textContent = "Task history";
-  document.getElementById("taskHistoryBack").style.display = "none";
-  document.getElementById("taskHistoryBody").innerHTML = lastTaskRecords.length
-    ? `<div class="task-list">${lastTaskRecords.map(taskHistoryRow).join("")}</div>`
-    : '<div class="empty">No accessible tasks.</div>';
-}
-function showTaskHistoryList() {
-  taskHistoryMode = "list";
-  taskDetailSeq += 1;
-  setTaskHistoryError("");
-  renderTaskHistoryList();
-}
-async function refreshTaskHistory() {
-  try {
-    const data = await api("/api/tasks");
-    if (Array.isArray(data.tasks)) lastTaskRecords = data.tasks;
-    if (document.getElementById("taskhistorydialog").open &&
-        taskHistoryMode === "list") {
-      setTaskHistoryError("");
-      renderTaskHistoryList();
-    }
-    return true;
-  } catch (e) {
-    if (document.getElementById("taskhistorydialog").open &&
-        taskHistoryMode === "list")
-      setTaskHistoryError(e.message);
-    return false;
-  }
-}
-async function openTaskHistory() {
-  taskHistoryMode = "list";
-  setTaskHistoryError("");
-  renderTaskHistoryList();
-  const dialog = document.getElementById("taskhistorydialog");
-  if (!dialog.open) dialog.showModal();
-  await refreshTaskHistory();
-}
-function taskDetailHtml(record) {
-  const context = taskContext(record);
-  const result = record.result;
-  const meta = [
-    record.id,
-    (record.order || {}).task_executor,
-    context.task_kind,
-    context.unit ? `unit ${context.unit}` : "",
-  ].filter(Boolean).join(" · ");
-  let html = `<div class="story-meta mono">${esc(meta)}</div>`;
-  html += `<div class="story-note"><b>${esc(taskState(record))}</b>${
-    result && result.reason ? ` · ${esc(result.reason)}` : ""}</div>`;
-  html += `<h3>Frozen order</h3><pre class="story-note mono">${
-    esc(JSON.stringify(record.order, null, 2))}</pre>`;
-  html += `<h3>Resolved staffing</h3>
-    <div class="amend-hint">Order-time snapshot; execution activity is the authority for staffing actually used.</div>
-    <pre class="story-note mono">${esc(JSON.stringify(record.resolved_staffing, null, 2))}</pre>`;
-  if (result) {
-    html += `<h3>Terminal accounting</h3>
-      <div class="story-meta">duration ${esc(fmtDHMS(result.duration_s))} · token usage partial: ${result.token_usage_partial ? "yes" : "no"} · cost partial: ${result.cost_partial ? "yes" : "no"}</div>` +
-      costHtml(result.cost, result.cost_partial) +
-      tokenUsageHtml(result.token_usage, result.token_usage_partial) +
-      `<h3>Native result</h3><div class="amend-hint">Opaque TaskExecutor result</div>
-       <pre class="story-note mono">${esc(JSON.stringify(result.native_result, null, 2))}</pre>`;
-  } else {
-    html += '<div class="story-note">No terminal result recorded.</div>';
-  }
-  return html;
-}
-async function openTaskDetail(taskId) {
-  const seq = ++taskDetailSeq;
-  taskHistoryMode = "detail";
-  setTaskHistoryError("");
-  document.getElementById("taskHistoryTitle").textContent = "Task";
-  document.getElementById("taskHistoryBack").style.display = "";
-  document.getElementById("taskHistoryBody").innerHTML =
-    '<div class="empty">Loading task…</div>';
-  const dialog = document.getElementById("taskhistorydialog");
-  if (!dialog.open) dialog.showModal();
-  try {
-    const data = await api("/api/tasks/" + encodeURIComponent(taskId));
-    if (seq !== taskDetailSeq || taskHistoryMode !== "detail") return;
-    const record = data.task;
-    const index = lastTaskRecords.findIndex(item => item.id === record.id);
-    if (index < 0) lastTaskRecords.push(record);
-    else lastTaskRecords[index] = record;
-    document.getElementById("taskHistoryTitle").textContent =
-      `Task · ${taskState(record)}`;
-    document.getElementById("taskHistoryBody").innerHTML =
-      taskDetailHtml(record);
-  } catch (e) {
-    if (seq === taskDetailSeq && taskHistoryMode === "detail")
-      setTaskHistoryError(e.message);
-  }
-}
-
 /* ---- new brainstorming: the standalone session create body, assembled
        from the panel. Unlike a milestone launch this posts a workspace
        PATH — the sealed create contract requires request.workspace_path —

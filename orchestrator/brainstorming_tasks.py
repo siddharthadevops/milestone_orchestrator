@@ -24,6 +24,11 @@ from orchestrator import tasks
 
 _PROFILE_AUTHORITY = "current_profile"
 _STATIC_AUTHORITY = "static"
+# A Brainstorming ordered outside a milestone has no profile to consult, so
+# until the staffing router lets the caller choose, every seat runs at the
+# top effort (operator, 2026-08-19): a direct discussion is ordered because
+# the question is hard, not to save tokens.
+DIRECT_BRAINSTORMING_EFFORT = "max"
 _TASK_CALLER_PREFIX = "task:"
 _NOTE_EFFECT = "Required effect: create the slice note at %s."
 _RECOVERED_EFFECT_ERROR = (
@@ -126,6 +131,12 @@ def resolve_staffing(config, workspace, model_profile_runtime=None):
             raise tasks.TaskRequestError(
                 code, "static Brainstorming staffing is unavailable"
             ) from exc
+        participants = [
+            dict(seat, effort=DIRECT_BRAINSTORMING_EFFORT)
+            if seat.get("delivery") == "llm" or seat.get("effort") is not None
+            else seat
+            for seat in participants
+        ]
         authority = _STATIC_AUTHORITY
     return brainstorming._json_copy(
         {"dispatch_authority": authority, "participants": participants},

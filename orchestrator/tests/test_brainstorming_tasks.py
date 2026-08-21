@@ -220,7 +220,7 @@ class BrainstormingTaskAdapterTest(unittest.TestCase):
         ):
             record = adapter.admit_task(
                 state,
-                self.order(request, max_rounds=4, closure_policy="majority"),
+                self.order(request, max_rounds=24, closure_policy="majority"),
                 self.config,
                 self.workspace,
                 model_profile_runtime=locator,
@@ -240,7 +240,7 @@ class BrainstormingTaskAdapterTest(unittest.TestCase):
 
         self.assertEqual(created["id"], "bs-profile")
         body = create.call_args.args[1]
-        self.assertEqual(body["request"]["max_rounds"], 4)
+        self.assertEqual(body["request"]["max_rounds"], 24)
         self.assertEqual(body["closure_policy"], "majority")
         self.assertEqual(
             [seat.get("model") for seat in body["participants"]],
@@ -374,8 +374,11 @@ class BrainstormingTaskAdapterTest(unittest.TestCase):
         self.assertEqual(
             classify.call_args.kwargs["classifier_model"], "codex-default"
         )
+        # Direct (static) seats run at the top effort, and the failure
+        # classifier borrows the opposite seat's effort.
         self.assertEqual(
-            classify.call_args.kwargs["classifier_effort"], "high"
+            classify.call_args.kwargs["classifier_effort"],
+            adapter.DIRECT_BRAINSTORMING_EFFORT,
         )
         with self.assertRaises(lifecycle.PublicLifecycleError):
             lifecycle._runtime_and_roster(

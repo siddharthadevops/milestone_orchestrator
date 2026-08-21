@@ -480,17 +480,13 @@ SLICE_SIZING_LINE = (
 )
 
 IMPLEMENTATION_SIZE_GUIDANCE = (
-    "Split the slice into coherent sequential implementation units, aiming\n"
-    "where reasonably possible to keep each unit below approximately 750\n"
-    "reviewable Git lines. Do not compress, omit, distort, or reimplement\n"
-    "sound work merely to fit that target.\n"
-    "As you approach it, stop expanding scope and close the current unit in\n"
-    "a coherent, functional, and reviewable state. If original slice work\n"
-    "remains, return `implementation_cut` with concise `cut_scope` and\n"
-    "`remaining_scope`; the driver will finish this unit's commit and full\n"
-    "review cycle before opening the next part. If the slice is complete,\n"
-    "omit `implementation_cut`. A mandatory live close instruction is only\n"
-    "a backstop if the delivery reaches 1,000 reviewable Git lines.\n"
+    "The driver meters reviewable Git lines live while you work. Around\n"
+    "500 it will ask you to close the current unit coherently; at 750 it\n"
+    "stops the call. Cut at the first natural boundary instead of waiting\n"
+    "to be asked: finish the coherent piece, return `implementation_cut`\n"
+    "with concise `cut_scope` and `remaining_scope`, and the driver reviews\n"
+    "this part before opening the next. Never compress, omit, or distort\n"
+    "sound work to fit. If the slice is complete, omit `implementation_cut`.\n"
 )
 
 SLICE_NOTE_CONTENT_BLOCK = (
@@ -1446,7 +1442,9 @@ def _producer_planning_block():
         "every slice; the structured result and the reviewed document must agree.\n"
         "Each choice contains `task_executor` and may contain its executor's\n"
         "`configuration`. Use only the shared catalogue below; do not infer a\n"
-        "choice from its staffing description.\n"
+        "choice from its staffing description. A `max_rounds` below the\n"
+        "catalogue minimum is raised to that minimum at admission: do not\n"
+        "plan shorter discussions than the catalogue allows.\n"
         "TASKEXECUTOR CATALOGUE:\n%s\n\n"
         % json.dumps(
             tasks.task_executor_catalogue(),

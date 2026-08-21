@@ -1348,12 +1348,12 @@ class TestVerificationProtocol(unittest.TestCase):
         self.assertIn("Run focused checks on what you touch", prompt)
         self.assertIn("after every fourth completed logical slice", prompt)
         self.assertIn("at milestone end", prompt)
-        self.assertIn("below approximately 750", prompt)
-        self.assertIn("Do not compress, omit, distort, or reimplement", prompt)
+        self.assertIn("at 750 it stops the call", prompt)
+        self.assertIn("Never compress, omit, or distort", prompt)
         self.assertIn("return `implementation_cut`", prompt)
         self.assertIn("Include `implementation_cut` proactively", prompt)
-        self.assertIn("before opening the next part", prompt)
-        self.assertIn("reaches 1,000 reviewable Git lines", prompt)
+        self.assertIn("reviews this part before opening the next", prompt)
+        self.assertIn("Cut at the first natural boundary", prompt)
         self.assertIn("Report the repo's official full-suite command",
                       prompt)
         self.assertIn("your suite_command will arm scheduled checkpoints",

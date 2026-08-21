@@ -120,77 +120,80 @@ class TaskPanelTests(unittest.TestCase):
     def test_task_history_and_chips_use_only_canonical_records(self):
         self.assertIn('onclick="newTask(event,', self.panel)
         self.assertIn('id="taskform"', self.panel)
-        self.assertIn('id="taskHistoryBtn"', self.panel)
-        self.assertIn('id="taskhistorydialog"', self.panel)
-        self.assertEqual(self.task_ui.count('api("/api/tasks")'), 1)
-        self.assertIn(
-            'api("/api/tasks/" + encodeURIComponent(taskId))', self.task_ui
-        )
-        self.assertIn("function taskRecordById", self.task_ui)
-        self.assertIn(
-            '"/api/tasks?run_id=" + encodeURIComponent(runId)',
-            self.task_ui,
-        )
-        self.assertIn(
-            '"?run_id=" + encodeURIComponent(runId)', self.task_ui
-        )
-        self.assertIn("(u.task_ids || [])", self.panel)
-        self.assertIn(".map(taskRecordById).filter(Boolean).map(taskChip)",
+        # No cross-project task list button any more (operator, 2026-08-18):
+        # standalone tasks are listed in the sidebar, bounded and newest first,
+        # and the dialog only ever shows one task.
+        self.assertNotIn('id="taskHistoryBtn"', self.panel)
+        self.assertNotIn("function openTaskHistory", self.panel)
+        # A task opens as a page in the right pane (like a run or a
+        # session), with Stop while it runs; the modal is gone.
+        self.assertNotIn('id="taskhistorydialog"', self.panel)
+        self.assertIn("function renderTaskPage", self.panel)
+        self.assertIn('"/api/tasks/" + encodeURIComponent(selectedTask) + "/stop"',
                       self.panel)
+        self.assertEqual(self.task_ui.count('api("/api/tasks")'), 0)
+        self.assertIn(
+            'api("/api/tasks/" + encodeURIComponent(id)', self.panel
+        )
+        # No per-run task record polling remains: nothing consumed it once
+        # the unit "Tasks" chip line went. A run-scoped read happens only
+        # when a task page is opened from inside a run.
+        self.assertNotIn("function refreshSelectedTaskRecords", self.panel)
+        self.assertNotIn('"/api/tasks?run_id="', self.panel)
+        self.assertIn('"?run_id=" + encodeURIComponent(runId)', self.panel)
+        # The per-unit "Tasks" chip line was dropped from the unit history
+        # (operator, 2026-08-18): draft/round/verify/Brainstorming chips
+        # already carry the same calls with more detail.
+        self.assertNotIn('addLine("Tasks", "", taskChips)', self.panel)
+        self.assertNotIn(".map(taskRecordById).filter(Boolean).map(taskChip)",
+                         self.panel)
         self.assertNotIn("context.unit ===", self.task_ui)
 
-    def test_task_refresh_is_scoped_coalesced_and_never_blocks_run_detail(self):
+    def test_run_detail_no_longer_polls_task_records(self):
         detail = self.panel.split(
             "async function refreshDetail() {", 1
         )[1].split("async function showStory", 1)[0]
         self.assertIn('const d = await api("/api/runs/" + runId)', detail)
-        self.assertIn("refreshSelectedTaskRecords(runId);", detail)
-        self.assertIn(
-            "refreshSelectedTaskRecords(runId, selectedRunTaskIds(sum))",
-            detail,
-        )
+        self.assertNotIn("refreshSelectedTaskRecords", detail)
         self.assertNotIn("refreshTaskHistory()", detail)
-        self.assertNotIn("await refreshSelectedTaskRecords", detail)
-        self.assertIn("if (selectedTaskListRefresh) return", self.task_ui)
-        self.assertIn(
-            "if (record && record.result !== null) continue", self.task_ui
-        )
-        self.assertIn(
-            "selectedTaskDetailRefreshes.has(taskId)", self.task_ui
-        )
+        # A terminal task page is not re-rendered by the tick (the operator
+        # may be reading it); a running one refreshes and keeps its
+        # <details> open state.
+        page = self.panel.split("async function refreshTaskPage() {", 1)[1]
+        page = page.split("\n}\n", 1)[0]
+        self.assertIn("lastTaskPage.result !== null && !taskStopping) return", page)
+        self.assertIn("wasOpen", page)
 
     def test_task_detail_preserves_native_result_and_accounting(self):
         detail = re.search(
-            r"function taskDetailHtml\(record\) \{(.*?)\n\}",
-            self.task_ui,
+            r"function renderTaskPage\(record, admittedAt\) \{(.*?)\n\}",
+            self.panel,
             re.S,
         ).group(1)
         for field in (
-            "record.order", "record.resolved_staffing", "result.reason",
+            "record.order", "taskStaffingLine(record)", "result.reason",
             "result.duration_s", "result.token_usage_partial",
             "result.cost_partial", "result.native_result",
         ):
             self.assertIn(field, detail)
-        self.assertIn("Order-time snapshot", detail)
-        self.assertIn("execution activity is the authority", detail)
+        self.assertIn("record.resolved_staffing", self.panel)
         self.assertIn("costHtml(result.cost, result.cost_partial)", detail)
         self.assertIn(
             "tokenUsageHtml(result.token_usage, result.token_usage_partial)",
             detail,
         )
-        self.assertGreaterEqual(detail.count("esc(JSON.stringify("), 3)
+        self.assertIn("opaque TaskExecutor output", detail)
         self.assertNotIn("actual staffing", detail.lower())
 
     def test_failed_and_successor_tasks_are_not_collapsed(self):
-        chip = re.search(
-            r"function taskChip\(record\) \{(.*?)\n\}",
-            self.task_ui,
+        row = re.search(
+            r"function taskRow\(row\) \{(.*?)\n\}",
+            self.panel,
             re.S,
         ).group(1)
-        self.assertIn("record.id", chip)
-        self.assertIn("taskState(record)", chip)
-        self.assertIn("taskKind(record)", chip)
-        self.assertIn("task_executor", chip)
+        self.assertIn("record.id", row)
+        self.assertIn("taskState(record)", row)
+        self.assertIn("task_executor", row)
         for forbidden in ("predecessor", "successor", "review number"):
             self.assertNotIn(forbidden, self.task_ui.lower())
 
@@ -204,7 +207,7 @@ class TaskPanelTests(unittest.TestCase):
             "roundChip",
         ):
             self.assertIn("function %s" % existing, self.panel)
-        self.assertIn('addLine("Tasks", "", taskChips)', self.panel)
+        self.assertNotIn('addLine("Tasks", "", taskChips)', self.panel)
 
 
 if __name__ == "__main__":

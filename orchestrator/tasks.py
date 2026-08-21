@@ -72,7 +72,11 @@ _TASK_EXECUTORS = (
         "configuration_schema": {
             "max_rounds": {
                 "type": "integer",
-                "minimum": 1,
+                # The floor every Brainstorming runs with, whatever a planner
+                # or caller wrote: a lower value is raised to it at
+                # resolution (operator, 2026-08-19 — a six-round slice
+                # discussion failed a run at "irreducible gap").
+                "minimum": contracts.MILESTONE_BRAINSTORMING_ROUNDS,
                 "default": contracts.MILESTONE_BRAINSTORMING_ROUNDS,
             },
             "closure_policy": {
@@ -224,11 +228,13 @@ def _resolve_configuration(task_executor, configuration):
     for name, definition in schema.items():
         value = configuration.get(name, definition["default"])
         if definition["type"] == "integer":
-            if type(value) is not int or value < definition["minimum"]:
+            if type(value) is not int:
                 raise ContractError(
-                    "configuration.%s must be an integer of at least %d"
-                    % (name, definition["minimum"])
+                    "configuration.%s must be an integer" % name
                 )
+            # `minimum` is a floor, not a refusal: a planner or caller who
+            # wrote less gets the floor, visibly, in the resolved value.
+            value = max(value, definition["minimum"])
         elif definition["type"] == "choice":
             if value not in definition["choices"]:
                 raise ContractError(

@@ -6,57 +6,107 @@ import copy
 import json
 import math
 import os
+import shutil
 import tempfile
 import threading
 import time
 import uuid
 
-from orchestrator import brainstorming_tasks, driver, gitsync, kvstore, pricing
+from orchestrator import brainstorming, brainstorming_tasks, driver, gitsync
+from orchestrator import kvstore, pricing
 from orchestrator import registry, runners, tasks
+from orchestrator import state as st
+
+
+TASKS_DIRNAME = "tasks"
+_TASK_KEY_PREFIX = "tasks/task:"
+_DOCUMENT_SCHEMA_VERSION = 1
+
+
+def state_directory(home):
+    """Directory of the standalone task KV store, beside Brainstorming's."""
+    return os.path.join(os.path.abspath(home), TASKS_DIRNAME, "state")
 
 
 def records_path(home):
-    return os.path.join(home, "tasks.json")
+    """The KV file that holds every standalone task document."""
+    return os.path.join(state_directory(home), kvstore.STORE_FILENAME)
+
+
+def task_key(task_id):
+    """`tasks/task:<id>` — one namespace beside runs and Brainstorming."""
+    return _TASK_KEY_PREFIX + kvstore.validate_fragment(task_id, "task_id")
 
 
 class StandaloneTaskStore:
-    """One atomic home for canonical records admitted outside a milestone."""
+    """One durable home for canonical records admitted outside a milestone.
+
+    Records live in the shared KV model under their own namespace prefix, one
+    document per task, exactly as Brainstorming keeps its sessions: the same
+    layout a product datastore (Agent99) reads, listable by prefix and
+    filterable by project. Locally the store is its own directory file, kept
+    apart from the Brainstorming and service files on purpose (operator,
+    2026-08-18). The document wraps the canonical record with the admission
+    time so listings keep admission order without touching the exact record
+    shape.
+    """
 
     def __init__(self, home):
         self.home = os.path.abspath(home)
+        self._store = kvstore.RevisionEnvelopeStore(
+            kvstore.LocalKVClient(state_directory(self.home))
+        )
+
+    @staticmethod
+    def _document(record, admitted_at):
+        return {
+            "schema_version": _DOCUMENT_SCHEMA_VERSION,
+            "admitted_at": admitted_at,
+            "record": record,
+        }
+
+    @staticmethod
+    def _validate_document(value, key):
+        if (
+            not isinstance(value, dict)
+            or set(value) != {"schema_version", "admitted_at", "record"}
+            or value["schema_version"] != _DOCUMENT_SCHEMA_VERSION
+            or not isinstance(value["admitted_at"], str)
+            or not isinstance(value["record"], dict)
+        ):
+            raise tasks.TaskRecordError(
+                "standalone task document %s is malformed" % key
+            )
+        return value
+
+    def _documents(self):
+        listing = self._store.list_entries(prefix=_TASK_KEY_PREFIX)
+        documents = []
+        for item in listing["items"]:
+            key = item["key"]
+            current = self._store.read(key)
+            if not current["exists?"]:
+                continue
+            documents.append(self._validate_document(current["value"], key))
+        documents.sort(key=lambda doc: (doc["admitted_at"], doc["record"]["id"]))
+        return documents
 
     def _load(self):
-        path = records_path(self.home)
-        if not os.path.exists(path):
-            return []
-        with open(path, "r", encoding="utf-8") as handle:
-            records = json.load(handle)
-        if not isinstance(records, list):
-            raise tasks.TaskRecordError("standalone task history must be a list")
-        return tasks.task_records({"tasks": records})
-
-    def _save(self, records):
-        os.makedirs(self.home, exist_ok=True)
-        fd, temporary = tempfile.mkstemp(
-            prefix=".tasks-", suffix=".json", dir=self.home
+        return tasks.task_records(
+            {"tasks": [doc["record"] for doc in self._documents()]}
         )
-        try:
-            with os.fdopen(fd, "w", encoding="utf-8") as handle:
-                json.dump(
-                    records,
-                    handle,
-                    indent=2,
-                    ensure_ascii=False,
-                    allow_nan=False,
-                )
-                handle.write("\n")
-            os.replace(temporary, records_path(self.home))
-        finally:
-            if os.path.exists(temporary):
-                os.unlink(temporary)
 
     def records(self):
         return self._load()
+
+    def documents(self):
+        """Every stored document, oldest admission first: `admitted_at` beside
+        the exact canonical `record`. Listing surfaces use this; the record
+        shape itself stays untouched."""
+        return [
+            {"admitted_at": doc["admitted_at"], "record": doc["record"]}
+            for doc in self._documents()
+        ]
 
     def record(self, task_id):
         return tasks.task_record({"tasks": self._load()}, task_id)
@@ -76,8 +126,29 @@ class StandaloneTaskStore:
             resolved_staffing,
             primary_workspace=primary_workspace,
         )
-        self._save(state["tasks"])
+        outcome = self._store.cas(
+            task_key(record["id"]),
+            None,
+            self._document(record, st.now_iso()),
+        )
+        if not outcome.ok:
+            raise tasks.TaskRecordError(
+                "standalone task %s already exists" % record["id"]
+            )
         return record
+
+    def delete(self, task_id):
+        """Forget one terminal task document. Returns the record removed, or
+        None when no such document exists. Callers refuse running tasks
+        before getting here."""
+        with registry.locked(self.home):
+            key = task_key(task_id)
+            current = self._store.read(key)
+            if not current["exists?"]:
+                return None
+            document = self._validate_document(current["value"], key)
+            self._store.delete(key, expected_revision=current["revision"])
+            return document["record"]
 
     def record_result(self, task_id, result):
         with registry.locked(self.home):
@@ -85,10 +156,76 @@ class StandaloneTaskStore:
 
     def record_result_locked(self, task_id, result):
         """Record a result while the caller holds the service registry lock."""
-        state = {"tasks": self._load()}
+        key = task_key(task_id)
+        current = self._store.read(key)
+        if not current["exists?"]:
+            raise tasks.TaskRecordError("unknown task %r" % task_id)
+        document = self._validate_document(current["value"], key)
+        state = {"tasks": [document["record"]]}
         record = tasks.record_task_result(state, task_id, result)
-        self._save(state["tasks"])
+        outcome = self._store.cas(
+            key,
+            current["revision"],
+            self._document(state["tasks"][0], document["admitted_at"]),
+        )
+        if not outcome.ok:
+            raise tasks.TaskRecordError(
+                "standalone task %s changed while recording its result"
+                % task_id
+            )
         return record
+
+
+def forget_task_evidence(home, record):
+    """Best-effort removal of what a deleted task left beside its record:
+    the per-call marker and, for Brainstorming, the private work area that
+    held its discussion target. Repository files are never touched."""
+    task_id = record["id"]
+    try:
+        os.unlink(_marker_path(home, task_id))
+    except FileNotFoundError:
+        pass
+    except Exception:
+        pass
+    if (record.get("order") or {}).get("task_executor") == "brainstorming":
+        try:
+            work_area, _parent, _target = (
+                brainstorming_tasks._private_target_paths(
+                    _workspace(record), home, task_id
+                )
+            )
+            shutil.rmtree(work_area, ignore_errors=True)
+        except Exception:
+            pass
+
+
+def task_session_id(home, record, host=None):
+    """The Brainstorming session a standalone task owns, or None.
+
+    Running: the host knows it. Otherwise: the session recorded on the
+    task's private target (the adapter's own retained-authority lookup).
+    Worker tasks own no session."""
+    if (record.get("order") or {}).get("task_executor") != "brainstorming":
+        return None
+    lookup = getattr(host, "running_session_id", None)
+    if callable(lookup):
+        known = lookup(record["id"])
+        if known:
+            return known
+    native = (record.get("result") or {}).get("native_result")
+    if isinstance(native, dict) and isinstance(native.get("session_id"), str):
+        return native["session_id"]
+    try:
+        _area, _parent, target = brainstorming_tasks._private_target_paths(
+            _workspace(record), home, record["id"]
+        )
+        store = brainstorming.SessionStore(
+            brainstorming_tasks.lifecycle.state_directory(home)
+        )
+        found = store.session_ids_for_target(target)
+    except Exception:
+        return None
+    return found[0] if found else None
 
 
 def worker_staffing(config):
@@ -235,7 +372,62 @@ class DirectTaskHost:
             if poll_interval is None else poll_interval
         )
         self._active = {}
+        # Per running task: the worker call control (to interrupt it) or the
+        # Brainstorming session id (to stop it), and any operator stop.
+        self._controls = {}
+        self._sessions = {}
+        self._stops = {}
         self._lock = threading.Lock()
+
+    def stop(self, task_id, reason="stopped by operator"):
+        """Stop one running standalone task. Returns True when a stop was
+        delivered, False when the task is not running here (already
+        terminal, or not this host's). The task closes as `failure` with
+        this reason: a stop is an operator outcome, never a guessed
+        success from whatever the interrupted worker last printed."""
+        reason = str(reason or "stopped by operator").strip()
+        with self._lock:
+            if task_id not in self._active:
+                return False
+            self._stops[task_id] = reason
+            control = self._controls.get(task_id)
+            session_id = self._sessions.get(task_id)
+        if control is not None:
+            # The transport binds interrupt only once the worker is spawned;
+            # a stop landing in that window would otherwise be dropped.
+            # Retry briefly; the stop flag closes the task either way.
+            deadline = time.monotonic() + 5.0
+            while True:
+                try:
+                    if control.interrupt(reason) or control.closed:
+                        break
+                except Exception:
+                    break
+                if time.monotonic() >= deadline:
+                    break
+                time.sleep(0.05)
+        if session_id is not None:
+            self._pause_session(session_id)
+        return True
+
+    def _pause_session(self, session_id):
+        try:
+            brainstorming_tasks.lifecycle.stop_session(
+                self.home, session_id, lambda _record: True
+            )
+        except Exception:
+            # Best-effort: the task still closes on the stop flag; the
+            # session is left as it is for native recovery.
+            pass
+
+    def _stop_reason(self, task_id):
+        with self._lock:
+            return self._stops.get(task_id)
+
+    def running_session_id(self, task_id):
+        """The Brainstorming session a running task owns, if known here."""
+        with self._lock:
+            return self._sessions.get(task_id)
 
     @staticmethod
     def _runner(config, _workspace):
@@ -267,6 +459,55 @@ class DirectTaskHost:
             raise
         return thread
 
+    def adopt_open_tasks(self, config_resolver_for):
+        """Re-attach the standalone tasks left open by a previous service.
+
+        The host's execution threads die with the process; the records do
+        not. A Brainstorming task owns an independent session that may have
+        gone on (or finished) meanwhile, and the adapter already knows how
+        to recover it from the task's private target — so it is restarted
+        here and runs to its result. A Worker task's call died with the
+        service and cannot be resumed without redoing the work blind, so it
+        is closed honestly and the operator re-orders if still wanted.
+        `config_resolver_for(record)` returns the zero-arg config resolver
+        to use for that record. Returns {adopted: [...], closed: [...]}."""
+        adopted, closed = [], []
+        try:
+            records = self.store.records()
+        except Exception:
+            return {"adopted": adopted, "closed": closed}
+        for record in records:
+            if record.get("result") is not None:
+                continue
+            task_id = record["id"]
+            executor = (record.get("order") or {}).get("task_executor")
+            if executor == "brainstorming":
+                try:
+                    if self.start(record, config_resolver_for(record)) is not None:
+                        adopted.append(task_id)
+                except Exception:
+                    pass
+                continue
+            try:
+                self.store.record_result(task_id, {
+                    "status": "failure",
+                    "reason": (
+                        "the service restarted while this call was in "
+                        "flight; the worker did not finish — re-order the "
+                        "task if the work is still wanted"
+                    ),
+                    "duration_s": 0.0,
+                    "token_usage": None,
+                    "token_usage_partial": True,
+                    "cost": None,
+                    "cost_partial": True,
+                    "native_result": None,
+                })
+                closed.append(task_id)
+            except Exception:
+                pass
+        return {"adopted": adopted, "closed": closed}
+
     def owns_workspace(self, workspace):
         """Whether an execution thread currently owns an overlapping tree."""
         with self._lock:
@@ -285,6 +526,9 @@ class DirectTaskHost:
         finally:
             with self._lock:
                 self._active.pop(task_id, None)
+                self._controls.pop(task_id, None)
+                self._sessions.pop(task_id, None)
+                self._stops.pop(task_id, None)
 
     def _run_worker(self, record, config_resolver):
         task_id = record["id"]
@@ -306,6 +550,12 @@ class DirectTaskHost:
             }
             _write_worker_marker(self.home, task_id, marker)
             runner = self.runner_factory(config, _workspace(record))
+            control = runners.ActiveCallControl()
+            with self._lock:
+                self._controls[task_id] = control
+                early_stop = self._stops.get(task_id)
+            if early_stop is not None:
+                raise RuntimeError(early_stop)
             carrier = tasks.execute_worker(
                 record,
                 lambda request: runner.call(
@@ -314,6 +564,8 @@ class DirectTaskHost:
                     _workspace(record),
                     model=model,
                     effort=effort,
+                    active_control=control,
+                    keep_template=True,
                 ),
             )
             native = carrier.text
@@ -347,6 +599,12 @@ class DirectTaskHost:
                 # execution has produced a native outcome, losing this
                 # best-effort write cannot replace that outcome.
                 pass
+        stop_reason = self._stop_reason(task_id)
+        if stop_reason is not None:
+            # An interrupted worker may exit cleanly and print something;
+            # that is not a success. The operator's stop is the outcome.
+            status = "failure"
+            reason = stop_reason
         result = {"status": status, **accounting, "native_result": native}
         if status == "failure":
             result["reason"] = reason or "Worker execution failed"
@@ -378,8 +636,32 @@ class DirectTaskHost:
             if projection is None:
                 return
             session_id = projection["id"]
+            with self._lock:
+                self._sessions[task_id] = session_id
             authority = record["resolved_staffing"]["dispatch_authority"]
+            def stopped(reason):
+                # The stop may have landed before the session id was known
+                # (start() registers the task before this thread runs), or
+                # while the lead was applying the agreed effects, when the
+                # session is already terminal and a pause is a no-op. Pause
+                # best-effort and record the operator's outcome regardless.
+                self._pause_session(session_id)
+                self.store.record_result(task_id, {
+                    "status": "failure",
+                    "reason": reason,
+                    "duration_s": 0.0,
+                    "token_usage": None,
+                    "token_usage_partial": True,
+                    "cost": None,
+                    "cost_partial": True,
+                    "native_result": {"session_id": session_id},
+                })
+
             while True:
+                stop_reason = self._stop_reason(task_id)
+                if stop_reason is not None:
+                    stopped(stop_reason)
+                    return
                 state = {"tasks": self.store.records()}
                 terminal = brainstorming_tasks.finish_task(
                     state,
@@ -397,6 +679,10 @@ class DirectTaskHost:
                     ),
                 )
                 if terminal is not None:
+                    stop_reason = self._stop_reason(task_id)
+                    if stop_reason is not None:
+                        stopped(stop_reason)
+                        return
                     self._persist_adapter_result(state, task_id)
                     return
                 time.sleep(self.poll_interval)

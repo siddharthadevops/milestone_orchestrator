@@ -132,8 +132,12 @@ DEFAULT_CONFIG = {
     # Git is the sole meter.  Markdown/text and runtime bookkeeping are
     # excluded by gitops.reviewable_line_count().
     "implementation_size_control": {
-        "soft_lines": 1000,
-        "hard_lines": 1500,
+        # Tightened from 1000/1500 (operator, 2026-08-20): parts were
+        # landing at 1000+ reviewable lines every time — workers ride to
+        # the boundary, so the boundary IS the slice size. 500 matches the
+        # WORKSPACE.md sizing guidance; 750 is the containment wall.
+        "soft_lines": 500,
+        "hard_lines": 750,
         "poll_interval_s": 2,
         "unconfirmed_grace_s": 180,
         "confirmed_grace_s": 600,
@@ -1464,8 +1468,8 @@ class Driver(object):
         if not isinstance(configured, dict):
             return None, None
         try:
-            soft = int(configured.get("soft_lines", 1000))
-            hard = int(configured.get("hard_lines", 1500))
+            soft = int(configured.get("soft_lines", 500))
+            hard = int(configured.get("hard_lines", 750))
             poll = float(configured.get("poll_interval_s", 2))
             unconfirmed_grace = float(
                 configured.get("unconfirmed_grace_s", 180)
@@ -4308,15 +4312,6 @@ class Driver(object):
                 reason = (
                     "a lightweight design update may insert future slices, "
                     "but may not remove, renumber, or reorder existing ones"
-                )
-                st.fail_run(self.state, reason, unit=unit)
-                self._save()
-                raise StopStep(reason)
-            added_ids = [value for value in new_ids if value not in old_ids]
-            if len(added_ids) > 1:
-                reason = (
-                    "a lightweight design update may insert at most one "
-                    "bounded future slice"
                 )
                 st.fail_run(self.state, reason, unit=unit)
                 self._save()

@@ -474,7 +474,7 @@ class BrainstormingSliceProductionTest(unittest.TestCase):
         self.assertEqual(work[0]["task_id"], failed_id)
 
         plan["producer_task_executor"]["implement"]["configuration"] = {
-            "max_rounds": 7,
+            "max_rounds": 27,
         }
         st.resume_run(subject.state)
         subject._save()
@@ -487,7 +487,7 @@ class BrainstormingSliceProductionTest(unittest.TestCase):
         successor_id = st.current_unit(subject.state)["active_task"]["id"]
         successor = tasks.task_record(subject.state, successor_id)
         self.assertNotEqual(successor_id, failed_id)
-        self.assertEqual(successor["order"]["configuration"]["max_rounds"], 7)
+        self.assertEqual(successor["order"]["configuration"]["max_rounds"], 27)
         self.assertEqual(tasks.task_record(subject.state, failed_id), predecessor)
         self.assertEqual(st.summary(subject.state)["work_duration_s"], 3.0)
 

@@ -156,7 +156,7 @@ class ProducerSelectionTest(unittest.TestCase):
                         "draft_slice_note": {"task_executor": "worker"},
                         "implement": {
                             "task_executor": "brainstorming",
-                            "configuration": {"max_rounds": 4},
+                            "configuration": {"max_rounds": 24},
                         },
                     },
                 }
@@ -168,7 +168,7 @@ class ProducerSelectionTest(unittest.TestCase):
         self.assertEqual(
             response["slices"][0]["producer_task_executor"]["implement"]
             ["configuration"],
-            {"max_rounds": 4},
+            {"max_rounds": 24},
         )
 
         invalid_maps = (
@@ -177,7 +177,9 @@ class ProducerSelectionTest(unittest.TestCase):
             {
                 "implement": {
                     "task_executor": "brainstorming",
-                    "configuration": {"max_rounds": 0},
+                    # not an integer: a low integer is raised to the floor,
+                    # not refused
+                    "configuration": {"max_rounds": "six"},
                 }
             },
         )
@@ -343,7 +345,7 @@ class ProducerSelectionTest(unittest.TestCase):
             {
                 "task_kind": "draft_slice_note",
                 "task_executor": "brainstorming",
-                "configuration": {"max_rounds": 4},
+                "configuration": {"max_rounds": 24},
             },
         )
         self.assertEqual(status, 200, first)
@@ -552,7 +554,7 @@ class ProducerSelectionTest(unittest.TestCase):
             {
                 "task_kind": "implement",
                 "task_executor": "brainstorming",
-                "configuration": {"max_rounds": 2},
+                "configuration": {"max_rounds": 22},
             },
         )
         self.assertEqual(status, 200)
@@ -574,7 +576,7 @@ class ProducerSelectionTest(unittest.TestCase):
                 "task_kind": "implement",
                 "selection": {
                     "task_executor": "brainstorming",
-                    "configuration": {"max_rounds": 2},
+                    "configuration": {"max_rounds": 22},
                 },
             }],
         )
@@ -932,7 +934,7 @@ class ProducerSelectionTest(unittest.TestCase):
             {
                 "task_kind": "draft_slice_note",
                 "task_executor": "brainstorming",
-                "configuration": {"max_rounds": 4},
+                "configuration": {"max_rounds": 24},
             },
         )
         self.assertEqual(status, 200)
@@ -973,7 +975,7 @@ class ProducerSelectionTest(unittest.TestCase):
         self.assertEqual(durable, admitted)
         self.assertEqual(
             durable["order"]["configuration"],
-            {"max_rounds": 4, "closure_policy": "unanimity"},
+            {"max_rounds": 24, "closure_policy": "unanimity"},
         )
 
     def test_terminal_failure_allows_distinct_successor_selection(self):
@@ -1011,7 +1013,7 @@ class ProducerSelectionTest(unittest.TestCase):
             {
                 "task_kind": "draft_slice_note",
                 "task_executor": "brainstorming",
-                "configuration": {"max_rounds": 2},
+                "configuration": {"max_rounds": 22},
             },
         )
         self.assertEqual(status, 200, response)
@@ -1030,7 +1032,7 @@ class ProducerSelectionTest(unittest.TestCase):
         )
         self.assertNotEqual(successor["id"], predecessor["id"])
         self.assertEqual(successor["order"]["task_executor"], "brainstorming")
-        self.assertEqual(successor["order"]["configuration"]["max_rounds"], 2)
+        self.assertEqual(successor["order"]["configuration"]["max_rounds"], 22)
 
     def test_review_and_fixer_orders_remain_worker_only(self):
         selected = {

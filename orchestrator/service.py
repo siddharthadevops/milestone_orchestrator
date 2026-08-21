@@ -3398,14 +3398,25 @@ def _git_sync_lease(home, workspace):
             _GIT_SYNC_LEASES.discard(key)
 
 
-def _require_unowned_workspace(home, workspace, task_host=None):
+def _require_unowned_workspace(
+    home, workspace, task_host=None, reap=True, live_sessions_only=False
+):
     """Refuse while any orchestrator work owns this worktree.
 
     A milestone driver, live Brainstorming session, or actively executing
     standalone task can mutate the tree.  A sync merging underneath any of
     them would either lose an accepted result or commit transient bytes.
+
+    `reap=False` for callers already holding the registry lock: reaping
+    re-takes that lock on a second fd and would deadlock the process.
+    `live_sessions_only=True` (task ordering) counts a Brainstorming session
+    as owner only while its process is actually running: a paused session
+    is not an agent acting on the tree, and counting it would refuse every
+    later order forever with no visible owner. Git sync keeps the stricter
+    reading (unknown is not evidence of being finished).
     """
-    reap_exited_drivers(home)
+    if reap:
+        reap_exited_drivers(home)
     runs = [
         {"workspace": entry.get("workspace"), "alive": driver_alive(entry),
          "id": entry["id"], "name": entry.get("name")}
@@ -3428,6 +3439,8 @@ def _require_unowned_workspace(home, workspace, task_host=None):
         # A session with no readable state counts as live: unknown is not
         # evidence of being finished.
         if session.get("status") in ("success", "failure"):
+            continue
+        if live_sessions_only and session.get("process") != "running":
             continue
         if gitsync.paths_overlap(session.get("target_path"), workspace):
             raise ApiError(409, WORK_AREA_BUSY)
@@ -4019,15 +4032,88 @@ def _resolve_direct_task_order(home, who, body):
         _raise_task_request(exc)
 
 
+def stop_task(home, who, task_id, host):
+    """Stop one running standalone task the caller may see.
+
+    Milestone tasks are stopped through their run (Stop on the run); a
+    task that is not running here is not an error worth a retry, so the
+    answer says so instead of failing."""
+    direct = task_api.StandaloneTaskStore(home)
+    try:
+        record = direct.record(task_id)
+    except tasks.TaskRecordError:
+        # Not a standalone task: either unknown, or a milestone task.
+        read_task(home, who, task_id)  # 404/403 as appropriate
+        raise ApiError(409, "milestone tasks are stopped through their run")
+    allowed = _allowed_task_projects(home, who)
+    if allowed is not None and _task_project(record) not in allowed:
+        raise ApiError(403, FORBIDDEN)
+    if record["result"] is not None:
+        return {"stopped": False, "state": "terminal"}
+    reason = "stopped by operator"
+    email = (who or {}).get("email")
+    if email:
+        reason = "stopped by %s" % email
+    delivered = host.stop(task_id, reason)
+    return {"stopped": bool(delivered), "state": "stopping" if delivered
+            else "not_running"}
+
+
+def delete_task(home, who, task_id, host):
+    """Delete one terminal standalone task the caller may see: its record,
+    its call marker, its private Brainstorming work area, and the session it
+    owned. Running tasks are stopped first; milestone tasks live in their
+    run and are not deleted here."""
+    direct = task_api.StandaloneTaskStore(home)
+    try:
+        record = direct.record(task_id)
+    except tasks.TaskRecordError:
+        read_task(home, who, task_id)  # 404/403 as appropriate
+        raise ApiError(409, "milestone tasks are deleted with their run")
+    allowed = _allowed_task_projects(home, who)
+    if allowed is not None and _task_project(record) not in allowed:
+        raise ApiError(403, FORBIDDEN)
+    if record["result"] is None:
+        raise ApiError(409, "stop the task before deleting it")
+    session_id = task_api.task_session_id(home, record, host)
+    if session_id:
+        try:
+            brainstorming_lifecycle.delete_session(
+                home, session_id, lambda _record: True, purge=True
+            )
+        except brainstorming_lifecycle.PublicLifecycleError as exc:
+            if exc.code != brainstorming_lifecycle.UNKNOWN_SESSION:
+                raise ApiError(409, "the task's discussion could not be "
+                               "discarded: %s" % exc.code)
+        except Exception:
+            # Best-effort: the task goes; a leftover session record is
+            # bookkeeping the session routes can still discard.
+            pass
+    removed = direct.delete(task_id)
+    if removed is not None:
+        task_api.forget_task_evidence(home, removed)
+    return {"deleted": removed is not None, "id": task_id}
+
+
 def create_task(home, who, body, host):
     order, staffing, primary, project = _resolve_direct_task_order(
         home, who, body
     )
     store = task_api.StandaloneTaskStore(home)
     resolver = lambda: _direct_task_config(home, project)
+    # Reap outside the lock: reaping takes the registry lock itself.
+    reap_exited_drivers(home)
     with registry.locked(home):
         if workspace_sync_in_flight(primary):
             raise ApiError(409, WORK_AREA_BUSY)
+        # One tree, one agent at a time: a milestone driver, a live
+        # Brainstorming session, or another standalone task already
+        # editing this work area refuses a second order (operator,
+        # 2026-08-18 — two identical orders raced on the same repo).
+        _require_unowned_workspace(
+            home, primary, task_host=host, reap=False,
+            live_sessions_only=True,
+        )
         record = store.admit_locked(order, staffing, primary)
         try:
             host.start(record, resolver)
@@ -4099,6 +4185,65 @@ def visible_tasks(home, who):
             record for record in direct if _task_project(record) in allowed
         ]
     return direct + _registered_task_records(home, allowed)
+
+
+def visible_direct_task_rows(home, who, limit=None):
+    """Sidebar listing: standalone tasks only, newest admission first.
+
+    Each row is `{admitted_at, record}`; milestone tasks are not listed here
+    (they live inside their run). `limit` bounds each project's page from
+    the newest end (running tasks always included); a cursor-based
+    continuation is left for a later step, the store already lists by
+    prefix with cursor and limit."""
+    allowed = _allowed_task_projects(home, who)
+    rows = task_api.StandaloneTaskStore(home).documents()
+    if allowed is not None:
+        rows = [
+            row for row in rows if _task_project(row["record"]) in allowed
+        ]
+    rows.reverse()
+    if limit is None:
+        return rows
+    # The bound is per project, so a quiet project's newest tasks are not
+    # pushed out by a busy one; running tasks always ride, whatever the
+    # bound (they are the ones you may need to stop).
+    kept, seen = [], {}
+    for row in rows:
+        project = _task_project(row["record"]) or ""
+        running = row["record"].get("result") is None
+        count = seen.get(project, 0)
+        if running or count < limit:
+            kept.append(row)
+            if not running:
+                seen[project] = count + 1
+    return kept
+
+
+def _sidebar_task_row(row):
+    """A light row for the sidebar: never the native result (which can be
+    hundreds of kilobytes of raw agent output) nor the full request."""
+    record = row["record"]
+    order = record.get("order") or {}
+    request = order.get("request") or {}
+    result = record.get("result")
+    text = str(request.get("request") or "").strip()
+    return {
+        "admitted_at": row["admitted_at"],
+        "record": {
+            "id": record.get("id"),
+            "order": {
+                "task_executor": order.get("task_executor"),
+                "request": {
+                    "request": text.split("\n", 1)[0][:200],
+                    "work_area": request.get("work_area") or {},
+                },
+            },
+            "result": None if result is None else {
+                "status": result.get("status"),
+                "reason": result.get("reason"),
+            },
+        },
+    }
 
 
 def _visible_run_task_state(home, who, run_id):
@@ -4251,6 +4396,20 @@ def make_handler(home, task_host=None):
                     })
                 elif route == "/api/tasks":
                     run_id = query.get("run_id")
+                    if query.get("scope") == "direct":
+                        limit = query.get("limit")
+                        if limit is not None:
+                            if not limit.isdigit() or int(limit) <= 0:
+                                raise ApiError(400, "limit must be a positive integer")
+                            limit = int(limit)
+                        self._json(200, {
+                            "ok": True,
+                            "rows": [
+                                _sidebar_task_row(row) for row in
+                                visible_direct_task_rows(home, who, limit)
+                            ],
+                        })
+                        return
                     self._json(
                         200,
                         {
@@ -4265,13 +4424,17 @@ def make_handler(home, task_host=None):
                 elif route.startswith("/api/tasks/"):
                     parts = route.rstrip("/").split("/")
                     if len(parts) == 4 and parts[3]:
-                        self._json(200, {
-                            "ok": True,
-                            "task": read_task(
-                                home, who, parts[3],
-                                run_id=query.get("run_id"),
-                            ),
-                        })
+                        record = read_task(
+                            home, who, parts[3], run_id=query.get("run_id")
+                        )
+                        payload = {"ok": True, "task": record}
+                        if query.get("run_id") is None:
+                            session_id = task_api.task_session_id(
+                                home, record, task_host
+                            )
+                            if session_id:
+                                payload["session_id"] = session_id
+                        self._json(200, payload)
                     else:
                         self._json(404, {"ok": False, "error": "not found"})
                 elif route == "/api/runs":
@@ -4475,6 +4638,14 @@ def make_handler(home, task_host=None):
                 if route == "/api/tasks":
                     task = create_task(home, who, self._task_body(), task_host)
                     self._json(201, {"ok": True, "task": task})
+                elif (
+                    route.startswith("/api/tasks/")
+                    and len(route.rstrip("/").split("/")) == 5
+                    and route.rstrip("/").split("/")[4] == "stop"
+                ):
+                    self._json(200, {"ok": True, **stop_task(
+                        home, who, route.rstrip("/").split("/")[3], task_host
+                    )})
                 elif route == "/api/brainstorming/sessions":
                     body = self._brainstorming_body()
                     checked = brainstorming_lifecycle.validate_create_body(
@@ -4714,7 +4885,12 @@ def make_handler(home, task_host=None):
                 route, query = self._route()
                 who = self._who()
                 parts = route.rstrip("/").split("/")
-                if (len(parts) == 6 and route.startswith("/api/runs/")
+                if (len(parts) == 4 and route.startswith("/api/tasks/")
+                        and parts[3]):
+                    self._json(200, {"ok": True, **delete_task(
+                        home, who, parts[3], task_host
+                    )})
+                elif (len(parts) == 6 and route.startswith("/api/runs/")
                         and parts[4] == "amendments"):
                     require_run_access(home, who, parts[3])
                     amendments = delete_amendment(home, parts[3], parts[5])
@@ -5013,8 +5189,28 @@ def make_server(home, port, task_host=None):
     # rewritten), so a seed or validation failure here stops startup
     # visibly instead of serving without the guaranteed catalogue entry.
     model_profiles.ensure_default(home)
+    adopt = task_host is None
     if task_host is None:
         task_host = task_api.DirectTaskHost(home)
+    # Standalone tasks left open by the previous service: Brainstorming
+    # ones are re-attached to their session and run to their result,
+    # Worker ones are closed as failed (their call died with the process).
+    # Only for the host this server creates itself: an injected host (tests,
+    # embedding) decides its own adoption.
+    try:
+        outcome = {"adopted": [], "closed": []} if not adopt else task_host.adopt_open_tasks(
+            lambda record: (
+                lambda: _direct_task_config(home, _task_project(record))
+            )
+        )
+        if outcome["adopted"] or outcome["closed"]:
+            print(
+                "standalone tasks after restart: adopted %d, closed %d"
+                % (len(outcome["adopted"]), len(outcome["closed"])),
+                file=sys.stderr,
+            )
+    except Exception as exc:  # startup must not die on bookkeeping
+        print("standalone task adoption failed: %s" % exc, file=sys.stderr)
     return ThreadingHTTPServer(
         ("127.0.0.1", port), make_handler(home, task_host=task_host)
     )

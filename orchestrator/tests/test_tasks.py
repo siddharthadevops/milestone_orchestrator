@@ -118,7 +118,7 @@ class TaskContractsTest(unittest.TestCase):
             {
                 "max_rounds": {
                     "type": "integer",
-                    "minimum": 1,
+                    "minimum": 20,
                     "default": 20,
                 },
                 "closure_policy": {
@@ -150,9 +150,9 @@ class TaskContractsTest(unittest.TestCase):
         )
         self.assertEqual(
             tasks.resolve_configuration(
-                "brainstorming", {"max_rounds": 4}
+                "brainstorming", {"max_rounds": 24}
             ),
-            {"max_rounds": 4, "closure_policy": "unanimity"},
+            {"max_rounds": 24, "closure_policy": "unanimity"},
         )
         self.assertEqual(
             tasks.resolve_configuration(
@@ -166,8 +166,6 @@ class TaskContractsTest(unittest.TestCase):
             ("worker", None),
             ("brainstorming", {"max_rounds": True}),
             ("brainstorming", {"max_rounds": 1.0}),
-            ("brainstorming", {"max_rounds": 0}),
-            ("brainstorming", {"max_rounds": -1}),
             ("brainstorming", {"closure_policy": "consensus"}),
             ("brainstorming", {"agent": "codex"}),
             ("brainstorming", []),
@@ -194,15 +192,15 @@ class TaskContractsTest(unittest.TestCase):
         definition = tasks._TASK_EXECUTOR_BY_ID["brainstorming"][
             "configuration_schema"
         ]["max_rounds"]
-        with mock.patch.dict(definition, {"default": 17}):
+        with mock.patch.dict(definition, {"default": 27}):
             self.assertEqual(
                 tasks.task_executor_catalogue()[1]["configuration_schema"]
                 ["max_rounds"]["default"],
-                17,
+                27,
             )
             self.assertEqual(
                 tasks.resolve_configuration("brainstorming")["max_rounds"],
-                17,
+                27,
             )
 
     def test_request_and_order_contracts(self):
@@ -241,12 +239,12 @@ class TaskContractsTest(unittest.TestCase):
             {
                 "task_executor": "brainstorming",
                 "request": task_request(),
-                "configuration": {"max_rounds": 3},
+                "configuration": {"max_rounds": 3},  # below the floor
             }
         )
         self.assertEqual(
             brainstorming_order["configuration"],
-            {"max_rounds": 3, "closure_policy": "unanimity"},
+            {"max_rounds": 20, "closure_policy": "unanimity"},  # raised
         )
 
         invalid_requests = []

@@ -307,7 +307,7 @@ class DesignUpdateRethinkTest(unittest.TestCase):
         self.assertEqual(unit["design_update"]["changed_paths"], [self.PATHS[0]])
         self.assertEqual(unit["design_update"]["editable_paths"], self.PATHS)
 
-    def test_amendment_can_insert_only_one_future_slice(self):
+    def test_amendment_can_insert_multiple_future_slices(self):
         state, unit = self._state(st.U_FIXING)
         driver = self._driver(state, modern=True)
         driver._save = mock.Mock()
@@ -321,10 +321,13 @@ class DesignUpdateRethinkTest(unittest.TestCase):
             ]
         }
 
-        with self.assertRaisesRegex(drv.StopStep, "at most one"):
-            driver._maybe_update_slices(unit, output)
+        driver._maybe_update_slices(unit, output)
 
-        self.assertEqual(state["milestone"]["slices"][-1]["id"], 2)
+        self.assertEqual(
+            [item["id"] for item in state["milestone"]["slices"]],
+            [1, 2, 3, 4],
+        )
+        self.assertEqual(state["events"][-1]["type"], "slices_updated")
 
     def test_modern_discussion_failure_stops_without_historical_gap_route(self):
         state, unit = self._state(st.U_FIXING)

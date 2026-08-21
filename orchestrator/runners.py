@@ -1273,7 +1273,12 @@ class SubprocessRunner(object):
         return t
 
     def call(self, family, prompt, workspace, model=None, effort=None,
-             timeout_override=None, active_control=None):
+             timeout_override=None, active_control=None,
+             keep_template=False):
+        """One call. `keep_template=True` keeps the plain template transport
+        even when an `active_control` is given: the control then only binds
+        interrupt (kill the worker group), which is what a stop button
+        needs, without switching to the live steerable transport."""
         if family not in self.commands:
             raise RunnerError("no command configured for family %r" % family)
         template = _with_usage_output(
@@ -1283,6 +1288,7 @@ class SubprocessRunner(object):
         return self._call_prepared(
             family, prompt, workspace, template, model, effort,
             timeout_override, _AMBIENT_EXECUTION, active_control,
+            keep_template=keep_template,
         )
 
     def supports_session_continuation(self, family, ambient=False):
@@ -1535,10 +1541,11 @@ class SubprocessRunner(object):
     def _call_prepared(
         self, family, prompt, workspace, template, model, effort, timeout,
         execution_context, control, session_ref=None, persist_session=False,
+        keep_template=False,
     ):
         live_argv = (
             self._live_argv(family, template, session_ref=session_ref)
-            if control else None
+            if control and not keep_template else None
         )
         if live_argv:
             live_argv = [

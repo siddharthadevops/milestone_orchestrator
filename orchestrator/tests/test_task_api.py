@@ -122,12 +122,12 @@ class TaskApiTest(unittest.TestCase):
         definition = tasks._TASK_EXECUTOR_BY_ID["brainstorming"][
             "configuration_schema"
         ]["max_rounds"]
-        with mock.patch.dict(definition, {"default": 17}):
+        with mock.patch.dict(definition, {"default": 27}):
             body = self.request("GET", "/api/task-executors")[1]
             self.assertEqual(body["task_executors"][1]["configuration_schema"]
-                             ["max_rounds"]["default"], 17)
+                             ["max_rounds"]["default"], 27)
             self.assertEqual(tasks.resolve_configuration("brainstorming")
-                             ["max_rounds"], 17)
+                             ["max_rounds"], 27)
 
     def test_direct_order_resolves_access_before_admission(self):
         self.project("mine", self.primary, [access.USER_EMAILS[0]])
@@ -228,7 +228,8 @@ class TaskApiTest(unittest.TestCase):
         raw = '{"status":"need_rethink","artifact":"do-not-parse"}'
 
         class Runner:
-            def call(_self, family, prompt, workspace, model=None, effort=None):
+            def call(_self, family, prompt, workspace, model=None, effort=None,
+                     **_kwargs):
                 seen.append((family, prompt, workspace, model, effort))
                 if fail:
                     raise runners.ProviderResponseError(
@@ -367,7 +368,7 @@ class TaskApiTest(unittest.TestCase):
         host = task_api.DirectTaskHost(self.home, poll_interval=0.01)
         self.start_server(host)
         order = self.order("brainstorming")
-        order["configuration"] = {"max_rounds": 4, "closure_policy": "majority"}
+        order["configuration"] = {"max_rounds": 24, "closure_policy": "majority"}
         with mock.patch.object(brainstorming_tasks, "resolve_staffing", return_value=pins), \
                 mock.patch.object(brainstorming_tasks, "start_task", side_effect=start), \
                 mock.patch.object(brainstorming_tasks, "finish_task", side_effect=finish), \
@@ -377,7 +378,7 @@ class TaskApiTest(unittest.TestCase):
             self.assertEqual(status, 201)
             task_id = body["task"]["id"]
             self.assertEqual(body["task"]["order"]["configuration"],
-                             {"max_rounds": 4, "closure_policy": "majority"})
+                             {"max_rounds": 24, "closure_policy": "majority"})
             self.assertEqual(body["task"]["resolved_staffing"], pins)
             self.assertTrue(effect_started.wait(2))
             self.assertIsNone(task_api.StandaloneTaskStore(self.home).record(task_id)
@@ -843,6 +844,224 @@ class TaskApiTest(unittest.TestCase):
             self.wait_record(record["id"])["result"]["status"], "success"
         )
 
+    def test_stop_closes_a_running_direct_task_as_operator_failure(self):
+        # The stop reaches the worker through the call control (the real
+        # runner binds interrupt to a group kill); whatever the interrupted
+        # worker returns afterwards, the task closes as the operator's stop.
+        entered, released = threading.Event(), threading.Event()
+
+        class Runner:
+            def call(_self, *_args, active_control=None, **_kwargs):
+                active_control._bind(
+                    lambda _text: False,
+                    lambda _reason: (released.set() or True),
+                )
+                entered.set()
+                released.wait(5)
+                return runners.RunnerResult("late clean exit", 0, 0.1)
+
+        host = task_api.DirectTaskHost(
+            self.home, runner_factory=lambda _config, _workspace: Runner()
+        )
+        self.start_server(host)
+        record = self.request("POST", "/api/tasks", self.order())[1]["task"]
+        self.assertTrue(entered.wait(2))
+        status, body = self.request(
+            "POST", "/api/tasks/%s/stop" % record["id"], {}
+        )
+        self.assertEqual((status, body["stopped"], body["state"]),
+                         (200, True, "stopping"))
+        self.assertTrue(released.wait(2))
+        result = self.wait_record(record["id"])["result"]
+        self.assertEqual(result["status"], "failure")
+        self.assertTrue(result["reason"].startswith("stopped by"))
+        # Stopping again is not an error: the task is terminal.
+        status, body = self.request(
+            "POST", "/api/tasks/%s/stop" % record["id"], {}
+        )
+        self.assertEqual((status, body["stopped"], body["state"]),
+                         (200, False, "terminal"))
+        self.assertEqual(
+            self.request("POST", "/api/tasks/no-such-task/stop", {})[0], 404
+        )
+
+    def test_stop_respects_project_access_and_milestone_ownership(self):
+        entered, release = threading.Event(), threading.Event()
+
+        class Runner:
+            def call(_self, *_args, active_control=None, **_kwargs):
+                if active_control is not None:
+                    active_control._bind(
+                        lambda _text: False,
+                        lambda _reason: (release.set() or True),
+                    )
+                entered.set()
+                release.wait(5)
+                return runners.RunnerResult("done", 0, 0.1)
+
+        host = task_api.DirectTaskHost(
+            self.home, runner_factory=lambda _config, _workspace: Runner()
+        )
+        self.start_server(host)
+        # A project the member cannot see: its running task is neither
+        # readable nor stoppable by that member.
+        other = self.directory("other-primary")
+        self.project("other", other)
+        foreign = self.request("POST", "/api/tasks", self.order(
+            work_area={"project": "other", "work_area": "main"}
+        ))[1]["task"]
+        self.assertTrue(entered.wait(2))
+        member = self.member()
+        try:
+            status, body = self.request(
+                "POST", "/api/tasks/%s/stop" % foreign["id"], {}, member
+            )
+            self.assertEqual((status, body["error"]), (403, service.FORBIDDEN))
+            # A milestone task is stopped through its run, never here.
+            state_path = os.path.join(self.tmp.name, "registered-state.json")
+            state = st.new_state("registered", self.primary, {})
+            milestone = tasks.admit_task(
+                state, foreign["order"], {"worker": {"agent": "codex"}}, other
+            )
+            st.save_new(state_path, state)
+            registry.add(self.home, registry.new_entry(
+                "registered", "registered", other, state_path,
+                project="other", work_area="main",
+            ))
+            status, body = self.request(
+                "POST", "/api/tasks/%s/stop" % milestone["id"], {}
+            )
+            self.assertEqual(status, 409)
+            self.assertIn("milestone", body["error"])
+        finally:
+            release.set()
+        self.wait_record(foreign["id"])
+
+    def test_delete_forgets_a_terminal_task_and_refuses_a_running_one(self):
+        entered, release = threading.Event(), threading.Event()
+
+        class Runner:
+            def call(_self, *_args, **_kwargs):
+                entered.set()
+                release.wait(5)
+                return runners.RunnerResult("done", 0, 0.1)
+
+        host = task_api.DirectTaskHost(
+            self.home, runner_factory=lambda _config, _workspace: Runner()
+        )
+        self.start_server(host)
+        record = self.request("POST", "/api/tasks", self.order())[1]["task"]
+        self.assertTrue(entered.wait(2))
+        try:
+            status, body = self.request(
+                "DELETE", "/api/tasks/%s" % record["id"]
+            )
+            self.assertEqual(status, 409)
+            self.assertIn("stop", body["error"])
+        finally:
+            release.set()
+        self.wait_record(record["id"])
+        marker = task_api._marker_path(self.home, record["id"])
+        self.assertTrue(os.path.exists(marker))
+        status, body = self.request("DELETE", "/api/tasks/%s" % record["id"])
+        self.assertEqual((status, body["deleted"]), (200, True))
+        self.assertFalse(os.path.exists(marker))
+        with self.assertRaises(tasks.TaskRecordError):
+            task_api.StandaloneTaskStore(self.home).record(record["id"])
+        self.assertEqual(
+            self.request("GET", "/api/tasks/%s" % record["id"])[0], 404
+        )
+        self.assertEqual(
+            self.request("DELETE", "/api/tasks/%s" % record["id"])[0], 404
+        )
+        # A member without access to the task's project cannot delete it.
+        other = self.directory("other-primary")
+        self.project("other", other)
+        foreign = self.request("POST", "/api/tasks", self.order(
+            work_area={"project": "other", "work_area": "main"}
+        ))[1]["task"]
+        release.set()
+        self.wait_record(foreign["id"])
+        status, body = self.request(
+            "DELETE", "/api/tasks/%s" % foreign["id"], headers=self.member()
+        )
+        self.assertEqual((status, body["error"]), (403, service.FORBIDDEN))
+
+    def test_restart_adopts_open_brainstorming_and_closes_open_worker_tasks(self):
+        # Records outlive the process; a new host re-attaches Brainstorming
+        # tasks (their session is independent) and closes Worker ones.
+        store = task_api.StandaloneTaskStore(self.home)
+        worker = store.admit(
+            self.order(), {"worker": {"agent": "codex"}}, self.primary
+        )
+        discussion = store.admit(
+            self.order(executor="brainstorming"),
+            {"dispatch_authority": "static", "participants": []},
+            self.primary,
+        )
+        done = store.admit(
+            self.order(), {"worker": {"agent": "codex"}}, self.primary
+        )
+        store.record_result(done["id"], {
+            "status": "success", "duration_s": 0.0,
+            "token_usage": None, "token_usage_partial": True,
+            "cost": None, "cost_partial": True, "native_result": "done",
+        })
+        host = task_api.DirectTaskHost(self.home)
+        seen = []
+        with mock.patch.object(
+            task_api.brainstorming_tasks, "start_task",
+            side_effect=lambda state, task_id, *_a, **_k: (
+                seen.append(task_id) or None
+            ),
+        ):
+            outcome = host.adopt_open_tasks(lambda _record: (lambda: {}))
+            deadline = time.time() + 5
+            while host.owns_workspace(self.primary) and time.time() < deadline:
+                time.sleep(0.01)
+        self.assertEqual(outcome, {
+            "adopted": [discussion["id"]], "closed": [worker["id"]]
+        })
+        self.assertEqual(seen, [discussion["id"]])
+        closed = store.record(worker["id"])["result"]
+        self.assertEqual(closed["status"], "failure")
+        self.assertIn("service restarted", closed["reason"])
+        self.assertIsNone(store.record(discussion["id"])["result"])
+        self.assertEqual(store.record(done["id"])["result"]["status"], "success")
+
+    def test_second_order_on_a_busy_work_area_is_refused(self):
+        entered, release = threading.Event(), threading.Event()
+
+        class Runner:
+            def call(_self, *_args, **_kwargs):
+                entered.set()
+                release.wait(5)
+                return runners.RunnerResult("done", 0, 0.1)
+
+        host = task_api.DirectTaskHost(
+            self.home, runner_factory=lambda _config, _workspace: Runner()
+        )
+        self.start_server(host)
+        first = self.request("POST", "/api/tasks", self.order())[1]["task"]
+        self.assertTrue(entered.wait(2))
+        try:
+            status, body = self.request("POST", "/api/tasks", self.order())
+            self.assertEqual(
+                (status, body["error"]), (409, service.WORK_AREA_BUSY)
+            )
+        finally:
+            release.set()
+        self.assertEqual(
+            self.wait_record(first["id"])["result"]["status"], "success"
+        )
+        # Once the tree is free again, a new order is admitted.
+        entered.clear()
+        second = self.request("POST", "/api/tasks", self.order())[1]["task"]
+        self.assertNotEqual(first["id"], second["id"])
+        self.assertTrue(entered.wait(2))
+        release.set()
+        self.wait_record(second["id"])
+
     def test_direct_interruption_adds_no_retry_or_liveness_claim(self):
         first = self.request("POST", "/api/tasks", self.order())[1]["task"]
         second = self.request("POST", "/api/tasks", self.order())[1]["task"]
@@ -851,13 +1070,17 @@ class TaskApiTest(unittest.TestCase):
                           ["result"])
         for method, suffix in (
             ("POST", "start"), ("POST", "retry"), ("POST", "cancel"),
-            ("DELETE", ""),
         ):
             path = "/api/tasks/%s%s" % (
                 first["id"], "/" + suffix if suffix else ""
             )
             with self.subTest(method=method, path=path):
                 self.assertEqual(self.request(method, path, {})[0], 404)
+        # Stop and delete exist (operator, 2026-08-18); delete refuses a
+        # running task rather than implying any cancel semantics.
+        self.assertEqual(
+            self.request("DELETE", "/api/tasks/%s" % first["id"])[0], 409
+        )
 
 
 if __name__ == "__main__":

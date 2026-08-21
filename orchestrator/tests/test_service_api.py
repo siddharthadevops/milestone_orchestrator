@@ -156,9 +156,16 @@ class ServiceApiTest(unittest.TestCase):
         # which every user who can see the project now gets.
         self.assertNotIn("+ New milestone", text)
         self.assertIn('onclick="newMilestone(event,', text)
-        self.assertIn('onclick="newBrainstorming(event,', text)
         self.assertIn("<span>New milestone</span>", text)
-        self.assertIn("<span>New brainstorming</span>", text)
+        # Brainstorming is ordered as a task (operator, 2026-08-18): the
+        # standalone "New brainstorming" entry left the project menu; the
+        # sidebar lists standalone tasks (newest first, bounded page)
+        # instead of every session.
+        self.assertNotIn('onclick="newBrainstorming(event,', text)
+        self.assertNotIn("<span>New brainstorming</span>", text)
+        self.assertIn('onclick="newTask(event,', text)
+        self.assertIn('"/api/tasks?scope=direct&limit=" + SIDEBAR_TASK_LIMIT', text)
+        self.assertNotIn('api("/api/brainstorming/sessions").then', text)
         self.assertIn(
             'id="b_rounds" type="number" min="1" step="1" value="20"',
             text,
@@ -221,7 +228,11 @@ class ServiceApiTest(unittest.TestCase):
         self.assertIn("picker.transform", text)
         self.assertIn("function sidebarItems", text)
         self.assertIn("last_action_epoch: r.last_action_epoch", text)
-        self.assertIn("last_action_epoch: s.last_action_epoch", text)
+        # Sidebar task rows (standalone tasks) ride beside runs; sessions
+        # no longer feed the sidebar.
+        self.assertIn('kind: "task"', text)
+        self.assertIn("function taskRow", text)
+        self.assertNotIn('kind: "brainstorm"', text)
         self.assertIn("const action = Number(item.last_action_epoch)", text)
         self.assertIn("function sessionRow", text)
         self.assertIn("function openSession", text)
