@@ -5645,19 +5645,22 @@ class Driver(object):
             else None
         )
         try:
-            terminal = brainstorming_tasks.finish_task(
-                self.state,
-                task_id,
-                home,
-                wait["session_id"],
-                lambda effect_request: brainstorming_tasks.apply_agreed_effects(
+            terminal = self._with_inspection_retry(
+                lambda: brainstorming_tasks.finish_task(
+                    self.state,
+                    task_id,
                     home,
                     wait["session_id"],
-                    task_id,
-                    effect_request,
-                    dispatch_authority=dispatch_authority,
-                    staffing_selection=staffing_selection,
-                ),
+                    lambda effect_request:
+                        brainstorming_tasks.apply_agreed_effects(
+                            home,
+                            wait["session_id"],
+                            task_id,
+                            effect_request,
+                            dispatch_authority=dispatch_authority,
+                            staffing_selection=staffing_selection,
+                        ),
+                )
             )
         except Exception as exc:
             # Inspection and recoverable service faults leave the task and its
@@ -5783,6 +5786,26 @@ class Driver(object):
             **({"task_id": task_id} if task_id is not None else {}),
         )
 
+    _INSPECTION_ATTEMPTS = 3
+    _INSPECTION_RETRY_DELAY_S = 2.0
+
+    def _with_inspection_retry(self, call):
+        """Retry one lifecycle read briefly before treating it as fatal.
+
+        An UNAVAILABLE projection is routinely transient — the shared session
+        store may be mid-write by another session's executor — and a run must
+        not die for a read that succeeds seconds later. Every other error
+        keeps its meaning and its first-raise timing.
+        """
+        for _ in range(self._INSPECTION_ATTEMPTS - 1):
+            try:
+                return call()
+            except brainstorming_lifecycle.PublicLifecycleError as exc:
+                if exc.code != brainstorming_lifecycle.UNAVAILABLE:
+                    raise
+                time.sleep(self._INSPECTION_RETRY_DELAY_S)
+        return call()
+
     def _do_brainstorming_wait(self):
         unit = st.current_unit(self.state)
         wait = copy.deepcopy(unit.get("brainstorming_wait") or {})
@@ -5798,10 +5821,12 @@ class Driver(object):
         if (wait.get("origin") or {}).get("task_executor") == "brainstorming":
             return self._do_brainstorming_production_wait(unit, wait)
         try:
-            handoff = brainstorming_milestone.terminal_handoff(
-                self.state,
-                session_id,
-                active_home=self.model_profiles_home,
+            handoff = self._with_inspection_retry(
+                lambda: brainstorming_milestone.terminal_handoff(
+                    self.state,
+                    session_id,
+                    active_home=self.model_profiles_home,
+                )
             )
         except brainstorming_lifecycle.PublicLifecycleError as exc:
             if exc.code != brainstorming_lifecycle.UNKNOWN_SESSION:

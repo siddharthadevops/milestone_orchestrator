@@ -5,6 +5,7 @@ import tempfile
 import unittest
 from unittest import mock
 
+from orchestrator import brainstorming_lifecycle
 from orchestrator import brainstorming_milestone
 from orchestrator import contracts
 from orchestrator import driver as drv
@@ -350,6 +351,49 @@ class DesignUpdateRethinkTest(unittest.TestCase):
         self.assertNotIn("brainstorming_wait", unit)
         self.assertEqual(state["failure"]["type"], "brainstorming_no_agreement")
         self.assertEqual(unit["status"], st.U_FAILED)
+
+    def test_transient_unavailable_inspection_retries_before_failing(self):
+        state, unit = self._state(st.U_FIXING)
+        driver = self._driver(state, modern=True)
+        driver._INSPECTION_RETRY_DELAY_S = 0
+        unit["brainstorming_wait"] = self._wait(unit)
+        driver._save = mock.Mock()
+
+        unavailable = brainstorming_lifecycle.PublicLifecycleError(
+            503, brainstorming_lifecycle.UNAVAILABLE
+        )
+        with mock.patch.object(
+            brainstorming_milestone,
+            "terminal_handoff",
+            side_effect=[unavailable, unavailable, None],
+        ) as handoff:
+            outcome = driver._do_brainstorming_wait()
+
+        self.assertIn("waiting for Brainstorming session", outcome)
+        self.assertEqual(handoff.call_count, 3)
+        self.assertIsNone(state.get("failure"))
+
+    def test_persistent_unavailable_inspection_still_fails_the_run(self):
+        state, unit = self._state(st.U_FIXING)
+        driver = self._driver(state, modern=True)
+        driver._INSPECTION_RETRY_DELAY_S = 0
+        unit["brainstorming_wait"] = self._wait(unit)
+        driver._save = mock.Mock()
+
+        with mock.patch.object(
+            brainstorming_milestone,
+            "terminal_handoff",
+            side_effect=brainstorming_lifecycle.PublicLifecycleError(
+                503, brainstorming_lifecycle.UNAVAILABLE
+            ),
+        ) as handoff:
+            with self.assertRaisesRegex(drv.StopStep, "inspection failed"):
+                driver._do_brainstorming_wait()
+
+        self.assertEqual(handoff.call_count, 3)
+        self.assertEqual(
+            state["failure"]["type"], "brainstorming_operational"
+        )
 
     def test_missing_or_false_flag_never_restores_legacy_gap_route(self):
         for modern in (None, False):
