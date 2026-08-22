@@ -1325,6 +1325,10 @@ def resume_run(state):
         # Grant fresh convergence state: a run that exhausted max_fix_loops
         # must not re-fail instantly on resume.
         unit["fix_loop_rounds"] = 0
+        deferred_fix = unit.get("deferred_fix_episode")
+        if isinstance(deferred_fix, dict):
+            deferred_fix["fix_loop_rounds"] = 0
+            deferred_fix["phantom_retried"] = False
         unit["verify_fix_attempts"] = {"pre_review": 0, "pre_seal": 0}
         unit.pop("baseline_unstable_runs", None)
         # The gap-repair back-edge counter is a convergence cap too: a
@@ -2353,6 +2357,10 @@ def _repair_episodes(state):
 # itself opens the entry ("waiting"); these close it.
 _BRAINSTORMING_OUTCOMES = {
     "brainstorming_builder_continued": "continued",
+    "brainstorming_implementation_queued": "implementation_queued",
+    "brainstorming_review_handoff_migrated_to_implementation": (
+        "implementation_queued"
+    ),
     "brainstorming_review_restarted": "restarted",
     "brainstorming_failure_routed": "failed",
     "brainstorming_operational_detached": "detached",

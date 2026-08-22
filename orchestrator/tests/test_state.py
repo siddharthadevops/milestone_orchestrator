@@ -2411,7 +2411,7 @@ class TestSummary(TempWorkspaceCase):
             session_id="bs-one", target_path="docs/one.md",
         )
         st.append_event(
-            state, "brainstorming_review_restarted", unit="skeleton",
+            state, "brainstorming_implementation_queued", unit="skeleton",
             kind=contracts.KIND_REVIEW_ROUND, session_id="bs-one",
             accepted_target_revision="brainstorming-sha256:" + "a" * 64,
         )
@@ -2435,14 +2435,38 @@ class TestSummary(TempWorkspaceCase):
             kind=contracts.KIND_REVIEW_ROUND, family="codex",
             session_id="bs-three", target_path="docs/three.md",
         )
+        st.append_event(
+            state, "brainstorming_wait_started", unit="skeleton",
+            kind=contracts.KIND_REVIEW_ROUND, family="codex",
+            session_id="bs-legacy", target_path="docs/legacy.md",
+        )
+        st.append_event(
+            state, "brainstorming_review_restarted", unit="skeleton",
+            kind=contracts.KIND_REVIEW_ROUND, session_id="bs-legacy",
+        )
+        st.append_event(
+            state,
+            "brainstorming_review_handoff_migrated_to_implementation",
+            unit="skeleton", from_kind=contracts.KIND_REVIEW_ROUND,
+            to_kind=contracts.KIND_FIX_FINDINGS, session_id="bs-legacy",
+        )
 
         views = {view["unit"]: view for view in st.summary(state)["units"]}
         detours = views["skeleton"]["brainstormings"]
         self.assertEqual(
             [(d["session_id"], d["kind"], d["outcome"]) for d in detours],
             [
-                ("bs-one", contracts.KIND_REVIEW_ROUND, "restarted"),
+                (
+                    "bs-one",
+                    contracts.KIND_REVIEW_ROUND,
+                    "implementation_queued",
+                ),
                 ("bs-two", contracts.KIND_IMPLEMENT, "detached"),
+                (
+                    "bs-legacy",
+                    contracts.KIND_REVIEW_ROUND,
+                    "implementation_queued",
+                ),
             ],
         )
         self.assertEqual(detours[0]["family"], "codex")
@@ -2842,12 +2866,27 @@ class TestTypedResume(TempWorkspaceCase):
         state = make_state(self.workspace)
         unit = unit_in_status(state, st.U_FIXING)
         unit["fix_loop_rounds"] = 6
+        unit["deferred_fix_episode"] = {
+            "fix_loop_rounds": 6,
+            "phantom_retried": True,
+            "fix_source": {"preserve_dirty_on_killed_fix": True},
+        }
         unit["verify_fix_attempts"] = {"pre_review": 4, "pre_seal": 0}
         unit["baseline_unstable_runs"] = 4
         st.fail_run(state, "did not converge after 6 loops", unit=unit)
         st.resume_run(state)
         self.assertEqual(unit["status"], st.U_FIXING)
         self.assertEqual(unit["fix_loop_rounds"], 0)
+        self.assertEqual(
+            unit["deferred_fix_episode"]["fix_loop_rounds"], 0
+        )
+        self.assertFalse(
+            unit["deferred_fix_episode"]["phantom_retried"]
+        )
+        self.assertTrue(
+            unit["deferred_fix_episode"]["fix_source"]
+            ["preserve_dirty_on_killed_fix"]
+        )
         self.assertEqual(unit["verify_fix_attempts"],
                          {"pre_review": 0, "pre_seal": 0})
         self.assertNotIn("baseline_unstable_runs", unit)

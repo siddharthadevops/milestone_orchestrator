@@ -20,6 +20,7 @@ from orchestrator import state as st
 from orchestrator import tasks
 from orchestrator import verifiers
 from orchestrator.tests.test_driver_fixes import make_config
+from orchestrator.tests.test_driver_mock import fix_ok, triaged, write_file
 
 
 def closing_summary():
@@ -2656,6 +2657,109 @@ class MilestoneDriverRethinkTest(unittest.TestCase):
             st.U_DELTA_REVIEW,
         )
 
+    def test_builder_application_can_edit_its_accepted_design_target(self):
+        workspace = os.path.join(self.tmp.name, "builder-design-target")
+        os.makedirs(os.path.join(workspace, "proposals"))
+        path = self._state_path(status=st.U_PENDING, workspace=workspace)
+        target = drv.Driver(
+            path, runner=runners.MockRunner([])
+        )._skeleton_artifact()
+        os.makedirs(os.path.dirname(os.path.join(workspace, target)), exist_ok=True)
+        with open(os.path.join(workspace, target), "w", encoding="utf-8") as fh:
+            fh.write("# Before\n")
+        runner = runners.MockRunner([
+            {
+                "expect_kind": contracts.KIND_IMPLEMENT,
+                "response": rethink(
+                    contracts.KIND_IMPLEMENT,
+                    target=target,
+                ),
+            },
+            {
+                "expect_kind": contracts.KIND_IMPLEMENT,
+                "response": {
+                    "status": "ok",
+                    "kind": contracts.KIND_IMPLEMENT,
+                    "files_changed": [target],
+                },
+                "side_effect": write_file(target, "# Accepted\n"),
+            },
+        ])
+
+        with mock.patch.object(
+            adapter, "create_session", return_value=self._created()
+        ):
+            drv.Driver(path, runner=runner).step()
+        with mock.patch.object(
+            adapter, "terminal_handoff", return_value=self._handoff()
+        ):
+            drv.Driver(path, runner=runner).step()
+        with mock.patch.object(
+            drv.Driver, "_enforce_sealed_artifacts", autospec=True,
+            return_value=[],
+        ) as guard:
+            drv.Driver(path, runner=runner).step()
+
+        self.assertIn(target, guard.call_args.kwargs["editable_sealed"])
+        with open(os.path.join(workspace, target), encoding="utf-8") as fh:
+            self.assertEqual(fh.read(), "# Accepted\n")
+
+    def test_builder_application_retry_retires_unused_target_authority(self):
+        workspace = os.path.join(self.tmp.name, "builder-target-retry")
+        os.makedirs(os.path.join(workspace, "proposals"))
+        path = self._state_path(status=st.U_PENDING, workspace=workspace)
+        target = drv.Driver(
+            path, runner=runners.MockRunner([])
+        )._skeleton_artifact()
+        os.makedirs(os.path.dirname(os.path.join(workspace, target)), exist_ok=True)
+        with open(os.path.join(workspace, target), "w", encoding="utf-8") as fh:
+            fh.write("# Stable\n")
+        runner = runners.MockRunner([
+            {
+                "expect_kind": contracts.KIND_IMPLEMENT,
+                "response": rethink(
+                    contracts.KIND_IMPLEMENT,
+                    target=target,
+                ),
+            },
+            {
+                "expect_kind": contracts.KIND_IMPLEMENT,
+                "response": {
+                    "status": "blocked",
+                    "kind": contracts.KIND_IMPLEMENT,
+                    "blocked_reason": "temporary operator dependency",
+                },
+            },
+            {
+                "expect_kind": contracts.KIND_IMPLEMENT,
+                "response": {
+                    "status": "ok",
+                    "kind": contracts.KIND_IMPLEMENT,
+                    "files_changed": [],
+                },
+            },
+        ])
+
+        with mock.patch.object(
+            adapter, "create_session", return_value=self._created()
+        ):
+            drv.Driver(path, runner=runner).step()
+        with mock.patch.object(
+            adapter, "terminal_handoff", return_value=self._handoff()
+        ):
+            drv.Driver(path, runner=runner).step()
+        failed = st.load(path)
+        self.assertIn("design_update", st.current_unit(failed))
+        st.resume_run(failed)
+        st.save(path, failed)
+        with mock.patch.object(
+            adapter, "terminal_handoff", return_value=self._handoff()
+        ):
+            drv.Driver(path, runner=runner).step()
+        drv.Driver(path, runner=runner).step()
+
+        self.assertNotIn("design_update", st.current_unit(st.load(path)))
+
     def test_suite_repair_rethink_continuation_keeps_suite_contract(self):
         command = "python3 -m unittest discover -s tests"
         path = self._state_path(
@@ -3203,27 +3307,137 @@ class MilestoneDriverRethinkTest(unittest.TestCase):
             ],
         )
 
-    def test_review_and_delta_restart_fresh(self):
-        path = self._state_path(status=st.U_ROUNDS)
+    def test_review_and_delta_queue_accepted_result_for_fixer(self):
         finding = report_finding()
-        runner = runners.MockRunner(
-            [
-                {
-                    "expect_kind": contracts.KIND_REVIEW_ROUND,
-                    "response": rethink(
-                        contracts.KIND_REVIEW_ROUND, finding=finding
-                    ),
-                },
-                {
-                    "expect_kind": contracts.KIND_REVIEW_ROUND,
-                    "response": {
-                        "status": "ok",
-                        "kind": contracts.KIND_REVIEW_ROUND,
-                        "findings": [],
+        for index, (kind, status) in enumerate((
+            (contracts.KIND_REVIEW_ROUND, st.U_ROUNDS),
+            (contracts.KIND_DELTA_REVIEW, st.U_DELTA_REVIEW),
+        )):
+            with self.subTest(kind=kind):
+                workspace = os.path.join(self.tmp.name, "apply-%d" % index)
+                os.makedirs(os.path.join(workspace, "proposals"))
+                path = self._state_path(status=status, workspace=workspace)
+                state = st.load(path)
+                unit = st.current_unit(state)
+                if kind == contracts.KIND_DELTA_REVIEW:
+                    unit["fix_queue"] = [copy.deepcopy(finding)]
+                    unit["fix_source"] = {
+                        "type": "round",
+                        "origin_type": "round",
+                        "family": "claude",
+                        "source_round_id": "round-1",
+                        "return_to": st.U_ROUNDS,
+                    }
+                    st.save(path, state)
+                runner = runners.MockRunner([
+                    {
+                        "expect_kind": kind,
+                        "response": rethink(kind, finding=finding),
                     },
-                },
-            ]
+                    {
+                        "expect_kind": contracts.KIND_FIX_FINDINGS,
+                        "response": fix_ok([
+                            triaged(
+                                finding["id"],
+                                "rejected",
+                                severity=finding["severity"],
+                                consultation={
+                                    "resolution": "The accepted result "
+                                    "requires no workspace change."
+                                },
+                            )
+                        ], brainstorming_application={
+                            "finding_id": finding["id"],
+                            "implementation_required": False,
+                            "reason": "The accepted result needs no edit.",
+                        }),
+                    },
+                ])
+                with mock.patch.object(
+                    drv.gitops, "worktree_diff", return_value="pending delta"
+                ), mock.patch.object(
+                    adapter, "create_session", return_value=self._created()
+                ):
+                    drv.Driver(path, runner=runner).step()
+                with mock.patch.object(
+                    adapter, "terminal_handoff", return_value=self._handoff()
+                ):
+                    drv.Driver(path, runner=runner).step()
+
+                queued = st.current_unit(st.load(path))
+                self.assertEqual(queued["status"], st.U_FIXING)
+                self.assertEqual(
+                    [entry["id"] for entry in queued["fix_queue"]],
+                    [finding["id"]],
+                )
+                self.assertEqual(len(runner.calls), 1)
+                self.assertEqual(
+                    queued["fix_source"]["return_to"], st.U_ROUNDS
+                )
+                self.assertIsInstance(
+                    queued["fix_source"]["brainstorming_agreement"]
+                    ["baseline_fingerprint"],
+                    str,
+                )
+                if kind == contracts.KIND_DELTA_REVIEW:
+                    self.assertGreaterEqual(queued["fix_loop_rounds"], 1)
+
+                drv.Driver(path, runner=runner).step()
+                self.assertEqual(runner.calls[1][1], contracts.KIND_FIX_FINDINGS)
+                self.assertIn(
+                    "BRAINSTORMING AGREEMENT — APPLY NOW", runner.calls[1][2]
+                )
+                self.assertNotIn("FRESH REVIEW REQUIRED", runner.calls[1][2])
+
+    def test_review_agreement_is_materialized_before_delta_review(self):
+        workspace = os.path.join(self.tmp.name, "materialize-before-review")
+        os.makedirs(os.path.join(workspace, "proposals"))
+        config = make_config(
+            git={"enabled": True},
+            snapshot_exclude_dirs=[],
+            error_classifier=False,
+            infra_retry_backoff_s=[],
         )
+        path = self._state_path(
+            status=st.U_ROUNDS,
+            workspace=workspace,
+            config=config,
+        )
+        finding = report_finding()
+        runner = runners.MockRunner([
+            {
+                "expect_kind": contracts.KIND_REVIEW_ROUND,
+                "response": rethink(
+                    contracts.KIND_REVIEW_ROUND, finding=finding
+                ),
+            },
+            {
+                "expect_kind": contracts.KIND_FIX_FINDINGS,
+                "response": fix_ok([
+                    triaged(
+                        finding["id"],
+                        "rejected",
+                        severity=finding["severity"],
+                        consultation={
+                            "resolution": "The agreed clarification is enough."
+                        },
+                        prevention={
+                            "documented_in": "applied.txt",
+                            "note": "Clarify the misleading boundary.",
+                        },
+                    )
+                ], files_changed=["applied.txt"]),
+                "side_effect": write_file("applied.txt", "accepted\n"),
+            },
+            {
+                "expect_kind": contracts.KIND_DELTA_REVIEW,
+                "response": {
+                    "status": "ok",
+                    "kind": contracts.KIND_DELTA_REVIEW,
+                    "findings": [],
+                },
+            },
+        ])
         with mock.patch.object(
             adapter, "create_session", return_value=self._created()
         ):
@@ -3232,97 +3446,400 @@ class MilestoneDriverRethinkTest(unittest.TestCase):
             adapter, "terminal_handoff", return_value=self._handoff()
         ):
             drv.Driver(path, runner=runner).step()
-        self.assertEqual(len(runner.calls), 1)
-        drv.Driver(path, runner=runner).step()
-        state = st.load(path)
-        self.assertEqual(len(st.current_unit(state)["rounds"]), 1)
-        self.assertIn(
-            "BRAINSTORMING RETURN (FRESH REVIEW REQUIRED)",
-            runner.calls[1][2],
-        )
-        self.assertEqual(runner.session_calls, [])
 
-        delta_workspace = os.path.join(self.tmp.name, "delta")
-        os.makedirs(os.path.join(delta_workspace, "proposals"))
-        delta_config = make_config(
+        self.assertFalse(os.path.exists(os.path.join(workspace, "applied.txt")))
+        drv.Driver(path, runner=runner).step()
+        self.assertTrue(os.path.exists(os.path.join(workspace, "applied.txt")))
+        self.assertEqual(
+            [call[1] for call in runner.calls],
+            [contracts.KIND_REVIEW_ROUND, contracts.KIND_FIX_FINDINGS],
+        )
+        drv.Driver(path, runner=runner).step()
+        self.assertEqual(runner.calls[-1][1], contracts.KIND_DELTA_REVIEW)
+        self.assertEqual(
+            st.current_unit(st.load(path))["status"],
+            st.U_PRE_REVIEW_VERIFY,
+        )
+
+    def test_fixer_agreement_can_noop_one_finding_and_plan_another(self):
+        workspace = os.path.join(self.tmp.name, "mixed-application")
+        os.makedirs(os.path.join(workspace, "proposals"))
+        config = make_config(
             git={"enabled": True},
             snapshot_exclude_dirs=[],
             error_classifier=False,
             infra_retry_backoff_s=[],
         )
-        delta_path = self._state_path(
-            status=st.U_DELTA_REVIEW,
-            workspace=delta_workspace,
-            config=delta_config,
+        path = self._state_path(
+            status=st.U_FIXING,
+            workspace=workspace,
+            config=config,
         )
-        delta_state = st.load(delta_path)
-        delta_unit = st.current_unit(delta_state)
-        delta_unit["fix_queue"] = [copy.deepcopy(finding)]
-        delta_unit["fix_source"] = {
+        state = st.load(path)
+        unit = st.current_unit(state)
+        first = report_finding("F1")
+        second = report_finding("F2")
+        unit["fix_queue"] = [copy.deepcopy(first), copy.deepcopy(second)]
+        unit["fix_source"] = {
             "type": "round",
             "origin_type": "round",
             "family": "claude",
             "source_round_id": "round-1",
             "return_to": st.U_ROUNDS,
         }
-        st.save(delta_path, delta_state)
-        delta_runner = runners.MockRunner(
-            [
-                {
-                    "expect_kind": contracts.KIND_DELTA_REVIEW,
-                    "response": rethink(
-                        contracts.KIND_DELTA_REVIEW, finding=finding
-                    ),
-                },
-                {
-                    "expect_kind": contracts.KIND_DELTA_REVIEW,
-                    "response": {
-                        "status": "ok",
-                        "kind": contracts.KIND_DELTA_REVIEW,
-                        "findings": [],
-                    },
-                },
-            ]
-        )
-        delta_driver = drv.Driver(delta_path, runner=delta_runner)
-        with open(
-            os.path.join(delta_workspace, "delta.txt"),
-            "w",
-            encoding="utf-8",
-        ) as handle:
-            handle.write("pending fix\n")
+        unit["design_update"] = {"editable_paths": []}
+        st.save(path, state)
+        slices = [
+            {"id": 8, "title": "Adapter"},
+            {"id": 9, "title": "Apply F2"},
+        ]
+        runner = runners.MockRunner([
+            {
+                "expect_kind": contracts.KIND_FIX_FINDINGS,
+                "response": rethink(
+                    contracts.KIND_FIX_FINDINGS,
+                    finding=first,
+                ),
+            },
+            {
+                "expect_kind": contracts.KIND_FIX_FINDINGS,
+                "response": fix_ok([
+                    triaged("F1", "fixed", severity="P1"),
+                    triaged("F2", "fixed", severity="P1"),
+                ], slices=slices, brainstorming_application={
+                    "finding_id": "F1",
+                    "implementation_required": False,
+                    "reason": "F1 needs no workspace implementation.",
+                }),
+            },
+        ])
+
         with mock.patch.object(
             adapter, "create_session", return_value=self._created()
         ):
-            delta_driver.step()
-        self.assertEqual(
-            st.current_unit(st.load(delta_path))["rounds"], []
-        )
+            drv.Driver(path, runner=runner).step()
         with mock.patch.object(
             adapter, "terminal_handoff", return_value=self._handoff()
         ):
-            drv.Driver(delta_path, runner=delta_runner).step()
-        drv.Driver(delta_path, runner=delta_runner).step()
-        self.assertIn(
-            "BRAINSTORMING RETURN (FRESH REVIEW REQUIRED)",
-            delta_runner.calls[1][2],
-        )
-        self.assertIn(
-            "does not change the\n"
-            "ordinary prompt's review subject or scope",
-            delta_runner.calls[1][2],
-        )
-        self.assertIn(
-            "Review ONLY the uncommitted changes",
-            delta_runner.calls[1][2],
-        )
-        self.assertNotIn(
-            "milestone artifact named by the",
-            delta_runner.calls[1][2],
-        )
-        self.assertEqual(delta_runner.session_calls, [])
+            drv.Driver(path, runner=runner).step()
+        drv.Driver(path, runner=runner).step()
 
-    def test_retired_seal_handoff_is_migrated_to_an_ordinary_review(self):
+        applied = st.load(path)
+        self.assertEqual(st.current_unit(applied)["status"], st.U_DELTA_REVIEW)
+        with mock.patch.object(drv.gitops, "worktree_diff", return_value=""):
+            drv.Driver(path, runner=runner).step()
+        applied = st.load(path)
+        self.assertEqual(st.current_unit(applied)["status"], st.U_ROUNDS)
+        self.assertEqual(applied["milestone"]["slices"], slices)
+        self.assertTrue(any(
+            event["type"] == "brainstorming_no_implementation_adopted"
+            and event["source_finding_id"] == "F1"
+            for event in applied["events"]
+        ))
+
+    def test_restored_tamper_does_not_count_as_agreement_application(self):
+        workspace = os.path.join(self.tmp.name, "restored-application")
+        os.makedirs(os.path.join(workspace, "proposals"))
+        os.makedirs(os.path.join(workspace, "docs"))
+        protected = os.path.join(workspace, "docs", "sealed.md")
+        with open(protected, "w", encoding="utf-8") as handle:
+            handle.write("canonical\n")
+        path = self._state_path(status=st.U_FIXING, workspace=workspace)
+        state = st.load(path)
+        unit = st.current_unit(state)
+        finding = report_finding()
+        unit["fix_queue"] = [copy.deepcopy(finding)]
+        unit["fix_source"] = {
+            "type": "round",
+            "origin_type": "round",
+            "family": "claude",
+            "source_round_id": "round-1",
+            "return_to": st.U_ROUNDS,
+        }
+        st.save(path, state)
+        runner = runners.MockRunner([
+            {
+                "expect_kind": contracts.KIND_FIX_FINDINGS,
+                "response": rethink(
+                    contracts.KIND_FIX_FINDINGS,
+                    finding=finding,
+                ),
+            },
+            {
+                "expect_kind": contracts.KIND_FIX_FINDINGS,
+                "response": fix_ok([
+                    triaged(
+                        finding["id"], "fixed", severity=finding["severity"]
+                    )
+                ], files_changed=["docs/sealed.md"]),
+                "side_effect": write_file("docs/sealed.md", "tampered\n"),
+            },
+        ])
+
+        with mock.patch.object(
+            adapter, "create_session", return_value=self._created()
+        ):
+            drv.Driver(path, runner=runner).step()
+        with mock.patch.object(
+            adapter, "terminal_handoff", return_value=self._handoff()
+        ):
+            drv.Driver(path, runner=runner).step()
+
+        def restore(_driver, _raw_name, editable_sealed=None):
+            del editable_sealed
+            with open(protected, "w", encoding="utf-8") as handle:
+                handle.write("canonical\n")
+            return ["docs/sealed.md"]
+
+        with mock.patch.object(
+            drv.Driver, "_enforce_sealed_artifacts", autospec=True,
+            side_effect=restore,
+        ):
+            drv.Driver(path, runner=runner).step()
+
+        retried = st.load(path)
+        agreement = st.current_unit(retried)["fix_source"][
+            "brainstorming_agreement"
+        ]
+        self.assertEqual(st.current_unit(retried)["status"], st.U_FIXING)
+        self.assertFalse(agreement.get("applied", False))
+        self.assertTrue(agreement["application_retry_issued"])
+        with open(protected, encoding="utf-8") as handle:
+            self.assertEqual(handle.read(), "canonical\n")
+
+    def test_application_fixer_cannot_open_another_brainstorming(self):
+        path = self._state_path(status=st.U_ROUNDS)
+        finding = report_finding()
+        runner = runners.MockRunner([
+            {
+                "expect_kind": contracts.KIND_REVIEW_ROUND,
+                "response": rethink(
+                    contracts.KIND_REVIEW_ROUND, finding=finding
+                ),
+            },
+            {
+                "expect_kind": contracts.KIND_FIX_FINDINGS,
+                "response": rethink(
+                    contracts.KIND_FIX_FINDINGS, finding=finding
+                ),
+            },
+        ])
+        with mock.patch.object(
+            adapter, "create_session", return_value=self._created()
+        ):
+            drv.Driver(path, runner=runner).step()
+        with mock.patch.object(
+            adapter, "terminal_handoff", return_value=self._handoff()
+        ):
+            drv.Driver(path, runner=runner).step()
+        with mock.patch.object(
+            adapter,
+            "create_session",
+            side_effect=AssertionError("a second discussion must not start"),
+        ):
+            drv.Driver(path, runner=runner).step()
+
+        failed = st.load(path)
+        self.assertEqual(failed["failure"]["type"], "worker_protocol")
+        self.assertNotIn("brainstorming_wait", st.current_unit(failed))
+        self.assertEqual(
+            sum(
+                event["type"] == "brainstorming_wait_started"
+                for event in failed["events"]
+            ),
+            1,
+        )
+
+    def test_applied_agreement_does_not_block_a_later_rethink(self):
+        path = self._state_path(status=st.U_FIXING)
+        state = st.load(path)
+        unit = st.current_unit(state)
+        prior = report_finding("F1")
+        current = report_finding("D1")
+        unit["fix_queue"] = [copy.deepcopy(current)]
+        unit["fix_source"] = {
+            "type": "delta",
+            "origin_type": "delta",
+            "family": "claude",
+            "source_round_id": "delta-1",
+            "return_to": st.U_ROUNDS,
+            "brainstorming_agreement": {
+                "origin_kind": contracts.KIND_REVIEW_ROUND,
+                "target_path": "proposals/rethink.md",
+                "handoff": self._handoff(),
+                "source_finding": prior,
+                "applied": True,
+            },
+        }
+        st.save(path, state)
+        runner = runners.MockRunner([{
+            "expect_kind": contracts.KIND_FIX_FINDINGS,
+            "response": rethink(
+                contracts.KIND_FIX_FINDINGS,
+                finding=current,
+            ),
+        }])
+
+        with mock.patch.object(
+            adapter, "create_session", return_value=self._created()
+        ):
+            drv.Driver(path, runner=runner).step()
+
+        waiting = st.current_unit(st.load(path))
+        self.assertEqual(
+            waiting["brainstorming_wait"]["signal"]["finding"]["id"],
+            "D1",
+        )
+
+    def test_report_agreement_authorizes_only_its_design_target(self):
+        workspace = os.path.join(self.tmp.name, "design-target")
+        os.makedirs(os.path.join(workspace, "proposals"))
+        os.makedirs(os.path.join(workspace, "docs"))
+        target = "docs/skeleton.md"
+        with open(os.path.join(workspace, target), "w", encoding="utf-8") as fh:
+            fh.write("# Current skeleton\n")
+        config = make_config()
+        state = st.new_state("Build the adapter.", workspace, config)
+        st.append_event(state, "initialized", goal=state["goal"])
+        state["milestone"]["slices"] = [{"id": 8, "title": "Adapter"}]
+        skeleton = st._new_unit(st.UNIT_SKELETON, None)
+        skeleton.update({"status": st.U_SEALED, "artifact": target})
+        note = st._new_unit(st.UNIT_SLICE_DOC, 8)
+        note["status"] = st.U_SEALED
+        implementation = st._new_unit(st.UNIT_SLICE_IMPL, 8)
+        implementation["status"] = st.U_ROUNDS
+        state["units"] = [skeleton, note, implementation]
+        path = drv.default_state_path(workspace)
+        st.save(path, state)
+        finding = report_finding()
+        runner = runners.MockRunner([
+            {
+                "expect_kind": contracts.KIND_REVIEW_ROUND,
+                "response": rethink(
+                    contracts.KIND_REVIEW_ROUND,
+                    finding=finding,
+                    target=target,
+                ),
+            },
+            {
+                "expect_kind": contracts.KIND_FIX_FINDINGS,
+                "response": fix_ok([
+                    triaged(
+                        finding["id"], "fixed", severity=finding["severity"]
+                    )
+                ], brainstorming_application={
+                    "finding_id": finding["id"],
+                    "implementation_required": False,
+                    "reason": "The agreement requires no implementation.",
+                }),
+            },
+        ])
+
+        with mock.patch.object(
+            adapter, "create_session", return_value=self._created()
+        ):
+            drv.Driver(path, runner=runner).step()
+        with mock.patch.object(
+            adapter, "terminal_handoff", return_value=self._handoff()
+        ):
+            drv.Driver(path, runner=runner).step()
+
+        queued = st.current_unit(st.load(path))
+        self.assertEqual(
+            queued["design_update"]["editable_paths"], [target]
+        )
+        drv.Driver(path, runner=runner).step()
+        self.assertNotIn("design_update", st.current_unit(st.load(path)))
+
+    def test_report_agreement_can_apply_only_a_slice_plan_change(self):
+        workspace = os.path.join(self.tmp.name, "slice-plan-application")
+        os.makedirs(os.path.join(workspace, "proposals"))
+        os.makedirs(os.path.join(workspace, "docs"))
+        subprocess.run(
+            ["git", "init", "-q"], cwd=workspace, check=True
+        )
+        target = "docs/skeleton.md"
+        with open(os.path.join(workspace, target), "w", encoding="utf-8") as fh:
+            fh.write("# Current skeleton\n")
+        subprocess.run(
+            ["git", "add", target], cwd=workspace, check=True
+        )
+        subprocess.run(
+            [
+                "git", "-c", "user.name=Test", "-c",
+                "user.email=test@example.invalid", "commit", "-qm",
+                "baseline",
+            ],
+            cwd=workspace,
+            check=True,
+        )
+        config = make_config(
+            git={"enabled": True},
+            snapshot_exclude_dirs=[],
+            error_classifier=False,
+            infra_retry_backoff_s=[],
+        )
+        state = st.new_state("Build the adapter.", workspace, config)
+        st.append_event(state, "initialized", goal=state["goal"])
+        state["milestone"]["slices"] = [{"id": 8, "title": "Adapter"}]
+        skeleton = st._new_unit(st.UNIT_SKELETON, None)
+        skeleton.update({"status": st.U_SEALED, "artifact": target})
+        note = st._new_unit(st.UNIT_SLICE_DOC, 8)
+        note["status"] = st.U_SEALED
+        implementation = st._new_unit(st.UNIT_SLICE_IMPL, 8)
+        implementation["status"] = st.U_ROUNDS
+        state["units"] = [skeleton, note, implementation]
+        path = drv.default_state_path(workspace)
+        st.save(path, state)
+        finding = report_finding()
+        slices = [
+            {"id": 8, "title": "Adapter"},
+            {"id": 9, "title": "Apply the accepted follow-up"},
+        ]
+        runner = runners.MockRunner([
+            {
+                "expect_kind": contracts.KIND_REVIEW_ROUND,
+                "response": rethink(
+                    contracts.KIND_REVIEW_ROUND,
+                    finding=finding,
+                    target=target,
+                ),
+            },
+            {
+                "expect_kind": contracts.KIND_FIX_FINDINGS,
+                "response": fix_ok([
+                    triaged(
+                        finding["id"], "fixed", severity=finding["severity"]
+                    )
+                ], slices=slices),
+            },
+        ])
+
+        with mock.patch.object(
+            adapter, "create_session", return_value=self._created()
+        ):
+            drv.Driver(path, runner=runner).step()
+        with mock.patch.object(
+            adapter, "terminal_handoff", return_value=self._handoff()
+        ):
+            drv.Driver(path, runner=runner).step()
+        drv.Driver(path, runner=runner).step()
+        self.assertEqual(
+            st.current_unit(st.load(path))["status"], st.U_DELTA_REVIEW
+        )
+        with mock.patch.object(drv.gitops, "worktree_diff", return_value=""):
+            drv.Driver(path, runner=runner).step()
+
+        applied = st.load(path)
+        unit = st.current_unit(applied)
+        self.assertEqual(applied["milestone"]["slices"], slices)
+        self.assertEqual(unit["status"], st.U_ROUNDS)
+        self.assertFalse(any(
+            event["type"] == "brainstorming_application_retry"
+            for event in applied["events"]
+        ))
+
+    def test_retired_seal_handoff_is_migrated_to_implementation(self):
         path = self._state_path(status=st.U_PRE_SEAL_VERIFY)
         state = st.load(path)
         unit = st.current_unit(state)
@@ -3333,24 +3850,223 @@ class MilestoneDriverRethinkTest(unittest.TestCase):
         }
         st.save(path, state)
 
-        drv.Driver(path, runner=runners.MockRunner([])).step()
+        source = unit["brainstorming_review_handoff"]["source_finding"]
+        runner = runners.MockRunner([{
+            "expect_kind": contracts.KIND_FIX_FINDINGS,
+            "response": fix_ok([
+                triaged(
+                    source["id"],
+                    "rejected",
+                    severity=source["severity"],
+                    consultation={"resolution": "No workspace change."},
+                )
+            ], brainstorming_application={
+                "finding_id": source["id"],
+                "implementation_required": False,
+                "reason": "The accepted result needs no workspace change.",
+            }),
+        }])
+        drv.Driver(path, runner=runner).step()
 
         migrated = st.load(path)
         current = st.current_unit(migrated)
-        self.assertEqual(current["status"], st.U_PRE_REVIEW_VERIFY)
-        self.assertEqual(
-            current["brainstorming_review_handoff"]["kind"],
-            contracts.KIND_REVIEW_ROUND,
-        )
+        self.assertEqual(current["status"], st.U_ROUNDS)
+        self.assertNotIn("brainstorming_review_handoff", current)
+        self.assertNotIn("brainstorming_agreement", current["fix_source"])
         self.assertEqual(current["family_index"], 0)
         self.assertTrue(any(
-            event["type"] == "brainstorming_review_handoff_migrated"
+            event["type"]
+            == "brainstorming_review_handoff_migrated_to_implementation"
             for event in migrated["events"]
         ))
+        self.assertIn(
+            "BRAINSTORMING AGREEMENT — APPLY NOW", runner.calls[0][2]
+        )
 
-    def test_retired_seal_handoff_survives_pending_delta_as_review_context(self):
-        from orchestrator.tests.test_driver_mock import fix_ok, triaged, write_file
+    def test_legacy_handoff_terminalizes_an_admitted_reviewer(self):
+        path = self._state_path(status=st.U_ROUNDS)
+        driver = drv.Driver(path, runner=runners.MockRunner([]))
+        unit = st.current_unit(driver.state)
+        origin = driver._admit_worker_task(
+            unit,
+            contracts.KIND_REVIEW_ROUND,
+            "frozen review request",
+            "codex",
+        )
+        finding = report_finding()
+        unit["brainstorming_review_handoff"] = {
+            "kind": contracts.KIND_REVIEW_ROUND,
+            "handoff": self._handoff(),
+            "source_finding": copy.deepcopy(finding),
+        }
+        driver._save()
+        runner = runners.MockRunner([{
+            "expect_kind": contracts.KIND_FIX_FINDINGS,
+            "response": fix_ok([
+                triaged(
+                    finding["id"],
+                    "rejected",
+                    severity=finding["severity"],
+                    consultation={"resolution": "No workspace change."},
+                )
+            ], brainstorming_application={
+                "finding_id": finding["id"],
+                "implementation_required": False,
+                "reason": "The accepted result needs no workspace change.",
+            }),
+        }])
 
+        drv.Driver(path, runner=runner).step()
+
+        migrated = st.load(path)
+        records = tasks.task_records(migrated)
+        self.assertEqual(records[0]["id"], origin["id"])
+        self.assertEqual(records[0]["result"]["status"], "failure")
+        self.assertEqual(records[1]["result"]["status"], "success")
+        self.assertNotEqual(records[0]["id"], records[1]["id"])
+        self.assertNotIn("active_task", st.current_unit(migrated))
+
+    def test_reserved_legacy_handoff_waits_for_first_application(self):
+        path = self._state_path(status=st.U_FIXING)
+        driver = drv.Driver(path, runner=runners.MockRunner([]))
+        unit = st.current_unit(driver.state)
+        accepted = report_finding("F1")
+        pending = report_finding("F1")
+        unit["fix_queue"] = [copy.deepcopy(pending)]
+        unit["fix_source"] = {
+            "type": "delta",
+            "origin_type": "round",
+            "family": "claude",
+            "source_round_id": "delta-1",
+            "return_to": st.U_PRE_REVIEW_VERIFY,
+        }
+        unit["fix_loop_rounds"] = 6
+        old_task = driver._admit_worker_task(
+            unit,
+            contracts.KIND_FIX_FINDINGS,
+            "frozen fixer request",
+            "codex",
+        )
+        reserved_handoff = self._handoff()
+        reserved_handoff["session_id"] = "reserved-session"
+        reserved_handoff["accepted_target_revision"] = "reserved-revision"
+        unit["brainstorming_review_handoff"] = {
+            "kind": contracts.KIND_REVIEW_ROUND,
+            "handoff": self._handoff(),
+            "source_finding": copy.deepcopy(accepted),
+            "reserved_handoff": {
+                "kind": contracts.KIND_REVIEW_ROUND,
+                "handoff": reserved_handoff,
+                "source_finding": report_finding("R1"),
+            },
+        }
+        driver._save()
+        runner = runners.MockRunner([
+            {
+                "expect_kind": contracts.KIND_FIX_FINDINGS,
+                "response": fix_ok([
+                    triaged("F1", "fixed", severity="P1"),
+                ]),
+            },
+            {
+                "expect_kind": contracts.KIND_FIX_FINDINGS,
+                "response": fix_ok([
+                    triaged(
+                        "F1", "rejected", severity="P1",
+                        consultation={
+                            "resolution": "The accepted F1 needs no edit."
+                        },
+                    ),
+                ], brainstorming_application={
+                    "finding_id": "F1",
+                    "implementation_required": False,
+                    "reason": "The first result needs no workspace edit.",
+                }),
+            },
+            {
+                "expect_kind": contracts.KIND_FIX_FINDINGS,
+                "response": fix_ok([
+                    triaged(
+                        "R1", "rejected", severity="P1",
+                        consultation={
+                            "resolution": "The reserved result needs no edit."
+                        },
+                    ),
+                ], brainstorming_application={
+                    "finding_id": "R1",
+                    "implementation_required": False,
+                    "reason": "The reserved result needs no workspace edit.",
+                }),
+            },
+        ])
+
+        for _ in range(3):
+            drv.Driver(path, runner=runner).step()
+
+        migrated = st.load(path)
+        records = tasks.task_records(migrated)
+        self.assertEqual(records[0]["id"], old_task["id"])
+        self.assertEqual(records[0]["result"]["status"], "failure")
+        self.assertTrue(all(
+            record["result"]["status"] == "success"
+            for record in records[1:]
+        ))
+        current = st.current_unit(migrated)
+        self.assertEqual(current["status"], st.U_FIXING)
+        self.assertEqual([item["id"] for item in current["fix_queue"]], ["F1"])
+        self.assertEqual(current["fix_source"]["source_round_id"], "delta-1")
+        self.assertEqual(current["fix_loop_rounds"], 6)
+        self.assertEqual(len(runner.calls), 3)
+        for call in runner.calls:
+            self.assertIn("BRAINSTORMING AGREEMENT — APPLY NOW", call[2])
+        self.assertIn('"id": "F1"', runner.calls[1][2])
+        self.assertIn('"id": "R1"', runner.calls[2][2])
+
+    def test_legacy_handoff_preempts_inflight_suite_repair(self):
+        path = self._state_path(status=st.U_FIXING)
+        state = st.load(path)
+        unit = st.current_unit(state)
+        verification = report_finding("V1")
+        unit["fix_queue"] = [copy.deepcopy(verification)]
+        unit["fix_source"] = {
+            "type": "verification",
+            "origin_type": "verification",
+            "family": None,
+            "source_round_id": "verify-1",
+            "return_to": st.U_PRE_SEAL_VERIFY,
+        }
+        unit["brainstorming_review_handoff"] = {
+            "kind": contracts.KIND_REVIEW_ROUND,
+            "handoff": self._handoff(),
+            "source_finding": report_finding("R1"),
+        }
+        st.save(path, state)
+        runner = runners.MockRunner([{
+            "expect_kind": contracts.KIND_FIX_FINDINGS,
+            "response": fix_ok([
+                triaged(
+                    "R1", "fixed", severity="P1",
+                ),
+            ], files_changed=["accepted.txt"]),
+            "side_effect": write_file("accepted.txt", "accepted\n"),
+        }])
+
+        drv.Driver(path, runner=runner).step()
+
+        resumed = st.load(path)
+        current = st.current_unit(resumed)
+        self.assertEqual(current["status"], st.U_FIXING)
+        self.assertEqual(current["fix_source"]["type"], "verification")
+        self.assertTrue(
+            current["fix_source"]["deferred_candidate_changed"]
+        )
+        self.assertEqual([item["id"] for item in current["fix_queue"]], ["V1"])
+        self.assertNotIn("brainstorming_review_handoff", current)
+        self.assertIn(
+            "BRAINSTORMING AGREEMENT — APPLY NOW", runner.calls[0][2]
+        )
+
+    def test_retired_seal_handoff_is_applied_before_pending_delta_review(self):
         workspace = os.path.join(self.tmp.name, "retired-seal-delta")
         os.makedirs(os.path.join(workspace, "proposals"))
         config = make_config(
@@ -3409,6 +4125,31 @@ class MilestoneDriverRethinkTest(unittest.TestCase):
             handle.write("pending fix\n")
         runner = runners.MockRunner([
             {
+                "expect_kind": contracts.KIND_FIX_FINDINGS,
+                "response": fix_ok([
+                    triaged(
+                        "F1",
+                        "fixed",
+                        severity="P1",
+                    )
+                ]),
+            },
+            {
+                "expect_kind": contracts.KIND_FIX_FINDINGS,
+                "response": fix_ok([
+                    triaged(
+                        "F1",
+                        "rejected",
+                        severity="P1",
+                        consultation={"resolution": "No workspace change."},
+                    )
+                ], brainstorming_application={
+                    "finding_id": "F1",
+                    "implementation_required": False,
+                    "reason": "The accepted result needs no workspace change.",
+                }),
+            },
+            {
                 "expect_kind": contracts.KIND_DELTA_REVIEW,
                 "response": {
                     "status": "ok",
@@ -3434,37 +4175,29 @@ class MilestoneDriverRethinkTest(unittest.TestCase):
         ])
 
         driver = drv.Driver(path, runner=runner)
-        for _ in range(3):
+        for _ in range(5):
             driver.step()
 
         resumed = st.load(path)
         current = st.current_unit(resumed)
         self.assertEqual(current["status"], st.U_PRE_REVIEW_VERIFY)
-        self.assertEqual(
-            current["brainstorming_review_handoff"]["kind"],
-            contracts.KIND_REVIEW_ROUND,
-        )
+        self.assertNotIn("brainstorming_review_handoff", current)
+        self.assertIsNone(current["fix_source"])
         self.assertEqual(current["family_index"], 0)
-        self.assertEqual(len(runner.calls), 3)
-        for call in (runner.calls[0], runner.calls[2]):
-            self.assertNotIn(
-                "BRAINSTORMING RETURN (FRESH REVIEW REQUIRED)", call[2]
-            )
+        self.assertEqual(len(runner.calls), 5)
+        self.assertEqual(runner.calls[0][1], contracts.KIND_FIX_FINDINGS)
+        self.assertEqual(runner.calls[1][1], contracts.KIND_FIX_FINDINGS)
+        self.assertEqual(runner.calls[2][1], contracts.KIND_DELTA_REVIEW)
+        self.assertTrue(any(
+            event["type"] == "brainstorming_application_retry"
+            for event in resumed["events"]
+        ))
+        self.assertIn(
+            "BRAINSTORMING AGREEMENT — APPLY NOW", runner.calls[0][2]
+        )
 
-    def test_delta_brainstorming_temporarily_reserves_whole_review_handoff(self):
-        workspace = os.path.join(self.tmp.name, "reserved-review-delta")
-        os.makedirs(os.path.join(workspace, "proposals"))
-        config = make_config(
-            git={"enabled": True},
-            snapshot_exclude_dirs=[],
-            error_classifier=False,
-            infra_retry_backoff_s=[],
-        )
-        path = self._state_path(
-            status=st.U_DELTA_REVIEW,
-            workspace=workspace,
-            config=config,
-        )
+    def test_legacy_reserved_handoffs_both_route_to_fixers(self):
+        path = self._state_path(status=st.U_DELTA_REVIEW)
         state = st.load(path)
         unit = st.current_unit(state)
         unit["fix_queue"] = [report_finding("D2")]
@@ -3473,89 +4206,62 @@ class MilestoneDriverRethinkTest(unittest.TestCase):
             "origin_type": "round",
             "family": "codex",
             "source_round_id": "slice_impl-08-codex-r1",
-            "return_to": st.U_PRE_REVIEW_VERIFY,
+            "return_to": st.U_ROUNDS,
         }
-        original_handoff = {
-            "kind": contracts.KIND_REVIEW_ROUND,
+        unit["brainstorming_review_handoff"] = {
+            "kind": contracts.KIND_DELTA_REVIEW,
             "handoff": self._handoff(),
-            "source_finding": report_finding("R1"),
+            "source_finding": report_finding("D2"),
+            "reserved_handoff": {
+                "kind": contracts.KIND_REVIEW_ROUND,
+                "handoff": self._handoff(),
+                "source_finding": report_finding("R1"),
+            },
         }
-        unit["brainstorming_review_handoff"] = copy.deepcopy(
-            original_handoff
-        )
         st.save(path, state)
-        pending_path = os.path.join(workspace, "pending-fix.txt")
-        with open(pending_path, "w", encoding="utf-8") as handle:
-            handle.write("baseline\n")
-        subprocess.run(
-            ["git", "add", "pending-fix.txt"],
-            cwd=workspace,
-            capture_output=True,
-            text=True,
-            check=True,
-        )
-        subprocess.run(
-            [
-                "git", "-c", "user.name=Test", "-c",
-                "user.email=test@example.invalid", "commit", "-qm",
-                "baseline",
-            ],
-            cwd=workspace,
-            capture_output=True,
-            text=True,
-            check=True,
-        )
-        with open(pending_path, "w", encoding="utf-8") as handle:
-            handle.write("pending fix\n")
         runner = runners.MockRunner([
             {
-                "expect_kind": contracts.KIND_DELTA_REVIEW,
-                "response": rethink(
-                    contracts.KIND_DELTA_REVIEW,
-                    finding=report_finding("D2"),
-                ),
+                "expect_kind": contracts.KIND_FIX_FINDINGS,
+                "response": fix_ok([
+                    triaged(
+                        "D2", "rejected", severity="P1",
+                        consultation={"resolution": "No delta change."},
+                    )
+                ], brainstorming_application={
+                    "finding_id": "D2",
+                    "implementation_required": False,
+                    "reason": "The accepted result needs no delta edit.",
+                }),
             },
             {
-                "expect_kind": contracts.KIND_DELTA_REVIEW,
-                "response": {
-                    "status": "ok",
-                    "kind": contracts.KIND_DELTA_REVIEW,
-                    "findings": [],
-                },
+                "expect_kind": contracts.KIND_FIX_FINDINGS,
+                "response": fix_ok([
+                    triaged(
+                        "R1", "rejected", severity="P1",
+                        consultation={"resolution": "No full change."},
+                    )
+                ], brainstorming_application={
+                    "finding_id": "R1",
+                    "implementation_required": False,
+                    "reason": "The accepted result needs no full edit.",
+                }),
             },
         ])
 
-        with mock.patch.object(
-            adapter, "create_session", return_value=self._created()
-        ):
-            drv.Driver(path, runner=runner).step()
-        paused = st.current_unit(st.load(path))
-        self.assertEqual(
-            paused["brainstorming_review_handoff"], original_handoff
-        )
-        with mock.patch.object(
-            adapter, "terminal_handoff", return_value=self._handoff()
-        ):
-            drv.Driver(path, runner=runner).step()
-        nested = st.current_unit(st.load(path))[
-            "brainstorming_review_handoff"
-        ]
-        self.assertEqual(nested["kind"], contracts.KIND_DELTA_REVIEW)
-        self.assertEqual(nested["reserved_handoff"], original_handoff)
-
+        drv.Driver(path, runner=runner).step()
         drv.Driver(path, runner=runner).step()
 
         resumed = st.current_unit(st.load(path))
-        self.assertEqual(resumed["status"], st.U_PRE_REVIEW_VERIFY)
+        self.assertEqual(resumed["status"], st.U_ROUNDS)
+        self.assertNotIn("brainstorming_review_handoff", resumed)
         self.assertEqual(
-            resumed["brainstorming_review_handoff"], original_handoff
+            [call[1] for call in runner.calls],
+            [contracts.KIND_FIX_FINDINGS, contracts.KIND_FIX_FINDINGS],
         )
-        self.assertIn(
-            "BRAINSTORMING RETURN (FRESH REVIEW REQUIRED)",
-            runner.calls[-1][2],
-        )
+        for call in runner.calls:
+            self.assertIn("BRAINSTORMING AGREEMENT — APPLY NOW", call[2])
 
-    def test_retired_seal_wait_success_restarts_as_ordinary_review(self):
+    def test_retired_seal_wait_success_queues_implementation(self):
         path = self._state_path(status=st.U_SEALING)
         state = st.load(path)
         unit = st.current_unit(state)
@@ -3578,13 +4284,14 @@ class MilestoneDriverRethinkTest(unittest.TestCase):
 
         resumed = st.load(path)
         current = st.current_unit(resumed)
-        self.assertEqual(current["status"], st.U_PRE_REVIEW_VERIFY)
+        self.assertEqual(current["status"], st.U_FIXING)
         self.assertNotIn("brainstorming_wait", current)
-        self.assertEqual(
-            current["brainstorming_review_handoff"]["kind"],
-            contracts.KIND_REVIEW_ROUND,
-        )
+        self.assertIn("brainstorming_agreement", current["fix_source"])
         self.assertEqual(current["family_index"], 0)
+        self.assertTrue(any(
+            event["type"] == "brainstorming_implementation_queued"
+            for event in resumed["events"]
+        ))
 
     def test_retired_seal_wait_failure_stops_without_synthetic_fix(self):
         path = self._state_path(status=st.U_SEALING)
@@ -3620,7 +4327,7 @@ class MilestoneDriverRethinkTest(unittest.TestCase):
             resumed["failure"]["type"], "brainstorming_no_agreement"
         )
 
-    def test_fresh_review_uses_retained_content_without_target_monitoring(self):
+    def test_fixer_applies_retained_result_or_closes_without_fake_edit(self):
         workspace = os.path.join(self.tmp.name, "retained-target-review")
         os.makedirs(os.path.join(workspace, "proposals"))
         config = make_config(
@@ -3645,11 +4352,28 @@ class MilestoneDriverRethinkTest(unittest.TestCase):
                     ),
                 },
                 {
+                    "expect_kind": contracts.KIND_FIX_FINDINGS,
+                    "response": fix_ok([
+                        triaged(
+                            finding["id"],
+                            "fixed",
+                            severity=finding["severity"],
+                        )
+                    ], brainstorming_application={
+                        "finding_id": finding["id"],
+                        "implementation_required": False,
+                        "reason": (
+                            "The accepted result resolves the finding "
+                            "without workspace implementation."
+                        ),
+                    }),
+                },
+                {
                     "expect_kind": contracts.KIND_REVIEW_ROUND,
                     "response": {
                         "status": "ok",
                         "kind": contracts.KIND_REVIEW_ROUND,
-                        "findings": [copy.deepcopy(finding)],
+                        "findings": [],
                     },
                 },
             ]
@@ -3666,27 +4390,59 @@ class MilestoneDriverRethinkTest(unittest.TestCase):
             coordination,
             "capture_target",
             side_effect=AssertionError(
-                "ordinary review must not monitor the retained proposal target"
+                "the fixer must use the retained accepted target"
             ),
         ):
             drv.Driver(path, runner=runner).step()
-        reviewed = st.current_unit(st.load(path))
-        self.assertEqual(len(reviewed["rounds"]), 1)
+        with mock.patch.object(drv.gitops, "worktree_diff", return_value=""):
+            drv.Driver(path, runner=runner).step()
+        drv.Driver(path, runner=runner).step()
+
+        completed = st.load(path)
+        reviewed = st.current_unit(completed)
+        self.assertEqual(reviewed["status"], st.U_ROUNDS)
         self.assertEqual(
-            [queued["id"] for queued in reviewed["fix_queue"]],
-            [finding["id"]],
+            [round_["kind"] for round_ in reviewed["rounds"]],
+            ["fix_findings", "review_round"],
         )
-        self.assertNotIn(
-            "brainstorming_review_handoff",
-            reviewed,
-        )
+        self.assertEqual(reviewed["fix_queue"], [])
+        self.assertIsNone(reviewed["fix_source"])
         self.assertIn(
-            "does not change the\n"
-            "ordinary prompt's review subject or scope",
-            runner.calls[1][2],
+            "BRAINSTORMING AGREEMENT — APPLY NOW", runner.calls[1][2]
         )
+        self.assertIn("do not manufacture an edit", runner.calls[1][2])
         self.assertIn('"source_finding": {', runner.calls[1][2])
         self.assertIn('"content": "accepted proposal"', runner.calls[1][2])
+        self.assertIn(
+            "ACCEPTED BRAINSTORMING DESIGN AMENDMENTS", runner.calls[2][2]
+        )
+        self.assertIn(
+            "without workspace implementation", runner.calls[2][2]
+        )
+        self.assertTrue(any(
+            event["type"] == "brainstorming_implementation_applied"
+            and event["no_workspace_change"] is True
+            for event in completed["events"]
+        ))
+        authority = drv.Driver(path, runner=runners.MockRunner([]))
+        same_unit = authority._amendments(
+            record_seen=False, unit=reviewed
+        )
+        other_unit = {
+            "kind": st.UNIT_SLICE_IMPL,
+            "slice_id": 9,
+        }
+        self.assertTrue(any(item.get("id") == "BSR-1" for item in same_unit))
+        self.assertFalse(any(
+            item.get("id") == "BSR-1"
+            for item in authority._amendments(
+                record_seen=False, unit=other_unit
+            )
+        ))
+        self.assertFalse(any(
+            item.get("id") == "BSR-1"
+            for item in authority._amendments(record_seen=False)
+        ))
 
     def test_fixer_discussion_failure_preserves_queue_and_stops(self):
         path = self._state_path(status=st.U_FIXING)

@@ -1802,6 +1802,53 @@ def build_brainstorming_production(
     )
 
 
+def _brainstorming_application_order(fixer=False):
+    no_change = (
+        "If the source finding requires no workspace implementation, claim no\n"
+        "file change and return exactly this additional top-level object:\n"
+        "  \"brainstorming_application\": {\"finding_id\": \"<source id>\",\n"
+        "    \"implementation_required\": false, \"reason\": \"...\"}\n"
+        "Use `fixed` when the finding is valid but the agreed outcome needs no\n"
+        "workspace change. Use ordinary `rejected` when the agreement instead\n"
+        "establishes that the finding was wrong or already satisfied. In both\n"
+        "cases the completed Brainstorming session supplies the consultation;\n"
+        "summarize its resolution and do not run another consultation.\n"
+        if fixer else ""
+    )
+    return (
+        "BRAINSTORMING AGREEMENT — APPLY NOW\n"
+        "The retained accepted result is binding for this application step,\n"
+        "subject to the GOAL, operator amendments, project safeguards, and the\n"
+        "original task. Apply it immediately to the real workspace wherever it\n"
+        "requires an implementation change, before any further review. Inspect\n"
+        "the workspace only to determine what remains to apply; do not re-review\n"
+        "or renegotiate the agreed result. If it requires no workspace change,\n"
+        "or the workspace already satisfies it, do not manufacture an edit; say\n"
+        "so and complete the ordinary output contract truthfully.\n"
+        "Do not return `need_rethink`: this accepted agreement must finish its\n"
+        "application before another discussion can be requested.\n"
+        + no_change
+        + "Normal verification and review follow this application step.\n\n"
+    )
+
+
+def _brainstorming_application_override(fixer=False):
+    consultation = (
+        " The completed Brainstorming session is the required consultation for\n"
+        "the source finding; do not request or run another one."
+        if fixer else ""
+    )
+    return (
+        "\nPOST-BRAINSTORMING APPLICATION OVERRIDE\n"
+        "For this call, any generic output-contract invitation to return\n"
+        "`need_rethink` or `gap` is inapplicable. Finish the accepted result\n"
+        "now; if it truly cannot be applied, return `blocked` rather than\n"
+        "starting or routing another design process."
+        + consultation
+        + "\n"
+    )
+
+
 def build_rethink_continuation(
     kind,
     family,
@@ -1823,6 +1870,9 @@ def build_rethink_continuation(
     producer_planning=False,
     materials=None,
 ):
+    finding_application = bool(
+        kind == contracts.KIND_FIX_FINDINGS and not verification_repair
+    )
     authority = {
         "session_id": handoff["session_id"],
         "accepted_target_revision": handoff[
@@ -1832,13 +1882,9 @@ def build_rethink_continuation(
     # `allow_design_correction` remains in the call signature while old driver
     # versions drain, but new prompts intentionally offer no one-shot path.
     authority_posture = (
-        "The retained target has been adopted as a run-scoped design "
-        "amendment and is also rendered above. It is binding below the GOAL, "
-        "operator amendments, and project safeguards; continue the original "
-        "task from that clarification.\n\n"
-        if accepted_design_amendment else
-        "It is a proposal, not approval: ordinary verification and review\n"
-        "still apply.\n\n"
+        "The retained target has also been adopted as a run-scoped design "
+        "amendment and rendered above.\n\n"
+        if accepted_design_amendment else ""
     )
     if original_request is not None:
         if not isinstance(original_request, str) or not original_request.strip():
@@ -1853,20 +1899,12 @@ def build_rethink_continuation(
             "prompt. Run the configured full-suite command(s), investigate all\n"
             "failures, and make only justified repairs. Return `ok` only after\n"
             "the complete suite passes on the final workspace bytes; otherwise\n"
-            "return `blocked` or another valid `need_rethink`.\n"
+            "return `blocked`.\n"
             "CONFIGURED FULL-SUITE COMMANDS:\n%s\n\n"
-            "SOURCE SIGNAL (copy this complete object only if returning\n"
-            " `need_rethink`):\n%s\n\n"
             % (
                 json.dumps(
                     list(verification_commands or []),
                     ensure_ascii=False,
-                    indent=2,
-                ),
-                json.dumps(
-                    verification_signal or {},
-                    ensure_ascii=False,
-                    sort_keys=True,
                     indent=2,
                 ),
             )
@@ -1916,6 +1954,9 @@ def build_rethink_continuation(
         "substitute bytes\n"
         "currently present at target_ref.\n"
         + authority_posture
+        + _brainstorming_application_order(
+            fixer=finding_application
+        )
         + "BRAINSTORMING HANDOFF\n"
         + json.dumps(
             {
@@ -1949,24 +1990,24 @@ def build_rethink_continuation(
             if battery and original_request is None else ""
         )
         + output_contract
+        + _brainstorming_application_override(
+            fixer=finding_application
+        )
     )
 
 
-def attach_rethink_review_handoff(prompt, handoff):
-    """Give a fresh reviewer the accepted proposal without resuming its call."""
+def attach_brainstorming_application_order(prompt, handoff):
+    """Order a fixer to apply one accepted report-origin result now."""
     return (
-        "BRAINSTORMING RETURN (FRESH REVIEW REQUIRED)\n"
-        "A previous reviewer paused this same judgment for one independent\n"
-        "Brainstorming discussion. This is a fresh provider call: assess the\n"
-        "ordinary review task yourself. This handoff does not change the\n"
-        "ordinary prompt's review subject or scope: judge exactly that task,\n"
-        "including its delta-only boundary when this is a delta review. The\n"
-        "source finding and retained proposal are evidence for that judgment,\n"
-        "not approval or additional review subjects. Report only defects within\n"
-        "the ordinary task's scope. A clean response means there are no such\n"
-        "in-scope defects; it never adopts retained proposal content. Do not\n"
-        "replace retained_target with live bytes at target_ref. All normal\n"
-        "review rules still apply.\n\n"
+        prompt.rstrip()
+        + "\n\n"
+        + _brainstorming_application_order(fixer=True)
+        + "For the source finding, the accepted outcome settles the decision.\n"
+        "Use current workspace evidence only to implement that outcome and to\n"
+        "select the truthful ordinary disposition it dictates, never to reopen\n"
+        "it. Use retained_target below; never substitute the live bytes at\n"
+        "target_ref for the accepted revision.\n\n"
+        "BRAINSTORMING HANDOFF\n"
         + json.dumps(
             {
                 "authority": {
@@ -1984,7 +2025,7 @@ def attach_rethink_review_handoff(prompt, handoff):
             indent=2,
         )
         + "\n\n"
-        + prompt
+        + _brainstorming_application_override(fixer=True)
     )
 
 

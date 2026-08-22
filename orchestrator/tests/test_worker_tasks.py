@@ -677,18 +677,26 @@ class WorkerTaskCutoverTest(unittest.TestCase):
         self.assertEqual(driver._slice_note_artifact(1), declared)
         self.assertEqual(task["result"]["native_result"], response)
 
-    def test_continuable_worker_rethink_repeats_and_completes_one_task(self):
+    def test_builder_cannot_chain_brainstorming_after_an_agreement(self):
         cases = (
-            (contracts.KIND_DRAFT_SLICE_NOTE, st.UNIT_SLICE_DOC, st.U_PENDING,
-             ok(contracts.KIND_DRAFT_SLICE_NOTE, artifact="docs/note.md")),
-            (contracts.KIND_IMPLEMENT, st.UNIT_SLICE_IMPL, st.U_PENDING,
-             ok(contracts.KIND_IMPLEMENT, files_changed=[])),
-            (contracts.KIND_FIX_FINDINGS, st.UNIT_SLICE_IMPL, st.U_FIXING,
-             fix_ok([triaged("F1", "fixed", severity="P1")])),
+            (
+                contracts.KIND_DRAFT_SLICE_NOTE,
+                st.UNIT_SLICE_DOC,
+                ok(contracts.KIND_DRAFT_SLICE_NOTE, artifact="docs/note.md"),
+            ),
+            (
+                contracts.KIND_IMPLEMENT,
+                st.UNIT_SLICE_IMPL,
+                ok(contracts.KIND_IMPLEMENT, files_changed=[]),
+            ),
         )
-        for index, (kind, unit_kind, status, completed) in enumerate(cases):
+        for index, (kind, unit_kind, completed) in enumerate(cases):
             with self.subTest(kind=kind):
-                path = self._path("repeat-%d" % index, unit_kind, status)
+                path = self._path(
+                    "builder-no-discussion-loop-%d" % index,
+                    unit_kind,
+                    st.U_PENDING,
+                )
                 queued = st.current_unit(st.load(path)).get("fix_queue") or []
                 signal = _rethink(kind, queued[0] if queued else None)
                 runner = runners.MockRunner([
@@ -698,20 +706,107 @@ class WorkerTaskCutoverTest(unittest.TestCase):
                 ])
                 with mock.patch.object(
                     adapter, "create_session",
-                    side_effect=[_created("discussion-1"), _created("discussion-2")],
+                    return_value=_created("builder-application"),
                 ), mock.patch.object(
                     adapter, "terminal_handoff",
-                    side_effect=[_handoff("discussion-1"), _handoff("discussion-2")],
+                    return_value=_handoff("builder-application"),
                 ):
-                    for _ in range(4):
+                    for _ in range(2):
                         drv.Driver(path, runner=runner).step()
                 state = st.load(path)
-                task = self._task(state)
-                origins = [e for e in state["events"]
-                           if e["type"] == "brainstorming_origin_recorded"]
-                self.assertEqual(len(tasks.task_records(state)), 1)
-                self.assertEqual({e.get("task_id") for e in origins}, {task["id"]})
-                self.assertEqual(task["result"]["native_result"], completed)
+                records = tasks.task_records(state)
+                origins = [
+                    event for event in state["events"]
+                    if event["type"] == "brainstorming_origin_recorded"
+                ]
+                self.assertEqual(state["failure"]["type"], "worker_protocol")
+                self.assertIn("brainstorming_wait", st.current_unit(state))
+                self.assertEqual(len(records), 1)
+                self.assertIsNone(records[0]["result"])
+                self.assertEqual(len(origins), 1)
+                self.assertEqual(origins[0].get("task_id"), records[0]["id"])
+                self.assertEqual(
+                    [(call[0], call[2]) for call in runner.session_calls],
+                    [
+                        ("start", "mock-session-1"),
+                        ("continue", "mock-session-1"),
+                    ],
+                )
+                self.assertEqual(
+                    runner.session_calls[0][1], runner.session_calls[1][1]
+                )
+                st.resume_run(state)
+                st.save(path, state)
+                with mock.patch.object(
+                    adapter,
+                    "terminal_handoff",
+                    return_value=_handoff("builder-application"),
+                ), mock.patch.object(
+                    adapter,
+                    "create_session",
+                    side_effect=AssertionError(
+                        "the accepted agreement must be reused"
+                    ),
+                ):
+                    drv.Driver(path, runner=runner).step()
+                drv.Driver(path, runner=runner).step()
+                completed_state = st.load(path)
+                completed_task = tasks.task_records(completed_state)[0]
+                self.assertEqual(completed_task["result"]["status"], "success")
+                self.assertEqual(len(tasks.task_records(completed_state)), 1)
+
+    def test_fixer_cannot_chain_brainstorming_after_an_agreement(self):
+        path = self._path("fixer-no-discussion-loop", status=st.U_FIXING)
+        source = st.current_unit(st.load(path))["fix_queue"][0]
+        signal = _rethink(contracts.KIND_FIX_FINDINGS, source)
+        runner = runners.MockRunner([
+            {"expect_kind": contracts.KIND_FIX_FINDINGS, "response": signal},
+            {"expect_kind": contracts.KIND_FIX_FINDINGS, "response": signal},
+            {
+                "expect_kind": contracts.KIND_FIX_FINDINGS,
+                "response": fix_ok([
+                    triaged(
+                        source["id"], "rejected", severity=source["severity"],
+                        consultation={"resolution": "No edit is required."},
+                    )
+                ], brainstorming_application={
+                    "finding_id": source["id"],
+                    "implementation_required": False,
+                    "reason": "The accepted result requires no edit.",
+                }),
+            },
+        ])
+        with mock.patch.object(
+            adapter,
+            "create_session",
+            return_value=_created("fixer-application"),
+        ):
+            drv.Driver(path, runner=runner).step()
+        with mock.patch.object(
+            adapter,
+            "terminal_handoff",
+            return_value=_handoff("fixer-application"),
+        ):
+            drv.Driver(path, runner=runner).step()
+
+        failed = st.load(path)
+        self.assertEqual(failed["failure"]["type"], "worker_protocol")
+        self.assertIn("brainstorming_wait", st.current_unit(failed))
+        self.assertEqual(len(tasks.task_records(failed)), 1)
+        self.assertIsNone(tasks.task_records(failed)[0]["result"])
+        st.resume_run(failed)
+        st.save(path, failed)
+        with mock.patch.object(
+            adapter,
+            "terminal_handoff",
+            return_value=_handoff("fixer-application"),
+        ):
+            drv.Driver(path, runner=runner).step()
+        drv.Driver(path, runner=runner).step()
+        completed = st.load(path)
+        self.assertEqual(
+            tasks.task_records(completed)[0]["result"]["status"], "success"
+        )
 
     def test_continuable_worker_abandonments_fail_and_reentry_succeeds_new_task(self):
         def paused(label, mode="proposal"):
@@ -824,14 +919,15 @@ class WorkerTaskCutoverTest(unittest.TestCase):
                     "terminal_handoff",
                     return_value=_handoff(label),
                 ):
-                    for _ in range(3):
+                    for _ in range(2):
                         drv.Driver(path, runner=runner).step()
 
-                task = self._task(st.load(path))
-                self.assertEqual(task["result"]["status"], "failure")
-                self.assertEqual(task["result"]["native_result"], signal)
-                self.assertNotEqual(
-                    task["result"]["native_result"], abandoned
+                failed = st.load(path)
+                task = self._task(failed)
+                self.assertIsNone(task["result"])
+                self.assertEqual(
+                    st.current_unit(failed)["brainstorming_wait"]["signal"],
+                    signal,
                 )
 
     def test_review_rethink_preserves_failed_origin_and_distinct_successor(self):
@@ -841,11 +937,24 @@ class WorkerTaskCutoverTest(unittest.TestCase):
         )):
             with self.subTest(kind=kind):
                 path = self._path("review-%d" % index, status=status)
-                signal = _rethink(kind, report_finding())
-                clean = report(kind)
+                source = report_finding()
+                signal = _rethink(kind, source)
+                applied = fix_ok([
+                    triaged(
+                        source["id"],
+                        "rejected",
+                        severity=source["severity"],
+                        consultation={
+                            "resolution": "The agreement requires no edit."
+                        },
+                    )
+                ])
                 runner = runners.MockRunner([
                     {"expect_kind": kind, "response": signal},
-                    {"expect_kind": kind, "response": clean},
+                    {
+                        "expect_kind": contracts.KIND_FIX_FINDINGS,
+                        "response": applied,
+                    },
                 ])
                 with mock.patch.object(adapter, "create_session",
                                        return_value=_created("review")), \
@@ -862,6 +971,13 @@ class WorkerTaskCutoverTest(unittest.TestCase):
                                   if e["type"] == "brainstorming_origin_recorded")
                 self.assertEqual([r["result"]["status"] for r in records],
                                  ["failure", "success"])
+                self.assertEqual(
+                    [
+                        record["order"]["request"]["context"]["task_kind"]
+                        for record in records
+                    ],
+                    [kind, contracts.KIND_FIX_FINDINGS],
+                )
                 self.assertEqual(records[0]["result"]["native_result"], signal)
                 self.assertNotEqual(origin_raw, unit["rounds"][-1]["raw_path"])
                 self.assertNotIn("task_id", next(e for e in state["events"]
@@ -1762,13 +1878,31 @@ class WorkerTaskCutoverTest(unittest.TestCase):
                     )
                 self.assertNotEqual(successor["id"], abandoned["id"])
 
-    def test_empty_delta_discards_completed_delta_review_handoff(self):
+    def test_delta_rethink_handoff_is_consumed_by_its_fixer(self):
         path = self._path("delta-handoff-vanished", status=st.U_DELTA_REVIEW)
-        signal = _rethink(contracts.KIND_DELTA_REVIEW, report_finding())
-        runner = runners.MockRunner([{
-            "expect_kind": contracts.KIND_DELTA_REVIEW,
-            "response": signal,
-        }])
+        source = report_finding()
+        signal = _rethink(contracts.KIND_DELTA_REVIEW, source)
+        runner = runners.MockRunner([
+            {
+                "expect_kind": contracts.KIND_DELTA_REVIEW,
+                "response": signal,
+            },
+            {
+                "expect_kind": contracts.KIND_FIX_FINDINGS,
+                "response": fix_ok([
+                    triaged(
+                        source["id"],
+                        "rejected",
+                        severity=source["severity"],
+                        consultation={"resolution": "No edit is required."},
+                    )
+                ], brainstorming_application={
+                    "finding_id": source["id"],
+                    "implementation_required": False,
+                    "reason": "The agreement requires no implementation.",
+                }),
+            },
+        ])
         with mock.patch.object(
             adapter, "create_session", return_value=_created("delta-handoff")
         ), mock.patch.object(
@@ -1782,21 +1916,19 @@ class WorkerTaskCutoverTest(unittest.TestCase):
             drv.Driver(path, runner=runner).step()
 
         completed = st.load(path)
-        self.assertEqual(
-            st.current_unit(completed)["brainstorming_review_handoff"]["kind"],
-            contracts.KIND_DELTA_REVIEW,
+        self.assertEqual(st.current_unit(completed)["status"], st.U_FIXING)
+        self.assertIn(
+            "brainstorming_agreement",
+            st.current_unit(completed)["fix_source"],
         )
-        with mock.patch.object(drv.gitops, "worktree_diff", return_value=""):
-            drv.Driver(path, runner=runner).step()
+        drv.Driver(path, runner=runner).step()
 
         closed = st.load(path)
         unit = st.current_unit(closed)
+        self.assertEqual(unit["status"], st.U_ROUNDS)
         self.assertNotIn("brainstorming_review_handoff", unit)
-        self.assertIsNone(
-            drv.Driver(path, runner=runner)._brainstorming_review_handoff(
-                unit, contracts.KIND_REVIEW_ROUND
-            )
-        )
+        self.assertNotIn("brainstorming_agreement", unit["fix_source"])
+        self.assertEqual(runner.calls[-1][1], contracts.KIND_FIX_FINDINGS)
 
     def test_same_task_fixer_recovery_dispatches_killed_call_notice(self):
         path = self._path("fixer-killed-notice", status=st.U_FIXING)

@@ -603,7 +603,6 @@ class DesignUpdateRethinkTest(unittest.TestCase):
         driver._project_prompt_inputs = mock.Mock(
             return_value=(None, [], [])
         )
-        driver._brainstorming_review_handoff = mock.Mock(return_value=None)
         return driver, unit
 
     @staticmethod

@@ -454,6 +454,34 @@ def validate_fix_finding(finding, ctx):
     return finding
 
 
+def validate_brainstorming_application(value, ctx):
+    """Proof that an accepted agreement required no workspace change."""
+    if not isinstance(value, dict):
+        raise ContractError("%s must be an object" % ctx)
+    expected = {"finding_id", "implementation_required", "reason"}
+    if set(value) != expected:
+        raise ContractError(
+            "%s must contain exactly %s" % (ctx, sorted(expected))
+        )
+    finding_id = _require(value, "finding_id", str, ctx)
+    if not finding_id.strip() or len(finding_id) > FINDING_ID_MAX:
+        raise ContractError(
+            "%s.finding_id must be non-empty and <=%d chars"
+            % (ctx, FINDING_ID_MAX)
+        )
+    if value.get("implementation_required") is not False:
+        raise ContractError(
+            "%s.implementation_required must be false" % ctx
+        )
+    reason = _require(value, "reason", str, ctx)
+    if not reason.strip() or len(reason) > FINDING_TEXT_MAX:
+        raise ContractError(
+            "%s.reason must be non-empty and <=%d chars"
+            % (ctx, FINDING_TEXT_MAX)
+        )
+    return value
+
+
 def _assert_unique_finding_ids(findings, ctx):
     """Finding ids must be unique within one output. A reviewer emitting
     the same id twice would poison everything keyed on ids downstream: an
@@ -1052,7 +1080,17 @@ def validate_worker_output(obj, kind, require_plain=False,
             validate_fix_finding(f, "%s.findings[%d]" % (ctx, i))
         _assert_unique_finding_ids(findings, ctx)
         _optional(obj, "files_changed", list, ctx, default=[])
+        application = obj.get("brainstorming_application")
+        if application is not None:
+            validate_brainstorming_application(
+                application, "%s.brainstorming_application" % ctx
+            )
         if verification_repair:
+            if application is not None:
+                raise ContractError(
+                    "%s: verification repair cannot claim a Brainstorming "
+                    "application" % ctx
+                )
             for claim in ("suite_command", "suite_command_finding_id"):
                 if claim in obj:
                     raise ContractError(
@@ -1196,7 +1234,7 @@ KIND_OUTPUT_KEYS = {
         {
             "findings", "files_changed", "slices", "suite_command",
             "suite_command_finding_id", "design_correction",
-            "retry_reason",
+            "retry_reason", "brainstorming_application",
         }
     ),
 }
@@ -1508,10 +1546,8 @@ Return one result for every queued id, and no others:
 observable damage, and violated guarantee, plus exceeds_baseline=true. If any
 cannot be demonstrated, the finding is invalid: `rejected` requires its
 consultation (`rejected_adjudicated` remains the settled-duplicate path), and
-both rejection dispositions require exceeds_baseline=false. Include any extra
-field explicitly required by an active block
-above (`slices`, the `suite_command` pair, `design_correction`, or a project
-safeguard field).
+both rejection dispositions require exceeds_baseline=false. Include extra
+fields required by an active block.
 When fixing a queued final-suite-command finding, also return `suite_command`
 and `suite_command_finding_id`; the command must run the official full suite
 once, non-interactively, from the workspace root.

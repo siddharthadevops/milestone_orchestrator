@@ -248,7 +248,11 @@ class TaskConformanceTest(unittest.TestCase):
             self._assert_existing_cases(
                 (
                     worker_cases.WorkerTaskCutoverTest,
-                    "test_continuable_worker_rethink_repeats_and_completes_one_task",
+                    "test_builder_cannot_chain_brainstorming_after_an_agreement",
+                ),
+                (
+                    worker_cases.WorkerTaskCutoverTest,
+                    "test_fixer_cannot_chain_brainstorming_after_an_agreement",
                 ),
                 (
                     worker_cases.WorkerTaskCutoverTest,
@@ -274,8 +278,7 @@ class TaskConformanceTest(unittest.TestCase):
         )
         self.assertEqual(
             signatures,
-            [(0.01, 15, 0.25, 0.0, False, False)] * 5
-            + [(0.02, 30, 0.5, 0.0, False, False)] * 3,
+            [(0.01, 15, 0.25, 0.0, False, False)] * 5,
         )
 
     def test_review_rethink_origin_and_successor_are_distinct(self):

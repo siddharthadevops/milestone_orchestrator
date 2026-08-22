@@ -179,6 +179,33 @@ class TestNaturalRethinkExit(unittest.TestCase):
             },
         )
         self.assertNotIn(self.HEADING, continuation)
+        self.assertIn("BRAINSTORMING AGREEMENT — APPLY NOW", continuation)
+        self.assertIn("requires no workspace change", continuation)
+        self.assertNotIn("It is a proposal, not approval", continuation)
+
+        suite_continuation = prompts.build_rethink_continuation(
+            contracts.KIND_FIX_FINDINGS,
+            FAMILY,
+            WORKSPACE,
+            {
+                "session_id": "brainstorming-2",
+                "accepted_target_revision": 3,
+                "result": {"outcome": "success"},
+                "retained_target": {"content": "accepted suite decision"},
+            },
+            verification_repair=True,
+            verification_commands=["python3 -m unittest"],
+        )
+        self.assertNotIn("another valid `need_rethink`", suite_continuation)
+        self.assertNotIn("copy this complete object", suite_continuation)
+        self.assertNotIn('"brainstorming_application"', suite_continuation)
+        self.assertTrue(suite_continuation.rstrip().endswith(
+            "starting or routing another design process."
+        ))
+        self.assertIn("`need_rethink` or `gap` is inapplicable", continuation)
+
+        ordinary_fixer = self.fixer(gap_enabled=False)
+        self.assertNotIn('"brainstorming_application"', ordinary_fixer)
 
     def test_accepted_amendment_paths_flow_through_ordinary_reviews(self):
         paths = ["docs/skeleton.md", "docs/slice-01.md"]

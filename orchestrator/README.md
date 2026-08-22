@@ -124,6 +124,15 @@ diagnoses close through the existing operational-failure path. Classifier LLM
 calls are separate activity, never discussion or target authority, and their
 time is included in accumulated LLM work.
 
+A successful milestone `need_rethink` agreement is binding for its application
+step. A builder or fixer resumes its original editable task; an agreement
+requested by a review or delta review queues a fixer immediately, before any
+further review. That worker applies the accepted result to the real workspace
+when it entails implementation. When it entails no workspace change or is
+already satisfied, the worker must say so without manufacturing an edit.
+It cannot open another discussion before completing that application.
+Ordinary verification and review run only after that application step.
+
 Work starts from a project's **⋯ menu**, never from a standing button:
 "New milestone" and "New brainstorming" are the first two items (every user
 who can see the project gets them; Configure and Admin users stay
