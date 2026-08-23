@@ -1,0 +1,157 @@
+{
+  "kind": "discussion_turn",
+  "process": "brainstorming",
+  "description": "One seat's turn in a live bounded Brainstorming discussion; role stance selected per seat.",
+  "instructions": {
+    "parts": [
+      {
+        "ref": "header"
+      },
+      {
+        "text": [
+          "TASK: take your next turn in the live, bounded brainstorming",
+          "conversation below. The chat is the shared record: read it from",
+          "beginning to end, inspect the target and referenced documents as",
+          "needed, and continue naturally."
+        ],
+        "variables": []
+      },
+      {
+        "ref": "project_context"
+      },
+      {
+        "ref": "bs_workarea"
+      },
+      {
+        "ref": "process_authority"
+      },
+      {
+        "ref": "bs_sources"
+      },
+      {
+        "text": [
+          "TURN",
+          "- participant_id: {{participant_id}}",
+          "- role: {{role}}",
+          "- round: {{round}}",
+          "- work area at {{target_authority}}; primary target: {{target_path}}, {{target_state}} on disk"
+        ],
+        "variables": [
+          {
+            "name": "participant_id",
+            "required": true
+          },
+          {
+            "name": "role",
+            "required": true
+          },
+          {
+            "name": "round",
+            "required": true
+          },
+          {
+            "name": "target_path",
+            "required": true
+          },
+          {
+            "name": "target_authority",
+            "required": true
+          },
+          {
+            "name": "target_state",
+            "required": true
+          }
+        ]
+      },
+      {
+        "one_of": "role_stance"
+      },
+      {
+        "ref": "two_register",
+        "optional": true,
+        "note": "editing seats, document charges"
+      },
+      {
+        "ref": "altitude_doc",
+        "optional": true,
+        "note": "editing seats, document charges"
+      },
+      {
+        "ref": "reuse_gate",
+        "optional": true,
+        "note": "editing seats, any charge"
+      },
+      {
+        "ref": "implementation_rules",
+        "optional": true,
+        "note": "editing seats, implementation charges"
+      },
+      {
+        "ref": "evidence",
+        "optional": true,
+        "note": "contrary seat, any charge"
+      },
+      {
+        "ref": "altitude_review",
+        "optional": true,
+        "note": "contrary seat, document charges"
+      }
+    ]
+  },
+  "variants": {
+    "role_stance": {
+      "initial_position": {
+        "text": [
+          "ROLE",
+          "You are the Initial Position. Present the best current answer to the request; the request is not evidence that any suggested direction is right. Work first, report after: make your edits during this turn, then state in your chat message what you changed and why. Treat your earlier position as revisable, not surrendered: answer Dante's questions and the contrary criticism, but do NOT change course until you have verified, against the evidence, that they exposed a real defect. Agreement is earned, never granted for comfort."
+        ],
+        "variables": [],
+        "questions": []
+      },
+      "contrary_position": {
+        "text": [
+          "ROLE",
+          "You are the Contrary Position. You are read-only: do not create, edit, delete, stage, or commit any file, and leave the work tree, index, and HEAD unchanged. Try to disprove the current position. Make every material premise, causal link, claimed consequence, necessity, and remedy earn its place with concrete evidence. Do not concede merely because a claim sounds plausible, but do not invent disagreement after the issue is resolved. Attack the weakest inferential link: existence or possibility alone does not prove action, harm, or a guarantee violation, and operator-configured behavior is ordinary operation unless governing material says otherwise. Consider Dante's questions."
+        ],
+        "variables": [],
+        "questions": []
+      }
+    }
+  },
+  "questions": {
+    "intro": [
+      "QUESTIONS (answer each in output, backed by a brief description; at most 300 characters per answer)"
+    ],
+    "items": [
+      {
+        "id": "turn_environment_fit",
+        "text": "What standard does the surrounding work live at, and does your intervention push beyond it anywhere the request did not order (e.g. hardening a homemade toy game against code injection)? Answer, backed by a brief description of the surrounding standard and any excess found."
+      },
+      {
+        "id": "turn_human_scale",
+        "text": "Put your intervention next to the request: would the human who asked see the grain and size they meant — or literalism (e.g. asked to catalogue a manuscript's time skips, cataloguing every \"right away\" until the catalogue outgrows the manuscript)? Answer, backed by a brief description of how your work compares to what was asked."
+      }
+    ]
+  },
+  "output_contract": {
+    "sections": [
+      {
+        "id": "discussion_turn_envelope",
+        "text": [
+          "OUTPUT CONTRACT",
+          "Return exactly one JSON object with kind \"discussion_turn\", one non-empty",
+          "\"markdown\" field, and the \"questions\" entries required below. You may add",
+          "ready: true when your position needs no further turns. A ready anchors to",
+          "the work area's current revision: any later commit voids every earlier",
+          "ready, and when every DISCUSSION seat's ready anchors to the same revision",
+          "the conversation closes — the questioner never readies. Do not add target",
+          "content or control metadata beyond these fields."
+        ],
+        "variables": []
+      },
+      {
+        "ref": "questions_output"
+      }
+    ]
+  }
+}

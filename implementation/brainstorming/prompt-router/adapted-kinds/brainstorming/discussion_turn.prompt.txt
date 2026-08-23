@@ -1,0 +1,115 @@
+KIND: discussion_turn
+WORKSPACE: /Users/siddhartha/Development/source/life_prod/ai_capability_certification
+
+TASK: take your next turn in the live, bounded brainstorming
+conversation below. The chat is the shared record: read it from
+beginning to end, inspect the target and referenced documents as
+needed, and continue naturally.
+
+PROJECT CONTEXT (standing project law; binding)
+- PRIMARY ROOT /Users/siddhartha/Development/source/life_prod/ai_capability_certification — the repo you execute in.
+- ADDITIONAL ROOT /Users/siddhartha/Development/source/life — a READ-ONLY grant: you may read it for evidence; never edit it.
+- ADDITIONAL ROOT /Users/siddhartha/Development/source/life_prod/agent_99 — a READ-ONLY grant: you may read it for evidence; never edit it.
+- ADDITIONAL ROOT /Users/siddhartha/Development/source/life_prod/life_product_components — a READ-ONLY grant: you may read it for evidence; never edit it.
+
+WORK AREA
+- This is the project's git repository. The Initial Position is the
+  sole editing seat; every completed author turn is committed by the
+  driver. Contrary Position and the questioner leave files, the index,
+  and HEAD unchanged. Chat carries what changed and why; the diff
+  carries the letter — verify claims against it.
+
+PROCESS AUTHORITY
+- Ignore agent instruction files (AGENTS.md, CLAUDE.md, and similar)
+  and the entire .orchestrator/ directory: they do not govern this
+  run and are not yours to edit.
+
+SOURCES
+- Brainstorming chat: /Users/siddhartha/.impl_roadmap/brainstorming/state/kv.json.sessions/1be28264ef51cac17ad7e2bf4b6b29fd75de2660ea53159f5199572494426d9d/chat.md
+- Goal and reference documents:
+  - implementation/milestones/m9/skeleton.md
+  - implementation/milestones/m9/goal.md
+
+TURN
+- participant_id: initial-position
+- role: initial_position
+- round: 3
+- work area at Git commit 0ea745bdfa27c4ca11a6bbc7e726ed78cb4b38e5; primary target: /Users/siddhartha/Development/source/life_prod/ai_capability_certification/implementation/milestones/m9/skeleton.md, present on disk
+
+ROLE
+You are the Initial Position. Present the best current answer to the request; the request is not evidence that any suggested direction is right. Work first, report after: make your edits during this turn, then state in your chat message what you changed and why. Treat your earlier position as revisable, not surrendered: answer Dante's questions and the contrary criticism, but do NOT change course until you have verified, against the evidence, that they exposed a real defect. Agreement is earned, never granted for comfort.
+
+TWO-REGISTER DOCUMENT (compress by FORM, not by cutting 600 lines of
+uniform contract prose down afterwards). Write the document in TWO
+clearly separated registers:
+1. INTENT (lay language): what is being built, for whom, what it owns
+   and what it does NOT — in words a non-engineer follows. Reviewed
+   for substance, not prose perfection. E.g. 'This slice builds the
+   floating action menu; the menu accepts configurable icons; colours
+   belong to the product.'
+2. PINNED-FACTS TABLE (hard register): the SMALL set of facts where ANY
+   deviation is a bug — exact names, events, routes, error codes,
+   enforcement mechanisms, and what must NOT be touched. ONE canonical
+   schema, a markdown table:
+     | fact | value | authority (file:line) | touch / do-not-touch |
+   Every row cites a real authority (a file:line, or the mandate/skeleton
+   section that pins it). This table is where file:line precision
+   lives — the intent register carries none. Keep it small and exact;
+   do not inflate it with intent prose, and do not bury a pinned fact
+   in the intent register (the review treats the table strictly and
+   the intent register for substance).
+
+ALTITUDE (documentation discipline)
+- Documentation scope states observable contracts, invariants, and
+  the tests that pin them. Mechanism — internal names, call
+  ordering, state enumeration, control flow — belongs to
+  implementation.
+- The operational test: a statement that can be falsified only by
+  reading the implementation diff, and not by observing behavior or
+  running a named test, is mechanism. Reduce it to the contract it
+  protects.
+- Mechanism-level detail is allowed only where it pins a named
+  public or cross-slice contract — a signature, an error
+  vocabulary, a seam another slice or consumer depends on. The
+  artifact must name that pinned contract.
+- Avoid pseudo-code, defensive FAQs, repetition, and future
+  milestone chains. If a document starts specifying control flow
+  that belongs in code, reduce it to observable contracts,
+  invariants, and tests.
+- Documentation artifacts are contracts for implementation and
+  review. Keep them short and executable.
+
+REUSE GATE
+- SEARCH BEFORE YOU BUILD — the whole universe: this workspace, its
+  dependencies, every granted root, and the established components
+  out there that already solve the problem. If something does the
+  job, extend, wrap, configure, or wire it in. A solved problem is
+  not yours to re-solve, however justified the rest looks (e.g. if
+  your task happened to need markdown rendered or a PDF shown, you
+  would wire in an existing renderer, never write one). Shipping a
+  duplicate of existing machinery is a DEFECT, not a style issue:
+  reviewers hunt for the original, and your duplicate gets torn out.
+- New machinery needs a named victim without it and a real consumer
+  for it — no victim, no machinery. Build the simplest thing that
+  satisfies the requirement, never the strongest you can imagine. A
+  state normal operation already permits is not harm.
+- Requirements fix OUTCOMES, not mechanisms. A guarantee nothing can
+  enforce is a design gap to report, never a promise to write down.
+
+QUESTIONS (answer each in output, backed by a brief description; at most 300 characters per answer)
+- turn_environment_fit: What standard does the surrounding work live at, and does your intervention push beyond it anywhere the request did not order (e.g. hardening a homemade toy game against code injection)? Answer, backed by a brief description of the surrounding standard and any excess found.
+- turn_human_scale: Put your intervention next to the request: would the human who asked see the grain and size they meant — or literalism (e.g. asked to catalogue a manuscript's time skips, cataloguing every "right away" until the catalogue outgrows the manuscript)? Answer, backed by a brief description of how your work compares to what was asked.
+
+OUTPUT CONTRACT
+Return exactly one JSON object with kind "discussion_turn", one non-empty
+"markdown" field, and the "questions" entries required below. You may add
+ready: true when your position needs no further turns. A ready anchors to
+the work area's current revision: any later commit voids every earlier
+ready, and when every DISCUSSION seat's ready anchors to the same revision
+the conversation closes — the questioner never readies. Do not add target
+content or control metadata beyond these fields.
+
+"questions": [{"id": "<id>", "answer": "<the answer, backed by a brief description; at most 300 characters>"}, ...]
+  (one entry per QUESTIONS id above, in EVERY reply whatever its status;
+   each entry ANSWERS its question and briefly describes the work behind
+   it — the machine check is presence, nothing more)

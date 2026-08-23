@@ -1,0 +1,140 @@
+KIND: review_round
+WORKSPACE: /Users/siddhartha/Development/source/milestone_orchestrator_impl
+
+TASK: full review round of the slice 10 implementation (Compatibility and conformance). REPORT ONLY.
+BASELINE: the current reviewed skeleton at implementation/milestones/staffing-router/skeleton.md is the operative restatement of the MANDATE — the milestone boundary; judge scope against IT. The operator's full original mandate is preserved at implementation/milestones/staffing-router/goal.md (generated snapshot); read it only to trace intent the skeleton does not settle.
+TARGET: (workspace) (plus any code/tests it governs)
+STANDARD: implementation/milestones/staffing-router/slices/slice-10.md — the reviewed contract this target must satisfy. A defect you newly find in the standard itself is a finding too, never grounds for blocked.
+
+PROJECT CONTEXT (standing project law; binding)
+- PRIMARY ROOT /Users/siddhartha/Development/source/milestone_orchestrator_impl — the repo you execute in.
+- ADDITIONAL ROOT /Users/siddhartha/Development/source/life — a READ-ONLY grant: you may read it for evidence; never edit it.
+- ADDITIONAL ROOT /Users/siddhartha/Development/source/life_prod/agent_99 — a READ-ONLY grant: you may read it for evidence; never edit it.
+- ADDITIONAL ROOT /Users/siddhartha/Development/source/life_prod/life_product_components — a READ-ONLY grant: you may read it for evidence; never edit it.
+- ADDITIONAL ROOT /Users/siddhartha/Development/source/life_prod/tutor — a READ-ONLY grant: you may read it for evidence; never edit it.
+
+OPERATOR AMENDMENTS (binding; they refine the MANDATE)
+A violation of any amendment in the reviewed artifact is a finding.
+[A1] Ladders are ordered by capability. A family's models ladder runs from the least to the most capable model, as the operator judges it; price is not the criterion, even where it happens to coincide. step_up exists to add intelligence when work is stuck - first more effort, then a more capable model - never to change cost. The initial conversion writes today's order (luna < terra < sol; sonnet < opus < fable) as operator data in the document, and only the operator reorders it.
+[A2] Old runs: default and move on. A run that resumes without a staffing session gets one that points at the document with its selected profile name (the converted profiles keep their names) at its selected rigor, or at the default document when that name does not exist. Nothing else is derived: live act overrides (acts.json literals) are NOT carried into the session; the document's own numbers apply from the next call, the marker shows what ran, and the operator edits the session if he wants something else. Resume is never failed or blocked for compatibility. This is the whole compatibility rule - one level, no strict/best-effort split about carried overrides, no census of old runs, no exception clauses, no machinery to represent old literals. Stop discussing it.
+[A3] Session overrides are explicit configuration written by any authorized session owner - the operator, or a calling product - through the store, the API, or the panel. Nothing in the router restricts the author beyond the caller identity and project access the service already enforces. A2 forbids only deriving overrides at resume; it says nothing about who may write one. Do not write 'operator only' anywhere.
+
+VERIFICATION BOUNDARY
+- Focused checks only, when necessary to verify a concrete claim;
+  the full test suite is run by someone else — do not run it.
+
+EVIDENCE
+- The local filesystem checkout is the source of truth for content
+  inspection; prefer local search and file-reading tools for speed.
+  Use git for scope, diff comparison, relevant history, and
+  commit/ref verification.
+
+JUDGMENT RUBRIC (answer once per alleged defect)
+FINDING VALIDITY
+1. Guarantee: which exact declared guarantee, if any, does the observed
+   outcome violate under its actual posture (strict, optimistic,
+   eventual, or best-effort), rather than a preferred stronger design?
+2. PERMITTED BASELINE vs actual outcome: record `permitted_baseline`,
+   `actual_outcome`, `incremental_harm`, and `exceeds_baseline`. Harm is
+   the delta BEYOND the permitted baseline, including declared normal
+   states and bounded staleness, transition, or recovery. Timing alone
+   does not turn an allowed state into additional harm.
+3. Affected party: who or what concretely suffers; what is the damage,
+   reversibility, and observable trace?
+4. Functional deviation: does behavior really change? Exposure: how
+   often, who can trigger or widen it, and how readily does it recover?
+5. Scope and altitude: is this a defect in the assigned unit, not an
+   outside-goal or higher-level design preference?
+A reviewer reports only exceeds_baseline=true.
+
+SEVERITY BATTERY
+- Defect or design? Behavior inside the declared posture is NOT a defect;
+  if posture is undeclared, infer it from the current reviewed design
+  baseline and say so.
+- P0/P1: grave/irreversible victim harm, normal-use contract break, or
+  at-will trigger. P2: bounded reversible victim harm or visible
+  normal-use deviation. P3: no nameable victim, negligible damage,
+  unchanged behavior, or rare untriggerable exposure. No nameable
+  victim caps severity at P3. Use the worst supported factor; P0-P2 must
+  state its evidence. Score the evidence, not unease.
+
+REUSE GATE
+- Hunt for duplicates: machinery the target builds that the
+  workspace, its dependencies, or an established component already
+  provides is a DEFECT — name the original in the finding.
+- Challenge machinery with no named victim and no real consumer, and
+  harmful omission too; do not demand the strongest imaginable
+  guarantee.
+- Requirements fix OUTCOMES, not mechanisms: a guarantee nothing can
+  enforce is a design-gap finding, never something to demand in
+  prose.
+
+TEST PINNING
+- Every contract the note pins must be satisfied by a named, passing
+  test; name the missing test in the finding.
+
+SCOPE AUTHORITY
+- Scope is authorized by the CURRENT reviewed SKELETON, not only by
+  this unit's own note. When a later accepted design change updates the
+  skeleton, a unit legitimately does the work the skeleton now
+  assigns it — including a modification an earlier step should have made
+  — folded into its own change. Authority runs MANDATE > current SKELETON >
+  this unit's own note: the updated skeleton OUTRANKS this unit's own
+  note where they diverge (the note predates the change and is stale on
+  those points), so code that follows the update over its own note is
+  NOT a violation. Judge against the CURRENT skeleton, and flag only work
+  no unit is assigned, or a change that contradicts the MANDATE or ANOTHER
+  unit's reviewed contract.
+
+ADJUDICATED REJECTIONS (settled for this unit unless NEW evidence)
+- [skeleton-codex-r1/SR-SKEL-002] (skeleton, P1) The promised profile conversion cannot represent every valid transitional profile — invalid: the goal promises expressibility of today's profiles (both stored profiles and the in-code seed keep one family per act across rigors) and makes assignment rigor-independent by design; a rigor-varying fam... :: Codex agreed in round 1 (same transcript): 'today's profiles' means the existing profiles requiring conversion, not every future document accepted by the retiring schema; the two stored profiles and the seed are family-consistent; the mandate expressly makes assignment rigor-independent; a deterministic medium-based conversion produces the promised same-name document without failing or requiring a rewrite; asked that the prevention sentence explicitly call this a normalization rather than lossless preservation. [documented in implementation/milestones/staffing-router/skeleton.md]
+[[ELIDED — 16 further adjudicated-rejection entries, ~16 lines]]
+
+PROCESS AUTHORITY
+- Ignore agent instruction files (AGENTS.md, CLAUDE.md, and similar)
+  and the entire .orchestrator/ directory: they do not govern this
+  run and are not yours to edit.
+
+QUESTIONS (answer each in output, backed by a brief description; at most 300 characters per answer)
+- environment_fit: What standard does the surrounding work live at, and do any findings you filed demand exceeding it where the mandate did not order (e.g. demanding injection defenses inside a homemade toy game)? Answer, backed by a brief description of the surrounding standard and any excess found.
+- human_scale: Put your findings next to the artifact: do they judge at the grain and size the mandate means, or demand literalism (e.g. asked to catalogue a manuscript's time skips, cataloguing every "right away" until the catalogue outgrows the manuscript)? Answer, backed by a brief description of how your work compares to what was asked.
+
+OUTPUT CONTRACT (mandatory)
+Return exactly one JSON object; no prose or markdown fences.
+
+Clean or findings:
+{"status":"ok","kind":"<echo KIND>","findings":[<finding>, ...],
+ "notes":"<optional short note>"}
+Each finding is exactly:
+{"id":"<unique id>","severity":"P0|P1|P2|P3","summary":"...",
+ "validity":{"permitted_baseline":"...","actual_outcome":"...",
+             "incremental_harm":"...","exceeds_baseline":true},
+ "plain":"<one lay sentence, under 500 chars>",
+ "example":"<smallest concrete scenario, under 500 chars>",
+ "contests":null|{"rejection_id":"<settled id>",
+                   "new_evidence":"<what changes it>"}}
+Reviewers report only: never add a disposition. Empty findings means clean.
+If the outcome does not exceed the permitted baseline, emit no finding.
+Plain and example must expose the defect and its scale without opening files.
+If a finding challenges a listed rejection, `contests` is mandatory: cite its
+id and genuinely new evidence. Without new evidence, emit no finding.
+Include any extra field explicitly required by an active project-safeguard or
+active project block above.
+
+Impossible task:
+{"status":"blocked","kind":"<echo KIND>","blocked_reason":"...",
+ "questions":[...]}   (the QUESTIONS entries are required in EVERY reply)
+
+Focused discussion before finishing this judgment:
+{"status":"need_rethink","kind":"<echo KIND>",
+ "finding":{<one complete current finding>},
+ "target_path":"<workspace-relative artifact it lives in>",
+ "questions":[...]}   (required in EVERY reply: a rethink is only
+legitimate after asking and answering them)
+No proposed direction; beyond these, return no other fields with
+`blocked` or `need_rethink`.
+
+"questions": [{"id": "<id>", "answer": "<the answer, backed by a brief description; at most 300 characters>"}, ...]
+  (one entry per QUESTIONS id above, in EVERY reply whatever its status;
+   each entry ANSWERS its question and briefly describes the work behind
+   it — the machine check is presence, nothing more)

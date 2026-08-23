@@ -1,0 +1,118 @@
+KIND: implement
+WORKSPACE: /Users/siddhartha/Development/source/milestone_orchestrator_impl
+
+TASK: implement slice 10 (Compatibility and conformance) against its current reviewed note.
+BASELINE: the current reviewed skeleton at implementation/milestones/staffing-router/skeleton.md is the operative restatement of the MANDATE — the milestone boundary; judge scope against IT. The operator's full original mandate is preserved at implementation/milestones/staffing-router/goal.md (generated snapshot); read it only to trace intent the skeleton does not settle.
+SLICE NOTE: implementation/milestones/staffing-router/slices/slice-10.md
+
+PROJECT CONTEXT (standing project law; binding)
+- PRIMARY ROOT /Users/siddhartha/Development/source/milestone_orchestrator_impl — the repo you execute in.
+- ADDITIONAL ROOT /Users/siddhartha/Development/source/life — a READ-ONLY grant: you may read it for evidence; never edit it.
+- ADDITIONAL ROOT /Users/siddhartha/Development/source/life_prod/agent_99 — a READ-ONLY grant: you may read it for evidence; never edit it.
+- ADDITIONAL ROOT /Users/siddhartha/Development/source/life_prod/life_product_components — a READ-ONLY grant: you may read it for evidence; never edit it.
+- ADDITIONAL ROOT /Users/siddhartha/Development/source/life_prod/tutor — a READ-ONLY grant: you may read it for evidence; never edit it.
+
+OPERATOR AMENDMENTS (binding; they refine the MANDATE)
+These bind like the TASK itself.
+[A1] Ladders are ordered by capability. A family's models ladder runs from the least to the most capable model, as the operator judges it; price is not the criterion, even where it happens to coincide. step_up exists to add intelligence when work is stuck - first more effort, then a more capable model - never to change cost. The initial conversion writes today's order (luna < terra < sol; sonnet < opus < fable) as operator data in the document, and only the operator reorders it.
+[A2] Old runs: default and move on. A run that resumes without a staffing session gets one that points at the document with its selected profile name (the converted profiles keep their names) at its selected rigor, or at the default document when that name does not exist. Nothing else is derived: live act overrides (acts.json literals) are NOT carried into the session; the document's own numbers apply from the next call, the marker shows what ran, and the operator edits the session if he wants something else. Resume is never failed or blocked for compatibility. This is the whole compatibility rule - one level, no strict/best-effort split about carried overrides, no census of old runs, no exception clauses, no machinery to represent old literals. Stop discussing it.
+[A3] Session overrides are explicit configuration written by any authorized session owner - the operator, or a calling product - through the store, the API, or the panel. Nothing in the router restricts the author beyond the caller identity and project access the service already enforces. A2 forbids only deriving overrides at resume; it says nothing about who may write one. Do not write 'operator only' anywhere.
+
+IMPLEMENTATION RULES
+- Implement the scope, including its tests.
+- Run focused checks on what you touch while working; the complete
+  suite belongs to the scheduled suite_checkpoint call — do not run it.
+
+- The driver meters reviewable Git lines live while you work:
+  around 500 it will ask you to close the current unit
+  coherently; at 750 it stops the call. Cut at the first
+  natural boundary instead of waiting to be asked.
+- Finish the coherent piece and return `implementation_cut` with
+  concise `cut_scope` and `remaining_scope`; the driver reviews
+  this part before opening the next. Never compress, omit, or
+  distort sound work to fit. If the slice is complete, omit
+  `implementation_cut`.
+
+REUSE GATE
+- SEARCH BEFORE YOU BUILD — the whole universe: this workspace, its
+  dependencies, every granted root, and the established components
+  out there that already solve the problem. If something does the
+  job, extend, wrap, configure, or wire it in. A solved problem is
+  not yours to re-solve, however justified the rest looks (e.g. if
+  your task happened to need markdown rendered or a PDF shown, you
+  would wire in an existing renderer, never write one). Shipping a
+  duplicate of existing machinery is a DEFECT, not a style issue:
+  reviewers hunt for the original, and your duplicate gets torn out.
+- New machinery needs a named victim without it and a real consumer
+  for it — no victim, no machinery. Build the simplest thing that
+  satisfies the requirement, never the strongest you can imagine. A
+  state normal operation already permits is not harm.
+- Requirements fix OUTCOMES, not mechanisms. A guarantee nothing can
+  enforce is a design gap to report, never a promise to write down.
+
+PROCESS AUTHORITY
+- Ignore agent instruction files (AGENTS.md, CLAUDE.md, and similar)
+  and the entire .orchestrator/ directory: they do not govern this
+  run and are not yours to edit.
+
+DESIGN CONTRADICTION — USE NEED_RETHINK
+- If you confirm one concrete design contradiction, still inside the
+  MANDATE, whose resolution requires changing the current design
+  baseline, return `need_rethink`: put the contradiction and its
+  evidence in `finding` and name the artifact it lives in. Do not
+  code around it, silently rewrite design documents, or stop the run
+  merely because those documents need an edit.
+
+QUESTIONS (answer each in output, backed by a brief description; at most 300 characters per answer)
+- machinery_trust: Does the code or tests you delivered defend against machinery we should TRUST — third-party, or our own (e.g. guarding against a missing field in JSON that WE ourselves emit)? A real worry belongs inside the emitting component, not in defenses around it. Answer, backed by a brief description of what you checked and any case found.
+- environment_fit: What standard does the surrounding work live at, and does the code you delivered exceed it anywhere the mandate did not order (e.g. hardening a homemade toy game against code injection)? Answer, backed by a brief description of the surrounding standard and any excess found.
+- human_scale: Put your delivery next to the note: would the human who asked see the grain and size they meant — or literalism (e.g. asked to catalogue a manuscript's time skips, cataloguing every "right away" until the catalogue outgrows the manuscript)? Answer, backed by a brief description of how your work compares to what was asked.
+
+OUTPUT CONTRACT (mandatory)
+Respond with EXACTLY ONE JSON object and nothing else: no prose before or
+after it, no markdown fences. The object must satisfy:
+
+Common fields:
+  "status": "ok" | "blocked" | "need_rethink"
+  "kind": "<echo the KIND header of this prompt>"
+  "blocked_reason": string    (required when status is "blocked": explain
+                               precisely what stops you; the run will end
+                               with this explanation in the log)
+  "notes": string             (optional, short)
+
+`status: "need_rethink"` — you found a design contradiction the
+Brainstorming process must resolve before you can finish. Return EXACTLY:
+  "status": "need_rethink"
+  "kind": "<echo the current kind>"
+  "finding": {<the contradiction, with its evidence>}
+  "target_path": "<workspace-relative artifact the contradiction lives in>"
+  "questions": [...]   (the QUESTIONS entries are required here too:
+   asking for a rethink is only legitimate AFTER asking and answering them)
+No proposed direction and no other fields — the orchestrator runs the
+session from the finding alone.
+
+Kind implement adds:
+  "files_changed": ["<workspace-relative paths you created or edited>", ...]
+  When the prompt includes SLICE PRODUCER PLANNING, also return the complete
+  updated plan in "slices": [ {"id": 1, "title": "...",
+                 "producer_task_executor": {
+                   "draft_slice_note": "<executor id>",
+                   "implement": "<executor id>"}}, ... ]
+  (unique integer ids; only the executor id per step)
+  "implementation_cut": {"cut_scope": "<the coherent functional cut now
+                            complete and ready for review>",
+                         "remaining_scope": "<the original slice obligations
+                            deliberately delegated to the next sequential
+                            implementation part>"}
+   Include `implementation_cut` proactively when you close a coherent unit
+   while original slice work remains, or when responding to the driver's live
+   close instruction or forced-cutoff stabilization. Omit it when the original
+   slice scope is complete. Both strings must be concrete and non-empty. This
+   field reports the boundary; it does not let you choose labels or
+   create/renumber design slices. The orchestrator derives a/b/c sequentially
+   and opens the next part only after this one completes its full review cycle.
+
+"questions": [{"id": "<id>", "answer": "<the answer, backed by a brief description; at most 300 characters>"}, ...]
+  (one entry per QUESTIONS id above, in EVERY reply whatever its status;
+   each entry ANSWERS its question and briefly describes the work behind
+   it — the machine check is presence, nothing more)

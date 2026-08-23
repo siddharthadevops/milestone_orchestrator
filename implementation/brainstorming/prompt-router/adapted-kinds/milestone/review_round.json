@@ -1,0 +1,161 @@
+{
+  "kind": "review_round",
+  "process": "milestone",
+  "description": "Report-only full review round over a unit's artifact and the code it governs.",
+  "instructions": {
+    "parts": [
+      {
+        "ref": "header"
+      },
+      {
+        "one_of": "target_frame"
+      },
+      {
+        "ref": "project_context"
+      },
+      {
+        "ref": "operator_amendments_review"
+      },
+      {
+        "ref": "verification_boundary"
+      },
+      {
+        "ref": "evidence"
+      },
+      {
+        "ref": "judgment_rubric"
+      },
+      {
+        "ref": "severity_battery"
+      },
+      {
+        "ref": "reuse_gate_review"
+      },
+      {
+        "ref": "doc_review_duty",
+        "optional": true,
+        "note": "present only when the reviewed target is documentation"
+      },
+      {
+        "ref": "impl_review_duty",
+        "optional": true,
+        "note": "present only when the reviewed target is implementation"
+      },
+      {
+        "ref": "scope_authority",
+        "optional": true,
+        "note": "present only when the reviewed target is implementation"
+      },
+      {
+        "ref": "altitude_review",
+        "optional": true,
+        "note": "present only when the reviewed target is documentation"
+      },
+      {
+        "ref": "deferred_debt"
+      },
+      {
+        "ref": "adjudicated_rejections"
+      },
+      {
+        "ref": "process_authority"
+      }
+    ]
+  },
+  "questions": {
+    "items": [
+      {
+        "id": "environment_fit",
+        "text": "What standard does the surrounding work live at, and do any findings you filed demand exceeding it where the mandate did not order (e.g. demanding injection defenses inside a homemade toy game)? Answer, backed by a brief description of the surrounding standard and any excess found."
+      },
+      {
+        "id": "human_scale",
+        "text": "Put your findings next to the artifact: do they judge at the grain and size the mandate means, or demand literalism (e.g. asked to catalogue a manuscript's time skips, cataloguing every \"right away\" until the catalogue outgrows the manuscript)? Answer, backed by a brief description of how your work compares to what was asked."
+      }
+    ],
+    "intro": [
+      "QUESTIONS (answer each in output, backed by a brief description; at most 300 characters per answer)"
+    ]
+  },
+  "output_contract": {
+    "sections": [
+      {
+        "ref": "envelope_compact"
+      },
+      {
+        "ref": "review_contract"
+      },
+      {
+        "ref": "review_blocked"
+      },
+      {
+        "ref": "review_need_rethink"
+      },
+      {
+        "ref": "questions_output"
+      }
+    ]
+  },
+  "variants": {
+    "target_frame": {
+      "slice_unit": {
+        "text": [
+          "TASK: {{task}} REPORT ONLY.",
+          "BASELINE: the current reviewed skeleton at {{skeleton_path}} is the operative restatement of the MANDATE — the milestone boundary; judge scope against IT. The operator's full original mandate is preserved at {{goal_path}} (generated snapshot); read it only to trace intent the skeleton does not settle.",
+          "TARGET: {{target}}",
+          "STANDARD: {{reference_path}} — the reviewed contract this target must satisfy. A defect you newly find in the standard itself is a finding too, never grounds for blocked."
+        ],
+        "variables": [
+          {
+            "name": "task",
+            "required": true,
+            "description": "e.g. 'full review round of the slice 10 implementation (Compatibility and conformance).'"
+          },
+          {
+            "name": "skeleton_path",
+            "required": true
+          },
+          {
+            "name": "goal_path",
+            "required": true
+          },
+          {
+            "name": "target",
+            "required": true,
+            "description": "The review target, e.g. '(workspace) (plus any code/tests it governs)'."
+          },
+          {
+            "name": "reference_path",
+            "required": true,
+            "description": "The reviewed baseline the target must satisfy (slice note or skeleton)."
+          }
+        ]
+      },
+      "skeleton_unit": {
+        "text": [
+          "TASK: {{task}} REPORT ONLY.",
+          "BASELINE: the operator's mandate at {{goal_path}} — the milestone boundary; judge the skeleton against IT.",
+          "TARGET: the skeleton at {{skeleton_path}}. Judge its FIT to what it governs: the plan must hold against the real repository and mandate it rules — verified against real code — but the governed code itself is not under review.",
+          "COVERAGE",
+          "- Every mandate requirement lands in some slice, and every slice",
+          "  stands reviewable alone: flag orphan requirements and slices no",
+          "  requirement justifies."
+        ],
+        "variables": [
+          {
+            "name": "task",
+            "required": true
+          },
+          {
+            "name": "goal_path",
+            "required": true
+          },
+          {
+            "name": "skeleton_path",
+            "required": true
+          }
+        ]
+      }
+    }
+  }
+}

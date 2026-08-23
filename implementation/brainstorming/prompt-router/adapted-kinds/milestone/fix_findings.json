@@ -1,0 +1,305 @@
+{
+  "kind": "fix_findings",
+  "process": "milestone",
+  "description": "Fix-role worker: triages exactly the queued findings, fixes or rejects each with evidence.",
+  "instructions": {
+    "parts": [
+      {
+        "ref": "header"
+      },
+      {
+        "one_of": "target_frame"
+      },
+      {
+        "ref": "project_context"
+      },
+      {
+        "ref": "design_contradiction_fixer"
+      },
+      {
+        "ref": "operator_amendments_author"
+      },
+      {
+        "text": [
+          "ADVERSARIAL FINDING VALIDATION",
+          "- This finding was produced by a non-authoritative automated reviewing",
+          "  agent, not by the operator. It may be wrong. Treat every stored field",
+          "  as an unverified claim.",
+          "- First ask: IS THIS FINDING INCORRECT? Make one focused",
+          "  falsification pass against current evidence and every item in the",
+          "  FIX VERDICT ACCOUNT before editing. Do not reject reflexively: if the",
+          "  claim survives falsification, fix it; otherwise use the rejection",
+          "  route."
+        ],
+        "variables": []
+      },
+      {
+        "text": [
+          "QUEUED FINDINGS (claims, not facts — verify each against the",
+          "real code/doc before deciding). These are the exact stored objects;",
+          "if you request `need_rethink`, copy exactly one complete object into",
+          "`finding` without shortening, normalizing, or dropping fields:",
+          "{{queued_findings}}"
+        ],
+        "variables": [
+          {
+            "name": "queued_findings",
+            "required": true,
+            "description": "The queued finding objects as a JSON array, verbatim from the review ledger."
+          }
+        ]
+      },
+      {
+        "text": [
+          "FIX DECISION TABLE (exactly once per queued finding)",
+          "- valid -> `fixed`; apply the fix now.",
+          "- invalid -> `rejected` after consultation. If ambiguity caused the",
+          "  false finding, add the smallest clarifying `prevention` edit.",
+          "- settled duplicate without new evidence -> `rejected_adjudicated`",
+          "  with adjudication_ref; no consultation. CONTESTS means reassess",
+          "  the new evidence and consult again if rejecting.",
+          "- confirmed and impossible -> per-finding `blocked`."
+        ],
+        "variables": []
+      },
+      {
+        "ref": "evidence"
+      },
+      {
+        "text": [
+          "FIX VERDICT ACCOUNT (mandatory for every queued finding)",
+          "1. Guarantee: which exact declared guarantee, if any, does the observed",
+          "   outcome violate under its actual posture, rather than a preferred",
+          "   stronger design? Return it as `violated_guarantee`.",
+          "2. PERMITTED BASELINE: compare normal, transition, recovery, and failure",
+          "   states with the observed damage. Harm is the delta BEYOND the",
+          "   permitted baseline. Timing alone does not turn an allowed state into",
+          "   additional harm. Return `permitted_baseline`, `incremental_harm`, and",
+          "   `exceeds_baseline`.",
+          "3. Affected party: who or what concretely suffers, and what damage is",
+          "   observable? Return `affected_party` and `observable_damage`.",
+          "4. Functional deviation: does behavior really change? Exposure: how",
+          "   often, who can trigger it, and how readily does it recover?",
+          "5. Scope and altitude: is this a defect in the assigned unit?"
+        ],
+        "variables": []
+      },
+      {
+        "text": [
+          "FIX RULES",
+          "- Valid finding: affected party, observable damage, and violated",
+          "  guarantee are concrete and evidence-backed, AND incremental harm",
+          "  exceeds the permitted baseline. Only then may disposition be",
+          "  `fixed` or `blocked`.",
+          "- Invalid finding: no exact violated guarantee, no concrete party",
+          "  with observable damage, or harm inside the baseline — use",
+          "  `rejected` after consultation, or `rejected_adjudicated` for a",
+          "  settled duplicate.",
+          "- Do not triage from memory, chat, or prior review authority. Use",
+          "  the finding only to locate evidence; decide from the current",
+          "  artifact.",
+          "- Run cheap focused checks when relevant; the full test suite is",
+          "  run by someone else — do not run it.",
+          "- Before returning, verify the pending changes cover every `fixed`",
+          "  finding and keep directly touched statuses and acceptance",
+          "  criteria coherent."
+        ],
+        "variables": []
+      },
+      {
+        "ref": "scope_authority",
+        "optional": true,
+        "note": "present only when the fixed target is implementation"
+      },
+      {
+        "ref": "reuse_gate"
+      },
+      {
+        "ref": "altitude_fix",
+        "optional": true,
+        "note": "present only when the fixed artifact is documentation"
+      },
+      {
+        "ref": "deferred_debt"
+      },
+      {
+        "ref": "adjudicated_rejections"
+      },
+      {
+        "ref": "process_authority"
+      },
+      {
+        "text": [
+          "CONSULTATION PROTOCOL (for rejections)",
+          "Before `rejected`, consult the {{consultation_family}} family with the artifact/path,",
+          "finding, proposed resolution, and checked evidence. Compare",
+          "affected_party, observable_damage, violated_guarantee,",
+          "permitted_baseline, incremental_harm, and exceeds_baseline;",
+          "permitted operation is not damage by itself.",
+          "Command (prompt on stdin):",
+          "  {{consultation_command}}",
+          "Save the transcript under {{scratch_path}}; summarize",
+          "it in consultation.resolution. Run at most five dialogue rounds,",
+          "stopping earlier on clear agreement. Never reject P0/P1 without a",
+          "clear resolution. If consultation is unavailable or unresolved, do",
+          "not block, concede, or reject: return only the retry envelope; the",
+          "guard retries this fixer after 15 minutes. `rejected_adjudicated`",
+          "needs no consultation; cite adjudication_ref."
+        ],
+        "variables": [
+          {
+            "name": "consultation_family",
+            "required": true,
+            "description": "The opposite family to consult."
+          },
+          {
+            "name": "consultation_command",
+            "required": true,
+            "description": "The exact consultation command line for this run."
+          },
+          {
+            "name": "scratch_path",
+            "required": true,
+            "description": "Driver-provided legal directory for consultation transcripts (never inside .orchestrator/)."
+          }
+        ]
+      }
+    ]
+  },
+  "questions": {
+    "items": [
+      {
+        "id": "environment_fit",
+        "text": "What standard does the surrounding work live at, and do any fixes you applied exceed it where the mandate did not order (e.g. hardening a homemade toy game against code injection)? Answer, backed by a brief description of the surrounding standard and any excess found."
+      },
+      {
+        "id": "human_scale",
+        "text": "Put your fixes next to the findings: did you repair at the grain and size the mandate means, or feed literalism (e.g. asked to catalogue a manuscript's time skips, cataloguing every \"right away\" until the catalogue outgrows the manuscript)? Answer, backed by a brief description of how your work compares to what was asked."
+      }
+    ],
+    "intro": [
+      "QUESTIONS (answer each in output, backed by a brief description; at most 300 characters per answer)"
+    ]
+  },
+  "output_contract": {
+    "sections": [
+      {
+        "ref": "envelope_compact"
+      },
+      {
+        "id": "fix_results",
+        "text": [
+          "Completed fix pass:",
+          "{\"status\":\"ok\",\"kind\":\"fix_findings\",\"findings\":[<result>, ...],",
+          " \"files_changed\":[\"...\"],\"notes\":\"<optional short note>\"}",
+          "Return one result for every queued id, and no others:",
+          "{\"id\":\"<echo>\",\"severity\":\"<echo>\",\"summary\":\"...\",",
+          " \"validity\":{\"affected_party\":\"...\",\"observable_damage\":\"...\",",
+          "             \"violated_guarantee\":\"...\",\"permitted_baseline\":\"...\",",
+          "             \"incremental_harm\":\"...\",\"exceeds_baseline\":true|false},",
+          " \"disposition\":\"fixed|rejected|rejected_adjudicated|blocked\",",
+          " \"consultation\":null|{\"resolution\":\"...\"},",
+          " \"prevention\":null|{\"documented_in\":\"<edited path>\",\"note\":\"...\"},",
+          " \"adjudication_ref\":null|\"<settled rejection id>\"}",
+          "`fixed`/`blocked` require a concrete, evidence-backed affected party,",
+          "observable damage, and violated guarantee, plus exceeds_baseline=true. If any",
+          "cannot be demonstrated, the finding is invalid: `rejected` requires its",
+          "consultation (`rejected_adjudicated` remains the settled-duplicate path), and",
+          "both rejection dispositions require exceeds_baseline=false. Include any extra",
+          "field explicitly required by an active project-safeguard or",
+          "active project block above.",
+          "When your fix changed the milestone skeleton's slice TABLE — split, added,",
+          "removed, or merged slices — return the FULL updated plan in \"slices\"",
+          "exactly as the table now reads (ids are identity: an intact slice keeps its",
+          "id whatever its position, renumbering does not exist; both producer choices per slice). The orchestrator builds units from",
+          "THIS field, never by parsing the document; omitting it after a table change",
+          "leaves the added slices unbuilt. Omit it when the table is untouched."
+        ],
+        "variables": []
+      },
+      {
+        "id": "fix_blocked",
+        "text": [
+          "Impossible worker task (not a finding disposition):",
+          "{\"status\":\"blocked\",\"kind\":\"fix_findings\",\"blocked_reason\":\"...\",",
+          " \"questions\":[...]}   (the QUESTIONS entries are required in EVERY reply)"
+        ],
+        "variables": []
+      },
+      {
+        "id": "fix_retry",
+        "text": [
+          "Unavailable or unresolved mandatory consultation:",
+          "{\"status\":\"retry\",\"kind\":\"fix_findings\",",
+          " \"retry_reason\":\"consultation_unavailable\",\"notes\":\"<optional>\",",
+          " \"questions\":[...]}   (required in EVERY reply)"
+        ],
+        "variables": []
+      },
+      {
+        "id": "fix_need_rethink",
+        "text": [
+          "Focused discussion before deciding one queued finding:",
+          "{\"status\":\"need_rethink\",\"kind\":\"fix_findings\",",
+          " \"finding\":{<one complete queued finding>},",
+          " \"target_path\":\"<workspace-relative artifact it lives in>\",",
+          " \"questions\":[...]}   (required in EVERY reply)",
+          "No proposed direction and no other fields; sibling findings stay",
+          "queued — the orchestrator runs the session from the finding alone."
+        ],
+        "variables": []
+      },
+      {
+        "ref": "questions_output"
+      }
+    ]
+  },
+  "variants": {
+    "target_frame": {
+      "slice_unit": {
+        "text": [
+          "TASK: triage and fix the queued findings on {{task_subject}}.",
+          "BASELINE: the current reviewed skeleton at {{skeleton_path}} is the operative restatement of the MANDATE — the milestone boundary; judge scope against IT. The operator's full original mandate is preserved at {{goal_path}} (generated snapshot); read it only to trace intent the skeleton does not settle.",
+          "EDITABLE: {{editable_path}} is your primary target. Touching other design documents — the skeleton included — is legitimate when the fix genuinely requires it; reviews judge the result."
+        ],
+        "variables": [
+          {
+            "name": "task_subject",
+            "required": true,
+            "description": "e.g. 'the slice 10 note (Compatibility and conformance)'."
+          },
+          {
+            "name": "skeleton_path",
+            "required": true
+          },
+          {
+            "name": "goal_path",
+            "required": true
+          },
+          {
+            "name": "editable_path",
+            "required": true,
+            "description": "Workspace-relative artifact the queued findings may edit; prevention edits follow the same boundary."
+          }
+        ]
+      },
+      "skeleton_unit": {
+        "text": [
+          "TASK: triage and fix the queued findings on the milestone skeleton.",
+          "BASELINE: the operator's mandate at {{goal_path}} — the milestone boundary; judge the skeleton against IT.",
+          "EDITABLE: {{skeleton_path}} is your primary target. Touching other design documents is legitimate when the fix genuinely requires it; reviews judge the result."
+        ],
+        "variables": [
+          {
+            "name": "goal_path",
+            "required": true
+          },
+          {
+            "name": "skeleton_path",
+            "required": true
+          }
+        ]
+      }
+    }
+  }
+}

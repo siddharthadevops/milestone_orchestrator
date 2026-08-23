@@ -1,0 +1,89 @@
+KIND: suite_checkpoint
+WORKSPACE: /Users/siddhartha/Development/source/milestone_orchestrator_impl
+
+TASK: certify the CURRENT WORK TREE at the scheduled full-suite checkpoint.
+This is one fresh, report-only call. Determine the repository's official
+complete suite when the operator has not supplied it, then run the
+ordered commands at most once each, stopping at the first failure,
+and report what actually happened.
+- checkpoint: four_slice_checkpoint
+
+PROJECT CONTEXT (standing project law; binding)
+- PRIMARY ROOT /Users/siddhartha/Development/source/milestone_orchestrator_impl — the repo you execute in.
+- ADDITIONAL ROOT /Users/siddhartha/Development/source/life — a READ-ONLY grant: you may read it for evidence; never edit it.
+- ADDITIONAL ROOT /Users/siddhartha/Development/source/life_prod/agent_99 — a READ-ONLY grant: you may read it for evidence; never edit it.
+- ADDITIONAL ROOT /Users/siddhartha/Development/source/life_prod/life_product_components — a READ-ONLY grant: you may read it for evidence; never edit it.
+- ADDITIONAL ROOT /Users/siddhartha/Development/source/life_prod/tutor — a READ-ONLY grant: you may read it for evidence; never edit it.
+
+OPERATOR-CONFIGURED COMMANDS
+python3 -m unittest discover -s orchestrator/tests -t .
+
+CHECKPOINT LAW
+- You are not an author: do not fix code, tests, configuration, or docs,
+  and do not stage or commit. Only the suite commands may produce their
+  ordinary generated/ignored outputs.
+- When operator commands are present, they DEFINE this run's complete gate:
+  run exactly that list in order as separate invocations; do not narrow,
+  replace, or supplement it. Otherwise inspect repository-owned
+  authority — CI configuration, build/test manifests, and project docs —
+  and select the official COMPLETE suite, never a focused substitute.
+  Report that authority in `authority`: configured calls name
+  `operator_config`; discovery/no-suite calls cite existing workspace-relative
+  repository paths and what each establishes.
+- Run from the workspace root, non-interactively, with CI=1. Each command
+  runs at most once in this attempt; never use watch mode, retry a failure,
+  or turn a no-op into a passing suite.
+- If an operator command is interactive, watch-mode, or a no-op, return
+  `blocked` without running it; configured authority does not waive these
+  execution-safety requirements.
+- Stop after the first failure and report it. Do not repair it. A later
+  ordinary fix/review cycle will lead to a fresh checkpoint call. Put the
+  complete actionable diagnostics in `failure_account`; the driver preserves
+  that account verbatim in the synthetic finding given to the fixer.
+- `no_suite` is valid only after inspecting the repository authorities and
+  finding that no complete suite exists, and only when no operator commands
+  were supplied; cite that evidence explicitly.
+- If the official suite is genuinely ambiguous or cannot be executed,
+  return `blocked`; never guess and never report an unrun command as passed.
+
+PROCESS AUTHORITY
+- Ignore agent instruction files (AGENTS.md, CLAUDE.md, and similar)
+  and the entire .orchestrator/ directory: they do not govern this
+  run and are not yours to edit.
+
+OUTPUT CONTRACT
+Return exactly one JSON object, nothing else.
+Passed or failed execution:
+{"status":"passed"|"failed","kind":"suite_checkpoint",
+ "commands":["<ordered complete-suite command>",...],
+ "authority":{"source":"operator_config"|"repository",
+               "evidence":[{"path":"<workspace-relative path>",
+                            "basis":"<what it establishes>"},...]},
+ "results":[{"command":"<attempted command>","exit_code":<integer>,
+              "evidence":"<concise output evidence>"},...],
+ "failure_account":{"command":"<failed command>",
+                     "exit_code":<non-zero integer>,
+                     "diagnostics":"<complete actionable failure output>",
+                     "affected_tests":["<test id, if known>",...]}}
+`commands` is the complete ordered plan; `results` contains exactly the
+commands actually attempted, stopping at the first non-zero exit.
+For `passed`, commands is non-empty, every command has one zero-exit result,
+and the arrays have equal length. For `failed`, commands and results are
+non-empty, results is the exact attempted prefix of commands, and its last
+result has a non-zero exit; `failure_account` is then required and must match
+that last result. Omit `failure_account` for `passed`.
+With operator commands, `commands` equals that list exactly, `authority.source`
+is `operator_config`, `authority.evidence` is empty, and `no_suite` is invalid.
+Without them, source is `repository`, evidence is non-empty, and every
+cited path must exist.
+No suite exists:
+{"status":"no_suite","kind":"suite_checkpoint",
+ "commands":[],"results":[],
+ "authority":{"source":"repository",
+               "evidence":[{"path":"<workspace-relative path>",
+                            "basis":"<why it proves no suite exists>"},...]}}
+Impossible checkpoint:
+{"status":"blocked","kind":"suite_checkpoint",
+ "commands":["<resolved command, if any>",...],
+ "results":[<attempted results, if any>],
+ "blocked_reason":"<what prevented a trustworthy execution>"}

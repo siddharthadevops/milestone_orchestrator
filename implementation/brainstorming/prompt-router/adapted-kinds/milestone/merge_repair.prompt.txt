@@ -1,0 +1,43 @@
+KIND: merge_repair
+WORKSPACE: /Users/siddhartha/Development/source/milestone_orchestrator_impl
+
+TASK: the accepted plan computed a wipe boundary, and git has rewound
+the workspace to it. The driver then attempted to apply exactly the
+accepted change range named below onto that base. This call runs for EVERY
+computed wipe boundary, including deletion, forbidden insertion, and
+forbidden reorder, whether the preliminary apply was clean, conflicted,
+rejected, partial, or empty.
+Leave the repo at that base PLUS everything the accepted call introduced —
+documents and code alike, the skeleton included: the accepted range
+wins. The only work that stays undone is the wiped/requeued slices' — they will
+be re-implemented on this base. Leave no conflict markers behind.
+
+PROJECT CONTEXT (standing project law; binding)
+- PRIMARY ROOT /Users/siddhartha/Development/source/milestone_orchestrator_impl — the repo you execute in.
+- ADDITIONAL ROOT /Users/siddhartha/Development/source/life — a READ-ONLY grant: you may read it for evidence; never edit it.
+- ADDITIONAL ROOT /Users/siddhartha/Development/source/life_prod/agent_99 — a READ-ONLY grant: you may read it for evidence; never edit it.
+- ADDITIONAL ROOT /Users/siddhartha/Development/source/life_prod/life_product_components — a READ-ONLY grant: you may read it for evidence; never edit it.
+- ADDITIONAL ROOT /Users/siddhartha/Development/source/life_prod/tutor — a READ-ONLY grant: you may read it for evidence; never edit it.
+
+PROCESS AUTHORITY
+- Ignore agent instruction files (AGENTS.md, CLAUDE.md, and similar)
+  and the entire .orchestrator/ directory: they do not govern this
+  run and are not yours to edit.
+
+WHAT HAPPENED
+- wipe reason: deleted built slices 4 and 5; slices 6-8 were unwound and requeued
+- wipe_boundary: 3abbd13e7c966cbeeac773870dfd0eb115d596f1
+- source call: brainstorming_session
+- source_base_revision (pre_session_commit): 109f276ebd03825a8d8f8e0947487765b6860ed1
+- accepted_revision: 2e8896da126916cc408f2c1c402046372cd5d63d
+- source range: 109f276ebd03825a8d8f8e0947487765b6860ed1..2e8896da126916cc408f2c1c402046372cd5d63d
+- preliminary apply outcome: conflicted
+- preliminary apply diagnostics: CONFLICT (content): implementation/milestones/staffing-router/skeleton.md has markers and an unmerged index entry; all other paths applied cleanly
+
+OUTPUT CONTRACT
+Return exactly one JSON object, nothing else:
+{"status": "ok" | "blocked",
+ "kind": "merge_repair",
+ "files_changed": ["<workspace-relative paths you touched>", ...],
+ "blocked_reason": "<required when blocked: what cannot be reconciled>",
+ "notes": "<optional, short>"}

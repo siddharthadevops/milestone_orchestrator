@@ -1,8 +1,8 @@
 # Current Prompts — Real Captures
 
-Status: **non-canonical reference**, companion to
-[`prompt-analysis-milestone.md`](prompt-analysis-milestone.md) and
-[`prompt-analysis-brainstorming.md`](prompt-analysis-brainstorming.md).
+Status: **non-canonical reference** — the raw evidence base for
+[`goal.md`](goal.md), [`prompt-content-milestone.md`](prompt-content-milestone.md)
+and the [`adapted-kinds/`](adapted-kinds/) corpus.
 
 Every section below is a **real prompt exactly as dispatched**, copied from
 the prompt traces the orchestrator persists for every physical call. The

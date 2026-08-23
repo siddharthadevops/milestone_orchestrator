@@ -1,0 +1,148 @@
+{
+  "kind": "draft_slice_note",
+  "process": "milestone",
+  "description": "Draft-role author: writes one slice note against the current reviewed skeleton.",
+  "instructions": {
+    "parts": [
+      {
+        "ref": "header"
+      },
+      {
+        "text": [
+          "TASK: draft the slice note for slice {{slice_id}} ({{slice_title}}).",
+          "BASELINE: the current reviewed skeleton at {{skeleton_path}} is the operative restatement of the MANDATE — the milestone boundary; judge scope against IT. The operator's full original mandate is preserved at {{goal_path}} (generated snapshot); read it only to trace intent the skeleton does not settle.",
+          "SKELETON: {{skeleton_path}} (current reviewed design baseline)"
+        ],
+        "variables": [
+          {
+            "name": "slice_id",
+            "required": true
+          },
+          {
+            "name": "slice_title",
+            "required": true
+          },
+          {
+            "name": "skeleton_path",
+            "required": true
+          },
+          {
+            "name": "goal_path",
+            "required": true
+          }
+        ]
+      },
+      {
+        "ref": "project_context"
+      },
+      {
+        "ref": "operator_amendments_author"
+      },
+      {
+        "ref": "producer_planning",
+        "optional": true,
+        "note": "mounted when re-planning is offered"
+      },
+      {
+        "text": [
+          "Write {{slice_note_path}}: scope as observable contracts and the",
+          "tests that pin them, non-goals, dependencies, acceptance",
+          "criteria, risks, and guarantee posture (the",
+          "consistency/delivery level each pinned mechanism promises:",
+          "strict, optimistic, eventual, or best-effort). State WHAT must",
+          "be observably true, not HOW code will do it."
+        ],
+        "variables": [
+          {
+            "name": "slice_note_path",
+            "required": true,
+            "description": "Workspace-relative path where the slice note must be written."
+          }
+        ]
+      },
+      {
+        "ref": "two_register"
+      },
+      {
+        "text": [
+          "DUE DILIGENCE (structured gate; mandatory in this run)",
+          "Answer the engineering questions below as a \"Due Diligence\"",
+          "section of the slice note — one row per question, each with at",
+          "least one evidence citation (a file:line, or the mandate/skeleton",
+          "section that pins it). Evidence is VERIFIED, never assumed: read",
+          "what you cite; the citation must actually say what you claim.",
+          "The skeleton answered these at design level; answer them here for",
+          "what THIS slice concretely introduces (modules, APIs, dependencies,",
+          "seams) — do not copy the skeleton's answers.",
+          "  - victim: who or what is affected without this slice, the realistic harm, exposure and reversibility, and the independent authority that establishes the need",
+          "  - machinery: what machinery this slice introduces — modules, APIs, dependencies — which authorised outcome each serves, and why it must exist",
+          "  - consumers_touched: which consumers this slice touches or creates — VERIFIED against real code (file:line), never assumed",
+          "  - cheaper_alternative: the cheapest sufficient option — reuse, extension, documentation, configuration, or doing nothing — and why anything cheaper is insufficient",
+          "  - cost: build, migration, operation, maintenance, and review cost, weighed against omission cost and reversibility",
+          "  - threat_model: who the attacker is and which inputs THIS slice handles that they control, versus who is TRUSTED (operator, product code, compile-time configuration) — defenses guard the untrusted inputs only; if this slice handles no untrusted input, say so and cite why",
+          "  - pinned_facts: the facts where ANY deviation is a bug — cite where each fact is pinned",
+          "  - verification: how this slice's claims are verified — the tests or checks that pin them",
+          "  - enforceability: for each guarantee or invariant this document asserts, the pinned mechanism (file:line of the library option, API, or existing code) that can actually enforce it — a guarantee no pinned mechanism can express is a design gap to report, never a promise to write down"
+        ],
+        "variables": []
+      },
+      {
+        "ref": "altitude_doc"
+      },
+      {
+        "ref": "reuse_gate"
+      },
+      {
+        "ref": "process_authority"
+      },
+      {
+        "ref": "design_contradiction_author"
+      }
+    ]
+  },
+  "questions": {
+    "intro": [
+      "QUESTIONS (answer each in output, backed by a brief description; at most 300 characters per answer)"
+    ],
+    "items": [
+      {
+        "id": "due_diligence_count",
+        "text": "How many Due Diligence rows did you answer in the document?"
+      },
+      {
+        "id": "machinery_trust",
+        "text": "Does the note you wrote pin any guarantee, test, or defense that polices machinery we should TRUST — third-party, or our own (e.g. guarding against a missing field in JSON that WE ourselves emit)? A real worry belongs inside the emitting component, not in defenses around it. Answer, backed by a brief description of what you checked and any case found."
+      },
+      {
+        "id": "environment_fit",
+        "text": "What standard does the surrounding work live at, and does the note you wrote exceed it anywhere the mandate did not order (e.g. hardening a homemade toy game against code injection)? Answer, backed by a brief description of the surrounding standard and any excess found."
+      },
+      {
+        "id": "human_scale",
+        "text": "Put the note next to the skeleton's assignment for this slice: would the human who asked see the grain and size they meant — or literalism (e.g. asked to catalogue a manuscript's time skips, cataloguing every \"right away\" until the catalogue outgrows the manuscript)? Answer, backed by a brief description of how your work compares to what was asked."
+      }
+    ]
+  },
+  "output_contract": {
+    "sections": [
+      {
+        "ref": "envelope_verbose"
+      },
+      {
+        "ref": "common_fields",
+        "defaults": {
+          "status_vocabulary": "\"ok\" | \"blocked\" | \"need_rethink\""
+        }
+      },
+      {
+        "ref": "need_rethink_author"
+      },
+      {
+        "ref": "draft_slice_note_result"
+      },
+      {
+        "ref": "questions_output"
+      }
+    ]
+  }
+}

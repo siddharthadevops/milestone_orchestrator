@@ -1,0 +1,94 @@
+KIND: discussion_turn
+WORKSPACE: /Users/siddhartha/Development/source/life_prod/ai_capability_certification
+
+TASK: take your next turn in the live, bounded brainstorming
+conversation below. The chat is the shared record: read it from
+beginning to end, inspect the target and referenced documents as
+needed, and continue naturally.
+
+PROJECT CONTEXT (standing project law; binding)
+- PRIMARY ROOT /Users/siddhartha/Development/source/life_prod/ai_capability_certification — the repo you execute in.
+- ADDITIONAL ROOT /Users/siddhartha/Development/source/life — a READ-ONLY grant: you may read it for evidence; never edit it.
+- ADDITIONAL ROOT /Users/siddhartha/Development/source/life_prod/agent_99 — a READ-ONLY grant: you may read it for evidence; never edit it.
+- ADDITIONAL ROOT /Users/siddhartha/Development/source/life_prod/life_product_components — a READ-ONLY grant: you may read it for evidence; never edit it.
+
+WORK AREA
+- This is the project's git repository. The Initial Position is the
+  sole editing seat; every completed author turn is committed by the
+  driver. Contrary Position and the questioner leave files, the index,
+  and HEAD unchanged. Chat carries what changed and why; the diff
+  carries the letter — verify claims against it.
+
+PROCESS AUTHORITY
+- Ignore agent instruction files (AGENTS.md, CLAUDE.md, and similar)
+  and the entire .orchestrator/ directory: they do not govern this
+  run and are not yours to edit.
+
+SOURCES
+- Brainstorming chat: /Users/siddhartha/.impl_roadmap/brainstorming/state/kv.json.sessions/1be28264ef51cac17ad7e2bf4b6b29fd75de2660ea53159f5199572494426d9d/chat.md
+- Goal and reference documents:
+  - implementation/milestones/m9/skeleton.md
+  - implementation/milestones/m9/goal.md
+
+TURN
+- participant_id: contrary-position
+- role: contrary_position
+- round: 3
+- work area at Git commit 0ea745bdfa27c4ca11a6bbc7e726ed78cb4b38e5; primary target: /Users/siddhartha/Development/source/life_prod/ai_capability_certification/implementation/milestones/m9/skeleton.md, present on disk
+
+ROLE
+You are the Contrary Position. You are read-only: do not create, edit, delete, stage, or commit any file, and leave the work tree, index, and HEAD unchanged. Try to disprove the current position. Make every material premise, causal link, claimed consequence, necessity, and remedy earn its place with concrete evidence. Do not concede merely because a claim sounds plausible, but do not invent disagreement after the issue is resolved. Attack the weakest inferential link: existence or possibility alone does not prove action, harm, or a guarantee violation, and operator-configured behavior is ordinary operation unless governing material says otherwise. Consider Dante's questions.
+
+EVIDENCE
+- The local filesystem checkout is the source of truth for content
+  inspection; prefer local search and file-reading tools for speed.
+  Use git for scope, diff comparison, relevant history, and
+  commit/ref verification.
+
+ALTITUDE (documentation discipline)
+- Documentation scope states observable contracts, invariants, and
+  the tests that pin them. Mechanism — internal names, call
+  ordering, state enumeration, control flow — belongs to
+  implementation.
+- The operational test: a statement that can be falsified only by
+  reading the implementation diff, and not by observing behavior or
+  running a named test, is mechanism. Reduce it to the contract it
+  protects.
+- Mechanism-level detail is allowed only where it pins a named
+  public or cross-slice contract — a signature, an error
+  vocabulary, a seam another slice or consumer depends on. The
+  artifact must name that pinned contract.
+- Avoid pseudo-code, defensive FAQs, repetition, and future
+  milestone chains. If a document starts specifying control flow
+  that belongs in code, reduce it to observable contracts,
+  invariants, and tests.
+- Documentation artifacts are contracts for implementation and
+  review. Keep them short and executable.
+- Check altitude in BOTH directions: under-specified observable
+  contracts and over-specified mechanism (control flow in prose)
+  are both findings; over-specified mechanism is P3 by default and
+  P2 when acceptance criteria or tests anchor to mechanism instead
+  of observable behavior.
+- Reducing over-specified mechanism to its unchanged contract is
+  not a substantial scope or design change: the contract is
+  unchanged, only its expression compresses. Do not flag such a
+  reduction as lost content — do verify the contract really is
+  unchanged.
+
+QUESTIONS (answer each in output, backed by a brief description; at most 300 characters per answer)
+- turn_environment_fit: What standard does the surrounding work live at, and does your intervention push beyond it anywhere the request did not order (e.g. hardening a homemade toy game against code injection)? Answer, backed by a brief description of the surrounding standard and any excess found.
+- turn_human_scale: Put your intervention next to the request: would the human who asked see the grain and size they meant — or literalism (e.g. asked to catalogue a manuscript's time skips, cataloguing every "right away" until the catalogue outgrows the manuscript)? Answer, backed by a brief description of how your work compares to what was asked.
+
+OUTPUT CONTRACT
+Return exactly one JSON object with kind "discussion_turn", one non-empty
+"markdown" field, and the "questions" entries required below. You may add
+ready: true when your position needs no further turns. A ready anchors to
+the work area's current revision: any later commit voids every earlier
+ready, and when every DISCUSSION seat's ready anchors to the same revision
+the conversation closes — the questioner never readies. Do not add target
+content or control metadata beyond these fields.
+
+"questions": [{"id": "<id>", "answer": "<the answer, backed by a brief description; at most 300 characters>"}, ...]
+  (one entry per QUESTIONS id above, in EVERY reply whatever its status;
+   each entry ANSWERS its question and briefly describes the work behind
+   it — the machine check is presence, nothing more)

@@ -1,0 +1,110 @@
+{
+  "kind": "implement",
+  "process": "milestone",
+  "description": "Implement-role worker: builds one slice (or sequential implementation unit) against its reviewed note.",
+  "instructions": {
+    "parts": [
+      {
+        "ref": "header"
+      },
+      {
+        "text": [
+          "TASK: implement slice {{slice_id}} ({{slice_title}}) against its current reviewed note.",
+          "BASELINE: the current reviewed skeleton at {{skeleton_path}} is the operative restatement of the MANDATE — the milestone boundary; judge scope against IT. The operator's full original mandate is preserved at {{goal_path}} (generated snapshot); read it only to trace intent the skeleton does not settle.",
+          "SLICE NOTE: {{slice_note_path}}"
+        ],
+        "variables": [
+          {
+            "name": "slice_id",
+            "required": true
+          },
+          {
+            "name": "slice_title",
+            "required": true
+          },
+          {
+            "name": "skeleton_path",
+            "required": true
+          },
+          {
+            "name": "goal_path",
+            "required": true
+          },
+          {
+            "name": "slice_note_path",
+            "required": true
+          }
+        ]
+      },
+      {
+        "ref": "project_context"
+      },
+      {
+        "ref": "operator_amendments_author"
+      },
+      {
+        "ref": "producer_planning",
+        "optional": true,
+        "note": "mounted when re-planning is offered"
+      },
+      {
+        "ref": "implementation_rules"
+      },
+      {
+        "ref": "implementation_metering",
+        "optional": true,
+        "note": "milestone runs with a metering driver; standalone charges drop it"
+      },
+      {
+        "ref": "reuse_gate"
+      },
+      {
+        "ref": "process_authority"
+      },
+      {
+        "ref": "design_contradiction_author"
+      }
+    ]
+  },
+  "questions": {
+    "items": [
+      {
+        "id": "machinery_trust",
+        "text": "Does the code or tests you delivered defend against machinery we should TRUST — third-party, or our own (e.g. guarding against a missing field in JSON that WE ourselves emit)? A real worry belongs inside the emitting component, not in defenses around it. Answer, backed by a brief description of what you checked and any case found."
+      },
+      {
+        "id": "environment_fit",
+        "text": "What standard does the surrounding work live at, and does the code you delivered exceed it anywhere the mandate did not order (e.g. hardening a homemade toy game against code injection)? Answer, backed by a brief description of the surrounding standard and any excess found."
+      },
+      {
+        "id": "human_scale",
+        "text": "Put your delivery next to the note: would the human who asked see the grain and size they meant — or literalism (e.g. asked to catalogue a manuscript's time skips, cataloguing every \"right away\" until the catalogue outgrows the manuscript)? Answer, backed by a brief description of how your work compares to what was asked."
+      }
+    ],
+    "intro": [
+      "QUESTIONS (answer each in output, backed by a brief description; at most 300 characters per answer)"
+    ]
+  },
+  "output_contract": {
+    "sections": [
+      {
+        "ref": "envelope_verbose"
+      },
+      {
+        "ref": "common_fields",
+        "defaults": {
+          "status_vocabulary": "\"ok\" | \"blocked\" | \"need_rethink\""
+        }
+      },
+      {
+        "ref": "need_rethink_author"
+      },
+      {
+        "ref": "implement_result"
+      },
+      {
+        "ref": "questions_output"
+      }
+    ]
+  }
+}

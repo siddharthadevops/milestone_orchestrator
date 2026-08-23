@@ -1,0 +1,109 @@
+{
+  "kind": "merge_repair",
+  "process": "milestone",
+  "description": "Bare technical call: after any computed plan wipe, leaves the repo at the surviving base plus everything the accepted plan-changing call introduced. No craft law, no battery.",
+  "instructions": {
+    "parts": [
+      {
+        "ref": "header"
+      },
+      {
+        "text": [
+          "TASK: the accepted plan computed a wipe boundary, and git has rewound",
+          "the workspace to it. The driver then attempted to apply exactly the",
+          "accepted change range named below onto that base. This call runs for EVERY",
+          "computed wipe boundary, including deletion, forbidden insertion, and",
+          "forbidden reorder, whether the preliminary apply was clean, conflicted,",
+          "rejected, partial, or empty.",
+          "Leave the repo at that base PLUS everything the accepted call introduced —",
+          "documents and code alike, the skeleton included: the accepted range",
+          "wins. The only work that stays undone is the wiped/requeued slices' — they will",
+          "be re-implemented on this base. Leave no conflict markers behind."
+        ],
+        "variables": []
+      },
+      {
+        "ref": "project_context"
+      },
+      {
+        "ref": "process_authority"
+      },
+      {
+        "text": [
+          "WHAT HAPPENED",
+          "- wipe reason: {{wipe_reason}}",
+          "- wipe_boundary: {{wipe_boundary}}",
+          "- source call: {{source_kind}}",
+          "- source_base_revision ({{source_base_role}}): {{source_base_revision}}",
+          "- accepted_revision: {{accepted_revision}}",
+          "- source range: {{source_base_revision}}..{{accepted_revision}}",
+          "- preliminary apply outcome: {{apply_outcome}}",
+          "- preliminary apply diagnostics: {{apply_diagnostics}}"
+        ],
+        "variables": [
+          {
+            "name": "wipe_reason",
+            "required": true,
+            "description": "Why the plan computed a wipe boundary and which slices were unwound/requeued."
+          },
+          {
+            "name": "wipe_boundary",
+            "required": true,
+            "description": "Commit restored before the accepted change range is re-landed; never the source-range start."
+          },
+          {
+            "name": "source_kind",
+            "required": true,
+            "description": "brainstorming_session or agent_call"
+          },
+          {
+            "name": "source_base_role",
+            "required": true,
+            "description": "pre_session_commit for Brainstorming; pre_call_commit for a direct agent call"
+          },
+          {
+            "name": "source_base_revision",
+            "required": true,
+            "description": "Commit captured before the accepted plan-changing call; source-range start and never the wipe boundary by implication."
+          },
+          {
+            "name": "accepted_revision",
+            "required": true,
+            "description": "Source-range end: the common ready commit for Brainstorming, or the driver's commit of an accepted direct-call result."
+          },
+          {
+            "name": "apply_outcome",
+            "required": true,
+            "description": "clean, conflicted, rejected, partial, or empty"
+          },
+          {
+            "name": "apply_diagnostics",
+            "required": true,
+            "description": "Git diagnostics plus the resulting index/work-tree state and affected paths; use 'none' only for a genuinely clean or empty apply."
+          }
+        ]
+      }
+    ]
+  },
+  "questions": {
+    "status": "bare technical kind — no battery by design (decision 57)",
+    "items": []
+  },
+  "output_contract": {
+    "sections": [
+      {
+        "id": "merge_repair_result",
+        "text": [
+          "OUTPUT CONTRACT",
+          "Return exactly one JSON object, nothing else:",
+          "{\"status\": \"ok\" | \"blocked\",",
+          " \"kind\": \"merge_repair\",",
+          " \"files_changed\": [\"<workspace-relative paths you touched>\", ...],",
+          " \"blocked_reason\": \"<required when blocked: what cannot be reconciled>\",",
+          " \"notes\": \"<optional, short>\"}"
+        ],
+        "variables": []
+      }
+    ]
+  }
+}

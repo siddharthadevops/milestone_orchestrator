@@ -1,0 +1,144 @@
+{
+  "kind": "reclassify",
+  "process": "milestone",
+  "description": "Report-only drift-risk rater: rates ONE finding's drift risk and drift damage for the deferral decision.",
+  "instructions": {
+    "parts": [
+      {
+        "ref": "header"
+      },
+      {
+        "text": [
+          "TASK: rate ONE finding's drift risk. REPORT ONLY — you edit",
+          "nothing and review nothing else."
+        ],
+        "variables": []
+      },
+      {
+        "ref": "project_context"
+      },
+      {
+        "text": [
+          "Rate the finding below against {{artifact_path}} as it is — read",
+          "the artifact; do not take the summary on trust.",
+          "",
+          "DRIFT RISK — the probability the next builder is silently misled:",
+          "  low    no plausible reading misleads the next agent's work",
+          "  medium a careful agent resolves it from context; a hasty one",
+          "         might not",
+          "  high   could plausibly steer into wrong code, wrong tests, or a",
+          "         wrong contract reading",
+          "  xhigh  misstates pinned contract/behaviour facts; building on it",
+          "         as written would likely produce wrong work",
+          "Builders stop and report any hole or ambiguity that would change",
+          "what they build, so under-specification is self-revealing: rate it",
+          "LOWER, and reserve high/xhigh for facts stated WRONG — those are",
+          "trusted and built on without stopping.",
+          "",
+          "DRIFT DAMAGE — if the drift happens, what the CORRECTION costs.",
+          "Price the correction, not the fear: nothing ships mid-milestone,",
+          "so the worst realistic damage is rework.",
+          "  low    a small local fix once seen (re-pin a value, correct a row)",
+          "  medium bounded rework inside this unit; caught at its own review",
+          "  high   the correction changes reviewed work or propagates: other",
+          "         slices built on the wrong contract must rework",
+          "  xhigh  effectively irreversible or externally published",
+          "Self-revelation discounts DAMAGE (cheap on contact), never the",
+          "probability.",
+          "",
+          "WHO BUILDS ON IT: {{builders}} — weigh the reading an agent at",
+          "that strength actually makes, not a hypothetical junior's.",
+          "",
+          "If the finding touches correctness, behaviour, or test coverage",
+          "beyond what its severity label suggests, say so in `reason` and",
+          "rate accordingly. Do not inflate to be safe or deflate to be",
+          "agreeable — a wrong rating in either direction corrupts the",
+          "decision this feeds."
+        ],
+        "variables": [
+          {
+            "name": "artifact_path",
+            "required": true,
+            "description": "Workspace-relative path of the rated artifact."
+          },
+          {
+            "name": "builders",
+            "required": true,
+            "description": "Who builds on the artifact, with strength."
+          }
+        ]
+      },
+      {
+        "text": [
+          "FINDING (severity {{finding_severity}}, id {{finding_id}}):",
+          "{{finding_summary}}",
+          "In plain words: {{finding_plain}}",
+          "Smallest failure scenario: {{finding_example}}"
+        ],
+        "variables": [
+          {
+            "name": "finding_severity",
+            "required": true
+          },
+          {
+            "name": "finding_id",
+            "required": true
+          },
+          {
+            "name": "finding_summary",
+            "required": true,
+            "description": "The finding's summary and validity account, verbatim from the ledger."
+          },
+          {
+            "name": "finding_plain",
+            "required": true,
+            "description": "The finding's stored plain-words sentence."
+          },
+          {
+            "name": "finding_example",
+            "required": true,
+            "description": "The finding's stored smallest failure scenario."
+          }
+        ]
+      },
+      {
+        "ref": "process_authority"
+      }
+    ]
+  },
+  "questions": {
+    "items": [
+      {
+        "id": "environment_fit",
+        "text": "What standard does the surrounding work live at, and does your rating assume a stricter one the mandate did not order? Answer, backed by a brief description of the standard you assumed and why."
+      },
+      {
+        "id": "human_scale",
+        "text": "Would a human see your rating as proportionate to what the finding actually is — or does it price literalism (e.g. asked to catalogue a manuscript's time skips, cataloguing every \"right away\" until the catalogue outgrows the manuscript)? Answer, backed by a brief description of how your work compares to what was asked."
+      }
+    ],
+    "intro": [
+      "QUESTIONS (answer each in output, backed by a brief description; at most 300 characters per answer)"
+    ]
+  },
+  "output_contract": {
+    "sections": [
+      {
+        "id": "reclassify_result",
+        "text": [
+          "OUTPUT CONTRACT (mandatory)",
+          "Respond with EXACTLY ONE JSON object and nothing else — no prose outside it,",
+          "no markdown fences:",
+          "{\"status\": \"ok\",",
+          " \"kind\": \"reclassify\",",
+          " \"drift_risk\": \"low\" | \"medium\" | \"high\" | \"xhigh\",",
+          " \"drift_damage\": \"low\" | \"medium\" | \"high\" | \"xhigh\",",
+          " \"reason\": \"<one sentence: the concrete basis for BOTH ratings>\",",
+          " \"questions\": [{\"id\": \"<id>\", \"answer\": \"<one short sentence>\"}, ...]}",
+          "  (one entry per QUESTIONS id above; the check is presence, nothing more)"
+        ],
+        "variables": []
+      }
+    ]
+  }
+}

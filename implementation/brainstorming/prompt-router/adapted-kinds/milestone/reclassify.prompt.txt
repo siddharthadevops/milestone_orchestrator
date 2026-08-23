@@ -1,0 +1,73 @@
+KIND: reclassify
+WORKSPACE: /Users/siddhartha/Development/source/milestone_orchestrator_impl
+
+TASK: rate ONE finding's drift risk. REPORT ONLY — you edit
+nothing and review nothing else.
+
+PROJECT CONTEXT (standing project law; binding)
+- PRIMARY ROOT /Users/siddhartha/Development/source/milestone_orchestrator_impl — the repo you execute in.
+- ADDITIONAL ROOT /Users/siddhartha/Development/source/life — a READ-ONLY grant: you may read it for evidence; never edit it.
+- ADDITIONAL ROOT /Users/siddhartha/Development/source/life_prod/agent_99 — a READ-ONLY grant: you may read it for evidence; never edit it.
+- ADDITIONAL ROOT /Users/siddhartha/Development/source/life_prod/life_product_components — a READ-ONLY grant: you may read it for evidence; never edit it.
+- ADDITIONAL ROOT /Users/siddhartha/Development/source/life_prod/tutor — a READ-ONLY grant: you may read it for evidence; never edit it.
+
+Rate the finding below against implementation/milestones/staffing-router/slices/slice-10.md as it is — read
+the artifact; do not take the summary on trust.
+
+DRIFT RISK — the probability the next builder is silently misled:
+  low    no plausible reading misleads the next agent's work
+  medium a careful agent resolves it from context; a hasty one
+         might not
+  high   could plausibly steer into wrong code, wrong tests, or a
+         wrong contract reading
+  xhigh  misstates pinned contract/behaviour facts; building on it
+         as written would likely produce wrong work
+Builders stop and report any hole or ambiguity that would change
+what they build, so under-specification is self-revealing: rate it
+LOWER, and reserve high/xhigh for facts stated WRONG — those are
+trusted and built on without stopping.
+
+DRIFT DAMAGE — if the drift happens, what the CORRECTION costs.
+Price the correction, not the fear: nothing ships mid-milestone,
+so the worst realistic damage is rework.
+  low    a small local fix once seen (re-pin a value, correct a row)
+  medium bounded rework inside this unit; caught at its own review
+  high   the correction changes reviewed work or propagates: other
+         slices built on the wrong contract must rework
+  xhigh  effectively irreversible or externally published
+Self-revelation discounts DAMAGE (cheap on contact), never the
+probability.
+
+WHO BUILDS ON IT: slice docs drafted by codex (gpt-5.6-sol, max effort); implementation built by codex (gpt-5.6-sol, max effort) — weigh the reading an agent at
+that strength actually makes, not a hypothetical junior's.
+
+If the finding touches correctness, behaviour, or test coverage
+beyond what its severity label suggests, say so in `reason` and
+rate accordingly. Do not inflate to be safe or deflate to be
+agreeable — a wrong rating in either direction corrupts the
+decision this feeds.
+
+FINDING (severity P2, id S10-CLAUDE-001):
+Acceptance criterion :128-132 closes the milestone by asserting that every retained profile/act helper is limited to conversion, A2's name-and-rigor read, old-record compatibility, or a home-less in-process construction with no operator or product entry point. That enumeration is falsified by the shipped launch path: `driver.init_run` builds `creation_overrides` from operator-supplied act layers whenever a catalogue home is present (`orchestrator/driver.py:12072-12074`), validates each entry against the retired `model_profiles.PROFILE_ACT_KEYS` vocabulary (`:11936-11954`), and writes `acts.json` (`:12123-12125`). The layers come from project defaults and the launch `config_override` on project-bound launches (`:12049-12055`, `orchestrator/service.py:1976`), from `config.acts` on the direct launch route (`orchestrator/service.py:2450-2455`), and from `--config` on CLI init (`:12158`) — all live operator/product entry points, all post-slice-8. The Question Battery `consumers_touched` row omits the same channel from both its observed and its verified-untouched lists.
+In plain words: The slice's closing check claims the only leftover profile/act code has no operator or product entry point, but every run launch still accepts operator-supplied `acts`, checks them against the retired act vocabulary, and writes an `acts.json` that nothing reads any more.
+Smallest failure scenario: POST /api/runs with {"config": {"acts": {"implementer": "codex"}}} against a homed service: init_run validates `implementer` against model_profiles.PROFILE_ACT_KEYS and writes acts.json beside the state (driver.py:11936-11954, 12072-12074, 12123-12125). A project whose defaults.acts carries an entry does the same on every project-bound launch. Nothing staffs from the file, but the criterion 'Retained profile/act helpers are limited to conversion, A2's name-and-rigor read, old-record compatibility, or a home-less in-process construction with no operator or product entry point' is false at each such launch.
+
+PROCESS AUTHORITY
+- Ignore agent instruction files (AGENTS.md, CLAUDE.md, and similar)
+  and the entire .orchestrator/ directory: they do not govern this
+  run and are not yours to edit.
+
+QUESTIONS (answer each in output, backed by a brief description; at most 300 characters per answer)
+- environment_fit: What standard does the surrounding work live at, and does your rating assume a stricter one the mandate did not order? Answer, backed by a brief description of the standard you assumed and why.
+- human_scale: Would a human see your rating as proportionate to what the finding actually is — or does it price literalism (e.g. asked to catalogue a manuscript's time skips, cataloguing every "right away" until the catalogue outgrows the manuscript)? Answer, backed by a brief description of how your work compares to what was asked.
+
+OUTPUT CONTRACT (mandatory)
+Respond with EXACTLY ONE JSON object and nothing else — no prose outside it,
+no markdown fences:
+{"status": "ok",
+ "kind": "reclassify",
+ "drift_risk": "low" | "medium" | "high" | "xhigh",
+ "drift_damage": "low" | "medium" | "high" | "xhigh",
+ "reason": "<one sentence: the concrete basis for BOTH ratings>",
+ "questions": [{"id": "<id>", "answer": "<one short sentence>"}, ...]}
+  (one entry per QUESTIONS id above; the check is presence, nothing more)

@@ -1,0 +1,149 @@
+{
+  "kind": "delta_review",
+  "process": "milestone",
+  "description": "Report-only incremental review of the current work tree against an explicit base revision.",
+  "instructions": {
+    "parts": [
+      {
+        "ref": "header"
+      },
+      {
+        "one_of": "target_frame"
+      },
+      {
+        "ref": "project_context"
+      },
+      {
+        "ref": "operator_amendments_review"
+      },
+      {
+        "ref": "verification_boundary"
+      },
+      {
+        "ref": "evidence"
+      },
+      {
+        "ref": "judgment_rubric"
+      },
+      {
+        "ref": "severity_battery"
+      },
+      {
+        "ref": "reuse_gate_review"
+      },
+      {
+        "ref": "doc_review_duty",
+        "optional": true,
+        "note": "present only when the reviewed target is documentation"
+      },
+      {
+        "ref": "impl_review_duty",
+        "optional": true,
+        "note": "present only when the reviewed target is implementation"
+      },
+      {
+        "ref": "scope_authority",
+        "optional": true,
+        "note": "present only when the reviewed target is implementation"
+      },
+      {
+        "ref": "altitude_review",
+        "optional": true,
+        "note": "present only when the reviewed target is documentation"
+      },
+      {
+        "ref": "deferred_debt"
+      },
+      {
+        "ref": "adjudicated_rejections"
+      },
+      {
+        "ref": "process_authority"
+      }
+    ]
+  },
+  "questions": {
+    "items": [
+      {
+        "id": "environment_fit",
+        "text": "What standard does the surrounding work live at, and do any findings you filed demand exceeding it where the mandate did not order (e.g. demanding injection defenses inside a homemade toy game)? Answer, backed by a brief description of the surrounding standard and any excess found."
+      },
+      {
+        "id": "human_scale",
+        "text": "Put your findings next to the delta: do they judge at the grain and size the mandate means, or demand literalism (e.g. asked to catalogue a manuscript's time skips, cataloguing every \"right away\" until the catalogue outgrows the manuscript)? Answer, backed by a brief description of how your work compares to what was asked."
+      }
+    ],
+    "intro": [
+      "QUESTIONS (answer each in output, backed by a brief description; at most 300 characters per answer)"
+    ]
+  },
+  "output_contract": {
+    "sections": [
+      {
+        "ref": "envelope_compact"
+      },
+      {
+        "ref": "review_contract"
+      },
+      {
+        "ref": "review_blocked"
+      },
+      {
+        "ref": "review_need_rethink"
+      },
+      {
+        "ref": "questions_output"
+      }
+    ]
+  },
+  "variants": {
+    "target_frame": {
+      "slice_unit": {
+        "text": [
+          "TASK: incremental review of the CURRENT WORK TREE against base revision {{delta_base_revision}} — every committed, staged, unstaged, and newly created change after that base — and their direct effects. HEAD is not the baseline.",
+          "REPORT ONLY.",
+          "BASELINE: the current reviewed skeleton at {{skeleton_path}} is the operative restatement of the MANDATE — the milestone boundary; judge scope against IT. The operator's full original mandate is preserved at {{goal_path}} (generated snapshot); read it only to trace intent the skeleton does not settle.",
+          "STANDARD: {{reference_path}} — check only that the DELTA does not contradict it; do not re-judge the whole artifact against it."
+        ],
+        "variables": [
+          {
+            "name": "delta_base_revision",
+            "required": true,
+            "description": "Commit captured before the reviewed change began; compare the complete current work tree against it."
+          },
+          {
+            "name": "skeleton_path",
+            "required": true
+          },
+          {
+            "name": "goal_path",
+            "required": true
+          },
+          {
+            "name": "reference_path",
+            "required": true
+          }
+        ]
+      },
+      "skeleton_unit": {
+        "text": [
+          "TASK: incremental review of the CURRENT WORK TREE against base revision {{delta_base_revision}} — every committed, staged, unstaged, and newly created change after that base — and their direct effects. HEAD is not the baseline.",
+          "REPORT ONLY.",
+          "BASELINE: the operator's mandate at {{goal_path}} — the milestone boundary.",
+          "STANDARD: {{goal_path}} — check only that the DELTA does not contradict the mandate; do not re-judge the whole skeleton against it."
+        ],
+        "variables": [
+          {
+            "name": "delta_base_revision",
+            "required": true,
+            "description": "Commit captured before the reviewed change began; compare the complete current work tree against it."
+          },
+          {
+            "name": "goal_path",
+            "required": true
+          }
+        ]
+      }
+    }
+  }
+}
