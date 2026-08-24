@@ -389,4 +389,5 @@ verification is the direct `suite_checkpoint` call instead.
 | slice_impl-02-a (Charge resolver and assembled JSON) | reviewed | 6 | satisfied | d4f1214 |
 | slice_impl-02-b (Charge resolver and assembled JSON) | reviewed | 1 | satisfied | 922859b |
 | slice_doc-03 (Registered contracts and QUESTIONS) | reviewed | 1 | satisfied | ad8976c |
-| slice_impl-03-a (Registered contracts and QUESTIONS) | reviewed | 19 | satisfied | - |
+| slice_impl-03-a (Registered contracts and QUESTIONS) | reviewed | 19 | satisfied | aa2e8bb |
+| slice_impl-03-b (Registered contracts and QUESTIONS) | reviewed | 4 | satisfied | - |

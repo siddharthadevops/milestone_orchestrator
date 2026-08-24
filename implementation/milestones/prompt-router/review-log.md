@@ -201,3 +201,22 @@
 - deterministic result: every configured family was clean or debt-clean on the same current bytes; full verification was not due at this boundary; no extra reviewer was called
 - cited reviews: `slice_impl-03-codex-r19`
 
+## slice_impl-03-b (Registered contracts and QUESTIONS)
+
+- draft: kind `implement`, artifact `-` (raw: `implementation/milestones/prompt-router/.run/raw/slice_impl-03-b-draft.txt`)
+
+| Round | Kind | Family | Findings | Triage | Raw |
+|---|---|---|---|---|---|
+| slice_impl-03-b-codex-r1 | review_round | codex | 1 | 1 reported | `implementation/milestones/prompt-router/.run/raw/slice_impl-03-b-codex-r1.txt` |
+| slice_impl-03-b-codex-r2 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/prompt-router/.run/raw/slice_impl-03-b-fix1.txt` |
+| slice_impl-03-b-codex-r3 | delta_review | codex | 0 | clean | `implementation/milestones/prompt-router/.run/raw/slice_impl-03-b-delta1.txt` |
+| slice_impl-03-b-codex-r4 | review_round | codex | 1 | DEBT-CLEAN (reclassified) | `implementation/milestones/prompt-router/.run/raw/slice_impl-03-b-codex-r2.txt` |
+
+### Review completion — SATISFIED
+
+- deterministic result: every configured family was clean or debt-clean on the same current bytes; full verification was not due at this boundary; no extra reviewer was called
+- cited reviews: `slice_impl-03-b-codex-r4`
+
+**Deferred debt (opposite-family verified):**
+- `codex-slice_impl-03-b-codex-001` (raised codex, cleared codex): Canonical-plan acceptance test omits the operative skeleton and anchoring failure path — The green 44-test gate falsely implies coverage while using only generated one/two-slice fixtures and never checking state after invalid anchoring, so later builders may trust unpinned behavior, but the real 14-slice block validates today and anchoring saves only after validation, making correction 
+
