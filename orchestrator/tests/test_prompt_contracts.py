@@ -203,6 +203,13 @@ class PromptContractsTest(unittest.TestCase):
                 with self.assertRaises(contracts.ContractError):
                     prompt_contracts.bind(base, additions)
 
+        undeclared = section("implement_result")
+        undeclared["text"] = ["Return {{files_changed}}"]
+        with self.assertRaisesRegex(
+            contracts.ContractError, "undeclared: files_changed"
+        ):
+            prompt_contracts.bind(base, (undeclared,))
+
     def test_field_filtering_requires_a_registered_schema_section(self):
         cases = (
             (

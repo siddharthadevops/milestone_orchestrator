@@ -5,6 +5,14 @@ TASK: implement slice 10 (Compatibility and conformance) against its current rev
 BASELINE: the current reviewed skeleton at implementation/milestones/staffing-router/skeleton.md is the operative restatement of the MANDATE — the milestone boundary; judge scope against IT. The operator's full original mandate is preserved at implementation/milestones/staffing-router/goal.md (generated snapshot); read it only to trace intent the skeleton does not settle.
 SLICE NOTE: implementation/milestones/staffing-router/slices/slice-10.md
 
+SEQUENTIAL IMPLEMENTATION PART — b
+- This is a runtime size cut of the SAME reviewed design slice, not a
+  new design slice. The original slice note remains authoritative.
+- CURRENT PART SCOPE (JSON quoted): "Complete the remaining compatibility proof."
+- Scope source unit: slice_impl-10-a
+- Complete exactly the current part scope. No later remainder is
+  delegated by the current unit record.
+
 PROJECT CONTEXT (standing project law; binding)
 - PRIMARY ROOT /Users/siddhartha/Development/source/milestone_orchestrator_impl — the repo you execute in.
 - ADDITIONAL ROOT /Users/siddhartha/Development/source/life — a READ-ONLY grant: you may read it for evidence; never edit it.

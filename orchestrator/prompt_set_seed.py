@@ -806,6 +806,19 @@ DEFAULT_PROMPT_SET = {'shared/shared.json': {'description': 'Shared prompt units
                                                                "  unit's reviewed "
                                                                'contract.'],
                                                       'variables': []},
+                                  'implementation_scope': {'text': ['{{implementation_scope}}'],
+                                                           'variables': [{'name': 'implementation_scope',
+                                                                          'required': False,
+                                                                          'drop_unit_if_absent': True,
+                                                                          'description': 'Prompt-ready '
+                                                                                         'projection '
+                                                                                         'of '
+                                                                                         'the '
+                                                                                         'exact '
+                                                                                         'current '
+                                                                                         'sequential '
+                                                                                         'implementation-part '
+                                                                                         'assignment.'}]},
                                   'implementation_rules': {'text': ['IMPLEMENTATION '
                                                                     'RULES',
                                                                     '- Implement the '
@@ -2375,6 +2388,7 @@ DEFAULT_PROMPT_SET = {'shared/shared.json': {'description': 'Shared prompt units
                                                                          'required': True},
                                                                         {'name': 'slice_note_path',
                                                                          'required': True}]},
+                                                         {'ref': 'implementation_scope'},
                                                          {'ref': 'project_context'},
                                                          {'ref': 'operator_amendments_author'},
                                                          {'ref': 'implementation_rules'},

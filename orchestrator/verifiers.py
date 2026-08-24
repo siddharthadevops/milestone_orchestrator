@@ -489,11 +489,14 @@ def validate_merged_output(obj, kind, extensions, roots,
                            allow_design_correction=False,
                            require_design_correction_verdict=False,
                            require_failure_gap=False,
-                           verification_repair=False):
+                           verification_repair=False,
+                           base_validator=None):
     """Validate a worker output against the base kind contract PLUS the
     in-scope compiled extensions.
 
-    Returns the object unchanged on success. Worker-authored violations
+    ``base_validator`` lets a routed prompt supply its bound registered
+    contract in place of the legacy kind-wide validator. Returns the object
+    unchanged on success. Worker-authored violations
     raise contracts.ContractError at the same point as the base validation,
     so call_worker's single repair retry applies unchanged. A validly
     blocked, retry, gap, OR need_rethink output is exempt from extension
@@ -514,13 +517,12 @@ def validate_merged_output(obj, kind, extensions, roots,
                 % type(ext).__name__
             )
     _require_distinct_fields(extensions)
-    if isinstance(obj, dict) and obj.get("status") in (
-        "blocked", "retry", "gap", "need_rethink"
-    ):
-        # These statuses FINISH NOTHING — no artifact to audit, so they are
-        # exempt from extension/root enforcement. Base validation still
-        # checks their own contract. A retry is stricter: it must not smuggle
-        # an extension claim into an otherwise no-artifact response.
+    if base_validator is not None and not callable(base_validator):
+        raise PolicyConfigError("base_validator must be callable")
+
+    def validate_base():
+        if base_validator is not None:
+            return base_validator(obj)
         contracts.validate_worker_output(
             obj, kind, require_plain=require_plain,
             battery_questions=battery_questions,
@@ -532,6 +534,15 @@ def validate_merged_output(obj, kind, extensions, roots,
             require_failure_gap=require_failure_gap,
             verification_repair=verification_repair,
         )
+
+    if isinstance(obj, dict) and obj.get("status") in (
+        "blocked", "retry", "gap", "need_rethink"
+    ):
+        # These statuses FINISH NOTHING — no artifact to audit, so they are
+        # exempt from extension/root enforcement. Base validation still
+        # checks their own contract. A retry is stricter: it must not smuggle
+        # an extension claim into an otherwise no-artifact response.
+        validate_base()
         if obj.get("status") == "retry":
             ctx = "worker[%s]" % kind
             for ext in extensions:
@@ -544,15 +555,7 @@ def validate_merged_output(obj, kind, extensions, roots,
         return obj
     if extensions:
         _preflight_operator_roots(extensions, roots)
-    contracts.validate_worker_output(
-        obj, kind, require_plain=require_plain,
-        battery_questions=battery_questions,
-        require_drift_damage=require_drift_damage,
-        allow_design_correction=allow_design_correction,
-        require_design_correction_verdict=require_design_correction_verdict,
-        require_failure_gap=require_failure_gap,
-        verification_repair=verification_repair,
-    )
+    validate_base()
     if not extensions:
         return obj
     ctx = "worker[%s]" % kind

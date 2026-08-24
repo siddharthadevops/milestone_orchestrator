@@ -169,30 +169,63 @@ def _raw_unit(part, document, shared, section, route):
     return unit, section_id
 
 
-def _prepared_unit(unit, values, fixed, section_id=None):
+def _prepared_unit(unit, values, fixed, part_defaults=None, section_id=None):
     declarations = copy.deepcopy(unit.get("variables", []))
     declared = {item["name"]: item for item in declarations}
     text = list(unit["text"])
-    for name, fixed_value in fixed.items():
+    pinned = {**(part_defaults or {}), **fixed}
+    for name, fixed_value in pinned.items():
         if name not in declared:
             continue
         if name in values and values[name] != fixed_value:
             raise PromptRouterError("fixed value %r cannot be overridden" % name)
-        token = "{{%s}}" % name
-        text = [line.replace(token, str(fixed_value)) for line in text]
-        declarations = [item for item in declarations if item["name"] != name]
-
     if any(
         item.get("drop_unit_if_absent") and item["name"] not in values
         for item in declarations
+        if item["name"] not in pinned
     ):
         return None
     missing = [
         item["name"] for item in declarations
-        if item["required"] and item["name"] not in values
+        if item["name"] not in pinned
+        and item["required"] and item["name"] not in values
     ]
     if missing:
         raise PromptRouterError("missing required value %r" % missing[0])
+
+    closed = {
+        name: value for name, value in pinned.items() if name in declared
+    }
+    protected = {
+        name
+        for value in closed.values()
+        for name in _PLACEHOLDER.findall(str(value))
+    }
+    while protected:
+        name = protected.pop()
+        if name in closed or name not in declared:
+            continue
+        declaration = declared[name]
+        value = (
+            values[name] if name in values else declaration["default"]
+        )
+        closed[name] = value
+        protected.update(_PLACEHOLDER.findall(str(value)))
+
+    declarations = [
+        item for item in declarations if item["name"] not in closed
+    ]
+
+    def substitute_closed(match):
+        name = match.group(1)
+        if name not in closed:
+            return match.group(0)
+        return str(closed[name])
+
+    # Close route and part constants in one pass.  If their opaque bytes look
+    # like another local placeholder, close that declaration in the same pass
+    # too so the final renderer cannot reinterpret the inserted bytes.
+    text = [_PLACEHOLDER.sub(substitute_closed, line) for line in text]
     result = {"text": text, "variables": declarations}
     if section_id is not None:
         result = {"id": section_id, **result}
@@ -218,7 +251,7 @@ def _parts(document, shared, section, key, route, values, fixed):
                 "stored default conflicts with fixed value %r" % conflicts[0]
             )
         prepared = _prepared_unit(
-            unit, values, {**defaults, **fixed}, section_id
+            unit, values, fixed, defaults, section_id
         )
         if prepared is not None:
             assembled.append(prepared)
@@ -402,17 +435,117 @@ def assemble(prompt_set, *, job, executor, material, values, role=None,
 
 
 def resolve(home, *, job, executor, material, values, prompt_set="default",
-            role=None, lead=None, artifact_type=None):
+            role=None, lead=None, artifact_type=None, prompt_validator=None):
     """Fresh-select one whole rung and assemble one canonical charge."""
     route = _route(job, executor, material, role, lead, artifact_type)
     values = _values_for(job, values)
+
+    def validate_selected(candidate):
+        _validate_routable(candidate)
+        if prompt_validator is not None:
+            prompt_validator(
+                _assemble(candidate, route, job, material, values, role)
+            )
+
     selected = prompt_sets.resolve(
-        home, prompt_set, validator=_validate_routable
+        home, prompt_set, validator=validate_selected
     )
     prompt = _assemble(
         selected.prompt_set, route, job, material, values, role
     )
     return Resolution(prompt, selected.prompt_set_fallback)
+
+
+def _render_unit(unit, values, context):
+    """Substitute one already-assembled unit into its served text."""
+    try:
+        lines = unit["text"]
+        declarations = unit["variables"]
+    except (KeyError, TypeError) as exc:
+        raise PromptRouterError("%s is not an assembled prompt unit" % context) \
+            from exc
+    if (
+        not isinstance(lines, list)
+        or any(not isinstance(line, str) for line in lines)
+        or not isinstance(declarations, list)
+    ):
+        raise PromptRouterError("%s is not an assembled prompt unit" % context)
+    text = "\n".join(lines)
+    substitutions = {}
+    for declaration in declarations:
+        if not isinstance(declaration, dict):
+            raise PromptRouterError(
+                "%s has an invalid variable declaration" % context
+            )
+        name = declaration.get("name")
+        if not isinstance(name, str) or not name:
+            raise PromptRouterError(
+                "%s has an invalid variable declaration" % context
+            )
+        if name in values:
+            value = values[name]
+        elif "default" in declaration:
+            value = declaration["default"]
+        elif declaration.get("drop_unit_if_absent"):
+            return None
+        else:
+            raise PromptRouterError("missing required value %r" % name)
+        substitutions[name] = str(value)
+
+    def substitute(match):
+        name = match.group(1)
+        if name not in substitutions:
+            return match.group(0)
+        return substitutions[name]
+
+    # Only declared substitutions are open at this boundary.  One pass keeps
+    # undeclared placeholder-looking bytes and replacement values opaque.
+    return _PLACEHOLDER.sub(substitute, text)
+
+
+def render(prompt, values):
+    """Render assembled JSON into the exact text sent to one worker call."""
+    if not isinstance(prompt, dict) or not isinstance(values, dict):
+        raise PromptRouterError("render requires an assembled prompt and values")
+    blocks = []
+    for section in ("instructions", "output_contract"):
+        units = prompt.get(section)
+        if not isinstance(units, list):
+            raise PromptRouterError("assembled prompt.%s must be a list" % section)
+        if section == "output_contract":
+            questions = prompt.get("questions")
+            if not isinstance(questions, dict):
+                raise PromptRouterError("assembled prompt.questions must be an object")
+            items = questions.get("items")
+            intro = questions.get("intro")
+            if not isinstance(items, list) or not isinstance(intro, list):
+                raise PromptRouterError("assembled prompt.questions is malformed")
+            if items:
+                if any(not isinstance(line, str) for line in intro):
+                    raise PromptRouterError("assembled question intro is malformed")
+                question_lines = list(intro)
+                for index, item in enumerate(items):
+                    if (
+                        not isinstance(item, dict)
+                        or not isinstance(item.get("id"), str)
+                        or not isinstance(item.get("text"), str)
+                    ):
+                        raise PromptRouterError(
+                            "assembled question %d is malformed" % index
+                        )
+                    question_lines.append(
+                        "- %s: %s" % (item["id"], item["text"])
+                    )
+                blocks.append("\n".join(question_lines))
+        for index, unit in enumerate(units):
+            rendered = _render_unit(
+                unit, values, "assembled prompt.%s[%d]" % (section, index)
+            )
+            if rendered is not None:
+                blocks.append(rendered)
+    if not blocks:
+        raise PromptRouterError("assembled prompt rendered no text")
+    return "\n\n".join(blocks) + "\n"
 
 
 _validate_routable(prompt_sets.default_seed())

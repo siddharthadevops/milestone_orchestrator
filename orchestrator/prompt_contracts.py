@@ -10,7 +10,7 @@ import copy
 import os
 from collections import namedtuple
 
-from . import contracts
+from . import contracts, prompt_sets
 
 
 BoundContract = namedtuple(
@@ -120,13 +120,21 @@ def _common(obj, bound, options, ctx):
 
 def _author_result(expected_kind, field):
     def validate(obj, bound, options, ctx):
-        del options
         status = _status(
             obj, bound, _AUTHOR_STATUSES[expected_kind], ctx,
             (expected_kind,),
         )
         if status == "ok":
-            _relative_path(_require(obj, field, str, ctx), "%s.%s" % (ctx, field))
+            value = _relative_path(
+                _require(obj, field, str, ctx), "%s.%s" % (ctx, field)
+            )
+            expected = options.get("expected_artifact")
+            if expected_kind == "draft_skeleton" and expected is not None:
+                if value != expected:
+                    raise contracts.ContractError(
+                        "%s.%s must exactly equal the supplied skeleton path %r"
+                        % (ctx, field, expected)
+                    )
 
     return validate
 
@@ -715,6 +723,19 @@ def _validate_fields(bound, obj):
         )
 
 
+def reserved_output_fields(bound):
+    """Return routed protocol names owned or forbidden by this contract."""
+    if not isinstance(bound, BoundContract):
+        raise contracts.ContractError("bound must be a BoundContract")
+    registered = set(bound.registered_section_ids)
+    reserved = set()
+    if registered.intersection(_FIELD_CONTRACT_SECTIONS):
+        reserved.update(_PROTOCOL_FIELDS)
+    if bound.question_ids or "questions_output" in registered:
+        reserved.add("questions")
+    return frozenset(reserved)
+
+
 def _section(section, ctx):
     if not isinstance(section, dict):
         raise contracts.ContractError("%s must be an object" % ctx)
@@ -750,7 +771,12 @@ def bind(prompt, consumer_sections=()):
         raise contracts.ContractError("consumer_sections must be a sequence")
     for index, section in enumerate(consumer_sections):
         section = copy.deepcopy(section)
-        section_id = _section(section, "consumer_sections[%d]" % index)
+        section_ctx = "consumer_sections[%d]" % index
+        section_id = _section(section, section_ctx)
+        try:
+            prompt_sets.validate_unit(section, section_ctx)
+        except prompt_sets.PromptSetError as exc:
+            raise contracts.ContractError(str(exc)) from exc
         if section_id not in REGISTERED_SECTIONS:
             raise contracts.ContractError(
                 "consumer section %r has no registered validator" % section_id
@@ -783,7 +809,8 @@ def bind(prompt, consumer_sections=()):
 
 
 def validate(bound, obj, *, queued_findings=None,
-             configured_suite_commands=None, workspace=None):
+             configured_suite_commands=None, workspace=None,
+             expected_artifact=None):
     """Validate one parsed reply against one previously bound prompt."""
     if not isinstance(bound, BoundContract):
         raise contracts.ContractError("bound must be a BoundContract")
@@ -793,6 +820,7 @@ def validate(bound, obj, *, queued_findings=None,
         "queued_findings": queued_findings,
         "configured_suite_commands": configured_suite_commands,
         "workspace": workspace,
+        "expected_artifact": expected_artifact,
     }
     for section_id in bound.registered_section_ids:
         REGISTERED_SECTIONS[section_id](

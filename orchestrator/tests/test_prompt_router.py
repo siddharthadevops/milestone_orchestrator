@@ -715,6 +715,86 @@ class PromptRouterTest(unittest.TestCase):
             ),
         )
 
+    def test_render_preserves_placeholder_like_substitution_bytes(self):
+        prompt = {
+            "kind": "implement",
+            "instructions": [{
+                "text": ["A={{first}} B={{second}}"],
+                "variables": [{"name": "first"}, {"name": "second"}],
+            }],
+            "questions": {"intro": [], "items": []},
+            "output_contract": [],
+        }
+
+        self.assertEqual(
+            prompt_router.render(
+                prompt,
+                {
+                    "first": "{{second}} and {{unknown}}",
+                    "second": "rendered",
+                },
+            ),
+            "A={{second}} and {{unknown}} B=rendered\n",
+        )
+
+    def test_part_defaults_are_rendered_once_as_opaque_text(self):
+        documents = copy.deepcopy(self.prompt_set.documents)
+        sections = documents["milestone/implement.json"]["output_contract"][
+            "sections"
+        ]
+        common_fields = next(
+            part for part in sections if part.get("ref") == "common_fields"
+        )
+        shared_common = documents["shared/shared.json"]["contract_sections"][
+            "common_fields"
+        ]
+        shared_common["text"].append("Workspace: {{workspace}}")
+        shared_common["variables"].append({
+            "name": "workspace",
+            "required": True,
+        })
+        opaque = (
+            '"ok" | "{{workspace}}" | "{{soft_lines}}" | "{{unknown}}"'
+        )
+        common_fields["defaults"]["status_vocabulary"] = opaque
+        candidate = prompt_sets.PromptSet(
+            name="placeholder-default", documents=documents
+        )
+        values = self.values("implement@slice_impl")
+
+        assembled = prompt_router.assemble(
+            candidate,
+            job="implement@slice_impl",
+            executor="agent_call",
+            material="code",
+            values=values,
+        )
+
+        common = next(
+            section for section in assembled["output_contract"]
+            if section["id"] == "common_fields"
+        )
+        self.assertNotIn(
+            "status_vocabulary",
+            {item["name"] for item in common["variables"]},
+        )
+        self.assertNotIn(
+            "workspace",
+            {item["name"] for item in common["variables"]},
+        )
+        rendered = prompt_router.render(
+            assembled,
+            dict(
+                values,
+                status_vocabulary='"caller override"',
+                workspace="later workspace",
+            ),
+        )
+        self.assertIn(opaque, rendered)
+        self.assertIn("Workspace: %s" % values["workspace"], rendered)
+        self.assertNotIn("Workspace: later workspace", rendered)
+        self.assertNotIn('"caller override"', rendered)
+
     def test_material_layer_is_exact_and_data_only(self):
         documents = copy.deepcopy(self.prompt_set.documents)
         documents["shared/shared.json"]["material_layers"] = {

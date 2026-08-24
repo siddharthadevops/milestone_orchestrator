@@ -226,6 +226,11 @@ def _validate_unit(unit, ctx):
     return declared
 
 
+def validate_unit(unit, ctx="prompt unit"):
+    """Validate one unit against the corpus substitution contract."""
+    return _validate_unit(unit, ctx)
+
+
 def _question_ids(items, ctx):
     ids = []
     for index, item in enumerate(_array(items, ctx)):

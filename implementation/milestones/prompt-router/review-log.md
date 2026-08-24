@@ -279,3 +279,55 @@
 - `codex-codex-slice_doc-05-004` (raised codex, cleared codex): Cutoff stabilization has no truthful canonical charge — The note’s live-meter qualification and explicit stabilizer fixture may prompt a capable builder to stop, but its router-only checks can silently permit the false hard-stop charge; correction is bounded to the routed canonical prompt and its stabilizer-focused tests within this unit.
 - `codex-codex-slice_doc-05-005` (raised codex, cleared codex): Legacy missing material is routed as document instead of code — The hard register and named test explicitly instruct the builder to default missing slice-note material to document, so it will likely implement the opposite of the mandated legacy code fallback, while correction remains bounded to Slice 05 routing and focused tests.
 
+## slice_impl-05-a (Milestone author-call cutover)
+
+- draft: kind `implement`, artifact `-` (raw: `implementation/milestones/prompt-router/.run/raw/slice_impl-05-draft.txt`)
+
+| Round | Kind | Family | Findings | Triage | Raw |
+|---|---|---|---|---|---|
+| slice_impl-05-codex-r1 | review_round | codex | 3 | 3 reported | `implementation/milestones/prompt-router/.run/raw/slice_impl-05-codex-r1.txt` |
+| slice_impl-05-codex-r2 | fix_findings | codex | 3 | 3 fixed | `implementation/milestones/prompt-router/.run/raw/slice_impl-05-fix1.txt` |
+| slice_impl-05-codex-r3 | delta_review | codex | 1 | 1 reported | `implementation/milestones/prompt-router/.run/raw/slice_impl-05-delta1.txt` |
+| slice_impl-05-codex-r4 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/prompt-router/.run/raw/slice_impl-05-fix2.txt` |
+| slice_impl-05-codex-r5 | delta_review | codex | 1 | 1 reported | `implementation/milestones/prompt-router/.run/raw/slice_impl-05-delta2.txt` |
+| slice_impl-05-codex-r6 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/prompt-router/.run/raw/slice_impl-05-fix3.txt` |
+| slice_impl-05-codex-r7 | delta_review | codex | 1 | 1 reported | `implementation/milestones/prompt-router/.run/raw/slice_impl-05-delta3.txt` |
+| slice_impl-05-codex-r8 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/prompt-router/.run/raw/slice_impl-05-fix4.txt` |
+| slice_impl-05-codex-r9 | delta_review | codex | 1 | 1 reported | `implementation/milestones/prompt-router/.run/raw/slice_impl-05-delta4.txt` |
+| slice_impl-05-codex-r10 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/prompt-router/.run/raw/slice_impl-05-fix5.txt` |
+| slice_impl-05-codex-r11 | review_round | codex | 4 | 4 reported | `implementation/milestones/prompt-router/.run/raw/slice_impl-05-codex-r2.txt` |
+| slice_impl-05-codex-r12 | fix_findings | codex | 3 | 3 fixed | `implementation/milestones/prompt-router/.run/raw/slice_impl-05-fix6.txt` |
+| slice_impl-05-codex-r13 | delta_review | codex | 1 | 1 reported | `implementation/milestones/prompt-router/.run/raw/slice_impl-05-delta5.txt` |
+| slice_impl-05-codex-r14 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/prompt-router/.run/raw/slice_impl-05-fix7.txt` |
+| slice_impl-05-codex-r15 | delta_review | codex | 0 | clean | `implementation/milestones/prompt-router/.run/raw/slice_impl-05-delta6.txt` |
+| slice_impl-05-codex-r16 | review_round | codex | 1 | 1 reported | `implementation/milestones/prompt-router/.run/raw/slice_impl-05-codex-r3.txt` |
+| slice_impl-05-codex-r17 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/prompt-router/.run/raw/slice_impl-05-fix8.txt` |
+| slice_impl-05-codex-r18 | delta_review | codex | 0 | clean | `implementation/milestones/prompt-router/.run/raw/slice_impl-05-delta7.txt` |
+| slice_impl-05-codex-r19 | review_round | codex | 1 | 1 reported | `implementation/milestones/prompt-router/.run/raw/slice_impl-05-codex-r4.txt` |
+| slice_impl-05-codex-r20 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/prompt-router/.run/raw/slice_impl-05-fix9.txt` |
+| slice_impl-05-codex-r21 | delta_review | codex | 0 | clean | `implementation/milestones/prompt-router/.run/raw/slice_impl-05-delta8.txt` |
+| slice_impl-05-codex-r22 | review_round | codex | 2 | 2 reported | `implementation/milestones/prompt-router/.run/raw/slice_impl-05-codex-r5.txt` |
+| slice_impl-05-codex-r23 | fix_findings | codex | 2 | 2 fixed | `implementation/milestones/prompt-router/.run/raw/slice_impl-05-fix10.txt` |
+| slice_impl-05-codex-r24 | delta_review | codex | 0 | clean | `implementation/milestones/prompt-router/.run/raw/slice_impl-05-delta9.txt` |
+| slice_impl-05-codex-r25 | review_round | codex | 2 | 2 reported | `implementation/milestones/prompt-router/.run/raw/slice_impl-05-codex-r6.txt` |
+| slice_impl-05-codex-r26 | fix_findings | codex | 2 | 2 fixed | `implementation/milestones/prompt-router/.run/raw/slice_impl-05-fix11.txt` |
+| slice_impl-05-codex-r27 | delta_review | codex | 1 | 1 reported | `implementation/milestones/prompt-router/.run/raw/slice_impl-05-delta10.txt` |
+| slice_impl-05-codex-r28 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/prompt-router/.run/raw/slice_impl-05-fix12.txt` |
+| slice_impl-05-codex-r29 | delta_review | codex | 1 | 1 reported | `implementation/milestones/prompt-router/.run/raw/slice_impl-05-delta11.txt` |
+| slice_impl-05-codex-r30 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/prompt-router/.run/raw/slice_impl-05-fix13.txt` |
+| slice_impl-05-codex-r31 | delta_review | codex | 0 | clean | `implementation/milestones/prompt-router/.run/raw/slice_impl-05-delta12.txt` |
+| slice_impl-05-codex-r32 | review_round | codex | 2 | 2 reported | `implementation/milestones/prompt-router/.run/raw/slice_impl-05-codex-r7.txt` |
+| slice_impl-05-codex-r33 | fix_findings | codex | 2 | 2 fixed | `implementation/milestones/prompt-router/.run/raw/slice_impl-05-fix14.txt` |
+| slice_impl-05-codex-r34 | delta_review | codex | 1 | 1 reported | `implementation/milestones/prompt-router/.run/raw/slice_impl-05-delta13.txt` |
+| slice_impl-05-codex-r35 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/prompt-router/.run/raw/slice_impl-05-fix15.txt` |
+| slice_impl-05-codex-r36 | delta_review | codex | 0 | clean | `implementation/milestones/prompt-router/.run/raw/slice_impl-05-delta14.txt` |
+| slice_impl-05-codex-r37 | review_round | codex | 0 | clean | `implementation/milestones/prompt-router/.run/raw/slice_impl-05-codex-r8.txt` |
+
+### Review completion — SATISFIED
+
+- deterministic result: every configured family was clean or debt-clean on the same current bytes; full verification was not due at this boundary; no extra reviewer was called
+- cited reviews: `slice_impl-05-codex-r37`
+
+**Deferred debt (opposite-family verified):**
+- `codex-S05A-CODEX-004` (raised codex, cleared codex): Non-ok author replies may carry safeguard completion claims — The live validator silently accepts reuse_evidence on blocked and need_rethink author replies despite the pinned ok-only contract, so later boundaries could trust and propagate wrong behavior, but correction is a local status gate plus focused regression tests.
+

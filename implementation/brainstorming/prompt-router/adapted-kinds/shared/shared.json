@@ -358,6 +358,19 @@
       ],
       "variables": []
     },
+    "implementation_scope": {
+      "text": [
+        "{{implementation_scope}}"
+      ],
+      "variables": [
+        {
+          "name": "implementation_scope",
+          "required": false,
+          "drop_unit_if_absent": true,
+          "description": "Prompt-ready projection of the exact current sequential implementation-part assignment."
+        }
+      ]
+    },
     "implementation_rules": {
       "text": [
         "IMPLEMENTATION RULES",

@@ -28,7 +28,7 @@ import threading
 import time
 import uuid
 
-from . import contracts
+from . import contracts, verifiers
 
 # In-flight worker CLI processes. Workers run in their OWN sessions
 # (start_new_session=True below) so a timeout can SIGKILL the whole worker
@@ -1279,12 +1279,24 @@ class SubprocessRunner(object):
         even when an `active_control` is given: the control then only binds
         interrupt (kill the worker group), which is what a stop button
         needs, without switching to the live steerable transport."""
-        if family not in self.commands:
-            raise RunnerError("no command configured for family %r" % family)
-        template = _with_usage_output(
-            family,
-            apply_model_effort(self.commands[family], model, effort),
-        )
+        try:
+            if family not in self.commands:
+                raise RunnerError(
+                    "no command configured for family %r" % family
+                )
+            template = _with_usage_output(
+                family,
+                apply_model_effort(self.commands[family], model, effort),
+            )
+        except BaseException as exc:
+            # Command selection and template resolution precede trace and
+            # spawn, so they cannot create a physical provider attempt.
+            try:
+                exc.worker_quiescent = True
+                exc.provider_dispatch_started = False
+            except (AttributeError, TypeError):
+                pass
+            raise
         return self._call_prepared(
             family, prompt, workspace, template, model, effort,
             timeout_override, _AMBIENT_EXECUTION, active_control,
@@ -1361,6 +1373,7 @@ class SubprocessRunner(object):
             # can safely reject and clear its exclusive attempt.
             try:
                 exc.worker_quiescent = True
+                exc.provider_dispatch_started = False
             except (AttributeError, TypeError):
                 pass
             raise
@@ -1444,6 +1457,7 @@ class SubprocessRunner(object):
             # process can exist.
             try:
                 exc.worker_quiescent = True
+                exc.provider_dispatch_started = False
             except (AttributeError, TypeError):
                 pass
             raise
@@ -1667,10 +1681,12 @@ class SubprocessRunner(object):
                 path = self.prompt_recorder(family, text)
             except Exception as exc:
                 label = " steer" if steer else ""
-                raise RunnerError(
+                error = RunnerError(
                     "could not persist the exact %s%s prompt: %s"
                     % (family, label, exc)
                 )
+                error.provider_dispatch_started = bool(steer)
+                raise error from exc
             if steer:
                 steer_paths.append(path)
             return path
@@ -1777,7 +1793,12 @@ class SubprocessRunner(object):
                     )
                 )
             except Exception as exc:
-                raise RunnerError("failed to spawn %r: %s" % (argv[0], exc))
+                error = RunnerError(
+                    "failed to spawn %r: %s" % (argv[0], exc)
+                )
+                if execution_context is _AMBIENT_EXECUTION:
+                    error.provider_dispatch_started = False
+                raise error from exc
             _track_worker(proc)
             tracked = True
             reader = threading.Thread(
@@ -2371,10 +2392,12 @@ class SubprocessRunner(object):
                 try:
                     prompt_path = self.prompt_recorder(family, prompt)
                 except Exception as exc:
-                    raise RunnerError(
+                    error = RunnerError(
                         "could not persist the exact %s prompt: %s"
                         % (family, exc)
                     )
+                    error.provider_dispatch_started = False
+                    raise error from exc
 
             # stdout goes to a FILE, not a pipe, so the watchdog can watch it
             # grow as a liveness signal: a slow token streamer burns little
@@ -2408,7 +2431,12 @@ class SubprocessRunner(object):
                         execution_context, argv, popen_kwargs
                     )
             except Exception as exc:
-                raise RunnerError("failed to spawn %r: %s" % (argv[0], exc))
+                error = RunnerError(
+                    "failed to spawn %r: %s" % (argv[0], exc)
+                )
+                if execution_context is _AMBIENT_EXECUTION:
+                    error.provider_dispatch_started = False
+                raise error from exc
 
             _track_worker(proc)
             if active_control is not None:
@@ -2840,6 +2868,9 @@ def _physical_dispatch(result, family=None, model=None, effort=None,
         "family": getattr(result, "resolved_family", None) or family,
         "model": getattr(result, "resolved_model", None) or model,
         "effort": getattr(result, "resolved_effort", None) or effort,
+        "prompt_set_fallback": getattr(
+            result, "prompt_set_fallback", None
+        ),
         "duration_s": getattr(result, "duration_s", None),
         "token_usage": usage,
         "token_usage_partial": bool(
@@ -2857,7 +2888,8 @@ def call_worker(runner, family, prompt, kind, workspace,
                 validate_opts=None, start_session=False, session_ref=None,
                 execution_context=_AMBIENT_EXECUTION,
                 active_control=None, resolve_dispatch=None,
-                continuation_family=None, on_dispatch=None):
+                continuation_family=None, on_dispatch=None,
+                prepare_call=None):
     """Run the CLI and return (validated_output, RunnerResult).
 
     Exactly one repair retry on contract violation; then
@@ -2878,6 +2910,13 @@ def call_worker(runner, family, prompt, kind, workspace,
     plain/example hard-require and question battery). A battery/plain
     violation is worker-repairable and costs the single repair retry,
     exactly like a malformed base contract.
+
+    prepare_call (optional): called before each physical attempt with ``None``
+    initially and the first contract error for the repair. It returns an
+    object carrying exact ``prompt`` text, its bound ``validate`` callable,
+    and optional ``prompt_set_fallback`` sidecar data. This is how routed
+    consumers keep fresh prompt resolution and served-contract validation in
+    one boundary; legacy callers retain the supplied prompt and repair suffix.
     """
     opts = dict(validate_opts or {})
     if start_session and session_ref is not None:
@@ -2885,8 +2924,6 @@ def call_worker(runner, family, prompt, kind, workspace,
             "a worker call cannot both start and continue a session"
         )
     if extensions:
-        from . import verifiers
-
         def _validate(obj):
             return verifiers.validate_merged_output(
                 obj, kind, extensions, roots, **opts
@@ -2894,6 +2931,37 @@ def call_worker(runner, family, prompt, kind, workspace,
     else:
         def _validate(obj):
             return contracts.validate_worker_output(obj, kind, **opts)
+
+    def prepared_call(legacy_prompt, repair_error=None):
+        if prepare_call is None:
+            return legacy_prompt, _validate, None
+        try:
+            prepared = prepare_call(repair_error)
+            call_prompt = prepared.prompt
+            call_validate = prepared.validate
+            fallback = getattr(prepared, "prompt_set_fallback", None)
+        except verifiers.VerifierError as exc:
+            exc.provider_dispatch_started = False
+            raise
+        except Exception as exc:
+            error = RunnerError("worker prompt preparation failed: %s" % exc)
+            error.provider_dispatch_started = False
+            raise error from exc
+        if not isinstance(call_prompt, str) or not call_prompt.strip():
+            error = RunnerError("worker prompt preparation returned no text")
+            error.provider_dispatch_started = False
+            raise error
+        if not callable(call_validate):
+            error = RunnerError(
+                "worker prompt preparation returned no validator"
+            )
+            error.provider_dispatch_started = False
+            raise error
+        return call_prompt, call_validate, fallback
+
+    def attach_preparation(result, fallback):
+        result.prompt_set_fallback = fallback
+        return result
 
     def diagnostic_text(result):
         """Keep app-server evidence when the selected final text is empty."""
@@ -2958,11 +3026,13 @@ def call_worker(runner, family, prompt, kind, workspace,
                 not isinstance(resolved, (tuple, list))
                 or len(resolved) != 3
             ):
-                raise RunnerError(
+                error = RunnerError(
                     "current dispatch resolver must return family, model, effort"
                 )
+                error.provider_dispatch_started = False
+                raise error
             call_family, call_model, call_effort = resolved
-        if resolve_dispatch is not None:
+        if resolve_dispatch is not None and prepare_call is None:
             call_prompt = current_family_prompt(call_prompt, call_family)
         if on_dispatch is not None:
             try:
@@ -3002,7 +3072,8 @@ def call_worker(runner, family, prompt, kind, workspace,
                 exc.resolved_family = call_family
                 exc.resolved_model = call_model
                 exc.resolved_effort = call_effort
-                exc.provider_dispatch_started = True
+                if not hasattr(exc, "provider_dispatch_started"):
+                    exc.provider_dispatch_started = True
                 raise
             else:
                 result.resolved_family = call_family
@@ -3023,9 +3094,11 @@ def call_worker(runner, family, prompt, kind, workspace,
         if continuation_ref is not None and not force_fresh:
             continuation = getattr(runner, "continue_session", None)
             if not callable(continuation):
-                raise RunnerError(
+                error = RunnerError(
                     "the runner cannot continue an explicit provider session"
                 )
+                error.provider_dispatch_started = False
+                raise error
             return compatible_call(
                 continuation,
                 call_family,
@@ -3039,9 +3112,13 @@ def call_worker(runner, family, prompt, kind, workspace,
             support = getattr(runner, "supports_session_continuation", None)
             if callable(support):
                 try:
-                    supported = support(call_family, ambient=True)
-                except TypeError:
-                    supported = support(call_family)
+                    try:
+                        supported = support(call_family, ambient=True)
+                    except TypeError:
+                        supported = support(call_family)
+                except BaseException as exc:
+                    exc.provider_dispatch_started = False
+                    raise
                 if not supported:
                     return compatible_call(
                         runner.call,
@@ -3061,39 +3138,64 @@ def call_worker(runner, family, prompt, kind, workspace,
             runner.call, call_family, call_prompt, workspace
         )
 
-    result = invoke(prompt, continuation_ref=session_ref)
+    first_prompt, first_validate, first_fallback = prepared_call(prompt)
+    try:
+        result = attach_preparation(
+            invoke(first_prompt, continuation_ref=session_ref), first_fallback
+        )
+    except RunnerError as exc:
+        if getattr(exc, "provider_dispatch_started", False):
+            attach_preparation(exc, first_fallback)
+            exc.physical_dispatches = [
+                _physical_dispatch(exc, family, model, effort, error=exc)
+            ]
+        raise
     if isinstance(result, ControlledInterruptionResult):
         return None, result
     try:
         validated, closers = _extract_contract_output(
-            result.text, _validate, kind
+            result.text, first_validate, kind
         )
         _note_recovery(result, closers)
         return validated, result
     except (ValueError, contracts.ContractError) as exc:
         first_error = str(exc)
     except BaseException as exc:
-        if extensions and isinstance(exc, verifiers.VerifierError):
+        if isinstance(exc, verifiers.VerifierError):
             _attach_call_accounting(exc, result)
         raise
     repair_prompt = prompt + (REPAIR_SUFFIX % first_error)
+    repair_validate = _validate
+    repair_fallback = None
     repair_ref = getattr(result, "session_ref", None) or session_ref
     repair_control = (
         active_control.renew() if active_control is not None else None
     )
     try:
-        result2 = invoke(
-            repair_prompt,
-            continuation_ref=repair_ref,
-            call_control=repair_control,
-            continuation_bound_family=getattr(
-                result, "resolved_family", family
+        if prepare_call is not None:
+            repair_prompt, repair_validate, repair_fallback = prepared_call(
+                prompt, first_error
+            )
+        result2 = attach_preparation(
+            invoke(
+                repair_prompt,
+                continuation_ref=repair_ref,
+                call_control=repair_control,
+                continuation_bound_family=getattr(
+                    result, "resolved_family", family
+                ),
             ),
+            repair_fallback,
         )
+    except verifiers.VerifierError as exc:
+        attach_completed_attempt(exc, result, first_error)
+        raise
     except RunnerError as exc:
-        if not getattr(exc, "provider_dispatch_started", True):
+        if not getattr(exc, "provider_dispatch_started", False):
+            exc.provider_dispatch_started = False
             attach_completed_attempt(exc, result, first_error)
             raise
+        attach_preparation(exc, repair_fallback)
         raw_texts = [diagnostic_text(result)]
         existing = getattr(exc, "raw_texts", None)
         if isinstance(existing, (list, tuple)):
@@ -3150,6 +3252,9 @@ def call_worker(runner, family, prompt, kind, workspace,
             "family": getattr(result, "resolved_family", family),
             "model": getattr(result, "resolved_model", model),
             "effort": getattr(result, "resolved_effort", effort),
+            "prompt_set_fallback": getattr(
+                result, "prompt_set_fallback", None
+            ),
             "duration_s": result.duration_s,
             "token_usage": result.token_usage,
             "token_usage_partial": bool(
@@ -3161,7 +3266,7 @@ def call_worker(runner, family, prompt, kind, workspace,
         return None, result2
     try:
         validated, closers = _extract_contract_output(
-            result2.text, _validate, kind
+            result2.text, repair_validate, kind
         )
         _note_recovery(result2, closers)
         # A repaired first strike must not stay invisible: hand the caller
@@ -3173,6 +3278,9 @@ def call_worker(runner, family, prompt, kind, workspace,
             "family": getattr(result, "resolved_family", family),
             "model": getattr(result, "resolved_model", model),
             "effort": getattr(result, "resolved_effort", effort),
+            "prompt_set_fallback": getattr(
+                result, "prompt_set_fallback", None
+            ),
             "duration_s": result.duration_s,
             "token_usage": result.token_usage,
             "token_usage_partial": bool(
@@ -3212,7 +3320,7 @@ def call_worker(runner, family, prompt, kind, workspace,
         ]
         raise error
     except BaseException as exc:
-        if extensions and isinstance(exc, verifiers.VerifierError):
+        if isinstance(exc, verifiers.VerifierError):
             _attach_call_accounting(exc, result, result2)
         raise
 

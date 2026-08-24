@@ -645,24 +645,14 @@ def _clip_operator_text(text):
     return text
 
 
-def _project_context_block(project_context):
-    """Standing project law for a project-bound run, rendered with the
-    same operator authority as amendments (the goal's prompt-machinery
-    rule): the ecosystem map — project and work-area handles plus the
-    fixed root universe the run was bound to at init — the recorded
-    reuse-source roles, and each in-scope safeguard with the full
-    obligation the driver will mechanically enforce (field, entry
-    type-specs, checks: naming the slot is the prompt half of the
-    no-bare-boolean doctrine). Reuse-source roles are descriptors only:
-    they do not create duties without an in-scope safeguard. None renders
-    nothing, so a project-less run's prompts stay byte-identical.
+def project_context_body(project_context):
+    """Render the body of standing project law for a project-bound run.
 
-    Input shape (driver-built): {project, work_area, primary, additional,
-    reuse_sources, safeguards} — roots verbatim from the state project
-    block (never a live store read; the map must describe exactly the
-    universe containment enforces), reuse_sources from the live
-    work_area_meta value or None, safeguards the live-selected in-scope
-    Slice-3 policy values."""
+    The routed prompt corpus owns the ``PROJECT CONTEXT`` heading, while the
+    legacy builders still add it in :func:`_project_context_block`.  Keeping
+    the body here lets both consumers render one authority snapshot without
+    duplicating safeguard formatting.
+    """
     if not project_context:
         return ""
     pc = project_context
@@ -670,7 +660,6 @@ def _project_context_block(project_context):
     sources = pc.get("reuse_sources") or []
     primary = pc.get("primary") or {}
     lines = [
-        "PROJECT CONTEXT (standing project law; binding)",
         "This run is bound to project %r, work area %r."
         % (pc.get("project"), pc.get("work_area")),
         "Ecosystem map (the fixed roots this run was bound to at init):",
@@ -739,7 +728,31 @@ def _project_context_block(project_context):
             "run-scoped OPERATOR AMENDMENTS WIN over project safeguards",
             "(the more specific, later intent).",
         ]
-    return "\n".join(lines) + "\n\n"
+    return "\n".join(lines)
+
+
+def _project_context_block(project_context):
+    """Standing project law for a project-bound run, rendered with the
+    same operator authority as amendments (the goal's prompt-machinery
+    rule): the ecosystem map — project and work-area handles plus the
+    fixed root universe the run was bound to at init — the recorded
+    reuse-source roles, and each in-scope safeguard with the full
+    obligation the driver will mechanically enforce (field, entry
+    type-specs, checks: naming the slot is the prompt half of the
+    no-bare-boolean doctrine). Reuse-source roles are descriptors only:
+    they do not create duties without an in-scope safeguard. None renders
+    nothing, so a project-less run's prompts stay byte-identical.
+
+    Input shape (driver-built): {project, work_area, primary, additional,
+    reuse_sources, safeguards} — roots verbatim from the state project
+    block (never a live store read; the map must describe exactly the
+    universe containment enforces), reuse_sources from the live
+    work_area_meta value or None, safeguards the live-selected in-scope
+    Slice-3 policy values."""
+    body = project_context_body(project_context)
+    if not body:
+        return ""
+    return "PROJECT CONTEXT (standing project law; binding)\n%s\n\n" % body
 
 
 def _amendments_block(amendments):

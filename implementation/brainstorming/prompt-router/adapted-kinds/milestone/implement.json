@@ -37,6 +37,9 @@
         ]
       },
       {
+        "ref": "implementation_scope"
+      },
+      {
         "ref": "project_context"
       },
       {

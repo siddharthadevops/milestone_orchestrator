@@ -13,7 +13,7 @@ from pathlib import Path
 KINDS_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(KINDS_DIR.parents[3]))
 
-from orchestrator import prompt_router, prompt_sets
+from orchestrator import prompt_router, prompt_sets, prompts
 
 BASE = KINDS_DIR.parent
 CAPTURES = (BASE / 'current-prompts.md').read_text().splitlines()
@@ -139,7 +139,13 @@ RUNS = {
                    'skeleton_path': SKELETON, 'goal_path': GOAL, 'slice_note_path': NOTE10,
                    'operator_amendments': AMENDMENTS_A,
                    'project': 'orchestrators', 'work_area': 'implementation', 'ecosystem_map': ECOSYSTEM,
-                   'brainstorming_max_rounds': ROUNDS},
+                   'brainstorming_max_rounds': ROUNDS,
+                   'implementation_scope': prompts._implementation_scope_block({
+                       'part': 'b',
+                       'scope': 'Complete the remaining compatibility proof.',
+                       'delegated_remaining': None,
+                       'source_unit': 'slice_impl-10-a',
+                   }).rstrip('\n')},
     },
     'review_round': {
         'route': {'job': 'review_round@slice_impl', 'executor': 'agent_call',
