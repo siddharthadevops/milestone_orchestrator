@@ -88,3 +88,31 @@
 - deterministic result: every configured family was clean or debt-clean on the same current bytes; full verification was not due at this boundary; no extra reviewer was called
 - cited reviews: `slice_impl-01-b-codex-r1`, `slice_impl-01-b-claude-r1`
 
+## slice_doc-02 (Charge resolver and assembled JSON)
+
+- draft: kind `draft_slice_note`, artifact `implementation/milestones/prompt-router/slices/slice-02.md` (raw: `implementation/milestones/prompt-router/.run/raw/slice_doc-02-draft.txt`)
+
+| Round | Kind | Family | Findings | Triage | Raw |
+|---|---|---|---|---|---|
+| slice_doc-02-codex-r1 | review_round | codex | 4 | 4 reported | `implementation/milestones/prompt-router/.run/raw/slice_doc-02-codex-r1.txt` |
+| slice_doc-02-codex-r2 | fix_findings | codex | 1 | 1 fixed (1 consulted) | `implementation/milestones/prompt-router/.run/raw/slice_doc-02-fix1-rethink-return.txt` |
+| slice_doc-02-codex-r3 | fix_findings | codex | 1 | 1 rejected (1 consulted) | `implementation/milestones/prompt-router/.run/raw/slice_doc-02-fix2.txt` |
+| slice_doc-02-codex-r4 | delta_review | codex | 2 | 2 reported | `implementation/milestones/prompt-router/.run/raw/slice_doc-02-delta1-2.txt` |
+| slice_doc-02-codex-r5 | fix_findings | codex | 2 | 2 fixed | `implementation/milestones/prompt-router/.run/raw/slice_doc-02-fix3.txt` |
+| slice_doc-02-codex-r6 | delta_review | codex | 1 | 1 reported | `implementation/milestones/prompt-router/.run/raw/slice_doc-02-delta2.txt` |
+| slice_doc-02-codex-r7 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/prompt-router/.run/raw/slice_doc-02-fix4.txt` |
+| slice_doc-02-codex-r8 | delta_review | codex | 0 | clean | `implementation/milestones/prompt-router/.run/raw/slice_doc-02-delta3.txt` |
+| slice_doc-02-codex-r9 | review_round | codex | 2 | DEBT-CLEAN (reclassified) | `implementation/milestones/prompt-router/.run/raw/slice_doc-02-codex-r2.txt` |
+
+### Review completion — SATISFIED
+
+- deterministic result: every configured family was clean or debt-clean on the same current bytes; full verification was not due at this boundary; no extra reviewer was called
+- cited reviews: `slice_doc-02-codex-r9`
+
+**Deferred debt (opposite-family verified):**
+- `codex-PR-S02-001` (raised codex, cleared codex): The route matrix admits non-code suite checkpoints — The slice explicitly admits every non-empty material and tests open material ids despite the pinned suite_checkpoint@workspace × agent_call × code contract, so the builder would likely implement the wrong admission silently, while correction is a local route restriction and test re-pin.
+- `codex-PR-S02-003` (raised codex, cleared codex): The focused gate does not prove charge errors cannot trigger rung fallback — The artifact explicitly forbids retrying charge errors on weaker rungs, so a capable builder should preserve the contract, but the focused gate omits the cross-rung missing-payload case and could let a hasty implementation silently fallback; correction is a local resolver fix plus one regression tes
+- `codex-PR-S02-004` (raised codex, cleared codex): The compatibility check cannot observe the consumers it claims to protect — The slice explicitly presents test_prompts as strict proof for unchanged dispatch and exact prompt recording although it exercises only builders, so the false assurance can silently mislead later work, while correction is a local dispatch-level regression test plus any resulting wiring repair.
+- `codex-codex-PR-S02-008` (raised codex, cleared codex): Slice 2 excludes B1's required source-goal revision — The slice pins the single `rethink` route but omits the cited source goal from its conversion, leaving an explicit wrong route contract that could silently misdirect later work, while correction is bounded to that goal and any affected session-routing code and tests.
+- `codex-codex-PR-S02-009` (raised codex, cleared codex): The gate does not pin draft_skeleton's canonical-block instructions — The omission could let the capable builder preserve the obsolete plan-table instruction because every named Slice 2 gate can still pass, but it is under-specification rather than a false pinned fact and Slice 3's first canonical-block use should expose it, leaving bounded corpus, seed, golden, and t
+

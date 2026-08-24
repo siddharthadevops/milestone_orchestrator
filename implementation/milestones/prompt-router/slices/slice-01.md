@@ -17,15 +17,16 @@ is read by that call. This is deliberately not versioned publication; edits raci
 a read may still be observed as any valid combination from that same set.
 
 Nothing sends these prompts to a worker yet. This slice makes the corpus
-available, validates it, and selects a safe whole set. Later slices own charge
-routing, assembly, reply validation, run selection, APIs, and consumer cutover.
+available, validates it, and selects a safe whole set. Slice 2 recaptures the
+stored `default`, generated seed, and goldens required by accepted amendment B1;
+later slices own reply validation, run selection, APIs, and consumer cutover.
 
 ### Ownership and boundary
 
 Owned here are the service-home layout, the shipped standard set, the built-in
 seed, whole-set readability, fresh selection, and the fallback indication. An
-empty service home gains the standard set; an existing set remains the
-operator's bytes and is neither repaired nor replaced during initialization.
+empty service home gains the release's standard set; an existing set remains
+the operator's bytes and is neither repaired nor replaced during initialization.
 
 Not owned here are prompt rendering, variable substitution, material overlays,
 job or seat selection, output-contract enforcement, traces, run bindings,
@@ -52,8 +53,9 @@ operator controls, or any change to what current workers receive.
 This first slice has no earlier-slice dependency. It uses the reviewed seed
 corpus and extends the service home's existing catalogue-initialization
 boundaries. Those initialization boundaries and the new selector are the only
-runtime surfaces touched. The next slice is the first consumer of the selected
-set; current prompt builders, dispatches, validators, and traces stay in force.
+runtime surfaces touched. Slice 2 is the first consumer and owns B1's corpus
+conversion; current prompt builders, dispatches, validators, and traces stay in
+force until their assigned cutovers.
 
 ### Non-goals
 
@@ -70,7 +72,7 @@ set; current prompt builders, dispatches, validators, and traces stay in force.
 
 ### Acceptance and size
 
-Acceptance is the focused contract below: it proves the shipped corpus, the
+Acceptance is the focused contract below: it proves the current shipped corpus,
 missing-only installation, representative whole-set defects, all three fallback
 outcomes, no cross-set mixing or repair, and a fresh second read after an edit.
 The unchanged legacy prompt tests prove that no current worker consumer moved.
@@ -83,9 +85,10 @@ goldens does not count toward that aim; no reason to exceed it is known.
 
 The material risks are a shallow validator accepting a half-set, fallback code
 mixing a usable file from the failed rung, initialization reverting an operator
-edit, and two separately maintained seed copies drifting. The tests corrupt one
-fact at a time, mark every rung with distinguishable values, preserve bytes
-around fallback, and compare both shipped representations to one corpus.
+edit, and the generated seed drifting during a corpus recapture. The tests
+corrupt one fact at a time, mark every rung with distinguishable values,
+preserve bytes around fallback, and compare both shipped representations to the
+same current corpus.
 
 ### Reuse Posture
 
@@ -103,9 +106,10 @@ reversible omission risk warrants.
 
 ### Planning-context disposition
 
-**Adopts** the reviewed skeleton and the seed corpus it makes binding. **Uses**
-the historical prompt capture and rationale only as evidence. **Revises** no
-accepted decision. **Rejects** brainstorming and `_drafts` material as
+**Adopts** the reviewed skeleton and accepted amendment B1. **Uses** the
+historical prompt capture and rationale only as evidence. **Preserves** this
+slice's store, fallback, and initialization contracts while Slice 2 revises the
+shipped corpus. **Rejects** other brainstorming and `_drafts` material as
 independent implementation authority.
 
 ## Register 2 — PINNED FACTS (hard register)
@@ -114,12 +118,12 @@ independent implementation authority.
 
 | fact | value | authority (file:line) | touch / do-not-touch |
 |---|---|---|---|
-| Stored corpus | Sets live at `prompt_sets/<set>/{shared,milestone,brainstorming}/…` under the service home. The canonical JSON inventory is `shared/shared.json`; milestone kinds `draft_skeleton`, `draft_slice_note`, `implement`, `review_round`, `delta_review`, `reclassify`, `fix_findings`, `suite_checkpoint`, `merge_repair`; and Brainstorming kinds `discussion_turn`, `questioner_turn`. Rendered `*.prompt.txt` files and `render_examples.py` remain authoring evidence, not runtime set members. | `implementation/milestones/prompt-router/skeleton.md:150,155`; `implementation/brainstorming/prompt-router/adapted-kinds/README.md:10-32` | touch the service-home set and shipped seed representation; do-not-create a second store or treat rendered examples as source units |
-| Shipped floor and initialization | The reviewed adapted corpus and its recorded decisions are both the stored set named `default` and the in-code seed at ship. An empty home gets the complete stored `default` at each existing home-entry boundary; once `prompt_sets/default` exists, later initialization leaves all of its bytes alone, valid or invalid. Equality is semantic after parsing, not byte formatting. | `implementation/milestones/prompt-router/skeleton.md:13-16,130,150,155`; existing boundaries `orchestrator/driver.py:905-940,12873-12876`; `orchestrator/service.py:5481-5500` | touch the three existing initialization boundaries; do-not-overwrite, repair, migrate, or normalize an existing set |
-| Whole-set readability | A rung is usable only when every canonical JSON member is present and readable and the corpus validates as one unit. Broken JSON, an unavailable or missing canonical member, an unresolved shared reference, a duplicate declared id, or an invalid variable declaration makes the whole rung unusable. Stored unknown contract-section ids remain data; semantic prose review and registered enforcement belong later. | `implementation/milestones/prompt-router/skeleton.md:150,153`; `implementation/milestones/prompt-router/goal.md:79-84`; corpus conventions `implementation/brainstorming/prompt-router/adapted-kinds/README.md:34-75` | touch one whole-set validator; do-not-skip a bad member, validate trusted prose semantics, or pull registered reply enforcement into this slice |
-| Resolution and fallback | Resolve requested named set → stored `default` → in-code seed. Return exactly one complete validated rung. A fall returns a non-empty indication beside the selected set; an ordinary named-set success has none. No file from a rejected rung may survive in the answer, and resolution writes or repairs nothing. | `implementation/milestones/prompt-router/skeleton.md:62-70,89-100,130,150,161`; sidecar precedent `orchestrator/staffing.py:1587-1622,1717-1739` | touch the set selector and its sidecar result; do-not-mix rungs, put fallback prose inside prompt content, retry, or heal stored files |
-| Freshness and consistency | Every selection rereads the requested set and any fallback rung it needs. A file edit completed before selection begins governs that file's read. A read racing multi-file saves may combine file states from that same rung, including a valid combination that never coexisted on disk; across calls there is zero consistency, monotonicity, or convergence guarantee. | `implementation/milestones/prompt-router/skeleton.md:89-100,150,161`; fresh-read precedent `orchestrator/staffing.py:1975-1994,2001-2029` | touch per-selection reads; do-not-add a cache, snapshot, version, lock ceremony, notification, retry, or reconciliation |
-| Slice boundary | This slice does not assemble or dispatch prompts and does not alter current prompt text, reply validation, tracing, routes, panel state, run bindings, staffing, or model routing. Those outcomes are assigned to later slices. | `implementation/milestones/prompt-router/skeleton.md:131-143,152-160,162`; current builders `orchestrator/prompts.py:1-19`; current author dispatch `orchestrator/driver.py:7664-7712`; exact trace `orchestrator/runners.py:1663-1676,1754-1757` | touch store, seed, validation, initialization, and selection only; do-not-cut over a consumer or edit any granted read-only root |
+| Stored corpus | Sets live at `prompt_sets/<set>/{shared,milestone,brainstorming}/…` under the service home. The canonical JSON inventory is `shared/shared.json`; milestone kinds `draft_skeleton`, `draft_slice_note`, `implement`, `review_round`, `delta_review`, `reclassify`, `fix_findings`, `suite_checkpoint`, `merge_repair`; and Brainstorming kinds `discussion_turn`, `questioner_turn`. Rendered `*.prompt.txt` files and `render_examples.py` remain authoring evidence, not runtime set members. | `implementation/milestones/prompt-router/skeleton.md:145`; `implementation/brainstorming/prompt-router/adapted-kinds/README.md:10-32` | touch the service-home set and shipped seed representation; do-not-create a second store or treat rendered examples as source units |
+| Shipped floor and initialization | The current reviewed corpus is both the stored set named `default` and the in-code seed at ship; Slice 2 owns B1's synchronized corpus, seed, and golden recapture. An empty home gets the complete stored `default` at each existing home-entry boundary; once `prompt_sets/default` exists, later initialization leaves all of its bytes alone, valid or invalid. Equality is semantic after parsing, not byte formatting. | accepted amendment B1; `implementation/milestones/prompt-router/skeleton.md:121-122,145`; existing boundaries `orchestrator/driver.py:905-940,12873-12876`; `orchestrator/service.py:5481-5500` | touch the three existing initialization boundaries and the release seed representation; do-not-overwrite, repair, migrate, or normalize an existing set |
+| Whole-set readability | A rung is usable only when every canonical JSON member is present and readable and the corpus validates as one unit. Broken JSON, an unavailable or missing canonical member, an unresolved shared reference, a duplicate declared id, or an invalid variable declaration makes the whole rung unusable. Stored unknown contract-section ids remain data; semantic prose review and registered enforcement belong later. | `implementation/milestones/prompt-router/skeleton.md:145,148`; `implementation/milestones/prompt-router/goal.md:79-84`; corpus conventions `implementation/brainstorming/prompt-router/adapted-kinds/README.md:34-75` | touch one whole-set validator; do-not-skip a bad member, validate trusted prose semantics, or pull registered reply enforcement into this slice |
+| Resolution and fallback | Resolve requested named set → stored `default` → in-code seed. Return exactly one complete validated rung. A fall returns a non-empty indication beside the selected set; an ordinary named-set success has none. No file from a rejected rung may survive in the answer, and resolution writes or repairs nothing. | `implementation/milestones/prompt-router/skeleton.md:64-68,96-101,145,147`; sidecar precedent `orchestrator/staffing.py:1587-1622,1717-1739` | touch the set selector and its sidecar result; do-not-mix rungs, put fallback prose inside prompt content, retry, or heal stored files |
+| Freshness and consistency | Every selection rereads the requested set and any fallback rung it needs. A file edit completed before selection begins governs that file's read. A read racing multi-file saves may combine file states from that same rung, including a valid combination that never coexisted on disk; across calls there is zero consistency, monotonicity, or convergence guarantee. | `implementation/milestones/prompt-router/skeleton.md:96-101,145`; fresh-read precedent `orchestrator/staffing.py:1975-1994,2001-2029` | touch per-selection reads; do-not-add a cache, snapshot, version, lock ceremony, notification, retry, or reconciliation |
+| Slice boundary | This slice does not assemble or dispatch prompts and does not alter prompt meaning, reply validation, tracing, routes, panel state, run bindings, staffing, or model routing. Slice 2 owns B1's corpus recapture; later slices own consumer cutover. | `implementation/milestones/prompt-router/skeleton.md:121-127`; current builders `orchestrator/prompts.py:1-19`; current author dispatch `orchestrator/driver.py:7664-7712`; exact trace `orchestrator/runners.py:1663-1676,1754-1757` | touch store, seed, validation, initialization, and selection only; do-not-cut over a consumer or edit any granted read-only root |
 
 ### Verification Contract
 
@@ -129,7 +133,7 @@ Focused command:
 
 | observable claim | named check | pass condition | posture |
 |---|---|---|---|
-| The shipped floor is complete and singular | new `test_shipped_corpus_and_seed_are_equivalent` | The canonical JSON inventory is exact; an empty home gains a parsed `default` equal to the in-code seed and reviewed corpus; no rendered example or script enters the runtime set. | strict |
+| The shipped floor is complete and singular | new `test_shipped_corpus_and_seed_are_equivalent` | The canonical JSON inventory is exact; after Slice 2's recapture an empty home gains a parsed `default` equal to the in-code seed and current reviewed corpus; no rendered example or script enters the runtime set. | strict |
 | Initialization is missing-only at every existing home boundary | new `test_default_install_is_missing_only_at_home_boundaries` | Driver start, run creation, and service start each install into an empty home; a valid edit and, separately, a malformed existing member remain byte-identical after another initialization. | strict |
 | Every declared defect rejects a whole rung | new `test_whole_set_validation_rejects_declared_defects` | Broken JSON, missing/unavailable canonical member, unresolved ref, duplicate id, and invalid variable declaration each make the rung unusable; no partial set is returned. | strict |
 | Fallback is total, disclosed, and never mixed or repaired | new `test_fallback_selects_one_complete_rung` | Distinct markers prove valid named selection, invalid named → stored `default`, and invalid named plus invalid `default` → seed; each fall has a sidecar indication, ordinary success has none, and all stored bytes are unchanged. | strict |
@@ -140,7 +144,7 @@ The repository's official full suite remains
 `python3 -m unittest discover -s orchestrator/tests -t .`
 (`orchestrator/README.md:544-546`). It belongs to the milestone's scheduled
 checkpoint, not this slice's focused implementation gate
-(`implementation/milestones/prompt-router/skeleton.md:141-143,159`).
+(`implementation/milestones/prompt-router/skeleton.md:132-133`).
 
 ### Question Battery
 
@@ -150,11 +154,11 @@ facts this note pins.
 
 | question | answer | evidence |
 |---|---|---|
-| consumers_touched | **Verified touched:** the three existing service-home initialization boundaries—driver start, run creation, and service start—and the new selector consumed by Slice 2. **Verified untouched:** current milestone prompt builders/author dispatch and exact prompt recording; no API, panel, validator, or worker dispatch moves in this slice. | `orchestrator/driver.py:905-940,12873-12876,7664-7712`; `orchestrator/service.py:5481-5500`; `orchestrator/prompts.py:1-19`; `orchestrator/runners.py:1663-1676,1754-1757`; `implementation/milestones/prompt-router/skeleton.md:130-132` |
-| pinned_facts | The one service-home layout and exact canonical JSON inventory; the adapted corpus as both stored `default` and in-code seed; missing-only non-repairing installation; whole-set validity; named → stored default → seed selection with a sidecar fallback indication and no rung mixing; per-read freshness with the declared best-effort consistency; and the no-consumer-cutover boundary. | `implementation/milestones/prompt-router/skeleton.md:89-100,130,150,155,161`; `implementation/brainstorming/prompt-router/adapted-kinds/README.md:10-75` |
-| verification | The six checks above pin seed/corpus equivalence, all existing home boundaries, every declared unreadable-set class, each rung and fallback indication with byte-stable non-repair, a fresh second read, and unchanged legacy prompt consumers. The focused command names the exact modules; the official full suite remains the later checkpoint command. | `implementation/milestones/prompt-router/skeleton.md:130,141-143,150,155,159`; existing patterns `orchestrator/tests/test_model_profiles.py:374-405`; `orchestrator/tests/test_staffing_sessions.py:651-662,719-747`; `orchestrator/README.md:544-546` |
+| consumers_touched | **Verified touched:** the three existing service-home initialization boundaries—driver start, run creation, and service start—and the selector consumed by Slice 2. **Verified untouched:** current milestone prompt builders/author dispatch and exact prompt recording; no API, panel, validator, or worker dispatch moves in this slice. Slice 2 alone owns B1's synchronized corpus recapture. | `orchestrator/driver.py:905-940,12873-12876,7664-7712`; `orchestrator/service.py:5481-5500`; `orchestrator/prompts.py:1-19`; `orchestrator/runners.py:1663-1676,1754-1757`; accepted amendment B1 |
+| pinned_facts | The one service-home layout and exact canonical JSON inventory; the current corpus as both stored `default` and in-code seed; missing-only non-repairing installation; whole-set validity; named → stored default → seed selection with a sidecar fallback indication and no rung mixing; per-read freshness with the declared best-effort consistency; and the no-consumer-cutover boundary. | `implementation/milestones/prompt-router/skeleton.md:96-101,121-127,145,147`; `implementation/brainstorming/prompt-router/adapted-kinds/README.md:10-75`; accepted amendment B1 |
+| verification | The six checks above pin seed/corpus equivalence, all existing home boundaries, every declared unreadable-set class, each rung and fallback indication with byte-stable non-repair, a fresh second read, and unchanged legacy prompt consumers. The focused command names the exact modules; the official full suite remains the later checkpoint command. | `implementation/milestones/prompt-router/skeleton.md:121-122,132-133,145,147`; existing patterns `orchestrator/tests/test_model_profiles.py:374-405`; `orchestrator/tests/test_staffing_sessions.py:651-662,719-747`; `orchestrator/README.md:544-546` |
 | reuse_posture | Affected parties are later slices and eventual prompt callers; omission blocks routing, while mixing can waste calls. Searches of this workspace and all granted roots found no existing prompt-set router. Reused are the binding corpus and renderer checks, the staffing selector's whole-rung fallback/sidecar shape, the model-profile missing-only seed, and the three existing home boundaries. Cheapest sufficient is one validator plus one fresh selector; the sole new cost is multi-file validation, reversible before cutover. | corpus `implementation/brainstorming/prompt-router/adapted-kinds/README.md:1-75`; renderer `implementation/brainstorming/prompt-router/adapted-kinds/render_examples.py:200-266`; fallback `orchestrator/staffing.py:1587-1622,1717-1739`; seed `orchestrator/model_profiles.py:417-429`; boundaries `orchestrator/driver.py:905-940,12873-12876`; `orchestrator/service.py:5481-5500` |
-| enforceability | Every asserted guarantee maps to an available mechanism in the Enforceability Gate: the existing missing-only seed guard; the corpus parser/ref/variable checks; staffing's single-rung fallback and sidecar result; fresh per-call reads and a read-only resolver; and named tests that corrupt inputs, mark rungs, and compare bytes. No snapshot, convergence, or semantic-prose guarantee is asserted. | `orchestrator/model_profiles.py:417-429`; `implementation/brainstorming/prompt-router/adapted-kinds/render_examples.py:200-266`; `orchestrator/staffing.py:1587-1622,1717-1739,1975-1994,2001-2029`; `implementation/milestones/prompt-router/skeleton.md:89-100,150,161` |
+| enforceability | Every asserted guarantee maps to an available mechanism in the Enforceability Gate: the existing missing-only seed guard; the corpus parser/ref/variable checks; staffing's single-rung fallback and sidecar result; fresh per-call reads and a read-only resolver; and named tests that corrupt inputs, mark rungs, and compare bytes. No snapshot, convergence, or semantic-prose guarantee is asserted. | `orchestrator/model_profiles.py:417-429`; `implementation/brainstorming/prompt-router/adapted-kinds/render_examples.py:200-266`; `orchestrator/staffing.py:1587-1622,1717-1739,1975-1994,2001-2029`; `implementation/milestones/prompt-router/skeleton.md:96-101,145` |
 
 ### Enforceability Gate
 
@@ -163,4 +167,4 @@ facts this note pins.
 | An empty home receives the seed and an existing set is not rewritten | The existing missing-only guard in `orchestrator/model_profiles.py:417-429`, invoked at the same three home boundaries already used at `orchestrator/driver.py:905-940,12873-12876` and `orchestrator/service.py:5481-5500`. | Exercise all three boundaries, then compare edited and malformed stored bytes before and after re-entry. |
 | Only a complete valid corpus is eligible | The corpus renderer already parses kind/shared JSON, resolves shared refs, checks variable declarations during rendering, and checks question-id uniqueness at `implementation/brainstorming/prompt-router/adapted-kinds/render_examples.py:200-266`; the store extends that one corpus walk to all canonical members before eligibility. | Remove or corrupt one fact at a time and require rejection of the entire rung. |
 | Fallback returns one rung, reports the fall beside it, and repairs nothing | The existing three-level selector and sidecar-result pattern at `orchestrator/staffing.py:1587-1622,1717-1739`, with the read-only resolution contract at `orchestrator/staffing.py:2001-2029`. | Give each rung distinct sentinels, force both falls, assert whole-result equality and byte-identical stored inputs. |
-| A later read sees completed edits without a cache, but gains no snapshot promise | The existing per-resolution store read at `orchestrator/staffing.py:1975-1994`; the skeleton expressly permits same-rung combinations and zero cross-call consistency at `implementation/milestones/prompt-router/skeleton.md:89-100`. | Resolve, complete one valid edit, resolve again in the same process, and assert the second content while demanding no multi-file snapshot. |
+| A later read sees completed edits without a cache, but gains no snapshot promise | The existing per-resolution store read at `orchestrator/staffing.py:1975-1994`; the skeleton expressly permits same-rung combinations and zero cross-call consistency at `implementation/milestones/prompt-router/skeleton.md:96-101`. | Resolve, complete one valid edit, resolve again in the same process, and assert the second content while demanding no multi-file snapshot. |

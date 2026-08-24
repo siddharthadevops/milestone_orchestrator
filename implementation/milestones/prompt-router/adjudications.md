@@ -2,4 +2,14 @@
 
 # Adjudicated Rejections
 
-(none)
+Settled findings: re-raising one requires referencing its id with
+genuinely new evidence (`contests`).
+
+## [brainstorming:bs-13aa15a9c1dd18c5de134fc215dec198/codex-PR-S02-005]
+
+- unit: slice_doc-02
+- severity: P1
+- finding: Canonical producer schema conflicts with the operative plan
+- rationale: Brainstorming confirmed the schemas are intentionally distinct and clarified immediate projection when the first valid block establishes its anchor.
+- prevention: implementation/milestones/prompt-router/skeleton.md (Clarified initial projection and the separation between canonical executor ids and runtime configuration.)
+
