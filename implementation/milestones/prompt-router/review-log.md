@@ -154,3 +154,19 @@
 **Deferred debt (opposite-family verified):**
 - `codex-S02B-CODEX-001` (raised codex, cleared codex): Closed charge and seat tests derive their oracle from production tables — The focused gate remains green after unauthorized route and seat insertions, plausibly misleading even a careful builder, while correction requires only a literal expected-map assertion and removal of any stray entries.
 
+## slice_doc-03 (Registered contracts and QUESTIONS)
+
+- draft: kind `draft_slice_note`, artifact `implementation/milestones/prompt-router/slices/slice-03.md` (raw: `implementation/milestones/prompt-router/.run/raw/slice_doc-03-draft.txt`)
+
+| Round | Kind | Family | Findings | Triage | Raw |
+|---|---|---|---|---|---|
+| slice_doc-03-codex-r1 | review_round | codex | 1 | DEBT-CLEAN (reclassified) | `implementation/milestones/prompt-router/.run/raw/slice_doc-03-codex-r1.txt` |
+
+### Review completion — SATISFIED
+
+- deterministic result: every configured family was clean or debt-clean on the same current bytes; full verification was not due at this boundary; no extra reviewer was called
+- cited reviews: `slice_doc-03-codex-r1`
+
+**Deferred debt (opposite-family verified):**
+- `codex-slice_doc-03-001` (raised codex, cleared codex): The Enforceability Gate duplicates existing contract and verification tables — All three copies are currently aligned, so they do not plausibly mislead the capable builder, and any later inconsistency would be an explicit stop-and-repair contradiction corrected by a small local deduplication or realignment.
+
