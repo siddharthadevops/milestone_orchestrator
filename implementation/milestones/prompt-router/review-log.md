@@ -220,3 +220,19 @@
 **Deferred debt (opposite-family verified):**
 - `codex-slice_impl-03-b-codex-001` (raised codex, cleared codex): Canonical-plan acceptance test omits the operative skeleton and anchoring failure path — The green 44-test gate falsely implies coverage while using only generated one/two-slice fixtures and never checking state after invalid anchoring, so later builders may trust unpinned behavior, but the real 14-slice block validates today and anchoring saves only after validation, making correction 
 
+## slice_doc-04 (Prompt-set binding and operator surface)
+
+- draft: kind `draft_slice_note`, artifact `implementation/milestones/prompt-router/slices/slice-04.md` (raw: `implementation/milestones/prompt-router/.run/raw/slice_doc-04-draft.txt`)
+
+| Round | Kind | Family | Findings | Triage | Raw |
+|---|---|---|---|---|---|
+| slice_doc-04-codex-r1 | review_round | codex | 1 | DEBT-CLEAN (reclassified) | `implementation/milestones/prompt-router/.run/raw/slice_doc-04-codex-r1.txt` |
+
+### Review completion — SATISFIED
+
+- deterministic result: every configured family was clean or debt-clean on the same current bytes; full verification was not due at this boundary; no extra reviewer was called
+- cited reviews: `slice_doc-04-codex-r1`
+
+**Deferred debt (opposite-family verified):**
+- `codex-slice_doc-04-verification-001` (raised codex, cleared codex): The focused gate omits the tests that protect Slice 4's required legacy-control boundary — The gate’s explicit compatibility claim is wrong because it runs only static panel checks while POST behavior and loaded-driver replay live in the omitted test_producer_selection module, so a builder can silently trust green coverage, but adding that module and repairing any exposed regression is sm
+
