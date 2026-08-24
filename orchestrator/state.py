@@ -34,6 +34,8 @@ import os
 import tempfile
 import time
 
+from . import prompt_sets
+
 try:
     import fcntl
 except ImportError:  # pragma: no cover - non-POSIX keeps existing fallback
@@ -130,7 +132,11 @@ def _orchestrator_rev():
     return rev if proc.returncode == 0 and rev else None
 
 
-def new_state(goal, workspace, config, name=None, slug=None, project=None):
+PROMPT_SET_KEY = "prompt_set"
+
+
+def new_state(goal, workspace, config, name=None, slug=None, project=None,
+              prompt_set=prompt_sets.DEFAULT_SET_NAME):
     docs_template = (config or {}).get("docs_dir") or "docs"
     docs_dir = os.path.normpath(
         docs_template.replace("{slug}", slug or slugify(name))
@@ -144,6 +150,7 @@ def new_state(goal, workspace, config, name=None, slug=None, project=None):
         "goal": goal,
         "workspace": workspace,
         "name": name,
+        PROMPT_SET_KEY: prompt_sets.validate_name(prompt_set),
         # Resolved once at init and stable for the run's life: the
         # milestone docs directory (artifacts + generated ledgers).
         # "docs" is the legacy flat layout (pre-docs_dir runs); anything
@@ -273,6 +280,13 @@ def _json_values_equal(left, right):
 
 def assert_append_only(old_state, new_state_):
     """Raise HistoryRewriteError if new_state_ rewrites recorded history."""
+    missing = object()
+    if old_state.get(PROMPT_SET_KEY, missing) != new_state_.get(
+        PROMPT_SET_KEY, missing
+    ):
+        raise HistoryRewriteError(
+            "%s: run binding was modified" % PROMPT_SET_KEY
+        )
     _assert_list_prefix(old_state.get("events", []), new_state_.get("events", []), "events")
     _assert_task_history(old_state.get("tasks", []), new_state_.get("tasks", []))
     old_units = old_state.get("units", [])
@@ -2776,6 +2790,11 @@ def summary(state, acts_overlay=None, current_review_model=None):
     out = {
         "goal": state["goal"],
         "workspace": state["workspace"],
+        PROMPT_SET_KEY: (
+            state[PROMPT_SET_KEY]
+            if PROMPT_SET_KEY in state
+            else prompt_sets.DEFAULT_SET_NAME
+        ),
         "milestone_status": state["milestone"]["status"],
         "slices": effective_slices,
         "current_unit": unit_key(unit) if unit else None,

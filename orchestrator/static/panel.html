@@ -181,6 +181,9 @@
   .pipe-cat:first-of-type { margin-top: 4px; padding-top: 0; border-top: 0; }
   .pipe-cat .unit-title { text-transform: none; letter-spacing: 0;
     font-weight: 500; }
+  .pipe-cat .slice-intent { display: block; max-width: 760px; margin-top: 3px;
+    color: #71717a; font-size: 11px; font-weight: 400; letter-spacing: 0;
+    line-height: 1.35; text-transform: none; }
   .pipe-cat.slice-cat { font-size: 19.5px; }
   .unit + .unit { margin-top: 10px; }
   .unit.phase .unit-name { color: #18181b; font-size: 13px;
@@ -623,6 +626,9 @@
       session opened here, and no seat, model or effort is chosen at
       launch. Change either from the run's Edit page while it runs; the
       change reaches the next call.</p>
+    <p><b>Prompt set</b> — the named prompt wording this run uses. The chooser
+      lists names only; readability and fallback are decided afresh for each
+      worker call.</p>
     <p><b>Verification</b> — left empty, the implementer reports the repo's
       official suite and the driver arms the gates with it.</p>
   </div>
@@ -655,6 +661,11 @@
       </select>
     </div>
     <div class="hint" id="f_staffing_hint"></div></div>
+  <div class="field"><label>Prompt set</label>
+    <div class="pathrow">
+      <select id="f_prompt_set"><option value="default">default</option></select>
+    </div>
+    <div class="hint" id="f_prompt_set_hint">Names only; prompt contents are checked per call.</div></div>
   <div class="field">
     <button class="btn" type="button" id="f_more_btn"
       onclick="toggleMore()">More options ▾</button></div>
@@ -3721,6 +3732,7 @@ async function refreshDetail() {
       html += `<div class="card"><h3>Binding</h3>` +
         (s.project ? `<div class="amend-hint mono">project: ${esc(s.project)} / ${esc(s.work_area)}</div>` : "") +
         `<div class="amend-hint mono">workspace: ${esc(s.workspace)}</div>` +
+        (sum ? `<div class="amend-hint mono">prompt set: ${esc(sum.prompt_set)}</div>` : "") +
         (sum && sum.suite_command ? `<div class="amend-hint mono">suite: ${esc(sum.suite_command)}</div>` : "") +
         `</div>`;
     } else {
@@ -3833,7 +3845,8 @@ async function refreshDetail() {
       const sliceTitle = id => {
         const sl = (sum.slices || []).find(x => x.id === id);
         return sl ? `<span class="unit-title">${esc(sl.title)}</span>${
-          producerControls(sl.id, sl.producer_task_executor, sl.material)}` : "";
+          producerControls(sl.id, sl.producer_task_executor, sl.material)}
+          <span class="slice-intent">${esc(sl.intent)}</span>` : "";
       };
       const catRow = (label, title, stat, duration, tokens,
                       tokenPartial, cls = "", cost = null,
@@ -3919,11 +3932,9 @@ async function refreshDetail() {
               + unitRow(byKey.skeleton);
         seen.skeleton = 1;
       }
-      // Display order is NUMERIC by slice id; execution order stays the
-      // skeleton table's row order (a remodel may insert a new slice
-      // mid-table, e.g. 19 right after 12 — the machine runs it there,
-      // the panel lists it in its numeric place).
-      [...(sum.slices || [])].sort((a, b) => a.id - b.id).forEach(sl => {
+      // The state-backed array is the delivery order. Never reinterpret its
+      // ids as a second ordering authority in the operator projection.
+      (sum.slices || []).forEach(sl => {
         const pad = String(sl.id).padStart(2, "0");
         const doc = byKey[`slice_doc-${pad}`];
         const impls = (sum.units || []).filter(u =>
@@ -4301,7 +4312,26 @@ function openForm(preselect) {
   loadLaunchProjects(preselect);
   loadProfiles();
   loadStaffingDocuments();
+  loadPromptSets();
   document.getElementById("form").showModal();
+}
+
+async function loadPromptSets() {
+  const select = document.getElementById("f_prompt_set");
+  const hint = document.getElementById("f_prompt_set_hint");
+  select.innerHTML = '<option value="default">default</option>';
+  select.value = "default";
+  try {
+    const data = await api("/api/prompt-sets");
+    const names = Array.isArray(data.prompt_sets) && data.prompt_sets.length
+      ? data.prompt_sets : ["default"];
+    select.innerHTML = names.map(name =>
+      `<option value="${esc(name)}">${esc(name)}</option>`).join("");
+    select.value = names.includes("default") ? "default" : names[0];
+    hint.textContent = "Names only; prompt contents are checked per call.";
+  } catch (e) {
+    hint.textContent = e.message;
+  }
 }
 
 /* ---- staffing documents: the one catalogue read every staffing choice
@@ -5108,6 +5138,7 @@ async function submitForm() {
     document: document.getElementById("f_staffing_document").value || "default",
     rigor: document.getElementById("f_staffing_rigor").value,
   };
+  payload.prompt_set = document.getElementById("f_prompt_set").value;
   try {
     const data = await api("/api/runs", {
       method: "POST",

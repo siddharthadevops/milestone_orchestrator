@@ -228,6 +228,7 @@ class TestCalculatorE2E(unittest.TestCase):
             {
                 "goal",
                 "workspace",
+                "prompt_set",
                 "milestone_status",
                 "slices",
                 "current_unit",
@@ -261,6 +262,7 @@ class TestCalculatorE2E(unittest.TestCase):
             },
         )
         self.assertEqual(summ["goal"], GOAL)
+        self.assertEqual(summ["prompt_set"], "default")
         self.assertIsInstance(summ["staffing_session"], str)
         self.assertEqual(summ["workspace"], self.work)
         self.assertIsInstance(summ["events_total"], int)

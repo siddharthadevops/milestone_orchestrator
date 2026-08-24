@@ -236,3 +236,20 @@
 **Deferred debt (opposite-family verified):**
 - `codex-slice_doc-04-verification-001` (raised codex, cleared codex): The focused gate omits the tests that protect Slice 4's required legacy-control boundary — The gate’s explicit compatibility claim is wrong because it runs only static panel checks while POST behavior and loaded-driver replay live in the omitted test_producer_selection module, so a builder can silently trust green coverage, but adding that module and repairing any exposed regression is sm
 
+## slice_impl-04 (Prompt-set binding and operator surface)
+
+- draft: kind `implement`, artifact `-` (raw: `implementation/milestones/prompt-router/.run/raw/slice_impl-04-draft.txt`)
+
+| Round | Kind | Family | Findings | Triage | Raw |
+|---|---|---|---|---|---|
+| slice_impl-04-codex-r1 | review_round | codex | 0 | clean | `implementation/milestones/prompt-router/.run/raw/slice_impl-04-codex-r1.txt` |
+| slice_impl-04-codex-r2 | fix_findings | codex | 0 | clean | `implementation/milestones/prompt-router/.run/raw/slice_impl-04-fix1.txt` |
+| slice_impl-04-codex-r3 | delta_review | codex | 0 | clean | `implementation/milestones/prompt-router/.run/raw/slice_impl-04-delta1.txt` |
+| slice_impl-04-codex-r4 | review_round | codex | 0 | clean | `implementation/milestones/prompt-router/.run/raw/slice_impl-04-codex-r2.txt` |
+
+### Review completion — SATISFIED
+
+- deterministic result: every configured family was clean or debt-clean on the same current bytes; the scheduled full verification passed; no extra reviewer was called
+- cited reviews: `slice_impl-04-codex-r4`
+- scheduled verification event: `376`
+

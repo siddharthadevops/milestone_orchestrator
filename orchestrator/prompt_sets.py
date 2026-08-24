@@ -80,10 +80,29 @@ def prompt_sets_dir(home):
     return os.path.join(home, PROMPT_SETS_DIRNAME)
 
 
-def prompt_set_dir(home, name):
+def validate_name(name):
     if not isinstance(name, str) or not _NAME.fullmatch(name):
         raise PromptSetError("invalid prompt-set name %r" % (name,))
+    return name
+
+
+def prompt_set_dir(home, name):
+    validate_name(name)
     return os.path.join(prompt_sets_dir(home), name)
+
+
+def list_names(home):
+    """Return bindable prompt-set names without reading prompt documents."""
+    names = set()
+    try:
+        with os.scandir(prompt_sets_dir(home)) as entries:
+            for entry in entries:
+                if entry.is_dir() and _NAME.fullmatch(entry.name):
+                    names.add(entry.name)
+    except FileNotFoundError:
+        pass
+    names.discard(DEFAULT_SET_NAME)
+    return [DEFAULT_SET_NAME, *sorted(names)]
 
 
 def _member_path(directory, member):

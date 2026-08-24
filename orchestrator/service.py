@@ -7,6 +7,7 @@ run's live state) and a JSON API:
 
     GET    /api/access             authenticated email, role, assignable users
     GET    /api/runs               all runs + derived status
+    GET    /api/prompt-sets        bindable prompt-set names (names only)
     GET    /api/fs                 read-only listing for the panel pickers:
                                    ?path=&mode=dir|file&ext=&hidden=1&nearest=1
                                    (nearest walks up to the closest existing
@@ -1875,7 +1876,7 @@ def _record_launch_roots(home, slug, area):
     )
 
 
-def _create_bound_run(home, payload, workspace):
+def _create_bound_run(home, payload, workspace, prompt_set):
     """POST /api/runs {project, work_area}: launch against a declared
     project instead of a bare path. Observable order: (1) addressing —
     declared project, live stored record of ANY status (readiness is
@@ -1977,6 +1978,7 @@ def _create_bound_run(home, payload, workspace):
             goal, workspace, name=name_for_init,
             project=binding, config_override=user_cfg,
             model_profiles_home=home,
+            prompt_set=prompt_set,
         )
     except driver.ProjectResolutionError as exc:
         # The sealed seam built cause for exactly this consumer: the
@@ -2300,6 +2302,18 @@ def resolve_staffing_request(home, record, body):
 
 def create_run(home, payload):
     attach = bool(payload.get("attach"))
+    prompt_set_supplied = "prompt_set" in payload
+    if attach and prompt_set_supplied:
+        raise ApiError(
+            400,
+            "attach adopts the existing state as-is; 'prompt_set' cannot be "
+            "combined with it",
+        )
+    prompt_set = payload.get("prompt_set", prompt_sets.DEFAULT_SET_NAME)
+    try:
+        prompt_set = prompt_sets.validate_name(prompt_set)
+    except prompt_sets.PromptSetError as exc:
+        raise ApiError(400, str(exc)) from exc
     bound = (
         payload.get("project") is not None
         or payload.get("work_area") is not None
@@ -2395,7 +2409,7 @@ def create_run(home, payload):
             )
     elif bound:
         workspace, state_path, goal_doc = _create_bound_run(
-            home, payload, workspace
+            home, payload, workspace, prompt_set
         )
     else:
         goal, goal_doc = _launch_goal(payload)
@@ -2452,6 +2466,7 @@ def create_run(home, payload):
             state_path = driver.init_run(
                 goal.strip(), workspace, config=config, name=name_for_init,
                 model_profiles_home=home,
+                prompt_set=prompt_set,
                 **creation_kwargs
             )
         except ValueError as exc:
@@ -4609,6 +4624,11 @@ def make_handler(home, task_host=None):
                     self._json(200, {
                         "ok": True,
                         "task_executors": tasks.task_executor_catalogue(),
+                    })
+                elif route == "/api/prompt-sets":
+                    self._json(200, {
+                        "ok": True,
+                        "prompt_sets": prompt_sets.list_names(home),
                     })
                 elif route == "/api/tasks":
                     run_id = query.get("run_id")

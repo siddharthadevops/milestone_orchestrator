@@ -391,4 +391,5 @@ verification is the direct `suite_checkpoint` call instead.
 | slice_doc-03 (Registered contracts and QUESTIONS) | reviewed | 1 | satisfied | ad8976c |
 | slice_impl-03-a (Registered contracts and QUESTIONS) | reviewed | 19 | satisfied | aa2e8bb |
 | slice_impl-03-b (Registered contracts and QUESTIONS) | reviewed | 4 | satisfied | 5cd2006 |
-| slice_doc-04 (Prompt-set binding and operator surface) | reviewed | 1 | satisfied | - |
+| slice_doc-04 (Prompt-set binding and operator surface) | reviewed | 1 | satisfied | 7094ec9 |
+| slice_impl-04 (Prompt-set binding and operator surface) | reviewed | 4 | satisfied | - |

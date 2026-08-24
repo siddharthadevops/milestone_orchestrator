@@ -12800,7 +12800,8 @@ def _validate_initial_strategy(config):
 
 def init_run(goal, workspace=None, config=None, state_path=None, name=None,
              project=None, config_override=None, model_profiles_home=None,
-             creation_acts=_CREATION_ACTS_UNSET):
+             creation_acts=_CREATION_ACTS_UNSET,
+             prompt_set=prompt_sets.DEFAULT_SET_NAME):
     """Create a new run state. `config` is a merged config dict (see
     load_config) or None for defaults. Returns the state path.
     Raises FileExistsError instead of overwriting an existing state; the
@@ -12824,8 +12825,12 @@ def init_run(goal, workspace=None, config=None, state_path=None, name=None,
     that cannot be resolved raises ProjectResolutionError and creates
     nothing. Because project defaults must merge BENEATH per-launch
     intent, a bound init takes the launch's own override separately, as
-    `config_override`, never pre-merged into `config`. Without a binding,
-    behavior is byte-identical to the pre-project seam."""
+    `config_override`, never pre-merged into `config`. Without a project
+    binding, project resolution remains inert."""
+    try:
+        prompt_set = prompt_sets.validate_name(prompt_set)
+    except prompt_sets.PromptSetError as exc:
+        raise ValueError(str(exc)) from exc
     if model_profiles_home is not None:
         model_profiles_home = os.path.abspath(model_profiles_home)
     creation_act_layers = [creation_acts]
@@ -12907,7 +12912,7 @@ def init_run(goal, workspace=None, config=None, state_path=None, name=None,
                 "template or remove/rename the directory" % fixed
             )
     state = st.new_state(goal, workspace, config, name=name, slug=slug,
-                         project=project_block)
+                         project=project_block, prompt_set=prompt_set)
     st.append_event(state, "initialized", goal=goal)
     if project_block is not None:
         # Frozen ledger shape: payload exactly {project, work_area}, once
@@ -12965,6 +12970,9 @@ def cmd_init(args):
                 user_cfg["acts"]
                 if isinstance(user_cfg, dict) and "acts" in user_cfg
                 else _CREATION_ACTS_UNSET
+            ),
+            prompt_set=getattr(
+                args, "prompt_set", prompt_sets.DEFAULT_SET_NAME
             ),
         )
     except (FileExistsError, ValueError) as exc:
@@ -13174,6 +13182,10 @@ def main(argv=None):
     p_init.add_argument("--workspace", required=True)
     p_init.add_argument("--config", default=None)
     p_init.add_argument("--state", default=None)
+    p_init.add_argument(
+        "--prompt-set", default=prompt_sets.DEFAULT_SET_NAME,
+        help="named prompt set to bind for the run",
+    )
     p_init.add_argument(
         "--model-profiles-home", default=registry.DEFAULT_HOME
     )

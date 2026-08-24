@@ -334,6 +334,7 @@ class TestNewState(TempWorkspaceCase):
                 "schema_version",
                 "goal",
                 "workspace",
+                "prompt_set",
                 "created_at",
                 "milestone",
                 "units",
@@ -348,6 +349,7 @@ class TestNewState(TempWorkspaceCase):
         )
         self.assertEqual(state["schema_version"], st.SCHEMA_VERSION)
         self.assertEqual(state["goal"], "Build X")
+        self.assertEqual(state["prompt_set"], "default")
         self.assertEqual(state["workspace"], self.workspace)
         self.assertEqual(state["milestone"], {"status": st.M_OPEN, "slices": []})
         self.assertEqual(state["events"], [])
@@ -2263,6 +2265,7 @@ class TestSummary(TempWorkspaceCase):
             {
                 "goal",
                 "workspace",
+                "prompt_set",
                 "milestone_status",
                 "slices",
                 "current_unit",
@@ -2293,6 +2296,7 @@ class TestSummary(TempWorkspaceCase):
         )
         self.assertEqual(summ["goal"], "Build X")
         self.assertEqual(summ["workspace"], self.workspace)
+        self.assertEqual(summ["prompt_set"], "default")
         self.assertEqual(summ["milestone_status"], st.M_FAILED)
         self.assertEqual(
             summ["slices"],
