@@ -170,3 +170,34 @@
 **Deferred debt (opposite-family verified):**
 - `codex-slice_doc-03-001` (raised codex, cleared codex): The Enforceability Gate duplicates existing contract and verification tables — All three copies are currently aligned, so they do not plausibly mislead the capable builder, and any later inconsistency would be an explicit stop-and-repair contradiction corrected by a small local deduplication or realignment.
 
+## slice_impl-03-a (Registered contracts and QUESTIONS)
+
+- draft: kind `implement`, artifact `-` (raw: `implementation/milestones/prompt-router/.run/raw/slice_impl-03-draft.txt`)
+
+| Round | Kind | Family | Findings | Triage | Raw |
+|---|---|---|---|---|---|
+| slice_impl-03-codex-r1 | review_round | codex | 6 | 6 reported | `implementation/milestones/prompt-router/.run/raw/slice_impl-03-codex-r1.txt` |
+| slice_impl-03-codex-r2 | fix_findings | codex | 6 | 6 fixed | `implementation/milestones/prompt-router/.run/raw/slice_impl-03-fix1.txt` |
+| slice_impl-03-codex-r3 | delta_review | codex | 1 | 1 reported | `implementation/milestones/prompt-router/.run/raw/slice_impl-03-delta1.txt` |
+| slice_impl-03-codex-r4 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/prompt-router/.run/raw/slice_impl-03-fix2.txt` |
+| slice_impl-03-codex-r5 | delta_review | codex | 1 | 1 reported | `implementation/milestones/prompt-router/.run/raw/slice_impl-03-delta2.txt` |
+| slice_impl-03-codex-r6 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/prompt-router/.run/raw/slice_impl-03-fix3.txt` |
+| slice_impl-03-codex-r7 | delta_review | codex | 1 | 1 reported | `implementation/milestones/prompt-router/.run/raw/slice_impl-03-delta3.txt` |
+| slice_impl-03-codex-r8 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/prompt-router/.run/raw/slice_impl-03-fix4.txt` |
+| slice_impl-03-codex-r9 | delta_review | codex | 2 | 2 reported | `implementation/milestones/prompt-router/.run/raw/slice_impl-03-delta4.txt` |
+| slice_impl-03-codex-r10 | fix_findings | codex | 2 | 2 fixed | `implementation/milestones/prompt-router/.run/raw/slice_impl-03-fix5.txt` |
+| slice_impl-03-codex-r11 | review_round | codex | 4 | 4 reported | `implementation/milestones/prompt-router/.run/raw/slice_impl-03-codex-r2.txt` |
+| slice_impl-03-codex-r12 | fix_findings | codex | 4 | 4 fixed | `implementation/milestones/prompt-router/.run/raw/slice_impl-03-fix6.txt` |
+| slice_impl-03-codex-r13 | delta_review | codex | 1 | 1 reported | `implementation/milestones/prompt-router/.run/raw/slice_impl-03-delta5.txt` |
+| slice_impl-03-codex-r14 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/prompt-router/.run/raw/slice_impl-03-fix7.txt` |
+| slice_impl-03-codex-r15 | delta_review | codex | 0 | clean | `implementation/milestones/prompt-router/.run/raw/slice_impl-03-delta6.txt` |
+| slice_impl-03-codex-r16 | review_round | codex | 1 | 1 reported | `implementation/milestones/prompt-router/.run/raw/slice_impl-03-codex-r3.txt` |
+| slice_impl-03-codex-r17 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/prompt-router/.run/raw/slice_impl-03-fix8.txt` |
+| slice_impl-03-codex-r18 | delta_review | codex | 0 | clean | `implementation/milestones/prompt-router/.run/raw/slice_impl-03-delta7.txt` |
+| slice_impl-03-codex-r19 | review_round | codex | 0 | clean | `implementation/milestones/prompt-router/.run/raw/slice_impl-03-codex-r4.txt` |
+
+### Review completion — SATISFIED
+
+- deterministic result: every configured family was clean or debt-clean on the same current bytes; full verification was not due at this boundary; no extra reviewer was called
+- cited reviews: `slice_impl-03-codex-r19`
+
