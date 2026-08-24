@@ -93,12 +93,6 @@ session from the finding alone.
 
 Kind implement adds:
   "files_changed": ["<workspace-relative paths you created or edited>", ...]
-  When the prompt includes SLICE PRODUCER PLANNING, also return the complete
-  updated plan in "slices": [ {"id": 1, "title": "...",
-                 "producer_task_executor": {
-                   "draft_slice_note": "<executor id>",
-                   "implement": "<executor id>"}}, ... ]
-  (unique integer ids; only the executor id per step)
   "implementation_cut": {"cut_scope": "<the coherent functional cut now
                             complete and ready for review>",
                          "remaining_scope": "<the original slice obligations

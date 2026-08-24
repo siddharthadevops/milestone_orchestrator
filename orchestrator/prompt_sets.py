@@ -37,6 +37,14 @@ MILESTONE_KINDS = (
 )
 BRAINSTORMING_KINDS = ("discussion_turn", "questioner_turn")
 LEAD_TURN_CHARGE_KINDS = ("draft_slice_note", "implement")
+MOUNT_TAGS = frozenset((
+    "executor:agent_call",
+    "role:initial_position",
+    "role:contrary_position",
+    "role:common_sense",
+    "target:document",
+    "target:implementation",
+))
 CANONICAL_MEMBERS = (
     "shared/shared.json",
     *("milestone/%s.json" % kind for kind in MILESTONE_KINDS),
@@ -194,6 +202,8 @@ def _validate_unit(unit, ctx):
             % (ctx, ", ".join(sorted(used - declared)) or "none",
                ", ".join(sorted(declared - used)) or "none")
         )
+    if "questions" in unit:
+        _question_ids(unit["questions"], "%s.questions" % ctx)
     return declared
 
 
@@ -202,6 +212,8 @@ def _question_ids(items, ctx):
     for index, item in enumerate(_array(items, ctx)):
         qctx = "%s[%d]" % (ctx, index)
         item = _mapping(item, qctx)
+        if set(item) != {"id", "text"}:
+            raise PromptSetError("%s must contain exactly id and text" % qctx)
         question_id = item.get("id")
         if not isinstance(question_id, str) or not question_id:
             raise PromptSetError("%s.id must be a non-empty string" % qctx)
@@ -226,6 +238,32 @@ def _validate_defaults(part, variables, ctx):
         )
 
 
+def _validate_mount(part, ctx):
+    if "optional" in part or "note" in part:
+        raise PromptSetError(
+            "%s uses retired optional-unit metadata" % ctx
+        )
+    if "mount" not in part:
+        return
+    tags = _array(part["mount"], "%s.mount" % ctx)
+    if not tags or any(not isinstance(tag, str) for tag in tags):
+        raise PromptSetError("%s.mount must contain tag strings" % ctx)
+    if len(tags) != len(set(tags)):
+        raise PromptSetError("%s.mount contains duplicate tags" % ctx)
+    unknown = sorted(set(tags) - MOUNT_TAGS)
+    if unknown:
+        raise PromptSetError("%s.mount has unknown tag %r" % (ctx, unknown[0]))
+    if "executor:agent_call" in tags and any(
+        tag.startswith("role:") for tag in tags
+    ):
+        raise PromptSetError("%s.mount cannot match a canonical route" % ctx)
+    for prefix in ("role:", "target:"):
+        if sum(tag.startswith(prefix) for tag in tags) > 1:
+            raise PromptSetError(
+                "%s.mount has conflicting %s tags" % (ctx, prefix[:-1])
+            )
+
+
 def _validate_parts(doc, section, key, shared, shared_variables, ctx):
     container = _mapping(doc.get(section), "%s.%s" % (ctx, section))
     parts = _array(container.get(key), "%s.%s.%s" % (ctx, section, key))
@@ -235,13 +273,12 @@ def _validate_parts(doc, section, key, shared, shared_variables, ctx):
     for index, part in enumerate(parts):
         pctx = "%s.%s.%s[%d]" % (ctx, section, key, index)
         part = _mapping(part, pctx)
+        _validate_mount(part, pctx)
         sources = [name for name in ("ref", "one_of", "text") if name in part]
         if len(sources) != 1:
             raise PromptSetError(
                 "%s must declare exactly one of ref, one_of, or text" % pctx
             )
-        if "optional" in part and part["optional"] is not True:
-            raise PromptSetError("%s.optional must be true when present" % pctx)
         source = sources[0]
         if source == "ref":
             ref = part["ref"]
@@ -286,6 +323,46 @@ def _validate_parts(doc, section, key, shared, shared_variables, ctx):
                         "%s and %s can select duplicate output-contract ids"
                         % (vctx, other_ctx)
                     )
+
+
+def _validate_material_layers(shared_doc, units, unit_variables,
+                              contracts, contract_variables, ctx):
+    layers = _mapping(
+        shared_doc.get("material_layers"), "%s shared.material_layers" % ctx
+    )
+    for job, materials in layers.items():
+        jctx = "%s shared.material_layers.%s" % (ctx, job)
+        if not isinstance(job, str) or not job:
+            raise PromptSetError("%s has an empty job id" % jctx)
+        materials = _mapping(materials, jctx)
+        for material, layer in materials.items():
+            lctx = "%s.%s" % (jctx, material)
+            if not isinstance(material, str) or not material:
+                raise PromptSetError("%s has an empty material id" % lctx)
+            layer = _mapping(layer, lctx)
+            if set(layer) != {"instructions", "questions", "output_contract"}:
+                raise PromptSetError(
+                    "%s must contain instructions, questions, and output_contract"
+                    % lctx
+                )
+            _validate_parts(
+                layer, "instructions", "parts", units, unit_variables, lctx
+            )
+            questions = _mapping(layer["questions"], "%s.questions" % lctx)
+            if set(questions) != {"intro", "items"}:
+                raise PromptSetError(
+                    "%s.questions must contain intro and items" % lctx
+                )
+            intro = _array(questions["intro"], "%s.questions.intro" % lctx)
+            if any(not isinstance(line, str) for line in intro):
+                raise PromptSetError(
+                    "%s.questions.intro must contain strings" % lctx
+                )
+            _question_ids(questions["items"], "%s.questions.items" % lctx)
+            _validate_parts(
+                layer, "output_contract", "sections", contracts,
+                contract_variables, lctx
+            )
 
 
 def _validate_kind(doc, process, kind, shared, shared_variables,
@@ -365,6 +442,9 @@ def _validate_documents(documents, ctx):
         name: _validate_unit(unit, "%s shared.contract_sections.%s" % (ctx, name))
         for name, unit in contracts.items()
     }
+    _validate_material_layers(
+        shared_doc, units, unit_variables, contracts, contract_variables, ctx
+    )
     question_ids = {}
     for member in CANONICAL_MEMBERS[1:]:
         process, filename = member.split("/")
@@ -448,17 +528,24 @@ def ensure_default(home):
             shutil.rmtree(staging)
 
 
-def resolve(home, name=DEFAULT_SET_NAME):
-    """Resolve requested set -> stored default -> immutable built-in seed."""
+def resolve(home, name=DEFAULT_SET_NAME, *, validator=None):
+    """Resolve one whole accepted rung, optionally applying a consumer lint."""
+    def accepted(prompt_set):
+        if validator is not None:
+            validator(prompt_set)
+        return prompt_set
+
     if name != DEFAULT_SET_NAME:
         try:
-            return Resolution(load(home, name), None)
+            return Resolution(accepted(load(home, name)), None)
         except PromptSetError:
             pass
     try:
-        stored = load(home, DEFAULT_SET_NAME)
+        stored = accepted(load(home, DEFAULT_SET_NAME))
     except PromptSetError:
-        return Resolution(default_seed(), PROMPT_SET_FALLBACK_SEED)
+        return Resolution(
+            accepted(default_seed()), PROMPT_SET_FALLBACK_SEED
+        )
     fallback = None if name == DEFAULT_SET_NAME else PROMPT_SET_FALLBACK_DEFAULT
     return Resolution(stored, fallback)
 

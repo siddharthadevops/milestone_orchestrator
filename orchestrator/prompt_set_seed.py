@@ -42,31 +42,33 @@ DEFAULT_PROMPT_SET = {'shared/shared.json': {'description': 'Shared prompt units
                                                                                     'grants.'}]},
                                   'producer_planning': {'text': ['SLICE PRODUCER '
                                                                  'PLANNING',
-                                                                 'For every planned '
-                                                                 'slice, choose from '
-                                                                 'the catalogue below '
-                                                                 'who produces',
-                                                                 'each of its two '
-                                                                 'steps — '
+                                                                 'Write exactly one '
+                                                                 '`## Canonical slice '
+                                                                 'plan` heading '
+                                                                 'immediately followed',
+                                                                 'by one fenced `json` '
+                                                                 'object rooted '
+                                                                 '`{"slices":[...]}`. '
+                                                                 'Array order is',
+                                                                 'delivery. Each slice '
+                                                                 'has exactly a unique '
+                                                                 'integer `id`, '
+                                                                 'non-empty `title`',
+                                                                 'and `intent`, '
+                                                                 'optional non-empty '
+                                                                 '`material`, and',
+                                                                 '`producer_task_executor` '
+                                                                 'with exactly '
                                                                  '`draft_slice_note` '
-                                                                 'and `implement` — '
-                                                                 'and show',
-                                                                 'both choices in the '
-                                                                 "skeleton's slice "
-                                                                 'table (edit it; the '
-                                                                 'table is not',
-                                                                 'fenced); the '
-                                                                 'structured result '
-                                                                 'and the document '
-                                                                 'must agree.',
-                                                                 'Plans grow FORWARD '
-                                                                 'only: insert new '
-                                                                 'slices among the '
-                                                                 'not-yet-built,',
-                                                                 'never before built '
-                                                                 'work, and never '
-                                                                 'reorder built '
-                                                                 'history.',
+                                                                 'and `implement`.',
+                                                                 'Choose both executor '
+                                                                 'ids from the '
+                                                                 'catalogue below. '
+                                                                 'Configuration is not',
+                                                                 'part of the plan, '
+                                                                 'and no duplicate '
+                                                                 'plan is returned in '
+                                                                 'the reply.',
                                                                  'TASK EXECUTOR '
                                                                  'CATALOGUE:',
                                                                  '{{task_executor_catalogue}}'],
@@ -1412,43 +1414,6 @@ DEFAULT_PROMPT_SET = {'shared/shared.json': {'description': 'Shared prompt units
                                                                             'or '
                                                                             'edited>", '
                                                                             '...]',
-                                                                            '  When '
-                                                                            'the '
-                                                                            'prompt '
-                                                                            'includes '
-                                                                            'SLICE '
-                                                                            'PRODUCER '
-                                                                            'PLANNING, '
-                                                                            'also '
-                                                                            'return '
-                                                                            'the '
-                                                                            'complete',
-                                                                            '  updated '
-                                                                            'plan in '
-                                                                            '"slices": '
-                                                                            '[ {"id": '
-                                                                            '1, '
-                                                                            '"title": '
-                                                                            '"...",',
-                                                                            '                 '
-                                                                            '"producer_task_executor": '
-                                                                            '{',
-                                                                            '                   '
-                                                                            '"draft_slice_note": '
-                                                                            '"<executor '
-                                                                            'id>",',
-                                                                            '                   '
-                                                                            '"implement": '
-                                                                            '"<executor '
-                                                                            'id>"}}, '
-                                                                            '... ]',
-                                                                            '  (unique '
-                                                                            'integer '
-                                                                            'ids; only '
-                                                                            'the '
-                                                                            'executor '
-                                                                            'id per '
-                                                                            'step)',
                                                                             '  '
                                                                             '"implementation_cut": '
                                                                             '{"cut_scope": '
@@ -1553,45 +1518,7 @@ DEFAULT_PROMPT_SET = {'shared/shared.json': {'description': 'Shared prompt units
                                                                                  'skeleton '
                                                                                  'document '
                                                                                  'you '
-                                                                                 'wrote>"',
-                                                                                 '  '
-                                                                                 '"slices": '
-                                                                                 '[ '
-                                                                                 '{"id": '
-                                                                                 '1, '
-                                                                                 '"title": '
-                                                                                 '"...",',
-                                                                                 '                 '
-                                                                                 '"producer_task_executor": '
-                                                                                 '{',
-                                                                                 '                   '
-                                                                                 '"draft_slice_note": '
-                                                                                 '"<executor '
-                                                                                 'id>",',
-                                                                                 '                   '
-                                                                                 '"implement": '
-                                                                                 '"<executor '
-                                                                                 'id>"}}, '
-                                                                                 '... '
-                                                                                 ']',
-                                                                                 '  '
-                                                                                 '(unique '
-                                                                                 'integer '
-                                                                                 'ids; '
-                                                                                 'return '
-                                                                                 'only '
-                                                                                 'the '
-                                                                                 'executor '
-                                                                                 'id '
-                                                                                 'per '
-                                                                                 'step '
-                                                                                 '— '
-                                                                                 'the',
-                                                                                 '  '
-                                                                                 'orchestrator '
-                                                                                 'chooses '
-                                                                                 'its '
-                                                                                 'configuration)'],
+                                                                                 'wrote>"'],
                                                                         'variables': []},
                                               'draft_slice_note_result': {'text': ['Kind '
                                                                                    'draft_slice_note '
@@ -1605,53 +1532,9 @@ DEFAULT_PROMPT_SET = {'shared/shared.json': {'description': 'Shared prompt units
                                                                                    'slice '
                                                                                    'note '
                                                                                    'you '
-                                                                                   'wrote>"',
-                                                                                   '  '
-                                                                                   'When '
-                                                                                   'the '
-                                                                                   'prompt '
-                                                                                   'includes '
-                                                                                   'SLICE '
-                                                                                   'PRODUCER '
-                                                                                   'PLANNING, '
-                                                                                   'also '
-                                                                                   'return '
-                                                                                   'the '
-                                                                                   'complete',
-                                                                                   '  '
-                                                                                   'updated '
-                                                                                   'plan '
-                                                                                   'in '
-                                                                                   '"slices": '
-                                                                                   '[ '
-                                                                                   '{"id": '
-                                                                                   '1, '
-                                                                                   '"title": '
-                                                                                   '"...",',
-                                                                                   '                 '
-                                                                                   '"producer_task_executor": '
-                                                                                   '{',
-                                                                                   '                   '
-                                                                                   '"draft_slice_note": '
-                                                                                   '"<executor '
-                                                                                   'id>",',
-                                                                                   '                   '
-                                                                                   '"implement": '
-                                                                                   '"<executor '
-                                                                                   'id>"}}, '
-                                                                                   '... '
-                                                                                   ']',
-                                                                                   '  '
-                                                                                   '(unique '
-                                                                                   'integer '
-                                                                                   'ids; '
-                                                                                   'only '
-                                                                                   'the '
-                                                                                   'executor '
-                                                                                   'id '
-                                                                                   'per '
-                                                                                   'step)'],
-                                                                          'variables': []}}},
+                                                                                   'wrote>"'],
+                                                                          'variables': []}},
+                        'material_layers': {}},
  'milestone/draft_skeleton.json': {'kind': 'draft_skeleton',
                                    'process': 'milestone',
                                    'description': 'Plan-role author: writes the '
@@ -2081,11 +1964,6 @@ DEFAULT_PROMPT_SET = {'shared/shared.json': {'description': 'Shared prompt units
                                                                                 'required': True}]},
                                                                 {'ref': 'project_context'},
                                                                 {'ref': 'operator_amendments_author'},
-                                                                {'ref': 'producer_planning',
-                                                                 'optional': True,
-                                                                 'note': 'mounted when '
-                                                                         're-planning '
-                                                                         'is offered'},
                                                                 {'text': ['Write '
                                                                           '{{slice_note_path}}: '
                                                                           'scope as '
@@ -2499,18 +2377,9 @@ DEFAULT_PROMPT_SET = {'shared/shared.json': {'description': 'Shared prompt units
                                                                          'required': True}]},
                                                          {'ref': 'project_context'},
                                                          {'ref': 'operator_amendments_author'},
-                                                         {'ref': 'producer_planning',
-                                                          'optional': True,
-                                                          'note': 'mounted when '
-                                                                  're-planning is '
-                                                                  'offered'},
                                                          {'ref': 'implementation_rules'},
                                                          {'ref': 'implementation_metering',
-                                                          'optional': True,
-                                                          'note': 'milestone runs with '
-                                                                  'a metering driver; '
-                                                                  'standalone charges '
-                                                                  'drop it'},
+                                                          'mount': ['executor:agent_call']},
                                                          {'ref': 'reuse_gate'},
                                                          {'ref': 'process_authority'},
                                                          {'ref': 'design_contradiction_author'}]},
@@ -2594,33 +2463,13 @@ DEFAULT_PROMPT_SET = {'shared/shared.json': {'description': 'Shared prompt units
                                                             {'ref': 'severity_battery'},
                                                             {'ref': 'reuse_gate_review'},
                                                             {'ref': 'doc_review_duty',
-                                                             'optional': True,
-                                                             'note': 'present only '
-                                                                     'when the '
-                                                                     'reviewed target '
-                                                                     'is '
-                                                                     'documentation'},
+                                                             'mount': ['target:document']},
                                                             {'ref': 'impl_review_duty',
-                                                             'optional': True,
-                                                             'note': 'present only '
-                                                                     'when the '
-                                                                     'reviewed target '
-                                                                     'is '
-                                                                     'implementation'},
+                                                             'mount': ['target:implementation']},
                                                             {'ref': 'scope_authority',
-                                                             'optional': True,
-                                                             'note': 'present only '
-                                                                     'when the '
-                                                                     'reviewed target '
-                                                                     'is '
-                                                                     'implementation'},
+                                                             'mount': ['target:implementation']},
                                                             {'ref': 'altitude_review',
-                                                             'optional': True,
-                                                             'note': 'present only '
-                                                                     'when the '
-                                                                     'reviewed target '
-                                                                     'is '
-                                                                     'documentation'},
+                                                             'mount': ['target:document']},
                                                             {'ref': 'deferred_debt'},
                                                             {'ref': 'adjudicated_rejections'},
                                                             {'ref': 'process_authority'}]},
@@ -2895,33 +2744,13 @@ DEFAULT_PROMPT_SET = {'shared/shared.json': {'description': 'Shared prompt units
                                                             {'ref': 'severity_battery'},
                                                             {'ref': 'reuse_gate_review'},
                                                             {'ref': 'doc_review_duty',
-                                                             'optional': True,
-                                                             'note': 'present only '
-                                                                     'when the '
-                                                                     'reviewed target '
-                                                                     'is '
-                                                                     'documentation'},
+                                                             'mount': ['target:document']},
                                                             {'ref': 'impl_review_duty',
-                                                             'optional': True,
-                                                             'note': 'present only '
-                                                                     'when the '
-                                                                     'reviewed target '
-                                                                     'is '
-                                                                     'implementation'},
+                                                             'mount': ['target:implementation']},
                                                             {'ref': 'scope_authority',
-                                                             'optional': True,
-                                                             'note': 'present only '
-                                                                     'when the '
-                                                                     'reviewed target '
-                                                                     'is '
-                                                                     'implementation'},
+                                                             'mount': ['target:implementation']},
                                                             {'ref': 'altitude_review',
-                                                             'optional': True,
-                                                             'note': 'present only '
-                                                                     'when the '
-                                                                     'reviewed target '
-                                                                     'is '
-                                                                     'documentation'},
+                                                             'mount': ['target:document']},
                                                             {'ref': 'deferred_debt'},
                                                             {'ref': 'adjudicated_rejections'},
                                                             {'ref': 'process_authority'}]},
@@ -3744,18 +3573,10 @@ DEFAULT_PROMPT_SET = {'shared/shared.json': {'description': 'Shared prompt units
                                                                       'coherent.'],
                                                              'variables': []},
                                                             {'ref': 'scope_authority',
-                                                             'optional': True,
-                                                             'note': 'present only '
-                                                                     'when the fixed '
-                                                                     'target is '
-                                                                     'implementation'},
+                                                             'mount': ['target:implementation']},
                                                             {'ref': 'reuse_gate'},
                                                             {'ref': 'altitude_fix',
-                                                             'optional': True,
-                                                             'note': 'present only '
-                                                                     'when the fixed '
-                                                                     'artifact is '
-                                                                     'documentation'},
+                                                             'mount': ['target:document']},
                                                             {'ref': 'deferred_debt'},
                                                             {'ref': 'adjudicated_rejections'},
                                                             {'ref': 'process_authority'},
@@ -3976,69 +3797,19 @@ DEFAULT_PROMPT_SET = {'shared/shared.json': {'description': 'Shared prompt units
                                                                             'active '
                                                                             'project '
                                                                             'block '
-                                                                            'above.',
-                                                                            'When your '
-                                                                            'fix '
-                                                                            'changed '
+                                                                            'above. '
+                                                                            'Plan '
+                                                                            'edits '
+                                                                            'live only '
+                                                                            'in the '
+                                                                            'canonical '
+                                                                            'skeleton',
+                                                                            'block; '
+                                                                            'never '
+                                                                            'duplicate '
+                                                                            'them in '
                                                                             'the '
-                                                                            'milestone '
-                                                                            "skeleton's "
-                                                                            'slice '
-                                                                            'TABLE — '
-                                                                            'split, '
-                                                                            'added,',
-                                                                            'removed, '
-                                                                            'or merged '
-                                                                            'slices — '
-                                                                            'return '
-                                                                            'the FULL '
-                                                                            'updated '
-                                                                            'plan in '
-                                                                            '"slices"',
-                                                                            'exactly '
-                                                                            'as the '
-                                                                            'table now '
-                                                                            'reads '
-                                                                            '(ids are '
-                                                                            'identity: '
-                                                                            'an intact '
-                                                                            'slice '
-                                                                            'keeps its',
-                                                                            'id '
-                                                                            'whatever '
-                                                                            'its '
-                                                                            'position, '
-                                                                            'renumbering '
-                                                                            'does not '
-                                                                            'exist; '
-                                                                            'both '
-                                                                            'producer '
-                                                                            'choices '
-                                                                            'per '
-                                                                            'slice). '
-                                                                            'The '
-                                                                            'orchestrator '
-                                                                            'builds '
-                                                                            'units '
-                                                                            'from',
-                                                                            'THIS '
-                                                                            'field, '
-                                                                            'never by '
-                                                                            'parsing '
-                                                                            'the '
-                                                                            'document; '
-                                                                            'omitting '
-                                                                            'it after '
-                                                                            'a table '
-                                                                            'change',
-                                                                            'leaves '
-                                                                            'the added '
-                                                                            'slices '
-                                                                            'unbuilt. '
-                                                                            'Omit it '
-                                                                            'when the '
-                                                                            'table is '
-                                                                            'untouched.'],
+                                                                            'reply.'],
                                                                    'variables': []},
                                                                   {'id': 'fix_blocked',
                                                                    'text': ['Impossible '
@@ -5056,40 +4827,21 @@ DEFAULT_PROMPT_SET = {'shared/shared.json': {'description': 'Shared prompt units
                                                                                    'required': True}]},
                                                                    {'one_of': 'role_stance'},
                                                                    {'ref': 'two_register',
-                                                                    'optional': True,
-                                                                    'note': 'editing '
-                                                                            'seats, '
-                                                                            'document '
-                                                                            'charges'},
+                                                                    'mount': ['role:initial_position',
+                                                                              'target:document']},
                                                                    {'ref': 'altitude_doc',
-                                                                    'optional': True,
-                                                                    'note': 'editing '
-                                                                            'seats, '
-                                                                            'document '
-                                                                            'charges'},
+                                                                    'mount': ['role:initial_position',
+                                                                              'target:document']},
                                                                    {'ref': 'reuse_gate',
-                                                                    'optional': True,
-                                                                    'note': 'editing '
-                                                                            'seats, '
-                                                                            'any '
-                                                                            'charge'},
+                                                                    'mount': ['role:initial_position']},
                                                                    {'ref': 'implementation_rules',
-                                                                    'optional': True,
-                                                                    'note': 'editing '
-                                                                            'seats, '
-                                                                            'implementation '
-                                                                            'charges'},
+                                                                    'mount': ['role:initial_position',
+                                                                              'target:implementation']},
                                                                    {'ref': 'evidence',
-                                                                    'optional': True,
-                                                                    'note': 'contrary '
-                                                                            'seat, any '
-                                                                            'charge'},
+                                                                    'mount': ['role:contrary_position']},
                                                                    {'ref': 'altitude_review',
-                                                                    'optional': True,
-                                                                    'note': 'contrary '
-                                                                            'seat, '
-                                                                            'document '
-                                                                            'charges'}]},
+                                                                    'mount': ['role:contrary_position',
+                                                                              'target:document']}]},
                                         'variants': {'role_stance': {'initial_position': {'text': ['ROLE',
                                                                                                    'You '
                                                                                                    'are '
@@ -5583,14 +5335,10 @@ DEFAULT_PROMPT_SET = {'shared/shared.json': {'description': 'Shared prompt units
                                                                              'analysis.'],
                                                                     'variables': []},
                                                                    {'ref': 'reuse_gate_questioner',
-                                                                    'optional': True,
-                                                                    'note': 'understanding '
-                                                                            'lens, any '
-                                                                            'charge'},
+                                                                    'mount': ['role:common_sense']},
                                                                    {'ref': 'altitude_questioner',
-                                                                    'optional': True,
-                                                                    'note': 'document '
-                                                                            'charges'},
+                                                                    'mount': ['role:common_sense',
+                                                                              'target:document']},
                                                                    {'text': ['RULES',
                                                                              '- Use '
                                                                              'the same '

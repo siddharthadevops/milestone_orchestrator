@@ -39,11 +39,6 @@
         "ref": "operator_amendments_author"
       },
       {
-        "ref": "producer_planning",
-        "optional": true,
-        "note": "mounted when re-planning is offered"
-      },
-      {
         "text": [
           "Write {{slice_note_path}}: scope as observable contracts and the",
           "tests that pin them, non-goals, dependencies, acceptance",

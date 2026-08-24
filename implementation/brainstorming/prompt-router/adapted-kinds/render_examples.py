@@ -11,6 +11,10 @@ import sys
 from pathlib import Path
 
 KINDS_DIR = Path(__file__).resolve().parent
+sys.path.insert(0, str(KINDS_DIR.parents[3]))
+
+from orchestrator import prompt_router, prompt_sets
+
 BASE = KINDS_DIR.parent
 CAPTURES = (BASE / 'current-prompts.md').read_text().splitlines()
 
@@ -70,6 +74,8 @@ BS_COMMON = {
 
 RUNS = {
     'merge_repair': {
+        'route': {'job': 'merge_repair@workspace', 'executor': 'agent_call',
+                  'material': 'code'},
         'values': {'kind': 'merge_repair', 'workspace': WS,
                    'ecosystem_map': ECOSYSTEM,
                    'wipe_reason': 'deleted built slices 4 and 5; slices 6-8 were unwound and requeued',
@@ -83,6 +89,8 @@ RUNS = {
     },
     'merge_repair.agent_call': {
         'kind_file': 'merge_repair',
+        'route': {'job': 'merge_repair@workspace', 'executor': 'agent_call',
+                  'material': 'code'},
         'values': {'kind': 'merge_repair', 'workspace': WS,
                    'ecosystem_map': ECOSYSTEM,
                    'wipe_reason': 'forbidden reorder first diverged at built position 4; slices 4-8 were unwound and requeued',
@@ -95,12 +103,16 @@ RUNS = {
                    'apply_diagnostics': 'none'},
     },
     'suite_checkpoint': {
+        'route': {'job': 'suite_checkpoint@workspace', 'executor': 'agent_call',
+                  'material': 'code'},
         'values': {'kind': 'suite_checkpoint', 'workspace': WS,
                    'ecosystem_map': ECOSYSTEM,
                    'checkpoint_reason': 'four_slice_checkpoint',
                    'verification_commands': 'python3 -m unittest discover -s orchestrator/tests -t .'},
     },
     'draft_skeleton': {
+        'route': {'job': 'draft_skeleton@skeleton', 'executor': 'agent_call',
+                  'material': 'document'},
         'values': {'kind': 'draft_skeleton', 'workspace': WS,
                    'goal_path': GOAL, 'skeleton_path': SKELETON,
                    'project': 'orchestrators', 'work_area': 'implementation', 'ecosystem_map': ECOSYSTEM,
@@ -108,6 +120,8 @@ RUNS = {
         # capture of 2026-08-18: no amendments existed yet -> both units drop
     },
     'draft_slice_note': {
+        'route': {'job': 'draft_slice_note@slice_doc', 'executor': 'agent_call',
+                  'material': 'document'},
         'values': {'kind': 'draft_slice_note', 'workspace': WS,
                    'slice_id': '10', 'slice_title': 'Compatibility and conformance',
                    'skeleton_path': SKELETON, 'goal_path': GOAL, 'slice_note_path': NOTE10,
@@ -117,6 +131,8 @@ RUNS = {
         # no SLICE PRODUCER PLANNING in this capture -> producer_planning drops
     },
     'implement': {
+        'route': {'job': 'implement@slice_impl', 'executor': 'agent_call',
+                  'material': 'code'},
         'options': {'implementation_metering': True},
         'values': {'kind': 'implement', 'workspace': WS,
                    'slice_id': '10', 'slice_title': 'Compatibility and conformance',
@@ -126,6 +142,8 @@ RUNS = {
                    'brainstorming_max_rounds': ROUNDS},
     },
     'review_round': {
+        'route': {'job': 'review_round@slice_impl', 'executor': 'agent_call',
+                  'material': 'code'},
         'variants': {'target_frame': 'slice_unit'},
         'values': {'kind': 'review_round', 'workspace': WS,
                    'task': 'full review round of the slice 10 implementation (Compatibility and conformance).',
@@ -140,6 +158,8 @@ RUNS = {
         # no deferred debt on this impl unit -> unit drops
     },
     'delta_review': {
+        'route': {'job': 'delta_review@slice_doc', 'executor': 'agent_call',
+                  'material': 'document'},
         'variants': {'target_frame': 'slice_unit'},
         'values': {'kind': 'delta_review', 'workspace': WS,
                    'task_subject': 'the slice 10 note (Compatibility and conformance)',
@@ -153,6 +173,8 @@ RUNS = {
         'options': {'scope_authority': False, 'doc_review_duty': True, 'altitude_review': True},  # doc target
     },
     'reclassify': {
+        'route': {'job': 'reclassify@doc', 'executor': 'agent_call',
+                  'material': 'document'},
         'values': {'kind': 'reclassify', 'workspace': WS,
                    'project': 'orchestrators', 'work_area': 'implementation', 'ecosystem_map': ECOSYSTEM,
                    'artifact_path': NOTE10,
@@ -163,6 +185,8 @@ RUNS = {
                    'finding_example': cap(2077, strip_prefix='Smallest failure scenario: ')},
     },
     'fix_findings': {
+        'route': {'job': 'fix_findings@slice_doc', 'executor': 'agent_call',
+                  'material': 'document'},
         'variants': {'target_frame': 'slice_unit'},
         'values': {'kind': 'fix_findings', 'workspace': WS,
                    'task_subject': 'the slice 10 note (Compatibility and conformance)',
@@ -178,6 +202,9 @@ RUNS = {
         'options': {'altitude_fix': True},  # doc target
     },
     'discussion_turn': {
+        'route': {'job': 'rethink', 'executor': 'brainstorming',
+                  'material': 'document', 'role': 'initial_position',
+                  'lead': True, 'artifact_type': 'document'},
         'options': {'two_register': True, 'altitude_doc': True, 'reuse_gate': True},
         'values': {**BS_COMMON, 'kind': 'discussion_turn', 'workspace': BS_COMMON['workspace_path'], 'participant_id': 'initial-position', 'role': 'initial_position', 'round': '3',
                    'target_authority': f'Git commit {BS_ACCEPTED_REVISION}',
@@ -186,6 +213,9 @@ RUNS = {
     },
     'discussion_turn.contrary': {
         'kind_file': 'discussion_turn',
+        'route': {'job': 'rethink', 'executor': 'brainstorming',
+                  'material': 'document', 'role': 'contrary_position',
+                  'lead': False, 'artifact_type': 'document'},
         'options': {'evidence': True, 'altitude_review': True},
         'values': {**BS_COMMON, 'kind': 'discussion_turn', 'workspace': BS_COMMON['workspace_path'], 'participant_id': 'contrary-position', 'role': 'contrary_position', 'round': '3',
                    'target_authority': f'Git commit {BS_ACCEPTED_REVISION}',
@@ -193,6 +223,9 @@ RUNS = {
         'variants': {'role_stance': 'contrary_position'},
     },
     'questioner_turn': {'options': {'reuse_gate_questioner': True, 'altitude_questioner': True},
+        'route': {'job': 'rethink', 'executor': 'brainstorming',
+                  'material': 'document', 'role': 'common_sense',
+                  'lead': False, 'artifact_type': 'document'},
         'values': {**BS_COMMON, 'kind': 'questioner_turn', 'workspace': BS_COMMON['workspace_path']}},
 }
 
@@ -204,8 +237,8 @@ def kind_path(kind):
             return p
     raise FileNotFoundError(kind)
 
-SHARED = json.loads((KINDS_DIR / 'shared' / 'shared.json').read_text())
 PLACEHOLDER = re.compile(r'\{\{(\w+)\}\}')
+PROMPT_SET = prompt_sets.default_seed()
 
 def render_unit(unit, values):
     """Render one unit; return text or None (unit dropped)."""
@@ -222,52 +255,44 @@ def render_unit(unit, values):
             raise KeyError(f"missing required variable '{name}'")
     return text
 
-def questions_block(doc, spec=None):
-    """Render the kind's QUESTIONS unit; None while its items are empty.
-    spec['questions_from'] borrows another kind's battery (session delivery)."""
-    q = doc.get('questions', {})
-    items = list(q.get('items', []))
-    if spec and spec.get('questions_from'):
-        borrowed = json.loads(kind_path(spec['questions_from']).read_text())
-        items += borrowed.get('questions', {}).get('items', [])
-    ids = [i['id'] for i in items]
-    assert len(ids) == len(set(ids)), f'duplicate question ids: {ids}'
-    for group, choice in (spec or {}).get('variants', {}).items():
-        items += doc.get('variants', {}).get(group, {}).get(choice, {}).get('questions', [])
-    if not items:
-        return None
-    lines = list(q.get('intro', [])) + [f"- {i['id']}: {i['text']}" for i in items]
-    return '\n'.join(lines)
-
 def render_kind(kind, spec):
-    doc = json.loads(kind_path(kind).read_text())
-    values, options = spec.get('values', {}), spec.get('options', {})
-    variants = spec.get('variants', {})
-    blocks = []
-    for section, key in (('instructions', 'parts'), ('output_contract', 'sections')):
-        if section == 'output_contract':
-            q = questions_block(doc, spec)
-            if q is not None:
-                blocks.append(q)
-        for part in doc.get(section, {}).get(key, []):
-            if part.get('optional') and not options.get(part.get('ref') or part.get('id') or (part.get('text', [''])[0].split(' ')[0].lower()), False):
-                continue
-            if 'ref' in part:
-                unit = SHARED['units'].get(part['ref']) or SHARED['contract_sections'][part['ref']]
-                vals = {**values, **part.get('defaults', {})}
-            elif 'one_of' in part:
-                unit = doc['variants'][part['one_of']][variants[part['one_of']]]
-                vals = values
-            else:
-                unit, vals = part, values
-            rendered = render_unit(unit, vals)
-            if rendered is not None:
-                blocks.append(rendered)
+    values = spec.get('values', {})
+    prompt = prompt_router.assemble(
+        PROMPT_SET, values=values, **spec['route']
+    )
+    blocks = [render_unit(unit, values) for unit in prompt['instructions']]
+    questions = prompt['questions']
+    if questions['items']:
+        lines = list(questions['intro'])
+        lines.extend(f"- {item['id']}: {item['text']}" for item in questions['items'])
+        blocks.append('\n'.join(lines))
+    blocks.extend(render_unit(unit, values) for unit in prompt['output_contract'])
     return '\n\n'.join(blocks) + '\n'
 
-for output_name, spec in RUNS.items():
-    kind = spec.get('kind_file', output_name)
-    out = kind_path(kind).with_name(f'{output_name}.prompt.txt')
-    out.write_text(render_kind(kind, spec))
-    print(f'{out.name}: {len(out.read_text().splitlines())} lines')
-print('OK')
+def render_all(output_dir=KINDS_DIR):
+    """Render every declared run and return its relative output inventory."""
+    output_dir = Path(output_dir)
+    emitted = []
+    for output_name, spec in RUNS.items():
+        kind = spec.get('kind_file', output_name)
+        relative = kind_path(kind).relative_to(KINDS_DIR).with_name(
+            f'{output_name}.prompt.txt'
+        )
+        out = output_dir / relative
+        out.parent.mkdir(parents=True, exist_ok=True)
+        rendered = render_kind(kind, spec)
+        out.write_text(rendered)
+        emitted.append((relative.as_posix(), len(rendered.splitlines())))
+    return tuple(emitted)
+
+
+if __name__ == '__main__':
+    if len(sys.argv) == 1:
+        destination = KINDS_DIR
+    elif len(sys.argv) == 3 and sys.argv[1] == '--output-dir':
+        destination = Path(sys.argv[2])
+    else:
+        raise SystemExit('usage: render_examples.py [--output-dir PATH]')
+    for relative, line_count in render_all(destination):
+        print(f'{relative}: {line_count} lines')
+    print('OK')

@@ -1,0 +1,418 @@
+"""Pure charge resolution and assembled prompt JSON.
+
+The router selects one complete prompt-set rung, derives all mounted units from
+canonical charge and seat coordinates, and returns inlined templates with their
+local substitution declarations.  It owns no dispatch, state, trace, or reply
+validation.
+"""
+
+import collections
+import copy
+import re
+
+from . import prompt_sets
+
+
+class PromptRouterError(ValueError):
+    """A charge, seat, or supplied substitution is invalid."""
+
+
+Resolution = collections.namedtuple(
+    "Resolution", ("prompt", "prompt_set_fallback")
+)
+_Route = collections.namedtuple(
+    "_Route", ("kind", "target_type", "variants", "mount_tags",
+               "borrow_questions")
+)
+
+DIRECT_ROUTES = {
+    "draft_skeleton@skeleton": ("draft_skeleton", "document"),
+    "review_round@skeleton": ("review_round", "document"),
+    "fix_findings@skeleton": ("fix_findings", "document"),
+    "delta_review@skeleton": ("delta_review", "document"),
+    "draft_slice_note@slice_doc": ("draft_slice_note", "document"),
+    "review_round@slice_doc": ("review_round", "document"),
+    "fix_findings@slice_doc": ("fix_findings", "document"),
+    "delta_review@slice_doc": ("delta_review", "document"),
+    "implement@slice_impl": ("implement", "implementation"),
+    "review_round@slice_impl": ("review_round", "implementation"),
+    "fix_findings@slice_impl": ("fix_findings", "implementation"),
+    "delta_review@slice_impl": ("delta_review", "implementation"),
+    "reclassify@doc": ("reclassify", "document"),
+    "suite_checkpoint@workspace": ("suite_checkpoint", None),
+    "merge_repair@workspace": ("merge_repair", None),
+}
+SESSION_JOBS = {
+    "draft_slice_note@slice_doc": "document",
+    "implement@slice_impl": "implementation",
+    "rethink": None,
+}
+SEATS = {
+    ("initial_position", True): "discussion_turn",
+    ("contrary_position", False): "discussion_turn",
+    ("common_sense", False): "questioner_turn",
+}
+_REVIEW_KINDS = frozenset(("review_round", "fix_findings", "delta_review"))
+_FORBIDDEN_VALUES = frozenset((
+    "_continuation_may_plan_slices",
+    "artifact_type",
+    "design_update",
+    "kind_file",
+    "optional_units",
+    "options",
+    "plan_authoring_authorized",
+    "producer_planning",
+    "producer_planning_replan",
+    "questions_from",
+    "role_stance",
+    "slices",
+    "target_frame",
+    "target_type",
+    "variant",
+    "variants",
+))
+_PLACEHOLDER = re.compile(r"\{\{([A-Za-z_]\w*)\}\}")
+
+
+def _route(job, executor, material, role, lead, artifact_type):
+    if not isinstance(job, str) or not job:
+        raise PromptRouterError("job must be a non-empty string")
+    if not isinstance(material, str) or not material:
+        raise PromptRouterError("material must be a non-empty string")
+    if executor == "agent_call":
+        if job not in DIRECT_ROUTES:
+            raise PromptRouterError("unknown agent-call job %r" % job)
+        if role is not None or lead is not None or artifact_type is not None:
+            raise PromptRouterError(
+                "agent calls do not accept seat or artifact-type coordinates"
+            )
+        kind, target_type = DIRECT_ROUTES[job]
+        variants = {}
+        if kind in _REVIEW_KINDS:
+            variants["target_frame"] = (
+                "skeleton_unit" if job.endswith("@skeleton") else "slice_unit"
+            )
+        tags = {"executor:agent_call"}
+        if target_type:
+            tags.add("target:%s" % target_type)
+        return _Route(kind, target_type, variants, frozenset(tags), None)
+
+    if executor != "brainstorming":
+        raise PromptRouterError("unknown executor %r" % executor)
+    if job not in SESSION_JOBS:
+        raise PromptRouterError("unknown brainstorming job %r" % job)
+    if not isinstance(lead, bool):
+        raise PromptRouterError("brainstorming lead coordinate must be boolean")
+    kind = SEATS.get((role, lead))
+    if kind is None:
+        raise PromptRouterError("invalid brainstorming seat coordinates")
+    target_type = SESSION_JOBS[job]
+    if job == "rethink":
+        if artifact_type not in ("document", "implementation"):
+            raise PromptRouterError(
+                "rethink requires document or implementation artifact type"
+            )
+        target_type = artifact_type
+    elif artifact_type is not None:
+        raise PromptRouterError(
+            "producer jobs derive artifact type from their canonical job"
+        )
+    tags = {"role:%s" % role, "target:%s" % target_type}
+    variants = {"role_stance": role} if kind == "discussion_turn" else {}
+    borrowed = job.split("@", 1)[0] if lead and job != "rethink" else None
+    return _Route(kind, target_type, variants, frozenset(tags), borrowed)
+
+
+def _values_for(job, values):
+    if not isinstance(values, dict) or any(
+        not isinstance(key, str) for key in values
+    ):
+        raise PromptRouterError("values must be an object with string keys")
+    forbidden = sorted(set(values) & _FORBIDDEN_VALUES)
+    if forbidden:
+        raise PromptRouterError(
+            "values contain retired or raw routing control %r" % forbidden[0]
+        )
+    if job != "draft_skeleton@skeleton" and "task_executor_catalogue" in values:
+        raise PromptRouterError(
+            "only draft_skeleton accepts the executor catalogue"
+        )
+    return values
+
+
+def _document(prompt_set, kind):
+    process = "brainstorming" if kind in prompt_sets.BRAINSTORMING_KINDS else "milestone"
+    return prompt_set.documents["%s/%s.json" % (process, kind)]
+
+
+def _mounted(part, tags):
+    return set(part.get("mount", ())).issubset(tags)
+
+
+def _raw_unit(part, document, shared, section, route):
+    if "ref" in part:
+        source = shared[
+            "contract_sections" if section == "output_contract" else "units"
+        ]
+        unit = source[part["ref"]]
+        section_id = part["ref"] if section == "output_contract" else None
+    elif "one_of" in part:
+        group = part["one_of"]
+        choice = route.variants.get(group)
+        if choice is None or choice not in document["variants"][group]:
+            raise PromptRouterError("canonical route has no %s selector" % group)
+        unit = document["variants"][group][choice]
+        section_id = unit.get("id") if section == "output_contract" else None
+    else:
+        unit = part
+        section_id = part.get("id") if section == "output_contract" else None
+    return unit, section_id
+
+
+def _prepared_unit(unit, values, fixed, section_id=None):
+    declarations = copy.deepcopy(unit.get("variables", []))
+    declared = {item["name"]: item for item in declarations}
+    text = list(unit["text"])
+    for name, fixed_value in fixed.items():
+        if name not in declared:
+            continue
+        if name in values and values[name] != fixed_value:
+            raise PromptRouterError("fixed value %r cannot be overridden" % name)
+        token = "{{%s}}" % name
+        text = [line.replace(token, str(fixed_value)) for line in text]
+        declarations = [item for item in declarations if item["name"] != name]
+
+    if any(
+        item.get("drop_unit_if_absent") and item["name"] not in values
+        for item in declarations
+    ):
+        return None
+    missing = [
+        item["name"] for item in declarations
+        if item["required"] and item["name"] not in values
+    ]
+    if missing:
+        raise PromptRouterError("missing required value %r" % missing[0])
+    result = {"text": text, "variables": declarations}
+    if section_id is not None:
+        result = {"id": section_id, **result}
+    return result
+
+
+def _parts(document, shared, section, key, route, values, fixed):
+    assembled = []
+    questions = []
+    for part in document[section][key]:
+        if not _mounted(part, route.mount_tags):
+            continue
+        unit, section_id = _raw_unit(
+            part, document, shared, section, route
+        )
+        defaults = part.get("defaults", {})
+        conflicts = sorted(
+            name for name, value in defaults.items()
+            if name in fixed and value != fixed[name]
+        )
+        if conflicts:
+            raise PromptRouterError(
+                "stored default conflicts with fixed value %r" % conflicts[0]
+            )
+        prepared = _prepared_unit(
+            unit, values, {**defaults, **fixed}, section_id
+        )
+        if prepared is not None:
+            assembled.append(prepared)
+            questions.extend(copy.deepcopy(unit.get("questions", [])))
+    return assembled, questions
+
+
+def _layer(prompt_set, job, material):
+    shared = prompt_set.documents["shared/shared.json"]
+    return shared["material_layers"].get(job, {}).get(material)
+
+
+def _assemble(prompt_set, route, job, material, values, role):
+    shared = prompt_set.documents["shared/shared.json"]
+    document = _document(prompt_set, route.kind)
+    fixed = {"kind": route.kind}
+    if role is not None:
+        fixed["role"] = role
+    instructions, variant_questions = _parts(
+        document, shared, "instructions", "parts", route, values, fixed
+    )
+    intro = list(document["questions"].get("intro", []))
+    questions = copy.deepcopy(document["questions"].get("items", []))
+    questions.extend(variant_questions)
+    if route.borrow_questions:
+        borrowed = _document(prompt_set, route.borrow_questions)
+        questions.extend(copy.deepcopy(borrowed["questions"].get("items", [])))
+    output_contract, unused = _parts(
+        document, shared, "output_contract", "sections", route, values, fixed
+    )
+    del unused
+
+    layer = _layer(prompt_set, job, material)
+    if layer is not None:
+        added, layer_variant_questions = _parts(
+            layer, shared, "instructions", "parts", route, values, fixed
+        )
+        instructions.extend(added)
+        intro.extend(layer["questions"]["intro"])
+        questions.extend(copy.deepcopy(layer["questions"]["items"]))
+        questions.extend(layer_variant_questions)
+        added, unused = _parts(
+            layer, shared, "output_contract", "sections", route, values, fixed
+        )
+        output_contract.extend(added)
+        del unused
+
+    question_ids = [item["id"] for item in questions]
+    if len(question_ids) != len(set(question_ids)):
+        raise PromptRouterError("assembled prompt has duplicate question ids")
+    section_ids = [section["id"] for section in output_contract]
+    if len(section_ids) != len(set(section_ids)):
+        raise PromptRouterError(
+            "assembled prompt has duplicate output-contract ids"
+        )
+    return {
+        "kind": route.kind,
+        "instructions": instructions,
+        "questions": {"intro": intro, "items": questions},
+        "output_contract": output_contract,
+    }
+
+
+def _validation_values(prompt_set):
+    names = set()
+    fixed = {"kind", "role"}
+
+    def walk(value):
+        if isinstance(value, dict):
+            for item in value.get("variables", ()):
+                if isinstance(item, dict) and isinstance(item.get("name"), str):
+                    names.add(item["name"])
+            defaults = value.get("defaults")
+            if isinstance(defaults, dict):
+                fixed.update(defaults)
+            for item in value.values():
+                walk(item)
+        elif isinstance(value, list):
+            for item in value:
+                walk(item)
+
+    walk(prompt_set.documents)
+    forbidden = sorted(names & _FORBIDDEN_VALUES)
+    if forbidden:
+        raise prompt_sets.PromptSetError(
+            "prompt set declares caller-forbidden variable %r" % forbidden[0]
+        )
+    return {name: "validation value" for name in names - fixed}
+
+
+def _validate_part_mounts(document, routes, ctx):
+    for section, key in (
+        ("instructions", "parts"),
+        ("output_contract", "sections"),
+    ):
+        for index, part in enumerate(document[section][key]):
+            if "mount" not in part:
+                continue
+            if not any(_mounted(part, route.mount_tags) for route in routes):
+                raise prompt_sets.PromptSetError(
+                    "%s.%s.%s[%d].mount cannot match a canonical route"
+                    % (ctx, section, key, index)
+                )
+
+
+def _validate_mount_reachability(prompt_set, charges):
+    routes_by_kind = collections.defaultdict(list)
+    routes_by_job = collections.defaultdict(list)
+    for job, route, _role in charges:
+        routes_by_kind[route.kind].append(route)
+        routes_by_job[job].append(route)
+
+    for member in prompt_sets.CANONICAL_MEMBERS[1:]:
+        kind = member.rsplit("/", 1)[1][:-5]
+        _validate_part_mounts(
+            prompt_set.documents[member], routes_by_kind[kind], member
+        )
+
+    layers = prompt_set.documents["shared/shared.json"]["material_layers"]
+    for job, materials in layers.items():
+        for material, layer in materials.items():
+            _validate_part_mounts(
+                layer,
+                routes_by_job[job],
+                "shared/shared.json.material_layers.%s.%s" % (job, material),
+            )
+
+
+def _validate_routable(prompt_set):
+    values = _validation_values(prompt_set)
+    layers = prompt_set.documents["shared/shared.json"]["material_layers"]
+    known_jobs = set(DIRECT_ROUTES) | set(SESSION_JOBS)
+    unknown_jobs = sorted(set(layers) - known_jobs)
+    if unknown_jobs:
+        raise prompt_sets.PromptSetError(
+            "material layers name unknown job %r" % unknown_jobs[0]
+        )
+    try:
+        charges = []
+        for job in DIRECT_ROUTES:
+            route = _route(
+                job, "agent_call", "validation-material", None, None, None
+            )
+            charges.append((job, route, None))
+        for job, declared_target in SESSION_JOBS.items():
+            targets = (
+                ("document", "implementation")
+                if declared_target is None else (None,)
+            )
+            for artifact_type in targets:
+                for role, lead in SEATS:
+                    route = _route(
+                        job, "brainstorming", "validation-material", role,
+                        lead, artifact_type,
+                    )
+                    charges.append((job, route, role))
+
+        _validate_mount_reachability(prompt_set, charges)
+        for job, route, role in charges:
+            route_values = dict(values)
+            if job != "draft_skeleton@skeleton":
+                route_values.pop("task_executor_catalogue", None)
+            materials = {"validation-material"} | set(layers.get(job, {}))
+            for material in materials:
+                _assemble(
+                    prompt_set, route, job, material, route_values, role
+                )
+    except (KeyError, TypeError, PromptRouterError) as exc:
+        raise prompt_sets.PromptSetError(
+            "prompt set cannot assemble every canonical route: %s" % exc
+        ) from exc
+
+
+def assemble(prompt_set, *, job, executor, material, values, role=None,
+             lead=None, artifact_type=None):
+    """Assemble one already selected prompt set without reading storage."""
+    route = _route(job, executor, material, role, lead, artifact_type)
+    values = _values_for(job, values)
+    _validate_routable(prompt_set)
+    return _assemble(prompt_set, route, job, material, values, role)
+
+
+def resolve(home, *, job, executor, material, values, prompt_set="default",
+            role=None, lead=None, artifact_type=None):
+    """Fresh-select one whole rung and assemble one canonical charge."""
+    route = _route(job, executor, material, role, lead, artifact_type)
+    values = _values_for(job, values)
+    selected = prompt_sets.resolve(
+        home, prompt_set, validator=_validate_routable
+    )
+    prompt = _assemble(
+        selected.prompt_set, route, job, material, values, role
+    )
+    return Resolution(prompt, selected.prompt_set_fallback)
+
+
+_validate_routable(prompt_sets.default_seed())

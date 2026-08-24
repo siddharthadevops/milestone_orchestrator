@@ -68,33 +68,43 @@
       },
       {
         "ref": "two_register",
-        "optional": true,
-        "note": "editing seats, document charges"
+        "mount": [
+          "role:initial_position",
+          "target:document"
+        ]
       },
       {
         "ref": "altitude_doc",
-        "optional": true,
-        "note": "editing seats, document charges"
+        "mount": [
+          "role:initial_position",
+          "target:document"
+        ]
       },
       {
         "ref": "reuse_gate",
-        "optional": true,
-        "note": "editing seats, any charge"
+        "mount": [
+          "role:initial_position"
+        ]
       },
       {
         "ref": "implementation_rules",
-        "optional": true,
-        "note": "editing seats, implementation charges"
+        "mount": [
+          "role:initial_position",
+          "target:implementation"
+        ]
       },
       {
         "ref": "evidence",
-        "optional": true,
-        "note": "contrary seat, any charge"
+        "mount": [
+          "role:contrary_position"
+        ]
       },
       {
         "ref": "altitude_review",
-        "optional": true,
-        "note": "contrary seat, document charges"
+        "mount": [
+          "role:contrary_position",
+          "target:document"
+        ]
       }
     ]
   },

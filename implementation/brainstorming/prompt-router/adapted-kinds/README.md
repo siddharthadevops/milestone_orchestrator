@@ -1,6 +1,7 @@
 # Adapted Kinds — Current Prompts Restructured for the Prompt Router
 
-Status: **binding seed corpus for this goal; not wired to code yet** — the
+Status: **binding seed corpus for this goal; assembled by the pure router but
+not yet wired to runtime consumers** — the
 target prompt set for the prompt-router milestone defined in
 [`../goal.md`](../goal.md), with
 [`../prompt-content-milestone.md`](../prompt-content-milestone.md) as its
@@ -51,9 +52,9 @@ captured evidence it was pruned from.
 - **Refs can pin per-kind constants.** `{"ref": "common_fields", "defaults":
   {"status_vocabulary": "…"}}` fixes a shared unit's variable to a kind-level
   constant; the consumer supplies only what remains open.
-- **Optional parts.** `{"ref": "…", "optional": true, "note": "…"}` marks a
-  part the consumer includes conditionally (today: the altitude blocks, present
-  only for documentation targets). Everything else is unconditional.
+- **Route-mounted parts.** `{"ref": "…", "mount": ["target:document"]}` tags a
+  part for canonical route/seat coordinates. The router derives these tags;
+  callers never pass optional switches. Everything else is unconditional.
 - **Variants.** A part `{"one_of": "<group>"}` selects one entry from the kind's
   `variants.<group>` by a consumer-supplied key (today: the discussion turn's
   per-seat role stance).
@@ -713,6 +714,16 @@ captured evidence it was pruned from.
     re-implemented logical slices count again. Material layering borrows only
     staffing's base/exact-override precedence: ids stay open, and legacy missing
     material reads as `code`.
+
+73. **Canonical plan block supersedes reply planning** (accepted amendment B1,
+    2026-08-24): `skeleton.md` has one canonical fenced JSON plan and no reply
+    duplicates it. `draft_skeleton` alone keeps catalogue-backed creation law;
+    note, implementation, fix, and session prompts have no planning selector or
+    `slices` result. Any physical call or seat may edit the block, so routing
+    grants no plan authority. `rethink@doc` and `rethink@impl` collapse to one
+    `rethink` charge whose required originating artifact type mounts the existing
+    document or implementation craft tags. This supersedes the conflicting plan
+    and split-rethink portions of decisions 15, 49, 50, 56, 61, 64, and 72.
 
 ## Content observations left untouched (not adaptation's call)
 

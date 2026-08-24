@@ -43,17 +43,13 @@
         "ref": "operator_amendments_author"
       },
       {
-        "ref": "producer_planning",
-        "optional": true,
-        "note": "mounted when re-planning is offered"
-      },
-      {
         "ref": "implementation_rules"
       },
       {
         "ref": "implementation_metering",
-        "optional": true,
-        "note": "milestone runs with a metering driver; standalone charges drop it"
+        "mount": [
+          "executor:agent_call"
+        ]
       },
       {
         "ref": "reuse_gate"

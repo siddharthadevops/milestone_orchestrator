@@ -92,6 +92,7 @@ class PromptSetStoreTest(unittest.TestCase):
             "unresolved_ref",
             "duplicate_id",
             "invalid_variable",
+            "impossible_mount",
             "invalid_optional_control",
             "missing_initial_position",
             "lead_turn_question_collision",
@@ -99,6 +100,8 @@ class PromptSetStoreTest(unittest.TestCase):
             "non_standard_json_infinity",
             "non_standard_json_negative_infinity",
             "idless_output_variant",
+            "inline_question_extra_field",
+            "shared_question_extra_field",
         ):
             with self.subTest(defect=defect):
                 name = "bad-%s" % defect.replace("_", "-")
@@ -139,6 +142,27 @@ class PromptSetStoreTest(unittest.TestCase):
                     document = json.loads(kind_path.read_text(encoding="utf-8"))
                     document["instructions"]["parts"][1]["optional"] = []
                     kind_path.write_text(json.dumps(document), encoding="utf-8")
+                elif defect == "impossible_mount":
+                    document = json.loads(kind_path.read_text(encoding="utf-8"))
+                    document["instructions"]["parts"][1]["mount"] = [
+                        "executor:agent_call", "role:initial_position"
+                    ]
+                    kind_path.write_text(json.dumps(document), encoding="utf-8")
+                elif defect == "inline_question_extra_field":
+                    document = json.loads(kind_path.read_text(encoding="utf-8"))
+                    document["instructions"]["parts"][1]["questions"] = [{
+                        "id": "inline", "text": "Inline?",
+                        "storage_note": "private",
+                    }]
+                    kind_path.write_text(json.dumps(document), encoding="utf-8")
+                elif defect == "shared_question_extra_field":
+                    shared_path = directory / "shared/shared.json"
+                    document = json.loads(shared_path.read_text(encoding="utf-8"))
+                    document["units"]["implementation_metering"]["questions"] = [{
+                        "id": "shared", "text": "Shared?",
+                        "storage_note": "private",
+                    }]
+                    shared_path.write_text(json.dumps(document), encoding="utf-8")
                 elif defect == "missing_initial_position":
                     kind_path = directory / "brainstorming/discussion_turn.json"
                     document = json.loads(kind_path.read_text(encoding="utf-8"))

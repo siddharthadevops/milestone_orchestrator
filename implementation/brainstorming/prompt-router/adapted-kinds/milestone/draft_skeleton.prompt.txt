@@ -30,12 +30,13 @@ SKELETON SCOPE
   never an imagined stronger one.
 
 SLICE PRODUCER PLANNING
-For every planned slice, choose from the catalogue below who produces
-each of its two steps — `draft_slice_note` and `implement` — and show
-both choices in the skeleton's slice table (edit it; the table is not
-fenced); the structured result and the document must agree.
-Plans grow FORWARD only: insert new slices among the not-yet-built,
-never before built work, and never reorder built history.
+Write exactly one `## Canonical slice plan` heading immediately followed
+by one fenced `json` object rooted `{"slices":[...]}`. Array order is
+delivery. Each slice has exactly a unique integer `id`, non-empty `title`
+and `intent`, optional non-empty `material`, and
+`producer_task_executor` with exactly `draft_slice_note` and `implement`.
+Choose both executor ids from the catalogue below. Configuration is not
+part of the plan, and no duplicate plan is returned in the reply.
 TASK EXECUTOR CATALOGUE:
 [
   {
@@ -144,12 +145,6 @@ Common fields:
 
 Kind draft_skeleton adds:
   "artifact": "<workspace-relative path of the skeleton document you wrote>"
-  "slices": [ {"id": 1, "title": "...",
-                 "producer_task_executor": {
-                   "draft_slice_note": "<executor id>",
-                   "implement": "<executor id>"}}, ... ]
-  (unique integer ids; return only the executor id per step — the
-  orchestrator chooses its configuration)
 
 "questions": [{"id": "<id>", "answer": "<the answer, backed by a brief description; at most 300 characters>"}, ...]
   (one entry per QUESTIONS id above, in EVERY reply whatever its status;

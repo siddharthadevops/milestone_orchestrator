@@ -145,12 +145,6 @@ session from the finding alone.
 
 Kind draft_slice_note adds:
   "artifact": "<workspace-relative path of the slice note you wrote>"
-  When the prompt includes SLICE PRODUCER PLANNING, also return the complete
-  updated plan in "slices": [ {"id": 1, "title": "...",
-                 "producer_task_executor": {
-                   "draft_slice_note": "<executor id>",
-                   "implement": "<executor id>"}}, ... ]
-  (unique integer ids; only the executor id per step)
 
 "questions": [{"id": "<id>", "answer": "<the answer, backed by a brief description; at most 300 characters>"}, ...]
   (one entry per QUESTIONS id above, in EVERY reply whatever its status;

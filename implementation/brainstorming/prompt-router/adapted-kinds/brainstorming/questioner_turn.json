@@ -63,13 +63,16 @@
       },
       {
         "ref": "reuse_gate_questioner",
-        "optional": true,
-        "note": "understanding lens, any charge"
+        "mount": [
+          "role:common_sense"
+        ]
       },
       {
         "ref": "altitude_questioner",
-        "optional": true,
-        "note": "document charges"
+        "mount": [
+          "role:common_sense",
+          "target:document"
+        ]
       },
       {
         "text": [

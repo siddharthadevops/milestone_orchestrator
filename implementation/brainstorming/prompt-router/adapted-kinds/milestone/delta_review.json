@@ -33,23 +33,27 @@
       },
       {
         "ref": "doc_review_duty",
-        "optional": true,
-        "note": "present only when the reviewed target is documentation"
+        "mount": [
+          "target:document"
+        ]
       },
       {
         "ref": "impl_review_duty",
-        "optional": true,
-        "note": "present only when the reviewed target is implementation"
+        "mount": [
+          "target:implementation"
+        ]
       },
       {
         "ref": "scope_authority",
-        "optional": true,
-        "note": "present only when the reviewed target is implementation"
+        "mount": [
+          "target:implementation"
+        ]
       },
       {
         "ref": "altitude_review",
-        "optional": true,
-        "note": "present only when the reviewed target is documentation"
+        "mount": [
+          "target:document"
+        ]
       },
       {
         "ref": "deferred_debt"

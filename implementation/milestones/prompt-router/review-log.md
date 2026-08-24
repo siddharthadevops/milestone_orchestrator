@@ -116,3 +116,25 @@
 - `codex-codex-PR-S02-008` (raised codex, cleared codex): Slice 2 excludes B1's required source-goal revision — The slice pins the single `rethink` route but omits the cited source goal from its conversion, leaving an explicit wrong route contract that could silently misdirect later work, while correction is bounded to that goal and any affected session-routing code and tests.
 - `codex-codex-PR-S02-009` (raised codex, cleared codex): The gate does not pin draft_skeleton's canonical-block instructions — The omission could let the capable builder preserve the obsolete plan-table instruction because every named Slice 2 gate can still pass, but it is under-specification rather than a false pinned fact and Slice 3's first canonical-block use should expose it, leaving bounded corpus, seed, golden, and t
 
+## slice_impl-02-a (Charge resolver and assembled JSON)
+
+- draft: kind `implement`, artifact `-` (raw: `implementation/milestones/prompt-router/.run/raw/slice_impl-02-draft.txt`)
+
+| Round | Kind | Family | Findings | Triage | Raw |
+|---|---|---|---|---|---|
+| slice_impl-02-codex-r1 | review_round | codex | 8 | 8 reported | `implementation/milestones/prompt-router/.run/raw/slice_impl-02-codex-r1.txt` |
+| slice_impl-02-codex-r2 | fix_findings | codex | 6 | 6 fixed | `implementation/milestones/prompt-router/.run/raw/slice_impl-02-fix1.txt` |
+| slice_impl-02-codex-r3 | delta_review | codex | 4 | 4 reported | `implementation/milestones/prompt-router/.run/raw/slice_impl-02-delta1.txt` |
+| slice_impl-02-codex-r4 | fix_findings | codex | 4 | 4 fixed | `implementation/milestones/prompt-router/.run/raw/slice_impl-02-fix2.txt` |
+| slice_impl-02-codex-r5 | delta_review | codex | 0 | clean | `implementation/milestones/prompt-router/.run/raw/slice_impl-02-delta2.txt` |
+| slice_impl-02-codex-r6 | review_round | codex | 0 | clean | `implementation/milestones/prompt-router/.run/raw/slice_impl-02-codex-r2.txt` |
+
+### Review completion — SATISFIED
+
+- deterministic result: every configured family was clean or debt-clean on the same current bytes; full verification was not due at this boundary; no extra reviewer was called
+- cited reviews: `slice_impl-02-codex-r6`
+
+**Deferred debt (opposite-family verified):**
+- `codex-S02A-CODEX-006` (raised codex, cleared codex): Valid local variable reuse can cause false whole-rung fallback — The validator silently treats a locally defaulted name as globally fixed, so later binding and cutover work can trust green whole-rung validation while preserving false fallback, but correction is a local value-scoping fix plus one focused regression test.
+- `codex-S02A-CODEX-007` (raised codex, cleared codex): The authoring guide still describes caller-selected variants — The guide explicitly misstates behavior and could mislead a hasty builder, but the resolver rejects variants or target_frame on the first charge, making silent drift unlikely and correction a small local documentation or call-site fix.
+

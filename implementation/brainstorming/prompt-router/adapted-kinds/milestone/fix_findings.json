@@ -108,16 +108,18 @@
       },
       {
         "ref": "scope_authority",
-        "optional": true,
-        "note": "present only when the fixed target is implementation"
+        "mount": [
+          "target:implementation"
+        ]
       },
       {
         "ref": "reuse_gate"
       },
       {
         "ref": "altitude_fix",
-        "optional": true,
-        "note": "present only when the fixed artifact is documentation"
+        "mount": [
+          "target:document"
+        ]
       },
       {
         "ref": "deferred_debt"
@@ -207,13 +209,8 @@
           "consultation (`rejected_adjudicated` remains the settled-duplicate path), and",
           "both rejection dispositions require exceeds_baseline=false. Include any extra",
           "field explicitly required by an active project-safeguard or",
-          "active project block above.",
-          "When your fix changed the milestone skeleton's slice TABLE — split, added,",
-          "removed, or merged slices — return the FULL updated plan in \"slices\"",
-          "exactly as the table now reads (ids are identity: an intact slice keeps its",
-          "id whatever its position, renumbering does not exist; both producer choices per slice). The orchestrator builds units from",
-          "THIS field, never by parsing the document; omitting it after a table change",
-          "leaves the added slices unbuilt. Omit it when the table is untouched."
+          "active project block above. Plan edits live only in the canonical skeleton",
+          "block; never duplicate them in the reply."
         ],
         "variables": []
       },
