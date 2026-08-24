@@ -47,6 +47,75 @@ class PromptRouterTest(unittest.TestCase):
         units = prompt["instructions"] + prompt["output_contract"]
         return "\n".join(line for unit in units for line in unit["text"])
 
+    @staticmethod
+    def write_set(home, name, documents):
+        directory = Path(prompt_sets.prompt_set_dir(home, name))
+        for member, document in documents.items():
+            path = directory / member
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(json.dumps(document), encoding="utf-8")
+        return directory
+
+    @staticmethod
+    def marked_documents(marker):
+        documents = copy.deepcopy(prompt_sets.default_seed().documents)
+        documents["shared/shared.json"]["material_layers"] = {
+            "implement@slice_impl": {
+                "code": {
+                    "instructions": {"parts": [{
+                        "text": ["Layer instruction"], "variables": []
+                    }]},
+                    "questions": {
+                        "intro": ["Layer questions"],
+                        "items": [{
+                            "id": "layer_question",
+                            "text": "Was the layer assembled?",
+                        }],
+                    },
+                    "output_contract": {"sections": [{
+                        "id": "layer_result",
+                        "text": ["Return the layer result."],
+                        "variables": [],
+                    }]},
+                }
+            }
+        }
+
+        def mark(value):
+            if isinstance(value, dict):
+                if (
+                    isinstance(value.get("text"), list)
+                    and isinstance(value.get("variables"), list)
+                ):
+                    value["text"].append(marker)
+                if set(value) == {"id", "text"}:
+                    value["text"] = "%s %s" % (marker, value["text"])
+                questions = value.get("questions")
+                if (
+                    isinstance(questions, dict)
+                    and isinstance(questions.get("intro"), list)
+                ):
+                    questions["intro"] = [
+                        "%s %s" % (marker, line)
+                        for line in questions["intro"]
+                    ]
+                for item in value.values():
+                    mark(item)
+            elif isinstance(value, list):
+                for item in value:
+                    mark(item)
+
+        mark(documents)
+        return documents
+
+    def assert_prompt_marked(self, prompt, marker):
+        for unit in prompt["instructions"] + prompt["output_contract"]:
+            self.assertIn(marker, unit["text"])
+        for line in prompt["questions"]["intro"]:
+            self.assertIn(marker, line)
+        for question in prompt["questions"]["items"]:
+            self.assertIn(marker, question["text"])
+
     def test_canonical_plan_corpus_seed_and_goldens_are_recaptured(self):
         reviewed = {
             member: json.loads((CORPUS / member).read_text(encoding="utf-8"))
@@ -193,6 +262,200 @@ class PromptRouterTest(unittest.TestCase):
                         lead=numeric_lead,
                     )
 
+    def test_invalid_charge_coordinates_and_raw_selectors_are_rejected(self):
+        job = "implement@slice_impl"
+        valid = {
+            "job": job,
+            "executor": "agent_call",
+            "material": "code",
+            "values": self.values(job),
+        }
+        invalid_coordinates = (
+            ("job_none", {"job": None}),
+            ("job_boolean", {"job": False}),
+            ("job_empty", {"job": ""}),
+            ("job_unknown", {"job": "implement"}),
+            ("executor_none", {"executor": None}),
+            ("executor_boolean", {"executor": False}),
+            ("executor_unknown", {"executor": "worker"}),
+            ("material_none", {"material": None}),
+            ("material_boolean", {"material": False}),
+            ("material_empty", {"material": ""}),
+            ("direct_role", {"role": "initial_position"}),
+            ("direct_lead", {"lead": False}),
+            ("direct_artifact_type", {"artifact_type": "implementation"}),
+        )
+        for case, change in invalid_coordinates:
+            with self.subTest(case=case):
+                charge = dict(valid)
+                charge.update(change)
+                with self.assertRaises(prompt_router.PromptRouterError):
+                    prompt_router.assemble(self.prompt_set, **charge)
+
+        invalid_executor_jobs = (
+            ("agent_call", "rethink"),
+            ("brainstorming", "reclassify@doc"),
+            ("brainstorming", "rethink@doc"),
+            ("brainstorming", "rethink@impl"),
+        )
+        for executor, invalid_job in invalid_executor_jobs:
+            with self.subTest(executor=executor, job=invalid_job):
+                charge = {
+                    "job": invalid_job,
+                    "executor": executor,
+                    "material": "code",
+                    "values": self.values("rethink"),
+                }
+                if executor == "brainstorming":
+                    charge.update(role="initial_position", lead=True)
+                with self.assertRaises(prompt_router.PromptRouterError):
+                    prompt_router.assemble(self.prompt_set, **charge)
+
+        retired_controls = frozenset((
+            "_continuation_may_plan_slices",
+            "artifact_type",
+            "design_update",
+            "kind_file",
+            "optional_units",
+            "options",
+            "plan_authoring_authorized",
+            "producer_planning",
+            "producer_planning_replan",
+            "questions_from",
+            "role_stance",
+            "slices",
+            "target_frame",
+            "target_type",
+            "variant",
+            "variants",
+        ))
+        self.assertEqual(prompt_router._FORBIDDEN_VALUES, retired_controls)
+        for control in retired_controls:
+            with self.subTest(raw_control=control):
+                values = dict(self.values(job), **{control: "caller choice"})
+                with self.assertRaises(prompt_router.PromptRouterError):
+                    prompt_router.assemble(
+                        self.prompt_set,
+                        job=job,
+                        executor="agent_call",
+                        material="code",
+                        values=values,
+                    )
+
+        invalid_values = (None, [], {1: "not a string key"})
+        for values in invalid_values:
+            with self.subTest(values=values):
+                with self.assertRaises(prompt_router.PromptRouterError):
+                    prompt_router.assemble(
+                        self.prompt_set,
+                        job=job,
+                        executor="agent_call",
+                        material="code",
+                        values=values,
+                    )
+
+        catalogue = dict(
+            self.values(job), task_executor_catalogue="caller catalogue"
+        )
+        with self.assertRaises(prompt_router.PromptRouterError):
+            prompt_router.assemble(
+                self.prompt_set,
+                job=job,
+                executor="agent_call",
+                material="code",
+                values=catalogue,
+            )
+
+    def test_all_session_seats_and_artifact_coordinates_are_closed(self):
+        session_targets = (
+            ("draft_slice_note@slice_doc", None),
+            ("implement@slice_impl", None),
+            ("rethink", "document"),
+            ("rethink", "implementation"),
+        )
+        for job, artifact_type in session_targets:
+            for (role, lead), kind in prompt_router.SEATS.items():
+                with self.subTest(
+                    job=job, artifact_type=artifact_type,
+                    role=role, lead=lead,
+                ):
+                    prompt = prompt_router.assemble(
+                        self.prompt_set,
+                        job=job,
+                        executor="brainstorming",
+                        material="code",
+                        values=self.values(job),
+                        role=role,
+                        lead=lead,
+                        artifact_type=artifact_type,
+                    )
+                    self.assertEqual(prompt["kind"], kind)
+
+        candidate_roles = (
+            "initial_position", "contrary_position", "common_sense",
+            "observer", None,
+        )
+        for role in candidate_roles:
+            for lead in (False, True):
+                if (role, lead) in prompt_router.SEATS:
+                    continue
+                with self.subTest(invalid_role=role, invalid_lead=lead):
+                    with self.assertRaises(prompt_router.PromptRouterError):
+                        prompt_router.assemble(
+                            self.prompt_set,
+                            job="implement@slice_impl",
+                            executor="brainstorming",
+                            material="code",
+                            values=self.values("implement@slice_impl"),
+                            role=role,
+                            lead=lead,
+                        )
+
+        for role in (
+            "initial_position", "contrary_position", "common_sense"
+        ):
+            for lead in (None, 0, 1, "true"):
+                with self.subTest(role=role, non_boolean_lead=lead):
+                    with self.assertRaises(prompt_router.PromptRouterError):
+                        prompt_router.assemble(
+                            self.prompt_set,
+                            job="implement@slice_impl",
+                            executor="brainstorming",
+                            material="code",
+                            values=self.values("implement@slice_impl"),
+                            role=role,
+                            lead=lead,
+                        )
+
+        for job in ("draft_slice_note@slice_doc", "implement@slice_impl"):
+            for artifact_type in ("document", "implementation"):
+                with self.subTest(job=job, artifact_type=artifact_type):
+                    with self.assertRaises(prompt_router.PromptRouterError):
+                        prompt_router.assemble(
+                            self.prompt_set,
+                            job=job,
+                            executor="brainstorming",
+                            material="code",
+                            values=self.values(job),
+                            role="initial_position",
+                            lead=True,
+                            artifact_type=artifact_type,
+                        )
+
+        for artifact_type in (None, "", "slice_impl", False):
+            with self.subTest(rethink_artifact_type=artifact_type):
+                with self.assertRaises(prompt_router.PromptRouterError):
+                    prompt_router.assemble(
+                        self.prompt_set,
+                        job="rethink",
+                        executor="brainstorming",
+                        material="code",
+                        values=self.values("rethink"),
+                        role="initial_position",
+                        lead=True,
+                        artifact_type=artifact_type,
+                    )
+
     def test_invalid_stored_routing_metadata_makes_the_rung_unreadable(self):
         defects = {}
 
@@ -255,6 +518,144 @@ class PromptRouterTest(unittest.TestCase):
                         prompt_sets.PROMPT_SET_FALLBACK_DEFAULT,
                     )
                     self.assertEqual(resolution.prompt["kind"], "implement")
+
+    def test_routing_and_layer_defects_fall_named_to_default_to_seed(self):
+        def malformed_selector(documents):
+            del documents["brainstorming/discussion_turn.json"]["variants"][
+                "role_stance"
+            ]["contrary_position"]
+
+        def malformed_layer(documents):
+            documents["shared/shared.json"]["material_layers"][
+                "implement@slice_impl"
+            ]["code"]["questions"] = []
+
+        def duplicate_question_id(documents):
+            documents["shared/shared.json"]["material_layers"][
+                "implement@slice_impl"
+            ]["code"]["questions"]["items"][0]["id"] = "machinery_trust"
+
+        def duplicate_contract_id(documents):
+            documents["shared/shared.json"]["material_layers"][
+                "implement@slice_impl"
+            ]["code"]["output_contract"]["sections"][0][
+                "id"
+            ] = "implement_result"
+
+        defects = {
+            "missing_canonical_selector": malformed_selector,
+            "malformed_layer": malformed_layer,
+            "duplicate_question_id": duplicate_question_id,
+            "duplicate_contract_id": duplicate_contract_id,
+        }
+        job = "implement@slice_impl"
+        charge = {
+            "job": job,
+            "executor": "agent_call",
+            "material": "code",
+            "values": self.values(job),
+            "prompt_set": "operator",
+        }
+        named_marker = "[[named-rung]]"
+        default_marker = "[[default-rung]]"
+
+        for defect_name, apply_defect in defects.items():
+            with self.subTest(defect=defect_name):
+                with tempfile.TemporaryDirectory(
+                    prefix="orch-prompt-router-fallback-"
+                ) as home:
+                    named = self.marked_documents(named_marker)
+                    stored_default = self.marked_documents(default_marker)
+                    self.write_set(home, "operator", named)
+                    self.write_set(home, "default", stored_default)
+
+                    selected = prompt_router.resolve(home, **charge)
+                    self.assertIsNone(selected.prompt_set_fallback)
+                    self.assert_prompt_marked(selected.prompt, named_marker)
+                    self.assertNotIn(
+                        default_marker, json.dumps(selected.prompt)
+                    )
+
+                    broken_named = copy.deepcopy(named)
+                    apply_defect(broken_named)
+                    self.write_set(home, "operator", broken_named)
+                    selected = prompt_router.resolve(home, **charge)
+                    self.assertEqual(
+                        selected.prompt_set_fallback,
+                        prompt_sets.PROMPT_SET_FALLBACK_DEFAULT,
+                    )
+                    self.assert_prompt_marked(selected.prompt, default_marker)
+                    self.assertNotIn(named_marker, json.dumps(selected.prompt))
+
+                    broken_default = copy.deepcopy(stored_default)
+                    apply_defect(broken_default)
+                    self.write_set(home, "default", broken_default)
+                    selected = prompt_router.resolve(home, **charge)
+                    self.assertEqual(
+                        selected.prompt_set_fallback,
+                        prompt_sets.PROMPT_SET_FALLBACK_SEED,
+                    )
+                    self.assertEqual(
+                        selected.prompt,
+                        prompt_router.assemble(
+                            self.prompt_set,
+                            job=job,
+                            executor="agent_call",
+                            material="code",
+                            values=self.values(job),
+                        ),
+                    )
+                    self.assertNotIn(named_marker, json.dumps(selected.prompt))
+                    self.assertNotIn(
+                        default_marker, json.dumps(selected.prompt)
+                    )
+                    self.assertEqual(
+                        selected._fields,
+                        ("prompt", "prompt_set_fallback"),
+                    )
+                    self.assertEqual(
+                        list(selected.prompt),
+                        [
+                            "kind", "instructions", "questions",
+                            "output_contract",
+                        ],
+                    )
+                    self.assertNotIn(
+                        "prompt_set_fallback", json.dumps(selected.prompt)
+                    )
+
+    def test_resolution_reads_completed_edits_fresh_and_freezes_answers(self):
+        job = "implement@slice_impl"
+        charge = {
+            "job": job,
+            "executor": "agent_call",
+            "material": "code",
+            "values": self.values(job),
+            "prompt_set": "operator",
+        }
+        first_marker = "[[first-edit]]"
+        second_marker = "[[second-edit]]"
+        with tempfile.TemporaryDirectory(
+            prefix="orch-prompt-router-fresh-"
+        ) as home:
+            self.write_set(
+                home, "operator", self.marked_documents(first_marker)
+            )
+            first = prompt_router.resolve(home, **charge)
+            frozen_first = copy.deepcopy(first.prompt)
+
+            self.write_set(
+                home, "operator", self.marked_documents(second_marker)
+            )
+            second = prompt_router.resolve(home, **charge)
+
+            self.assertIsNone(first.prompt_set_fallback)
+            self.assertIsNone(second.prompt_set_fallback)
+            self.assertEqual(first.prompt, frozen_first)
+            self.assert_prompt_marked(first.prompt, first_marker)
+            self.assert_prompt_marked(second.prompt, second_marker)
+            self.assertNotIn(second_marker, json.dumps(first.prompt))
+            self.assertNotIn(first_marker, json.dumps(second.prompt))
 
     def test_assembled_shape_and_substitution_contract(self):
         job = "implement@slice_impl"

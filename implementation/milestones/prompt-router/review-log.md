@@ -138,3 +138,19 @@
 - `codex-S02A-CODEX-006` (raised codex, cleared codex): Valid local variable reuse can cause false whole-rung fallback — The validator silently treats a locally defaulted name as globally fixed, so later binding and cutover work can trust green whole-rung validation while preserving false fallback, but correction is a local value-scoping fix plus one focused regression test.
 - `codex-S02A-CODEX-007` (raised codex, cleared codex): The authoring guide still describes caller-selected variants — The guide explicitly misstates behavior and could mislead a hasty builder, but the resolver rejects variants or target_frame on the first charge, making silent drift unlikely and correction a small local documentation or call-site fix.
 
+## slice_impl-02-b (Charge resolver and assembled JSON)
+
+- draft: kind `implement`, artifact `-` (raw: `implementation/milestones/prompt-router/.run/raw/slice_impl-02-b-draft.txt`)
+
+| Round | Kind | Family | Findings | Triage | Raw |
+|---|---|---|---|---|---|
+| slice_impl-02-b-codex-r1 | review_round | codex | 1 | DEBT-CLEAN (reclassified) | `implementation/milestones/prompt-router/.run/raw/slice_impl-02-b-codex-r1.txt` |
+
+### Review completion — SATISFIED
+
+- deterministic result: every configured family was clean or debt-clean on the same current bytes; full verification was not due at this boundary; no extra reviewer was called
+- cited reviews: `slice_impl-02-b-codex-r1`
+
+**Deferred debt (opposite-family verified):**
+- `codex-S02B-CODEX-001` (raised codex, cleared codex): Closed charge and seat tests derive their oracle from production tables — The focused gate remains green after unauthorized route and seat insertions, plausibly misleading even a careful builder, while correction requires only a literal expected-map assertion and removal of any stray entries.
+

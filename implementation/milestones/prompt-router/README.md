@@ -386,4 +386,5 @@ verification is the direct `suite_checkpoint` call instead.
 | slice_impl-01-a (Prompt-set store and seed fallback) | reviewed | 13 | satisfied | 68e70a8 |
 | slice_impl-01-b (Prompt-set store and seed fallback) | reviewed | 2 | satisfied | 266e27e |
 | slice_doc-02 (Charge resolver and assembled JSON) | reviewed | 9 | satisfied | 9b129a7 |
-| slice_impl-02-a (Charge resolver and assembled JSON) | reviewed | 6 | satisfied | - |
+| slice_impl-02-a (Charge resolver and assembled JSON) | reviewed | 6 | satisfied | d4f1214 |
+| slice_impl-02-b (Charge resolver and assembled JSON) | reviewed | 1 | satisfied | - |
