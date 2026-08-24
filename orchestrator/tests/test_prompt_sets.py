@@ -7,7 +7,9 @@ from pathlib import Path
 import tempfile
 import unittest
 
+from orchestrator import driver, runners, service
 from orchestrator import prompt_sets as ps
+from orchestrator import state as st
 
 
 REVIEWED_CORPUS = (
@@ -237,6 +239,96 @@ class PromptSetStoreTest(unittest.TestCase):
         )
         self.assertIsNone(second.prompt_set_fallback)
         self.assertEqual(set(self.stored_bytes()), before_files)
+
+    def test_default_install_is_missing_only_at_home_boundaries(self):
+        def driver_start(home, workspace):
+            workspace.mkdir()
+            state_path = driver.default_state_path(str(workspace))
+            st.save(
+                state_path,
+                st.new_state(
+                    "prompt-set driver startup",
+                    str(workspace),
+                    driver.load_config(None),
+                ),
+            )
+            driver.Driver(
+                state_path,
+                runner=runners.MockRunner([]),
+                model_profiles_home=str(home),
+            )
+
+        def run_creation(home, workspace):
+            driver.init_run(
+                "prompt-set run creation",
+                str(workspace),
+                config=driver.load_config(None),
+                model_profiles_home=str(home),
+                creation_acts=None,
+            )
+
+        def service_start(home, workspace):
+            del workspace
+            server = service.make_server(str(home), 0)
+            server.server_close()
+
+        boundaries = {
+            "driver_start": driver_start,
+            "run_creation": run_creation,
+            "service_start": service_start,
+        }
+        scenarios = ("empty", "valid_edit", "malformed")
+
+        for boundary_name, initialize in boundaries.items():
+            for scenario in scenarios:
+                with self.subTest(boundary=boundary_name, scenario=scenario):
+                    root = Path(self.tmp.name) / ("%s-%s" % (
+                        boundary_name, scenario
+                    ))
+                    home = root / "home"
+                    workspace = root / "workspace"
+                    home.mkdir(parents=True)
+                    before = None
+                    if scenario != "empty":
+                        ps.ensure_default(str(home))
+                        member = (
+                            Path(ps.prompt_set_dir(str(home), "default"))
+                            / "milestone/implement.json"
+                        )
+                        if scenario == "valid_edit":
+                            document = json.loads(member.read_text("utf-8"))
+                            document["description"] = "operator edit"
+                            member.write_text(
+                                json.dumps(document, separators=(",", ":")),
+                                encoding="utf-8",
+                            )
+                        else:
+                            member.write_bytes(b"{malformed")
+                        before = {
+                            str(path.relative_to(home)): path.read_bytes()
+                            for path in sorted(home.rglob("*"))
+                            if path.is_file()
+                        }
+
+                    initialize(home, workspace)
+
+                    if scenario == "empty":
+                        self.assertEqual(
+                            ps.load(str(home), "default"), ps.default_seed()
+                        )
+                    else:
+                        after = {
+                            str(path.relative_to(home)): path.read_bytes()
+                            for path in sorted(home.rglob("*"))
+                            if path.is_file() and "prompt_sets/default/" in str(
+                                path.relative_to(home)
+                            )
+                        }
+                        expected = {
+                            path: value for path, value in before.items()
+                            if path.startswith("prompt_sets/default/")
+                        }
+                        self.assertEqual(after, expected)
 
 
 if __name__ == "__main__":

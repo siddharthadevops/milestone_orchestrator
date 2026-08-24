@@ -198,7 +198,7 @@ from . import brainstorming, brainstorming_lifecycle
 from . import brainstorming_tasks
 from . import driver, errclass, gitops, gitsync, interpreter, kvstore, model_profiles
 from . import profiles
-from . import projects, registry, tasks
+from . import projects, prompt_sets, registry, tasks
 from . import reuse_audit
 from . import staffing
 from . import state as st
@@ -5487,6 +5487,7 @@ def make_server(home, port, task_host=None):
         profiles.ensure_seeds(home)
     except Exception:
         pass
+    prompt_sets.ensure_default(home)
     # The model-profile `default` seed is NOT best-effort: a successfully
     # initialized service must hold a valid `default` (missing-only — an
     # existing file, operator edits included, is validated but never

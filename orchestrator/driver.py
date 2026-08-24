@@ -38,7 +38,8 @@ except ImportError:  # pragma: no cover - non-POSIX: flock degrades to the
 
 from . import brainstorming, brainstorming_lifecycle, brainstorming_milestone
 from . import contracts, errclass, gitops, interpreter, kvstore, ledgers
-from . import model_profiles, pricing, profiles, projects, prompts, registry, runners
+from . import model_profiles, pricing, profiles, projects, prompt_sets, prompts
+from . import registry, runners
 from . import staffing
 from . import tasks
 from . import verifiers, workareas
@@ -903,6 +904,7 @@ class Driver(object):
         # append a different state transition and obscure the stale call.
         self._consume_stale_marker()
         if self.model_profiles_home is not None:
+            prompt_sets.ensure_default(self.model_profiles_home)
             # Whether the profile catalogue's floor could be read at all.
             # The conversion below is the one thing that must NOT run when
             # it could not: see the two comments that follow.
@@ -12872,6 +12874,7 @@ def init_run(goal, workspace=None, config=None, state_path=None, name=None,
     creation_overrides = {}
     if model_profiles_home is not None:
         creation_overrides = _creation_act_overrides(creation_act_layers)
+        prompt_sets.ensure_default(model_profiles_home)
         model_profiles.ensure_default(model_profiles_home)
         staffing.ensure_documents(model_profiles_home)
         _restrict_config_acts_to_shipped(config)

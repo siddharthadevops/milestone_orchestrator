@@ -74,3 +74,17 @@
 - `claude-installed-default-directory-mode-0700` (raised claude, cleared codex): `ensure_default` installs the stored `default` by renaming a `tempfile.mkdtemp` staging directory, so the set root lands with mode 0700 while its parent, subdirectories and files use the ordinary umask modes. — The confirmed 0700 set root creates a silent cross-account behavior defect that ordinary same-owner tests will miss while later routing work trusts stored operator edits, but correction is a local permission fix plus a focused regression test.
 - `claude-part-a-alone-exceeds-slice-size-aim` (raised claude, cleared codex): This part alone adds 712 non-mechanical lines against the slice's stated aim of about 500 for the whole slice, with the delegated wiring and boundary test still to come. — The 712-line excess is immediately visible in the committed diff and changes no behavioral contract, so it is unlikely to silently steer the capable delegated builder, while correction requires only a local size-rationale acknowledgement rather than propagated code or test rework.
 
+## slice_impl-01-b (Prompt-set store and seed fallback)
+
+- draft: kind `implement`, artifact `-` (raw: `implementation/milestones/prompt-router/.run/raw/slice_impl-01-b-draft.txt`)
+
+| Round | Kind | Family | Findings | Triage | Raw |
+|---|---|---|---|---|---|
+| slice_impl-01-b-codex-r1 | review_round | codex | 0 | clean | `implementation/milestones/prompt-router/.run/raw/slice_impl-01-b-codex-r1.txt` |
+| slice_impl-01-b-claude-r1 | review_round | claude | 0 | clean | `implementation/milestones/prompt-router/.run/raw/slice_impl-01-b-claude-r1.txt` |
+
+### Review completion — SATISFIED
+
+- deterministic result: every configured family was clean or debt-clean on the same current bytes; full verification was not due at this boundary; no extra reviewer was called
+- cited reviews: `slice_impl-01-b-codex-r1`, `slice_impl-01-b-claude-r1`
+
