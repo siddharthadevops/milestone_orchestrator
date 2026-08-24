@@ -22,3 +22,24 @@
 - `claude-F3-slice-14-catch-all-and-unacknowledged-size` (raised claude, cleared codex): Slice 14 bundles at least five distinct intents over the milestone's largest retirement surface, and the skeleton records no acknowledgement of the ~500-line aim for it (or for the similarly bundled slices 5 and 6), contrary to this repo's own skeleton precedent. — The oversized obligations and files are explicit, so a capable builder is unlikely to infer a wrong contract silently, but if it nevertheless produces one combined Slice 14 diff, correcting the review coupling requires bounded splitting and rework within that unit.
 - `claude-F4-guarantee-posture-duplicated-into-register-2` (raised claude, cleared codex): Register 2's `Guarantee posture` row reproduces nearly the whole of Register 1's four posture bullets in one ~380-word cell, creating two authoritative statements of the same posture in one short planning contract. — The two current statements are materially aligned, so a capable builder is unlikely to be silently misled and would stop on any later contradiction, but an unnoticed divergence could still require bounded code-and-test rework within the affected unit.
 
+## slice_doc-01 (Prompt-set store and seed fallback)
+
+- draft: kind `draft_slice_note`, artifact `implementation/milestones/prompt-router/slices/slice-01.md` (raw: `implementation/milestones/prompt-router/.run/raw/slice_doc-01-draft.txt`)
+
+| Round | Kind | Family | Findings | Triage | Raw |
+|---|---|---|---|---|---|
+| slice_doc-01-codex-r1 | review_round | codex | 3 | DEBT-CLEAN (reclassified) | `implementation/milestones/prompt-router/.run/raw/slice_doc-01-codex-r1.txt` |
+| slice_doc-01-claude-r1 | review_round | claude | 2 | DEBT-CLEAN (reclassified) | `implementation/milestones/prompt-router/.run/raw/slice_doc-01-claude-r1.txt` |
+
+### Review completion — SATISFIED
+
+- deterministic result: every configured family was clean or debt-clean on the same current bytes; full verification was not due at this boundary; no extra reviewer was called
+- cited reviews: `slice_doc-01-codex-r1`, `slice_doc-01-claude-r1`
+
+**Deferred debt (opposite-family verified):**
+- `codex-S01-CODEX-001` (raised codex, cleared codex): The whole-set validity gate relies on renderer checks that do not exist — The hard register falsely credits the renderer with whole-corpus ref and declaration validation, so a capable builder could reuse its fixture-dependent checks and silently admit malformed sets, while correction remains bounded to strengthening this slice's validator and focused defect tests.
+- `codex-S01-CODEX-002` (raised codex, cleared codex): The no-consumer-cutover acceptance check does not exercise any consumer — The slice wrongly treats builder-only legacy assertions as proof that dispatch remains untouched, so a green focused gate can silently admit author cutover, while correction is a local dispatch re-pin plus one dispatch-level regression test.
+- `codex-S01-CODEX-003` (raised codex, cleared codex): Initialization does not declare whether malformed stored defaults block runtime entry points — The startup outcome is under-specified, but total seed fallback and the malformed-default initialization check should make this builder stop or infer continuation, while any mistaken abort is exposed by the first boundary test and corrected locally.
+- `claude-S01-CLAUDE-001` (raised claude, cleared codex): The installation contract is written only for a NEW/EMPTY home, so the dominant real-world case — an existing service home that has model_profiles/ and staffing_documents/ but no prompt_sets/ — is never named, guaranteed, or tested; every upgraded install may permanently lack the editable stored `default` the milestone exists to provide. — The repeated new/empty-home wording and empty-home-only test create a behavioral coverage ambiguity that could mislead a hasty builder, but the cited path-based missing-only guard should guide this max-effort builder correctly, and any drift needs only a local seed-condition fix plus one regression 
+- `claude-S01-CLAUDE-002` (raised claude, cleared codex): Whole-set validity is left undefined for optional parts and unselected variant branches, and the cited enforcing walk is mount-scoped, so a broken ref or variable declaration hiding in an unmounted branch passes the strict 'complete rung' gate and detonates on a later served call with no rung left to fall to. — The strict all-member and unresolved-reference language should lead a capable builder to validate every branch or stop on the mount-scoped citation ambiguity, but a rendering-led implementation could still skip dormant units; correcting that would be bounded validator-and-test rework without changin
+
