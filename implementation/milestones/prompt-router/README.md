@@ -382,4 +382,5 @@ verification is the direct `suite_checkpoint` call instead.
 | Unit | Status | Rounds | Review result | Gate commit |
 |---|---|---|---|---|
 | skeleton | reviewed | 2 | satisfied | 7aa01f1 |
-| slice_doc-01 (Prompt-set store and seed fallback) | reviewed | 2 | satisfied | - |
+| slice_doc-01 (Prompt-set store and seed fallback) | reviewed | 2 | satisfied | d5c68ce |
+| slice_impl-01-a (Prompt-set store and seed fallback) | reviewed | 13 | satisfied | - |

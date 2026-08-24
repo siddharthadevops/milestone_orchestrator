@@ -43,3 +43,34 @@
 - `claude-S01-CLAUDE-001` (raised claude, cleared codex): The installation contract is written only for a NEW/EMPTY home, so the dominant real-world case — an existing service home that has model_profiles/ and staffing_documents/ but no prompt_sets/ — is never named, guaranteed, or tested; every upgraded install may permanently lack the editable stored `default` the milestone exists to provide. — The repeated new/empty-home wording and empty-home-only test create a behavioral coverage ambiguity that could mislead a hasty builder, but the cited path-based missing-only guard should guide this max-effort builder correctly, and any drift needs only a local seed-condition fix plus one regression 
 - `claude-S01-CLAUDE-002` (raised claude, cleared codex): Whole-set validity is left undefined for optional parts and unselected variant branches, and the cited enforcing walk is mount-scoped, so a broken ref or variable declaration hiding in an unmounted branch passes the strict 'complete rung' gate and detonates on a later served call with no rung left to fall to. — The strict all-member and unresolved-reference language should lead a capable builder to validate every branch or stop on the mount-scoped citation ambiguity, but a rendering-led implementation could still skip dormant units; correcting that would be bounded validator-and-test rework without changin
 
+## slice_impl-01-a (Prompt-set store and seed fallback)
+
+- draft: kind `implement`, artifact `-` (raw: `implementation/milestones/prompt-router/.run/raw/slice_impl-01-draft.txt`)
+
+| Round | Kind | Family | Findings | Triage | Raw |
+|---|---|---|---|---|---|
+| slice_impl-01-codex-r1 | review_round | codex | 2 | 2 reported | `implementation/milestones/prompt-router/.run/raw/slice_impl-01-codex-r1.txt` |
+| slice_impl-01-codex-r2 | fix_findings | codex | 2 | 2 fixed | `implementation/milestones/prompt-router/.run/raw/slice_impl-01-fix1.txt` |
+| slice_impl-01-codex-r3 | delta_review | codex | 0 | clean | `implementation/milestones/prompt-router/.run/raw/slice_impl-01-delta1.txt` |
+| slice_impl-01-codex-r4 | review_round | codex | 1 | 1 reported | `implementation/milestones/prompt-router/.run/raw/slice_impl-01-codex-r2.txt` |
+| slice_impl-01-codex-r5 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/prompt-router/.run/raw/slice_impl-01-fix2.txt` |
+| slice_impl-01-codex-r6 | delta_review | codex | 0 | clean | `implementation/milestones/prompt-router/.run/raw/slice_impl-01-delta2.txt` |
+| slice_impl-01-codex-r7 | review_round | codex | 2 | 2 reported | `implementation/milestones/prompt-router/.run/raw/slice_impl-01-codex-r3.txt` |
+| slice_impl-01-codex-r8 | fix_findings | codex | 2 | 2 fixed | `implementation/milestones/prompt-router/.run/raw/slice_impl-01-fix3.txt` |
+| slice_impl-01-codex-r9 | delta_review | codex | 1 | 1 reported | `implementation/milestones/prompt-router/.run/raw/slice_impl-01-delta3.txt` |
+| slice_impl-01-codex-r10 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/prompt-router/.run/raw/slice_impl-01-fix4.txt` |
+| slice_impl-01-codex-r11 | delta_review | codex | 0 | clean | `implementation/milestones/prompt-router/.run/raw/slice_impl-01-delta4.txt` |
+| slice_impl-01-codex-r12 | review_round | codex | 0 | clean | `implementation/milestones/prompt-router/.run/raw/slice_impl-01-codex-r4.txt` |
+| slice_impl-01-claude-r1 | review_round | claude | 4 | DEBT-CLEAN (reclassified) | `implementation/milestones/prompt-router/.run/raw/slice_impl-01-claude-r1.txt` |
+
+### Review completion — SATISFIED
+
+- deterministic result: every configured family was clean or debt-clean on the same current bytes; full verification was not due at this boundary; no extra reviewer was called
+- cited reviews: `slice_impl-01-codex-r12`, `slice_impl-01-claude-r1`
+
+**Deferred debt (opposite-family verified):**
+- `claude-session-composition-rule-in-store-validator` (raised claude, cleared codex): The whole-set validator hard-requires `variants.role_stance.initial_position` in `brainstorming/discussion_turn.json` and cross-checks lead-turn question ids against `draft_slice_note`/`implement`, a session-composition rule outside this slice's declared defect classes and assigned to Slice 7. — The validator and its test encode a wrong behavioural contract that a capable builder could trust silently, but fallback is exposed as stored_default and correction is a small local removal and test update before Slice 7 composition.
+- `claude-inventory-exactness-assertion-is-tautological` (raised claude, cleared codex): `test_shipped_corpus_and_seed_are_equivalent` builds its 'reviewed' corpus by iterating `ps.CANONICAL_MEMBERS`, so its inventory-exactness assertion can never fail and the named drift alarm does not cover a corpus file the constant omits. — The exactness test derives the reviewed inventory from the implementation constant and therefore silently misses added corpus files despite a green suite, but once detected the correction is a small local inventory, seed, and test synchronization.
+- `claude-installed-default-directory-mode-0700` (raised claude, cleared codex): `ensure_default` installs the stored `default` by renaming a `tempfile.mkdtemp` staging directory, so the set root lands with mode 0700 while its parent, subdirectories and files use the ordinary umask modes. — The confirmed 0700 set root creates a silent cross-account behavior defect that ordinary same-owner tests will miss while later routing work trusts stored operator edits, but correction is a local permission fix plus a focused regression test.
+- `claude-part-a-alone-exceeds-slice-size-aim` (raised claude, cleared codex): This part alone adds 712 non-mechanical lines against the slice's stated aim of about 500 for the whole slice, with the delegated wiring and boundary test still to come. — The 712-line excess is immediately visible in the committed diff and changes no behavioral contract, so it is unlikely to silently steer the capable delegated builder, while correction requires only a local size-rationale acknowledgement rather than propagated code or test rework.
+
