@@ -253,3 +253,29 @@
 - cited reviews: `slice_impl-04-codex-r4`
 - scheduled verification event: `376`
 
+## slice_doc-05 (Milestone author-call cutover)
+
+- draft: kind `draft_slice_note`, artifact `implementation/milestones/prompt-router/slices/slice-05.md` (raw: `implementation/milestones/prompt-router/.run/raw/slice_doc-05-draft.txt`)
+
+| Round | Kind | Family | Findings | Triage | Raw |
+|---|---|---|---|---|---|
+| slice_doc-05-codex-r1 | review_round | codex | 3 | 3 reported | `implementation/milestones/prompt-router/.run/raw/slice_doc-05-codex-r1.txt` |
+| slice_doc-05-codex-r2 | fix_findings | codex | 2 | 2 fixed | `implementation/milestones/prompt-router/.run/raw/slice_doc-05-fix1.txt` |
+| slice_doc-05-codex-r3 | delta_review | codex | 1 | 1 reported | `implementation/milestones/prompt-router/.run/raw/slice_doc-05-delta1.txt` |
+| slice_doc-05-codex-r4 | fix_findings | codex | 1 | 1 fixed | `implementation/milestones/prompt-router/.run/raw/slice_doc-05-fix2.txt` |
+| slice_doc-05-codex-r5 | delta_review | codex | 0 | clean | `implementation/milestones/prompt-router/.run/raw/slice_doc-05-delta2.txt` |
+| slice_doc-05-codex-r6 | review_round | codex | 2 | 2 reported | `implementation/milestones/prompt-router/.run/raw/slice_doc-05-codex-r2.txt` |
+| slice_doc-05-codex-r7 | fix_findings | codex | 2 | 2 fixed | `implementation/milestones/prompt-router/.run/raw/slice_doc-05-fix3.txt` |
+| slice_doc-05-codex-r8 | delta_review | codex | 0 | clean | `implementation/milestones/prompt-router/.run/raw/slice_doc-05-delta3.txt` |
+| slice_doc-05-codex-r9 | review_round | codex | 2 | DEBT-CLEAN (reclassified) | `implementation/milestones/prompt-router/.run/raw/slice_doc-05-codex-r3.txt` |
+
+### Review completion — SATISFIED
+
+- deterministic result: every configured family was clean or debt-clean on the same current bytes; full verification was not due at this boundary; no extra reviewer was called
+- cited reviews: `slice_doc-05-codex-r9`
+
+**Deferred debt (opposite-family verified):**
+- `codex-slice_doc-05-003` (raised codex, cleared codex): The focused gate omits directly affected test families — The note falsely claims its focused command covers every touched test family while omitting existing frozen-material and oversized-recovery suites, so the builder can trust a misleading green gate, though later full-suite detection should require only bounded rework within this unit.
+- `codex-codex-slice_doc-05-004` (raised codex, cleared codex): Cutoff stabilization has no truthful canonical charge — The note’s live-meter qualification and explicit stabilizer fixture may prompt a capable builder to stop, but its router-only checks can silently permit the false hard-stop charge; correction is bounded to the routed canonical prompt and its stabilizer-focused tests within this unit.
+- `codex-codex-slice_doc-05-005` (raised codex, cleared codex): Legacy missing material is routed as document instead of code — The hard register and named test explicitly instruct the builder to default missing slice-note material to document, so it will likely implement the opposite of the mandated legacy code fallback, while correction remains bounded to Slice 05 routing and focused tests.
+
