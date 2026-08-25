@@ -24,14 +24,14 @@ calls and Brainstorming seats may change that block through their ordinary
 repository edits; no route, flag, state field, panel action, or reply field
 grants plan authority. Valid changes are anchored, projected into run state,
 reviewed, and, when they disturb built history, recovered through the existing
-rewind and accepted-range repair flow.
+block-derived account and one LLM-owned structural-repair handoff.
 
 ### Ownership and boundaries
 
 Owned here: prompt-set storage and resolution, assembled prompt service,
 registered reply validation, run prompt-set binding, milestone and Brainstorming
 consumer cutover, the canonical-plan block boundary and projection,
-repository-backed session agreement, plan rewind/reconciliation, the
+repository-backed session agreement, plan diff and frozen reconciliation, the
 complete-suite checkpoint, prompt traces, activation compatibility, and
 conformance tests.
 
@@ -72,8 +72,11 @@ legacy resume. **Uses** older analysis and captures only as historical evidence.
   projected run plan before producer selection or work ordering.
   Before dispatch, the block must match the last validated anchor unless an
   accepted-range reconciliation is open; other drift blocks to the operator
-  without re-baselining or automatic restoration. The exact pre-call repository
-  snapshot anchors rollback. After every physical call or seat turn, unchanged
+  without re-baselining or automatic restoration. A proportional pre-call
+  snapshot of governed Git-visible work-tree bytes under existing exclusions,
+  the index tree, HEAD identity/tip, and the canonical anchor defines rollback.
+  Unrelated refs, reflogs, stash, and other Git plumbing are outside the
+  guarantee. After every physical call or seat turn, unchanged
   bytes keep the anchor without revalidation; changed bytes must form one valid
   block or the snapshot is restored. `draft_skeleton` is accepted only with a
   valid block. Later valid changes refresh the projected run plan before plan
@@ -85,11 +88,18 @@ legacy resume. **Uses** older analysis and captures only as historical evidence.
   result does not count. A later unchanged judgment or checkpoint is required.
 - **Strict repository transitions:** explicit revisions anchor committed editing
   turns, readiness, delta review, canonical-plan state, accepted direct-call
-  ranges, rewind boundaries, and reconciliation. A direct plan-changing call's
-  accepted range contains only its captured pre-call to surviving post-call
-  delta. During reconciliation the accepted block remains authoritative; an
-  equal repaired block adopts the repaired commit without a second plan diff.
-  An incompletable reconciliation blocks to the operator.
+  ranges, wipe boundaries, and reconciliation. A direct plan-changing call's
+  accepted range contains only its committed pre-call to surviving post-call
+  delta and leaves HEAD at `accepted_revision`. Only a computed wipe boundary
+  opens reconciliation: its original old plan/run boundaries, source range, and
+  opening account are persisted and scheduling freezes. The driver performs no
+  repository surgery and durably marks one `merge_repair` handoff from
+  `accepted_revision`; the LLM owns the run-owned surgery and final same-branch
+  commit. The final account is recomputed from the persisted original boundaries
+  and replaces the opening account without a second repair. Finite revision and
+  clean-state checks close reconciliation atomically without repository edits;
+  an interruption, blocked result, unsupported history, or failed check leaves
+  the frozen LLM-left state for manual recovery or restart.
 - **Strict checkpoint gate:** a failed suite checkpoint cannot be deferred or
   reclassified; no seal passes until a fresh unchanged attempt returns `passed`
   or `no_suite`.
@@ -105,7 +115,8 @@ legacy resume. **Uses** older analysis and captures only as historical evidence.
 Operators and workers bear wrong instructions, rejected outputs, lost review
 time, and incorrect recovery work; repository bytes are reversible, spent calls
 are not. Reused are the binding corpus, staffing's fresh whole-rung resolution,
-task charges, validators, exact prompt traces, Git snapshot/restore/commit
+task charges, validators, exact prompt traces, proportional Git
+capture/restore/commit
 primitives, review seals, and suite cadence. B1 also reuses the skeleton itself
 as the plan document and existing run state only as a projection. The cheapest
 sufficient design is one prompt router plus exact canonical-block extraction and
@@ -127,8 +138,8 @@ document reads and existing Git operations, without a daemon or dual authority.
   {"id":7,"title":"Session charge and seat composition","intent":"Admit only planned producer sessions and the single orchestrator-opened rethink session; compose author, contrary, and questioner turns from tagged job law and seat coordinates with applicable QUESTIONS.","producer_task_executor":{"draft_slice_note":"agent_call","implement":"agent_call"}},
   {"id":8,"title":"Repository-backed session turns","intent":"Run sessions in the project repository, commit editing turns, restore ordinary read-only mutations, and preserve only a valid canonical-plan block change under the narrow read-only exception.","producer_task_executor":{"draft_slice_note":"agent_call","implement":"agent_call"}},
   {"id":9,"title":"Anchored readiness and session seal","intent":"Close when discussion seats are ready on one current commit, invalidate readiness after any new commit, derive delivery from Git, and apply nothing at close.","producer_task_executor":{"draft_slice_note":"agent_call","implement":"agent_call"}},
-  {"id":10,"title":"Plan identity and wipe boundary","intent":"Derive plan changes only from anchored canonical blocks, compare by slice id and order, unwind from the earliest historical boundary, and requeue only unwound work.","producer_task_executor":{"draft_slice_note":"agent_call","implement":"agent_call"}},
-  {"id":11,"title":"Accepted-range reconciliation","intent":"Isolate direct-call plan changes to their captured pre-call range and re-land the accepted block after a wipe, treating equality as completion and further delta as a new plan change.","producer_task_executor":{"draft_slice_note":"agent_call","implement":"agent_call"}},
+  {"id":10,"title":"Plan identity and wipe boundary","intent":"Derive plan changes only from anchored canonical blocks; compute a wipe boundary; persist the original old plan and run boundaries, source range, and opening wipe, requeue, and checkpoint account; then freeze scheduling.","producer_task_executor":{"draft_slice_note":"agent_call","implement":"agent_call"}},
+  {"id":11,"title":"Accepted-range reconciliation","intent":"From accepted_revision, hand off the sole merge_repair attempt; validate its clean same-branch linear result; recompute the final account from the persisted original boundaries; and close atomically without driver repository edits.","producer_task_executor":{"draft_slice_note":"agent_call","implement":"agent_call"}},
   {"id":12,"title":"Read-only suite checkpoint","intent":"Run configured or evidence-discovered complete suites once in a read-only agent call, restore ordinary mutation, preserve a valid block-only plan edit, and require a fresh unchanged rerun.","producer_task_executor":{"draft_slice_note":"agent_call","implement":"agent_call"}},
   {"id":13,"title":"Checkpoint cadence, failure, and activation","intent":"Schedule checkpoints every four completed logical slices and at close, repair non-deferrable failures, invalidate unwound anchors, and refuse pre-activation run schemas after the drained cutover.","producer_task_executor":{"draft_slice_note":"agent_call","implement":"agent_call"}},
   {"id":14,"title":"Legacy retirement and end-to-end conformance","intent":"Remove parallel prompt, plan-control, reply-plan, compatibility, and write-fence lanes; prove every physical call and canonical-plan boundary; bump the schema only after all cutovers and a driver drain.","producer_task_executor":{"draft_slice_note":"agent_call","implement":"agent_call"}}
@@ -148,7 +159,7 @@ document reads and existing Git operations, without a daemon or dual authority.
 | Contract registry | Each section id selects prose and, for the registered subset, its validator. Validate exactly registered assembled ids and mounted questions. Stored unknown ids are served and ignored; consumer-appended unknown ids are refused. | `goal.md:93-109` | touch the section registry and worker validation; do-not-build a second resolution path or content-policing engine |
 | Target output vocabulary | Runtime output uses `questions`, with one non-empty answer per mounted id, at most 300 characters each. Target `need_rethink` is `finding` plus `target_path`; producer configuration, reply `slices`, implementer/fixer suite reporting, and planning authority fields retire. | `goal.md:116-145`; accepted amendment B1 | touch prompt contracts and validators; do-not-retain superseded fields or compatibility adapters after cutover |
 | Session eligibility and roles | Brainstorming runs only the two planned producer steps and the single orchestrator-opened `rethink` session. Initial Position is the ordinary editor; contrary and questioner seats are read-only except for the canonical-block-only preservation rule. | `goal.md:185-197,323-332`; accepted amendment B1 | touch session admission and dispatch; do-not-add review, fix, rating, or suite sessions |
-| Plan recovery | Slice id is identity and array order is delivery. Deletion or forbidden historical divergence selects the earliest prior boundary, rewinds later work, and requeues unwound slices. During `merge_repair`, the accepted-revision block remains the plan, anchor, and projection while the rewound tree is only the repair base; equality adopts the repaired commit without a second diff, while a further valid delta starts a new change. | `goal.md:228-282`; accepted amendment B1 | touch block-derived diff, reset, range isolation, and reconciliation; do-not-derive before/after from run state or re-land unrelated pending work |
+| Plan recovery | Slice id is identity and array order is delivery. Deletion or forbidden historical divergence selects the earliest prior boundary and computes an opening wipe/requeue/checkpoint account from the original old plan and run boundaries. Only a computed `wipe_boundary` opens reconciliation and freezes scheduling; the accepted-revision block remains the plan, anchor, and projection. The driver leaves HEAD at `accepted_revision`, performs no rewind/apply/merge/conflict resolution, and marks the sole `merge_repair` handoff immediately before dispatch. Its LLM owns all run-owned surgery and the final same-branch commit. Recompute one final account from the persisted original boundaries to the final block; this replaces the opening account and no further delta starts another repair. Success is limited to routed-output, branch, cleanliness, canonical-block, linear-history, ancestry, and invalidation checks, followed by atomic state/ledger close without repository edits. Failure leaves the frozen LLM-left state for manual recovery or restart. | operator amendment A3; accepted amendment B2 | touch block-derived diff, frozen reconciliation state, one handoff, and finite final checks; do-not-derive before/after from run state, mutate the repository in the driver, add retry/fallback machinery, or run a second repair |
 | Read-only and suite boundary | Ordinary governed mutation by a read-only seat or suite checkpoint is restored. A valid plan-block change is reinserted alone and committed, invalidating that call's readiness or checkpoint status. Failed suite evidence remains non-deferrable until a fresh unchanged `passed` or `no_suite`. | `goal.md:149-180,187-226`; accepted amendment B1 | touch snapshot/restore, block reinsertion, and rerun gates; do-not-count the mutating result or preserve other bytes |
 | Activation compatibility | After all cutovers and a driver drain, increment `state.SCHEMA_VERSION` and refuse pre-activation runs. Prompt reply transport, producer defaults, and legacy validators/adapters retire together; there is no fallback or migration. | accepted amendment B1 | touch activation guard and retirement tests; do-not-resume or rewrite legacy history under the new runtime |
 | Retirements and untouched systems | Retire prompt builders/scrubber, old battery plumbing, split rethink routes, optional producer planning, reply `slices`, producer/material mutation controls, `plan_authoring_authorized`, `_continuation_may_plan_slices`, `design_update` as authority, matching-file-delta rejection, design-document fences, substring prompt tests, and old compatibility lanes. Each reply transport remains until its call-owning boundary lands. Staffing, rigor, model routing, and caller-authored standalone orders remain untouched. | `goal.md:294-335`; accepted amendment B1 | touch only replacement and cutover surfaces; do-not-expand into staffing, model routing, or embedded Git |
@@ -163,4 +174,4 @@ document reads and existing Git operations, without a daemon or dual authority.
 | cheaper_alternative | Reusing the skeleton block, existing state projection, prompt seams, and Git primitives is cheaper than adding a planning discriminator, mutation API, Markdown parser, migration, or second authority. Documentation alone cannot enforce dispatch drift, rollback, or accepted ranges. | accepted amendment B1; `orchestrator/gitops.py:730-824,944-981` |
 | cost | Fourteen bounded slices convert prompt and plan consumers without a daemon or data migration. Runtime adds fresh reads, exact-block comparison, and existing Git operations; activation deliberately rejects legacy runs instead of carrying permanent compatibility machinery. | accepted amendment B1; this skeleton, `Canonical slice plan` |
 | threat_model | Workers control reply JSON and repository edits; malformed prompt sets and invalid plan blocks fail at their boundaries. Operator prompt prose, configured suite commands, and compile-time registration are trusted. The block-only exception preserves no unrelated read-only mutation. | `goal.md:79-85,95-109,171-226`; accepted amendment B1 |
-| enforceability | Whole-rung resolution, closed reply validation, existing target-type prompt slots, exact traces, Git snapshots/restores/commits, exact canonical-block comparison, and state transition gates cover the asserted guarantees. The design promises no semantic policing, prompt snapshot publication, automatic plan restoration, or legacy migration. | `implementation/brainstorming/prompt-router/adapted-kinds/brainstorming/discussion_turn.json:69-98`; `orchestrator/contracts.py:898-1059`; `orchestrator/runners.py:1663-1676,2735-2775`; `orchestrator/gitops.py:730-824,944-981`; accepted amendment B1 |
+| enforceability | Whole-rung resolution, closed reply validation, existing target-type prompt slots, exact traces, proportional worktree/index/HEAD/anchor capture and restoration, exact canonical-block comparison, and state transition gates cover the asserted guarantees. The design promises no unrelated-ref, reflog, stash, or Git-plumbing recovery, semantic policing, prompt snapshot publication, automatic plan restoration, or legacy migration. | `implementation/brainstorming/prompt-router/adapted-kinds/brainstorming/discussion_turn.json:69-98`; `orchestrator/contracts.py:898-1059`; `orchestrator/runners.py:1663-1676,2735-2775`; `orchestrator/canonical_plan.py:317-353`; `orchestrator/gitops.py:787-872`; operator amendment A1; accepted amendment B1 |

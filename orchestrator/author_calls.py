@@ -28,8 +28,9 @@ AUTHOR_JOBS = frozenset((
 
 PreparedAuthorCall = collections.namedtuple(
     "PreparedAuthorCall",
-    ("prompt", "validate", "prompt_set_fallback", "bound"),
+    ("prompt", "validate", "prompt_set_fallback", "bound", "complete"),
 )
+PreparedAuthorCall.__new__.__defaults__ = (None,)
 
 
 def prepare(
@@ -49,6 +50,27 @@ def prepare(
             "job %r is not a direct milestone author charge" % job
         )
     charge_values = dict(values)
+    recovery = charge_values.get("author_recovery")
+    if recovery is None:
+        charge_values.pop("author_recovery", None)
+    elif not isinstance(recovery, str) or not recovery.strip():
+        raise prompt_router.PromptRouterError(
+            "author_recovery must be a non-empty string"
+        )
+    meter_values = (
+        charge_values.get("soft_lines"), charge_values.get("hard_lines")
+    )
+    if (meter_values[0] is None) != (meter_values[1] is None):
+        raise prompt_router.PromptRouterError(
+            "soft_lines and hard_lines must be supplied together"
+        )
+    if meter_values[0] is None:
+        charge_values.pop("soft_lines", None)
+        charge_values.pop("hard_lines", None)
+    if meter_values[0] is not None and job != "implement@slice_impl":
+        raise prompt_router.PromptRouterError(
+            "only implement accepts implementation meter limits"
+        )
     implementation_scope = charge_values.get("implementation_scope")
     if implementation_scope is None:
         charge_values.pop("implementation_scope", None)
@@ -96,7 +118,7 @@ def prepare(
         authority_body = prompts.project_context_body(authority)
         charge_values["ecosystem_map"] = authority_body
 
-    def validate_author_prompt(prompt):
+    def validate_author_prompt(prompt, defaulted_variables):
         try:
             prompt_contracts.bind(
                 prompt, consumer_sections=consumer_sections
@@ -106,6 +128,27 @@ def prepare(
                 "routed author prompt cannot bind its served contract: %s" % exc
             ) from exc
         rendered_prompt = prompt_router.render(prompt, charge_values)
+        absent_runtime_inputs = set()
+        if implementation_scope is None:
+            absent_runtime_inputs.add("implementation_scope")
+        if recovery is None:
+            absent_runtime_inputs.add("author_recovery")
+        if meter_values[0] is None:
+            absent_runtime_inputs.update(("soft_lines", "hard_lines"))
+
+        invented = sorted(
+            absent_runtime_inputs.intersection(defaulted_variables)
+        )
+        if invented:
+            raise prompt_sets.PromptSetError(
+                "routed author prompt defaults absent runtime input %r"
+                % invented[0]
+            )
+        mounted_variables = {
+            declaration.get("name")
+            for unit in prompt["instructions"]
+            for declaration in unit["variables"]
+        }
         scope_is_mounted = any(
             declaration.get("name") == "implementation_scope"
             for unit in prompt["instructions"]
@@ -118,12 +161,36 @@ def prepare(
             raise prompt_sets.PromptSetError(
                 "routed implementation prompt omits its current part scope"
             )
+        if implementation_scope is None and scope_is_mounted:
+            raise prompt_sets.PromptSetError(
+                "routed implementation prompt invents a current part scope"
+            )
         if (
             frozen_extensions
             and authority_body not in rendered_prompt
         ):
             raise prompt_sets.PromptSetError(
                 "routed author prompt omits active project safeguards"
+            )
+        if recovery is not None and "author_recovery" not in mounted_variables:
+            raise prompt_sets.PromptSetError(
+                "routed author prompt omits its physical-call recovery context"
+            )
+        if recovery is None and "author_recovery" in mounted_variables:
+            raise prompt_sets.PromptSetError(
+                "routed author prompt invents physical-call recovery context"
+            )
+        if meter_values[0] is not None and not {
+            "soft_lines", "hard_lines"
+        }.issubset(mounted_variables):
+            raise prompt_sets.PromptSetError(
+                "routed implementation prompt omits its live meter limits"
+            )
+        if meter_values[0] is None and {
+            "soft_lines", "hard_lines"
+        }.intersection(mounted_variables):
+            raise prompt_sets.PromptSetError(
+                "routed implementation prompt invents live meter limits"
             )
 
     resolution = prompt_router.resolve(
@@ -172,4 +239,5 @@ def prepare(
         validate,
         resolution.prompt_set_fallback,
         bound,
+        None,
     )

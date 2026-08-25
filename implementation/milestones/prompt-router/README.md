@@ -394,4 +394,5 @@ verification is the direct `suite_checkpoint` call instead.
 | slice_doc-04 (Prompt-set binding and operator surface) | reviewed | 1 | satisfied | 7094ec9 |
 | slice_impl-04 (Prompt-set binding and operator surface) | reviewed | 4 | satisfied | 0f0466e |
 | slice_doc-05 (Milestone author-call cutover) | reviewed | 9 | satisfied | 3715307 |
-| slice_impl-05-a (Milestone author-call cutover) | reviewed | 37 | satisfied | - |
+| slice_impl-05-a (Milestone author-call cutover) | reviewed | 37 | satisfied | 929a86f |
+| slice_impl-05-b (Milestone author-call cutover) | reviewed | 50 | satisfied | - |

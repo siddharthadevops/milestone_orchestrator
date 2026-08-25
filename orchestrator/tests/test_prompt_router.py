@@ -127,6 +127,25 @@ class PromptRouterTest(unittest.TestCase):
         self.assertNotIn("rethink@impl", corpus_text)
         self.assertNotIn("plan_authoring_authorized", corpus_text)
         self.assertNotIn("design_update", corpus_text)
+        merge_repair = reviewed["milestone/merge_repair.json"]
+        repair_variables = {
+            variable["name"]
+            for part in merge_repair["instructions"]["parts"]
+            for variable in part.get("variables", [])
+        }
+        self.assertEqual(
+            repair_variables,
+            {
+                "accepted_revision",
+                "opening_reconciliation_account",
+                "required_outcome",
+                "source_base_revision",
+                "source_base_role",
+                "source_kind",
+                "wipe_boundary",
+                "wipe_reason",
+            },
+        )
         planning_refs = []
         for member, document in reviewed.items():
             if member == "shared/shared.json":
@@ -175,6 +194,19 @@ class PromptRouterTest(unittest.TestCase):
                     for member in emitted
                 },
             )
+
+    def test_merge_repair_route_assembles_and_renders(self):
+        job = "merge_repair@workspace"
+        values = self.values(job)
+        prompt = prompt_router.assemble(
+            self.prompt_set,
+            job=job,
+            executor="agent_call",
+            material="code",
+            values=values,
+        )
+        self.assertEqual(prompt["kind"], "merge_repair")
+        self.assertTrue(prompt_router.render(prompt, values))
 
     def test_canonical_charge_matrix_and_session_target_mounts(self):
         for job, (kind, unused_target) in prompt_router.DIRECT_ROUTES.items():
@@ -691,7 +723,11 @@ class PromptRouterTest(unittest.TestCase):
         )
         defaults = {item["name"]: item.get("default")
                     for item in metering["variables"]}
-        self.assertEqual(defaults, {"soft_lines": "500", "hard_lines": "750"})
+        self.assertEqual(defaults, {"soft_lines": None, "hard_lines": None})
+        self.assertTrue(all(
+            declaration.get("drop_unit_if_absent")
+            for declaration in metering["variables"]
+        ))
 
         missing = dict(values)
         missing.pop("workspace")

@@ -145,6 +145,240 @@ class AuthorCallPreparationTest(unittest.TestCase):
             prepared.prompt.index("IMPLEMENTATION RULES"),
         )
 
+    def test_recovery_is_routed_and_unmetered_stabilization_drops_limits(self):
+        values = implement_values(self.temp.name)
+        del values["soft_lines"]
+        del values["hard_lines"]
+        values["author_recovery"] = "FORCED CONTROLLED-CUTOFF RECOVERY"
+
+        prepared = self.prepare(values=values)
+
+        self.assertIn(values["author_recovery"], prepared.prompt)
+        self.assertNotIn("meters reviewable Git lines", prepared.prompt)
+        self.assertEqual(
+            prepared.prompt_set_fallback,
+            prompt_sets.PROMPT_SET_FALLBACK_SEED,
+        )
+
+    def test_explicit_null_optional_inputs_are_omitted(self):
+        prepared = self.prepare(values=implement_values(
+            self.temp.name,
+            author_recovery=None,
+            soft_lines=None,
+            hard_lines=None,
+        ))
+
+        self.assertNotIn("None", prepared.prompt)
+        self.assertNotIn("meters reviewable Git lines", prepared.prompt)
+
+    def test_absent_runtime_inputs_cannot_be_replaced_by_prompt_defaults(self):
+        prompt_sets.ensure_default(self.temp.name)
+        shared_path = os.path.join(
+            prompt_sets.prompt_set_dir(self.temp.name, "default"),
+            "shared",
+            "shared.json",
+        )
+        with open(shared_path, "r", encoding="utf-8") as handle:
+            shared = json.load(handle)
+        original_shared = copy.deepcopy(shared)
+        invented = {
+            "implementation_scope": "INVENTED IMPLEMENTATION SCOPE",
+            "author_recovery": "INVENTED RECOVERY",
+            "soft_lines": "500",
+            "hard_lines": "750",
+        }
+        for unit_name, names in (
+            ("implementation_scope", ("implementation_scope",)),
+            ("author_recovery", ("author_recovery",)),
+            ("implementation_metering", ("soft_lines", "hard_lines")),
+        ):
+            declarations = shared["units"][unit_name]["variables"]
+            by_name = {item["name"]: item for item in declarations}
+            for name in names:
+                by_name[name].pop("drop_unit_if_absent")
+                by_name[name]["default"] = invented[name]
+        with open(shared_path, "w", encoding="utf-8") as handle:
+            json.dump(shared, handle)
+
+        values = implement_values(self.temp.name)
+        values.pop("soft_lines")
+        values.pop("hard_lines")
+        prepared = self.prepare(values=values)
+
+        self.assertEqual(
+            prepared.prompt_set_fallback,
+            prompt_sets.PROMPT_SET_FALLBACK_SEED,
+        )
+        for value in invented.values():
+            self.assertNotIn(value, prepared.prompt)
+        self.assertNotIn("meters reviewable Git lines", prepared.prompt)
+
+        with open(shared_path, "w", encoding="utf-8") as handle:
+            json.dump(original_shared, handle)
+        implement_path = os.path.join(
+            prompt_sets.prompt_set_dir(self.temp.name, "default"),
+            "milestone",
+            "implement.json",
+        )
+        with open(implement_path, "r", encoding="utf-8") as handle:
+            implement = json.load(handle)
+        original_implement = copy.deepcopy(implement)
+        scope_part = next(
+            part for part in implement["instructions"]["parts"]
+            if part.get("ref") == "implementation_scope"
+        )
+        scope_part["defaults"] = {
+            "implementation_scope": invented["implementation_scope"]
+        }
+        with open(implement_path, "w", encoding="utf-8") as handle:
+            json.dump(implement, handle)
+
+        fixed_default = self.prepare(values=values)
+        self.assertEqual(
+            fixed_default.prompt_set_fallback,
+            prompt_sets.PROMPT_SET_FALLBACK_SEED,
+        )
+        self.assertNotIn(invented["implementation_scope"], fixed_default.prompt)
+
+        output_default = "INVENTED OUTPUT-CONTRACT SCOPE"
+        shared = copy.deepcopy(original_shared)
+        common_fields = shared["contract_sections"]["common_fields"]
+        common_fields["text"].append(
+            "  invented_scope: {{implementation_scope}}"
+        )
+        common_fields["variables"].append({
+            "name": "implementation_scope",
+            "required": False,
+            "default": output_default,
+            "description": "Consumer regression fixture.",
+        })
+        with open(shared_path, "w", encoding="utf-8") as handle:
+            json.dump(shared, handle)
+        with open(implement_path, "w", encoding="utf-8") as handle:
+            json.dump(original_implement, handle)
+
+        output_contract = self.prepare(values=values)
+        self.assertEqual(
+            output_contract.prompt_set_fallback,
+            prompt_sets.PROMPT_SET_FALLBACK_SEED,
+        )
+        self.assertNotIn(output_default, output_contract.prompt)
+
+        chained_default = "INVENTED CHAINED SCOPE"
+        shared = copy.deepcopy(original_shared)
+        scope_unit = shared["units"]["implementation_scope"]
+        scope_unit["text"] = [
+            "{{carrier}} / {{implementation_scope}}"
+        ]
+        scope_unit["variables"].append({
+            "name": "carrier",
+            "required": False,
+            "default": "unused",
+            "description": "Consumer regression fixture.",
+        })
+        scope_declaration = next(
+            item for item in scope_unit["variables"]
+            if item["name"] == "implementation_scope"
+        )
+        scope_declaration.pop("drop_unit_if_absent")
+        scope_declaration["default"] = chained_default
+        implement = copy.deepcopy(original_implement)
+        scope_part = next(
+            part for part in implement["instructions"]["parts"]
+            if part.get("ref") == "implementation_scope"
+        )
+        scope_part["defaults"] = {
+            "carrier": "{{implementation_scope}}"
+        }
+        with open(shared_path, "w", encoding="utf-8") as handle:
+            json.dump(shared, handle)
+        with open(implement_path, "w", encoding="utf-8") as handle:
+            json.dump(implement, handle)
+
+        chained = self.prepare(values=values)
+        self.assertEqual(
+            chained.prompt_set_fallback,
+            prompt_sets.PROMPT_SET_FALLBACK_SEED,
+        )
+        self.assertNotIn(chained_default, chained.prompt)
+
+    def test_unmounted_route_default_does_not_reject_current_charge(self):
+        prompt_sets.ensure_default(self.temp.name)
+        review_path = os.path.join(
+            prompt_sets.prompt_set_dir(self.temp.name, "default"),
+            "milestone",
+            "review_round.json",
+        )
+        with open(review_path, "r", encoding="utf-8") as handle:
+            review = json.load(handle)
+        review["instructions"]["parts"].append({
+            "ref": "implementation_scope",
+            "defaults": {
+                "implementation_scope": "UNRELATED REVIEW DEFAULT",
+            },
+        })
+        with open(review_path, "w", encoding="utf-8") as handle:
+            json.dump(review, handle)
+
+        values = implement_values(self.temp.name)
+        values.pop("soft_lines")
+        values.pop("hard_lines")
+        prepared = self.prepare(values=values)
+
+        self.assertIsNone(prepared.prompt_set_fallback)
+        self.assertNotIn("UNRELATED REVIEW DEFAULT", prepared.prompt)
+
+    def test_recovery_requires_the_selected_rung_to_mount_its_variable(self):
+        prompt_sets.ensure_default(self.temp.name)
+        root = prompt_sets.prompt_set_dir(self.temp.name, "default")
+        shared_path = os.path.join(root, "shared", "shared.json")
+        with open(shared_path, "r", encoding="utf-8") as handle:
+            shared = json.load(handle)
+        del shared["units"]["author_recovery"]
+        with open(shared_path, "w", encoding="utf-8") as handle:
+            json.dump(shared, handle)
+        for name in ("draft_skeleton", "draft_slice_note", "implement"):
+            path = os.path.join(root, "milestone", name + ".json")
+            with open(path, "r", encoding="utf-8") as handle:
+                job = json.load(handle)
+            job["instructions"]["parts"] = [
+                part for part in job["instructions"]["parts"]
+                if part.get("ref") != "author_recovery"
+            ]
+            with open(path, "w", encoding="utf-8") as handle:
+                json.dump(job, handle)
+
+        prepared = self.prepare(values=implement_values(
+            self.temp.name,
+            author_recovery="IMPLEMENTATION RULES",
+        ))
+
+        self.assertEqual(
+            prepared.prompt_set_fallback,
+            prompt_sets.PROMPT_SET_FALLBACK_SEED,
+        )
+
+    def test_custom_meter_wording_keeps_the_selected_prompt_rung(self):
+        prompt_sets.ensure_default(self.temp.name)
+        shared_path = os.path.join(
+            prompt_sets.prompt_set_dir(self.temp.name, "default"),
+            "shared",
+            "shared.json",
+        )
+        with open(shared_path, "r", encoding="utf-8") as handle:
+            shared = json.load(handle)
+        metering = shared["units"]["implementation_metering"]["text"]
+        metering[1] = "  expect a soft-close request near {{soft_lines}}"
+        metering[2] = "  and a firm stop once {{hard_lines}} is crossed."
+        with open(shared_path, "w", encoding="utf-8") as handle:
+            json.dump(shared, handle)
+
+        prepared = self.prepare()
+
+        self.assertIsNone(prepared.prompt_set_fallback)
+        self.assertIn("soft-close request near 41", prepared.prompt)
+        self.assertIn("firm stop once 63", prepared.prompt)
+
     def test_continuation_falls_past_stored_set_that_omits_part_scope(self):
         prompt_sets.ensure_default(self.temp.name)
         implement_path = os.path.join(
@@ -361,6 +595,83 @@ class AuthorCallPreparationTest(unittest.TestCase):
 
 
 class PhysicalPreparationTest(unittest.TestCase):
+    def test_completion_boundary_runs_before_reply_validation(self):
+        completed = []
+
+        def prepare(_error):
+            def validate(reply):
+                self.assertEqual(completed, ["done"])
+                return reply
+
+            return author_calls.PreparedAuthorCall(
+                "KIND: implement\nROUTED\n",
+                validate,
+                "rung-1",
+                None,
+                lambda: completed.append("done"),
+            )
+
+        output, _result = runners.call_worker(
+            runners.MockRunner([{
+                "expect_kind": "implement",
+                "response": {"status": "ok"},
+            }]),
+            "codex",
+            "legacy prompt must not dispatch",
+            "implement",
+            "/workspace",
+            prepare_call=prepare,
+        )
+
+        self.assertEqual(output, {"status": "ok"})
+        self.assertEqual(completed, ["done"])
+
+    def test_completion_rejection_keeps_physical_call_evidence(self):
+        usage = {
+            "input_tokens": 7,
+            "cached_input_tokens": 1,
+            "output_tokens": 2,
+            "reasoning_output_tokens": 0,
+            "total_tokens": 9,
+        }
+
+        class AccountingRunner(object):
+            def call(self, *_args, **_kwargs):
+                return runners.RunnerResult(
+                    '{"status":"ok"}', 0, 1.5,
+                    token_usage=usage,
+                    cost_payloads=[{"provider": "evidence"}],
+                )
+
+        def reject():
+            error = ValueError("invalid canonical block")
+            error.call_boundary_failure = True
+            raise error
+
+        prepared = author_calls.PreparedAuthorCall(
+            "KIND: implement\nROUTED\n",
+            lambda reply: reply,
+            "rung-1",
+            None,
+            reject,
+        )
+        with self.assertRaises(runners.RunnerError) as caught:
+            runners.call_worker(
+                AccountingRunner(),
+                "codex",
+                "legacy prompt must not dispatch",
+                "implement",
+                "/workspace",
+                prepare_call=lambda _error: prepared,
+            )
+
+        error = caught.exception
+        self.assertTrue(error.provider_dispatch_started)
+        self.assertTrue(error.call_boundary_failure)
+        self.assertEqual(error.token_usage, usage)
+        self.assertEqual(error.prompt_set_fallback, "rung-1")
+        self.assertEqual(len(error.physical_dispatches), 1)
+
     def test_late_dispatch_does_not_rewrite_a_prepared_prompt(self):
         prompt = (
             "KIND: implement\n"
@@ -584,6 +895,246 @@ class PhysicalPreparationTest(unittest.TestCase):
                 for dispatch in caught.exception.physical_dispatches
             ],
             ["rung-1", "rung-2"],
+        )
+
+    def test_rejecting_repair_completion_keeps_both_attempts(self):
+        first_usage = {
+            "input_tokens": 7,
+            "cached_input_tokens": 1,
+            "output_tokens": 2,
+            "reasoning_output_tokens": 0,
+            "total_tokens": 9,
+        }
+        repair_usage = {
+            "input_tokens": 5,
+            "cached_input_tokens": 0,
+            "output_tokens": 1,
+            "reasoning_output_tokens": 0,
+            "total_tokens": 6,
+        }
+
+        class RejectingRepairRunner(object):
+            def __init__(self):
+                self.calls = 0
+
+            def call(self, *_args, **_kwargs):
+                self.calls += 1
+                if self.calls == 1:
+                    return runners.RunnerResult(
+                        '{"attempt":1}', 0, 1.5,
+                        token_usage=first_usage,
+                        cost_payloads=[{"provider": "first"}],
+                    )
+                error = runners.RunnerError("repair transport failed")
+                error.raw_texts = ['{"repair":"transport failure"}']
+                error.duration_s = 2.0
+                error.token_usage = repair_usage
+                error.token_usage_partial = False
+                error.cost_payloads = [{"provider": "repair"}]
+                raise error
+
+        attempts = []
+
+        def prepare(_error):
+            attempt = len(attempts) + 1
+            attempts.append(attempt)
+
+            def validate(_reply):
+                raise contracts.ContractError("invalid attempt")
+
+            def complete():
+                if attempt == 2:
+                    raise ValueError("repair repository rejected")
+
+            return author_calls.PreparedAuthorCall(
+                "KIND: implement\nATTEMPT: %d\n" % attempt,
+                validate,
+                "rung-%d" % attempt,
+                None,
+                complete,
+            )
+
+        with self.assertRaisesRegex(
+            runners.RunnerError, "repair repository rejected"
+        ) as caught:
+            runners.call_worker(
+                RejectingRepairRunner(),
+                "codex",
+                "legacy prompt must not dispatch",
+                "implement",
+                "/workspace",
+                prepare_call=prepare,
+            )
+
+        error = caught.exception
+        self.assertEqual(error.raw_texts, [
+            '{"attempt":1}',
+            '{"repair":"transport failure"}',
+        ])
+        self.assertEqual(len(error.physical_dispatches), 2)
+        self.assertEqual(
+            [
+                dispatch["prompt_set_fallback"]
+                for dispatch in error.physical_dispatches
+            ],
+            ["rung-1", "rung-2"],
+        )
+        self.assertEqual(error.duration_s, 3.5)
+        self.assertEqual(error.token_usage, {
+            "input_tokens": 12,
+            "cached_input_tokens": 1,
+            "output_tokens": 3,
+            "reasoning_output_tokens": 0,
+            "total_tokens": 15,
+        })
+        self.assertFalse(error.token_usage_partial)
+        self.assertEqual(error.cost_payloads, [
+            {"provider": "first"},
+            {"provider": "repair"},
+        ])
+
+    def test_non_runner_repair_exception_still_completes_the_attempt(self):
+        repair_usage = {
+            "input_tokens": 5,
+            "cached_input_tokens": 1,
+            "output_tokens": 2,
+            "reasoning_output_tokens": 0,
+            "total_tokens": 7,
+        }
+
+        def fail_adapter(_workspace):
+            error = ValueError("provider adapter interrupted")
+            error.duration_s = 2.0
+            error.token_usage = repair_usage
+            error.token_usage_partial = False
+            error.cost_payloads = [{"provider": "repair evidence"}]
+            raise error
+
+        runner = runners.MockRunner([
+            {"expect_kind": "implement", "response": {"attempt": 1}},
+            {
+                "expect_kind": "implement",
+                "side_effect": fail_adapter,
+                "response": "unreachable",
+            },
+        ])
+        completed = []
+        attempts = []
+
+        def prepare(_error):
+            attempt = len(attempts) + 1
+            attempts.append(attempt)
+
+            def validate(_reply):
+                raise contracts.ContractError("invalid attempt")
+
+            return author_calls.PreparedAuthorCall(
+                "KIND: implement\nATTEMPT: %d\n" % attempt,
+                validate,
+                "rung-%d" % attempt,
+                None,
+                lambda: completed.append(attempt),
+            )
+
+        with self.assertRaisesRegex(
+            ValueError, "provider adapter interrupted"
+        ) as caught:
+            runners.call_worker(
+                runner,
+                "codex",
+                "legacy prompt must not dispatch",
+                "implement",
+                "/workspace",
+                prepare_call=prepare,
+            )
+
+        self.assertEqual(completed, [1, 2])
+        error = caught.exception
+        self.assertEqual(len(error.physical_dispatches), 2)
+        self.assertEqual(
+            [
+                dispatch["prompt_set_fallback"]
+                for dispatch in error.physical_dispatches
+            ],
+            ["rung-1", "rung-2"],
+        )
+        self.assertEqual(error.duration_s, 2.01)
+        self.assertEqual(error.token_usage, repair_usage)
+        self.assertTrue(error.token_usage_partial)
+        self.assertEqual(
+            error.cost_payloads,
+            [None, {"provider": "repair evidence"}],
+        )
+
+    def test_verifier_repair_exception_keeps_both_attempts_accounting(self):
+        repair_usage = {
+            "input_tokens": 8,
+            "cached_input_tokens": 2,
+            "output_tokens": 3,
+            "reasoning_output_tokens": 1,
+            "total_tokens": 11,
+        }
+
+        def fail_verifier(_workspace):
+            error = verifiers.OperationalError("repair policy unavailable")
+            error.duration_s = 1.0
+            error.token_usage = repair_usage
+            error.token_usage_partial = False
+            error.cost_payloads = [{"provider": "verifier repair"}]
+            raise error
+
+        runner = runners.MockRunner([
+            {"expect_kind": "implement", "response": {"attempt": 1}},
+            {
+                "expect_kind": "implement",
+                "side_effect": fail_verifier,
+                "response": "unreachable",
+            },
+        ])
+        attempts = []
+
+        def prepare(_error):
+            attempt = len(attempts) + 1
+            attempts.append(attempt)
+
+            def validate(_reply):
+                raise contracts.ContractError("invalid attempt")
+
+            return author_calls.PreparedAuthorCall(
+                "KIND: implement\nATTEMPT: %d\n" % attempt,
+                validate,
+                "rung-%d" % attempt,
+                None,
+                lambda: None,
+            )
+
+        with self.assertRaisesRegex(
+            verifiers.OperationalError, "repair policy unavailable"
+        ) as caught:
+            runners.call_worker(
+                runner,
+                "codex",
+                "legacy prompt must not dispatch",
+                "implement",
+                "/workspace",
+                prepare_call=prepare,
+            )
+
+        error = caught.exception
+        self.assertEqual(len(error.physical_dispatches), 2)
+        self.assertEqual(
+            [
+                dispatch["prompt_set_fallback"]
+                for dispatch in error.physical_dispatches
+            ],
+            ["rung-1", "rung-2"],
+        )
+        self.assertEqual(error.duration_s, 1.01)
+        self.assertEqual(error.token_usage, repair_usage)
+        self.assertTrue(error.token_usage_partial)
+        self.assertEqual(
+            error.cost_payloads,
+            [None, {"provider": "verifier repair"}],
         )
 
     def test_repair_trace_failure_does_not_invent_physical_attempt(self):

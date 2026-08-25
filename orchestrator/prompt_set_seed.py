@@ -819,6 +819,18 @@ DEFAULT_PROMPT_SET = {'shared/shared.json': {'description': 'Shared prompt units
                                                                                          'sequential '
                                                                                          'implementation-part '
                                                                                          'assignment.'}]},
+                                  'author_recovery': {'text': ['{{author_recovery}}'],
+                                                      'variables': [{'name': 'author_recovery',
+                                                                     'required': False,
+                                                                     'drop_unit_if_absent': True,
+                                                                     'description': 'Physical-call '
+                                                                                    'recovery '
+                                                                                    'context '
+                                                                                    'supplied '
+                                                                                    'inside '
+                                                                                    'the '
+                                                                                    'routed '
+                                                                                    'charge.'}]},
                                   'implementation_rules': {'text': ['IMPLEMENTATION '
                                                                     'RULES',
                                                                     '- Implement the '
@@ -942,36 +954,34 @@ DEFAULT_PROMPT_SET = {'shared/shared.json': {'description': 'Shared prompt units
                                                                        '`implementation_cut`.'],
                                                               'variables': [{'name': 'soft_lines',
                                                                              'required': False,
-                                                                             'default': '500',
+                                                                             'drop_unit_if_absent': True,
                                                                              'description': 'Reviewable-line '
                                                                                             'count '
                                                                                             'where '
-                                                                                            'the '
+                                                                                            'this '
+                                                                                            "call's "
+                                                                                            'live '
                                                                                             'driver '
+                                                                                            'meter '
                                                                                             'asks '
                                                                                             'for '
                                                                                             'a '
                                                                                             'coherent '
-                                                                                            'close; '
-                                                                                            'defaults '
-                                                                                            'to '
-                                                                                            "today's "
-                                                                                            'value.'},
+                                                                                            'close.'},
                                                                             {'name': 'hard_lines',
                                                                              'required': False,
-                                                                             'default': '750',
+                                                                             'drop_unit_if_absent': True,
                                                                              'description': 'Reviewable-line '
                                                                                             'count '
                                                                                             'where '
-                                                                                            'the '
+                                                                                            'this '
+                                                                                            "call's "
+                                                                                            'live '
                                                                                             'driver '
+                                                                                            'meter '
                                                                                             'stops '
                                                                                             'the '
-                                                                                            'call; '
-                                                                                            'defaults '
-                                                                                            'to '
-                                                                                            "today's "
-                                                                                            'value.'}]},
+                                                                                            'call.'}]},
                                   'doc_review_duty': {'text': ['CITATIONS',
                                                                '- Every file:line '
                                                                'authority the document '
@@ -1554,6 +1564,7 @@ DEFAULT_PROMPT_SET = {'shared/shared.json': {'description': 'Shared prompt units
                                                   'milestone skeleton document and '
                                                   'proposes the slice plan.',
                                    'instructions': {'parts': [{'ref': 'header'},
+                                                              {'ref': 'author_recovery'},
                                                               {'text': ['TASK: draft '
                                                                         'the milestone '
                                                                         'skeleton for '
@@ -1923,6 +1934,7 @@ DEFAULT_PROMPT_SET = {'shared/shared.json': {'description': 'Shared prompt units
                                                     'slice note against the current '
                                                     'reviewed skeleton.',
                                      'instructions': {'parts': [{'ref': 'header'},
+                                                                {'ref': 'author_recovery'},
                                                                 {'text': ['TASK: draft '
                                                                           'the slice '
                                                                           'note for '
@@ -2349,6 +2361,7 @@ DEFAULT_PROMPT_SET = {'shared/shared.json': {'description': 'Shared prompt units
                                              '(or sequential implementation unit) '
                                              'against its reviewed note.',
                               'instructions': {'parts': [{'ref': 'header'},
+                                                         {'ref': 'author_recovery'},
                                                          {'text': ['TASK: implement '
                                                                    'slice {{slice_id}} '
                                                                    '({{slice_title}}) '
@@ -4532,68 +4545,96 @@ DEFAULT_PROMPT_SET = {'shared/shared.json': {'description': 'Shared prompt units
                                                                        'variables': []}]}},
  'milestone/merge_repair.json': {'kind': 'merge_repair',
                                  'process': 'milestone',
-                                 'description': 'Bare technical call: after any '
-                                                'computed plan wipe, leaves the repo '
-                                                'at the surviving base plus everything '
-                                                'the accepted plan-changing call '
-                                                'introduced. No craft law, no battery.',
+                                 'description': 'Bare technical call: after a computed '
+                                                'plan wipe, owns all run-owned '
+                                                'repository surgery and the final '
+                                                'same-branch commit. No craft law, no '
+                                                'battery.',
                                  'instructions': {'parts': [{'ref': 'header'},
                                                             {'text': ['TASK: the '
                                                                       'accepted plan '
                                                                       'computed a wipe '
-                                                                      'boundary, and '
-                                                                      'git has rewound',
-                                                                      'the workspace '
-                                                                      'to it. The '
-                                                                      'driver then '
-                                                                      'attempted to '
-                                                                      'apply exactly '
-                                                                      'the',
-                                                                      'accepted change '
-                                                                      'range named '
-                                                                      'below onto that '
-                                                                      'base. This call '
-                                                                      'runs for EVERY',
-                                                                      'computed wipe '
-                                                                      'boundary, '
-                                                                      'including '
-                                                                      'deletion, '
-                                                                      'forbidden '
-                                                                      'insertion, and',
-                                                                      'forbidden '
-                                                                      'reorder, '
-                                                                      'whether the '
-                                                                      'preliminary '
-                                                                      'apply was '
-                                                                      'clean, '
-                                                                      'conflicted,',
-                                                                      'rejected, '
-                                                                      'partial, or '
-                                                                      'empty.',
-                                                                      'Leave the repo '
-                                                                      'at that base '
-                                                                      'PLUS everything '
-                                                                      'the accepted '
-                                                                      'call introduced '
-                                                                      '—',
-                                                                      'documents and '
-                                                                      'code alike, the '
-                                                                      'skeleton '
-                                                                      'included: the '
-                                                                      'accepted range',
-                                                                      'wins. The only '
-                                                                      'work that stays '
-                                                                      'undone is the '
-                                                                      'wiped/requeued '
-                                                                      "slices' — they "
-                                                                      'will',
-                                                                      'be '
-                                                                      're-implemented '
-                                                                      'on this base. '
-                                                                      'Leave no '
+                                                                      'boundary. The '
+                                                                      'repository '
+                                                                      'remains',
+                                                                      'at '
+                                                                      'accepted_revision; '
+                                                                      'the driver has '
+                                                                      'performed no '
+                                                                      'rewind, apply, '
+                                                                      'merge, or',
                                                                       'conflict '
-                                                                      'markers '
-                                                                      'behind.'],
+                                                                      'resolution. You '
+                                                                      'own all '
+                                                                      'run-owned '
+                                                                      'repository '
+                                                                      'surgery and the '
+                                                                      'final',
+                                                                      'same-branch '
+                                                                      'commit. '
+                                                                      'Preserve '
+                                                                      'required '
+                                                                      'pre-boundary '
+                                                                      'history and '
+                                                                      'every accepted',
+                                                                      'intent, remove '
+                                                                      'the unwound '
+                                                                      'work, and leave '
+                                                                      'a clean '
+                                                                      'repository with '
+                                                                      'one valid',
+                                                                      'canonical plan '
+                                                                      'block. You may '
+                                                                      'change that '
+                                                                      'block while '
+                                                                      'reconciling, '
+                                                                      'but finish',
+                                                                      'the final plan '
+                                                                      'in this call: '
+                                                                      'there is no '
+                                                                      'second repair. '
+                                                                      'If the required '
+                                                                      'outcome',
+                                                                      'cannot be '
+                                                                      'completed, '
+                                                                      'return blocked '
+                                                                      'and leave the '
+                                                                      'repository in '
+                                                                      'your final '
+                                                                      'state.',
+                                                                      'Your final '
+                                                                      'run-owned '
+                                                                      'result must be '
+                                                                      'linear. If the '
+                                                                      'final account '
+                                                                      'has a wipe',
+                                                                      'boundary, it '
+                                                                      'must be an '
+                                                                      'ancestor of '
+                                                                      'final HEAD and '
+                                                                      'every '
+                                                                      'invalidated '
+                                                                      'recorded',
+                                                                      'commit must be '
+                                                                      'absent from '
+                                                                      'final HEAD '
+                                                                      'ancestry. If '
+                                                                      'there is no '
+                                                                      'final wipe '
+                                                                      'boundary,',
+                                                                      'accepted_revision '
+                                                                      'must be an '
+                                                                      'ancestor of '
+                                                                      'final HEAD and '
+                                                                      'there must be '
+                                                                      'no '
+                                                                      'invalidations.',
+                                                                      'These are '
+                                                                      'revision '
+                                                                      'checks, not '
+                                                                      'path, hunk, or '
+                                                                      'semantic '
+                                                                      'proof.'],
                                                              'variables': []},
                                                             {'ref': 'project_context'},
                                                             {'ref': 'process_authority'},
@@ -4614,13 +4655,19 @@ DEFAULT_PROMPT_SET = {'shared/shared.json': {'description': 'Shared prompt units
                                                                       '{{accepted_revision}}',
                                                                       '- source range: '
                                                                       '{{source_base_revision}}..{{accepted_revision}}',
-                                                                      '- preliminary '
-                                                                      'apply outcome: '
-                                                                      '{{apply_outcome}}',
-                                                                      '- preliminary '
-                                                                      'apply '
-                                                                      'diagnostics: '
-                                                                      '{{apply_diagnostics}}'],
+                                                                      '- opening '
+                                                                      'reconciliation '
+                                                                      'account '
+                                                                      '(original old '
+                                                                      'plan/run '
+                                                                      'boundaries and '
+                                                                      'opening '
+                                                                      'wipe/requeue/checkpoint '
+                                                                      'effects): '
+                                                                      '{{opening_reconciliation_account}}',
+                                                                      '- required '
+                                                                      'outcome: '
+                                                                      '{{required_outcome}}'],
                                                              'variables': [{'name': 'wipe_reason',
                                                                             'required': True,
                                                                             'description': 'Why '
@@ -4637,19 +4684,17 @@ DEFAULT_PROMPT_SET = {'shared/shared.json': {'description': 'Shared prompt units
                                                                                            'unwound/requeued.'},
                                                                            {'name': 'wipe_boundary',
                                                                             'required': True,
-                                                                            'description': 'Commit '
-                                                                                           'restored '
-                                                                                           'before '
+                                                                            'description': 'Computed '
+                                                                                           'opening '
+                                                                                           'boundary; '
                                                                                            'the '
-                                                                                           'accepted '
-                                                                                           'change '
-                                                                                           'range '
-                                                                                           'is '
-                                                                                           're-landed; '
-                                                                                           'never '
-                                                                                           'the '
-                                                                                           'source-range '
-                                                                                           'start.'},
+                                                                                           'repository '
+                                                                                           'has '
+                                                                                           'not '
+                                                                                           'been '
+                                                                                           'rewound '
+                                                                                           'to '
+                                                                                           'it.'},
                                                                            {'name': 'source_kind',
                                                                             'required': True,
                                                                             'description': 'brainstorming_session '
@@ -4687,52 +4732,55 @@ DEFAULT_PROMPT_SET = {'shared/shared.json': {'description': 'Shared prompt units
                                                                            {'name': 'accepted_revision',
                                                                             'required': True,
                                                                             'description': 'Source-range '
-                                                                                           'end: '
-                                                                                           'the '
-                                                                                           'common '
-                                                                                           'ready '
-                                                                                           'commit '
+                                                                                           'end '
+                                                                                           'and '
+                                                                                           'dispatch '
+                                                                                           'HEAD: '
+                                                                                           'closed_ready_HEAD '
                                                                                            'for '
                                                                                            'Brainstorming, '
                                                                                            'or '
                                                                                            'the '
                                                                                            "driver's "
+                                                                                           'accepted-result '
                                                                                            'commit '
-                                                                                           'of '
-                                                                                           'an '
-                                                                                           'accepted '
-                                                                                           'direct-call '
-                                                                                           'result.'},
-                                                                           {'name': 'apply_outcome',
-                                                                            'required': True,
-                                                                            'description': 'clean, '
-                                                                                           'conflicted, '
-                                                                                           'rejected, '
-                                                                                           'partial, '
-                                                                                           'or '
-                                                                                           'empty'},
-                                                                           {'name': 'apply_diagnostics',
-                                                                            'required': True,
-                                                                            'description': 'Git '
-                                                                                           'diagnostics '
-                                                                                           'plus '
-                                                                                           'the '
-                                                                                           'resulting '
-                                                                                           'index/work-tree '
-                                                                                           'state '
-                                                                                           'and '
-                                                                                           'affected '
-                                                                                           'paths; '
-                                                                                           'use '
-                                                                                           "'none' "
-                                                                                           'only '
                                                                                            'for '
                                                                                            'a '
-                                                                                           'genuinely '
+                                                                                           'direct '
+                                                                                           'call.'},
+                                                                           {'name': 'opening_reconciliation_account',
+                                                                            'required': True,
+                                                                            'description': 'Persisted '
+                                                                                           'original '
+                                                                                           'old '
+                                                                                           'plan/run '
+                                                                                           'boundaries, '
+                                                                                           'source '
+                                                                                           'range, '
+                                                                                           'and '
+                                                                                           'opening '
+                                                                                           'wipe/requeue/checkpoint '
+                                                                                           'account.'},
+                                                                           {'name': 'required_outcome',
+                                                                            'required': True,
+                                                                            'description': 'The '
+                                                                                           'required '
+                                                                                           'preserved '
+                                                                                           'history '
+                                                                                           'and '
+                                                                                           'intent, '
+                                                                                           'removed '
+                                                                                           'unwound '
+                                                                                           'work, '
+                                                                                           'valid '
+                                                                                           'final '
+                                                                                           'block, '
                                                                                            'clean '
-                                                                                           'or '
-                                                                                           'empty '
-                                                                                           'apply.'}]}]},
+                                                                                           'same-branch '
+                                                                                           'state, '
+                                                                                           'and '
+                                                                                           'final '
+                                                                                           'commit.'}]}]},
                                  'questions': {'status': 'bare technical kind — no '
                                                          'battery by design (decision '
                                                          '57)',

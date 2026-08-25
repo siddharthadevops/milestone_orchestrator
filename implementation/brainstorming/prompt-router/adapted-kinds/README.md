@@ -41,9 +41,9 @@ captured evidence it was pruned from.
   `"required": true` → missing value is a consumer error (loud);
   `"required": false` → the consumer substitutes or, when the whole unit exists
   only to frame the variable, drops the unit (`"drop_unit_if_absent": true`);
-  `"default": "…"` → value used when the consumer passes none (e.g. the
-  implement size targets `soft_lines`/`hard_lines`, defaulting to today's
-  500/750 — each run may pass its own).
+  `"default": "…"` → value used when the consumer passes none. Live implement
+  size targets `soft_lines`/`hard_lines` are supplied by that call's meter and
+  their unit is absent on the unmetered stabilization call.
 - **Units per kind.** `instructions` (ordered `parts`), `questions` (the NEW
   output-answered battery: `intro` lines + `items` of `{id, text}`; renders as
   a QUESTIONS block before the contract and lands in the output's `questions`
@@ -724,6 +724,19 @@ captured evidence it was pruned from.
     `rethink` charge whose required originating artifact type mounts the existing
     document or implementation craft tags. This supersedes the conflicting plan
     and split-rethink portions of decisions 15, 49, 50, 56, 61, 64, and 72.
+
+74. **One LLM-owned structural repair** (operator amendment A3, 2026-08-25):
+    only a computed wipe boundary opens reconciliation. The driver freezes the
+    persisted original boundaries/account and dispatches once from
+    `accepted_revision`; it performs no rewind, apply, merge, or conflict
+    resolution. `merge_repair` owns all run-owned surgery and the final
+    same-branch commit, may finish the canonical block in that call, and has no
+    apply-outcome inputs. The driver checks a linear result plus the conditional
+    wipe-boundary/accepted-revision ancestry and invalidation rules, recomputes
+    the final account from the original boundaries to the final block, and
+    closes without a second repair. This supersedes the merge-repair protocol
+    in decisions 57, 61, 67, 69, 71, 72, and 73; those entries remain chronology
+    only.
 
 ## Content observations left untouched (not adaptation's call)
 

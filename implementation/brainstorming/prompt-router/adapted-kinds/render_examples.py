@@ -84,8 +84,8 @@ RUNS = {
                    'source_base_role': 'pre_session_commit',
                    'source_base_revision': PRE_SESSION_REVISION,
                    'accepted_revision': ACCEPTED_REVISION,
-                   'apply_outcome': 'conflicted',
-                   'apply_diagnostics': 'CONFLICT (content): implementation/milestones/staffing-router/skeleton.md has markers and an unmerged index entry; all other paths applied cleanly'},
+                   'opening_reconciliation_account': '{"old_plan_ids":[1,2,3,4,5,6,7,8],"old_run_boundaries":{"3":"3abbd13e7c966cbeeac773870dfd0eb115d596f1"},"wipe_boundary":"3abbd13e7c966cbeeac773870dfd0eb115d596f1","requeue":[4,5,6,7,8],"invalidated_commits":["109f276ebd03825a8d8f8e0947487765b6860ed1"],"checkpoint_anchors_invalidated":[]}',
+                   'required_outcome': 'Preserve history through slice 3 and all accepted intent; remove run-owned work for slices 4-8; finish one valid canonical block; leave a clean same-branch linear final commit with the wipe boundary ancestral and listed invalidated commits absent.'},
     },
     'merge_repair.agent_call': {
         'kind_file': 'merge_repair',
@@ -99,8 +99,8 @@ RUNS = {
                    'source_base_role': 'pre_call_commit',
                    'source_base_revision': PRE_SESSION_REVISION,
                    'accepted_revision': ACCEPTED_REVISION,
-                   'apply_outcome': 'clean',
-                   'apply_diagnostics': 'none'},
+                   'opening_reconciliation_account': '{"old_plan_ids":[1,2,3,4,5,6,7,8],"old_run_boundaries":{"3":"3abbd13e7c966cbeeac773870dfd0eb115d596f1"},"wipe_boundary":"3abbd13e7c966cbeeac773870dfd0eb115d596f1","requeue":[4,5,6,7,8],"invalidated_commits":["109f276ebd03825a8d8f8e0947487765b6860ed1"],"checkpoint_anchors_invalidated":[]}',
+                   'required_outcome': 'Preserve history through slice 3 and all accepted intent; remove run-owned work for slices 4-8; finish one valid canonical block; leave a clean same-branch linear final commit with the wipe boundary ancestral and listed invalidated commits absent.'},
     },
     'suite_checkpoint': {
         'route': {'job': 'suite_checkpoint@workspace', 'executor': 'agent_call',
@@ -140,6 +140,7 @@ RUNS = {
                    'operator_amendments': AMENDMENTS_A,
                    'project': 'orchestrators', 'work_area': 'implementation', 'ecosystem_map': ECOSYSTEM,
                    'brainstorming_max_rounds': ROUNDS,
+                   'soft_lines': '500', 'hard_lines': '750',
                    'implementation_scope': prompts._implementation_scope_block({
                        'part': 'b',
                        'scope': 'Complete the remaining compatibility proof.',

@@ -21,6 +21,7 @@ Two jobs, both structural:
 outputs, fake counters) never pollutes diffs or gate commits.
 """
 
+import hashlib
 import os
 import subprocess
 
@@ -30,6 +31,7 @@ GIT_TIMEOUT = 60
 IGNORE_LINE = ".orchestrator/"
 DIFF_MAX_CHARS = 24000
 TRUNCATION_MARKER = "\n[... diff truncated by the driver: review the files directly ...]\n"
+CANONICAL_PLAN_REF_PREFIX = "refs/orchestrator/canonical-plan/"
 
 # Local-config marker: the index baseline has been seeded for this repo.
 # ensure_repo() must stage the "everything present = reviewed" baseline
@@ -639,6 +641,23 @@ def commit_wip(workspace, message):
     return _run(workspace, "rev-parse", "--short", "HEAD").stdout.strip()
 
 
+def commit_tree_snapshot(workspace, tree, message, parent=None):
+    """Create a commit object for ``tree`` without moving HEAD."""
+    _assert_workspace_root(workspace)
+    _assert_no_embedded_repos(workspace)
+    if not isinstance(tree, str) or not tree:
+        raise GitError("commit-tree snapshot requires a tree")
+    if not isinstance(message, str) or not message.strip():
+        raise GitError("commit-tree snapshot requires a message")
+    args = ["commit-tree", tree]
+    if parent is not None:
+        if not isinstance(parent, str) or not parent:
+            raise GitError("commit-tree snapshot parent is invalid")
+        args.extend(("-p", parent))
+    args.extend(("-m", message))
+    return _run(workspace, *args).stdout.strip()
+
+
 def head_matches_wip(workspace, parent, tree, message):
     """Whether HEAD is exactly the WIP described by a durable intent.
 
@@ -824,6 +843,34 @@ def snapshot_worktree_tree(workspace):
         _run(workspace, "read-tree", original_index, check=False)
 
 
+def restore_head_index_worktree(
+    workspace, sym, head, index_tree, worktree_tree
+):
+    """Restore the proportional author-call repository boundary.
+
+    Only the pre-call HEAD identity/tip, ordinary index tree, and Git-visible
+    worktree bytes are governed. Unrelated refs, reflogs, configuration, object
+    storage, and private nested-repository metadata are deliberately outside
+    this boundary.
+    """
+    _assert_workspace_root(workspace)
+    if not all(
+        isinstance(value, str) and value
+        for value in (head, index_tree, worktree_tree)
+    ):
+        raise GitError("author-call repository snapshot is malformed")
+    if sym:
+        if not isinstance(sym, str) or not sym.startswith("refs/"):
+            raise GitError("author-call HEAD identity is malformed")
+        _run(workspace, "update-ref", sym, head)
+        _run(workspace, "symbolic-ref", "HEAD", sym)
+    else:
+        _run(workspace, "update-ref", "--no-deref", "HEAD", head)
+    _run(workspace, "read-tree", "-u", "--reset", worktree_tree)
+    _run(workspace, "clean", "-fdq")
+    _run(workspace, "read-tree", index_tree)
+
+
 def merge_candidate_tree(workspace, base, current, candidate_tree):
     """Three-way merge a parked candidate onto a later sealed HEAD.
 
@@ -886,6 +933,31 @@ def park_candidate_tree(workspace, refname, tree):
         raise GitError("parked candidate ref is outside its reserved namespace")
     _run(workspace, "update-ref", refname, tree)
     return tree
+
+
+def canonical_plan_anchor_ref(path):
+    """Stable private ref for one skeleton's current mechanical anchor."""
+    if not isinstance(path, str) or not path:
+        raise GitError("canonical-plan anchor path is invalid")
+    digest = hashlib.sha256(path.encode("utf-8")).hexdigest()
+    return CANONICAL_PLAN_REF_PREFIX + digest
+
+
+def pin_canonical_plan_commit(workspace, path, revision):
+    """Keep the current canonical-plan commit reachable without moving HEAD."""
+    _assert_workspace_root(workspace)
+    if not isinstance(revision, str) or not revision:
+        raise GitError("canonical-plan anchor revision is invalid")
+    resolved = _run(
+        workspace,
+        "rev-parse",
+        "--verify",
+        "%s^{commit}" % revision,
+    ).stdout.strip()
+    if resolved != revision:
+        raise GitError("canonical-plan anchor revision must be a full commit id")
+    _run(workspace, "update-ref", canonical_plan_anchor_ref(path), revision)
+    return revision
 
 
 def parked_candidate_tree(workspace, refname):
@@ -1138,6 +1210,21 @@ def show_file(workspace, rev, relpath):
     if proc.returncode != 0:
         return None
     return proc.stdout
+
+
+def show_file_mode(workspace, rev, relpath):
+    """Return the tree-entry mode for ``relpath`` at ``rev``."""
+    _assert_workspace_root(workspace)
+    proc = _run(
+        workspace, "ls-tree", "-z", rev, "--", relpath, check=False
+    )
+    if proc.returncode != 0 or not proc.stdout:
+        return None
+    metadata, separator, path = proc.stdout.rstrip("\0").partition("\t")
+    fields = metadata.split()
+    if not separator or path != relpath or len(fields) != 3:
+        return None
+    return fields[0]
 
 
 def head_sha(workspace):

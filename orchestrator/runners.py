@@ -2914,9 +2914,11 @@ def call_worker(runner, family, prompt, kind, workspace,
     prepare_call (optional): called before each physical attempt with ``None``
     initially and the first contract error for the repair. It returns an
     object carrying exact ``prompt`` text, its bound ``validate`` callable,
-    and optional ``prompt_set_fallback`` sidecar data. This is how routed
-    consumers keep fresh prompt resolution and served-contract validation in
-    one boundary; legacy callers retain the supplied prompt and repair suffix.
+    optional ``prompt_set_fallback`` sidecar data, and an optional ``complete``
+    callback run immediately after that provider attempt and before reply
+    validation. This is how routed consumers keep fresh prompt resolution,
+    repository-plan handling, and served-contract validation in one physical
+    boundary; legacy callers retain the supplied prompt and repair suffix.
     """
     opts = dict(validate_opts or {})
     if start_session and session_ref is not None:
@@ -2934,18 +2936,22 @@ def call_worker(runner, family, prompt, kind, workspace,
 
     def prepared_call(legacy_prompt, repair_error=None):
         if prepare_call is None:
-            return legacy_prompt, _validate, None
+            return legacy_prompt, _validate, None, None
         try:
             prepared = prepare_call(repair_error)
             call_prompt = prepared.prompt
             call_validate = prepared.validate
             fallback = getattr(prepared, "prompt_set_fallback", None)
+            complete = getattr(prepared, "complete", None)
         except verifiers.VerifierError as exc:
             exc.provider_dispatch_started = False
             raise
         except Exception as exc:
             error = RunnerError("worker prompt preparation failed: %s" % exc)
             error.provider_dispatch_started = False
+            error.call_boundary_failure = bool(
+                getattr(exc, "call_boundary_failure", False)
+            )
             raise error from exc
         if not isinstance(call_prompt, str) or not call_prompt.strip():
             error = RunnerError("worker prompt preparation returned no text")
@@ -2957,7 +2963,13 @@ def call_worker(runner, family, prompt, kind, workspace,
             )
             error.provider_dispatch_started = False
             raise error
-        return call_prompt, call_validate, fallback
+        if complete is not None and not callable(complete):
+            error = RunnerError(
+                "worker prompt preparation returned no completion boundary"
+            )
+            error.provider_dispatch_started = False
+            raise error
+        return call_prompt, call_validate, fallback, complete
 
     def attach_preparation(result, fallback):
         result.prompt_set_fallback = fallback
@@ -2965,11 +2977,55 @@ def call_worker(runner, family, prompt, kind, workspace,
 
     def diagnostic_text(result):
         """Keep app-server evidence when the selected final text is empty."""
-        text = result.text
+        text = getattr(result, "text", None)
         if isinstance(text, str) and text.strip():
             return text
         transport = getattr(result, "transport_text", None)
         return transport if isinstance(transport, str) and transport else text
+
+    def complete_attempt(complete, outcome):
+        if complete is None:
+            return
+        try:
+            complete()
+        except Exception as exc:
+            error = RunnerError(
+                "worker post-call boundary rejected the attempt: %s" % exc
+            )
+            error.provider_dispatch_started = True
+            error.prepared_completion_attempted = True
+            error.call_boundary_failure = bool(
+                getattr(exc, "call_boundary_failure", False)
+            )
+            existing = getattr(outcome, "raw_texts", None)
+            if isinstance(existing, (list, tuple)):
+                error.raw_texts = list(existing)
+            elif isinstance(existing, str) and existing:
+                error.raw_texts = [existing]
+            else:
+                diagnostic = diagnostic_text(outcome)
+                error.raw_texts = [diagnostic] if diagnostic else []
+            error.duration_s = getattr(outcome, "duration_s", None)
+            error.token_usage = normalize_token_usage(
+                getattr(outcome, "token_usage", None)
+            )
+            error.token_usage_partial = bool(
+                getattr(outcome, "token_usage_partial", False)
+                or error.token_usage is None
+            )
+            error.cost_payloads = list(
+                getattr(outcome, "cost_payloads", None) or []
+            )
+            for name in (
+                "resolved_family", "resolved_model", "resolved_effort",
+                "prompt_set_fallback",
+            ):
+                if hasattr(outcome, name):
+                    setattr(error, name, getattr(outcome, name))
+            error.physical_dispatches = [
+                _physical_dispatch(error, family, model, effort, error=error)
+            ]
+            raise error from exc
 
     def current_family_prompt(call_prompt, call_family):
         """Keep the machine header coherent with late dispatch resolution."""
@@ -2983,34 +3039,74 @@ def call_worker(runner, family, prompt, kind, workspace,
                 return "".join(lines)
         return call_prompt
 
-    def attach_completed_attempt(exc, result, first_error):
-        """Carry a completed malformed attempt across a blocked repair."""
+    def attach_completed_attempt(
+        exc, result, first_error, repair_result=None
+    ):
+        """Carry every started attempt across a blocked repair."""
         existing = getattr(exc, "raw_texts", None)
         raw_texts = [diagnostic_text(result)]
         if isinstance(existing, (list, tuple)):
             raw_texts.extend(existing)
         elif isinstance(existing, str) and existing:
             raw_texts.append(existing)
+        elif repair_result is not None:
+            diagnostic = diagnostic_text(repair_result)
+            if isinstance(diagnostic, str) and diagnostic:
+                raw_texts.append(diagnostic)
         exc.raw_texts = raw_texts
-        exc.duration_s = getattr(result, "duration_s", None)
-        exc.token_usage = normalize_token_usage(
-            getattr(result, "token_usage", None)
-        )
-        exc.token_usage_partial = bool(
-            getattr(result, "token_usage", None) is None
-            or getattr(result, "token_usage_partial", False)
-        )
-        exc.cost_payloads = merged_cost_payloads(result)
-        exc.physical_dispatches = [
+        completed = [result]
+        if repair_result is not None:
+            completed.append(repair_result)
+        usages = [getattr(item, "token_usage", None) for item in completed]
+        durations = [
+            getattr(item, "duration_s", None) for item in completed
+            if isinstance(getattr(item, "duration_s", None), (int, float))
+            and not isinstance(getattr(item, "duration_s", None), bool)
+        ]
+        cost_payloads = merged_cost_payloads(*completed)
+        dispatches = [
             _physical_dispatch(
                 result, family, model, effort, error=first_error
             )
         ]
-        exc.resolved_family = getattr(result, "resolved_family", family)
-        exc.resolved_model = getattr(result, "resolved_model", model)
-        exc.resolved_effort = getattr(result, "resolved_effort", effort)
+        if repair_result is not None:
+            dispatches.append(
+                _physical_dispatch(
+                    repair_result, family, model, effort, error=exc
+                )
+            )
+        final = completed[-1]
+        exc.duration_s = sum(durations) if durations else None
+        exc.token_usage = add_token_usage(*usages)
+        exc.token_usage_partial = any(
+            getattr(item, "token_usage_partial", False) or usage is None
+            for item, usage in zip(completed, usages)
+        )
+        exc.cost_payloads = cost_payloads
+        exc.physical_dispatches = dispatches
+        exc.resolved_family = getattr(final, "resolved_family", family)
+        exc.resolved_model = getattr(final, "resolved_model", model)
+        exc.resolved_effort = getattr(final, "resolved_effort", effort)
         exc.completed_attempt_before_dispatch_failure = True
         exc.incident_error = first_error
+
+    def finish_repair_failure(
+        exc, complete, fallback, result, first_error
+    ):
+        """Run a started repair's boundary without losing either attempt."""
+        attach_preparation(exc, fallback)
+        if getattr(exc, "prepared_completion_attempted", False):
+            return
+        try:
+            complete_attempt(complete, exc)
+        except BaseException as completion_exc:
+            attach_completed_attempt(
+                completion_exc,
+                result,
+                first_error,
+                repair_result=completion_exc,
+            )
+            raise
 
     def invoke(call_prompt, continuation_ref=None,
                call_control=active_control,
@@ -3138,17 +3234,27 @@ def call_worker(runner, family, prompt, kind, workspace,
             runner.call, call_family, call_prompt, workspace
         )
 
-    first_prompt, first_validate, first_fallback = prepared_call(prompt)
+    first_prompt, first_validate, first_fallback, first_complete = (
+        prepared_call(prompt)
+    )
     try:
         result = attach_preparation(
             invoke(first_prompt, continuation_ref=session_ref), first_fallback
         )
+        complete_attempt(first_complete, result)
     except RunnerError as exc:
         if getattr(exc, "provider_dispatch_started", False):
             attach_preparation(exc, first_fallback)
+            if not getattr(exc, "prepared_completion_attempted", False):
+                complete_attempt(first_complete, exc)
             exc.physical_dispatches = [
                 _physical_dispatch(exc, family, model, effort, error=exc)
             ]
+        raise
+    except BaseException as exc:
+        if getattr(exc, "provider_dispatch_started", False):
+            attach_preparation(exc, first_fallback)
+            complete_attempt(first_complete, exc)
         raise
     if isinstance(result, ControlledInterruptionResult):
         return None, result
@@ -3167,15 +3273,19 @@ def call_worker(runner, family, prompt, kind, workspace,
     repair_prompt = prompt + (REPAIR_SUFFIX % first_error)
     repair_validate = _validate
     repair_fallback = None
+    repair_complete = None
     repair_ref = getattr(result, "session_ref", None) or session_ref
     repair_control = (
         active_control.renew() if active_control is not None else None
     )
     try:
         if prepare_call is not None:
-            repair_prompt, repair_validate, repair_fallback = prepared_call(
-                prompt, first_error
-            )
+            (
+                repair_prompt,
+                repair_validate,
+                repair_fallback,
+                repair_complete,
+            ) = prepared_call(prompt, first_error)
         result2 = attach_preparation(
             invoke(
                 repair_prompt,
@@ -3187,63 +3297,50 @@ def call_worker(runner, family, prompt, kind, workspace,
             ),
             repair_fallback,
         )
+        complete_attempt(repair_complete, result2)
     except verifiers.VerifierError as exc:
-        attach_completed_attempt(exc, result, first_error)
+        repair_started = getattr(exc, "provider_dispatch_started", False)
+        if repair_started:
+            finish_repair_failure(
+                exc, repair_complete, repair_fallback, result, first_error
+            )
+        attach_completed_attempt(
+            exc,
+            result,
+            first_error,
+            repair_result=exc if repair_started else None,
+        )
         raise
     except RunnerError as exc:
         if not getattr(exc, "provider_dispatch_started", False):
             exc.provider_dispatch_started = False
             attach_completed_attempt(exc, result, first_error)
             raise
-        attach_preparation(exc, repair_fallback)
-        raw_texts = [diagnostic_text(result)]
-        existing = getattr(exc, "raw_texts", None)
-        if isinstance(existing, (list, tuple)):
-            raw_texts.extend(existing)
-        elif isinstance(existing, str) and existing:
-            raw_texts.append(existing)
-        else:
-            second = getattr(exc, "transport_text", None)
-            if not isinstance(second, str) or not second:
-                second = getattr(exc, "raw_text", None)
-            if isinstance(second, str) and second:
-                raw_texts.append(second)
-        exc.raw_texts = raw_texts
-        first_usage = normalize_token_usage(result.token_usage)
-        repair_usage = normalize_token_usage(
-            getattr(exc, "token_usage", None)
+        finish_repair_failure(
+            exc, repair_complete, repair_fallback, result, first_error
         )
-        exc.token_usage = add_token_usage(first_usage, repair_usage)
-        exc.physical_dispatches = [
-            _physical_dispatch(
-                result, family, model, effort, error=first_error
-            ),
-            _physical_dispatch(
-                exc, family, model, effort, error=exc
-            ),
-        ]
-        exc.cost_payloads = merged_cost_payloads(result, exc)
-        first_duration = getattr(result, "duration_s", None)
-        repair_duration = getattr(exc, "duration_s", None)
-        if isinstance(first_duration, (int, float)) \
-                and not isinstance(first_duration, bool):
-            exc.duration_s = first_duration + (
-                repair_duration
-                if isinstance(repair_duration, (int, float))
-                and not isinstance(repair_duration, bool)
-                else 0
-            )
-        exc.token_usage_partial = bool(
-            getattr(exc, "token_usage_partial", False)
-            or first_usage is None
-            or repair_usage is None
+        attach_completed_attempt(
+            exc,
+            result,
+            first_error,
+            repair_result=exc,
         )
         raise
-    except Exception as exc:
+    except BaseException as exc:
         # Current-state validation can deliberately stop before the repair
         # dispatch. The first provider call nevertheless completed and its
         # generic evidence/accounting must cross that pre-dispatch boundary.
-        attach_completed_attempt(exc, result, first_error)
+        repair_started = getattr(exc, "provider_dispatch_started", False)
+        if repair_started:
+            finish_repair_failure(
+                exc, repair_complete, repair_fallback, result, first_error
+            )
+        attach_completed_attempt(
+            exc,
+            result,
+            first_error,
+            repair_result=exc if repair_started else None,
+        )
         raise
     if isinstance(result2, ControlledInterruptionResult):
         result2.repair = {

@@ -371,6 +371,19 @@
         }
       ]
     },
+    "author_recovery": {
+      "text": [
+        "{{author_recovery}}"
+      ],
+      "variables": [
+        {
+          "name": "author_recovery",
+          "required": false,
+          "drop_unit_if_absent": true,
+          "description": "Physical-call recovery context supplied inside the routed charge."
+        }
+      ]
+    },
     "implementation_rules": {
       "text": [
         "IMPLEMENTATION RULES",
@@ -422,14 +435,14 @@
         {
           "name": "soft_lines",
           "required": false,
-          "default": "500",
-          "description": "Reviewable-line count where the driver asks for a coherent close; defaults to today's value."
+          "drop_unit_if_absent": true,
+          "description": "Reviewable-line count where this call's live driver meter asks for a coherent close."
         },
         {
           "name": "hard_lines",
           "required": false,
-          "default": "750",
-          "description": "Reviewable-line count where the driver stops the call; defaults to today's value."
+          "drop_unit_if_absent": true,
+          "description": "Reviewable-line count where this call's live driver meter stops the call."
         }
       ]
     },

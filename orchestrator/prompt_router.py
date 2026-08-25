@@ -169,7 +169,14 @@ def _raw_unit(part, document, shared, section, route):
     return unit, section_id
 
 
-def _prepared_unit(unit, values, fixed, part_defaults=None, section_id=None):
+def _prepared_unit(
+    unit,
+    values,
+    fixed,
+    part_defaults=None,
+    section_id=None,
+    defaulted_variables=None,
+):
     declarations = copy.deepcopy(unit.get("variables", []))
     declared = {item["name"]: item for item in declarations}
     text = list(unit["text"])
@@ -193,6 +200,12 @@ def _prepared_unit(unit, values, fixed, part_defaults=None, section_id=None):
     if missing:
         raise PromptRouterError("missing required value %r" % missing[0])
 
+    if defaulted_variables is not None:
+        defaulted_variables.update(
+            name for name in (part_defaults or {})
+            if name in declared and name not in values
+        )
+
     closed = {
         name: value for name, value in pinned.items() if name in declared
     }
@@ -206,15 +219,23 @@ def _prepared_unit(unit, values, fixed, part_defaults=None, section_id=None):
         if name in closed or name not in declared:
             continue
         declaration = declared[name]
-        value = (
-            values[name] if name in values else declaration["default"]
-        )
+        if name in values:
+            value = values[name]
+        else:
+            value = declaration["default"]
+            if defaulted_variables is not None:
+                defaulted_variables.add(name)
         closed[name] = value
         protected.update(_PLACEHOLDER.findall(str(value)))
 
     declarations = [
         item for item in declarations if item["name"] not in closed
     ]
+    if defaulted_variables is not None:
+        defaulted_variables.update(
+            item["name"] for item in declarations
+            if item["name"] not in values and "default" in item
+        )
 
     def substitute_closed(match):
         name = match.group(1)
@@ -232,7 +253,16 @@ def _prepared_unit(unit, values, fixed, part_defaults=None, section_id=None):
     return result
 
 
-def _parts(document, shared, section, key, route, values, fixed):
+def _parts(
+    document,
+    shared,
+    section,
+    key,
+    route,
+    values,
+    fixed,
+    defaulted_variables=None,
+):
     assembled = []
     questions = []
     for part in document[section][key]:
@@ -251,7 +281,12 @@ def _parts(document, shared, section, key, route, values, fixed):
                 "stored default conflicts with fixed value %r" % conflicts[0]
             )
         prepared = _prepared_unit(
-            unit, values, fixed, defaults, section_id
+            unit,
+            values,
+            fixed,
+            defaults,
+            section_id,
+            defaulted_variables,
         )
         if prepared is not None:
             assembled.append(prepared)
@@ -264,14 +299,29 @@ def _layer(prompt_set, job, material):
     return shared["material_layers"].get(job, {}).get(material)
 
 
-def _assemble(prompt_set, route, job, material, values, role):
+def _assemble(
+    prompt_set,
+    route,
+    job,
+    material,
+    values,
+    role,
+    defaulted_variables=None,
+):
     shared = prompt_set.documents["shared/shared.json"]
     document = _document(prompt_set, route.kind)
     fixed = {"kind": route.kind}
     if role is not None:
         fixed["role"] = role
     instructions, variant_questions = _parts(
-        document, shared, "instructions", "parts", route, values, fixed
+        document,
+        shared,
+        "instructions",
+        "parts",
+        route,
+        values,
+        fixed,
+        defaulted_variables,
     )
     intro = list(document["questions"].get("intro", []))
     questions = copy.deepcopy(document["questions"].get("items", []))
@@ -280,21 +330,42 @@ def _assemble(prompt_set, route, job, material, values, role):
         borrowed = _document(prompt_set, route.borrow_questions)
         questions.extend(copy.deepcopy(borrowed["questions"].get("items", [])))
     output_contract, unused = _parts(
-        document, shared, "output_contract", "sections", route, values, fixed
+        document,
+        shared,
+        "output_contract",
+        "sections",
+        route,
+        values,
+        fixed,
+        defaulted_variables,
     )
     del unused
 
     layer = _layer(prompt_set, job, material)
     if layer is not None:
         added, layer_variant_questions = _parts(
-            layer, shared, "instructions", "parts", route, values, fixed
+            layer,
+            shared,
+            "instructions",
+            "parts",
+            route,
+            values,
+            fixed,
+            defaulted_variables,
         )
         instructions.extend(added)
         intro.extend(layer["questions"]["intro"])
         questions.extend(copy.deepcopy(layer["questions"]["items"]))
         questions.extend(layer_variant_questions)
         added, unused = _parts(
-            layer, shared, "output_contract", "sections", route, values, fixed
+            layer,
+            shared,
+            "output_contract",
+            "sections",
+            route,
+            values,
+            fixed,
+            defaulted_variables,
         )
         output_contract.extend(added)
         del unused
@@ -443,8 +514,18 @@ def resolve(home, *, job, executor, material, values, prompt_set="default",
     def validate_selected(candidate):
         _validate_routable(candidate)
         if prompt_validator is not None:
+            defaulted_variables = set()
             prompt_validator(
-                _assemble(candidate, route, job, material, values, role)
+                _assemble(
+                    candidate,
+                    route,
+                    job,
+                    material,
+                    values,
+                    role,
+                    defaulted_variables,
+                ),
+                frozenset(defaulted_variables),
             )
 
     selected = prompt_sets.resolve(

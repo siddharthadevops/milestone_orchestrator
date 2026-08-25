@@ -1,16 +1,19 @@
 KIND: merge_repair
 WORKSPACE: /Users/siddhartha/Development/source/milestone_orchestrator_impl
 
-TASK: the accepted plan computed a wipe boundary, and git has rewound
-the workspace to it. The driver then attempted to apply exactly the
-accepted change range named below onto that base. This call runs for EVERY
-computed wipe boundary, including deletion, forbidden insertion, and
-forbidden reorder, whether the preliminary apply was clean, conflicted,
-rejected, partial, or empty.
-Leave the repo at that base PLUS everything the accepted call introduced —
-documents and code alike, the skeleton included: the accepted range
-wins. The only work that stays undone is the wiped/requeued slices' — they will
-be re-implemented on this base. Leave no conflict markers behind.
+TASK: the accepted plan computed a wipe boundary. The repository remains
+at accepted_revision; the driver has performed no rewind, apply, merge, or
+conflict resolution. You own all run-owned repository surgery and the final
+same-branch commit. Preserve required pre-boundary history and every accepted
+intent, remove the unwound work, and leave a clean repository with one valid
+canonical plan block. You may change that block while reconciling, but finish
+the final plan in this call: there is no second repair. If the required outcome
+cannot be completed, return blocked and leave the repository in your final state.
+Your final run-owned result must be linear. If the final account has a wipe
+boundary, it must be an ancestor of final HEAD and every invalidated recorded
+commit must be absent from final HEAD ancestry. If there is no final wipe boundary,
+accepted_revision must be an ancestor of final HEAD and there must be no invalidations.
+These are revision checks, not path, hunk, or semantic proof.
 
 PROJECT CONTEXT (standing project law; binding)
 - PRIMARY ROOT /Users/siddhartha/Development/source/milestone_orchestrator_impl — the repo you execute in.
@@ -31,8 +34,8 @@ WHAT HAPPENED
 - source_base_revision (pre_session_commit): 109f276ebd03825a8d8f8e0947487765b6860ed1
 - accepted_revision: 2e8896da126916cc408f2c1c402046372cd5d63d
 - source range: 109f276ebd03825a8d8f8e0947487765b6860ed1..2e8896da126916cc408f2c1c402046372cd5d63d
-- preliminary apply outcome: conflicted
-- preliminary apply diagnostics: CONFLICT (content): implementation/milestones/staffing-router/skeleton.md has markers and an unmerged index entry; all other paths applied cleanly
+- opening reconciliation account (original old plan/run boundaries and opening wipe/requeue/checkpoint effects): {"old_plan_ids":[1,2,3,4,5,6,7,8],"old_run_boundaries":{"3":"3abbd13e7c966cbeeac773870dfd0eb115d596f1"},"wipe_boundary":"3abbd13e7c966cbeeac773870dfd0eb115d596f1","requeue":[4,5,6,7,8],"invalidated_commits":["109f276ebd03825a8d8f8e0947487765b6860ed1"],"checkpoint_anchors_invalidated":[]}
+- required outcome: Preserve history through slice 3 and all accepted intent; remove run-owned work for slices 4-8; finish one valid canonical block; leave a clean same-branch linear final commit with the wipe boundary ancestral and listed invalidated commits absent.
 
 OUTPUT CONTRACT
 Return exactly one JSON object, nothing else:

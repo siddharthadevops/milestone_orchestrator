@@ -8,6 +8,9 @@
         "ref": "header"
       },
       {
+        "ref": "author_recovery"
+      },
+      {
         "text": [
           "TASK: implement slice {{slice_id}} ({{slice_title}}) against its current reviewed note.",
           "BASELINE: the current reviewed skeleton at {{skeleton_path}} is the operative restatement of the MANDATE — the milestone boundary; judge scope against IT. The operator's full original mandate is preserved at {{goal_path}} (generated snapshot); read it only to trace intent the skeleton does not settle.",

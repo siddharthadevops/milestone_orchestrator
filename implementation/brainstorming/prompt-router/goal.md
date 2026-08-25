@@ -220,49 +220,51 @@ recorded in its README. The load-bearing ones this milestone implements in code:
   along, so at close the outcome is already committed — no transport, no
   apply step, no landing. Delta review compares the final work tree with the
   recorded pre-session commit; the review seal is the gate on the result. The
-  production-effect agent call is retired. ONE case needs surgery — the
-  accepted plan computes a WIPE BOUNDARY, whether from deletion of built
-  slices or from a forbidden insertion/reorder. Every accepted plan-changing call
-  has a committed source range before rewind. For Brainstorming,
-  `source_base_revision` is the distinct `pre_session_commit` and
-  `accepted_revision` is the common ready anchor. For a direct `agent_call`,
-  the driver first checkpoints the work tree before dispatching any contract
-  that may return `slices`; that HEAD is `source_base_revision`, isolating the
-  call from earlier pending work. If the result changes the plan, the driver
-  commits its accepted work tree as `accepted_revision` before rewinding; a
-  changed plan with no matching file delta is invalid. Git rewinds to the separately computed
-  `wipe_boundary`, then `merge_repair` is called ALWAYS — even when the
-  preliminary apply was clean — to re-land exactly
-  `source_base_revision..accepted_revision` on that new base. Its executor is
-  `agent_call` and it inherits the accepted source charge's material. The final
-  delta seal uses `source_base_revision`; for Brainstorming that is the recorded
-  `pre_session_commit`, so it judges the final net result.
-  There is no auto-merge lottery on a rewound base: git is the bookkeeper, the LLM does the reconciling. The
-  kind is served by the router like everything else: task, project
-  context, the account of what happened, and nothing more. The session's
-  accepted range WINS: everything it introduces survives, documents and
-  code alike; only the pre-existing built work at and after the computed wipe
-  boundary remains undone. There is NO driver-side path verification — that
-  would be reinventing git — and a reconciliation that cannot complete
-  blocks to the operator.
+  production-effect agent call is retired. ONE case needs surgery: only a
+  computed `wipe_boundary` opens structural reconciliation. The driver persists
+  and freezes scheduling on one open account containing the original old
+  plan/run boundaries, accepted source range, and opening wipe, requeue, and
+  checkpoint effects. For Brainstorming, `source_base_revision` is the distinct
+  `pre_session_commit` and `accepted_revision` is `closed_ready_HEAD`. For a
+  direct `agent_call`, the committed pre-dispatch HEAD is
+  `source_base_revision`; the driver's accepted-result commit is
+  `accepted_revision`, and HEAD equals it.
+
+  The repository stays at `accepted_revision`. The driver performs no rewind,
+  apply, merge, conflict resolution, or preliminary outcome. It dispatches one
+  `merge_repair` from that revision with the persisted facts and required
+  outcome. That LLM owns all run-owned repository surgery and the final
+  same-branch commit: preserve required pre-boundary history and accepted
+  intent, remove unwound work, and leave one valid canonical block. It may
+  change the block while reconciling, but MUST finish the final plan in this
+  call. The final wipe/requeue/checkpoint account is recomputed from the
+  persisted original old plan/run boundaries to the final block, replaces the
+  opening account, and never starts a second repair.
+
+  Success requires routed output, the same branch, clean index and work tree, a
+  valid final block, and a linear run-owned result. With a final wipe boundary,
+  that boundary must be an ancestor of final HEAD and every invalidated recorded
+  commit absent from its ancestry. Without one, `accepted_revision` must remain
+  an ancestor and there are no invalidations. The driver then atomically records
+  the final account and HEAD, applies ledger invalidations, and closes without
+  repository edits; review seals judge semantics. A blocked/interrupted call or
+  failed revision check leaves the LLM's repository state for manual recovery
+  or milestone restart. There is no fallback, retry, worker-commit folding, or
+  second repair engine.
 - **Plan edits: slice ids are identity, commit order is sacred.** An
   intact slice keeps its id whatever its position — order is just the
   table's sequence, renumbering does not exist. The plan diff is computed
   by id: a kept id continues with its history; an absent id is deleted; a
   new id is a new slice (a merge is a new id replacing its sources).
-  Deleting built slices unwinds history from the EARLIEST deleted one
-  forward: the driver reverts the workspace to the boundary commit of the
-  last surviving slice before it — or to the MILESTONE-START commit when
-  no built slice survives before the deletion — and every slice whose commits were
-  unwound — built or active, id and note intact — is re-implemented on
-  the new base. (Delete 4 and 5 while implementing 8: revert to the end
-  of 3; 6, 7 and 8 requeue.) The wipe takes EVERYTHING from the earliest
-  deleted slice forward — their commits, every later slice's commits, and
-  the current in-flight uncommitted delta. A session's own commits
-  sit above the pre-session commit in the same history: the wipe unwinds
-  them with everything else, `merge_repair` re-lands the accepted call's
-  `source_base_revision..accepted_revision` on the new base, and the unwound
-  slices requeue against it. Slice closures and full-suite checkpoint anchors
+  Deleting built slices computes the EARLIEST deleted boundary: the commit of
+  the last surviving slice before it, or the MILESTONE-START commit when no
+  built slice survives before the deletion. Every affected built or active
+  slice keeps its id and note and is requeued. (Delete 4 and 5 while
+  implementing 8: the boundary is the end of 3; 6, 7 and 8 requeue.) The
+  persisted account names all run-owned work from that boundary forward. The
+  driver does not remove it; the single `merge_repair` call preserves the
+  accepted intent while removing the recorded invalidated work. Slice closures
+  and full-suite checkpoint anchors
   at or after the wipe boundary stop counting; re-implemented logical slices
   count again, and only a `passed`/`no_suite` checkpoint whose owning slice
   subsequently closes can anchor cadence. Slices untouched by the unwind keep their
@@ -272,7 +274,7 @@ recorded in its README. The load-bearing ones this milestone implements in code:
   treats it as a deletion boundary at the EARLIEST table position whose
   id differs from the previous table, and everything from
   it forward is undone and requeued. From that point onward it follows the
-  SAME wipe-and-`merge_repair` path as an actual deletion; the trigger is the
+  SAME single-reconciliation path as an actual deletion; the trigger is the
   computed boundary, never the presence of a deleted id. When one plan edit
   yields several candidates (deletion and positional divergence), the driver
   chooses the earliest position in the previous plan and performs one wipe.

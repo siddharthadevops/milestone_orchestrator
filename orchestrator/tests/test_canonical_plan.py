@@ -367,6 +367,171 @@ class CanonicalPlanGitBoundaryTest(unittest.TestCase):
             )
         wrong.assert_not_called()
 
+    def test_snapshot_window_rechecks_live_plan_before_dispatch(self):
+        slices, _revision, _anchor = self.establish()
+        state = st.load(self.state_path)
+        original_snapshot = gitops.snapshot_worktree_tree
+        drifted = changed(
+            slices, lambda value: value[0].__setitem__("title", "Late drift")
+        )
+
+        def snapshot_then_drift(workspace):
+            tree = original_snapshot(workspace)
+            self.write_skeleton(drifted)
+            return tree
+
+        with mock.patch.object(
+            gitops,
+            "snapshot_worktree_tree",
+            side_effect=snapshot_then_drift,
+        ):
+            with self.assertRaises(canonical_plan.CanonicalPlanDrift):
+                canonical_plan.begin_author_call(state, self.skeleton)
+
+        self.assertEqual(
+            state["milestone"][canonical_plan.ANCHOR_KEY]["revision"],
+            self.git(
+                "rev-parse",
+                gitops.canonical_plan_anchor_ref(self.skeleton),
+            ),
+        )
+
+    def test_first_physical_draft_projects_a_ref_pinned_anchor(self):
+        head = self.commit_skeleton(b"# Skeleton pending\n", "baseline")
+        self.save_stale_state()
+        state = st.load(self.state_path)
+        snapshot = canonical_plan.begin_author_call(
+            state, self.skeleton, allow_unanchored=True
+        )
+        planned = [slice_plan(3), slice_plan(1)]
+        self.write_skeleton(document(planned))
+
+        result = canonical_plan.complete_author_call(
+            state, snapshot, message="physical draft plan"
+        )
+
+        self.assertTrue(result["changed"])
+        self.assertEqual(self.git("rev-parse", "HEAD"), head)
+        self.assertEqual(
+            self.git(
+                "rev-parse",
+                gitops.canonical_plan_anchor_ref(self.skeleton),
+            ),
+            result["anchor"]["revision"],
+        )
+        self.assertEqual(
+            [item["id"] for item in state["milestone"]["slices"]],
+            [3, 1],
+        )
+
+    def test_valid_physical_change_projects_a_ref_pinned_commit_anchor(self):
+        slices, head, old_anchor = self.establish()
+        state = st.load(self.state_path)
+        snapshot = canonical_plan.begin_author_call(state, self.skeleton)
+        changed_slices = slices + [slice_plan(3)]
+        self.write_skeleton(document(changed_slices))
+
+        result = canonical_plan.complete_author_call(state, snapshot)
+
+        self.assertTrue(result["changed"])
+        self.assertEqual(self.git("rev-parse", "HEAD"), head)
+        self.assertNotEqual(result["anchor"], old_anchor)
+        self.assertEqual(
+            self.git(
+                "rev-parse",
+                gitops.canonical_plan_anchor_ref(self.skeleton),
+            ),
+            result["anchor"]["revision"],
+        )
+        self.assertEqual(
+            [item["id"] for item in state["milestone"]["slices"]],
+            [2, 1, 3],
+        )
+        accepted = gitops.show_file(
+            self.workspace,
+            result["anchor"]["revision"],
+            self.skeleton,
+        )
+        self.assertEqual(
+            canonical_plan.canonical_block_bytes(accepted),
+            canonical_plan.canonical_block_bytes(document(changed_slices)),
+        )
+
+    def test_unchanged_physical_call_keeps_the_existing_anchor(self):
+        _slices, head, anchor = self.establish()
+        state = st.load(self.state_path)
+        snapshot = canonical_plan.begin_author_call(state, self.skeleton)
+
+        with mock.patch.object(
+            canonical_plan,
+            "validate_canonical_plan",
+            side_effect=AssertionError("unchanged plans are not revalidated"),
+        ):
+            result = canonical_plan.complete_author_call(state, snapshot)
+
+        self.assertFalse(result["changed"])
+        self.assertEqual(result["anchor"], anchor)
+        self.assertEqual(self.git("rev-parse", "HEAD"), head)
+
+    def test_invalid_change_restores_proportional_repository_boundary(self):
+        _slices, head, anchor = self.establish()
+        staged = os.path.join(self.workspace, "staged.txt")
+        with open(staged, "w", encoding="utf-8") as handle:
+            handle.write("pre-call index\n")
+        self.git("add", "staged.txt")
+        with open(staged, "w", encoding="utf-8") as handle:
+            handle.write("pre-call worktree\n")
+        untracked = os.path.join(self.workspace, "untracked.txt")
+        with open(untracked, "w", encoding="utf-8") as handle:
+            handle.write("pre-call untracked\n")
+        before_status = self.git("status", "--short")
+        state = st.load(self.state_path)
+
+        snapshot = canonical_plan.begin_author_call(state, self.skeleton)
+        repository = snapshot["repository"]
+        self.assertEqual(
+            set(repository),
+            {"workspace", "sym", "head", "index_tree", "worktree_tree"},
+        )
+        self.git("add", "-A")
+        self.git("commit", "-q", "-m", "worker commit")
+        anchor_ref = gitops.canonical_plan_anchor_ref(self.skeleton)
+        self.git("update-ref", "-d", anchor_ref)
+        self.write_skeleton(framed('{"slices":['))
+        os.unlink(staged)
+        with open(
+            os.path.join(self.workspace, "worker-only.txt"),
+            "w",
+            encoding="utf-8",
+        ) as handle:
+            handle.write("discard me\n")
+        self.git("add", "-A")
+
+        with self.assertRaisesRegex(
+            canonical_plan.CanonicalPlanError, "snapshot was restored"
+        ):
+            canonical_plan.complete_author_call(state, snapshot)
+
+        self.assertEqual(self.git("rev-parse", "HEAD"), head)
+        self.assertEqual(
+            gitops.snapshot_index_tree(self.workspace),
+            repository["index_tree"],
+        )
+        self.assertEqual(
+            gitops.snapshot_worktree_tree(self.workspace),
+            repository["worktree_tree"],
+        )
+        self.assertEqual(self.git("status", "--short"), before_status)
+        self.assertEqual(
+            state["milestone"][canonical_plan.ANCHOR_KEY], anchor
+        )
+        self.assertEqual(
+            self.git("rev-parse", anchor_ref), anchor["revision"]
+        )
+        self.assertFalse(
+            os.path.exists(os.path.join(self.workspace, "worker-only.txt"))
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

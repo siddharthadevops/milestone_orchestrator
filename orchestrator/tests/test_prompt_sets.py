@@ -150,7 +150,11 @@ class PromptSetStoreTest(unittest.TestCase):
                     kind_path.write_text(json.dumps(document), encoding="utf-8")
                 elif defect == "inline_question_extra_field":
                     document = json.loads(kind_path.read_text(encoding="utf-8"))
-                    document["instructions"]["parts"][1]["questions"] = [{
+                    inline = next(
+                        part for part in document["instructions"]["parts"]
+                        if "variables" in part
+                    )
+                    inline["questions"] = [{
                         "id": "inline", "text": "Inline?",
                         "storage_note": "private",
                     }]
@@ -178,9 +182,11 @@ class PromptSetStoreTest(unittest.TestCase):
                         item = copy.deepcopy(document["questions"]["items"][0])
                         document["questions"]["items"].append(item)
                     else:
-                        declaration = document["instructions"]["parts"][1][
-                            "variables"
-                        ][0]
+                        inline = next(
+                            part for part in document["instructions"]["parts"]
+                            if "variables" in part
+                        )
+                        declaration = inline["variables"][0]
                         declaration["required"] = "yes"
                     kind_path.write_text(json.dumps(document), encoding="utf-8")
 
